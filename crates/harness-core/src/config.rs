@@ -20,6 +20,51 @@ pub struct TargetConfig {
     /// to the configured oracle kind and is handed over opaquely.
     #[serde(default)]
     pub oracle: toml::Table,
+    /// `[llm]` section (docs/SCHEMAS.md M2 additions).
+    #[serde(default)]
+    pub llm: LlmSection,
+}
+
+/// The `[llm]` section of `harness.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LlmSection {
+    /// `external | anthropic | replay`.
+    #[serde(default = "default_provider")]
+    pub provider: String,
+    /// Model identifier for live providers (Tier-2 default per briefing §16).
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// Response token budget.
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+    /// Environment variable holding the API key (live providers only; the
+    /// key itself is never written anywhere).
+    #[serde(default = "default_api_key_env")]
+    pub api_key_env: String,
+}
+
+impl Default for LlmSection {
+    fn default() -> Self {
+        LlmSection {
+            provider: default_provider(),
+            model: default_model(),
+            max_tokens: default_max_tokens(),
+            api_key_env: default_api_key_env(),
+        }
+    }
+}
+
+fn default_provider() -> String {
+    "external".into()
+}
+fn default_model() -> String {
+    "claude-sonnet-5".into()
+}
+fn default_max_tokens() -> u32 {
+    8192
+}
+fn default_api_key_env() -> String {
+    "ANTHROPIC_API_KEY".into()
 }
 
 /// The `[target]` section of `harness.toml`.

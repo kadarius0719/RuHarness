@@ -37,8 +37,8 @@ engineering decision, research spike, and milestone handoff is in
 |---|---|---|
 | **M0** — end-to-end thread | One leaf unit migrated and differentially verified | ✅ |
 | **M1** — ledger + schemas | Fact model, plan, content-bound verdicts, multi-unit ordering, workspace, CI | ✅ |
-| **M2** — observer | Gotcha detectors + LLM triage; runtime-view sync | next |
-| **M3** — provider adapter #2 | Same migration through a second LLM provider | — |
+| **M2** — observer | Gotcha detectors, risk scoring, LLM triage, human review loop, runtime-view sync | ✅ |
+| **M3** — provider adapter #2 | Same migration through a second LLM provider | next |
 | **M4** — benchmark | DARPA TRACTOR public corpus scores as regression suite | — |
 | **M5** — extension proof | External detector plugin + `EXTENDING.md` | — |
 | **M6+** — Phase 2 spike | Second language frontend, golden-test oracle | — |
@@ -86,6 +86,42 @@ cargo run -p harness-cli -- state status --target targets/zopfli
 The staleness detector: facts vs tree, every unit's plan hash vs tree, every
 verdict's input digests vs tree, and status/evidence contradictions.
 
+**The observer (M2):**
+
+```bash
+cargo run -p harness-cli -- detect --target targets/zopfli
+```
+Runs the deterministic gotcha detectors (tree-sitter, 8 taxonomy categories:
+macros, function pointers, unions/bitfields, setjmp/signals/threads, variadics,
+mutable globals, allocator ownership) and writes content-keyed findings bound to
+the facts they were computed from. Hazards the suite *cannot* see (pointer
+arithmetic, type punning, aliasing) are carried as standing caveats; oracle- and
+human-discovered hazards live in `annotations.jsonl` (M0's two real findings are
+the founding entries).
+
+```bash
+cargo run -p harness-cli -- observe --target targets/zopfli
+```
+The LLM triage pass: findings are batched per unit and adjudicated
+(confirm/dismiss/uncertain with rationale) under a hardened prompt contract —
+nonce-delimited untrusted code slices, no source text in the trusted region,
+harness-computed content hashes binding every verdict to exactly what was
+serialized. Verdicts land in `triage.jsonl`; `observations.md` renders units
+ranked by a deterministic risk score. Provider is configurable (`[llm]` in
+harness.toml): `anthropic` (live, key from env), `replay` (recorded traces), or
+`external` — the harness writes request files and any capable agent runtime
+supplies the responses, which is also how triage runs without an API key.
+Dismissals never delete: they keep full risk weight until a human upholds them
+via `harness review <finding> --uphold-dismiss`, and human-mandatory categories
+stay flagged until reviewed.
+
+```bash
+cargo run -p harness-cli -- sync-runtime --target targets/zopfli
+```
+Regenerates the managed block in the target's `AGENTS.md` (current state, next
+units by risk, the exact commands) with a content hash; `--check` is CI-usable.
+The ledger stays the single source of truth — the view is always derived.
+
 Exit codes (stable contract): `0` ok/green · `1` harness error · `2` usage ·
 `10` oracle red. Machine consumers read the ledger files, not stdout.
 
@@ -93,15 +129,20 @@ Exit codes (stable contract): `0` ok/green · `1` harness error · `2` usage ·
 
 ```
 crates/
-  harness-core/     # fact model, schemas, plan, verdicts, planner, traits (forbid unsafe, deny missing_docs)
+  harness-core/     # fact model, schemas, plan, verdicts, observer, risk, planner, traits
   harness-scan/     # C frontend (tree-sitter) implementing LanguageFrontend
+  harness-detect/   # built-in hazard detectors (c-treesitter-v1 suite)
+  harness-llm/      # provider adapters (anthropic/replay/external) + triage pass
   harness-oracle/   # c-abi-differential OracleStrategy
   harness-cli/      # the `harness` binary
 docs/SCHEMAS.md     # normative ledger schemas, v1
 targets/zopfli/     # vendored migration target (pinned)
   harness.toml      #   target config
+  AGENTS.md         #   generated runtime view (managed block; `harness sync-runtime`)
   migration/        #   THE LEDGER: facts.jsonl, plan.toml, units/<id>/ (contract,
-                    #   driver, Rust crate, content-bound verdicts), DECISIONS.md
+                    #   driver, Rust crate, content-bound verdicts), DECISIONS.md,
+                    #   observer/ (findings, annotations, triage, reviews,
+                    #   observations.md; traces/ gitignored)
 DECISIONS.md        # engineering log: spikes, decisions, milestone handoffs
 ```
 

@@ -92,6 +92,114 @@ fn full_pipeline_on_zopfli() {
 
     // 5. staleness gate: touch a unit source file -> verify refuses (exit 1)
     //    without running the oracle.
+    // 4b. observer pipeline: detect fires on the real target.
+    let r = harness(&["detect", "--target", target]);
+    assert_eq!(r.code, 0, "detect failed: {}\n{}", r.stdout, r.stderr);
+    let findings_text =
+        std::fs::read_to_string(tmp.join("migration/observer/findings.jsonl")).unwrap();
+    assert!(
+        findings_text.contains("macro-statement-body"),
+        "ZOPFLI_APPEND_DATA not flagged:\n{findings_text}"
+    );
+    assert!(
+        findings_text.contains("function-pointer-arg"),
+        "{findings_text}"
+    );
+
+    // 4c. observe with no traces (fresh-clone conditions): external mode
+    //     writes requests and exits 1 awaiting responses.
+    let _ = std::fs::remove_dir_all(tmp.join("migration/observer/traces"));
+    let r = harness(&["observe", "--target", target]);
+    assert_eq!(
+        r.code, 1,
+        "expected awaiting-responses: {}\n{}",
+        r.stdout, r.stderr
+    );
+    assert!(r.stderr.contains("awaiting"), "{}", r.stderr);
+    let traces: Vec<_> = std::fs::read_dir(tmp.join("migration/observer/traces"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".request.json"))
+        .collect();
+    assert!(!traces.is_empty(), "no request files written");
+    // Request files must not leak finding messages into the trusted region
+    // (spot-check: the detector message text appears in findings.jsonl only).
+    let one_request = std::fs::read_to_string(traces[0].path()).unwrap();
+    assert!(
+        !one_request.contains("heap ownership crosses the function boundary"),
+        "detector message leaked into prompt"
+    );
+
+    // 4d. review CLI: unknown finding refused; real finding recorded.
+    let r = harness(&[
+        "review",
+        "f-0000000000000000",
+        "--reinstate",
+        "--target",
+        target,
+    ]);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    let first_id = findings_text
+        .lines()
+        .find_map(|l| l.split("\"id\":\"").nth(1).map(|s| s[..18].to_string()))
+        .expect("a finding id");
+    let r = harness(&[
+        "review",
+        &first_id,
+        "--reinstate",
+        "--note",
+        "e2e",
+        "--target",
+        target,
+    ]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(tmp.join("migration/observer/reviews.jsonl").exists());
+
+    // 4e. sync-runtime writes the managed block and --check is then clean.
+    let r = harness(&["sync-runtime", "--target", target]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let agents = std::fs::read_to_string(tmp.join("AGENTS.md")).unwrap();
+    assert!(agents.contains("BEGIN RUHARNESS GENERATED"), "{agents}");
+    let r = harness(&["sync-runtime", "--target", target, "--check"]);
+    assert_eq!(r.code, 0, "check not clean: {}\n{}", r.stdout, r.stderr);
+
+    // 4f. M2 refusal exit codes (docs/SCHEMAS.md CLI additions), all exit 1:
+    //     --check on an out-of-date block; detect on stale facts; observe on
+    //     stale findings.
+    let stale_agents = agents.replace("risk", "RISK");
+    std::fs::write(tmp.join("AGENTS.md"), &stale_agents).unwrap();
+    let r = harness(&["sync-runtime", "--target", target, "--check"]);
+    assert_eq!(
+        r.code, 1,
+        "check must flag drift: {}\n{}",
+        r.stdout, r.stderr
+    );
+    std::fs::write(tmp.join("AGENTS.md"), &agents).unwrap();
+
+    let util_h = tmp.join("src/zopfli/util.h");
+    let util_src = std::fs::read_to_string(&util_h).unwrap();
+    std::fs::write(&util_h, format!("{util_src}\n/* e2e touch */\n")).unwrap();
+    let r = harness(&["detect", "--target", target]);
+    assert_eq!(r.code, 1, "detect must refuse stale facts: {}", r.stdout);
+    assert!(r.stderr.contains("harness scan"), "{}", r.stderr);
+    // Rescan makes facts fresh, but findings are now bound to the old file
+    // hash -> observe must refuse and point at detect.
+    let r = harness(&["scan", "--target", target]);
+    assert_eq!(r.code, 0);
+    let r = harness(&["observe", "--target", target]);
+    assert_eq!(
+        r.code, 1,
+        "observe must refuse stale findings: {}",
+        r.stdout
+    );
+    assert!(r.stderr.contains("harness detect"), "{}", r.stderr);
+    // Restore and re-sync so the later steps see a consistent tree.
+    std::fs::write(&util_h, &util_src).unwrap();
+    let r = harness(&["scan", "--target", target]);
+    assert_eq!(r.code, 0);
+    let r = harness(&["detect", "--target", target]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+
     // 5'. red path first: introduce a behavioral change in the Rust crate
     //     (the C side is untouched, so the stale gate must NOT fire) ->
     //     exit 10, status demoted, last-green preserved.

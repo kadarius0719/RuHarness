@@ -55,6 +55,44 @@ enum Cmd {
         #[command(subcommand)]
         cmd: StateCmd,
     },
+    /// Run the hazard detectors and regenerate observer findings
+    Detect {
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+    },
+    /// Triage findings (LLM pass) and render observations.md
+    Observe {
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+    },
+    /// Record a human review of a triaged finding
+    Review {
+        /// Finding id (f-...)
+        finding: String,
+        /// Uphold the model's dismissal
+        #[arg(long, conflicts_with = "reinstate")]
+        uphold_dismiss: bool,
+        /// Reinstate a dismissed finding
+        #[arg(long)]
+        reinstate: bool,
+        /// Optional note
+        #[arg(long, default_value = "")]
+        note: String,
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+    },
+    /// Refresh the generated runtime view (AGENTS.md managed block)
+    SyncRuntime {
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Exit 1 if regeneration would change the block (CI mode)
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -82,6 +120,16 @@ fn main() -> ExitCode {
         Cmd::State {
             cmd: StateCmd::Status { target },
         } => cmd_status(target),
+        Cmd::Detect { target } => cmd_detect(target),
+        Cmd::Observe { target } => cmd_observe(target),
+        Cmd::Review {
+            finding,
+            uphold_dismiss,
+            reinstate,
+            note,
+            target,
+        } => cmd_review(finding, uphold_dismiss, reinstate, note, target),
+        Cmd::SyncRuntime { target, check } => cmd_sync_runtime(target, check),
     };
     match result {
         Ok(code) => code,
@@ -361,4 +409,257 @@ enum VerdictState {
     Present { green: bool },
     Missing,
     Unreadable,
+}
+
+// ---------- M2: observer commands ----------
+
+fn facts_records_hash(facts: &Facts) -> String {
+    let pairs: Vec<(String, String)> = facts
+        .files
+        .iter()
+        .map(|f| (f.path.clone(), f.hash.clone()))
+        .collect();
+    hash::file_set_hash(&pairs)
+}
+
+fn cmd_detect(target: PathBuf) -> Result<ExitCode> {
+    use harness_core::observer::{FindingsFile, ObserverPaths};
+    use harness_core::traits::Detector;
+    let ctx = TargetContext::load(&target)?;
+    let ledger = Ledger::new(&ctx.root);
+    let facts =
+        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let stale = stale_fact_files(&ctx, &facts);
+    if stale > 0 {
+        bail!("facts.jsonl is stale ({stale} file(s) changed on disk); run `harness scan` first");
+    }
+    let suite = harness_detect::CTreeSitterSuite;
+    let findings = suite.detect(&ctx, &facts)?;
+    let file = FindingsFile {
+        detector_suite: suite.name().to_string(),
+        facts_hash: facts_records_hash(&facts),
+        findings,
+    };
+    let path = ObserverPaths::findings(&ledger);
+    file.store(&path)?;
+    let mut by_category: std::collections::BTreeMap<&str, usize> = Default::default();
+    for f in &file.findings {
+        *by_category.entry(f.category.as_str()).or_insert(0) += 1;
+    }
+    out(format!(
+        "detect: {} finding(s) -> {}",
+        file.findings.len(),
+        path.display()
+    ));
+    for (cat, n) in by_category {
+        out(format!("detect:   {cat}: {n}"));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Everything `observe` needs, loaded and freshness-checked.
+type ObserverInputs = (
+    Facts,
+    Plan,
+    harness_core::observer::FindingsFile,
+    Vec<harness_core::observer::Finding>,
+    harness_core::observer::TriageFile,
+    Vec<harness_core::observer::Review>,
+);
+
+fn observer_inputs(ctx: &TargetContext, ledger: &Ledger) -> Result<ObserverInputs> {
+    use harness_core::observer::{self, ObserverPaths};
+    let facts =
+        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let plan_doc = Plan::load(&ledger.plan_path())?;
+    plan_doc
+        .execution_order()
+        .context("plan.toml is structurally invalid")?;
+    let findings = harness_core::observer::FindingsFile::load(&ObserverPaths::findings(ledger))
+        .context("loading findings (run `harness detect` first)")?;
+    if findings.facts_hash != facts_records_hash(&facts) {
+        bail!("findings.jsonl is bound to different facts; run `harness detect`");
+    }
+    for f in &findings.findings {
+        let now = hash::file_hash(&ctx.root.join(&f.file))
+            .with_context(|| format!("hashing {}", f.file))?;
+        if now != f.file_hash {
+            bail!(
+                "finding {} is stale ({} changed since detect); run `harness detect`",
+                f.id,
+                f.file
+            );
+        }
+    }
+    let annotations = observer::load_annotations(&ObserverPaths::annotations(ledger))?;
+    let triage = harness_core::observer::TriageFile::load(&ObserverPaths::triage(ledger))?;
+    let reviews = observer::load_reviews(&ObserverPaths::reviews(ledger))?;
+    Ok((facts, plan_doc, findings, annotations, triage, reviews))
+}
+
+fn cmd_observe(target: PathBuf) -> Result<ExitCode> {
+    use harness_core::observer::{self, ObserverPaths};
+    let ctx = TargetContext::load(&target)?;
+    let ledger = Ledger::new(&ctx.root);
+    let (facts, plan_doc, findings, annotations, _, reviews) = observer_inputs(&ctx, &ledger)?;
+
+    let traces = ObserverPaths::traces(&ledger);
+    let llm = &ctx.config.llm;
+    let adapter: Box<dyn harness_core::traits::ProviderAdapter> = match llm.provider.as_str() {
+        "anthropic" => Box::new(harness_llm::AnthropicAdapter::from_env(&llm.api_key_env)?),
+        "replay" => Box::new(harness_llm::TraceAdapter::new(traces.clone(), false)),
+        "external" => Box::new(harness_llm::TraceAdapter::new(traces.clone(), true)),
+        other => bail!("unknown [llm] provider `{other}` (external | anthropic | replay)"),
+    };
+    let outcome = match harness_llm::run_triage(
+        adapter.as_ref(),
+        &llm.model,
+        llm.max_tokens,
+        &ctx,
+        &facts,
+        &plan_doc,
+        &findings,
+        &traces,
+    ) {
+        Ok(o) => o,
+        Err(e) if e.to_string().contains("awaiting response") => {
+            eprintln!("{e:#}");
+            eprintln!(
+                "observe: external provider mode — supply the response file(s) under {} and re-run",
+                traces.display()
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+        Err(e) => return Err(e.into()),
+    };
+    outcome.triage.store(&ObserverPaths::triage(&ledger))?;
+
+    let mut all_findings: Vec<harness_core::observer::Finding> = findings.findings.clone();
+    all_findings.extend(annotations.iter().cloned());
+    let risk = harness_core::risk::score_units(
+        &facts,
+        &plan_doc,
+        &all_findings,
+        &outcome.triage,
+        &reviews,
+    );
+    let rendered = observer::render_observations(&observer::ObservationsInput {
+        findings: &findings,
+        annotations: &annotations,
+        triage: &outcome.triage,
+        reviews: &reviews,
+        plan: &plan_doc,
+        facts: &facts,
+        risk: &risk,
+    })?;
+    harness_core::ledger::write_atomic(&ObserverPaths::observations(&ledger), rendered.as_bytes())?;
+    let usage_in: u64 = outcome.usage.iter().map(|(_, i, _)| i).sum();
+    let usage_out: u64 = outcome.usage.iter().map(|(_, _, o)| o).sum();
+    out(format!(
+        "observe: {} verdict(s) via `{}` -> {} (tokens in/out: {}/{})",
+        outcome.triage.verdicts.len(),
+        adapter.name(),
+        ObserverPaths::observations(&ledger).display(),
+        usage_in,
+        usage_out
+    ));
+    for r in risk.iter().take(5) {
+        out(format!("observe: risk {} {}", r.score, r.unit));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_review(
+    finding: String,
+    uphold_dismiss: bool,
+    reinstate: bool,
+    note: String,
+    target: PathBuf,
+) -> Result<ExitCode> {
+    use harness_core::observer::{self, ObserverPaths};
+    if uphold_dismiss == reinstate {
+        bail!("pass exactly one of --uphold-dismiss or --reinstate");
+    }
+    let ctx = TargetContext::load(&target)?;
+    let ledger = Ledger::new(&ctx.root);
+    let findings = harness_core::observer::FindingsFile::load(&ObserverPaths::findings(&ledger))
+        .context("loading findings (run `harness detect` first)")?;
+    let annotations = observer::load_annotations(&ObserverPaths::annotations(&ledger))?;
+    if !findings.findings.iter().any(|f| f.id == finding)
+        && !annotations.iter().any(|f| f.id == finding)
+    {
+        bail!("unknown finding `{finding}`");
+    }
+    let action = if uphold_dismiss {
+        "uphold-dismiss"
+    } else {
+        "reinstate"
+    };
+    observer::append_review(
+        &ObserverPaths::reviews(&ledger),
+        &observer::Review {
+            finding: finding.clone(),
+            action: action.into(),
+            note,
+        },
+    )?;
+    out(format!(
+        "review: {finding} {action} recorded — re-run `harness observe` to re-render"
+    ));
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_sync_runtime(target: PathBuf, check: bool) -> Result<ExitCode> {
+    use harness_core::observer::{self, ObserverPaths};
+    let ctx = TargetContext::load(&target)?;
+    let ledger = Ledger::new(&ctx.root);
+    let facts =
+        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let plan_doc = Plan::load(&ledger.plan_path())?;
+    // Risk from whatever observer state exists: a MISSING file is fine
+    // (empty), but parse errors and newer-schema refusals must propagate —
+    // the agent-facing view must never be built from silently-dropped data.
+    let findings =
+        match harness_core::observer::FindingsFile::load(&ObserverPaths::findings(&ledger)) {
+            Ok(f) => f,
+            Err(e) if e.is_not_found() => Default::default(),
+            Err(e) => return Err(e.into()),
+        };
+    let annotations = observer::load_annotations(&ObserverPaths::annotations(&ledger))?;
+    let triage = harness_core::observer::TriageFile::load(&ObserverPaths::triage(&ledger))?;
+    let reviews = observer::load_reviews(&ObserverPaths::reviews(&ledger))?;
+    let mut all_findings = findings.findings.clone();
+    all_findings.extend(annotations);
+    let risk = harness_core::risk::score_units(&facts, &plan_doc, &all_findings, &triage, &reviews);
+
+    let body =
+        harness_core::runtime_view::render_block_body(&ctx.config.target.name, &plan_doc, &risk);
+    let block = harness_core::runtime_view::wrap_block(&body);
+    let agents_path = ctx.root.join("AGENTS.md");
+    let existing = std::fs::read_to_string(&agents_path).ok();
+    let updated = harness_core::runtime_view::apply(existing.as_deref(), &block)?;
+    if check {
+        if existing.as_deref() == Some(updated.as_str()) {
+            out("sync-runtime: up to date".into());
+            return Ok(ExitCode::SUCCESS);
+        }
+        eprintln!(
+            "sync-runtime: AGENTS.md managed block is out of date; run `harness sync-runtime`"
+        );
+        return Ok(ExitCode::FAILURE);
+    }
+    harness_core::ledger::write_atomic(&agents_path, updated.as_bytes())?;
+    // Claude Code bridge: CLAUDE.md imports AGENTS.md (per §14.3 spike evidence).
+    let claude_path = ctx.root.join("CLAUDE.md");
+    let claude = std::fs::read_to_string(&claude_path).unwrap_or_default();
+    if !claude.contains("@AGENTS.md") {
+        let mut updated_claude = claude;
+        if !updated_claude.is_empty() && !updated_claude.ends_with('\n') {
+            updated_claude.push('\n');
+        }
+        updated_claude.push_str("@AGENTS.md\n");
+        harness_core::ledger::write_atomic(&claude_path, updated_claude.as_bytes())?;
+    }
+    out(format!("sync-runtime: {} updated", agents_path.display()));
+    Ok(ExitCode::SUCCESS)
 }

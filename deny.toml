@@ -16,6 +16,9 @@ allow = [
   "Unicode-3.0",
   "Unicode-DFS-2016",
   "CC0-1.0",
+  # webpki-roots (Mozilla CCADB root-store data) — pulled in by ureq's rustls
+  # feature for the anthropic adapter's TLS path (DECISIONS.md, M2 deps).
+  "CDLA-Permissive-2.0",
 ]
 
 [advisories]

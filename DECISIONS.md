@@ -200,3 +200,124 @@ observations.md; `harness sync-runtime` (§14.3 design already recorded, spike g
 exact pattern); consider harness-driven per-unit crate gates replacing the CI interim.
 Carried forward: facts.db SQLite export deferred to first query consumer; proptest
 deferred; [state] profiles config deferred until artifacts exist.
+
+## 2026-09-17 — M2 research spike (§15) — findings and decisions
+
+Three parallel source-verified sweeps (hazard-detection landscape, translation
+literature, LLM triage hardening). Condensed:
+
+- **Tree-sitter honestly covers 8/12 taxonomy categories** (Semgrep's GA C support —
+  pre-expansion tree-sitter/GLR — validates the substrate). Pointer arithmetic, type
+  punning, aliasing, and indirect-call resolution genuinely need type info: recorded
+  as libclang-frontend material, carried as standing caveats in observations.md.
+  clang-tidy's check list is the M3+ reference oracle; weggli (dormant) is the
+  architectural cousin; Coccinelle rule idioms noted.
+- **TRACTOR Round-1 report (MIT-LL, Feb 2026)**: six performers, 48–98.7% functional
+  correctness; failures dominated by *semantic comparison* not compilation —
+  vindicating the oracle-is-the-product principle. Unsafe residue: raw-pointer
+  deref/arith > mutable statics > unions. Macros/conditional compilation are the
+  cross-performer pain point. Battery difficulty is staged; harder batteries every
+  6 months. **No published per-unit risk score exists** — ours is novel; TRACTOR
+  per-test failure data is the M4 calibration set.
+- **Risk signals (evidence-ranked)**: pointer-role complexity, oracle availability
+  (deferred — no coverage data yet), size×coupling (degradation >50 LoC; SCC as
+  blast radius), UB/impl-defined flags (most-failed TRACTOR tests), macro density +
+  mutable globals. Threading/setjmp/signal = binary blockers, not points.
+- **LLM triage**: production systems (Semgrep Assistant >95% agreement, Copilot
+  Autofix, Datadog) all ship ADVISORY triage with human review; agentic triage can
+  suppress 22% of true positives → asymmetric authority is mandatory. Spotlighting/
+  datamarking cuts injection success >50%→<2%; frontier models resist comment-based
+  attacks (Feb 2026, 9,366 trials) so slices keep comments. ≤10 findings/call,
+  ID-keyed verdicts, rationale-before-verdict field order.
+
+**Design decisions** (schemas in docs/SCHEMAS.md "M2 additions"; 3-lens adversarial
+review found 8 blockers, all fixed in the spec):
+
+1. Finding ids are content-keyed (spanned-source hash + occurrence index) — the beads
+   id-churn failure mode, avoided a second time. Verdicts keyed by finding id alone;
+   shared-header findings triaged once, joined per-unit at render.
+2. findings.jsonl is a pure function of (tree, detector suite): freshness-bound to
+   facts via header hash + per-file hashes; observe refuses on staleness (M1 refusal
+   pattern). Unit attribution + risk computed at render time, never committed.
+3. Behavior travels on records (`blocker`, `human_mandatory` flags) — open category
+   enum stays fail-safe for unknown categories.
+4. Human review surface: reviews.jsonl via `harness review`; dismissals keep full
+   risk weight until a human uphold exists. annotations.jsonl ingests oracle/human
+   findings (M0's comparator-UB + maxbits-contract are the founding entries).
+5. Injection posture: nonce-delimited untrusted regions, `<` escaped, no source-
+   derived text in the trusted prompt region, harness-computed content hashes,
+   response schema validation. Order: RNG-free blake3 sort (determinism chosen over
+   position-bias mitigation; recorded tradeoff).
+6. ProviderAdapter trait = name + complete only (Capabilities deferred to first
+   consumer, the facts.db precedent). Adapters: anthropic (ureq/rustls, key from env,
+   never persisted), trace-based replay/external (one trace format = record = replay
+   = external hand-off; external mode is how a driving agent runtime supplies triage
+   without an API key — provider-agnostic by construction, and M3's second live
+   adapter plugs into the same seam).
+7. Risk formula v1: capped weighted sum, fixed absolute caps, blocker pinning ≥90.
+   Weights are the M4 calibration hypothesis, recorded not sacred.
+8. Model default claude-sonnet-5 (briefing §16 Tier-2 for triage); config-overridable.
+
+**Deps added (§11.1):** `ureq` (approved baseline §11.2, rustls TLS, blocking —
+sync-first policy §10.3 upheld; no tokio). No other additions.
+
+**Revisit when:** libclang frontend lands (pointer/punning/aliasing detectors);
+M4 TRACTOR calibration (risk weights); per-unit test coverage exists (oracle-
+availability signal); canary injection set (recorded as future hardening).
+
+## 2026-09-17 — Risk score v1 normalization caps (normative for scoring stability)
+
+Fixed absolute caps (changing any is a schema-visible scoring change): signature
+pointer density 40 `*`s → 25 pts; LoC 2000 → 15; SCC files 5 → 5; fan-in 10 → 5;
+dependency depth 5 → 5; UB/impl-defined findings (all annotations count here, plus
+bitfield/union/ub-reliance/impl-defined/impl-contract categories) 5 → 20; macro +
+global-mutable findings 10 → 15; alloc-ownership findings 10 → 10. Sum = 100; each
+signal appears in exactly one term (the M2 review caught an alloc double-count that
+summed to 110 — fixed before any score was committed to main). Any `blocker` finding
+pins the unit at ≥ 90. Dismissed findings keep full weight until a human
+`uphold-dismiss` review exists.
+
+## 2026-09-17 — M2 complete; verification-review findings; state at session end (§17 handoff)
+
+**M2 is done.** Observer stage shipped: `harness-detect` (c-treesitter-v1 suite, 8
+taxonomy groups, content-keyed findings freshness-bound to facts), `harness-llm`
+(ProviderAdapter trait; `anthropic` live adapter via ureq/rustls, `replay`/`external`
+trace adapters — one trace format), the triage pass with its injection posture,
+deterministic risk scoring, `observations.md` rendering, the human review loop
+(`harness review`), annotations for oracle/human findings, and `harness sync-runtime`
+(§14.3). Zopfli run: 31 findings + 2 founding annotations, all 31 triaged (24 confirm,
+5 dismiss, 1 uncertain — via the external provider path, since this environment has no
+API key), 11 units risk-ranked; the 3-file SCC tops at 51. Gates: fmt, clippy -D
+warnings, 50 tests incl. e2e covering detect/observe/review/sync-runtime and all M2
+refusal exit codes. Stage-2 done-criteria (every finding triaged; units ranked) are
+enforced by the renderer, not by convention.
+
+**Pre-commit review (4 lenses) found and fixed:** 2 blockers — `webpki-roots`'s
+CDLA-Permissive-2.0 license missing from deny.toml (CI would have failed) and
+`sync-runtime` silently deleting human prose on a corrupted marker (now a hard error);
+plus: alloc double-counted in the risk formula (weights summed to 110 — fixed to 100),
+annotations not feeding the UB signal, `sync-runtime` swallowing newer-schema refusals,
+retry traces recorded under the wrong key (replay would fail), unvalidated finding
+fields reaching the trusted prompt region, model rationale able to forge markdown
+structure, `api_key_env` exfiltration via hostile harness.toml (now must start with
+`ANTHROPIC_`), detector gaps (const-qualifier level on globals, missing
+`sigsetjmp`/`_longjmp`/`cnd_`, unnamed fn-pointer params, typedef chains, fn-pointer
+struct fields, `__attribute__`-defeated pointer-return heuristic, macro span
+off-by-one), and spec/impl drift on trace keys and per-group identity bytes (spec
+amended). All with regression tests.
+
+**Live-call status:** the Anthropic adapter is implemented per the current API
+(x-api-key + anthropic-version 2023-06-01, no temperature/thinking params, stop_reason
+gating, 1 retry on 429/5xx) but has NOT been exercised against the live API in this
+environment (no key). First live run should be done deliberately with
+`provider = "anthropic"` and its trace pair inspected; it will produce byte-identical
+triage.jsonl on replay by construction.
+
+**Next actions (M3 — provider adapter #2):** second live adapter (any OpenAI-compatible
+or local endpoint) behind the same trait with zero changes outside harness-llm +
+config; prove the same triage run through both; record/replay determinism across
+providers. Carry-forwards: canary injection set for the triage prompt (recorded as
+future hardening); `state status` does not yet report observer freshness (observe
+refuses instead — acceptable, documented); per-unit oracle-availability risk signal
+awaits per-unit tests; facts.db export + proptest still deferred; libclang frontend
+for the 4 undetectable categories.

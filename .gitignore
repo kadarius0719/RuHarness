@@ -1,2 +1,3 @@
 target/
 /targets/zopfli/migration/build/
+/targets/zopfli/migration/observer/traces/

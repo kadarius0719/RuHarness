@@ -14,5 +14,7 @@ path = "src/main.rs"
 harness-core.workspace = true
 harness-scan.workspace = true
 harness-oracle.workspace = true
+harness-detect.workspace = true
+harness-llm.workspace = true
 clap.workspace = true
 anyhow.workspace = true

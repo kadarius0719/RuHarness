@@ -14,8 +14,11 @@ pub mod error;
 pub mod facts;
 pub mod hash;
 pub mod ledger;
+pub mod observer;
 pub mod plan;
 pub mod planner;
+pub mod risk;
+pub mod runtime_view;
 pub mod traits;
 pub mod verdict;
 
