@@ -1,0 +1,48 @@
+# CI gates (briefing §10.2): fmt, clippy -D warnings, workspace tests on both
+# development platforms, plus supply-chain checks (§11.3) via cargo-deny.
+# The integration tests compile vendored C with `cc`, which is present on both
+# runners out of the box.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    name: checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --workspace
+      # Unit crates are excluded from the workspace by design (a broken
+      # in-progress unit must not brick the harness), so verified units get
+      # their gates explicitly. Interim: enumerated here until the harness
+      # itself drives per-unit gates (recorded in DECISIONS.md, M1 review).
+      - name: unit crate gates (u001-katajainen)
+        run: |
+          cargo clippy --manifest-path targets/zopfli/migration/units/u001-katajainen/katajainen_rs/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path targets/zopfli/migration/units/u001-katajainen/katajainen_rs/Cargo.toml
+
+  deny:
+    name: deny (advisories, licenses, bans, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources

@@ -1,0 +1,18 @@
+[package]
+name = "harness-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The harness binary"
+
+[[bin]]
+name = "harness"
+path = "src/main.rs"
+
+[dependencies]
+harness-core.workspace = true
+harness-scan.workspace = true
+harness-oracle.workspace = true
+clap.workspace = true
+anyhow.workspace = true

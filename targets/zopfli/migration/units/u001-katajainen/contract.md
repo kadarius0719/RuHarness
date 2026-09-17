@@ -37,7 +37,8 @@ logic is safe Rust: pointer-chained nodes from the C version become index-based 
 
 ## Done-criteria (oracle)
 
-`cargo run -p harness-m0 -- oracle` fully green:
+`harness verify u001-katajainen --target targets/zopfli` fully green
+(M0 ran this as `cargo run -p harness-m0 -- oracle`; same checks):
 1. differential driver stdout byte-identical (C vs Rust link),
 2. whole-program zopfli compressed output byte-identical (all-C vs mixed link),
 3. ASan/UBSan-clean C-side driver run.

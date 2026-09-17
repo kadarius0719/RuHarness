@@ -1,0 +1,133 @@
+schema_version = 1
+target = "zopfli"
+
+# Migration plan (docs/SCHEMAS.md). Block order is advisory; execution order is
+# re-derived from depends_on. `harness plan` reconciles derived fields; status
+# is owned by `harness verify`; prose fields are human/LLM-owned.
+
+[[unit]]
+id = "u001-katajainen"
+status = "verified"
+files = ["src/zopfli/katajainen.c"]
+interface = ["int ZopfliLengthLimitedCodeLengths(const size_t*, int, int, unsigned*)"]
+test_strategy = "differential driver + whole-program byte-compare + sanitizers"
+done_criteria = "oracle green: driver stdout byte-identical C vs Rust link, mixed-link gzip byte-identical, ASan/UBSan clean"
+symbols = ["ZopfliLengthLimitedCodeLengths"]
+depends_on = []
+source_hash = "blake3:24231df2ed359c49223558a9f977ce9d6d370e6ad1d9baf6d34cf47751a81f4c"
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u001-katajainen/driver.c"
+rust_crate = "katajainen_rs"
+replaces = ["src/zopfli/katajainen.c"]
+
+[[unit]]
+id = "u-cache"
+status = "pending"
+files = ["src/zopfli/cache.c"]
+source_hash = "blake3:8d15936587f46b00a6c685b3ab32dd1d7f3b7407d3bdc4fc33fb7fa75ab78702"
+symbols = ["ZopfliCacheToSublen", "ZopfliCleanCache", "ZopfliInitCache", "ZopfliMaxCachedSublen", "ZopfliSublenToCache"]
+interface = ["void ZopfliCacheToSublen(const ZopfliLongestMatchCache* lmc, size_t pos, size_t length, unsigned short* sublen)", "void ZopfliCleanCache(ZopfliLongestMatchCache* lmc)", "void ZopfliInitCache(size_t blocksize, ZopfliLongestMatchCache* lmc)", "unsigned ZopfliMaxCachedSublen(const ZopfliLongestMatchCache* lmc, size_t pos, size_t length)", "void ZopfliSublenToCache(const unsigned short* sublen, size_t pos, size_t length, ZopfliLongestMatchCache* lmc)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[[unit]]
+id = "u-hash"
+status = "pending"
+files = ["src/zopfli/hash.c"]
+source_hash = "blake3:53d2d2d4560e6e7851c6d5e8def981da46411603f6cf0e83479375f25fb3f15a"
+symbols = ["ZopfliAllocHash", "ZopfliCleanHash", "ZopfliResetHash", "ZopfliUpdateHash", "ZopfliWarmupHash"]
+interface = ["void ZopfliAllocHash(size_t window_size, ZopfliHash* h)", "void ZopfliCleanHash(ZopfliHash* h)", "void ZopfliResetHash(size_t window_size, ZopfliHash* h)", "void ZopfliUpdateHash(const unsigned char* array, size_t pos, size_t end, ZopfliHash* h)", "void ZopfliWarmupHash(const unsigned char* array, size_t pos, size_t end, ZopfliHash* h)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[[unit]]
+id = "u-lz77"
+status = "pending"
+files = ["src/zopfli/lz77.c"]
+source_hash = "blake3:1227b69f8e6acd9bc2e3de221e94995ba9fe70535a15b9216c6dc2b437bfd654"
+symbols = ["ZopfliAppendLZ77Store", "ZopfliCleanBlockState", "ZopfliCleanLZ77Store", "ZopfliCopyLZ77Store", "ZopfliFindLongestMatch", "ZopfliInitBlockState", "ZopfliInitLZ77Store", "ZopfliLZ77GetByteRange", "ZopfliLZ77GetHistogram", "ZopfliLZ77Greedy", "ZopfliStoreLitLenDist", "ZopfliVerifyLenDist"]
+interface = ["void ZopfliAppendLZ77Store(const ZopfliLZ77Store* store, ZopfliLZ77Store* target)", "void ZopfliCleanBlockState(ZopfliBlockState* s)", "void ZopfliCleanLZ77Store(ZopfliLZ77Store* store)", "void ZopfliCopyLZ77Store( const ZopfliLZ77Store* source, ZopfliLZ77Store* dest)", "void ZopfliFindLongestMatch(ZopfliBlockState* s, const ZopfliHash* h, const unsigned char* array, size_t pos, size_t size, size_t limit, unsigned short* sublen, unsigned short* distance, unsigned short* length)", "void ZopfliInitBlockState(const ZopfliOptions* options, size_t blockstart, size_t blockend, int add_lmc, ZopfliBlockState* s)", "void ZopfliInitLZ77Store(const unsigned char* data, ZopfliLZ77Store* store)", "size_t ZopfliLZ77GetByteRange(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend)", "void ZopfliLZ77GetHistogram(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend, size_t* ll_counts, size_t* d_counts)", "void ZopfliLZ77Greedy(ZopfliBlockState* s, const unsigned char* in, size_t instart, size_t inend, ZopfliLZ77Store* store, ZopfliHash* h)", "void ZopfliStoreLitLenDist(unsigned short length, unsigned short dist, size_t pos, ZopfliLZ77Store* store)", "void ZopfliVerifyLenDist(const unsigned char* data, size_t datasize, size_t pos, unsigned short dist, unsigned short length)"]
+depends_on = ["u-cache", "u-hash"]
+test_strategy = ""
+done_criteria = ""
+
+[[unit]]
+id = "u-tree"
+status = "pending"
+files = ["src/zopfli/tree.c"]
+source_hash = "blake3:054e37090e2f07d025dc15d8f90346a7e225c8b3a42738c6f8ee74ceb6ac108a"
+symbols = ["ZopfliCalculateBitLengths", "ZopfliCalculateEntropy", "ZopfliLengthsToSymbols"]
+interface = ["void ZopfliCalculateBitLengths(const size_t* count, size_t n, int maxbits, unsigned* bitlengths)", "void ZopfliCalculateEntropy(const size_t* count, size_t n, double* bitlengths)", "void ZopfliLengthsToSymbols(const unsigned* lengths, size_t n, unsigned maxbits, unsigned* symbols)"]
+depends_on = ["u001-katajainen"]
+test_strategy = ""
+done_criteria = ""
+
+[[unit]]
+id = "u-blocksplitter-deflate-squeeze"
+status = "pending"
+files = ["src/zopfli/blocksplitter.c", "src/zopfli/deflate.c", "src/zopfli/squeeze.c"]
+source_hash = "blake3:1f7544fb2a86425827d71300bb1dd610f3d9944d4f0b68eb1f3ac92c749cfbb6"
+symbols = ["ZopfliBlockSplit", "ZopfliBlockSplitLZ77", "ZopfliBlockSplitSimple", "OptimizeHuffmanForRle", "ZopfliCalculateBlockSize", "ZopfliCalculateBlockSizeAutoType", "ZopfliDeflate", "ZopfliDeflatePart", "ZopfliLZ77Optimal", "ZopfliLZ77OptimalFixed"]
+interface = ["void ZopfliBlockSplit(const ZopfliOptions* options, const unsigned char* in, size_t instart, size_t inend, size_t maxblocks, size_t** splitpoints, size_t* npoints)", "void ZopfliBlockSplitLZ77(const ZopfliOptions* options, const ZopfliLZ77Store* lz77, size_t maxblocks, size_t** splitpoints, size_t* npoints)", "void ZopfliBlockSplitSimple(const unsigned char* in, size_t instart, size_t inend, size_t blocksize, size_t** splitpoints, size_t* npoints)", "void OptimizeHuffmanForRle(int length, size_t* counts)", "double ZopfliCalculateBlockSize(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend, int btype)", "double ZopfliCalculateBlockSizeAutoType(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend)", "void ZopfliDeflate(const ZopfliOptions* options, int btype, int final, const unsigned char* in, size_t insize, unsigned char* bp, unsigned char** out, size_t* outsize)", "void ZopfliDeflatePart(const ZopfliOptions* options, int btype, int final, const unsigned char* in, size_t instart, size_t inend, unsigned char* bp, unsigned char** out, size_t* outsize)", "void ZopfliLZ77Optimal(ZopfliBlockState *s, const unsigned char* in, size_t instart, size_t inend, int numiterations, ZopfliLZ77Store* store)", "void ZopfliLZ77OptimalFixed(ZopfliBlockState *s, const unsigned char* in, size_t instart, size_t inend, ZopfliLZ77Store* store)"]
+depends_on = ["u-hash", "u-lz77", "u-tree"]
+test_strategy = ""
+done_criteria = ""
+
+[[unit]]
+id = "u-gzip_container"
+status = "pending"
+files = ["src/zopfli/gzip_container.c"]
+source_hash = "blake3:fd81cf9a9e0f687b9b84f9ca436bd7240c3003d8eb3252682fba444f9bd43c72"
+symbols = ["ZopfliGzipCompress"]
+interface = ["void ZopfliGzipCompress(const ZopfliOptions* options, const unsigned char* in, size_t insize, unsigned char** out, size_t* outsize)"]
+depends_on = ["u-blocksplitter-deflate-squeeze"]
+test_strategy = ""
+done_criteria = ""
+
+[[unit]]
+id = "u-util"
+status = "pending"
+files = ["src/zopfli/util.c"]
+source_hash = "blake3:13fb91a1645775ea1694fc01c7766c770334898261dbb1570bf49639e2d2832c"
+symbols = ["ZopfliInitOptions"]
+interface = ["void ZopfliInitOptions(ZopfliOptions* options)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[[unit]]
+id = "u-zlib_container"
+status = "pending"
+files = ["src/zopfli/zlib_container.c"]
+source_hash = "blake3:e5d174fe52a269a2697218815a42cf9f037f03cbfe6a3e44441f28b3270b9478"
+symbols = ["ZopfliZlibCompress"]
+interface = ["void ZopfliZlibCompress(const ZopfliOptions* options, const unsigned char* in, size_t insize, unsigned char** out, size_t* outsize)"]
+depends_on = ["u-blocksplitter-deflate-squeeze"]
+test_strategy = ""
+done_criteria = ""
+
+[[unit]]
+id = "u-zopfli_lib"
+status = "pending"
+files = ["src/zopfli/zopfli_lib.c"]
+source_hash = "blake3:181ad5288edbe56a5d6c0b1006e007651dc6b7eb6eedbab015048711b2f63850"
+symbols = ["ZopfliCompress"]
+interface = ["void ZopfliCompress(const ZopfliOptions* options, ZopfliFormat output_type, const unsigned char* in, size_t insize, unsigned char** out, size_t* outsize)"]
+depends_on = ["u-blocksplitter-deflate-squeeze", "u-gzip_container", "u-zlib_container"]
+test_strategy = ""
+done_criteria = ""
+
+[[unit]]
+id = "u-zopfli_bin"
+status = "pending"
+files = ["src/zopfli/zopfli_bin.c"]
+source_hash = "blake3:7f38235f8061b25c53f80793b016ebeb228b55f97af2371cf8b200c385747778"
+symbols = ["main"]
+interface = ["int main(int argc, char* argv[])"]
+depends_on = ["u-util", "u-zopfli_lib"]
+test_strategy = ""
+done_criteria = ""

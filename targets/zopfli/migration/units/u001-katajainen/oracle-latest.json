@@ -1,0 +1,45 @@
+{
+  "schema": "ruharness-verdict",
+  "schema_version": 1,
+  "unit": "u001-katajainen",
+  "green": true,
+  "inputs": {
+    "unit_source": "blake3:24231df2ed359c49223558a9f977ce9d6d370e6ad1d9baf6d34cf47751a81f4c",
+    "driver": "blake3:019139974804439b50881cb5be2173812764eec4d92f13110564d7514fe68d38",
+    "rust_crate": "blake3:b91f77e8501bfb3ec59ca6d644f1c26b4c158bd9f4f1fcbd8fb95136b8b7d67d",
+    "replaces": [
+      "src/zopfli/katajainen.c"
+    ],
+    "toolchain": [
+      "rustc 1.94.1 (e408947bf 2026-03-25)",
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)"
+    ]
+  },
+  "checks": [
+    {
+      "name": "differential-driver",
+      "passed": true,
+      "detail": "183832 bytes identical"
+    },
+    {
+      "name": "whole-program:sample_text.txt",
+      "passed": true,
+      "detail": "205 bytes identical"
+    },
+    {
+      "name": "whole-program:sample_rand.bin",
+      "passed": true,
+      "detail": "16407 bytes identical"
+    },
+    {
+      "name": "whole-program:sample_empty",
+      "passed": true,
+      "detail": "20 bytes identical"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    }
+  ]
+}

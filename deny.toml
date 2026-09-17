@@ -1,0 +1,32 @@
+# cargo-deny configuration (briefing §11.3). Config schema version 2.
+# Run locally with `cargo deny check`; CI runs it via EmbarkStudios/cargo-deny-action.
+
+[licenses]
+version = 2
+# Every license here must be justified: additions are a reviewed change, not a
+# convenience. OR-expressions pass if any arm is allowed.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CC0-1.0",
+]
+
+[advisories]
+version = 2
+# Defaults: RUSTSEC vulnerabilities and unsound crates error, yanked versions
+# are denied. The advisory DB is fetched by cargo-deny itself.
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

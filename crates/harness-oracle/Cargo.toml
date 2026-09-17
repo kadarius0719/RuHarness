@@ -1,0 +1,13 @@
+[package]
+name = "harness-oracle"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "RuHarness oracle strategies (c-abi-differential)"
+
+[dependencies]
+harness-core.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

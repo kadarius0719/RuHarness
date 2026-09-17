@@ -16,122 +16,109 @@ invented rather than translated — same skeleton, different planner and oracle.
 - **The oracle is the product.** Models are swappable commodities; the verification
   machinery is the durable value. "Compiles and passes the oracle" is the *only*
   definition of done for a migrated unit — never an agent's judgment of correctness.
-- **State lives on disk, not in conversation.** All pipeline state is checkpointed
-  as files in the target repo (the *ledger*). Any agent, from any provider, must be
-  able to resume any stage cold by reading it.
+- **State lives on disk, not in conversation.** All pipeline state is committed
+  plain text in the target repo (the *ledger*); anything binary or regenerable is a
+  derived, gitignored cache. Any agent, from any provider, resumes any stage cold by
+  reading the ledger — and every `verified` claim is **content-bound**: verdicts
+  record blake3 digests of exactly what was tested.
 - **Deterministic tools measure; agents interpret.** Parsing, graph construction,
-  test execution, and diffing are plain code. LLMs rank, explain, plan, and write
-  code — nothing a script could do instead.
-- **Provider-agnostic by construction.** No pipeline logic couples to any one
-  vendor's SDK.
-- **Migrate in dependency order, behind an FFI seam.** Leaf units with narrow
-  interfaces first, strangler-fig style; the C ABI boundary is the safety net.
-- **Unsafe Rust only at the FFI shim.** Interior logic of migrated units is safe
-  Rust.
+  planning order, test execution, and diffing are plain code with byte-reproducible
+  output. LLMs rank, explain, plan, and write code — nothing a script could do.
+- **Provider-agnostic by construction; migrate in dependency order behind an FFI
+  seam; unsafe Rust only at the boundary shim.**
 
-The full architecture is five components — ledger (state), scanner (deterministic
-analysis), observer (hazard triage), planner (ordered migration units), and
-executor + oracle (the translate/verify loop). The engineering log with every
-decision, research spike, and milestone handoff is [DECISIONS.md](DECISIONS.md).
+The normative ledger schemas are in [docs/SCHEMAS.md](docs/SCHEMAS.md); every
+engineering decision, research spike, and milestone handoff is in
+[DECISIONS.md](DECISIONS.md).
 
 ## Status
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M0** — end-to-end thread | One C library, one leaf unit, one binary: scan → translate → link → differential test | ✅ done |
-| **M1** — ledger + fact schema | `facts.db`, `plan.yaml`, multi-unit ordering, multi-crate workspace | next |
-| **M2** — observer | Gotcha detectors (macros, unions, pointer tricks, UB reliance, …) + LLM triage | — |
-| **M3** — provider adapter #2 | Same migration through a second LLM provider, zero core changes | — |
-| **M4** — benchmark | DARPA TRACTOR public corpus, scores as regression suite | — |
+| **M0** — end-to-end thread | One leaf unit migrated and differentially verified | ✅ |
+| **M1** — ledger + schemas | Fact model, plan, content-bound verdicts, multi-unit ordering, workspace, CI | ✅ |
+| **M2** — observer | Gotcha detectors + LLM triage; runtime-view sync | next |
+| **M3** — provider adapter #2 | Same migration through a second LLM provider | — |
+| **M4** — benchmark | DARPA TRACTOR public corpus scores as regression suite | — |
 | **M5** — extension proof | External detector plugin + `EXTENDING.md` | — |
 | **M6+** — Phase 2 spike | Second language frontend, golden-test oracle | — |
 
-**M0 concretely:** the vendored [zopfli](https://github.com/google/zopfli)
-compression library (pinned commit, provenance in `DECISIONS.md`) with its
-`katajainen.c` unit — length-limited Huffman code lengths, one public symbol —
-migrated to safe Rust (`katajainen_rs`) behind the identical
-`extern "C"` ABI, with zero human-written Rust, verified by the oracle.
-
-The oracle already earned its keep at M0 by catching two things code review alone
-would likely miss: the C baseline memory-corrupts (SIGBUS) for `maxbits > 15`, an
-implicit contract nowhere in its header; and its qsort comparator stops being a
-total order for frequencies ≥ 2²² — undefined behavior in the *original C*. Both
-are recorded as hazards in the migration ledger.
+The working target is a vendored [zopfli](https://github.com/google/zopfli) (pinned
+commit in `DECISIONS.md`). Its plan currently holds 11 units in dependency order;
+`u001-katajainen` (length-limited Huffman codes) is migrated to safe Rust behind the
+identical C ABI and oracle-verified, with zero human-written Rust.
 
 ## Usage
 
 Prerequisites: stable Rust (pinned via `rust-toolchain.toml`) and a C compiler
-(`cc`; clang with ASan/UBSan support — developed and tested on macOS).
-
-Scan the target: parse all C sources with tree-sitter, build the function-level
-call graph, and rank public *leaf units* (functions whose transitive callees are
-only same-file statics and libc — the cheapest safe migration candidates):
+(clang with ASan/UBSan; developed on macOS, CI also runs Ubuntu).
 
 ```bash
-cargo run -p harness-m0 -- scan
+cargo run -p harness-cli -- scan --target targets/zopfli
 ```
-
-Run the oracle — the definition of done for the migrated unit:
+Parses the C sources (tree-sitter), writes the canonical fact model to
+`migration/facts.jsonl`: files with include edges, symbols with canonical ids and
+signatures, call refs.
 
 ```bash
-cargo run -p harness-m0 -- oracle
+cargo run -p harness-cli -- plan --target targets/zopfli
 ```
+Clusters files into migration units (dependency cycles collapse into one unit),
+computes each unit's `source_hash` over its include closure, and **reconciles**
+`migration/plan.toml` — statuses, human comments, and unknown fields survive every
+replan; execution order is re-derived from `depends_on`, never trusted from block
+order.
 
-It performs five checks and prints a PASS/FAIL line for each:
+```bash
+cargo run -p harness-cli -- verify u001-katajainen --target targets/zopfli
+```
+Refuses if the unit's source changed since planning (re-plan first). Otherwise runs
+the unit's oracle — for `c-abi-differential`: a differential driver linked against
+original C vs the Rust staticlib over ~500 deterministic cases (byte-compared),
+the whole program built all-C vs mixed C/Rust (gzip output byte-compared over three
+samples), and an ASan/UBSan run — then writes a **content-bound verdict**
+(`oracle-latest.json`, digests of everything tested) and updates the plan status.
+Red demotes `verified → in-progress` and preserves `oracle-last-green.json`.
 
-1. **Differential driver** — `migration/units/u001-katajainen/driver.c` is compiled
-   twice, linked against the original `katajainen.c` and against the Rust
-   staticlib, then run over ~500 deterministic generated cases (fixed-seed PRNG:
-   edge cases, error paths, sparse/dense/large distributions). Stdout must be
-   byte-identical.
-2. **Whole-program (×3 samples)** — the full `zopfli` binary is built all-C and
-   mixed (C minus `katajainen.c`, plus the Rust staticlib); gzip output over text,
-   random-binary, and empty samples must be byte-identical (zopfli's gzip MTIME is
-   hardcoded to 0, so output is deterministic).
-3. **Sanitizers** — the C-side driver is rebuilt with ASan+UBSan and must run
-   clean.
+```bash
+cargo run -p harness-cli -- state status --target targets/zopfli
+```
+The staleness detector: facts vs tree, every unit's plan hash vs tree, every
+verdict's input digests vs tree, and status/evidence contradictions.
 
-Exit code is 0 only on a fully green verdict, so the command is CI-usable as-is.
-Both commands together: `cargo run -p harness-m0 -- all`. The harness's own tests:
-`cargo test --workspace`.
-
-Everything is deterministic and offline: fixed seeds, pinned target sources, no
-network. Build artifacts land in `targets/zopfli/migration/build/` (gitignored);
-the machine-checked evidence of the last oracle run is committed at
-`targets/zopfli/migration/units/u001-katajainen/oracle-latest.md`.
+Exit codes (stable contract): `0` ok/green · `1` harness error · `2` usage ·
+`10` oracle red. Machine consumers read the ledger files, not stdout.
 
 ## Repository layout
 
 ```
-m0/                          # the harness in embryo: scan + oracle binary
-                             # (promoted to harness-core/-scan/-oracle/… crates at M1)
-targets/zopfli/              # vendored migration target (pinned; .git stripped)
-  migration/                 # THE LEDGER — all migration state, on disk
-    DECISIONS.md             #   unit choices, behavioral hazards, oracle definition
-    units/u001-katajainen/
-      contract.md            #   preserved ABI, semantics, domain, done-criteria, status
-      driver.c               #   differential test driver (shared by both links)
-      oracle-latest.md       #   latest oracle verdict + evidence
-      katajainen_rs/         #   the migrated unit: safe Rust core, unsafe only in
-                             #   the extern "C" shim
-DECISIONS.md                 # harness engineering log + per-session handoff state
+crates/
+  harness-core/     # fact model, schemas, plan, verdicts, planner, traits (forbid unsafe, deny missing_docs)
+  harness-scan/     # C frontend (tree-sitter) implementing LanguageFrontend
+  harness-oracle/   # c-abi-differential OracleStrategy
+  harness-cli/      # the `harness` binary
+docs/SCHEMAS.md     # normative ledger schemas, v1
+targets/zopfli/     # vendored migration target (pinned)
+  harness.toml      #   target config
+  migration/        #   THE LEDGER: facts.jsonl, plan.toml, units/<id>/ (contract,
+                    #   driver, Rust crate, content-bound verdicts), DECISIONS.md
+DECISIONS.md        # engineering log: spikes, decisions, milestone handoffs
 ```
 
-The ledger is the source of truth. To pick up work cold — human or agent — read
-root `DECISIONS.md` (the latest handoff section says what's done and what's next),
-then the target's `migration/` directory. Chat history is never authoritative.
+Unit crates under `targets/` are deliberately **not** workspace members — the
+oracle builds them via `--manifest-path`, so a broken in-progress unit can never
+brick the harness's own tooling on a fresh clone.
 
 ## Working on the harness
 
-Quality gates expected to pass before committing (CI to be added at M1):
+CI (GitHub Actions, macOS + Ubuntu) enforces: `cargo fmt --check`, `cargo clippy
+--all-targets -- -D warnings`, `cargo test --workspace` (includes an end-to-end
+pipeline test that migrates-and-verifies u001 in a temp copy), and `cargo deny`
+(advisories, license allowlist, source policy). `Cargo.lock` is committed.
 
-```bash
-cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace
-```
-
-Dependency policy is deliberately tight (widely-used, permissively-licensed,
-minimal transitive footprint; every addition justified in `DECISIONS.md`). Current
-non-std dependencies: `tree-sitter` + `tree-sitter-c`, total.
+Dependency policy is tight (§11 of the project briefing): every addition is
+justified in `DECISIONS.md`. Current tree: serde/serde_json, toml/toml_edit,
+blake3, thiserror, tree-sitter (+C grammar), clap, anyhow.
 
 ## License
 

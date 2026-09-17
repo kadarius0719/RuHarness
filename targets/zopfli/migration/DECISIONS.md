@@ -46,7 +46,8 @@ callees, no globals/IO/threads, deterministic output — the cheapest possible o
 
 ## 2026-09-17 — Oracle definition for u001
 
-Run from repo root: `cargo run -p harness-m0 -- oracle`
+Run from repo root: `cargo run -p harness-cli -- verify u001-katajainen --target targets/zopfli`
+(originally `cargo run -p harness-m0 -- oracle` at M0; promoted at M1 with identical checks)
 - Differential driver: `migration/units/u001-katajainen/driver.c`, deterministic
   xorshift64 inputs (~500 cases: n ∈ {0..300}, maxbits ∈ {1,3,7,15,20}, sparse/dense/
   large-value/error-path frequency patterns), full bitlength arrays printed; C-linked

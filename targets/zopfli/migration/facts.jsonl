@@ -1,0 +1,436 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"src/zopfli/blocksplitter.c","hash":"blake3:45edada9429d0c02fa96699747472fd127d01762900f5ba47710c38e6183d274","includes":["src/zopfli/blocksplitter.h","src/zopfli/deflate.h","src/zopfli/squeeze.h","src/zopfli/tree.h","src/zopfli/util.h"]}
+{"k":"file","path":"src/zopfli/blocksplitter.h","hash":"blake3:cbeb76a18fd8d52cb171ea1c535eada637b6cdb647524addc531d7591f0cb5a7","includes":["src/zopfli/lz77.h","src/zopfli/zopfli.h"]}
+{"k":"file","path":"src/zopfli/cache.c","hash":"blake3:7ff4ac7140f2bb35f2e5f6c0e0d400a1193a9161377541233bd157b6a6e81be6","includes":["src/zopfli/cache.h"]}
+{"k":"file","path":"src/zopfli/cache.h","hash":"blake3:d30b727472630cf133b1b1dfe991dfc4721b43c6f9c9924937d31416758da2db","includes":["src/zopfli/util.h"]}
+{"k":"file","path":"src/zopfli/deflate.c","hash":"blake3:8a2b4bd73fe83b3d4be2f991f56d7645fefdaed1af4fc5060f6d8f994e366b37","includes":["src/zopfli/blocksplitter.h","src/zopfli/deflate.h","src/zopfli/squeeze.h","src/zopfli/symbols.h","src/zopfli/tree.h"]}
+{"k":"file","path":"src/zopfli/deflate.h","hash":"blake3:f2fffe426ffecb62c48cc8aebbb18db43b142a4688a14582fe6edb82f14e9738","includes":["src/zopfli/lz77.h","src/zopfli/zopfli.h"]}
+{"k":"file","path":"src/zopfli/gzip_container.c","hash":"blake3:b8c4500031f99c374a11bfcf19a9e325a7a17d836bacb8ff563f0b4946c36245","includes":["src/zopfli/deflate.h","src/zopfli/gzip_container.h","src/zopfli/util.h"]}
+{"k":"file","path":"src/zopfli/gzip_container.h","hash":"blake3:efd2ee452d2dcfbc2c5ba961d0fe8f379f794d5cf374fc09a437b57f97953a5a","includes":["src/zopfli/zopfli.h"]}
+{"k":"file","path":"src/zopfli/hash.c","hash":"blake3:563e24b938b7c92b32d946f9504ce6a64641f45d91585644087deb065fe3d6cf","includes":["src/zopfli/hash.h"]}
+{"k":"file","path":"src/zopfli/hash.h","hash":"blake3:7b61692a3b727e4ed9dc72cd979073be325d95bb650f4f7b80488a28db4c558d","includes":["src/zopfli/util.h"]}
+{"k":"file","path":"src/zopfli/katajainen.c","hash":"blake3:9223297ce32da3bb984055affc62845c7a6cfd3b2e4a743a111d3a829854885e","includes":["src/zopfli/katajainen.h"]}
+{"k":"file","path":"src/zopfli/katajainen.h","hash":"blake3:3d8e727e428fe1ec9285677eef9d910ce6c3bd9f8323ce7add5a5ba547390dfc","includes":[]}
+{"k":"file","path":"src/zopfli/lz77.c","hash":"blake3:45f6002dde299e029feebb49c0c456a2054f8e33c0a3c436a2b620e2a75ee89e","includes":["src/zopfli/lz77.h","src/zopfli/symbols.h","src/zopfli/util.h"]}
+{"k":"file","path":"src/zopfli/lz77.h","hash":"blake3:cc7a024d69bc213d97aa7a33272c4abb0666885751e8759daf915aedc3a9cb2c","includes":["src/zopfli/cache.h","src/zopfli/hash.h","src/zopfli/zopfli.h"]}
+{"k":"file","path":"src/zopfli/squeeze.c","hash":"blake3:39cf14ffb5893fbbb35644a35e3767efdf301e94568c72fe3a14c344b6863b6c","includes":["src/zopfli/blocksplitter.h","src/zopfli/deflate.h","src/zopfli/squeeze.h","src/zopfli/symbols.h","src/zopfli/tree.h","src/zopfli/util.h"]}
+{"k":"file","path":"src/zopfli/squeeze.h","hash":"blake3:171ef91551f778631b3a3912f3da62d087b6e733ddba6975cfce0294471cb61a","includes":["src/zopfli/lz77.h"]}
+{"k":"file","path":"src/zopfli/symbols.h","hash":"blake3:63a54ef811d9665d774384c7f18db44f6aad2aee189d5611f314469c8a7056a6","includes":[]}
+{"k":"file","path":"src/zopfli/tree.c","hash":"blake3:92b7975a5899c1da8059607decc139536698cfacf17bc082baa0c56655713abf","includes":["src/zopfli/katajainen.h","src/zopfli/tree.h","src/zopfli/util.h"]}
+{"k":"file","path":"src/zopfli/tree.h","hash":"blake3:6f8369f99d7b1e47f6fbdaa12bbe33136d2bb8a8c7f1d118f613f435283073a0","includes":[]}
+{"k":"file","path":"src/zopfli/util.c","hash":"blake3:bb6139fea2ddf43d1e64d0f48e0ce8f6e060a375d078aeee1ae13144d8d33710","includes":["src/zopfli/util.h","src/zopfli/zopfli.h"]}
+{"k":"file","path":"src/zopfli/util.h","hash":"blake3:2a8065060f50ac796ae408495f8f6748c40bea322698dfb009a20b4209091e6a","includes":[]}
+{"k":"file","path":"src/zopfli/zlib_container.c","hash":"blake3:ab36dceed2fe62e1bb5268242e4cc3b70945a4a87728a0f53ca5d3ecfda7ba1a","includes":["src/zopfli/deflate.h","src/zopfli/util.h","src/zopfli/zlib_container.h"]}
+{"k":"file","path":"src/zopfli/zlib_container.h","hash":"blake3:35aa45039092a88a12631cc40c2d3adb9c6b4c64241aa20f6ec2cd325fc98366","includes":["src/zopfli/zopfli.h"]}
+{"k":"file","path":"src/zopfli/zopfli.h","hash":"blake3:38d5f951aa95669e1ce7e119dd110b003ded463e8fb925353ed64e6c2d4870ad","includes":[]}
+{"k":"file","path":"src/zopfli/zopfli_bin.c","hash":"blake3:0dea54c63a7ee9bdf66719fd019ce1726d5b48cc5710d8de78f63f86655ba06d","includes":["src/zopfli/deflate.h","src/zopfli/gzip_container.h","src/zopfli/zlib_container.h"]}
+{"k":"file","path":"src/zopfli/zopfli_lib.c","hash":"blake3:3478fbdde39ad227a899b1fa512927210373f1162327e7d1eb7b46ba7b1e212f","includes":["src/zopfli/deflate.h","src/zopfli/gzip_container.h","src/zopfli/zlib_container.h","src/zopfli/zopfli.h"]}
+{"k":"symbol","name":"ZopfliBlockSplit","kind":"function","file":"src/zopfli/blocksplitter.c","visibility":"public","signature":"void ZopfliBlockSplit(const ZopfliOptions* options, const unsigned char* in, size_t instart, size_t inend, size_t maxblocks, size_t** splitpoints, size_t* npoints)","span":[275,320]}
+{"k":"symbol","name":"ZopfliBlockSplitLZ77","kind":"function","file":"src/zopfli/blocksplitter.c","visibility":"public","signature":"void ZopfliBlockSplitLZ77(const ZopfliOptions* options, const ZopfliLZ77Store* lz77, size_t maxblocks, size_t** splitpoints, size_t* npoints)","span":[215,273]}
+{"k":"symbol","name":"ZopfliBlockSplitSimple","kind":"function","file":"src/zopfli/blocksplitter.c","visibility":"public","signature":"void ZopfliBlockSplitSimple(const unsigned char* in, size_t instart, size_t inend, size_t blocksize, size_t** splitpoints, size_t* npoints)","span":[322,332]}
+{"k":"symbol","name":"src/zopfli/blocksplitter.c::AddSorted","kind":"function","file":"src/zopfli/blocksplitter.c","visibility":"internal","signature":"static void AddSorted(size_t value, size_t** out, size_t* outsize)","span":[130,143]}
+{"k":"symbol","name":"src/zopfli/blocksplitter.c::EstimateCost","kind":"function","file":"src/zopfli/blocksplitter.c","visibility":"internal","signature":"static double EstimateCost(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend)","span":[108,111]}
+{"k":"symbol","name":"src/zopfli/blocksplitter.c::FindLargestSplittableBlock","kind":"function","file":"src/zopfli/blocksplitter.c","visibility":"internal","signature":"static int FindLargestSplittableBlock( size_t lz77size, const unsigned char* done, const size_t* splitpoints, size_t npoints, size_t* lstart, size_t* lend)","span":[195,213]}
+{"k":"symbol","name":"src/zopfli/blocksplitter.c::FindMinimum","kind":"function","file":"src/zopfli/blocksplitter.c","visibility":"internal","signature":"static size_t FindMinimum(FindMinimumFun f, void* context, size_t start, size_t end, double* smallest)","span":[43,96]}
+{"k":"symbol","name":"src/zopfli/blocksplitter.c::PrintBlockSplitPoints","kind":"function","file":"src/zopfli/blocksplitter.c","visibility":"internal","signature":"static void PrintBlockSplitPoints(const ZopfliLZ77Store* lz77, const size_t* lz77splitpoints, size_t nlz77points)","span":[148,180]}
+{"k":"symbol","name":"src/zopfli/blocksplitter.c::SplitCost","kind":"function","file":"src/zopfli/blocksplitter.c","visibility":"internal","signature":"static double SplitCost(size_t i, void* context)","span":[125,128]}
+{"k":"symbol","name":"ZopfliCacheToSublen","kind":"function","file":"src/zopfli/cache.c","visibility":"public","signature":"void ZopfliCacheToSublen(const ZopfliLongestMatchCache* lmc, size_t pos, size_t length, unsigned short* sublen)","span":[87,108]}
+{"k":"symbol","name":"ZopfliCleanCache","kind":"function","file":"src/zopfli/cache.c","visibility":"public","signature":"void ZopfliCleanCache(ZopfliLongestMatchCache* lmc)","span":[48,52]}
+{"k":"symbol","name":"ZopfliInitCache","kind":"function","file":"src/zopfli/cache.c","visibility":"public","signature":"void ZopfliInitCache(size_t blocksize, ZopfliLongestMatchCache* lmc)","span":[28,46]}
+{"k":"symbol","name":"ZopfliMaxCachedSublen","kind":"function","file":"src/zopfli/cache.c","visibility":"public","signature":"unsigned ZopfliMaxCachedSublen(const ZopfliLongestMatchCache* lmc, size_t pos, size_t length)","span":[113,123]}
+{"k":"symbol","name":"ZopfliSublenToCache","kind":"function","file":"src/zopfli/cache.c","visibility":"public","signature":"void ZopfliSublenToCache(const unsigned short* sublen, size_t pos, size_t length, ZopfliLongestMatchCache* lmc)","span":[54,85]}
+{"k":"symbol","name":"OptimizeHuffmanForRle","kind":"function","file":"src/zopfli/deflate.c","visibility":"public","signature":"void OptimizeHuffmanForRle(int length, size_t* counts)","span":[434,518]}
+{"k":"symbol","name":"ZopfliCalculateBlockSize","kind":"function","file":"src/zopfli/deflate.c","visibility":"public","signature":"double ZopfliCalculateBlockSize(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend, int btype)","span":[584,608]}
+{"k":"symbol","name":"ZopfliCalculateBlockSizeAutoType","kind":"function","file":"src/zopfli/deflate.c","visibility":"public","signature":"double ZopfliCalculateBlockSizeAutoType(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend)","span":[610,621]}
+{"k":"symbol","name":"ZopfliDeflate","kind":"function","file":"src/zopfli/deflate.c","visibility":"public","signature":"void ZopfliDeflate(const ZopfliOptions* options, int btype, int final, const unsigned char* in, size_t insize, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[908,931]}
+{"k":"symbol","name":"ZopfliDeflatePart","kind":"function","file":"src/zopfli/deflate.c","visibility":"public","signature":"void ZopfliDeflatePart(const ZopfliOptions* options, int btype, int final, const unsigned char* in, size_t instart, size_t inend, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[811,906]}
+{"k":"symbol","name":"src/zopfli/deflate.c::AbsDiff","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static size_t AbsDiff(size_t x, size_t y)","span":[422,427]}
+{"k":"symbol","name":"src/zopfli/deflate.c::AddBit","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void AddBit(int bit, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[38,43]}
+{"k":"symbol","name":"src/zopfli/deflate.c::AddBits","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void AddBits(unsigned symbol, unsigned length, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[45,55]}
+{"k":"symbol","name":"src/zopfli/deflate.c::AddDynamicTree","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void AddDynamicTree(const unsigned* ll_lengths, const unsigned* d_lengths, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[251,272]}
+{"k":"symbol","name":"src/zopfli/deflate.c::AddHuffmanBits","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void AddHuffmanBits(unsigned symbol, unsigned length, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[61,72]}
+{"k":"symbol","name":"src/zopfli/deflate.c::AddLZ77Block","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void AddLZ77Block(const ZopfliOptions* options, int btype, int final, const ZopfliLZ77Store* lz77, size_t lstart, size_t lend, size_t expected_data_size, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[682,745]}
+{"k":"symbol","name":"src/zopfli/deflate.c::AddLZ77BlockAutoType","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void AddLZ77BlockAutoType(const ZopfliOptions* options, int final, const ZopfliLZ77Store* lz77, size_t lstart, size_t lend, size_t expected_data_size, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[747,800]}
+{"k":"symbol","name":"src/zopfli/deflate.c::AddLZ77Data","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void AddLZ77Data(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend, size_t expected_data_size, const unsigned* ll_symbols, const unsigned* ll_lengths, const unsigned* d_symbols, const unsigned* d_lengths, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[297,333]}
+{"k":"symbol","name":"src/zopfli/deflate.c::AddNonCompressedBlock","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void AddNonCompressedBlock(const ZopfliOptions* options, int final, const unsigned char* in, size_t instart, size_t inend, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[625,663]}
+{"k":"symbol","name":"src/zopfli/deflate.c::CalculateBlockSymbolSize","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static size_t CalculateBlockSymbolSize(const unsigned* ll_lengths, const unsigned* d_lengths, const ZopfliLZ77Store* lz77, size_t lstart, size_t lend)","span":[406,420]}
+{"k":"symbol","name":"src/zopfli/deflate.c::CalculateBlockSymbolSizeGivenCounts","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static size_t CalculateBlockSymbolSizeGivenCounts(const size_t* ll_counts, const size_t* d_counts, const unsigned* ll_lengths, const unsigned* d_lengths, const ZopfliLZ77Store* lz77, size_t lstart, size_t lend)","span":[375,401]}
+{"k":"symbol","name":"src/zopfli/deflate.c::CalculateBlockSymbolSizeSmall","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static size_t CalculateBlockSymbolSizeSmall(const unsigned* ll_lengths, const unsigned* d_lengths, const ZopfliLZ77Store* lz77, size_t lstart, size_t lend)","span":[348,370]}
+{"k":"symbol","name":"src/zopfli/deflate.c::CalculateTreeSize","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static size_t CalculateTreeSize(const unsigned* ll_lengths, const unsigned* d_lengths)","span":[277,290]}
+{"k":"symbol","name":"src/zopfli/deflate.c::EncodeTree","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static size_t EncodeTree(const unsigned* ll_lengths, const unsigned* d_lengths, int use_16, int use_17, int use_18, unsigned char* bp, unsigned char** out, size_t* outsize)","span":[105,249]}
+{"k":"symbol","name":"src/zopfli/deflate.c::GetDynamicLengths","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static double GetDynamicLengths(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend, unsigned* ll_lengths, unsigned* d_lengths)","span":[569,582]}
+{"k":"symbol","name":"src/zopfli/deflate.c::GetFixedTree","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void GetFixedTree(unsigned* ll_lengths, unsigned* d_lengths)","span":[335,342]}
+{"k":"symbol","name":"src/zopfli/deflate.c::PatchDistanceCodesForBuggyDecoders","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static void PatchDistanceCodesForBuggyDecoders(unsigned* d_lengths)","span":[86,99]}
+{"k":"symbol","name":"src/zopfli/deflate.c::TryOptimizeHuffmanForRle","kind":"function","file":"src/zopfli/deflate.c","visibility":"internal","signature":"static double TryOptimizeHuffmanForRle( const ZopfliLZ77Store* lz77, size_t lstart, size_t lend, const size_t* ll_counts, const size_t* d_counts, unsigned* ll_lengths, unsigned* d_lengths)","span":[525,560]}
+{"k":"symbol","name":"ZopfliGzipCompress","kind":"function","file":"src/zopfli/gzip_container.c","visibility":"public","signature":"void ZopfliGzipCompress(const ZopfliOptions* options, const unsigned char* in, size_t insize, unsigned char** out, size_t* outsize)","span":[84,124]}
+{"k":"symbol","name":"src/zopfli/gzip_container.c::CRC","kind":"function","file":"src/zopfli/gzip_container.c","visibility":"internal","signature":"static unsigned long CRC(const unsigned char* data, size_t size)","span":[75,81]}
+{"k":"symbol","name":"ZopfliAllocHash","kind":"function","file":"src/zopfli/hash.c","visibility":"public","signature":"void ZopfliAllocHash(size_t window_size, ZopfliHash* h)","span":[29,43]}
+{"k":"symbol","name":"ZopfliCleanHash","kind":"function","file":"src/zopfli/hash.c","visibility":"public","signature":"void ZopfliCleanHash(ZopfliHash* h)","span":[75,89]}
+{"k":"symbol","name":"ZopfliResetHash","kind":"function","file":"src/zopfli/hash.c","visibility":"public","signature":"void ZopfliResetHash(size_t window_size, ZopfliHash* h)","span":[45,73]}
+{"k":"symbol","name":"ZopfliUpdateHash","kind":"function","file":"src/zopfli/hash.c","visibility":"public","signature":"void ZopfliUpdateHash(const unsigned char* array, size_t pos, size_t end, ZopfliHash* h)","span":[100,137]}
+{"k":"symbol","name":"ZopfliWarmupHash","kind":"function","file":"src/zopfli/hash.c","visibility":"public","signature":"void ZopfliWarmupHash(const unsigned char* array, size_t pos, size_t end, ZopfliHash* h)","span":[139,143]}
+{"k":"symbol","name":"src/zopfli/hash.c::UpdateHashValue","kind":"function","file":"src/zopfli/hash.c","visibility":"internal","signature":"static void UpdateHashValue(ZopfliHash* h, unsigned char c)","span":[96,98]}
+{"k":"symbol","name":"ZopfliLengthLimitedCodeLengths","kind":"function","file":"src/zopfli/katajainen.c","visibility":"public","signature":"int ZopfliLengthLimitedCodeLengths( const size_t* frequencies, int n, int maxbits, unsigned* bitlengths)","span":[172,262]}
+{"k":"symbol","name":"src/zopfli/katajainen.c::BoundaryPM","kind":"function","file":"src/zopfli/katajainen.c","visibility":"internal","signature":"static void BoundaryPM(Node* (*lists)[2], Node* leaves, int numsymbols, NodePool* pool, int index)","span":[69,101]}
+{"k":"symbol","name":"src/zopfli/katajainen.c::BoundaryPMFinal","kind":"function","file":"src/zopfli/katajainen.c","visibility":"internal","signature":"static void BoundaryPMFinal(Node* (*lists)[2], Node* leaves, int numsymbols, NodePool* pool, int index)","span":[103,119]}
+{"k":"symbol","name":"src/zopfli/katajainen.c::ExtractBitLengths","kind":"function","file":"src/zopfli/katajainen.c","visibility":"internal","signature":"static void ExtractBitLengths(Node* chain, Node* leaves, unsigned* bitlengths)","span":[143,163]}
+{"k":"symbol","name":"src/zopfli/katajainen.c::InitLists","kind":"function","file":"src/zopfli/katajainen.c","visibility":"internal","signature":"static void InitLists( NodePool* pool, const Node* leaves, int maxbits, Node* (*lists)[2])","span":[125,136]}
+{"k":"symbol","name":"src/zopfli/katajainen.c::InitNode","kind":"function","file":"src/zopfli/katajainen.c","visibility":"internal","signature":"static void InitNode(size_t weight, int count, Node* tail, Node* node)","span":[52,56]}
+{"k":"symbol","name":"src/zopfli/katajainen.c::LeafComparator","kind":"function","file":"src/zopfli/katajainen.c","visibility":"internal","signature":"static int LeafComparator(const void* a, const void* b)","span":[168,170]}
+{"k":"symbol","name":"ZopfliAppendLZ77Store","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliAppendLZ77Store(const ZopfliLZ77Store* store, ZopfliLZ77Store* target)","span":[151,158]}
+{"k":"symbol","name":"ZopfliCleanBlockState","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliCleanBlockState(ZopfliBlockState* s)","span":[235,242]}
+{"k":"symbol","name":"ZopfliCleanLZ77Store","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliCleanLZ77Store(ZopfliLZ77Store* store)","span":[40,48]}
+{"k":"symbol","name":"ZopfliCopyLZ77Store","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliCopyLZ77Store( const ZopfliLZ77Store* source, ZopfliLZ77Store* dest)","span":[54,92]}
+{"k":"symbol","name":"ZopfliFindLongestMatch","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliFindLongestMatch(ZopfliBlockState* s, const ZopfliHash* h, const unsigned char* array, size_t pos, size_t size, size_t limit, unsigned short* sublen, unsigned short* distance, unsigned short* length)","span":[407,542]}
+{"k":"symbol","name":"ZopfliInitBlockState","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliInitBlockState(const ZopfliOptions* options, size_t blockstart, size_t blockend, int add_lmc, ZopfliBlockState* s)","span":[219,233]}
+{"k":"symbol","name":"ZopfliInitLZ77Store","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliInitLZ77Store(const unsigned char* data, ZopfliLZ77Store* store)","span":[28,38]}
+{"k":"symbol","name":"ZopfliLZ77GetByteRange","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"size_t ZopfliLZ77GetByteRange(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend)","span":[160,166]}
+{"k":"symbol","name":"ZopfliLZ77GetHistogram","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliLZ77GetHistogram(const ZopfliLZ77Store* lz77, size_t lstart, size_t lend, size_t* ll_counts, size_t* d_counts)","span":[189,217]}
+{"k":"symbol","name":"ZopfliLZ77Greedy","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliLZ77Greedy(ZopfliBlockState* s, const unsigned char* in, size_t instart, size_t inend, ZopfliLZ77Store* store, ZopfliHash* h)","span":[544,630]}
+{"k":"symbol","name":"ZopfliStoreLitLenDist","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliStoreLitLenDist(unsigned short length, unsigned short dist, size_t pos, ZopfliLZ77Store* store)","span":[98,149]}
+{"k":"symbol","name":"ZopfliVerifyLenDist","kind":"function","file":"src/zopfli/lz77.c","visibility":"public","signature":"void ZopfliVerifyLenDist(const unsigned char* data, size_t datasize, size_t pos, unsigned short dist, unsigned short length)","span":[273,286]}
+{"k":"symbol","name":"src/zopfli/lz77.c::CeilDiv","kind":"function","file":"src/zopfli/lz77.c","visibility":"internal","signature":"static size_t CeilDiv(size_t a, size_t b)","span":[50,52]}
+{"k":"symbol","name":"src/zopfli/lz77.c::GetLengthScore","kind":"function","file":"src/zopfli/lz77.c","visibility":"internal","signature":"static int GetLengthScore(int length, int distance)","span":[265,271]}
+{"k":"symbol","name":"src/zopfli/lz77.c::GetMatch","kind":"function","file":"src/zopfli/lz77.c","visibility":"internal","signature":"static const unsigned char* GetMatch(const unsigned char* scan, const unsigned char* match, const unsigned char* end, const unsigned char* safe_end)","span":[297,331]}
+{"k":"symbol","name":"src/zopfli/lz77.c::StoreInLongestMatchCache","kind":"function","file":"src/zopfli/lz77.c","visibility":"internal","signature":"static void StoreInLongestMatchCache(ZopfliBlockState* s, size_t pos, size_t limit, const unsigned short* sublen, unsigned short distance, unsigned short length)","span":[384,404]}
+{"k":"symbol","name":"src/zopfli/lz77.c::TryGetFromLongestMatchCache","kind":"function","file":"src/zopfli/lz77.c","visibility":"internal","signature":"static int TryGetFromLongestMatchCache(ZopfliBlockState* s, size_t pos, size_t* limit, unsigned short* sublen, unsigned short* distance, unsigned short* length)","span":[340,378]}
+{"k":"symbol","name":"src/zopfli/lz77.c::ZopfliLZ77GetHistogramAt","kind":"function","file":"src/zopfli/lz77.c","visibility":"internal","signature":"static void ZopfliLZ77GetHistogramAt(const ZopfliLZ77Store* lz77, size_t lpos, size_t* ll_counts, size_t* d_counts)","span":[168,187]}
+{"k":"symbol","name":"ZopfliLZ77Optimal","kind":"function","file":"src/zopfli/squeeze.c","visibility":"public","signature":"void ZopfliLZ77Optimal(ZopfliBlockState *s, const unsigned char* in, size_t instart, size_t inend, int numiterations, ZopfliLZ77Store* store)","span":[446,526]}
+{"k":"symbol","name":"ZopfliLZ77OptimalFixed","kind":"function","file":"src/zopfli/squeeze.c","visibility":"public","signature":"void ZopfliLZ77OptimalFixed(ZopfliBlockState *s, const unsigned char* in, size_t instart, size_t inend, ZopfliLZ77Store* store)","span":[528,560]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::AddWeighedStatFreqs","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void AddWeighedStatFreqs(const SymbolStats* stats1, double w1, const SymbolStats* stats2, double w2, SymbolStats* result)","span":[65,78]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::CalculateStatistics","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void CalculateStatistics(SymbolStats* stats)","span":[392,395]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::ClearStatFreqs","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void ClearStatFreqs(SymbolStats* stats)","span":[109,113]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::CopyStats","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void CopyStats(SymbolStats* source, SymbolStats* dest)","span":[53,62]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::FollowPath","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void FollowPath(ZopfliBlockState* s, const unsigned char* in, size_t instart, size_t inend, unsigned short* path, size_t pathsize, ZopfliLZ77Store* store, ZopfliHash *h)","span":[338,389]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::GetBestLengths","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static double GetBestLengths(ZopfliBlockState *s, const unsigned char* in, size_t instart, size_t inend, CostModelFun* costmodel, void* costcontext, unsigned short* length_array, ZopfliHash* h, float* costs)","span":[217,309]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::GetCostFixed","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static double GetCostFixed(unsigned litlen, unsigned dist, void* unused)","span":[125,140]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::GetCostModelMinCost","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static double GetCostModelMinCost(CostModelFun* costmodel, void* costcontext)","span":[163,198]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::GetCostStat","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static double GetCostStat(unsigned litlen, unsigned dist, void* context)","span":[146,157]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::GetStatistics","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void GetStatistics(const ZopfliLZ77Store* store, SymbolStats* stats)","span":[398,411]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::InitRanState","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void InitRanState(RanState* state)","span":[84,87]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::InitStats","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void InitStats(SymbolStats* stats)","span":[45,51]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::LZ77OptimalRun","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static double LZ77OptimalRun(ZopfliBlockState* s, const unsigned char* in, size_t instart, size_t inend, unsigned short** path, size_t* pathsize, unsigned short* length_array, CostModelFun* costmodel, void* costcontext, ZopfliLZ77Store* store, ZopfliHash* h, float* costs)","span":[429,444]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::Ran","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static unsigned int Ran(RanState* state)","span":[90,94]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::RandomizeFreqs","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void RandomizeFreqs(RanState* state, size_t* freqs, int n)","span":[96,101]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::RandomizeStatFreqs","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void RandomizeStatFreqs(RanState* state, SymbolStats* stats)","span":[103,107]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::TraceBackwards","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static void TraceBackwards(size_t size, const unsigned short* length_array, unsigned short** path, size_t* pathsize)","span":[317,336]}
+{"k":"symbol","name":"src/zopfli/squeeze.c::zopfli_min","kind":"function","file":"src/zopfli/squeeze.c","visibility":"internal","signature":"static size_t zopfli_min(size_t a, size_t b)","span":[200,202]}
+{"k":"symbol","name":"src/zopfli/symbols.h::ZopfliGetDistExtraBits","kind":"function","file":"src/zopfli/symbols.h","visibility":"internal","signature":"static int ZopfliGetDistExtraBits(int dist)","span":[38,58]}
+{"k":"symbol","name":"src/zopfli/symbols.h::ZopfliGetDistExtraBitsValue","kind":"function","file":"src/zopfli/symbols.h","visibility":"internal","signature":"static int ZopfliGetDistExtraBitsValue(int dist)","span":[61,85]}
+{"k":"symbol","name":"src/zopfli/symbols.h::ZopfliGetDistSymbol","kind":"function","file":"src/zopfli/symbols.h","visibility":"internal","signature":"static int ZopfliGetDistSymbol(int dist)","span":[88,135]}
+{"k":"symbol","name":"src/zopfli/symbols.h::ZopfliGetDistSymbolExtraBits","kind":"function","file":"src/zopfli/symbols.h","visibility":"internal","signature":"static int ZopfliGetDistSymbolExtraBits(int s)","span":[231,237]}
+{"k":"symbol","name":"src/zopfli/symbols.h::ZopfliGetLengthExtraBits","kind":"function","file":"src/zopfli/symbols.h","visibility":"internal","signature":"static int ZopfliGetLengthExtraBits(int l)","span":[138,158]}
+{"k":"symbol","name":"src/zopfli/symbols.h::ZopfliGetLengthExtraBitsValue","kind":"function","file":"src/zopfli/symbols.h","visibility":"internal","signature":"static int ZopfliGetLengthExtraBitsValue(int l)","span":[161,177]}
+{"k":"symbol","name":"src/zopfli/symbols.h::ZopfliGetLengthSymbol","kind":"function","file":"src/zopfli/symbols.h","visibility":"internal","signature":"static int ZopfliGetLengthSymbol(int l)","span":[183,219]}
+{"k":"symbol","name":"src/zopfli/symbols.h::ZopfliGetLengthSymbolExtraBits","kind":"function","file":"src/zopfli/symbols.h","visibility":"internal","signature":"static int ZopfliGetLengthSymbolExtraBits(int s)","span":[222,228]}
+{"k":"symbol","name":"ZopfliCalculateBitLengths","kind":"function","file":"src/zopfli/tree.c","visibility":"public","signature":"void ZopfliCalculateBitLengths(const size_t* count, size_t n, int maxbits, unsigned* bitlengths)","span":[96,101]}
+{"k":"symbol","name":"ZopfliCalculateEntropy","kind":"function","file":"src/zopfli/tree.c","visibility":"public","signature":"void ZopfliCalculateEntropy(const size_t* count, size_t n, double* bitlengths)","span":[71,94]}
+{"k":"symbol","name":"ZopfliLengthsToSymbols","kind":"function","file":"src/zopfli/tree.c","visibility":"public","signature":"void ZopfliLengthsToSymbols(const unsigned* lengths, size_t n, unsigned maxbits, unsigned* symbols)","span":[30,69]}
+{"k":"symbol","name":"ZopfliInitOptions","kind":"function","file":"src/zopfli/util.c","visibility":"public","signature":"void ZopfliInitOptions(ZopfliOptions* options)","span":[28,35]}
+{"k":"symbol","name":"ZopfliZlibCompress","kind":"function","file":"src/zopfli/zlib_container.c","visibility":"public","signature":"void ZopfliZlibCompress(const ZopfliOptions* options, const unsigned char* in, size_t insize, unsigned char** out, size_t* outsize)","span":[50,79]}
+{"k":"symbol","name":"src/zopfli/zlib_container.c::adler32","kind":"function","file":"src/zopfli/zlib_container.c","visibility":"internal","signature":"static unsigned adler32(const unsigned char* data, size_t size)","span":[29,48]}
+{"k":"symbol","name":"main","kind":"function","file":"src/zopfli/zopfli_bin.c","visibility":"public","signature":"int main(int argc, char* argv[])","span":[144,219]}
+{"k":"symbol","name":"src/zopfli/zopfli_bin.c::AddStrings","kind":"function","file":"src/zopfli/zopfli_bin.c","visibility":"internal","signature":"static char* AddStrings(const char* str1, const char* str2)","span":[131,138]}
+{"k":"symbol","name":"src/zopfli/zopfli_bin.c::CompressFile","kind":"function","file":"src/zopfli/zopfli_bin.c","visibility":"internal","signature":"static void CompressFile(const ZopfliOptions* options, ZopfliFormat output_type, const char* infilename, const char* outfilename)","span":[99,126]}
+{"k":"symbol","name":"src/zopfli/zopfli_bin.c::LoadFile","kind":"function","file":"src/zopfli/zopfli_bin.c","visibility":"internal","signature":"static int LoadFile(const char* filename, unsigned char** out, size_t* outsize)","span":[45,79]}
+{"k":"symbol","name":"src/zopfli/zopfli_bin.c::SaveFile","kind":"function","file":"src/zopfli/zopfli_bin.c","visibility":"internal","signature":"static void SaveFile(const char* filename, const unsigned char* in, size_t insize)","span":[84,94]}
+{"k":"symbol","name":"src/zopfli/zopfli_bin.c::StringsEqual","kind":"function","file":"src/zopfli/zopfli_bin.c","visibility":"internal","signature":"static char StringsEqual(const char* str1, const char* str2)","span":[140,142]}
+{"k":"symbol","name":"ZopfliCompress","kind":"function","file":"src/zopfli/zopfli_lib.c","visibility":"public","signature":"void ZopfliCompress(const ZopfliOptions* options, ZopfliFormat output_type, const unsigned char* in, size_t insize, unsigned char** out, size_t* outsize)","span":[28,42]}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"ZopfliAllocHash","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"ZopfliBlockSplitLZ77","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"ZopfliCleanBlockState","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"ZopfliCleanHash","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"ZopfliCleanLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"ZopfliInitBlockState","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"ZopfliInitLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"ZopfliLZ77Greedy","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliBlockSplit","file":"src/zopfli/blocksplitter.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliBlockSplitLZ77","file":"src/zopfli/blocksplitter.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliBlockSplitLZ77","file":"src/zopfli/blocksplitter.c","to":"exit","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliBlockSplitLZ77","file":"src/zopfli/blocksplitter.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliBlockSplitLZ77","file":"src/zopfli/blocksplitter.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliBlockSplitLZ77","file":"src/zopfli/blocksplitter.c","to":"src/zopfli/blocksplitter.c::AddSorted","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplitLZ77","file":"src/zopfli/blocksplitter.c","to":"src/zopfli/blocksplitter.c::EstimateCost","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplitLZ77","file":"src/zopfli/blocksplitter.c","to":"src/zopfli/blocksplitter.c::FindLargestSplittableBlock","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplitLZ77","file":"src/zopfli/blocksplitter.c","to":"src/zopfli/blocksplitter.c::FindMinimum","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplitLZ77","file":"src/zopfli/blocksplitter.c","to":"src/zopfli/blocksplitter.c::PrintBlockSplitPoints","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliBlockSplitSimple","file":"src/zopfli/blocksplitter.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/blocksplitter.c::AddSorted","file":"src/zopfli/blocksplitter.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/blocksplitter.c::EstimateCost","file":"src/zopfli/blocksplitter.c","to":"ZopfliCalculateBlockSizeAutoType","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/blocksplitter.c::FindMinimum","file":"src/zopfli/blocksplitter.c","to":"f","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/blocksplitter.c::PrintBlockSplitPoints","file":"src/zopfli/blocksplitter.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/blocksplitter.c::PrintBlockSplitPoints","file":"src/zopfli/blocksplitter.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/blocksplitter.c::PrintBlockSplitPoints","file":"src/zopfli/blocksplitter.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/blocksplitter.c::PrintBlockSplitPoints","file":"src/zopfli/blocksplitter.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/blocksplitter.c::SplitCost","file":"src/zopfli/blocksplitter.c","to":"src/zopfli/blocksplitter.c::EstimateCost","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCacheToSublen","file":"src/zopfli/cache.c","to":"ZopfliMaxCachedSublen","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCleanCache","file":"src/zopfli/cache.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliInitCache","file":"src/zopfli/cache.c","to":"exit","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliInitCache","file":"src/zopfli/cache.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliInitCache","file":"src/zopfli/cache.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliSublenToCache","file":"src/zopfli/cache.c","to":"ZopfliMaxCachedSublen","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliSublenToCache","file":"src/zopfli/cache.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"OptimizeHuffmanForRle","file":"src/zopfli/deflate.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"OptimizeHuffmanForRle","file":"src/zopfli/deflate.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"OptimizeHuffmanForRle","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AbsDiff","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCalculateBlockSize","file":"src/zopfli/deflate.c","to":"ZopfliLZ77GetByteRange","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCalculateBlockSize","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::CalculateBlockSymbolSize","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCalculateBlockSize","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::GetDynamicLengths","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCalculateBlockSize","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::GetFixedTree","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCalculateBlockSizeAutoType","file":"src/zopfli/deflate.c","to":"ZopfliCalculateBlockSize","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflate","file":"src/zopfli/deflate.c","to":"ZopfliDeflatePart","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflate","file":"src/zopfli/deflate.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliAppendLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliBlockSplit","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliBlockSplitLZ77","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliCalculateBlockSizeAutoType","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliCleanBlockState","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliCleanLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliInitBlockState","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliInitLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliLZ77Optimal","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"ZopfliLZ77OptimalFixed","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddLZ77Block","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddLZ77BlockAutoType","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliDeflatePart","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddNonCompressedBlock","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddBit","file":"src/zopfli/deflate.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddBits","file":"src/zopfli/deflate.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddDynamicTree","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::EncodeTree","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddHuffmanBits","file":"src/zopfli/deflate.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"ZopfliLZ77GetByteRange","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"ZopfliLengthsToSymbols","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddBit","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddDynamicTree","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddHuffmanBits","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddLZ77Data","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddNonCompressedBlock","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::GetDynamicLengths","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Block","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::GetFixedTree","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77BlockAutoType","file":"src/zopfli/deflate.c","to":"ZopfliCalculateBlockSize","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77BlockAutoType","file":"src/zopfli/deflate.c","to":"ZopfliCleanBlockState","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77BlockAutoType","file":"src/zopfli/deflate.c","to":"ZopfliCleanLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77BlockAutoType","file":"src/zopfli/deflate.c","to":"ZopfliInitBlockState","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77BlockAutoType","file":"src/zopfli/deflate.c","to":"ZopfliInitLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77BlockAutoType","file":"src/zopfli/deflate.c","to":"ZopfliLZ77GetByteRange","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77BlockAutoType","file":"src/zopfli/deflate.c","to":"ZopfliLZ77OptimalFixed","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77BlockAutoType","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddBits","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77BlockAutoType","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddLZ77Block","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Data","file":"src/zopfli/deflate.c","to":"ZopfliGetDistExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Data","file":"src/zopfli/deflate.c","to":"ZopfliGetDistExtraBitsValue","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Data","file":"src/zopfli/deflate.c","to":"ZopfliGetDistSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Data","file":"src/zopfli/deflate.c","to":"ZopfliGetLengthExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Data","file":"src/zopfli/deflate.c","to":"ZopfliGetLengthExtraBitsValue","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Data","file":"src/zopfli/deflate.c","to":"ZopfliGetLengthSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Data","file":"src/zopfli/deflate.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Data","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddBits","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddLZ77Data","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddHuffmanBits","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::AddNonCompressedBlock","file":"src/zopfli/deflate.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::AddNonCompressedBlock","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddBit","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSize","file":"src/zopfli/deflate.c","to":"ZopfliLZ77GetHistogram","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSize","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::CalculateBlockSymbolSizeGivenCounts","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSize","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::CalculateBlockSymbolSizeSmall","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSizeGivenCounts","file":"src/zopfli/deflate.c","to":"ZopfliGetDistSymbolExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSizeGivenCounts","file":"src/zopfli/deflate.c","to":"ZopfliGetLengthSymbolExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSizeGivenCounts","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::CalculateBlockSymbolSizeSmall","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSizeSmall","file":"src/zopfli/deflate.c","to":"ZopfliGetDistSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSizeSmall","file":"src/zopfli/deflate.c","to":"ZopfliGetDistSymbolExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSizeSmall","file":"src/zopfli/deflate.c","to":"ZopfliGetLengthSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSizeSmall","file":"src/zopfli/deflate.c","to":"ZopfliGetLengthSymbolExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateBlockSymbolSizeSmall","file":"src/zopfli/deflate.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::CalculateTreeSize","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::EncodeTree","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::EncodeTree","file":"src/zopfli/deflate.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::EncodeTree","file":"src/zopfli/deflate.c","to":"ZopfliCalculateBitLengths","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::EncodeTree","file":"src/zopfli/deflate.c","to":"ZopfliLengthsToSymbols","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::EncodeTree","file":"src/zopfli/deflate.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::EncodeTree","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddBits","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::EncodeTree","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::AddHuffmanBits","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::GetDynamicLengths","file":"src/zopfli/deflate.c","to":"ZopfliCalculateBitLengths","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::GetDynamicLengths","file":"src/zopfli/deflate.c","to":"ZopfliLZ77GetHistogram","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::GetDynamicLengths","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::PatchDistanceCodesForBuggyDecoders","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::GetDynamicLengths","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::TryOptimizeHuffmanForRle","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::TryOptimizeHuffmanForRle","file":"src/zopfli/deflate.c","to":"OptimizeHuffmanForRle","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::TryOptimizeHuffmanForRle","file":"src/zopfli/deflate.c","to":"ZopfliCalculateBitLengths","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::TryOptimizeHuffmanForRle","file":"src/zopfli/deflate.c","to":"memcpy","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/deflate.c::TryOptimizeHuffmanForRle","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::CalculateBlockSymbolSizeGivenCounts","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::TryOptimizeHuffmanForRle","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::CalculateTreeSize","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/deflate.c::TryOptimizeHuffmanForRle","file":"src/zopfli/deflate.c","to":"src/zopfli/deflate.c::PatchDistanceCodesForBuggyDecoders","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliGzipCompress","file":"src/zopfli/gzip_container.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliGzipCompress","file":"src/zopfli/gzip_container.c","to":"ZopfliDeflate","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliGzipCompress","file":"src/zopfli/gzip_container.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliGzipCompress","file":"src/zopfli/gzip_container.c","to":"src/zopfli/gzip_container.c::CRC","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliAllocHash","file":"src/zopfli/hash.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliCleanHash","file":"src/zopfli/hash.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliUpdateHash","file":"src/zopfli/hash.c","to":"src/zopfli/hash.c::UpdateHashValue","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliWarmupHash","file":"src/zopfli/hash.c","to":"src/zopfli/hash.c::UpdateHashValue","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLengthLimitedCodeLengths","file":"src/zopfli/katajainen.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLengthLimitedCodeLengths","file":"src/zopfli/katajainen.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLengthLimitedCodeLengths","file":"src/zopfli/katajainen.c","to":"qsort","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLengthLimitedCodeLengths","file":"src/zopfli/katajainen.c","to":"src/zopfli/katajainen.c::BoundaryPM","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLengthLimitedCodeLengths","file":"src/zopfli/katajainen.c","to":"src/zopfli/katajainen.c::BoundaryPMFinal","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLengthLimitedCodeLengths","file":"src/zopfli/katajainen.c","to":"src/zopfli/katajainen.c::ExtractBitLengths","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLengthLimitedCodeLengths","file":"src/zopfli/katajainen.c","to":"src/zopfli/katajainen.c::InitLists","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/katajainen.c::BoundaryPM","file":"src/zopfli/katajainen.c","to":"src/zopfli/katajainen.c::BoundaryPM","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/katajainen.c::BoundaryPM","file":"src/zopfli/katajainen.c","to":"src/zopfli/katajainen.c::InitNode","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/katajainen.c::InitLists","file":"src/zopfli/katajainen.c","to":"src/zopfli/katajainen.c::InitNode","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliAppendLZ77Store","file":"src/zopfli/lz77.c","to":"ZopfliStoreLitLenDist","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCleanBlockState","file":"src/zopfli/lz77.c","to":"ZopfliCleanCache","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCleanBlockState","file":"src/zopfli/lz77.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliCleanLZ77Store","file":"src/zopfli/lz77.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliCopyLZ77Store","file":"src/zopfli/lz77.c","to":"ZopfliCleanLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCopyLZ77Store","file":"src/zopfli/lz77.c","to":"ZopfliInitLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCopyLZ77Store","file":"src/zopfli/lz77.c","to":"exit","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliCopyLZ77Store","file":"src/zopfli/lz77.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliCopyLZ77Store","file":"src/zopfli/lz77.c","to":"src/zopfli/lz77.c::CeilDiv","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliFindLongestMatch","file":"src/zopfli/lz77.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliFindLongestMatch","file":"src/zopfli/lz77.c","to":"src/zopfli/lz77.c::GetMatch","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliFindLongestMatch","file":"src/zopfli/lz77.c","to":"src/zopfli/lz77.c::StoreInLongestMatchCache","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliFindLongestMatch","file":"src/zopfli/lz77.c","to":"src/zopfli/lz77.c::TryGetFromLongestMatchCache","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliInitBlockState","file":"src/zopfli/lz77.c","to":"ZopfliInitCache","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliInitBlockState","file":"src/zopfli/lz77.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77GetHistogram","file":"src/zopfli/lz77.c","to":"memset","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77GetHistogram","file":"src/zopfli/lz77.c","to":"src/zopfli/lz77.c::ZopfliLZ77GetHistogramAt","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Greedy","file":"src/zopfli/lz77.c","to":"ZopfliFindLongestMatch","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Greedy","file":"src/zopfli/lz77.c","to":"ZopfliResetHash","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Greedy","file":"src/zopfli/lz77.c","to":"ZopfliStoreLitLenDist","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Greedy","file":"src/zopfli/lz77.c","to":"ZopfliUpdateHash","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Greedy","file":"src/zopfli/lz77.c","to":"ZopfliVerifyLenDist","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Greedy","file":"src/zopfli/lz77.c","to":"ZopfliWarmupHash","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Greedy","file":"src/zopfli/lz77.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77Greedy","file":"src/zopfli/lz77.c","to":"src/zopfli/lz77.c::GetLengthScore","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliStoreLitLenDist","file":"src/zopfli/lz77.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliStoreLitLenDist","file":"src/zopfli/lz77.c","to":"ZopfliGetDistSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliStoreLitLenDist","file":"src/zopfli/lz77.c","to":"ZopfliGetLengthSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliStoreLitLenDist","file":"src/zopfli/lz77.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliVerifyLenDist","file":"src/zopfli/lz77.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/lz77.c::StoreInLongestMatchCache","file":"src/zopfli/lz77.c","to":"ZopfliSublenToCache","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/lz77.c::StoreInLongestMatchCache","file":"src/zopfli/lz77.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/lz77.c::TryGetFromLongestMatchCache","file":"src/zopfli/lz77.c","to":"ZopfliCacheToSublen","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/lz77.c::TryGetFromLongestMatchCache","file":"src/zopfli/lz77.c","to":"ZopfliMaxCachedSublen","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/lz77.c::TryGetFromLongestMatchCache","file":"src/zopfli/lz77.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"ZopfliAllocHash","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"ZopfliCalculateBlockSize","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"ZopfliCleanHash","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"ZopfliCleanLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"ZopfliCopyLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"ZopfliInitLZ77Store","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"ZopfliLZ77Greedy","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"exit","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::AddWeighedStatFreqs","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::CalculateStatistics","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::ClearStatFreqs","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::CopyStats","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::GetStatistics","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::InitRanState","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::InitStats","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::LZ77OptimalRun","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77Optimal","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::RandomizeStatFreqs","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77OptimalFixed","file":"src/zopfli/squeeze.c","to":"ZopfliAllocHash","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77OptimalFixed","file":"src/zopfli/squeeze.c","to":"ZopfliCleanHash","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliLZ77OptimalFixed","file":"src/zopfli/squeeze.c","to":"exit","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77OptimalFixed","file":"src/zopfli/squeeze.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77OptimalFixed","file":"src/zopfli/squeeze.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLZ77OptimalFixed","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::LZ77OptimalRun","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::CalculateStatistics","file":"src/zopfli/squeeze.c","to":"ZopfliCalculateEntropy","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::CopyStats","file":"src/zopfli/squeeze.c","to":"memcpy","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::FollowPath","file":"src/zopfli/squeeze.c","to":"ZopfliFindLongestMatch","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::FollowPath","file":"src/zopfli/squeeze.c","to":"ZopfliResetHash","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::FollowPath","file":"src/zopfli/squeeze.c","to":"ZopfliStoreLitLenDist","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::FollowPath","file":"src/zopfli/squeeze.c","to":"ZopfliUpdateHash","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::FollowPath","file":"src/zopfli/squeeze.c","to":"ZopfliVerifyLenDist","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::FollowPath","file":"src/zopfli/squeeze.c","to":"ZopfliWarmupHash","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::FollowPath","file":"src/zopfli/squeeze.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetBestLengths","file":"src/zopfli/squeeze.c","to":"ZopfliFindLongestMatch","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetBestLengths","file":"src/zopfli/squeeze.c","to":"ZopfliResetHash","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetBestLengths","file":"src/zopfli/squeeze.c","to":"ZopfliUpdateHash","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetBestLengths","file":"src/zopfli/squeeze.c","to":"ZopfliWarmupHash","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetBestLengths","file":"src/zopfli/squeeze.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetBestLengths","file":"src/zopfli/squeeze.c","to":"costmodel","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetBestLengths","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::GetCostModelMinCost","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetBestLengths","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::zopfli_min","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetCostFixed","file":"src/zopfli/squeeze.c","to":"ZopfliGetDistExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetCostFixed","file":"src/zopfli/squeeze.c","to":"ZopfliGetLengthExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetCostFixed","file":"src/zopfli/squeeze.c","to":"ZopfliGetLengthSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetCostModelMinCost","file":"src/zopfli/squeeze.c","to":"costmodel","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetCostStat","file":"src/zopfli/squeeze.c","to":"ZopfliGetDistExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetCostStat","file":"src/zopfli/squeeze.c","to":"ZopfliGetDistSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetCostStat","file":"src/zopfli/squeeze.c","to":"ZopfliGetLengthExtraBits","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetCostStat","file":"src/zopfli/squeeze.c","to":"ZopfliGetLengthSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetStatistics","file":"src/zopfli/squeeze.c","to":"ZopfliGetDistSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetStatistics","file":"src/zopfli/squeeze.c","to":"ZopfliGetLengthSymbol","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::GetStatistics","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::CalculateStatistics","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::InitStats","file":"src/zopfli/squeeze.c","to":"memset","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::LZ77OptimalRun","file":"src/zopfli/squeeze.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::LZ77OptimalRun","file":"src/zopfli/squeeze.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::LZ77OptimalRun","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::FollowPath","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::LZ77OptimalRun","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::GetBestLengths","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::LZ77OptimalRun","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::TraceBackwards","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::RandomizeFreqs","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::Ran","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::RandomizeStatFreqs","file":"src/zopfli/squeeze.c","to":"src/zopfli/squeeze.c::RandomizeFreqs","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/squeeze.c::TraceBackwards","file":"src/zopfli/squeeze.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/squeeze.c::TraceBackwards","file":"src/zopfli/squeeze.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/symbols.h::ZopfliGetDistExtraBits","file":"src/zopfli/symbols.h","to":"__builtin_clz","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/symbols.h::ZopfliGetDistExtraBitsValue","file":"src/zopfli/symbols.h","to":"__builtin_clz","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/symbols.h::ZopfliGetDistSymbol","file":"src/zopfli/symbols.h","to":"__builtin_clz","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliCalculateBitLengths","file":"src/zopfli/tree.c","to":"ZopfliLengthLimitedCodeLengths","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCalculateBitLengths","file":"src/zopfli/tree.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliCalculateEntropy","file":"src/zopfli/tree.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliCalculateEntropy","file":"src/zopfli/tree.c","to":"log","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLengthsToSymbols","file":"src/zopfli/tree.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLengthsToSymbols","file":"src/zopfli/tree.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliLengthsToSymbols","file":"src/zopfli/tree.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliZlibCompress","file":"src/zopfli/zlib_container.c","to":"ZOPFLI_APPEND_DATA","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliZlibCompress","file":"src/zopfli/zlib_container.c","to":"ZopfliDeflate","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliZlibCompress","file":"src/zopfli/zlib_container.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliZlibCompress","file":"src/zopfli/zlib_container.c","to":"src/zopfli/zlib_container.c::adler32","refkind":"call","resolved":true}
+{"k":"ref","from":"main","file":"src/zopfli/zopfli_bin.c","to":"ZopfliInitOptions","refkind":"call","resolved":true}
+{"k":"ref","from":"main","file":"src/zopfli/zopfli_bin.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"main","file":"src/zopfli/zopfli_bin.c","to":"atoi","refkind":"call","resolved":false}
+{"k":"ref","from":"main","file":"src/zopfli/zopfli_bin.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"main","file":"src/zopfli/zopfli_bin.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"main","file":"src/zopfli/zopfli_bin.c","to":"src/zopfli/zopfli_bin.c::AddStrings","refkind":"call","resolved":true}
+{"k":"ref","from":"main","file":"src/zopfli/zopfli_bin.c","to":"src/zopfli/zopfli_bin.c::CompressFile","refkind":"call","resolved":true}
+{"k":"ref","from":"main","file":"src/zopfli/zopfli_bin.c","to":"src/zopfli/zopfli_bin.c::StringsEqual","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::AddStrings","file":"src/zopfli/zopfli_bin.c","to":"exit","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::AddStrings","file":"src/zopfli/zopfli_bin.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::AddStrings","file":"src/zopfli/zopfli_bin.c","to":"strcat","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::AddStrings","file":"src/zopfli/zopfli_bin.c","to":"strcpy","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::AddStrings","file":"src/zopfli/zopfli_bin.c","to":"strlen","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::CompressFile","file":"src/zopfli/zopfli_bin.c","to":"ZopfliCompress","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::CompressFile","file":"src/zopfli/zopfli_bin.c","to":"_fileno","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::CompressFile","file":"src/zopfli/zopfli_bin.c","to":"_setmode","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::CompressFile","file":"src/zopfli/zopfli_bin.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::CompressFile","file":"src/zopfli/zopfli_bin.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::CompressFile","file":"src/zopfli/zopfli_bin.c","to":"fwrite","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::CompressFile","file":"src/zopfli/zopfli_bin.c","to":"src/zopfli/zopfli_bin.c::LoadFile","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::CompressFile","file":"src/zopfli/zopfli_bin.c","to":"src/zopfli/zopfli_bin.c::SaveFile","refkind":"call","resolved":true}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"exit","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"fclose","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"fopen","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"fread","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"free","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"fseek","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"ftell","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"malloc","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::LoadFile","file":"src/zopfli/zopfli_bin.c","to":"rewind","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::SaveFile","file":"src/zopfli/zopfli_bin.c","to":"assert","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::SaveFile","file":"src/zopfli/zopfli_bin.c","to":"exit","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::SaveFile","file":"src/zopfli/zopfli_bin.c","to":"fclose","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::SaveFile","file":"src/zopfli/zopfli_bin.c","to":"fopen","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::SaveFile","file":"src/zopfli/zopfli_bin.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::SaveFile","file":"src/zopfli/zopfli_bin.c","to":"fwrite","refkind":"call","resolved":false}
+{"k":"ref","from":"src/zopfli/zopfli_bin.c::StringsEqual","file":"src/zopfli/zopfli_bin.c","to":"strcmp","refkind":"call","resolved":false}
+{"k":"ref","from":"ZopfliCompress","file":"src/zopfli/zopfli_lib.c","to":"ZopfliDeflate","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCompress","file":"src/zopfli/zopfli_lib.c","to":"ZopfliGzipCompress","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCompress","file":"src/zopfli/zopfli_lib.c","to":"ZopfliZlibCompress","refkind":"call","resolved":true}
+{"k":"ref","from":"ZopfliCompress","file":"src/zopfli/zopfli_lib.c","to":"assert","refkind":"call","resolved":false}

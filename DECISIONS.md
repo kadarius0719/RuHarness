@@ -83,3 +83,120 @@ Two real findings the oracle produced (details in targets/zopfli/migration/DECIS
 (harness-core/-scan/-detect/-llm/-oracle/-cli) → multi-unit ordering. Also carried
 forward from M0: function-pointer calls invisible to the scanner (M2 detector
 material); CI for the §10.2/§11.3 gates not yet set up.
+
+## 2026-09-17 — M1 state-backend research spike (§14.1) — findings and decisions
+
+Five parallel web-research passes (embedded stores, git-native state, content-addressed
+storage, runtime conventions, plan-file format), all claims source-verified as of Sept
+2026. Full transcripts in the session workflow logs; condensed findings:
+
+- **Binary SQLite in git is an anti-pattern** (no diffs, unmergeable, byte-
+  nondeterministic pages). Projects that commit DBs rely on textconv/`.dump` hacks.
+  The beads project (Yegge) is the cautionary case study: JSONL-in-git ledger hit
+  rebase conflicts from non-idempotent writers and sequential-ID collisions across
+  branches, then retreated to a derived-export model.
+- **rusqlite 0.40.2** requires system SQLite ≥ 3.45.3; Ubuntu 24.04 LTS ships 3.45.1
+  and macOS lags — so when we ship the facts.db export, `bundled` is justified
+  (identical behavior everywhere; this answers §11.2's "justify bundling").
+  redb 4.3 is credible but KV-only; **sled is still not shippable** (no stable
+  release since 2021, README says use SQLite).
+- **serde_yaml is dead** (archived 2024-03); its popular successor serde_yml was
+  flagged AI-generated/unsound with a security advisory. TOML tooling is at peak
+  health (toml 1.x, toml_edit format-preserving edits — cargo-adjacent maintainers).
+- **Committed plain files beat git notes/refs** for reviewable tool state
+  (git-appraise dormant; Gerrit NoteDb works only behind a daemon; the 2025-26 agent
+  tool wave — spec-kit, OpenSpec, Backlog.md — all chose plain files). Proven
+  patterns: file-per-record, canonical serialization, content-derived IDs, regenerate-
+  don't-hand-merge for derived files, worktrees for parallel builds.
+- **CAS shape** (for when artifacts exist): in-repo `cas/<2hex>/<blake3-hex>`, atomic
+  temp+rename writes, mark-and-sweep GC from unit-record roots — never mtime-LRU for
+  tracked files (git destroys mtimes). blake3 is the incumbent in this niche
+  (ccache, Buck2). Design recorded; no code until the LLM loop produces artifacts.
+- **Runtime view** (§14.3, for M2): one small generated managed block in AGENTS.md
+  (BEGIN/END markers + content hash), CLAUDE.md bridging via `@AGENTS.md`; expose
+  state via CLI/MCP *tools*, never MCP resources (~28% client support, Claude Code
+  effectively doesn't consume them). Evidence that context files must carry only
+  non-derivable info (ETH study: verbose/derivable content costs ~20% and *lowers*
+  success) — ledger state qualifies.
+
+**Decisions** (schemas frozen in docs/SCHEMAS.md, reviewed by a 4-lens adversarial
+design panel whose two blockers — unbound verdicts, unspecified staleness — are fixed
+in the spec):
+
+1. Canonical fact model = deterministic sorted **facts.jsonl, committed**; SQLite
+   facts.db becomes a derived gitignored export, **deferred to its first query
+   consumer (M2)** with its SQL schema frozen on paper. Deviation from the briefing's
+   "facts.db (SQLite)" wording, sanctioned by §14.1's own spike clause; cold-resume
+   is strengthened, not weakened (text is diffable/mergeable and regenerable).
+2. **plan.toml, not plan.yaml** (§11.2 invited this; the YAML ecosystem rupture
+   decides it). Reconciliation semantics, writer model, advisory ordering, and closed
+   enums per SCHEMAS.md.
+3. **Verdicts are content-bound**: blake3 digests of every oracle input; `harness
+   state status` is the staleness detector; `verify` refuses on stale plans and
+   demotes status on red. No timestamps in committed canonical files.
+4. **Unit crates leave the harness workspace** (`[workspace] exclude` targets/);
+   the oracle builds them via `--manifest-path`, so a broken in-progress unit can
+   never brick the harness's own tooling on a fresh clone.
+5. Traits at M1: `LanguageFrontend`, `OracleStrategy` (now threaded with a
+   `TargetContext` so implementations receive config). `PlannerStrategy` demoted to
+   a plain function until a second planner exists. `Detector`/`ProviderAdapter`
+   defined at M2/M3.
+6. Symbol identity is frontend-canonical (`file::name` for C statics) — the fact
+   model no longer assumes C's global-uniqueness of external names.
+
+**Dependencies added (§11.1):** `serde`/`serde_json` (canonical JSONL), `toml` +
+`toml_edit` (plan read + surgical mutation — the only mainstream format-preserving
+editor), `blake3` (committed content hashes need a stable keyed-nowhere hash; std
+hashers are per-process-random and release-unstable), `thiserror` (core/scan/oracle
+typed errors, §10.2), `clap` + `anyhow` (harness-cli — reverses M0's no-clap note:
+the CLI now has four subcommands with flags and §13.4 makes it a stable documented
+interface; threshold genuinely crossed). **proptest deferred** (§10.2 pushback,
+recorded: M1 ships seeded-PRNG round-trip/idempotence tests + a golden byte fixture;
+proptest lands when hand-edited plan files warrant fuzzing). **rusqlite deferred**
+to the facts.db export milestone.
+
+**Revisit when:** facts exceed ~10^5 records or cross-unit queries appear (facts.db
+export + rusqlite); a second planner strategy appears (re-promote the trait); YAML
+interop is ever demanded (serde-saphyr, never serde_yml).
+
+## 2026-09-17 — M1 complete; verification-review findings; state at session end (§17 handoff)
+
+**M1 is done.** Workspace promoted to crates/{harness-core,-scan,-oracle,-cli}; ledger
+schemas v1 frozen in docs/SCHEMAS.md and implemented; zopfli plan holds 11 units in
+dependency order (one genuine 3-file SCC merged: blocksplitter/deflate/squeeze);
+u001-katajainen re-verified GREEN under the content-bound verdict regime. Gates green:
+fmt, clippy -D warnings, 18 tests incl. an e2e that runs the full pipeline plus a red
+oracle run in a temp copy. CI authored (macOS+Ubuntu + cargo-deny). m0/ deleted.
+
+**Pre-commit adversarial review (4 lenses) found and fixed — all with regression
+coverage where testable:**
+1. *Split-cycle plan corruption* (blocker): adopt_existing_ids let two clusters claim
+   one existing id → plan corrupted on disk. Fixed: claim-once + self-dep drop +
+   duplicate-id rejection + `harness plan` validates the reconciled document BEFORE
+   writing.
+2. *Stem-collision unit loss* (blocker): u-util from src/x and src/y collided and one
+   unit silently vanished. Fixed: path-slug fallback ids + hard duplicate check.
+3. *Candidate crash ≠ red* (blocker): a crashing/non-building Rust candidate exited 1
+   with stale green evidence left standing. Fixed: crate build failures and run
+   crashes are now failed checks in a red verdict (exit 10, demotion, last-green kept).
+4. *`-lm` before objects* (blocker): whole-program link would fail on Ubuntu
+   (--as-needed). Fixed: link args after inputs (cflags/libs split).
+5. *CARGO_TARGET_DIR false-green* (blocker): redirected builds left a stale staticlib
+   where find_staticlib looks. Fixed: explicit --target-dir.
+6. Should-fixes applied: rust_crate digest is now a CLOSED list (Cargo.toml +
+   Cargo.lock + src/**, spec amended); atomic writes everywhere (temp+rename);
+   structural plan validation on every CLI load; contradiction detection in both
+   directions incl. merged; red-on-merged warns without auto-demote; stale-refusal
+   recovery advice corrected (scan→plan→verify) and `plan` refuses stale facts;
+   status distinguishes missing/unreadable/newer-schema verdicts; EPIPE-safe stdout;
+   exit codes 0/1/2/10 all pinned by e2e; SCHEMAS example allowlist includes rustc;
+   CI runs the verified unit crate's clippy+tests via --manifest-path (interim until
+   the harness drives per-unit gates itself).
+
+**Next actions (M2 — observer):** research spike (translation-literature re-check per
+§15); Detector trait + built-in detectors from the §6 gotcha taxonomy (function-
+pointer calls are already a known scanner gap); LLM triage pass writing
+observations.md; `harness sync-runtime` (§14.3 design already recorded, spike gave the
+exact pattern); consider harness-driven per-unit crate gates replacing the CI interim.
+Carried forward: facts.db SQLite export deferred to first query consumer; proptest
+deferred; [state] profiles config deferred until artifacts exist.

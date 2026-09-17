@@ -1,0 +1,12 @@
+[package]
+name = "harness-scan"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "RuHarness language frontends (C via tree-sitter)"
+
+[dependencies]
+harness-core.workspace = true
+tree-sitter.workspace = true
+tree-sitter-c.workspace = true
