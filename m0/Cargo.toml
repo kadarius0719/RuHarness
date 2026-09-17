@@ -1,0 +1,11 @@
+[package]
+name = "harness-m0"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "M0 end-to-end thread: scan zopfli, pick leaf, run the differential oracle"
+
+[dependencies]
+tree-sitter = "0.27"
+tree-sitter-c = "0.24"
