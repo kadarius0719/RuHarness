@@ -38,8 +38,8 @@ engineering decision, research spike, and milestone handoff is in
 | **M0** — end-to-end thread | One leaf unit migrated and differentially verified | ✅ |
 | **M1** — ledger + schemas | Fact model, plan, content-bound verdicts, multi-unit ordering, workspace, CI | ✅ |
 | **M2** — observer | Gotcha detectors, risk scoring, LLM triage, human review loop, runtime-view sync | ✅ |
-| **M3** — provider adapter #2 | Same migration through a second LLM provider | next |
-| **M4** — benchmark | DARPA TRACTOR public corpus scores as regression suite | — |
+| **M3** — executor + provider #2 | `harness migrate` (translate → oracle → repair), sandboxed execution, two wire adapters proven live | ✅ |
+| **M4** — benchmark | DARPA TRACTOR public corpus scores as regression suite | next |
 | **M5** — extension proof | External detector plugin + `EXTENDING.md` | — |
 | **M6+** — Phase 2 spike | Second language frontend, golden-test oracle | — |
 
@@ -116,6 +116,43 @@ via `harness review <finding> --uphold-dismiss`, and human-mandatory categories
 stay flagged until reviewed.
 
 ```bash
+cargo run -p harness-cli -- migrate u001-katajainen --target targets/zopfli
+```
+**The executor (M3).** Builds a translation prompt (ABI contract, confirmed hazards,
+nonce-delimited C source), asks the configured provider for exactly two files —
+`src/logic.rs` (100% safe Rust) and `src/ffi.rs` (the C-ABI shim) — and drops them
+into a **harness-owned** crate scaffold whose `lib.rs` makes the *compiler* confine
+`unsafe` to the shim. The candidate then faces the full oracle; failures feed up to
+three stateless repair turns carrying bounded evidence (rustc errors, differing
+cases). Every attempt is recorded under `units/<id>/attempts/<id>/` with a
+content-derived id, per-turn results and token usage, the candidate source, and a
+`prompt_digest` — equal digests across attempts prove the same migration was posed
+to different providers. Green candidates are promoted through a crash-safe
+two-rename protocol and re-verified in place. `--provider replay` re-runs a recorded
+attempt from its traces and *verifies* it against the ledger.
+
+Model-written code is untrusted: every build and run happens under `sandbox-exec`
+(no network, no reads of your home directory, writes confined to the build dir,
+scrubbed environment, timeouts with process-group kill), and a **symbol-set check**
+rejects candidates that export anything beyond the unit's symbols or smuggle in
+pre-main constructors — so a candidate cannot forge a green by shadowing `printf` or
+exiting before `main`. On platforms without a sandbox, `verify` and `migrate` refuse
+unless you pass `--allow-unsandboxed`.
+
+**Providers.** A target's `harness.toml` can only *name* a provider profile and a
+model — endpoints and credentials live in user-level config
+(`$RUHARNESS_PROVIDERS`, see [providers.example.toml](providers.example.toml)), so a
+hostile target can't point your API key at its own server. Built in: `external`
+(file hand-off to any agent runtime), `replay`, `anthropic`. Wire adapters:
+Anthropic Messages and OpenAI-compatible Chat Completions (OpenAI, Ollama,
+llama.cpp, vLLM, LM Studio, Groq, OpenRouter, …). Fully local, no API key:
+
+```bash
+export RUHARNESS_PROVIDERS=$PWD/providers.example.toml
+cargo run -p harness-cli -- migrate u001-katajainen --target targets/zopfli --provider ollama-openai --model llama3.2-1b-32k
+```
+
+```bash
 cargo run -p harness-cli -- sync-runtime --target targets/zopfli
 ```
 Regenerates the managed block in the target's `AGENTS.md` (current state, next
@@ -123,7 +160,7 @@ units by risk, the exact commands) with a content hash; `--check` is CI-usable.
 The ledger stays the single source of truth — the view is always derived.
 
 Exit codes (stable contract): `0` ok/green · `1` harness error · `2` usage ·
-`10` oracle red. Machine consumers read the ledger files, not stdout.
+`10` oracle red (for `migrate`: red, blocked, truncated, or format). Machine consumers read the ledger files, not stdout.
 
 ## Repository layout
 
@@ -132,8 +169,9 @@ crates/
   harness-core/     # fact model, schemas, plan, verdicts, observer, risk, planner, traits
   harness-scan/     # C frontend (tree-sitter) implementing LanguageFrontend
   harness-detect/   # built-in hazard detectors (c-treesitter-v1 suite)
-  harness-llm/      # provider adapters (anthropic/replay/external) + triage pass
-  harness-oracle/   # c-abi-differential OracleStrategy
+  harness-llm/      # provider profiles + adapters (anthropic, openai-compat,
+                    #   replay/external), triage pass, the migrate executor
+  harness-oracle/   # c-abi-differential OracleStrategy: sandbox, symbol-set check
   harness-cli/      # the `harness` binary
 docs/SCHEMAS.md     # normative ledger schemas, v1
 targets/zopfli/     # vendored migration target (pinned)

@@ -404,3 +404,58 @@ sandbox and run #1 through the pre-existing Anthropic adapter. The next commit a
 ONLY the OpenAI-compatible adapter + its registration + config, then records run #2 —
 so `git diff --stat` between them is the literal proof of "zero code changes outside
 the adapter and config".
+
+## 2026-09-19 — M3 complete: the agnosticism proof, stated precisely; handoff (§17)
+
+**The literal proof** (`git diff --stat 9a83b34..4cc5724` — commit A → commit B):
+
+```
+ crates/harness-llm/src/lib.rs                      |    1 +
+ crates/harness-llm/src/openai_compat.rs            | 1057 ++++++++++++++++++++
+ crates/harness-llm/src/providers.rs                |   22 +-
+ providers.example.toml                             |    9 +
+ .../attempts/a-82a651aef9fa/attempt.json           |   34 +
+```
+One new adapter file, one `mod` line, one `kind_builder` arm (+ the single existing test
+that asserted the kind was unsupported), one user-level config profile, and the
+evidence of the run. No executor, oracle, core, or CLI code changed between the run
+through provider #1 and the run through provider #2.
+
+**What the evidence supports — and what it does not.** M3 shows provider-agnostic
+*plumbing*, not provider-independent migration *success*. One harness build drove unit
+u001-katajainen with a byte-identical translate prompt (`prompt_digest
+blake3:991d2768…`, identical on all three attempts; the translate turn reported 4552
+input tokens on BOTH wires) through two independently written wire adapters —
+Anthropic Messages (`/v1/messages`) and OpenAI Chat Completions
+(`/v1/chat/completions`) — both LIVE against local Ollama 0.30.10 running
+`llama3.2-1b-32k` (CONTEXT 32768 confirmed via `ollama ps`). The runs differ only in
+the user-level provider profile. Both ended `truncated` (a 1B model cannot hold the
+emission contract; run #1 did get one candidate as far as a sandboxed build failure).
+That proves two wire formats, not two vendors, and it proves transport + executor +
+ledger, not translation quality. The only GREEN came through the `external` hand-off,
+answered BLIND by a fresh subagent limited to reading the request and writing its
+reply (it never saw the verified crate; green on turn 1 under the full sandboxed
+oracle); its token usage is unmeasured (`null`). **No cloud endpoint — including
+api.anthropic.com — has been exercised by this harness yet.**
+
+**Cheapest next strengthening (needs the user's consent — a multi-GB download):** pull
+one capable local coder model (the spike names Qwen3.6-27B / Devstral Small 2 /
+Qwen3-Coder-class, Apache-2.0) and re-run both wire adapters with `--retry`; a green
+through BOTH live adapters is what "reproduced" in §8.3 ultimately means. Or set
+`ANTHROPIC_API_KEY` and run the built-in `anthropic` profile.
+
+**State:** gates green (fmt, clippy -D warnings, 288 tests incl. the e2e that drives
+migrate → external hand-off → green → replay-verify → promotion → wrong translation →
+repair request, all under `--allow-unsandboxed`-aware gating). Ledger: u001 verified
+(verdict now records `symbol-set` and `sandbox: sandbox-exec`), three attempts
+recorded with source-only evidence bundles, 10 units pending.
+
+**Next actions (M4 — TRACTOR benchmark):** spike the corpus layout (Battery 01; P00
+Perlin, P01 SPHINCS) → a second target under `targets/` → the missing executor stage
+the corpus will force: LLM **driver/test generation** (§3.5 step 1 — today `migrate`
+refuses units without a driver) with C-vs-C self-validation → scores as the regression
+suite. Carry-forwards: held-out oracle corpus (revisit trigger: first live repair turn
+that flips red→green); escalation tiers + budget enforcement + `harness usage` (§16,
+enum strings already reserved); deny-by-default sandbox profile; Linux sandbox
+(Landlock/unshare); nightly `-Zsanitizer` for ffi shims; canary injection set;
+facts.db export; proptest.

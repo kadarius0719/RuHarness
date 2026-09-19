@@ -11,7 +11,7 @@
 //!
 //! Both sides of the call are validated as untrusted input:
 //! - findings.jsonl is on-disk data (threat model §12.1), so every finding
-//!   is shape-checked ([`validate_findings`]) BEFORE any of its fields can
+//!   is shape-checked (`validate_findings`) BEFORE any of its fields can
 //!   reach the trusted metadata line or a filesystem path;
 //! - model replies are shape-checked, the rationale is normalized to a
 //!   single line and capped, and every evidence entry must be a
@@ -581,7 +581,7 @@ fn is_awaiting(e: &Error) -> bool {
 /// ("prompt truncated by server") that is never validated, retried, or
 /// recorded as a trace.
 ///
-/// Findings are shape-checked first ([`validate_findings`]; a malformed
+/// Findings are shape-checked first (`validate_findings`; a malformed
 /// findings.jsonl refuses the run before any field reaches a prompt or a
 /// path), then freshness is re-checked against the tree (mismatch → run
 /// `harness detect`). Every reply — live, replayed, or handed off, first or

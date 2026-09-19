@@ -6,9 +6,11 @@
 //! adapter, the trace-based replay/external adapter, prompt assembly under
 //! the injection posture (nonce-delimited untrusted slices, `<` escaping,
 //! no source-derived text in the trusted region), harness-computed content
-//! hashes, and response validation. It never persists an API key, and it
-//! only ever reads one from an `ANTHROPIC_*` variable (the name comes from
-//! the target's `harness.toml`, which is untrusted).
+//! hashes, and response validation. It never persists an API key. Which
+//! endpoint and which key variable to use is never the target's decision:
+//! the target's `harness.toml` (hostile input) only NAMES a provider
+//! profile; endpoints and credentials come from built-in profiles or the
+//! user-level profiles file (see [`providers`]).
 //!
 //! Every completion — triage and executor alike — is requested through
 //! [`checked_complete`], which refuses a prompt that cannot fit the
