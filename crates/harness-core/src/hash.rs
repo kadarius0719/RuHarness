@@ -78,6 +78,14 @@ pub fn unit_crate_file_set_hash(root: &Path, crate_dir: &Path) -> Result<String,
     Ok(file_set_hash(&pairs))
 }
 
+/// Location-independent crate content hash (docs/SCHEMAS.md attempts
+/// ledger): the same closed file list as [`unit_crate_file_set_hash`], but
+/// with paths relative to the crate dir — so a candidate's digest still
+/// matches after promotion moves it.
+pub fn crate_content_hash(crate_dir: &Path) -> Result<String, Error> {
+    unit_crate_file_set_hash(crate_dir, crate_dir)
+}
+
 fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), Error> {
     let entries = std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))?;
     for entry in entries {

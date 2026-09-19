@@ -5,7 +5,7 @@ name = "zopfli"
 source_dir = "src/zopfli"
 
 [oracle]
-allowlist = ["cc", "cargo", "rustc"]
+allowlist = ["cc", "cargo", "rustc", "nm"]
 # keys below are owned by the c-abi-differential oracle kind
 extra_link_args = ["-lm"]
 

@@ -209,6 +209,7 @@ dependencies = [
  "harness-llm",
  "harness-oracle",
  "harness-scan",
+ "serde_json",
 ]
 
 [[package]]
@@ -240,6 +241,7 @@ dependencies = [
  "harness-core",
  "serde",
  "serde_json",
+ "toml",
  "ureq",
 ]
 

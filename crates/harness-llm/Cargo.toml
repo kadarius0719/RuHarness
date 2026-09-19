@@ -10,5 +10,6 @@ description = "RuHarness provider adapters and the observer triage pass"
 harness-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 blake3.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls"] }

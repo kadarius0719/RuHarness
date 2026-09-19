@@ -354,3 +354,180 @@ model = "claude-sonnet-5"    # Tier-2 default for observer triage (briefing §16
 max_tokens = 8192
 api_key_env = "ANTHROPIC_API_KEY"
 ```
+
+---
+
+# M3 additions: executor + provider profiles (v1)
+
+Reviewed by a 3-lens adversarial design panel 2026-09-19 (security lens verdict was
+"flawed": three blockers — link-arg injection, plan-field path traversal, symbol
+shadowing forging green — all fixed below).
+
+## Trust boundaries
+
+- **Target-owned files are hostile input**: `harness.toml`, `plan.toml`, all C source,
+  and the differential driver. Consequences, all enforced in code:
+  - Plan `id` and `[unit.oracle] rust_crate` must be single clean path segments
+    (`^[A-Za-z0-9][A-Za-z0-9._-]*$`); `files`, `driver`, `replaces` must be clean
+    relative paths (no `..`, not rooted, no control characters). Validated at plan
+    load; every write/copy destination is additionally checked to be inside
+    `migration/units/<id>/` after canonicalization.
+  - `[oracle] extra_link_args` accepts ONLY `-l<name>` (`^-l[A-Za-z0-9_+.-]+$`).
+  - Provider endpoints and credentials never come from the target. `harness.toml`
+    names a **provider profile** and a model string; profiles live in USER-level
+    config (`$RUHARNESS_PROVIDERS`, else `~/.config/ruharness/providers.toml`). The CLI
+    never loads a target-local `.env`; the model string is only ever placed in the
+    request body, never in a URL or header.
+- **Model output is untrusted code.** The harness owns the candidate's `Cargo.toml`
+  (no dependencies, no build script, `panic = "abort"`, empty `[workspace]`) and
+  `src/lib.rs`:
+  ```rust
+  #![deny(unsafe_code)]
+  #[forbid(unsafe_code)] mod logic;
+  #[allow(unsafe_code)] mod ffi;
+  ```
+  so the compiler confines `unsafe` to `ffi.rs`. The model emits exactly
+  `src/logic.rs` and `src/ffi.rs` (allowlist lookup, never path sanitization).
+  Security boundaries are: the compiler-enforced lint structure, the **symbol-set
+  check**, and the sandbox. The textual deny-scan is *quality feedback only*.
+- **Symbol-set check** (oracle check `symbol-set`, applies to every verification):
+  the candidate staticlib's defined external symbols that are not Rust-mangled, minus
+  a baseline captured from an empty harness-owned crate built with the same
+  toolchain, must equal the unit's `symbols` exactly. A candidate exporting `printf`,
+  `malloc`, or any other extra global cannot go green. The same check rejects
+  **pre-main constructors**: symbols placed in `__mod_init_func` / `__mod_term_func` /
+  `__init_offsets` (macOS) or `.init_array` / `.fini_array` / `.ctors` / `.dtors`
+  (Linux, when `objdump` is allowlisted and available) beyond the baseline's count —
+  a static initializer could otherwise print forged output and exit before `main`.
+- **Sandbox** (`sandbox-exec` on macOS) wraps every build AND every run of target- or
+  model-derived code: network denied; reads under the user's home denied except the
+  target root and the Rust toolchain dirs; writes confined to the unit's build/
+  attempt dirs and temp. All oracle child processes get a scrubbed environment
+  (`PATH`, `HOME`, `TMPDIR`, `CARGO_HOME`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` only) and
+  a wall-clock timeout (`[oracle] timeout_secs`, default 120; expiry = failed
+  check). The mode applied is recorded in the verdict (`inputs.toolchain` gains
+  `sandbox: <mode>`). Built-binary runs additionally deny `process-exec` of anything
+  but the binary itself, and a timeout kills the child's whole process group. Where
+  no sandbox exists (`sandbox: none`), EVERY command that builds or runs target- or
+  model-derived code — `verify` and `migrate`, with any provider (an `external`
+  candidate and the target's own driver run just the same) — refuses unless
+  `--allow-unsandboxed` is passed.
+- **What the oracle does NOT prove:** the `sanitizers` check instruments the C
+  baseline and driver only. Stable Rust has no ASan, so the candidate's `ffi.rs` shim
+  is not sanitizer-verified; its safety rests on the compiler-enforced shim structure
+  plus the differential checks. (Nightly `-Zsanitizer` is recorded future work.)
+- **Target-configured LLM spend is bounded:** `max_repairs ≤ 10` and
+  `max_tokens ≤ 65536` are enforced at config load — a hostile `harness.toml` cannot
+  turn one command into an unbounded stream of billable calls.
+
+## Provider profiles (user-level, never target-owned)
+
+```toml
+[providers.ollama-anthropic]
+kind = "anthropic"                 # anthropic | openai-compat
+base_url = "http://127.0.0.1:11434"
+# api_key_env = "ANTHROPIC_API_KEY" # optional; omitted = no auth header
+context_tokens = 32768              # optional; enables truncation preflight
+timeout_secs = 600
+```
+Built-ins needing no file: `external`, `replay`, `anthropic` (api.anthropic.com,
+`ANTHROPIC_API_KEY`). `openai-compat` adds `max_tokens_field = "max_tokens" |
+"max_completion_tokens"`. Adapters never send sampling parameters. When
+`context_tokens` is set: preflight refuses (harness error, no attempt record) if
+`prompt_bytes/3 + max_tokens > context_tokens`; after each call, reported
+`input_tokens < prompt_bytes/6` is a harness error "prompt truncated by server" —
+never recorded as a model outcome.
+
+`CompletionResponse.stop_reason` stays the raw provider string (trace format
+unchanged from M2); the normalized kind is derived: `end_turn|stop` → EndTurn,
+`max_tokens|length|model_context_window_exceeded` → MaxTokens,
+`refusal|content_filter` → Refusal, else Other.
+
+## harness.toml additions
+
+```toml
+[llm.migrate]            # optional stage override (§13.2 per-stage routing)
+provider = "ollama-anthropic"
+model = "llama3.2-1b-32k"
+max_tokens = 8192
+max_repairs = 3          # 1 translate + up to 3 stateless repair turns
+```
+(`api_key_env` from M2 is removed from target config; ignored if present.)
+
+## Attempts ledger: migration/units/<id>/attempts/<attempt-id>/
+
+Committed evidence per attempt (source only; `attempts/**/target/` is gitignored):
+`attempt.json` + `candidate/src/{logic.rs,ffi.rs}` (the last candidate written) +
+`attempt-verdict.json` (last oracle verdict, when one ran).
+
+```json
+{"schema":"ruharness-attempt","schema_version":1,
+ "id":"a-<12hex>","unit":"u001-katajainen",
+ "provider":"ollama-anthropic","provider_kind":"anthropic","model":"llama3.2-1b-32k",
+ "prompt_digest":"blake3:...",
+ "unit_source":"blake3:...","driver":"blake3:...","toolchain":["rustc ...","sandbox: sandbox-exec"],
+ "outcome":"red",
+ "turns":[{"kind":"translate","result":"build","request_key":"8hex",
+           "response_hash":"blake3:...","input_tokens":9120,"output_tokens":1400}],
+ "candidate_digest":"blake3:...","promoted":false}
+```
+- `id` = `a-` + 12 hex of blake3(unit ‖ NUL ‖ unit_source ‖ NUL ‖ driver ‖ NUL ‖
+  provider_kind ‖ NUL ‖ model ‖ NUL ‖ translate request_key) — content-derived, never
+  a counter; re-running the same attempt (the normal path in `external` mode, where
+  the process exits awaiting each response) resumes the same directory.
+- `prompt_digest` = blake3(system ‖ NUL ‖ user) of the translate turn. Equal digests
+  across attempts prove the same migration was posed to different providers.
+- `attempt.json` is rewritten atomically after EVERY turn (`outcome: "in-progress"`
+  until the trajectory ends), so a crash leaves an accurate record.
+- `outcome` (closed): `in-progress | green | red | blocked | truncated | format`;
+  reserved for later milestones without a schema bump: `budget`, `thrash`.
+  Turn `result` (closed): `green | format | check | build | oracle | crash-timeout |
+  truncated | blocked`.
+- Token fields are nullable: `null` = unknown (external hand-off, or a provider that
+  reports no usage) — never `0`.
+- `candidate_digest` = crate-content hash: the closed file list with paths relative
+  to the crate dir, so it is location-independent and matches after promotion.
+- **Finished attempts are immutable.** For a LIVE provider, re-running an attempt
+  whose record is finished refuses unless `--retry` is passed; `--retry` records a
+  NEW sample `a-<12hex>.r<N>` (N = 2, 3, …) in its own directory. Live traces are
+  recorded per sample under `traces/<attempt-id>/`, so samples never overwrite each
+  other. (`external` resumes are deterministic re-derivations of the same record.)
+- `provider = "replay"` VERIFIES a recorded attempt: it locates the record whose
+  translate `request_key` matches (or the one pinned with `--attempt`), re-runs the
+  trajectory from its traces in a scratch dir, and compares turn-by-turn
+  `request_key`, `response_hash`, `result`, plus `candidate_digest` and `outcome` —
+  any divergence is an error. It writes nothing to the attempts ledger.
+- The `prompt truncated by server` and context-preflight checks apply to every
+  stage (`observe` and `migrate`); a rejected call leaves no replayable trace.
+
+## Emission contract (translate and repair turns)
+
+For each file: the path alone on a line, a column-0 ` ```rust ` fence, the ENTIRE
+file, a closing fence; then a final line `RUHARNESS_END_OF_OUTPUT`. Exactly
+`src/logic.rs` and `src/ffi.rs` are accepted (exact allowlist match; last duplicate
+wins). `<blocked>reason</blocked>` instead of code = outcome `blocked`. Truncation
+(stop kind MaxTokens, `output_tokens >= max_tokens - 8`, or EOF inside a block) →
+nothing is written, outcome `truncated`. Leading `<think>…</think>` spans are
+stripped.
+
+## Promotion protocol
+
+On green, when the unit is not already verified/merged (or `--promote`):
+(1) the final attempt record is written first; (2) the candidate's closed file list
+is staged to `units/<id>/.promote-<attempt>/`; (3) two renames: `<crate>` →
+`.<crate>.prev`, staged → `<crate>`; (4) the normal `verify` runs — red ⇒ `.prev` is
+renamed back and status/verdicts are untouched; green ⇒ `.prev` is deleted and
+`promoted: true` is recorded. A leftover `.<crate>.prev` found at startup is resolved
+by EVIDENCE: if the committed green verdict's `rust_crate` digest matches the crate on
+disk, the promotion had completed and only the backup is removed; otherwise the
+unverified candidate is rolled back. An ERROR during the in-place verify rolls back
+exactly like a red verdict.
+
+## CLI additions
+
+- `harness migrate <UNIT> [--target DIR] [--provider P] [--model M] [--promote]
+  [--retry] [--attempt ID] [--allow-unsandboxed]` — exit 0 green · 10 red/blocked/truncated/format · 1 harness
+  error (incl. awaiting external responses, stale refusals, truncated-by-server).
+- `harness verify` gains `--allow-unsandboxed` (see Trust boundaries).
+- `harness state status` additionally flags a done-claiming status whose verdict is
+  STALE as a CONTRADICTION, and prints a per-unit attempts summary.

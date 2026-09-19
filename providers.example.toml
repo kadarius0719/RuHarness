@@ -1,0 +1,15 @@
+# RuHarness provider profiles — USER-level config (never target-owned: a target's
+# harness.toml may only NAME a profile; endpoints and credentials live here).
+# Use: export RUHARNESS_PROVIDERS=/path/to/this/file
+#      (default location: ~/.config/ruharness/providers.toml)
+# Built-in profiles need no entry: external, replay, anthropic (api.anthropic.com).
+
+# Anthropic Messages wire format against a local Ollama server (no key needed).
+# The model should be created with a large context, e.g.:
+#   printf 'FROM llama3.2:1b\nPARAMETER num_ctx 32768\n' > Modelfile
+#   ollama create llama3.2-1b-32k -f Modelfile
+[providers.ollama-anthropic]
+kind = "anthropic"
+base_url = "http://127.0.0.1:11434"
+context_tokens = 32768
+timeout_secs = 900

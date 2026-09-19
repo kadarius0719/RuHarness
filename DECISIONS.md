@@ -321,3 +321,86 @@ future hardening); `state status` does not yet report observer freshness (observ
 refuses instead — acceptable, documented); per-unit oracle-availability risk signal
 awaits per-unit tests; facts.db export + proptest still deferred; libclang frontend
 for the 4 undetectable categories.
+
+## 2026-09-19 — M3 research spike (§15) and design decisions
+
+Three source-verified sweeps (second-provider landscape, translation/repair-loop
+evidence, code-emission formats). Condensed:
+
+- **Adapter #2 = OpenAI-compatible Chat Completions.** Still the universal lowest
+  common denominator in Sept 2026 (OpenAI, Ollama, llama.cpp, vLLM, LM Studio, Groq,
+  Together, OpenRouter, Mistral, Gemini-compat all serve it; the Responses API has not
+  displaced it). The one unsafe field is the max-token NAME (`max_tokens` vs
+  `max_completion_tokens`); sampling params must be omitted (reasoning models 400 on
+  them); errors can arrive inside HTTP 200; ureq 3 has NO default timeouts.
+- **Executor evidence:** 1 translate + ≤3 repairs (5th iteration ≈ 0% gain, PtrTrans/
+  CRUST-Bench); stateless repair turns with the full current candidate; whole-file
+  emission beats diffs at this size (aider: 99.6% vs 71.6% well-formed on a weak
+  model); a `<blocked>` escape hatch cut cheating 54%→9% (ImpossibleBench); models
+  special-case visible test inputs, so evidence must be bounded; safe-first with a
+  mechanical FFI shim (ENCRUST pattern).
+- **Environment:** no cloud API keys; Ollama 0.30.10 local with `llama3.2:1b`, which
+  serves BOTH the OpenAI and the Anthropic wire formats. A derived 32k-context model
+  (`llama3.2-1b-32k`, Modelfile `PARAMETER num_ctx 32768`; no download) avoids silent
+  server-side prompt truncation (`ollama ps` confirmed CONTEXT 32768).
+
+**Decisions** (spec: docs/SCHEMAS.md "M3 additions"; a 3-lens design review returned
+"flawed" from the security lens — all three blockers fixed in the spec before code):
+
+1. `harness migrate`: translate → parse → deny-scan → harness-owned scaffold → oracle →
+   stateless repair, ≤3 repairs; attempts ledger with content-derived ids, per-turn
+   atomic journaling, nullable token usage, `prompt_digest` so equal digests prove the
+   same migration was posed to different providers.
+2. Trust boundaries: target-owned files are hostile (plan path fields validated at
+   load; `extra_link_args` is `-l<name>` only; endpoints/credentials live in USER-level
+   provider profiles, never the target's harness.toml; LLM spend clamped). Model output
+   is untrusted code: harness owns Cargo.toml + lib.rs so the COMPILER confines
+   `unsafe` to ffi.rs; symbol-set check (incl. pre-main constructor sections) and the
+   sandbox are the security boundaries; the deny-scan is quality feedback only.
+3. Sandbox (M0's deferred item; its revisit trigger fired): `sandbox-exec` around
+   every build and run, scrubbed env, wall-clock timeouts with process-group kill,
+   home reads denied; on `sandbox: none` platforms every code-executing command
+   refuses without `--allow-unsandboxed`.
+4. Promotion: record-first, stage, two renames, in-place verify, evidence-aware
+   recovery.
+5. Cut per YAGNI (enum strings reserved so deferral costs no schema bump): held-out
+   corpus + driver seeds, escalation tiers, budget enforcement, `harness usage`, thrash
+   detection, retry-with-doubled-tokens, Linux unshare/Landlock, syn-based checks.
+   Deferred with recorded design: LLM driver/test generation (§3.5 step 1), RESET
+   trajectories, deny-by-default sandbox profile, nightly `-Zsanitizer` for the shim.
+
+**What the live run taught (run #1, first sample, discarded pre-commit):** the 1B model
+parroted the prompt back, including the contract's own `<blocked>reason</blocked>`
+example, which the parser took for a verdict. Fixed: blocked detection is by content
+(placeholder/echoed instruction rejected; markdown-wrapped genuine verdicts accepted).
+Exactly the class of bug only a weak live model surfaces.
+
+**Pre-commit code review (3 lenses) — 1 blocker + fixes, all with regression tests:**
+live re-runs destroyed prior evidence (now immutable; `--retry` records sample
+`.rN`, per-sample live traces); pre-main constructor forgery reproduced by the
+reviewer (`__mod_init_func` printing forged output before main) — now rejected by the
+symbol-set boundary; promotion recovery could roll back a verified promotion (now
+evidence-aware); unbounded target-controlled `max_repairs` (clamped); trace dirs
+could be redirected through a committed symlink (level-by-level real-dir check);
+absolute paths leaked into committed evidence (scrubbed at the oracle source);
+the sandbox gate only covered live providers (now every code-executing command);
+`observe` skipped the context/truncation checks (shared `checked_complete`); replay
+verified nothing against the ledger (now compares every turn, digest, and outcome).
+
+**Recorded runs so far (unit u001-katajainen, identical `prompt_digest`
+`blake3:991d2768…` on both):**
+- `a-d6b377fb9257` — provider kind `anthropic` (the M2 adapter, base_url → local
+  Ollama `/v1/messages`), model `llama3.2-1b-32k`, LIVE: format → format → build
+  (model-written Rust compiled in the sandbox and failed) → truncated. Outcome
+  `truncated`. ~19.4K input / 5.3K output tokens.
+- `a-ef81857896e5` — `external` hand-off answered BLIND: a fresh subagent restricted
+  to two tool calls (read the request JSON, write its answer), which never saw the
+  existing verified crate. GREEN on the first turn under the full sandboxed oracle.
+  The `model` field (`claude-sonnet-5`) is the configured string; the answering model
+  was this session's Claude model via the subagent; usage unmeasured (null).
+
+Commit sequencing is deliberate: THIS commit contains the executor, the seam, the
+sandbox and run #1 through the pre-existing Anthropic adapter. The next commit adds
+ONLY the OpenAI-compatible adapter + its registration + config, then records run #2 —
+so `git diff --stat` between them is the literal proof of "zero code changes outside
+the adapter and config".

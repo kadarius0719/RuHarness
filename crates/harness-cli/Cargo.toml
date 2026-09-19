@@ -18,3 +18,6 @@ harness-detect.workspace = true
 harness-llm.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

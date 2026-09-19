@@ -70,6 +70,39 @@ pub struct CompletionResponse {
     pub stop_reason: String,
 }
 
+/// Normalized stop kind, DERIVED from the raw provider `stop_reason` string so
+/// the serialized trace format never changes (docs/SCHEMAS.md M3 additions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopKind {
+    /// The model finished its turn normally.
+    EndTurn,
+    /// Output hit the token cap (or the context window) — treat as truncated.
+    MaxTokens,
+    /// The provider declined or filtered the request.
+    Refusal,
+    /// Anything else (raw string preserved on the response).
+    Other,
+}
+
+impl StopKind {
+    /// Union table over the providers' raw stop strings.
+    pub fn from_raw(raw: &str) -> StopKind {
+        match raw {
+            "end_turn" | "stop" => StopKind::EndTurn,
+            "max_tokens" | "length" | "model_context_window_exceeded" => StopKind::MaxTokens,
+            "refusal" | "content_filter" => StopKind::Refusal,
+            _ => StopKind::Other,
+        }
+    }
+}
+
+impl CompletionResponse {
+    /// The normalized stop kind of this response.
+    pub fn stop(&self) -> StopKind {
+        StopKind::from_raw(&self.stop_reason)
+    }
+}
+
 /// A model provider behind a plain completion interface (§13.1). Capability
 /// metadata is deferred until a consumer exists (recorded in DECISIONS.md).
 pub trait ProviderAdapter {

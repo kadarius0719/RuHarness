@@ -49,6 +49,9 @@ enum Cmd {
         /// Target repository root
         #[arg(long, default_value = ".")]
         target: PathBuf,
+        /// Run target/model-derived code even though no sandbox is available
+        #[arg(long)]
+        allow_unsandboxed: bool,
     },
     /// Ledger state queries
     State {
@@ -84,6 +87,32 @@ enum Cmd {
         #[arg(long, default_value = ".")]
         target: PathBuf,
     },
+    /// Translate a unit through the configured LLM provider and verify it
+    Migrate {
+        /// Unit id from plan.toml
+        unit: String,
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Provider profile override (built-in or user-level profile name)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model override
+        #[arg(long)]
+        model: Option<String>,
+        /// Promote a green candidate even when the unit is already verified
+        #[arg(long)]
+        promote: bool,
+        /// Run target/model-derived code even though no sandbox is available
+        #[arg(long)]
+        allow_unsandboxed: bool,
+        /// Record a NEW sample when this live attempt already finished
+        #[arg(long)]
+        retry: bool,
+        /// Pin the recorded attempt a `--provider replay` run verifies
+        #[arg(long)]
+        attempt: Option<String>,
+    },
     /// Refresh the generated runtime view (AGENTS.md managed block)
     SyncRuntime {
         /// Target repository root
@@ -116,7 +145,11 @@ fn main() -> ExitCode {
     let result = match cli.cmd {
         Cmd::Scan { target } => cmd_scan(target),
         Cmd::Plan { target } => cmd_plan(target),
-        Cmd::Verify { unit, target } => cmd_verify(unit, target),
+        Cmd::Verify {
+            unit,
+            target,
+            allow_unsandboxed,
+        } => cmd_verify(unit, target, allow_unsandboxed),
         Cmd::State {
             cmd: StateCmd::Status { target },
         } => cmd_status(target),
@@ -129,6 +162,25 @@ fn main() -> ExitCode {
             note,
             target,
         } => cmd_review(finding, uphold_dismiss, reinstate, note, target),
+        Cmd::Migrate {
+            unit,
+            target,
+            provider,
+            model,
+            promote,
+            allow_unsandboxed,
+            retry,
+            attempt,
+        } => cmd_migrate(MigrateArgs {
+            unit,
+            target,
+            provider,
+            model,
+            promote,
+            allow_unsandboxed,
+            retry,
+            attempt,
+        }),
         Cmd::SyncRuntime { target, check } => cmd_sync_runtime(target, check),
     };
     match result {
@@ -219,7 +271,47 @@ fn cmd_plan(target: PathBuf) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_verify(unit_id: String, target: PathBuf) -> Result<ExitCode> {
+/// Every command that builds or runs target- or model-derived code refuses
+/// on platforms without a sandbox unless the user explicitly accepts the risk
+/// (docs/SCHEMAS.md "Trust boundaries") — regardless of provider: an
+/// `external` candidate and the target's own driver.c run just the same.
+fn require_sandbox(allow_unsandboxed: bool, what: &str) -> Result<()> {
+    if harness_oracle::sandbox_mode() == "none" && !allow_unsandboxed {
+        bail!(
+            "no sandbox is available on this platform; `{what}` builds and runs target- and \
+             model-derived code unconfined — pass --allow-unsandboxed to accept that"
+        );
+    }
+    Ok(())
+}
+
+/// A ledger directory that is guaranteed not to be (or pass through) a
+/// symlink: created level by level under the canonical target root, refusing
+/// any component that is not a real directory. Target-owned trees are hostile
+/// — a committed `traces -> /elsewhere` must not redirect harness writes.
+fn safe_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<PathBuf> {
+    let mut cur = root.to_path_buf();
+    for comp in components {
+        cur = cur.join(comp);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+                bail!(
+                    "{} is not a real directory; refusing to write through it",
+                    cur.display()
+                )
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&cur).with_context(|| format!("creating {}", cur.display()))?;
+            }
+            Err(e) => return Err(e).with_context(|| format!("inspecting {}", cur.display())),
+        }
+    }
+    Ok(cur)
+}
+
+fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Result<ExitCode> {
+    require_sandbox(allow_unsandboxed, "harness verify")?;
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
     let plan_path = ledger.plan_path();
@@ -230,6 +322,7 @@ fn cmd_verify(unit_id: String, target: PathBuf) -> Result<ExitCode> {
         .execution_order()
         .context("plan.toml is structurally invalid; fix it before verifying")?;
     let unit = plan_doc.unit(&unit_id)?;
+    recover_interrupted_promotion(&ctx, &ledger, unit)?;
     let facts =
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
 
@@ -383,8 +476,11 @@ fn cmd_status(target: PathBuf) -> Result<ExitCode> {
         let done_claimed = matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged);
         let contradiction = match latest {
             VerdictState::Present { green } => {
-                (done_claimed && !green)
-                    || (green && verdict_desc.ends_with("(fresh)") && !done_claimed)
+                let fresh = verdict_desc.ends_with("(fresh)");
+                // Done-claiming status needs FRESH green evidence: a red verdict
+                // or a stale one (crate/source/driver changed since) both
+                // contradict it; so does fresh green the status never absorbed.
+                (done_claimed && (!green || !fresh)) || (green && fresh && !done_claimed)
             }
             VerdictState::Missing => done_claimed,
             VerdictState::Unreadable => done_claimed,
@@ -401,6 +497,23 @@ fn cmd_status(target: PathBuf) -> Result<ExitCode> {
                 ""
             }
         ));
+        let attempts = harness_core::attempts::load_unit_attempts(&ledger, &unit.id)?;
+        if !attempts.is_empty() {
+            let bound = attempts
+                .iter()
+                .filter(|a| a.unit_source == source_now)
+                .count();
+            let summary: Vec<String> = attempts
+                .iter()
+                .map(|a| format!("{}:{}:{}", a.id, a.provider_kind, a.outcome))
+                .collect();
+            out(format!(
+                "status:   attempts: {} ({} bound to current source) [{}]",
+                attempts.len(),
+                bound,
+                summary.join(", ")
+            ));
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -503,16 +616,11 @@ fn cmd_observe(target: PathBuf) -> Result<ExitCode> {
     let ledger = Ledger::new(&ctx.root);
     let (facts, plan_doc, findings, annotations, _, reviews) = observer_inputs(&ctx, &ledger)?;
 
-    let traces = ObserverPaths::traces(&ledger);
+    let traces = safe_ledger_dir(&ctx.root, &["migration", "observer", "traces"])?;
     let llm = &ctx.config.llm;
-    let adapter: Box<dyn harness_core::traits::ProviderAdapter> = match llm.provider.as_str() {
-        "anthropic" => Box::new(harness_llm::AnthropicAdapter::from_env(&llm.api_key_env)?),
-        "replay" => Box::new(harness_llm::TraceAdapter::new(traces.clone(), false)),
-        "external" => Box::new(harness_llm::TraceAdapter::new(traces.clone(), true)),
-        other => bail!("unknown [llm] provider `{other}` (external | anthropic | replay)"),
-    };
+    let resolved = harness_llm::providers::resolve(&llm.provider, &traces)?;
     let outcome = match harness_llm::run_triage(
-        adapter.as_ref(),
+        &resolved,
         &llm.model,
         llm.max_tokens,
         &ctx,
@@ -558,7 +666,7 @@ fn cmd_observe(target: PathBuf) -> Result<ExitCode> {
     out(format!(
         "observe: {} verdict(s) via `{}` -> {} (tokens in/out: {}/{})",
         outcome.triage.verdicts.len(),
-        adapter.name(),
+        resolved.adapter.name(),
         ObserverPaths::observations(&ledger).display(),
         usage_in,
         usage_out
@@ -661,5 +769,291 @@ fn cmd_sync_runtime(target: PathBuf, check: bool) -> Result<ExitCode> {
         harness_core::ledger::write_atomic(&claude_path, updated_claude.as_bytes())?;
     }
     out(format!("sync-runtime: {} updated", agents_path.display()));
+    Ok(ExitCode::SUCCESS)
+}
+
+// ---------- M3: executor command ----------
+
+/// Resolve a promotion that was interrupted (docs/SCHEMAS.md "Promotion
+/// protocol"). A leftover `.<crate>.prev` has two possible meanings, told
+/// apart by EVIDENCE, never by guesswork:
+/// - the committed green verdict is bound to the crate now on disk → the
+///   promotion completed and only the cleanup was lost: finish it;
+/// - otherwise the swapped-in candidate was never verified: restore `.prev`.
+fn recover_interrupted_promotion(
+    ctx: &TargetContext,
+    ledger: &Ledger,
+    unit: &harness_core::Unit,
+) -> Result<()> {
+    let Some(crate_name) = unit.oracle_param_str("rust_crate") else {
+        return Ok(());
+    };
+    let unit_dir = ledger.unit_dir(&unit.id);
+    let crate_dir = unit_dir.join(crate_name);
+    let prev = unit_dir.join(format!(".{crate_name}.prev"));
+    if !prev.exists() {
+        return Ok(());
+    }
+    let completed = crate_dir.exists()
+        && Verdict::load(&ledger.verdict_latest_path(&unit.id))
+            .ok()
+            .filter(|v| v.green)
+            .and_then(|v| {
+                hash::unit_crate_file_set_hash(&ctx.root, &crate_dir)
+                    .ok()
+                    .map(|now| now == v.inputs.rust_crate)
+            })
+            .unwrap_or(false);
+    if completed {
+        std::fs::remove_dir_all(&prev).context("finishing promotion cleanup")?;
+        out(format!(
+            "recover: promotion of `{}` had completed (verdict bound to the crate on disk); \
+             removed the leftover backup",
+            unit.id
+        ));
+    } else {
+        if crate_dir.exists() {
+            std::fs::remove_dir_all(&crate_dir).context("removing unverified promoted crate")?;
+        }
+        std::fs::rename(&prev, &crate_dir).context("restoring previous crate")?;
+        out(format!(
+            "recover: rolled back an interrupted, unverified promotion of `{}`",
+            unit.id
+        ));
+    }
+    Ok(())
+}
+
+/// Copy the closed crate file list (Cargo.toml, Cargo.lock, src/**) — never
+/// `target/` — from `from` to a fresh `to`.
+fn copy_crate_sources(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(to.join("src")).context("creating staged crate")?;
+    for name in ["Cargo.toml", "Cargo.lock"] {
+        let src = from.join(name);
+        if src.exists() {
+            std::fs::copy(&src, to.join(name)).with_context(|| format!("copying {name}"))?;
+        }
+    }
+    fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
+        for entry in std::fs::read_dir(from).context("reading candidate src")? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let (src, dst) = (entry.path(), to.join(&name));
+            if src.is_dir() {
+                std::fs::create_dir_all(&dst)?;
+                copy_tree(&src, &dst)?;
+            } else {
+                std::fs::copy(&src, &dst)?;
+            }
+        }
+        Ok(())
+    }
+    copy_tree(&from.join("src"), &to.join("src"))
+}
+
+/// Arguments of `harness migrate`.
+struct MigrateArgs {
+    unit: String,
+    target: PathBuf,
+    provider: Option<String>,
+    model: Option<String>,
+    promote: bool,
+    allow_unsandboxed: bool,
+    retry: bool,
+    attempt: Option<String>,
+}
+
+fn cmd_migrate(args: MigrateArgs) -> Result<ExitCode> {
+    let MigrateArgs {
+        unit: unit_id,
+        target,
+        provider: provider_flag,
+        model: model_flag,
+        promote: promote_flag,
+        allow_unsandboxed,
+        retry,
+        attempt,
+    } = args;
+    require_sandbox(allow_unsandboxed, "harness migrate")?;
+    use harness_core::observer::{self, FindingState, ObserverPaths};
+    let ctx = TargetContext::load(&target)?;
+    let ledger = Ledger::new(&ctx.root);
+    let plan_path = ledger.plan_path();
+    let plan_doc = Plan::load(&plan_path)?;
+    plan_doc
+        .execution_order()
+        .context("plan.toml is structurally invalid; fix it before migrating")?;
+    let unit = plan_doc.unit(&unit_id)?;
+    recover_interrupted_promotion(&ctx, &ledger, unit)?;
+
+    let facts =
+        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let closure = facts.include_closure(&unit.files);
+    let current = hash::file_set_hash_on_disk(&ctx.root, &closure)?;
+    if current != unit.source_hash {
+        bail!(
+            "unit `{unit_id}` is stale: source changed since planning; run `harness scan`, \
+             then `harness plan`, review the diff, then migrate"
+        );
+    }
+
+    // Stage routing (§13.2): flag > [llm.migrate] > [llm].
+    let llm = &ctx.config.llm;
+    let stage = llm.migrate.as_ref();
+    let provider_name = provider_flag
+        .or_else(|| stage.and_then(|m| m.provider.clone()))
+        .unwrap_or_else(|| llm.provider.clone());
+    let model = model_flag
+        .or_else(|| stage.and_then(|m| m.model.clone()))
+        .unwrap_or_else(|| llm.model.clone());
+    let max_tokens = stage.and_then(|m| m.max_tokens).unwrap_or(llm.max_tokens);
+    let max_repairs = stage.and_then(|m| m.max_repairs).unwrap_or(3);
+
+    let traces = safe_ledger_dir(&ctx.root, &["migration", "units", &unit_id, "traces"])?;
+    let resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
+
+    // Confirmed hazards for this unit (annotations are implicitly confirmed).
+    let mut hazards: Vec<observer::Finding> = Vec::new();
+    let findings = match observer::FindingsFile::load(&ObserverPaths::findings(&ledger)) {
+        Ok(f) => f.findings,
+        Err(e) if e.is_not_found() => Vec::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let annotations = observer::load_annotations(&ObserverPaths::annotations(&ledger))?;
+    let triage = observer::TriageFile::load(&ObserverPaths::triage(&ledger))?;
+    let reviews = observer::load_reviews(&ObserverPaths::reviews(&ledger))?;
+    for f in findings.iter().chain(annotations.iter()) {
+        let affects =
+            observer::affected_units(&f.file, &plan_doc, &facts).contains(&unit_id.as_str());
+        let state = observer::finding_state(f, &triage, &reviews);
+        if affects && matches!(state, FindingState::Confirmed | FindingState::Reinstated) {
+            hazards.push(f.clone());
+        }
+    }
+
+    let oracle = harness_oracle::CAbiDifferential;
+    let params = harness_llm::migrate::MigrateParams {
+        provider: &resolved,
+        model: &model,
+        max_tokens,
+        max_repairs,
+        traces_dir: &traces,
+        retry,
+        attempt: attempt.as_deref(),
+    };
+    let outcome = match harness_llm::migrate::run_migration(
+        &params, &oracle, &ctx, &facts, &plan_doc, unit, &hazards,
+    ) {
+        Ok(o) => o,
+        Err(e) if e.to_string().contains("awaiting response") => {
+            eprintln!("{e:#}");
+            eprintln!(
+                "migrate: external provider mode — supply the response file under {} and re-run",
+                traces.display()
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let record = &outcome.record;
+    for (i, t) in record.turns.iter().enumerate() {
+        out(format!(
+            "migrate: turn {} {} -> {} (tokens in/out: {}/{})",
+            i + 1,
+            t.kind,
+            t.result,
+            t.input_tokens
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".into()),
+            t.output_tokens
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".into()),
+        ));
+    }
+    out(format!(
+        "migrate: {} attempt {} via `{}` ({}) model `{}` -> {}",
+        unit_id,
+        record.id,
+        record.provider,
+        record.provider_kind,
+        record.model,
+        record.outcome.to_uppercase()
+    ));
+    if record.outcome != "green" {
+        return Ok(ExitCode::from(EXIT_ORACLE_RED));
+    }
+
+    // Promotion (docs/SCHEMAS.md): only for units not already done, unless forced;
+    // never from a replay run (which writes nothing to the ledger).
+    let already_done = matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged);
+    let (Some(candidate), true) = (
+        outcome.candidate_dir.as_ref(),
+        resolved.kind != "replay" && (!already_done || promote_flag),
+    ) else {
+        out(format!(
+            "migrate: green attempt recorded; not promoted ({})",
+            if already_done {
+                "unit already verified — pass --promote to replace"
+            } else {
+                "replay run"
+            }
+        ));
+        return Ok(ExitCode::SUCCESS);
+    };
+    let crate_name = unit
+        .oracle_param_str("rust_crate")
+        .context("unit has no rust_crate oracle param")?;
+    let unit_dir = ledger.unit_dir(&unit_id);
+    let crate_dir = unit_dir.join(crate_name);
+    let staged_root = unit_dir.join(format!(".promote-{}", record.id));
+    let staged = staged_root.join(crate_name);
+    let prev = unit_dir.join(format!(".{crate_name}.prev"));
+    if staged_root.exists() {
+        std::fs::remove_dir_all(&staged_root).context("clearing stale staging dir")?;
+    }
+    copy_crate_sources(candidate, &staged)?;
+    if hash::crate_content_hash(&staged)? != record.candidate_digest {
+        std::fs::remove_dir_all(&staged_root).ok();
+        bail!("staged candidate digest does not match the attempt record; not promoting");
+    }
+    // Two renames; a crash between them is rolled back by
+    // recover_interrupted_promotion on the next run.
+    if crate_dir.exists() {
+        std::fs::rename(&crate_dir, &prev).context("moving current crate aside")?;
+    }
+    std::fs::rename(&staged, &crate_dir).context("swapping candidate in")?;
+    std::fs::remove_dir_all(&staged_root).ok();
+
+    // Verify the PROMOTED location; nothing is persisted unless it is green.
+    let in_place = oracle.verify(&ctx, unit);
+    if !matches!(&in_place, Ok(v) if v.green) {
+        std::fs::remove_dir_all(&crate_dir).context("removing unverified promoted crate")?;
+        if prev.exists() {
+            std::fs::rename(&prev, &crate_dir).context("restoring previous crate")?;
+        }
+        out("migrate: promoted candidate did not verify in place — rolled back".into());
+        in_place?; // surface a harness error as such; a red verdict falls through
+        return Ok(ExitCode::from(EXIT_ORACLE_RED));
+    }
+    let verdict = in_place?;
+    verdict.store(&ledger.verdict_latest_path(&unit_id))?;
+    verdict.store(&ledger.verdict_last_green_path(&unit_id))?;
+    harness_core::ledger::write_atomic(
+        &ledger.verdict_md_path(&unit_id),
+        verdict.render_md().as_bytes(),
+    )?;
+    plan::set_status(&plan_path, &unit_id, UnitStatus::Verified)?;
+    if prev.exists() {
+        std::fs::remove_dir_all(&prev).context("removing previous crate backup")?;
+    }
+    let mut promoted = record.clone();
+    promoted.promoted = true;
+    promoted.store(&outcome.attempt_dir)?;
+    out(format!(
+        "migrate: {unit_id} promoted and verified — status set to verified"
+    ));
     Ok(ExitCode::SUCCESS)
 }

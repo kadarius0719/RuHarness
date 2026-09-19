@@ -1,7 +1,8 @@
 //! The observer triage pass (docs/SCHEMAS.md "Triage call contract"):
 //! batch findings per owning unit, assemble injection-hardened prompts,
-//! route calls through a [`ProviderAdapter`], validate responses, and emit
-//! [`VerdictRecord`]s bound by harness-computed content hashes.
+//! route calls through [`checked_complete`] (the context guards shared with
+//! the executor), validate responses, and emit [`VerdictRecord`]s bound by
+//! harness-computed content hashes.
 //!
 //! Injection posture (§12.1): the trusted prompt region carries only
 //! harness-generated text; source slices are JSON-string-encoded with `<`
@@ -30,12 +31,13 @@
 //! under that key, so replaying the same inputs succeeds without a retry.
 
 use crate::adapters::TraceAdapter;
+use crate::providers::{checked_complete, ResolvedProvider};
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::facts::Facts;
 use harness_core::observer::{Finding, FindingsFile, TriageFile, TriageVerdict, VerdictRecord};
 use harness_core::plan::Plan;
-use harness_core::traits::{CompletionRequest, ProviderAdapter};
+use harness_core::traits::{CompletionRequest, CompletionResponse, ProviderAdapter, StopKind};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -71,7 +73,7 @@ fn is_finding_id(id: &str) -> bool {
 }
 
 /// `^[a-z0-9-]+$`.
-fn is_kebab_token(s: &str) -> bool {
+pub(crate) fn is_kebab_token(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
             .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-'))
@@ -79,7 +81,7 @@ fn is_kebab_token(s: &str) -> bool {
 
 /// A clean repo-relative path: non-empty, not absolute/rooted, no `..`
 /// component (either separator), no control characters (so no newlines).
-fn is_clean_relative_path(p: &str) -> bool {
+pub(crate) fn is_clean_relative_path(p: &str) -> bool {
     let path = Path::new(p);
     !p.is_empty()
         && !p.starts_with(['/', '\\'])
@@ -276,7 +278,7 @@ fn call_order_key(batch_key: &str, finding_id: &str) -> String {
 
 /// JSON-string-encode a slice, additionally escaping `<` as `\u003c` so no
 /// byte of untrusted source can form a tag.
-fn encode_slice(slice: &str) -> Result<String, Error> {
+pub(crate) fn encode_slice(slice: &str) -> Result<String, Error> {
     let json =
         serde_json::to_string(slice).map_err(|e| Error::Invariant(format!("encode slice: {e}")))?;
     Ok(json.replace('<', "\\u003c"))
@@ -540,6 +542,28 @@ fn validate_response(
     Ok(out)
 }
 
+/// Gate a reply on its normalized stop kind. Adapters return the provider's
+/// raw `stop_reason` and never error on it (docs/SCHEMAS.md M3 additions),
+/// so the guarantee the Anthropic adapter used to give — only a normally
+/// finished turn is a usable triage reply — is enforced here, with the same
+/// messages: truncation ([`StopKind::MaxTokens`]) tells the user to raise
+/// the budget; anything else that is not [`StopKind::EndTurn`] (refusal,
+/// unknown) names the raw stop reason. Such a reply is a hard error: it is
+/// never validated, retried, or recorded.
+fn check_stop(adapter: &dyn ProviderAdapter, response: &CompletionResponse) -> Result<(), Error> {
+    let name = adapter.name();
+    let raw = &response.stop_reason;
+    match response.stop() {
+        StopKind::EndTurn => Ok(()),
+        StopKind::MaxTokens => Err(Error::Invariant(format!(
+            "{name}: response truncated (stop_reason `{raw}`) — raise [llm] max_tokens"
+        ))),
+        StopKind::Refusal | StopKind::Other => Err(Error::Invariant(format!(
+            "{name}: model did not complete normally (stop_reason `{raw}`)"
+        ))),
+    }
+}
+
 /// True when `e` is a [`TraceAdapter`] external-mode hand-off (request
 /// written, response pending) rather than a real failure.
 fn is_awaiting(e: &Error) -> bool {
@@ -547,14 +571,24 @@ fn is_awaiting(e: &Error) -> bool {
 }
 
 /// Run the triage pass: batch `findings` per owning plan unit, call the
-/// adapter once per batch, validate, and return verdicts bound by
+/// provider once per batch, validate, and return verdicts bound by
 /// harness-computed content hashes (docs/SCHEMAS.md "Triage call contract").
+///
+/// Every call — first or retry, live or trace-backed — goes through
+/// [`checked_complete`]: a prompt that cannot fit the profile's declared
+/// `context_tokens` is refused before it is sent, and a reply whose reported
+/// `input_tokens` show that the server truncated the prompt is a hard error
+/// ("prompt truncated by server") that is never validated, retried, or
+/// recorded as a trace.
 ///
 /// Findings are shape-checked first ([`validate_findings`]; a malformed
 /// findings.jsonl refuses the run before any field reaches a prompt or a
 /// path), then freshness is re-checked against the tree (mismatch → run
-/// `harness detect`). Live calls get one validation retry with the error
-/// appended; trace-backed adapters get a hard error instead. A live call is
+/// `harness detect`). Every reply — live, replayed, or handed off, first or
+/// retry — must have ended normally ([`StopKind::EndTurn`]); a truncated or
+/// refused reply is a hard error naming the raw stop reason. Live providers
+/// (`provider.live`) get one validation retry with the error appended;
+/// trace-backed providers get a hard error instead. A live call is
 /// recorded into `traces_dir` only once its reply validated, under the
 /// ORIGINAL request's key — a validated retry reply replaces the invalid
 /// first one, so replaying the same inputs succeeds without a retry; a
@@ -566,7 +600,7 @@ fn is_awaiting(e: &Error) -> bool {
 /// plan-owned at v1) and currently unused.
 #[allow(clippy::too_many_arguments)]
 pub fn run_triage(
-    adapter: &dyn ProviderAdapter,
+    provider: &ResolvedProvider,
     model: &str,
     max_tokens: u32,
     target: &TargetContext,
@@ -585,9 +619,10 @@ pub fn run_triage(
     validate_findings(&findings.findings)?;
     check_freshness(&target.root, &findings.findings)?;
 
-    // Live adapters (anything that is not trace-backed) get traces recorded
-    // and a validation retry; replay/external are deterministic, no retry.
-    let live = !matches!(adapter.name(), "replay" | "external");
+    // Live providers get traces recorded and a validation retry;
+    // replay/external are deterministic, no retry.
+    let adapter: &dyn ProviderAdapter = provider.adapter.as_ref();
+    let live = provider.live;
 
     let batches = build_batches(&target.root, plan, &findings.findings)?;
     let mut verdicts: Vec<VerdictRecord> = Vec::new();
@@ -601,7 +636,7 @@ pub fn run_triage(
             .to_string();
         let usage_key = format!("{}.{}", batch.key, &ids_hex[..8]);
 
-        let response = match adapter.complete(&request) {
+        let response = match checked_complete(provider, &request) {
             Ok(r) => r,
             Err(e) if is_awaiting(&e) => {
                 awaiting.push(e.to_string());
@@ -609,6 +644,7 @@ pub fn run_triage(
             }
             Err(e) => return Err(e),
         };
+        check_stop(adapter, &response)?;
         let (mut in_tokens, mut out_tokens) = (response.input_tokens, response.output_tokens);
 
         // `validated` is the reply that passed validation — the first one,
@@ -625,7 +661,8 @@ pub fn run_triage(
                     "\nYour previous reply failed validation: {validation_error}\nReply again \
                      with ONLY the JSON array, following the output contract exactly.\n"
                 ));
-                let retry_response = adapter.complete(&retry)?;
+                let retry_response = checked_complete(provider, &retry)?;
+                check_stop(adapter, &retry_response)?;
                 in_tokens += retry_response.input_tokens;
                 out_tokens += retry_response.output_tokens;
                 let v = validate_response(&retry_response.text, batch, &hashes).map_err(|e| {
@@ -671,7 +708,6 @@ pub fn run_triage(
 mod tests {
     use super::*;
     use harness_core::observer::finding_id;
-    use harness_core::traits::CompletionResponse;
     use std::path::PathBuf;
 
     const C_SOURCE: &str = "\
@@ -804,10 +840,32 @@ files = ["src/unit.c"]
         serde_json::to_string(&items).unwrap()
     }
 
+    /// A resolved provider around `adapter`, kind = the adapter's name.
+    fn provider(adapter: impl ProviderAdapter + 'static, live: bool) -> ResolvedProvider {
+        let kind = adapter.name().to_string();
+        ResolvedProvider {
+            adapter: Box::new(adapter),
+            profile: format!("{kind}-profile"),
+            kind,
+            context_tokens: None,
+            live,
+        }
+    }
+
+    /// The built-in `external` provider over `traces`.
+    fn external(traces: &Path) -> ResolvedProvider {
+        provider(TraceAdapter::new(traces, true), false)
+    }
+
+    /// A plausible input-token count for `req` (about 4 bytes per token).
+    fn plausible_tokens(req: &CompletionRequest) -> u64 {
+        (req.system.len() + req.user.len()) as u64 / 4
+    }
+
     #[test]
     fn external_flow_end_to_end() {
         let (target, facts, plan, findings, traces) = fixture("e2e");
-        let adapter = TraceAdapter::new(&traces, true);
+        let adapter = external(&traces);
 
         // Pass 1: external mode writes the request file and awaits.
         let err = run_triage(
@@ -861,9 +919,10 @@ files = ["src/unit.c"]
             &findings,
             &[("confirm", "high"), ("dismiss", "medium")],
         );
+        let prompt_tokens = plausible_tokens(&request);
         let response = CompletionResponse {
             text: format!("```json\n{reply}\n```"),
-            input_tokens: 12,
+            input_tokens: prompt_tokens,
             output_tokens: 34,
             stop_reason: "end_turn".into(),
         };
@@ -909,7 +968,10 @@ files = ["src/unit.c"]
             "{}",
             outcome.usage[0].0
         );
-        assert_eq!((outcome.usage[0].1, outcome.usage[0].2), (12, 34));
+        assert_eq!(
+            (outcome.usage[0].1, outcome.usage[0].2),
+            (prompt_tokens, 34)
+        );
 
         // Pass 3: corrupt one echoed hash → hard error (no retry on traces).
         let corrupted = reply.replacen("blake3:", "blake3:0000", 1);
@@ -946,8 +1008,10 @@ files = ["src/unit.c"]
     struct FlakyAdapter {
         root: PathBuf,
         findings: FindingsFile,
-        seen: std::cell::RefCell<Vec<CompletionRequest>>,
+        seen: Seen,
     }
+
+    type Seen = std::rc::Rc<std::cell::RefCell<Vec<CompletionRequest>>>;
 
     impl ProviderAdapter for FlakyAdapter {
         fn name(&self) -> &'static str {
@@ -968,7 +1032,7 @@ files = ["src/unit.c"]
             };
             Ok(CompletionResponse {
                 text,
-                input_tokens: 10,
+                input_tokens: plausible_tokens(req),
                 output_tokens: 5,
                 stop_reason: "end_turn".into(),
             })
@@ -978,23 +1042,29 @@ files = ["src/unit.c"]
     #[test]
     fn retry_records_validated_reply_under_original_key_and_replays() {
         let (target, facts, plan, findings, traces) = fixture("retry");
-        let adapter = FlakyAdapter {
-            root: target.root.clone(),
-            findings: findings.clone(),
-            seen: Default::default(),
-        };
+        let seen = Seen::default();
+        let adapter = provider(
+            FlakyAdapter {
+                root: target.root.clone(),
+                findings: findings.clone(),
+                seen: Seen::clone(&seen),
+            },
+            true,
+        );
 
         let outcome = run_triage(
             &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
         )
         .unwrap();
         assert_eq!(outcome.triage.verdicts.len(), 2);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 2, "one call + one retry");
         // Both calls' usage is summed into the one batch entry.
         assert_eq!(outcome.usage.len(), 1);
-        assert_eq!((outcome.usage[0].1, outcome.usage[0].2), (20, 10));
-
-        let seen = adapter.seen.borrow();
-        assert_eq!(seen.len(), 2, "one call + one retry");
+        assert_eq!(
+            (outcome.usage[0].1, outcome.usage[0].2),
+            (plausible_tokens(&seen[0]) + plausible_tokens(&seen[1]), 10)
+        );
         let (original, retry) = (&seen[0], &seen[1]);
         assert_eq!(retry.system, original.system);
         assert!(retry.user.starts_with(&original.user));
@@ -1022,7 +1092,7 @@ files = ["src/unit.c"]
 
         // Replaying the live run (no retry possible in replay) succeeds and
         // reproduces the verdicts byte-for-byte, writing nothing.
-        let replay = TraceAdapter::new(&traces, false);
+        let replay = provider(TraceAdapter::new(&traces, false), false);
         let replayed = run_triage(
             &replay, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
         )
@@ -1041,15 +1111,16 @@ files = ["src/unit.c"]
             fn complete(&self, _: &CompletionRequest) -> Result<CompletionResponse, Error> {
                 Ok(CompletionResponse {
                     text: "nope".into(),
-                    input_tokens: 1,
+                    input_tokens: 0,
                     output_tokens: 1,
                     stop_reason: "end_turn".into(),
                 })
             }
         }
         let (target, facts, plan, findings, traces) = fixture("retry-fail");
+        let garbage = provider(Garbage, true);
         let err = run_triage(
-            &Garbage, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+            &garbage, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
         )
         .unwrap_err()
         .to_string();
@@ -1059,6 +1130,304 @@ files = ["src/unit.c"]
             "an unvalidated reply must never be recorded: {:?}",
             trace_file_names(&traces)
         );
+    }
+
+    /// A live-style adapter whose FIRST reply is `first` and whose retry
+    /// reply (if one is requested) ends with `retry_stop`. Counts calls.
+    struct StopAdapter {
+        name: &'static str,
+        first: (String, &'static str),
+        retry_stop: &'static str,
+        calls: Calls,
+    }
+
+    type Calls = std::rc::Rc<std::cell::Cell<usize>>;
+
+    /// A live provider around a [`StopAdapter`], plus its call counter.
+    fn stop_provider(
+        name: &'static str,
+        first: (String, &'static str),
+        retry_stop: &'static str,
+    ) -> (ResolvedProvider, Calls) {
+        let calls = Calls::default();
+        let adapter = StopAdapter {
+            name,
+            first,
+            retry_stop,
+            calls: Calls::clone(&calls),
+        };
+        (provider(adapter, true), calls)
+    }
+
+    impl ProviderAdapter for StopAdapter {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn complete(&self, _: &CompletionRequest) -> Result<CompletionResponse, Error> {
+            self.calls.set(self.calls.get() + 1);
+            let (text, stop_reason) = if self.calls.get() == 1 {
+                (self.first.0.clone(), self.first.1)
+            } else {
+                ("[]".to_string(), self.retry_stop)
+            };
+            Ok(CompletionResponse {
+                text,
+                input_tokens: 0,
+                output_tokens: 1,
+                stop_reason: stop_reason.into(),
+            })
+        }
+    }
+
+    #[test]
+    fn abnormal_stop_is_a_hard_error_with_the_m2_messages() {
+        // (adapter name, raw stop_reason, expected message) — for the
+        // anthropic adapter these are byte-identical to the errors the
+        // adapter itself raised at M2.
+        let cases = [
+            (
+                "anthropic",
+                "max_tokens",
+                "anthropic: response truncated (stop_reason `max_tokens`) — raise [llm] max_tokens",
+            ),
+            (
+                "anthropic",
+                "refusal",
+                "anthropic: model did not complete normally (stop_reason `refusal`)",
+            ),
+            (
+                "anthropic",
+                "pause_turn",
+                "anthropic: model did not complete normally (stop_reason `pause_turn`)",
+            ),
+            (
+                "anthropic",
+                "",
+                "anthropic: model did not complete normally (stop_reason ``)",
+            ),
+            // Other providers' raw strings normalize through StopKind.
+            (
+                "fake-live",
+                "length",
+                "fake-live: response truncated (stop_reason `length`) — raise [llm] max_tokens",
+            ),
+            (
+                "fake-live",
+                "content_filter",
+                "fake-live: model did not complete normally (stop_reason `content_filter`)",
+            ),
+        ];
+        for (index, (name, stop_reason, expected)) in cases.into_iter().enumerate() {
+            let (target, facts, plan, findings, traces) = fixture(&format!("stop-{index}"));
+            let (_, request, _) = single_batch(&target, &plan, &findings);
+            // Even a reply that WOULD validate is refused when truncated.
+            let reply = valid_reply(
+                &request,
+                &target.root,
+                &findings,
+                &[("confirm", "high"), ("dismiss", "low")],
+            );
+            let (adapter, calls) = stop_provider(name, (reply, stop_reason), "end_turn");
+            let err = run_triage(
+                &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+            )
+            .unwrap_err()
+            .to_string();
+            assert_eq!(err, expected);
+            assert_eq!(calls.get(), 1, "{stop_reason}: no validation retry");
+            assert!(
+                trace_file_names(&traces).is_empty(),
+                "{stop_reason}: an abnormal reply must never be recorded"
+            );
+        }
+    }
+
+    #[test]
+    fn normal_stop_strings_of_any_provider_are_accepted() {
+        // `stop` is the OpenAI-style spelling of a finished turn.
+        for (index, stop_reason) in ["end_turn", "stop"].into_iter().enumerate() {
+            let (target, facts, plan, findings, traces) = fixture(&format!("stop-ok-{index}"));
+            let (_, request, _) = single_batch(&target, &plan, &findings);
+            let reply = valid_reply(
+                &request,
+                &target.root,
+                &findings,
+                &[("confirm", "high"), ("dismiss", "low")],
+            );
+            let (adapter, _) = stop_provider("fake-live", (reply, stop_reason), "end_turn");
+            let outcome = run_triage(
+                &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+            )
+            .unwrap();
+            assert_eq!(outcome.triage.verdicts.len(), 2, "{stop_reason}");
+        }
+    }
+
+    #[test]
+    fn abnormal_stop_on_the_validation_retry_is_a_hard_error() {
+        let (target, facts, plan, findings, traces) = fixture("stop-retry");
+        let (adapter, calls) = stop_provider(
+            "anthropic",
+            ("prose, not JSON".into(), "end_turn"),
+            "max_tokens",
+        );
+        let err = run_triage(
+            &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            err,
+            "anthropic: response truncated (stop_reason `max_tokens`) — raise [llm] max_tokens"
+        );
+        assert_eq!(calls.get(), 2);
+        assert!(trace_file_names(&traces).is_empty());
+    }
+
+    #[test]
+    fn recorded_replies_are_stop_gated_too() {
+        // A hand-written external response that was cut off is refused the
+        // same way (trace-backed adapters never gated this themselves).
+        let (target, facts, plan, findings, traces) = fixture("stop-external");
+        let adapter = external(&traces);
+        let _ = run_triage(
+            &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+        )
+        .unwrap_err();
+        let req_path = the_request_file(&traces);
+        let request: CompletionRequest =
+            serde_json::from_str(&std::fs::read_to_string(&req_path).unwrap()).unwrap();
+        let response = CompletionResponse {
+            text: valid_reply(
+                &request,
+                &target.root,
+                &findings,
+                &[("confirm", "high"), ("dismiss", "low")],
+            ),
+            input_tokens: 0,
+            output_tokens: 0,
+            stop_reason: "max_tokens".into(),
+        };
+        std::fs::write(
+            TraceAdapter::response_path(&traces, &request).unwrap(),
+            serde_json::to_string_pretty(&response).unwrap(),
+        )
+        .unwrap();
+        let err = run_triage(
+            &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            err,
+            "external: response truncated (stop_reason `max_tokens`) — raise [llm] max_tokens"
+        );
+    }
+
+    /// Regression (M3 review): triage used to call the adapter directly, so
+    /// neither context guard applied to it. Both now do, through
+    /// `checked_complete` — and a truncated call is never recorded.
+    #[test]
+    fn a_server_truncated_prompt_is_a_hard_error_and_leaves_no_trace() {
+        /// Replies VALIDLY but reports `input_tokens` far below the prompt.
+        struct Truncating {
+            root: PathBuf,
+            findings: FindingsFile,
+            calls: Calls,
+        }
+        impl ProviderAdapter for Truncating {
+            fn name(&self) -> &'static str {
+                "fake-live"
+            }
+            fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse, Error> {
+                self.calls.set(self.calls.get() + 1);
+                Ok(CompletionResponse {
+                    text: valid_reply(
+                        req,
+                        &self.root,
+                        &self.findings,
+                        &[("confirm", "high"), ("dismiss", "low")],
+                    ),
+                    input_tokens: 7,
+                    output_tokens: 5,
+                    stop_reason: "end_turn".into(),
+                })
+            }
+        }
+        let (target, facts, plan, findings, traces) = fixture("server-truncated");
+        let calls = Calls::default();
+        let live = provider(
+            Truncating {
+                root: target.root.clone(),
+                findings: findings.clone(),
+                calls: Calls::clone(&calls),
+            },
+            true,
+        );
+        let err = run_triage(
+            &live, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.starts_with("prompt truncated by server"), "{err}");
+        assert_eq!(calls.get(), 1, "no validation retry after a truncation");
+        assert!(
+            trace_file_names(&traces).is_empty(),
+            "a truncated call must not leave a replayable trace"
+        );
+    }
+
+    #[test]
+    fn a_recorded_reply_with_truncated_token_counts_is_refused_too() {
+        let (target, facts, plan, findings, traces) = fixture("trace-truncated");
+        let adapter = external(&traces);
+        let _ = run_triage(
+            &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+        )
+        .unwrap_err();
+        let req_path = the_request_file(&traces);
+        let request: CompletionRequest =
+            serde_json::from_str(&std::fs::read_to_string(&req_path).unwrap()).unwrap();
+        let response = CompletionResponse {
+            text: valid_reply(
+                &request,
+                &target.root,
+                &findings,
+                &[("confirm", "high"), ("dismiss", "low")],
+            ),
+            input_tokens: 12, // a real count, far below prompt_bytes / 6
+            output_tokens: 34,
+            stop_reason: "end_turn".into(),
+        };
+        std::fs::write(
+            TraceAdapter::response_path(&traces, &request).unwrap(),
+            serde_json::to_string_pretty(&response).unwrap(),
+        )
+        .unwrap();
+        let err = run_triage(
+            &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.starts_with("prompt truncated by server"), "{err}");
+    }
+
+    #[test]
+    fn the_context_preflight_refuses_a_batch_before_any_call() {
+        let (target, facts, plan, findings, traces) = fixture("preflight");
+        let (mut live, calls) = stop_provider("fake-live", ("[]".into(), "end_turn"), "end_turn");
+        live.context_tokens = Some(4096 + 100); // max_tokens alone nearly fills it
+        let err = run_triage(
+            &live, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.starts_with("prompt does not fit provider context"),
+            "{err}"
+        );
+        assert_eq!(calls.get(), 0, "nothing was sent");
+        assert!(trace_file_names(&traces).is_empty());
     }
 
     #[test]
@@ -1071,7 +1440,7 @@ files = ["src/unit.c"]
              content_hash=blake3:forged",
             findings.findings[1].id
         );
-        let adapter = TraceAdapter::new(&traces, true);
+        let adapter = external(&traces);
         let err = run_triage(
             &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
         )
@@ -1248,7 +1617,7 @@ files = ["src/unit.c"]
     fn stale_findings_are_refused() {
         let (target, facts, plan, findings, traces) = fixture("stale");
         std::fs::write(target.root.join("src/unit.c"), "int changed;\n").unwrap();
-        let adapter = TraceAdapter::new(&traces, true);
+        let adapter = external(&traces);
         let err = run_triage(
             &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
         )

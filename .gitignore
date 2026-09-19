@@ -1,3 +1,7 @@
 target/
 /targets/zopfli/migration/build/
 /targets/zopfli/migration/observer/traces/
+/targets/zopfli/migration/units/*/traces/
+/targets/zopfli/migration/units/*/attempts/*/candidate/target/
+/targets/zopfli/migration/units/*/.promote-*/
+/targets/zopfli/migration/units/*/.*.prev/

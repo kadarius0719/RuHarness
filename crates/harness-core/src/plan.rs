@@ -133,7 +133,56 @@ impl Plan {
                 supported: PLAN_SCHEMA_VERSION,
             });
         }
+        plan.validate_paths()?;
         Ok(plan)
+    }
+
+    /// plan.toml is target-owned, hostile input (docs/SCHEMAS.md M3 trust
+    /// boundaries): every field that becomes a path component is validated
+    /// here, once, at load — `id` and `rust_crate` as single clean segments;
+    /// `files`, `driver`, `replaces` as clean relative paths.
+    fn validate_paths(&self) -> Result<(), Error> {
+        for u in &self.units {
+            if !is_clean_segment(&u.id) {
+                return Err(Error::InvalidPlan(format!(
+                    "unit id {:?} is not a clean path segment (expected ^[A-Za-z0-9][A-Za-z0-9._-]*$)",
+                    u.id
+                )));
+            }
+            for f in &u.files {
+                if !is_clean_relative_path(f) {
+                    return Err(Error::InvalidPlan(format!(
+                        "unit `{}`: file {:?} is not a clean relative path",
+                        u.id, f
+                    )));
+                }
+            }
+            if let Some(c) = u.oracle_param_str("rust_crate") {
+                if !is_clean_segment(c) {
+                    return Err(Error::InvalidPlan(format!(
+                        "unit `{}`: rust_crate {:?} is not a clean path segment",
+                        u.id, c
+                    )));
+                }
+            }
+            if let Some(d) = u.oracle_param_str("driver") {
+                if !is_clean_relative_path(d) {
+                    return Err(Error::InvalidPlan(format!(
+                        "unit `{}`: driver {:?} is not a clean relative path",
+                        u.id, d
+                    )));
+                }
+            }
+            for r in u.oracle_param_list("replaces") {
+                if !is_clean_relative_path(&r) {
+                    return Err(Error::InvalidPlan(format!(
+                        "unit `{}`: replaces entry {:?} is not a clean relative path",
+                        u.id, r
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Find a unit by id.
@@ -205,6 +254,26 @@ impl Plan {
         }
         Ok(order)
     }
+}
+
+/// A single clean path segment: `^[A-Za-z0-9][A-Za-z0-9._-]*$` (so no
+/// separators, no `..`, no leading dot, no control characters).
+pub fn is_clean_segment(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && s != ".."
+}
+
+/// A clean relative path: non-empty, `/`-separated clean components (each a
+/// [`is_clean_segment`] — which also rules out `.`/`..`, leading dots,
+/// backslashes, rooted paths, and control characters).
+pub fn is_clean_relative_path(p: &str) -> bool {
+    !p.is_empty() && p.split('/').all(is_clean_segment)
 }
 
 /// A planner-derived unit proposal, fed into [`reconcile`].

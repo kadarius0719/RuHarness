@@ -393,3 +393,45 @@ fn stem_collision_units_both_survive() {
     assert!(ids.contains("u-src-a"), "{ids:?}");
     assert!(ids.contains("u-src2-a"), "{ids:?}");
 }
+
+#[test]
+fn target_config_cannot_request_unbounded_llm_spend() {
+    // Regression (M3 review): harness.toml is hostile input.
+    let dir = temp_dir("cfg-clamp");
+    let base = "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"src\"\n";
+    std::fs::write(
+        dir.join("harness.toml"),
+        format!("{base}[llm.migrate]\nmax_repairs = 4294967295\n"),
+    )
+    .unwrap();
+    let err = harness_core::TargetContext::load(&dir).unwrap_err();
+    assert!(err.to_string().contains("max_repairs"), "{err}");
+    std::fs::write(
+        dir.join("harness.toml"),
+        format!("{base}[llm]\nmax_tokens = 1000000\n"),
+    )
+    .unwrap();
+    assert!(harness_core::TargetContext::load(&dir).is_err());
+    std::fs::write(
+        dir.join("harness.toml"),
+        format!("{base}[llm.migrate]\nmax_repairs = 3\n"),
+    )
+    .unwrap();
+    assert!(harness_core::TargetContext::load(&dir).is_ok());
+}
+
+#[test]
+fn hostile_plan_paths_are_refused_at_load() {
+    // Regression (M3 design review): plan fields become path components.
+    let dir = temp_dir("plan-paths");
+    let path = dir.join("plan.toml");
+    for bad in [
+        "id = \"../../etc\"\nstatus = \"pending\"\n",
+        "id = \"ok\"\nstatus = \"pending\"\nfiles = [\"/etc/passwd\"]\n",
+        "id = \"ok\"\nstatus = \"pending\"\n[unit.oracle]\nkind = \"x\"\nrust_crate = \"../up\"\n",
+        "id = \"ok\"\nstatus = \"pending\"\n[unit.oracle]\nkind = \"x\"\ndriver = \"a/../../b.c\"\n",
+    ] {
+        std::fs::write(&path, format!("schema_version = 1\n[[unit]]\n{bad}")).unwrap();
+        assert!(Plan::load(&path).is_err(), "accepted hostile plan: {bad}");
+    }
+}

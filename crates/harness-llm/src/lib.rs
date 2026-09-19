@@ -10,6 +10,11 @@
 //! only ever reads one from an `ANTHROPIC_*` variable (the name comes from
 //! the target's `harness.toml`, which is untrusted).
 //!
+//! Every completion — triage and executor alike — is requested through
+//! [`checked_complete`], which refuses a prompt that cannot fit the
+//! profile's declared context window and rejects a reply whose reported
+//! token count shows that the server truncated the prompt.
+//!
 //! # Trace keys and nonces (normative for this crate)
 //!
 //! - **Trace key** = first 8 lowercase hex of
@@ -37,7 +42,13 @@
 #![deny(missing_docs)]
 
 pub mod adapters;
+pub mod emission;
+pub mod migrate;
+pub mod providers;
 pub mod triage;
 
 pub use adapters::{AnthropicAdapter, TraceAdapter};
+pub use emission::{deny_scan, parse_emission, EmissionResult};
+pub use migrate::{run_migration, MigrateParams, MigrationOutcome};
+pub use providers::{checked_complete, ProviderProfile, ResolvedProvider};
 pub use triage::{run_triage, TriageOutcome};

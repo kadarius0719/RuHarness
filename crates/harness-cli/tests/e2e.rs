@@ -43,6 +43,44 @@ fn harness(args: &[&str]) -> Run {
     }
 }
 
+/// The one `*.request.json` in `dir` that has no matching response yet.
+fn pending_request(dir: &Path) -> Option<PathBuf> {
+    let mut pending: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.to_string_lossy().ends_with(".request.json"))
+        .filter(|p| {
+            !PathBuf::from(
+                p.to_string_lossy()
+                    .replace(".request.json", ".response.json"),
+            )
+            .exists()
+        })
+        .collect();
+    pending.sort();
+    pending.pop()
+}
+
+/// Render the two files in the executor's emission contract.
+fn emission(logic: &str, ffi: &str) -> String {
+    format!(
+        "src/logic.rs\n```rust\n{logic}```\nsrc/ffi.rs\n```rust\n{ffi}```\nRUHARNESS_END_OF_OUTPUT\n"
+    )
+}
+
+/// Write the external provider's response file next to a request.
+fn write_response(request: &Path, text: &str) {
+    let response = PathBuf::from(
+        request
+            .to_string_lossy()
+            .replace(".request.json", ".response.json"),
+    );
+    let body = serde_json::json!({
+        "text": text, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"
+    });
+    std::fs::write(response, serde_json::to_string_pretty(&body).unwrap()).unwrap();
+}
+
 #[test]
 fn full_pipeline_on_zopfli() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -68,7 +106,13 @@ fn full_pipeline_on_zopfli() {
     assert!(r.stdout.contains("execution order"), "{}", r.stdout);
 
     // 3. verify u001 — the full oracle, green.
-    let r = harness(&["verify", "u001-katajainen", "--target", target]);
+    let r = harness(&[
+        "verify",
+        "--allow-unsandboxed",
+        "u001-katajainen",
+        "--target",
+        target,
+    ]);
     assert_eq!(r.code, 0, "verify failed: {}\n{}", r.stdout, r.stderr);
     assert!(r.stdout.contains("GREEN"), "{}", r.stdout);
     let verdict =
@@ -200,10 +244,197 @@ fn full_pipeline_on_zopfli() {
     let r = harness(&["detect", "--target", target]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
 
+    // ---- M3: executor (`harness migrate`) via the external hand-off ----
+    let unit_dir = tmp.join("migration/units/u001-katajainen");
+    let traces_dir = unit_dir.join("traces");
+    let _ = std::fs::remove_dir_all(&traces_dir);
+    let _ = std::fs::remove_dir_all(unit_dir.join("attempts"));
+    let logic = include_str!("fixtures/katajainen_logic.rs");
+    let ffi = include_str!("fixtures/katajainen_ffi.rs");
+
+    // M-a. first run writes a translate request and exits 1 awaiting a reply.
+    let r = harness(&[
+        "migrate",
+        "--allow-unsandboxed",
+        "u001-katajainen",
+        "--target",
+        target,
+    ]);
+    assert_eq!(r.code, 1, "expected awaiting: {}\n{}", r.stdout, r.stderr);
+    assert!(r.stderr.contains("awaiting response"), "{}", r.stderr);
+    let request = pending_request(&traces_dir).expect("translate request written");
+    let request_text = std::fs::read_to_string(&request).unwrap();
+    assert!(
+        request_text.contains("c_source_"),
+        "C source must be nonce-delimited"
+    );
+    assert!(
+        !request_text.contains("not a total order"),
+        "hazard message text leaked into the prompt"
+    );
+
+    // M-b. supply the known-good translation -> GREEN, but NOT promoted
+    //      (the unit is already verified).
+    write_response(&request, &emission(logic, ffi));
+    let r = harness(&[
+        "migrate",
+        "--allow-unsandboxed",
+        "u001-katajainen",
+        "--target",
+        target,
+    ]);
+    assert_eq!(
+        r.code, 0,
+        "migrate should be green: {}\n{}",
+        r.stdout, r.stderr
+    );
+    assert!(r.stdout.contains("GREEN"), "{}", r.stdout);
+    assert!(r.stdout.contains("not promoted"), "{}", r.stdout);
+    let attempts: Vec<_> = std::fs::read_dir(unit_dir.join("attempts"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(attempts.len(), 1, "exactly one attempt dir");
+    let attempt_json = std::fs::read_to_string(attempts[0].path().join("attempt.json")).unwrap();
+    assert!(
+        attempt_json.contains("\"outcome\": \"green\""),
+        "{attempt_json}"
+    );
+    assert!(
+        attempt_json.contains("\"input_tokens\": null"),
+        "external usage must be null, not 0: {attempt_json}"
+    );
+    assert!(attempts[0].path().join("candidate/src/logic.rs").exists());
+    assert!(
+        !unit_dir.join("katajainen_rs/src/logic.rs").exists(),
+        "must not be promoted"
+    );
+
+    // M-c. replay verifies the trajectory and writes NOTHING to the ledger.
+    let before = std::fs::read_to_string(attempts[0].path().join("attempt.json")).unwrap();
+    let r = harness(&[
+        "migrate",
+        "--allow-unsandboxed",
+        "u001-katajainen",
+        "--target",
+        target,
+        "--provider",
+        "replay",
+    ]);
+    assert_eq!(r.code, 0, "replay: {}\n{}", r.stdout, r.stderr);
+    let after = std::fs::read_to_string(attempts[0].path().join("attempt.json")).unwrap();
+    assert_eq!(before, after, "replay must not touch the attempts ledger");
+    assert_eq!(
+        std::fs::read_dir(unit_dir.join("attempts"))
+            .unwrap()
+            .count(),
+        1
+    );
+
+    // M-d. status lists the attempt.
+    let r = harness(&["state", "status", "--target", target]);
+    assert!(r.stdout.contains("attempts: 1"), "{}", r.stdout);
+
+    // M-e. promotion: with the unit no longer verified, the same (resumed)
+    //      attempt promotes through the two-rename protocol and re-verifies.
+    let plan_path = tmp.join("migration/plan.toml");
+    let plan_text = std::fs::read_to_string(&plan_path).unwrap();
+    std::fs::write(
+        &plan_path,
+        plan_text.replacen("status = \"verified\"", "status = \"in-progress\"", 1),
+    )
+    .unwrap();
+    let r = harness(&[
+        "migrate",
+        "--allow-unsandboxed",
+        "u001-katajainen",
+        "--target",
+        target,
+    ]);
+    assert_eq!(r.code, 0, "promotion run: {}\n{}", r.stdout, r.stderr);
+    assert!(r.stdout.contains("promoted and verified"), "{}", r.stdout);
+    assert!(
+        unit_dir.join("katajainen_rs/src/logic.rs").exists(),
+        "candidate swapped in"
+    );
+    assert!(
+        !unit_dir.join(".katajainen_rs.prev").exists(),
+        "backup must be cleaned up"
+    );
+    let plan_text = std::fs::read_to_string(&plan_path).unwrap();
+    assert!(plan_text.contains("status = \"verified\""), "{plan_text}");
+    let attempt_json = std::fs::read_to_string(attempts[0].path().join("attempt.json")).unwrap();
+    assert!(
+        attempt_json.contains("\"promoted\": true"),
+        "{attempt_json}"
+    );
+    let r = harness(&["state", "status", "--target", target]);
+    assert!(r.stdout.contains("verdict=green (fresh)"), "{}", r.stdout);
+    assert!(!r.stdout.contains("CONTRADICTION"), "{}", r.stdout);
+
+    // M-f. a WRONG translation (different model string => new attempt) goes
+    //      red through the real oracle and produces a repair request carrying
+    //      the failure class and the current candidate.
+    let r = harness(&[
+        "migrate",
+        "--allow-unsandboxed",
+        "u001-katajainen",
+        "--target",
+        target,
+        "--model",
+        "e2e-wrong-model",
+    ]);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    let request = pending_request(&traces_dir).expect("second translate request");
+    let wrong = logic.replace(
+        "bitlengths[leaves[0].count as usize] = 1;",
+        "bitlengths[leaves[0].count as usize] = 2;",
+    );
+    assert_ne!(wrong, logic, "mutation site not found in fixture");
+    write_response(&request, &emission(&wrong, ffi));
+    let r = harness(&[
+        "migrate",
+        "--allow-unsandboxed",
+        "u001-katajainen",
+        "--target",
+        target,
+        "--model",
+        "e2e-wrong-model",
+    ]);
+    assert_eq!(
+        r.code, 1,
+        "repair turn must await: {}\n{}",
+        r.stdout, r.stderr
+    );
+    let repair = pending_request(&traces_dir).expect("repair request written");
+    let repair_text = std::fs::read_to_string(&repair).unwrap();
+    assert!(
+        repair_text.contains("[FAILURE CLASS]"),
+        "no failure class in repair prompt"
+    );
+    assert!(
+        repair_text.contains("[CURRENT RUST]"),
+        "no current candidate in repair prompt"
+    );
+    assert_eq!(
+        std::fs::read_dir(unit_dir.join("attempts"))
+            .unwrap()
+            .count(),
+        2,
+        "the wrong-model run is a distinct attempt"
+    );
+
     // 5'. red path first: introduce a behavioral change in the Rust crate
     //     (the C side is untouched, so the stale gate must NOT fire) ->
     //     exit 10, status demoted, last-green preserved.
-    let lib_rs = tmp.join("migration/units/u001-katajainen/katajainen_rs/src/lib.rs");
+    // After the M3 promotion above, the unit crate uses the executor layout
+    // (harness-owned lib.rs scaffold + logic.rs); mutate whichever holds the logic.
+    let crate_src = tmp.join("migration/units/u001-katajainen/katajainen_rs/src");
+    let lib_rs = if crate_src.join("logic.rs").exists() {
+        crate_src.join("logic.rs")
+    } else {
+        crate_src.join("lib.rs")
+    };
     let rust_src = std::fs::read_to_string(&lib_rs).unwrap();
     let broken = rust_src.replace(
         "bitlengths[leaves[0].count as usize] = 1;",
@@ -211,7 +442,13 @@ fn full_pipeline_on_zopfli() {
     );
     assert_ne!(rust_src, broken, "mutation site not found");
     std::fs::write(&lib_rs, &broken).unwrap();
-    let r = harness(&["verify", "u001-katajainen", "--target", target]);
+    let r = harness(&[
+        "verify",
+        "--allow-unsandboxed",
+        "u001-katajainen",
+        "--target",
+        target,
+    ]);
     assert_eq!(
         r.code, 10,
         "expected oracle red: {}\n{}",
@@ -245,7 +482,13 @@ fn full_pipeline_on_zopfli() {
     let mut c_src = std::fs::read_to_string(&kata).unwrap();
     c_src.push_str("\n/* touched by e2e */\n");
     std::fs::write(&kata, c_src).unwrap();
-    let r = harness(&["verify", "u001-katajainen", "--target", target]);
+    let r = harness(&[
+        "verify",
+        "--allow-unsandboxed",
+        "u001-katajainen",
+        "--target",
+        target,
+    ]);
     assert_eq!(
         r.code, 1,
         "expected stale refusal: {}\n{}",

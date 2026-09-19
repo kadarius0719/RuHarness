@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 
 /// Version of the config schema this build understands.
 pub const CONFIG_SCHEMA_VERSION: u64 = 1;
+/// Upper bound on any target-configured response token budget.
+pub const MAX_TOKENS_LIMIT: u64 = 65_536;
+/// Upper bound on target-configured repair turns per attempt.
+pub const MAX_REPAIRS_LIMIT: u64 = 10;
 
 /// Parsed `harness.toml`. Unknown fields are tolerated and preserved on disk
 /// (this struct is read-only; the file is never rewritten by the harness).
@@ -25,22 +29,41 @@ pub struct TargetConfig {
     pub llm: LlmSection,
 }
 
-/// The `[llm]` section of `harness.toml`.
+/// The `[llm]` section of `harness.toml`. Target config is hostile input: it
+/// may only NAME a provider profile and a model — endpoints and credentials
+/// live in user-level provider profiles (docs/SCHEMAS.md M3 additions).
 #[derive(Debug, Clone, Deserialize)]
 pub struct LlmSection {
-    /// `external | anthropic | replay`.
+    /// Provider profile name (`external | replay | anthropic` built in, or a
+    /// user-defined profile).
     #[serde(default = "default_provider")]
     pub provider: String,
-    /// Model identifier for live providers (Tier-2 default per briefing §16).
+    /// Model identifier (Tier-2 default per briefing §16).
     #[serde(default = "default_model")]
     pub model: String,
     /// Response token budget.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
-    /// Environment variable holding the API key (live providers only; the
-    /// key itself is never written anywhere).
-    #[serde(default = "default_api_key_env")]
-    pub api_key_env: String,
+    /// Optional `[llm.migrate]` stage override (§13.2 per-stage routing).
+    #[serde(default)]
+    pub migrate: Option<MigrateSection>,
+}
+
+/// `[llm.migrate]`: executor-stage routing and loop bounds.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MigrateSection {
+    /// Provider profile for the executor (falls back to `[llm] provider`).
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Model for the executor (falls back to `[llm] model`).
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Response token budget (falls back to `[llm] max_tokens`).
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Stateless repair turns after the translate turn (default 3).
+    #[serde(default)]
+    pub max_repairs: Option<u32>,
 }
 
 impl Default for LlmSection {
@@ -49,7 +72,7 @@ impl Default for LlmSection {
             provider: default_provider(),
             model: default_model(),
             max_tokens: default_max_tokens(),
-            api_key_env: default_api_key_env(),
+            migrate: None,
         }
     }
 }
@@ -62,9 +85,6 @@ fn default_model() -> String {
 }
 fn default_max_tokens() -> u32 {
     8192
-}
-fn default_api_key_env() -> String {
-    "ANTHROPIC_API_KEY".into()
 }
 
 /// The `[target]` section of `harness.toml`.
@@ -89,6 +109,29 @@ impl TargetConfig {
                 found: config.schema_version,
                 supported: CONFIG_SCHEMA_VERSION,
             });
+        }
+        // harness.toml is target-owned, hostile input: it must not be able to
+        // turn one command into an unbounded stream of billable calls.
+        let mut budgets: Vec<(&str, u64, u64)> = vec![(
+            "[llm] max_tokens",
+            u64::from(config.llm.max_tokens),
+            MAX_TOKENS_LIMIT,
+        )];
+        if let Some(m) = &config.llm.migrate {
+            if let Some(t) = m.max_tokens {
+                budgets.push(("[llm.migrate] max_tokens", u64::from(t), MAX_TOKENS_LIMIT));
+            }
+            if let Some(r) = m.max_repairs {
+                budgets.push(("[llm.migrate] max_repairs", u64::from(r), MAX_REPAIRS_LIMIT));
+            }
+        }
+        for (key, value, limit) in budgets {
+            if value > limit {
+                return Err(Error::parse(
+                    &path,
+                    format!("{key} = {value} exceeds the harness limit of {limit}"),
+                ));
+            }
         }
         Ok(config)
     }

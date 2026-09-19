@@ -1,0 +1,26 @@
+{
+  "schema": "ruharness-verdict",
+  "schema_version": 1,
+  "unit": "u001-katajainen",
+  "green": false,
+  "inputs": {
+    "unit_source": "blake3:24231df2ed359c49223558a9f977ce9d6d370e6ad1d9baf6d34cf47751a81f4c",
+    "driver": "blake3:019139974804439b50881cb5be2173812764eec4d92f13110564d7514fe68d38",
+    "rust_crate": "blake3:8a59b36908dad82e22c81dc239815612a82351b5561646681aeb2880e74568d9",
+    "replaces": [
+      "src/zopfli/katajainen.c"
+    ],
+    "toolchain": [
+      "rustc 1.94.1 (e408947bf 2026-03-25)",
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec"
+    ]
+  },
+  "checks": [
+    {
+      "name": "rust-build",
+      "passed": false,
+      "detail": "unit crate failed to build: `cargo build --release --offline --manifest-path <target>/migration/units/u001-katajainen/attempts/a-d6b377fb9257/candidate/Cargo.toml --target-dir <target>/migration/units/u001-katajainen/attempts/a-d6b377fb9257/candidate/target` failed (exit status: 101):\n   Compiling katajainen_rs v0.1.0 (<target>/migration/units/u001-katajainen/attempts/a-d6b377fb9257/candidate)\nerror[E0425]: cannot find type `size_t` in this scope\n --> src/logic.rs:3:25\n  |\n3 |     frequencies: *const size_t,\n  |                         ^^^^^^ not found in this scope\n\nerror[E0425]: cannot find type `size_t` in this scope\n --> src/ffi.rs:3:25\n  |\n3 |     frequencies: *const size_t,\n  |                         ^^^^^^ not found in this scope\n\nerror: declaration of a `no_mangle` function\n --> src/logic.rs:1:1\n  |\n1 | #[no_mangle]\n  | ^^^^^^^^^^^^\n  |\n  = note: the linker's behavior with multiple libraries exporting duplicate symbol names is undefined and Rust cannot provide guarantees when you manually override them\nnote: the lint level is defined here\n --> src/lib.rs:2:10\n  |\n2 | #[forbid(unsafe_code)] mod logic;\n  |          ^^^^^^^^^^^\n\nerror[E0308]: mismatched types\n --> src/logic.rs:7:6\n  |\n2 | pub extern \"C\" fn ZopfliLengthLimitedCodeLengths(\n  |                   ------------------------------ implicitly returns `()` as its body has no tail or `return` expression\n...\n7 | ) -> i32 {\n  |      ^^^ expected `i32`, found `()`\n  |\nhelp: consider returning the local binding `n`\n  |\n7 | ) -> i32 {\n8 ~     n\n  |\n\nerror[E0308]: mismatched types\n --> src/ffi.rs:7:6\n  |\n2 | pub unsafe extern \"C\" fn ZopfliLengthLimitedCodeLengths(\n  |                          ------------------------------ implicitly returns `()` as its body has no tail or `return` expression\n...\n7 | ) -> i32 {\n  |      ^^^ expected `i32`, found `()`\n  |\nhelp: consider returning the local binding `n`\n  |\n7 | ) -> i32 {\n8 ~     n\n  |\n\nSome errors have detailed explanations: E0308, E0425.\nFor more information about an error, try `rustc --explain E0308`.\nerror: could not compile `katajainen_rs` (lib) due to 5 previous errors\n"
+    }
+  ]
+}

@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod attempts;
 pub mod config;
 pub mod error;
 pub mod facts;

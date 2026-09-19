@@ -6,7 +6,7 @@
   "inputs": {
     "unit_source": "blake3:24231df2ed359c49223558a9f977ce9d6d370e6ad1d9baf6d34cf47751a81f4c",
     "driver": "blake3:019139974804439b50881cb5be2173812764eec4d92f13110564d7514fe68d38",
-    "rust_crate": "blake3:b91f77e8501bfb3ec59ca6d644f1c26b4c158bd9f4f1fcbd8fb95136b8b7d67d",
+    "rust_crate": "blake3:774d5d9640d6dd8438c39b48be94c0155ef2924abac615308d3b11452d415552",
     "replaces": [
       "src/zopfli/katajainen.c"
     ],
