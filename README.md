@@ -48,7 +48,129 @@ commit in `DECISIONS.md`). Its plan currently holds 11 units in dependency order
 `u001-katajainen` (length-limited Huffman codes) is migrated to safe Rust behind the
 identical C ABI and oracle-verified, with zero human-written Rust.
 
-## Usage
+## How it works, in plain English
+
+**The problem.** You have C code you want in Rust. An AI model can write the Rust,
+but you can't trust it: it may compile and still behave differently. So the question
+this project answers is not "can a model translate C?" but **"how do we *know* a
+translation is right without reading it?"**
+
+**The idea.** Translate one small piece at a time, and keep the rest of the program
+in C. The new Rust piece exposes exactly the same C function names and signatures, so
+it can be dropped into the program in place of the C file it replaces. Then run the
+old and the new side by side and compare.
+
+There are three moving parts:
+
+1. **The harness** — the `harness` command-line tool in this repo. It is ordinary,
+   deterministic code: it reads the C, works out which files depend on which, decides
+   a safe order to migrate them, asks a model for a translation, and keeps records.
+   It never *judges* whether a translation is correct.
+2. **The oracle** — the judge. For one piece ("unit") it:
+   - builds a small test program twice — once linked with the original C, once with
+     the new Rust — feeds both ~500 identical inputs, and requires the outputs to
+     match **byte for byte**;
+   - builds the *whole* real program both ways (all C vs. C-with-the-Rust-piece) and
+     requires identical output on sample files;
+   - checks the Rust library exports *only* the functions it is supposed to (so it
+     can't cheat by replacing `printf`), and runs the C side under memory checkers.
+
+   All green → the unit is **verified**. Anything else → **red**. That is the only
+   definition of "done" — nobody's opinion, including the model's, counts.
+3. **The ledger** — a folder of plain text files inside the target project
+   (`targets/zopfli/migration/`). Everything the harness knows lives there: the facts
+   it scanned, the plan, every verdict, every attempt. Nothing important lives in a
+   chat window, so anyone (or any AI agent) can pick the work up cold by reading it.
+   Verdicts record fingerprints (hashes) of exactly what was tested, so "verified"
+   can't silently go stale — if the code changes, `harness state status` says so.
+
+**The flow:**
+
+```
+scan ──▶ plan ──▶ detect ──▶ observe ──▶ migrate ──▶ verify
+read C   order    flag risky   AI reviews   AI writes    the oracle
+         units    C patterns   the flags    Rust + tests  judges it
+```
+
+**Why it's safe to run.** Model-written code is treated as hostile: it is compiled and
+run inside a sandbox (no network, can't read your home folder, time-limited), and the
+project being migrated can't choose where your API key is sent — that lives in *your*
+config, not the project's.
+
+## Quick start (5 minutes, no AI or API key needed)
+
+You need Rust and a C compiler (on a Mac: `xcode-select --install`). From the repo
+root:
+
+**1. Install the tool**
+```bash
+cargo install --path crates/harness-cli
+```
+
+**2. See the state of the migration** — what's verified, what's pending, is anything stale
+```bash
+harness state status --target targets/zopfli
+```
+
+**3. Run the judge on the piece that's already migrated** — expect six `PASS` lines and `GREEN`
+```bash
+harness verify u001-katajainen --target targets/zopfli
+```
+
+**4. Watch it catch a bug.** Open
+`targets/zopfli/migration/units/u001-katajainen/katajainen_rs/src/lib.rs`, find
+`bitlengths[leaves[0].count as usize] = 1;` and change the `1` to `2`. Run step 3
+again: `differential-driver` now `FAIL`s, the verdict is `RED`, and the unit is demoted
+from `verified`. Undo everything with:
+```bash
+git checkout targets/zopfli
+```
+
+**5. See the plan and the risk report**
+```bash
+harness plan --target targets/zopfli
+```
+then open `targets/zopfli/migration/observer/observations.md`.
+
+### Trying the AI part
+
+**With a free local model** ([Ollama](https://ollama.com)). In one terminal run
+`ollama serve`; in another:
+```bash
+export RUHARNESS_PROVIDERS=$PWD/providers.example.toml
+```
+```bash
+harness migrate u001-katajainen --target targets/zopfli --provider ollama-openai --model llama3.2-1b-32k --retry
+```
+You'll see each turn (`translate`, then `repair`s) and a final outcome. A tiny model
+will fail — that's the point: the oracle catches it and the attempt is recorded under
+`migration/units/u001-katajainen/attempts/`. (The example profile file explains how to
+create the `llama3.2-1b-32k` model.)
+
+**With no model at all** — the harness writes the prompt to a file and waits:
+```bash
+harness migrate u001-katajainen --target targets/zopfli --model my-test
+```
+Answer it by creating the matching `….response.json` next to the `….request.json` it
+names, then run the same command again.
+
+### What the flags mean
+
+| Flag | Meaning |
+|---|---|
+| `--target DIR` | Which project to work on (the folder containing `harness.toml`). Always `targets/zopfli` here. |
+| `u001-katajainen` | The *unit* — one piece of the plan. Ids are listed by `harness state status`. |
+| `--provider NAME` | Which AI backend to use: `external` (file hand-off, the default), `replay`, `anthropic` (needs `ANTHROPIC_API_KEY`), or a profile from your providers file such as `ollama-openai`. |
+| `--model NAME` | The model name sent to that backend. |
+| `--retry` | Finished attempts are never overwritten; this records a *new* sample instead. |
+| `--promote` | Replace an already-verified unit's Rust with a new green candidate. |
+| `--attempt ID` | With `--provider replay`: which recorded attempt to re-check. |
+| `--allow-unsandboxed` | Only needed where no sandbox exists (e.g. Linux): accept running untrusted code unconfined. |
+
+Exit codes, for scripting: `0` success/green · `1` the harness refused or errored ·
+`2` bad command line · `10` the oracle said red.
+
+## Command reference
 
 Prerequisites: stable Rust (pinned via `rust-toolchain.toml`) and a C compiler
 (clang with ASan/UBSan; developed on macOS, CI also runs Ubuntu).
