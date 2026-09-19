@@ -1,0 +1,34 @@
+{
+  "schema": "ruharness-attempt",
+  "schema_version": 1,
+  "id": "a-82a651aef9fa",
+  "unit": "u001-katajainen",
+  "provider": "ollama-openai",
+  "provider_kind": "openai-compat",
+  "model": "llama3.2-1b-32k",
+  "prompt_digest": "blake3:991d27688588b224fd598150013d81841e23569bf4652a3984c89ecab06c9173",
+  "unit_source": "blake3:24231df2ed359c49223558a9f977ce9d6d370e6ad1d9baf6d34cf47751a81f4c",
+  "driver": "blake3:019139974804439b50881cb5be2173812764eec4d92f13110564d7514fe68d38",
+  "toolchain": [],
+  "outcome": "truncated",
+  "turns": [
+    {
+      "kind": "translate",
+      "result": "format",
+      "request_key": "44ba151b",
+      "response_hash": "blake3:21c2492e5a3db9a9a99f118fb354ef3e9a01de77bfe86d73c62140698dbe3e10",
+      "input_tokens": 4552,
+      "output_tokens": 1586
+    },
+    {
+      "kind": "repair",
+      "result": "truncated",
+      "request_key": "9a8de297",
+      "response_hash": "blake3:90d8f530792d5b73d0fa78e8daf600f87e7d2fe1d63ca9bb665f421c86009d6d",
+      "input_tokens": 4703,
+      "output_tokens": 990
+    }
+  ],
+  "candidate_digest": "",
+  "promoted": false
+}

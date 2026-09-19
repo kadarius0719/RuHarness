@@ -13,3 +13,12 @@ kind = "anthropic"
 base_url = "http://127.0.0.1:11434"
 context_tokens = 32768
 timeout_secs = 900
+
+# OpenAI-compatible Chat Completions wire format against the same local Ollama
+# server (note: base_url includes the /v1 prefix for this kind).
+[providers.ollama-openai]
+kind = "openai-compat"
+base_url = "http://127.0.0.1:11434/v1"
+max_tokens_field = "max_tokens"
+context_tokens = 32768
+timeout_secs = 900

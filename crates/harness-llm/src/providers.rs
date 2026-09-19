@@ -207,6 +207,7 @@ pub struct ProviderProfile {
 fn kind_builder(kind: &str) -> Option<KindBuilder> {
     match kind {
         "anthropic" => Some(build_anthropic),
+        "openai-compat" => Some(crate::openai_compat::build),
         _ => None,
     }
 }
@@ -812,20 +813,25 @@ max_tokens_field = "max_tokens"
 
     #[test]
     fn unknown_kind_lists_the_supported_kinds() {
-        assert_eq!(supported_kinds(), ["anthropic"]);
+        assert_eq!(supported_kinds(), ["anthropic", "openai-compat"]);
         let path = profiles_file(
             "kinds",
             &format!("{EXAMPLE}\n[providers.odd]\nkind = \"gemini\"\nbase_url = \"http://x\"\n"),
         );
-        for (profile, kind) in [("odd", "gemini"), ("later", "openai-compat")] {
-            let err = resolve_in(profile, &path, &[]).unwrap_err().to_string();
-            assert!(err.contains(&format!("[providers.{profile}]")), "{err}");
-            assert!(err.contains(&format!("unsupported kind {kind:?}")), "{err}");
-            assert!(err.contains("(supported kinds: anthropic)"), "{err}");
-            assert!(err.contains(path.to_str().unwrap()), "{err}");
-        }
+        let err = resolve_in("odd", &path, &[]).unwrap_err().to_string();
+        assert!(err.contains("[providers.odd]"), "{err}");
+        assert!(err.contains("unsupported kind \"gemini\""), "{err}");
+        assert!(
+            err.contains("(supported kinds: anthropic, openai-compat)"),
+            "{err}"
+        );
+        assert!(err.contains(path.to_str().unwrap()), "{err}");
         // A broken sibling never blocks a healthy profile.
         resolve_in("ollama-anthropic", &path, &[]).unwrap();
+        assert_eq!(
+            resolve_in("later", &path, &[]).unwrap().kind,
+            "openai-compat"
+        );
     }
 
     #[test]

@@ -44,6 +44,7 @@
 pub mod adapters;
 pub mod emission;
 pub mod migrate;
+mod openai_compat;
 pub mod providers;
 pub mod triage;
 
