@@ -85,6 +85,9 @@ pub struct VectorRun {
 /// A built scorer: runner binaries plus the verified snapshot they came from.
 #[derive(Debug)]
 pub struct Scorer {
+    /// Held for the scorer's lifetime: one scoring run per suite at a time
+    /// (runs share and recreate the verified snapshot).
+    _lock: BenchLock,
     suite_dir: PathBuf,
     snapshot: PathBuf,
     runners: PathBuf,
@@ -102,6 +105,8 @@ impl Scorer {
             .map_err(|e| Error::io(suite_dir, e))?;
         lock.require_verified(&suite_dir, suite)?;
         let bench = suite_dir.join(".bench");
+        std::fs::create_dir_all(&bench).map_err(|e| Error::io(&bench, e))?;
+        let bench_lock = BenchLock::acquire(&bench.join("LOCK"))?;
         let snapshot = bench.join("snapshot");
         if snapshot.exists() {
             std::fs::remove_dir_all(&snapshot).map_err(|e| Error::io(&snapshot, e))?;
@@ -209,6 +214,7 @@ impl Scorer {
         };
         let environment = environment(&tools)?;
         Ok(Scorer {
+            _lock: bench_lock,
             suite_dir,
             snapshot: snapshot_root,
             runners: target_dir.join("release"),
@@ -398,6 +404,37 @@ impl Scorer {
             RunStatus::Exited(code) if code == 0 || code == 1 => parse_report(&report),
             RunStatus::Exited(code) => format!("fail:runner-exit-{code}"),
         })
+    }
+}
+
+/// An exclusive lock file (`create_new`), removed on drop. A crashed run
+/// leaves it behind; the error says so.
+#[derive(Debug)]
+struct BenchLock(PathBuf);
+
+impl BenchLock {
+    fn acquire(path: &Path) -> Result<BenchLock, Error> {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(_) => Ok(BenchLock(path.to_path_buf())),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(Error::Invariant(format!(
+                    "another bench scoring run holds {} (runs share the verified snapshot); if no \
+                 run is active it is stale from a crash — remove it",
+                    path.display()
+                )))
+            }
+            Err(e) => Err(Error::io(path, e)),
+        }
+    }
+}
+
+impl Drop for BenchLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 

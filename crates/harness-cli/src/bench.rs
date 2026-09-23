@@ -73,6 +73,9 @@ pub enum BenchCmd {
         /// available (the scorer loads candidates next to held-out vectors)
         #[arg(long)]
         allow_unsandboxed: bool,
+        /// Cases scored in parallel (default: half the available cores)
+        #[arg(long)]
+        jobs: Option<usize>,
     },
     /// Regression check against the committed scores.json: re-verify every
     /// verified unit, re-validate every generated driver, re-score, compare
@@ -89,6 +92,9 @@ pub enum BenchCmd {
         /// available
         #[arg(long)]
         allow_unsandboxed: bool,
+        /// Cases scored in parallel (default: half the available cores)
+        #[arg(long)]
+        jobs: Option<usize>,
     },
 }
 
@@ -103,22 +109,34 @@ pub fn run(cmd: BenchCmd) -> Result<ExitCode> {
             cases,
             write,
             allow_unsandboxed,
+            jobs,
         } => {
             // The scorer builds and loads model-written candidates and the
             // corpus's third-party scorer next to held-out vectors: the same
             // sandbox floor as every other code-running command (M4 review).
             crate::require_sandbox(allow_unsandboxed, "harness bench score")?;
-            cmd_score(&suite, &cases, write)
+            cmd_score(&suite, &cases, write, default_jobs(jobs))
         }
         BenchCmd::Check {
             suite,
             replay,
             allow_unsandboxed,
+            jobs,
         } => {
             crate::require_sandbox(allow_unsandboxed, "harness bench check")?;
-            cmd_check(&suite, replay)
+            cmd_check(&suite, replay, default_jobs(jobs))
         }
     }
+}
+
+/// `--jobs`, defaulting to half the available cores (at least 1).
+fn default_jobs(jobs: Option<usize>) -> usize {
+    jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get() / 2)
+            .unwrap_or(1)
+    })
+    .max(1)
 }
 
 /// Load `suite.toml` and `corpus.lock` and require the corpus to verify.
@@ -568,7 +586,12 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
 }
 
 /// Score `cases` (all when empty); returns the finalized scores + problems.
-fn compute(suite_dir: &Path, only: &[String], recheck: bool) -> Result<(Scores, Vec<String>)> {
+fn compute(
+    suite_dir: &Path,
+    only: &[String],
+    recheck: bool,
+    jobs: usize,
+) -> Result<(Scores, Vec<String>)> {
     let (suite, lock) = load_verified(suite_dir)?;
     let scorer = Scorer::prepare(suite_dir, &suite, &lock)?;
     let mut scores = Scores {
@@ -582,28 +605,57 @@ fn compute(suite_dir: &Path, only: &[String], recheck: bool) -> Result<(Scores, 
         cases: Vec::new(),
     };
     let mut problems = Vec::new();
-    for case in &suite.cases {
-        if !only.is_empty() && !only.iter().any(|o| *o == case.path || o == case.name()) {
-            continue;
+    let selected: Vec<&SuiteCase> = suite
+        .cases
+        .iter()
+        .filter(|case| only.is_empty() || only.iter().any(|o| *o == case.path || o == case.name()))
+        .collect();
+    // Cases are independent targets (own ledgers, own crates, per-run temp
+    // dirs), so they are scored on a few worker threads; results are
+    // collected by index and the record is sorted canonically afterwards.
+    let jobs = jobs.clamp(1, selected.len().max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let slots: Vec<std::sync::Mutex<Option<Result<Scored>>>> = selected
+        .iter()
+        .map(|_| std::sync::Mutex::new(None))
+        .collect();
+    std::thread::scope(|scope| {
+        for _ in 0..jobs {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let Some(case) = selected.get(i) else { break };
+                let result = score_one(&scorer, suite_dir, case, recheck)
+                    .with_context(|| format!("scoring {}", case.path));
+                if let Ok(scored) = &result {
+                    out(format!(
+                        "bench: {} [{}] {} — C {}/{} Rust {}/{}{}",
+                        case.path,
+                        case.split,
+                        scored.score.class,
+                        scored.score.c_baseline.pass,
+                        scored.score.vectors.len() as u32 - scored.score.c_baseline.skip,
+                        scored.score.rust.pass,
+                        scored.score.vectors.len() as u32 - scored.score.c_baseline.skip,
+                        scored
+                            .score
+                            .candidate
+                            .as_ref()
+                            .map(|k| format!(" (candidate {}/{})", k.pass, k.pass + k.fail))
+                            .unwrap_or_default()
+                    ));
+                }
+                if let Ok(mut slot) = slots[i].lock() {
+                    *slot = Some(result);
+                }
+            });
         }
-        let scored = score_one(&scorer, suite_dir, case, recheck)
-            .with_context(|| format!("scoring {}", case.path))?;
-        out(format!(
-            "bench: {} [{}] {} — C {}/{} Rust {}/{}{}",
-            case.path,
-            case.split,
-            scored.score.class,
-            scored.score.c_baseline.pass,
-            scored.score.vectors.len() as u32 - scored.score.c_baseline.skip,
-            scored.score.rust.pass,
-            scored.score.vectors.len() as u32 - scored.score.c_baseline.skip,
-            scored
-                .score
-                .candidate
-                .as_ref()
-                .map(|k| format!(" (candidate {}/{})", k.pass, k.pass + k.fail))
-                .unwrap_or_default()
-        ));
+    });
+    for (case, slot) in selected.iter().zip(slots) {
+        let scored = slot
+            .into_inner()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Err(anyhow::anyhow!("scoring {}: worker lost", case.path)))?;
         problems.extend(scored.problems);
         if scored.score.class == "infra-error" {
             problems.push(format!(
@@ -650,14 +702,14 @@ fn print_totals(scores: &Scores) {
     }
 }
 
-fn cmd_score(suite_dir: &Path, cases: &[String], write: bool) -> Result<ExitCode> {
+fn cmd_score(suite_dir: &Path, cases: &[String], write: bool, jobs: usize) -> Result<ExitCode> {
     if write && !cases.is_empty() {
         bail!("--write records the WHOLE suite; drop --case");
     }
     // Recording a baseline re-verifies every verified unit and re-validates
     // every generated driver first (review, M4): a red unit must never be
     // written into the regression baseline as verified.
-    let (scores, problems) = compute(suite_dir, cases, write)?;
+    let (scores, problems) = compute(suite_dir, cases, write, jobs)?;
     print_totals(&scores);
     for p in &problems {
         out(format!("bench score: PROBLEM: {p}"));
@@ -681,14 +733,14 @@ fn cmd_score(suite_dir: &Path, cases: &[String], write: bool) -> Result<ExitCode
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_check(suite_dir: &Path, replay: bool) -> Result<ExitCode> {
+fn cmd_check(suite_dir: &Path, replay: bool, jobs: usize) -> Result<ExitCode> {
     let baseline = Scores::load(&suite_dir.join("scores.json"))
         .context("loading the committed scores.json (run `bench score --write` first)")?;
     let mut problems = Vec::new();
     if replay {
         problems.extend(replay_all(suite_dir)?);
     }
-    let (now, recheck_problems) = compute(suite_dir, &[], true)?;
+    let (now, recheck_problems) = compute(suite_dir, &[], true, jobs)?;
     problems.extend(recheck_problems);
     print_totals(&now);
     let cmp = compare(&baseline, &now);
