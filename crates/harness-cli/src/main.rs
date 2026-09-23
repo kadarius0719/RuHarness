@@ -922,6 +922,35 @@ fn copy_crate_sources(from: &std::path::Path, to: &std::path::Path) -> Result<()
     copy_tree(&from.join("src"), &to.join("src"))
 }
 
+/// The unit's confirmed hazards as `harness migrate` puts them in the
+/// translate prompt (annotations are implicitly confirmed). Shared with
+/// `bench check --replay`, which must pose the byte-identical prompt.
+pub(crate) fn confirmed_hazards(
+    ledger: &Ledger,
+    plan_doc: &Plan,
+    facts: &Facts,
+    unit_id: &str,
+) -> Result<Vec<harness_core::observer::Finding>> {
+    use harness_core::observer::{self, FindingState, ObserverPaths};
+    let mut hazards = Vec::new();
+    let findings = match observer::FindingsFile::load(&ObserverPaths::findings(ledger)) {
+        Ok(f) => f.findings,
+        Err(e) if e.is_not_found() => Vec::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let annotations = observer::load_annotations(&ObserverPaths::annotations(ledger))?;
+    let triage = observer::TriageFile::load(&ObserverPaths::triage(ledger))?;
+    let reviews = observer::load_reviews(&ObserverPaths::reviews(ledger))?;
+    for f in findings.iter().chain(annotations.iter()) {
+        let affects = observer::affected_units(&f.file, plan_doc, facts).contains(&unit_id);
+        let state = observer::finding_state(f, &triage, &reviews);
+        if affects && matches!(state, FindingState::Confirmed | FindingState::Reinstated) {
+            hazards.push(f.clone());
+        }
+    }
+    Ok(hazards)
+}
+
 /// Arguments of `harness migrate`.
 struct MigrateArgs {
     unit: String,
@@ -946,7 +975,6 @@ fn cmd_migrate(args: MigrateArgs) -> Result<ExitCode> {
         attempt,
     } = args;
     require_sandbox(allow_unsandboxed, "harness migrate")?;
-    use harness_core::observer::{self, FindingState, ObserverPaths};
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
     let plan_path = ledger.plan_path();
@@ -997,24 +1025,7 @@ fn cmd_migrate(args: MigrateArgs) -> Result<ExitCode> {
     let traces = safe_ledger_dir(&ctx.root, &["migration", "units", &unit_id, "traces"])?;
     let resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
 
-    // Confirmed hazards for this unit (annotations are implicitly confirmed).
-    let mut hazards: Vec<observer::Finding> = Vec::new();
-    let findings = match observer::FindingsFile::load(&ObserverPaths::findings(&ledger)) {
-        Ok(f) => f.findings,
-        Err(e) if e.is_not_found() => Vec::new(),
-        Err(e) => return Err(e.into()),
-    };
-    let annotations = observer::load_annotations(&ObserverPaths::annotations(&ledger))?;
-    let triage = observer::TriageFile::load(&ObserverPaths::triage(&ledger))?;
-    let reviews = observer::load_reviews(&ObserverPaths::reviews(&ledger))?;
-    for f in findings.iter().chain(annotations.iter()) {
-        let affects =
-            observer::affected_units(&f.file, &plan_doc, &facts).contains(&unit_id.as_str());
-        let state = observer::finding_state(f, &triage, &reviews);
-        if affects && matches!(state, FindingState::Confirmed | FindingState::Reinstated) {
-            hazards.push(f.clone());
-        }
-    }
+    let hazards = confirmed_hazards(&ledger, &plan_doc, &facts, &unit_id)?;
 
     let oracle = harness_oracle::CAbiDifferential;
     let params = harness_llm::migrate::MigrateParams {

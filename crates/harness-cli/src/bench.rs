@@ -292,7 +292,12 @@ pub fn driver_state(
     }
     let closure = facts.include_closure(&unit.files);
     let unit_source = hash::file_set_hash_on_disk(&ctx.root, &closure)?;
-    let driver_path = ledger.driver_path(&unit.id);
+    // The driver the ORACLE runs: the configured `[unit.oracle] driver`
+    // (M4 review: the default path could differ from what verify uses).
+    let driver_path = match unit.oracle_param_str("driver") {
+        Some(rel) => ctx.root.join(rel),
+        None => ledger.driver_path(&unit.id),
+    };
     let driver = if driver_path.exists() {
         hash::file_hash(&driver_path)?
     } else {
@@ -428,7 +433,10 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
             pipeline.driver = driver_state(&ctx, &facts, unit)?;
             let closure = facts.include_closure(&unit.files);
             inputs.unit_source = hash::file_set_hash_on_disk(&ctx.root, &closure)?;
-            let driver_path = ledger.driver_path(&unit.id);
+            let driver_path = match unit.oracle_param_str("driver") {
+                Some(rel) => ctx.root.join(rel),
+                None => ledger.driver_path(&unit.id),
+            };
             if driver_path.exists() {
                 inputs.driver = hash::file_hash(&driver_path)?;
             }
@@ -762,7 +770,28 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                 let traces = ledger.unit_dir(&unit.id).join(traces_sub);
                 let max_tokens = section.and_then(|m| m.max_tokens).unwrap_or(llm.max_tokens);
                 let max_repairs = section.and_then(|m| m.max_repairs).unwrap_or(3);
+                // Only attempts bound to the CURRENT inputs can reproduce: a
+                // record for superseded source or a replaced driver is stale
+                // evidence, reported, never a replay failure (M4 review).
+                let closure = facts.include_closure(&unit.files);
+                let unit_source = hash::file_set_hash_on_disk(&ctx.root, &closure)?;
+                let driver_now = match unit.oracle_param_str("driver") {
+                    Some(rel) if ctx.root.join(rel).exists() => {
+                        hash::file_hash(&ctx.root.join(rel))?
+                    }
+                    _ => String::new(),
+                };
+                let hazards = crate::confirmed_hazards(&ledger, &plan, &facts, &unit.id)?;
                 for rec in records.iter().filter(|r| r.outcome != "in-progress") {
+                    let stale = rec.unit_source != unit_source
+                        || (stage == "migrate" && rec.driver != driver_now);
+                    if stale {
+                        out(format!(
+                            "bench replay: {} {stage} {} skipped (bound to superseded inputs)",
+                            case.path, rec.id
+                        ));
+                        continue;
+                    }
                     let resolved = harness_llm::providers::resolve("replay", &traces)?;
                     let params = harness_llm::MigrateParams {
                         provider: &resolved,
@@ -787,7 +816,7 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                             &facts,
                             &plan,
                             unit,
-                            &[],
+                            &hazards,
                         )
                         .map(|_| ())
                     };

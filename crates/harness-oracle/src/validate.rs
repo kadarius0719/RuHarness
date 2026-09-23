@@ -51,6 +51,8 @@ const MAX_DRIVER_OUTPUT: usize = 256 * 1024;
 
 /// Wall-clock limit for one mutant's run.
 const MUTANT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Slowest allowed run of the original driver: a third of [`MUTANT_TIMEOUT`].
+const MAX_DRIVER_RUN: Duration = Duration::from_secs(3);
 
 /// Validate `driver` (a path inside the target root — the promoted
 /// `units/<id>/driver.c` or an attempt's `candidate/driver.c`) against the
@@ -314,9 +316,14 @@ impl Ctx<'_> {
         // 4. determinism: three separate runs, identical, bounded.
         let mut outputs: Vec<Vec<u8>> = Vec::new();
         let mut run_failed: Option<Check> = None;
+        let mut slowest = Duration::ZERO;
         for i in 0..DETERMINISM_RUNS {
+            let started = std::time::Instant::now();
             match self.confined.run(&o2, &[], &[]) {
-                Ok(out) => outputs.push(out),
+                Ok(out) => {
+                    slowest = slowest.max(started.elapsed());
+                    outputs.push(out);
+                }
                 Err(e) => {
                     run_failed = Some(fail("determinism", format!("run {} failed: {e}", i + 1)));
                     break;
@@ -325,6 +332,24 @@ impl Ctx<'_> {
         }
         if let Some(check) = run_failed {
             gate!(check);
+        }
+        // A mutant timeout counts as a KILL only because the original driver
+        // finishes far inside the mutant limit; a slow driver would make
+        // every mutant "killed" by the clock (M4 correctness review: a weak
+        // driver with a 14 s busy loop went 7/22 -> 22/22). The bound is far
+        // from real drivers (all 91 TRACTOR drivers run in < 0.4 s).
+        if slowest > MAX_DRIVER_RUN {
+            gate!(fail(
+                "determinism",
+                // No measured time in the text: evidence must be deterministic.
+                format!(
+                    "a run of the driver took longer than the {}s limit (one third of the {}s \
+                     mutant timeout, so that a mutant timeout is evidence of changed behavior); \
+                     do less work per run",
+                    MAX_DRIVER_RUN.as_secs(),
+                    MUTANT_TIMEOUT.as_secs()
+                )
+            ));
         }
         let pinned = outputs.first().cloned().unwrap_or_default();
         gate!(determinism_check(&outputs));

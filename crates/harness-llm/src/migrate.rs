@@ -1103,6 +1103,21 @@ int add(int a, int b) { return a + b; }\n";
             );
             for check in &mut verdict.checks {
                 check.detail = check.detail.replace("{CRATE}", &quoted);
+                // `{RAWCUT}` emulates the oracle's raw stderr excerpt: a
+                // fixed byte budget applied to the PATH-BEARING text, before
+                // any scrub or alias could run.
+                if check.detail.contains("{RAWCUT}") {
+                    let text = check.detail.replace("{RAWCUT}", "");
+                    let mut cut = 3000.min(text.len());
+                    while !text.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    check.detail = format!(
+                        "{}\n[{} more bytes omitted]",
+                        &text[..cut],
+                        text.len() - cut
+                    );
+                }
             }
             Ok(verdict)
         }
@@ -2587,6 +2602,31 @@ int add(int a, int b) { return a + b; }\n";
         );
     }
 
+    /// Regression (M4 correctness review): the oracle cuts RAW tool output
+    /// (still quoting the real candidate path) to a byte budget before any
+    /// alias runs; a replay scratch path of a different length moved the
+    /// cut. Replay scratch names are now length-preserving.
+    #[test]
+    fn a_raw_cut_of_path_bearing_output_replays() {
+        let fx = fixture("replay-rawcut");
+        let long_detail = format!(
+            "{{RAWCUT}}unit crate failed to build (at {{CRATE}})\n{}",
+            "error[E0382]: use of moved value (at {CRATE}/src/logic.rs:21:26)\n".repeat(120)
+        );
+        let red_build = move || verdict(&[("rust-build", false, long_detail.as_str())]);
+        let (provider, seen) = scripted("external", false, vec![good(), good()]);
+        let first = run_with(&fx, &provider, &oracle(vec![red_build(), green()]), 1, &[]).unwrap();
+        let repair = seen.borrow()[1].user.clone();
+        let (provider, seen) = scripted("external", false, vec![good(), good()]);
+        let again = run_with(&fx, &provider, &oracle(vec![red_build(), green()]), 1, &[]).unwrap();
+        assert_eq!(again.record, first.record);
+        assert_eq!(
+            seen.borrow()[1].user,
+            repair,
+            "raw-cut evidence replays byte-identically"
+        );
+    }
+
     #[test]
     fn a_finished_external_attempt_is_verified_not_rewritten() {
         let fx = fixture("promoted");
@@ -2608,7 +2648,7 @@ int add(int a, int b) { return a + b; }\n";
         assert_eq!(seen.borrow().len(), 1);
         assert_eq!(
             fake.calls.borrow()[0].rust_crate,
-            format!(".replay-{}/candidate", first.record.id)
+            format!(".replay--{}/candidate", first.record.id)
         );
         assert_eq!(snapshot(&fx.unit_dir()), before, "nothing was rewritten");
 
@@ -2701,7 +2741,7 @@ int add(int a, int b) { return a + b; }\n";
         assert!(replayed.candidate_dir.is_none(), "replay never promotes");
         assert_eq!(
             fake.calls.borrow()[0].rust_crate,
-            format!(".replay-{}/candidate", outcome.record.id)
+            format!(".replay--{}/candidate", outcome.record.id)
         );
         assert_eq!(fake.calls.borrow()[0].logic, LOGIC);
         assert_eq!(

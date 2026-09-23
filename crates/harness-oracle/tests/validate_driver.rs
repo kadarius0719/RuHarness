@@ -326,3 +326,35 @@ fn tce_equivalent_mutants_are_discarded() {
     );
     assert!(v.green, "{}", describe(&v));
 }
+
+/// Regression (M4 correctness review): mutant timeouts count as kills, so a
+/// weak driver that is merely SLOW used to pass the mutation gate (7/22 ->
+/// 22/22 once each run exceeded the 10 s mutant limit). A driver run over
+/// the 3 s bound now fails `determinism` before mutation runs.
+#[test]
+fn a_slow_driver_cannot_buy_mutation_kills_with_the_clock() {
+    let driver = "#include <stdio.h>\n#include \"unit.h\"\n\
+                  static volatile unsigned long long spin;\n\
+                  int main(void) {\n\
+                    for (unsigned long long i = 0; i < 16000000000ULL; i++) spin += i;\n\
+                    printf(\"%d %d\\n\", unit_score(0, 0), unit_twice(0));\n\
+                    return 0;\n\
+                  }\n";
+    let (_tmp, v) = validate("dv-slow", driver);
+    let det = v
+        .checks
+        .iter()
+        .find(|c| c.name == "determinism")
+        .expect("determinism ran");
+    assert!(!det.passed, "{}", describe(&v));
+    assert!(
+        det.detail.contains("longer than the 3s limit"),
+        "{}",
+        det.detail
+    );
+    assert!(
+        v.mutation.is_none(),
+        "mutation must not run: {}",
+        describe(&v)
+    );
+}

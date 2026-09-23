@@ -424,7 +424,15 @@ impl<'a> Job<'a> {
                 printable(&recorded.provider, 64)
             )));
         }
-        let scratch_rel = vec![format!(".replay-{}", recorded.id)];
+        // The scratch name is exactly as long as `<attempts subdir>/<id>`:
+        // the oracle cuts raw tool output to a byte budget BEFORE any scrub
+        // or alias can run (stderr excerpts), so a path of a different
+        // length would move the cut and change the evidence (M4 correctness
+        // review). `.replay` + padding dashes + `<id>` keeps every byte
+        // offset identical; the alias then makes the text identical.
+        let subdir = self.stage.texts().attempts_subdir;
+        let pad = "-".repeat((subdir.len() + 1).saturating_sub(".replay".len()).max(1));
+        let scratch_rel = vec![format!(".replay{pad}{}", recorded.id)];
         // A crashed verification may have left its scratch behind. The unit
         // dir is verified first, so not even this removal goes through a
         // symlink.

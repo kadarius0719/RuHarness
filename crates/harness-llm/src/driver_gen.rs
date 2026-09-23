@@ -1299,7 +1299,7 @@ return 0;\n}\n";
         assert_eq!(
             judge.calls.borrow()[0].0,
             fx.unit_dir()
-                .join(format!(".replay-{}", outcome.record.id))
+                .join(format!(".replay---------{}", outcome.record.id))
                 .join("candidate/driver.c")
         );
         assert_eq!(snapshot(&fx.unit_dir()), before, "replay wrote nothing");
