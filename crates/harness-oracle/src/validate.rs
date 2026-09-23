@@ -320,7 +320,7 @@ impl Ctx<'_> {
         let mut slowest = Duration::ZERO;
         for i in 0..DETERMINISM_RUNS {
             let started = std::time::Instant::now();
-            match self.confined.run(&o2, &[], &[]) {
+            match self.confined.run(&o2, &[], &[])? {
                 Ok(out) => {
                     slowest = slowest.max(started.elapsed());
                     outputs.push(out);
@@ -362,7 +362,7 @@ impl Ctx<'_> {
         gate!(
             match self.cc(&o0, &o0_inputs, &["-O0".to_string()], true)? {
                 Err(stderr) => fail("opt-levels", format!("the -O0 build failed: {stderr}")),
-                Ok(()) => match self.confined.run(&o0, &[], &[]) {
+                Ok(()) => match self.confined.run(&o0, &[], &[])? {
                     Err(e) => fail("opt-levels", format!("the -O0 build's run failed: {e}")),
                     Ok(out) if out == pinned => pass(
                         "opt-levels",
@@ -393,7 +393,7 @@ impl Ctx<'_> {
             .collect();
         gate!(match self.cc(&san, &o0_inputs, &san_flags, true)? {
             Err(stderr) => fail("sanitizers", format!("sanitizer build failed: {stderr}")),
-            Ok(()) => crate::sanitizer_check(self.confined.run(&san, &[], &[])),
+            Ok(()) => crate::sanitizer_check(self.confined.run(&san, &[], &[])?),
         });
 
         // 7. mutation adequacy.
@@ -518,7 +518,7 @@ impl Ctx<'_> {
         if built.is_err() {
             return Ok(MutantOutcome::NotCompiled);
         }
-        Ok(match confined.run(&bin, &[], &[]) {
+        Ok(match confined.run(&bin, &[], &[])? {
             Ok(out) if out == *pinned => MutantOutcome::Survived,
             Ok(_) | Err(RunFailure::Failed(_)) | Err(RunFailure::TimedOut { .. }) => {
                 MutantOutcome::Killed

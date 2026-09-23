@@ -710,3 +710,12 @@ released-hidden strict pass **15/18** (83.3%; was 14/18), verified 17, blind spo
 (decorrelate — unmarked C UB; read_scalefactors — FFI boundary), vectors 83/89; hidden
 synthetic 8/9 (vectors 19/20; was 7/9, 17/20), hidden organic unchanged 7/9. Public unchanged:
 70/77, 0 blind spots, 908/950. No other case changed class.
+
+## 2026-09-23 — Carry-forward closed: confinement setup failures are harness errors
+
+`Confinement::run` now returns `Result<Result<RunOutput, RunFailure>, Error>`: how the
+RUN ended (crash, exit, timeout) stays a failed check (evidence); a confinement that
+cannot be SET UP (temp dir, sandbox profile) is a harness `Error` — never text fed to a
+model as repair evidence (§16.2: sandbox misconfiguration is a harness bug). Kept as
+before, deliberately: a built binary that cannot be SPAWNED stays a run failure (the
+M3 decision and its test). Regression test fails without the change.

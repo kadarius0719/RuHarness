@@ -39,9 +39,12 @@ pub(crate) const TMPDIR_TOKEN: &[u8] = b"$TMPDIR";
 
 impl Confinement<'_> {
     /// Run the built binary `bin` (canonical) with `args`, allowed to read the
-    /// canonical `inputs` besides itself. Every failure — including a profile
-    /// that cannot be rendered or a temp dir that cannot be created — is a
-    /// [`RunFailure`], i.e. a failed check rather than a harness abort.
+    /// canonical `inputs` besides itself. How the RUN ended is the inner
+    /// result: a crash, non-zero exit or timeout is a [`RunFailure`], i.e. a
+    /// failed check (evidence). A confinement that cannot be SET UP — its
+    /// temp dir cannot be created, its sandbox profile cannot be rendered —
+    /// is the outer [`Error`]: a harness fault, never evidence fed to a model
+    /// (briefing §16.2: sandbox misconfiguration is a harness bug).
     ///
     /// Every occurrence of the run's fresh temp dir path in stdout and stderr
     /// reads [`TMPDIR_TOKEN`]: the path is harness-injected per-run state, not
@@ -52,14 +55,14 @@ impl Confinement<'_> {
         bin: &Path,
         args: &[&str],
         inputs: &[PathBuf],
-    ) -> Result<RunOutput, RunFailure> {
-        self.run_raw(bin, args, inputs).map(|(tmp, out)| {
+    ) -> Result<Result<RunOutput, RunFailure>, Error> {
+        Ok(self.run_raw(bin, args, inputs)?.map(|(tmp, out)| {
             let path = tmp.as_os_str().as_encoded_bytes();
             RunOutput {
                 stdout: replace_bytes(&out.stdout, path, TMPDIR_TOKEN),
                 stderr: replace_bytes(&out.stderr, path, TMPDIR_TOKEN),
             }
-        })
+        }))
     }
 
     /// [`Confinement::run`] without the temp dir replacement; also returns
@@ -69,26 +72,23 @@ impl Confinement<'_> {
         bin: &Path,
         args: &[&str],
         inputs: &[PathBuf],
-    ) -> Result<(PathBuf, RunOutput), RunFailure> {
-        let tmp = RunTmp::create().map_err(|e| RunFailure::Failed(e.to_string()))?;
+    ) -> Result<Result<(PathBuf, RunOutput), RunFailure>, Error> {
+        let tmp = RunTmp::create()?;
         let profile = match self.host {
-            Some(host) => Some(
-                sandbox::render_run_profile(&RunSpec {
-                    host,
-                    target_root: self.target_root,
-                    bin,
-                    read_files: inputs,
-                    tmpdir: tmp.path(),
-                })
-                .map_err(|e| RunFailure::Failed(e.to_string()))?,
-            ),
+            Some(host) => Some(sandbox::render_run_profile(&RunSpec {
+                host,
+                target_root: self.target_root,
+                bin,
+                read_files: inputs,
+                tmpdir: tmp.path(),
+            })?),
             None => None,
         };
         let env = [("TMPDIR", tmp.path().as_os_str())];
         let out = self
             .runner
-            .built_with_env(bin, args, profile.as_deref(), &env)?;
-        Ok((tmp.path().to_path_buf(), out))
+            .built_with_env(bin, args, profile.as_deref(), &env);
+        Ok(out.map(|out| (tmp.path().to_path_buf(), out)))
         // `tmp` is dropped (removed) here, after the child is gone.
     }
 }
@@ -276,6 +276,7 @@ int main(int argc, char **argv) {
         };
         let (_, out) = confined
             .run_raw(&bin, &args, std::slice::from_ref(&sample))
+            .expect("confinement set up")
             .expect("confined probe runs");
         let out = String::from_utf8_lossy(&out.stdout).into_owned();
         let lines: Vec<&str> = out.lines().collect();
@@ -305,7 +306,10 @@ int main(int argc, char **argv) {
         assert!(!run_tmp.exists(), "the run temp dir must be removed");
 
         // Two runs never share a temp dir.
-        let (_, again) = confined.run_raw(&bin, &["t"], &[]).expect("second run");
+        let (_, again) = confined
+            .run_raw(&bin, &["t"], &[])
+            .expect("confinement set up")
+            .expect("second run");
         let again = String::from_utf8_lossy(&again.stdout).into_owned();
         assert!(!again.contains(tmp_line[1]), "{again} vs {out}");
     }
@@ -321,7 +325,10 @@ int main(int argc, char **argv) {
             host: None,
             target_root: tmp.path(),
         };
-        let (tmp_dir, out) = confined.run_raw(&bin, &["t"], &[]).expect("runs");
+        let (tmp_dir, out) = confined
+            .run_raw(&bin, &["t"], &[])
+            .expect("confinement set up")
+            .expect("runs");
         let out = String::from_utf8_lossy(&out.stdout).into_owned();
         let fields: Vec<&str> = out.trim().split(' ').collect();
         assert_eq!(fields.len(), 3, "{out}");
@@ -343,10 +350,35 @@ int main(int argc, char **argv) {
             host: None,
             target_root: tmp.path(),
         };
-        let one = confined.run(&bin, &["t"], &[]).expect("runs");
-        let two = confined.run(&bin, &["t"], &[]).expect("runs");
+        let one = confined
+            .run(&bin, &["t"], &[])
+            .expect("set up")
+            .expect("runs");
+        let two = confined
+            .run(&bin, &["t"], &[])
+            .expect("set up")
+            .expect("runs");
         assert_eq!(one, two);
         assert_eq!(one.stdout, b"tmp $TMPDIR writable\n");
+    }
+
+    /// M4 review carry-forward: a confinement that cannot be SET UP (here:
+    /// a profile that cannot be rendered) is a harness error — before, it
+    /// was a failed check whose text reached the model as repair evidence.
+    #[test]
+    fn a_confinement_that_cannot_be_set_up_is_a_harness_error() {
+        let tmp = TempDir::new("confine-setup");
+        let r = runner(tmp.path());
+        let host = HostDirs::from_env().expect("HOME set");
+        let confined = Confinement {
+            runner: &r,
+            host: Some(&host),
+            target_root: tmp.path(),
+        };
+        let err = confined
+            .run(Path::new("relative/bin"), &[], &[])
+            .expect_err("the profile cannot be rendered");
+        assert!(err.to_string().contains("must be absolute"), "{err}");
     }
 
     #[test]

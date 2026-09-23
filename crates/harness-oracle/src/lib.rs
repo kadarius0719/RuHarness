@@ -632,8 +632,8 @@ impl CAbiDifferential {
         cc(&build.join("drv_c"), &drv_c_inputs, &[], &[])?;
         cc(&build.join("drv_rs"), &drv_rs_inputs, &[], &[])?;
         match (
-            confined.run(&build.join("drv_c"), &[], &[]),
-            confined.run(&build.join("drv_rs"), &[], &[]),
+            confined.run(&build.join("drv_c"), &[], &[])?,
+            confined.run(&build.join("drv_rs"), &[], &[])?,
         ) {
             (Ok(out_c), Ok(out_rs)) => {
                 write_file(&build.join("drv_c.out"), &out_c.stdout)?;
@@ -663,7 +663,7 @@ impl CAbiDifferential {
         let san_flags: Vec<String> = SANITIZER_FLAGS.iter().map(|s| (*s).to_string()).collect();
         let san_bin = build.join("drv_c_san");
         match cc(&san_bin, &drv_c_inputs, &san_flags, &[]) {
-            Ok(()) => checks.push(sanitizer_check(confined.run(&san_bin, &[], &[]))),
+            Ok(()) => checks.push(sanitizer_check(confined.run(&san_bin, &[], &[])?)),
             Err(e) => checks.push(Check {
                 name: "sanitizers".into(),
                 passed: false,
@@ -747,8 +747,8 @@ impl CAbiDifferential {
             let check_name = format!("whole-program:{name}");
             let inputs = std::slice::from_ref(&sample);
             match (
-                confined.run(&build.join("whole_c"), &argv, inputs),
-                confined.run(&build.join("whole_mixed"), &argv, inputs),
+                confined.run(&build.join("whole_c"), &argv, inputs)?,
+                confined.run(&build.join("whole_mixed"), &argv, inputs)?,
             ) {
                 (Ok(gz_c), Ok(gz_mixed)) => {
                     checks.push(run_diff_check(&check_name, &gz_c, &gz_mixed));
