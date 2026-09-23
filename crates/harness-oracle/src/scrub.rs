@@ -78,6 +78,8 @@ impl Scrubber {
 
     /// Replace every known machine path prefix in `text` with its placeholder.
     pub(crate) fn apply(&self, text: &str) -> String {
+        let text = strip_panic_thread_ids(text);
+        let text = text.as_str();
         let mut out = text.to_string();
         for (needle, token) in &self.replacements {
             if out.contains(needle.as_str()) {
@@ -132,8 +134,67 @@ fn temp_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Remove the OS thread id Rust (>= 1.94) prints in panic messages —
+/// `thread '<unnamed>' (85990116) panicked at …` becomes `thread '<unnamed>'
+/// panicked at …`. The id changes on every run, so leaving it in a check
+/// detail made verdicts, repair prompts and trace keys nondeterministic: a
+/// resumed attempt re-derived a different request for the same turn and
+/// could never progress (found on three TRACTOR attempts, M4).
+pub(crate) fn strip_panic_thread_ids(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find("thread '") {
+        let (before, from) = rest.split_at(pos);
+        out.push_str(before);
+        // `thread '<name>' (<digits>) panicked`
+        let after_quote = &from["thread '".len()..];
+        let Some(close) = after_quote.find('\'') else {
+            out.push_str(from);
+            return out;
+        };
+        let name_end = "thread '".len() + close + 1; // through the closing quote
+        let tail = &from[name_end..];
+        let digits = tail
+            .strip_prefix(" (")
+            .map(|t| t.chars().take_while(char::is_ascii_digit).count())
+            .unwrap_or(0);
+        let id_len = 2 + digits + 1; // " (" + digits + ")"
+        if digits > 0 && tail[2 + digits..].starts_with(") panicked") {
+            out.push_str(&from[..name_end]);
+            rest = &tail[id_len..];
+        } else {
+            out.push_str(&from[..name_end]);
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn panic_thread_ids_are_stripped() {
+        use super::strip_panic_thread_ids as strip;
+        assert_eq!(
+            strip("x\nthread '<unnamed>' (85990116) panicked at src/logic.rs:63:17:\nindex"),
+            "x\nthread '<unnamed>' panicked at src/logic.rs:63:17:\nindex"
+        );
+        assert_eq!(
+            strip("thread 'main' (1) panicked at a\nthread 'main' (22) panicked at b"),
+            "thread 'main' panicked at a\nthread 'main' panicked at b"
+        );
+        // Anything else is left alone.
+        for keep in [
+            "thread 'x' (abc) panicked",
+            "thread 'x' (12) exited",
+            "no thread here",
+            "thread '",
+        ] {
+            assert_eq!(strip(keep), keep);
+        }
+    }
+
     use super::*;
 
     #[test]
