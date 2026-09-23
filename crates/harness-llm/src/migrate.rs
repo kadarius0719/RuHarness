@@ -4316,6 +4316,118 @@ int add(int a, int b) { return a + b; }\n";
         let _ = std::fs::remove_dir_all(&outside);
     }
 
+    /// The committed zopfli target (the M3 evidence lives there).
+    fn zopfli_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../targets/zopfli")
+    }
+
+    /// GOLDEN (docs/M4-DESIGN.md R11): the migrate prompt bytes and the
+    /// attempt-id derivation are FROZEN. For every recorded u001 attempt,
+    /// the translate request `run_migration` builds today — from the
+    /// committed tree, with the hazards the CLI selects — must have the
+    /// recorded `request_key` and `prompt_digest` and land under the
+    /// recorded attempt id. The run happens in a scratch copy of the tree
+    /// (only what the prompt and the id read), against a provider that
+    /// never answers, so nothing under `targets/` is touched.
+    #[test]
+    fn golden_recorded_u001_translate_requests_reproduce() {
+        use harness_core::observer::{self, FindingState, ObserverPaths};
+        const GOLDEN_UNIT: &str = "u001-katajainen";
+        let real = zopfli_root().canonicalize().unwrap();
+        let real_ledger = Ledger::new(real.clone());
+        let facts = Facts::load(&real_ledger.facts_path()).unwrap();
+        let plan = Plan::load(&real_ledger.plan_path()).unwrap();
+        let unit = plan.unit(GOLDEN_UNIT).unwrap();
+
+        // Hazards exactly as `harness migrate` selects them.
+        let findings = observer::FindingsFile::load(&ObserverPaths::findings(&real_ledger))
+            .unwrap()
+            .findings;
+        let annotations =
+            observer::load_annotations(&ObserverPaths::annotations(&real_ledger)).unwrap();
+        let triage = observer::TriageFile::load(&ObserverPaths::triage(&real_ledger)).unwrap();
+        let reviews = observer::load_reviews(&ObserverPaths::reviews(&real_ledger)).unwrap();
+        let hazards: Vec<Finding> = findings
+            .iter()
+            .chain(annotations.iter())
+            .filter(|f| {
+                observer::affected_units(&f.file, &plan, &facts).contains(&GOLDEN_UNIT)
+                    && matches!(
+                        observer::finding_state(f, &triage, &reviews),
+                        FindingState::Confirmed | FindingState::Reinstated
+                    )
+            })
+            .cloned()
+            .collect();
+
+        // Scratch copy: harness.toml, the include closure, the driver.
+        let copy =
+            std::env::temp_dir().join(format!("harness-llm-golden-u001-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&copy);
+        let driver_rel = unit.oracle_param_str("driver").unwrap();
+        let mut files = facts.include_closure(&unit.files);
+        files.push("harness.toml".into());
+        files.push(driver_rel.to_string());
+        for rel in &files {
+            let to = copy.join(rel);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(real.join(rel), &to).unwrap();
+        }
+        let target = TargetContext::load(&copy).unwrap();
+        let traces = copy.join("traces");
+
+        let recorded = attempts::load_unit_attempts(&real_ledger, GOLDEN_UNIT).unwrap();
+        assert_eq!(recorded.len(), 3, "the three M3 attempts");
+        for want in &recorded {
+            let (provider, seen) = scripted(
+                &want.provider_kind,
+                false,
+                vec![Err("awaiting response: golden".into())],
+            );
+            let params = MigrateParams {
+                provider: &provider,
+                model: &want.model,
+                max_tokens: 8192,
+                max_repairs: 3,
+                traces_dir: &traces,
+                retry: false,
+                attempt: None,
+            };
+            let err = run_migration(
+                &params,
+                &oracle(vec![]),
+                &target,
+                &facts,
+                &plan,
+                unit,
+                &hazards,
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("golden"), "{err}");
+            let request = seen.borrow()[0].clone();
+            assert_eq!(
+                TraceAdapter::request_key(&request).unwrap(),
+                want.turns[0].request_key,
+                "{}: translate request_key",
+                want.id
+            );
+            assert_eq!(prompt_digest(&request), want.prompt_digest, "{}", want.id);
+            let fresh = AttemptRecord::load(
+                &Ledger::new(target.root.clone())
+                    .unit_dir(GOLDEN_UNIT)
+                    .join("attempts")
+                    .join(&want.id),
+            )
+            .unwrap_or_else(|e| panic!("{}: no attempt under the recorded id: {e}", want.id));
+            assert_eq!(fresh.id, want.id);
+            assert_eq!(fresh.stage, None);
+            assert_eq!(fresh.prompt_digest, want.prompt_digest);
+            assert_eq!(fresh.unit_source, want.unit_source);
+            assert_eq!(fresh.driver, want.driver);
+        }
+        let _ = std::fs::remove_dir_all(&copy);
+    }
+
     #[test]
     fn the_system_prompt_states_the_contract() {
         for needle in [
