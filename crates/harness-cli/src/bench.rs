@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use harness_core::bench::{
     classify_case, compare, CaseInputs, CasePipeline, CaseScore, CorpusLock, Counts, Scores, Suite,
-    SuiteCase, VectorScore, SCORES_SCHEMA_NAME, SCORES_SCHEMA_VERSION,
+    SuiteCase, VectorScore, Verification, SCORES_SCHEMA_NAME, SCORES_SCHEMA_VERSION,
 };
 use harness_core::driver::DriverValidation;
 use harness_core::ledger::Ledger;
@@ -69,6 +69,10 @@ pub enum BenchCmd {
         /// Record the result as the suite's scores.json (whole suite only)
         #[arg(long)]
         write: bool,
+        /// Run model-written and third-party code even though no sandbox is
+        /// available (the scorer loads candidates next to held-out vectors)
+        #[arg(long)]
+        allow_unsandboxed: bool,
     },
     /// Regression check against the committed scores.json: re-verify every
     /// verified unit, re-validate every generated driver, re-score, compare
@@ -81,6 +85,10 @@ pub enum BenchCmd {
         /// its traces (zero tokens; slower)
         #[arg(long)]
         replay: bool,
+        /// Run model-written and third-party code even though no sandbox is
+        /// available
+        #[arg(long)]
+        allow_unsandboxed: bool,
     },
 }
 
@@ -94,8 +102,22 @@ pub fn run(cmd: BenchCmd) -> Result<ExitCode> {
             suite,
             cases,
             write,
-        } => cmd_score(&suite, &cases, write),
-        BenchCmd::Check { suite, replay } => cmd_check(&suite, replay),
+            allow_unsandboxed,
+        } => {
+            // The scorer builds and loads model-written candidates and the
+            // corpus's third-party scorer next to held-out vectors: the same
+            // sandbox floor as every other code-running command (M4 review).
+            crate::require_sandbox(allow_unsandboxed, "harness bench score")?;
+            cmd_score(&suite, &cases, write)
+        }
+        BenchCmd::Check {
+            suite,
+            replay,
+            allow_unsandboxed,
+        } => {
+            crate::require_sandbox(allow_unsandboxed, "harness bench check")?;
+            cmd_check(&suite, replay)
+        }
     }
 }
 
@@ -392,7 +414,7 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
 
     let mut pipeline = CasePipeline::default();
     let mut inputs = CaseInputs::default();
-    let mut verified = false;
+    let mut verification = Verification::No;
     let mut rust_lib: Option<PathBuf> = None;
     let mut candidate_lib: Option<PathBuf> = None;
     if root.join("harness.toml").exists() && Ledger::new(&root).plan_path().exists() {
@@ -436,8 +458,30 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                 .last()
                 .map(|r| r.outcome.clone())
                 .unwrap_or_default();
-            verified = matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged);
-            if verified {
+            // "Verified" for scoring = plan status AND the latest verdict is
+            // green over the CURRENT digests AND the driver is freshly
+            // validated (R6). Anything less is `stale-verified`, never scored
+            // as verified (review, M4).
+            let claims = matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged);
+            if claims {
+                let fresh_green =
+                    match harness_core::Verdict::load(&ledger.verdict_latest_path(&unit.id)) {
+                        Ok(v) => {
+                            let now = harness_oracle::compute_inputs(&ctx, unit, &facts)?;
+                            v.green
+                                && v.inputs.unit_source == now.unit_source
+                                && v.inputs.driver == now.driver
+                                && v.inputs.rust_crate == now.rust_crate
+                        }
+                        Err(_) => false,
+                    };
+                verification = if fresh_green && pipeline.driver == "validated" {
+                    Verification::Verified
+                } else {
+                    Verification::Stale
+                };
+            }
+            if verification == Verification::Verified {
                 let crate_name = unit.oracle_param_str("rust_crate").unwrap_or_default();
                 let crate_dir = ledger.unit_dir(&unit.id).join(crate_name);
                 inputs.rust_crate = hash::unit_crate_file_set_hash(&ctx.root, &crate_dir)?;
@@ -448,16 +492,28 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                     }
                 }
                 rust_lib = harness_oracle::build_crate_staticlib(&ctx, &crate_dir).ok();
-            } else if let Some(last) = m_attempts.iter().rfind(|r| !r.candidate_digest.is_empty()) {
-                let dir = attempts::attempt_dir(&ledger, &unit.id, &last.id).join("candidate");
+            } else if let Some(cand) = m_attempts
+                .iter()
+                .filter(|r| {
+                    // A FINISHED attempt the oracle rejected on BEHAVIOR:
+                    // its last candidate built, ran, and differed from the C.
+                    r.outcome == "red"
+                        && r.turns.last().is_some_and(|t| t.result == "oracle")
+                        && !r.candidate_digest.is_empty()
+                })
+                .min_by(|a, b| a.id.cmp(&b.id))
+            {
+                let dir = attempts::attempt_dir(&ledger, &unit.id, &cand.id).join("candidate");
                 if dir.is_dir() {
-                    inputs.candidate = last.candidate_digest.clone();
+                    inputs.candidate = cand.candidate_digest.clone();
+                    pipeline.candidate_attempt = cand.id.clone();
                     candidate_lib = harness_oracle::build_crate_staticlib(&ctx, &dir).ok();
                 }
             }
         }
     }
     let runs = scorer.score_case(case, &cside, rust_lib.as_deref(), candidate_lib.as_deref())?;
+    let verified = verification == Verification::Verified;
     let rust_missing = if verified { "fail:build" } else { "not-run" };
     let vectors: Vec<VectorScore> = runs
         .iter()
@@ -476,7 +532,7 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
             },
         })
         .collect();
-    let class = classify_case(&vectors, verified).to_string();
+    let class = classify_case(&vectors, verification).to_string();
     let c_baseline = tally(&vectors.iter().map(|v| v.c.as_str()).collect::<Vec<_>>());
     let rust = tally(&vectors.iter().map(|v| v.rust.as_str()).collect::<Vec<_>>());
     let candidate = (!inputs.candidate.is_empty()).then(|| {
@@ -541,6 +597,13 @@ fn compute(suite_dir: &Path, only: &[String], recheck: bool) -> Result<(Scores, 
                 .unwrap_or_default()
         ));
         problems.extend(scored.problems);
+        if scored.score.class == "infra-error" {
+            problems.push(format!(
+                "{}: infra-error (a side failed to build/link/run or report — a harness problem, \
+                 not a measurement)",
+                case.path
+            ));
+        }
         scores.cases.push(scored.score);
     }
     scores.finalize();
@@ -558,20 +621,22 @@ fn print_totals(scores: &Scores) {
     for t in &scores.totals {
         out(format!(
             "bench totals [{}]: strict-pass {}/{} scorable cases ({}) · verified {} (blind spots \
-             {}) · oracle false negatives {} · non-UB vectors passed {}/{} ({}) · unscorable {} \
-             · C-baseline-invalid {} · cases {}",
+             {}) · stale-verified {} · vector-pass/oracle-red {} · non-UB vectors passed {}/{} \
+             ({}) · unscorable {} · C-baseline-invalid {} · infra-error {} · cases {}",
             t.split,
             t.strict_pass,
             t.scorable,
             pct(t.strict_pass, t.scorable),
             t.verified,
             t.blind_spots,
-            t.oracle_false_negatives,
+            t.stale_verified,
+            t.vector_pass_oracle_red,
             t.vectors_passed,
             t.vectors,
             pct(t.vectors_passed, t.vectors),
             t.unscorable,
             t.c_baseline_invalid,
+            t.infra_errors,
             t.cases
         ));
     }
@@ -581,8 +646,23 @@ fn cmd_score(suite_dir: &Path, cases: &[String], write: bool) -> Result<ExitCode
     if write && !cases.is_empty() {
         bail!("--write records the WHOLE suite; drop --case");
     }
-    let (scores, _) = compute(suite_dir, cases, false)?;
+    // Recording a baseline re-verifies every verified unit and re-validates
+    // every generated driver first (review, M4): a red unit must never be
+    // written into the regression baseline as verified.
+    let (scores, problems) = compute(suite_dir, cases, write)?;
     print_totals(&scores);
+    for p in &problems {
+        out(format!("bench score: PROBLEM: {p}"));
+    }
+    if !problems.is_empty() {
+        if write {
+            bail!(
+                "refusing to record scores.json with {} problem(s)",
+                problems.len()
+            );
+        }
+        return Ok(ExitCode::FAILURE);
+    }
     if write {
         scores.store(&suite_dir.join("scores.json"))?;
         out(format!(
@@ -609,6 +689,7 @@ fn cmd_check(suite_dir: &Path, replay: bool) -> Result<ExitCode> {
         ("inputs changed (re-score required)", &cmp.input_changes),
         ("membership", &cmp.membership),
         ("environment drift (C side)", &cmp.drift),
+        ("totals changed", &cmp.totals_changes),
         ("REGRESSION", &cmp.regressions),
         ("improvement", &cmp.improvements),
         ("PROBLEM", &problems),
@@ -617,10 +698,13 @@ fn cmd_check(suite_dir: &Path, replay: bool) -> Result<ExitCode> {
             out(format!("bench check: {label}: {item}"));
         }
     }
-    if !cmp.incomparable.is_empty() || !cmp.input_changes.is_empty() || !cmp.membership.is_empty() {
+    // An environment/lock mismatch makes vector comparisons meaningless.
+    if !cmp.incomparable.is_empty() {
         out("bench check: INCOMPARABLE — re-baseline with `bench score --write`".into());
         return Ok(ExitCode::FAILURE);
     }
+    // Regressions on unchanged cases (and lost verified status anywhere) are
+    // judged per case: other cases' changed inputs never mask them.
     if !cmp.regressions.is_empty() || !problems.is_empty() {
         out(format!(
             "bench check: FAILED — {} regression(s), {} problem(s)",
@@ -628,6 +712,14 @@ fn cmd_check(suite_dir: &Path, replay: bool) -> Result<ExitCode> {
             problems.len()
         ));
         return Ok(ExitCode::from(crate::EXIT_ORACLE_RED));
+    }
+    if !cmp.input_changes.is_empty() || !cmp.membership.is_empty() {
+        out(
+            "bench check: no regression on unchanged cases; re-score required for changed \
+             ones (`bench score --write`)"
+                .into(),
+        );
+        return Ok(ExitCode::FAILURE);
     }
     out(format!(
         "bench check: OK — no regression ({} improvement(s))",

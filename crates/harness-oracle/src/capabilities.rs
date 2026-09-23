@@ -380,6 +380,23 @@ pub(crate) fn asm_macros(src: &str) -> Vec<String> {
                 // `asm !=` is a comparison, not a macro call.
                 if b.get(j) == Some(&b'!') && b.get(j + 1) != Some(&b'=') {
                     out.push(format!("{ident}!"));
+                } else {
+                    // Any other mention names the item — e.g. a renaming
+                    // import `use core::arch::asm as z;` then `z!(…)`, which
+                    // the macro-call form alone would miss (M4 review).
+                    out.push(format!("{ident} (named outside a macro call)"));
+                }
+            }
+            if ident == "arch" {
+                // `core::arch` / `std::arch` (or any `…::arch` path): the
+                // inline-assembly and intrinsics module, reachable under a
+                // renamed import.
+                let mut k = start;
+                while k > 0 && b[k - 1].is_ascii_whitespace() {
+                    k -= 1;
+                }
+                if k >= 2 && &b[k - 2..k] == b"::" {
+                    out.push("`::arch` path".to_string());
                 }
             }
             continue;
@@ -522,6 +539,22 @@ fn rust_sources(dir: &Path, visit: &mut dyn FnMut(&str, &str)) -> Result<(), Err
 
 #[cfg(test)]
 mod tests {
+    /// Regression (M4 security review): a renaming import evaded the
+    /// literal `asm!` scan and compiled under the candidate scaffolding.
+    #[test]
+    fn renamed_inline_assembly_is_caught() {
+        let src = "use core::arch::asm as z;\n\
+                   #[no_mangle] pub extern \"C\" fn probe() -> u64 {\n\
+                   let mut out: u64 = 0; unsafe { z!(\"mov {0}, 7\", out(reg) out); } out }\n";
+        let hits = asm_macros(src);
+        assert!(hits.iter().any(|h| h.contains("::arch")), "{hits:?}");
+        assert!(hits.iter().any(|h| h.starts_with("asm ")), "{hits:?}");
+        let glob = "use std::arch::*;\n";
+        assert!(!asm_macros(glob).is_empty());
+        // Innocent code stays clean (comments and strings are skipped).
+        assert!(asm_macros("// core::arch::asm\nlet s = \"asm!\"; let arch_x = 1;\n").is_empty());
+    }
+
     use super::*;
     use crate::testutil::{TempDir, ToolBench};
 
@@ -634,10 +667,17 @@ mod tests {
     #[test]
     fn asm_macro_scan_ignores_comments_strings_and_lookalikes() {
         let src = "// asm!(\"x\")\n/* global_asm! /* nested */ asm! */\nlet s = \"asm!\";\n\
-                   let r = r#\"naked_asm!\"#;\nlet c = '!';\nfn asm_helper() {}\nlet asm = 1; let y = asm != 2;\n\
+                   let r = r#\"naked_asm!\"#;\nlet c = '!';\nfn asm_helper() {}\n\
                    fn f<'a>(x: &'a u8) {}\n";
         assert!(asm_macros(src).is_empty(), "{:?}", asm_macros(src));
-        assert_eq!(asm_macros("core::arch::asm!(\"nop\");"), vec!["asm!"]);
+        // Stricter since the M4 security review: ANY bare `asm`-family
+        // identifier is rejected (a renaming import is indistinguishable from
+        // a variable at the token level), even `let asm = 1; asm != 2`.
+        assert_eq!(asm_macros("let asm = 1; let y = asm != 2;\n").len(), 2);
+        assert_eq!(
+            asm_macros("core::arch::asm!(\"nop\");"),
+            vec!["`::arch` path", "asm!"]
+        );
         assert_eq!(asm_macros("global_asm ! (\"\");"), vec!["global_asm!"]);
         assert_eq!(asm_macros("r#naked_asm!(\"\")"), vec!["naked_asm!"]);
     }
@@ -731,6 +771,12 @@ mod tests {
             }
         })
         .expect("walks");
-        assert_eq!(found, vec!["ffi.rs:global_asm!".to_string()]);
+        assert_eq!(
+            found,
+            vec![
+                "ffi.rs:`::arch` path".to_string(),
+                "ffi.rs:global_asm!".to_string()
+            ]
+        );
     }
 }

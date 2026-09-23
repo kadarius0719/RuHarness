@@ -809,6 +809,11 @@ pub struct CasePipeline {
     pub migrate_turns: Option<u32>,
     /// Latest migrate attempt outcome (`""` when none).
     pub migrate_outcome: String,
+    /// The unverified candidate scored for this case (`""` when none): only a
+    /// FINISHED red attempt whose last turn failed on behavior (`oracle`) —
+    /// a candidate that built, ran, and differed from the C on the driver.
+    #[serde(default)]
+    pub candidate_attempt: String,
 }
 
 /// One case's score.
@@ -819,9 +824,14 @@ pub struct CaseScore {
     /// `public | hidden`.
     pub split: String,
     /// Closed: `strict-pass` (verified; every non-UB vector passes) |
-    /// `blind-spot` (verified; some non-UB vector fails) | `unverified` |
-    /// `unscorable` (no non-UB vector) | `c-baseline-invalid` (the C itself
-    /// fails a non-UB vector on this platform).
+    /// `blind-spot` (verified; some non-UB vector fails on a real cando
+    /// outcome) | `unverified` | `stale-verified` (plan says verified, but the
+    /// latest verdict is not green over the current digests, or the driver is
+    /// not freshly validated — never scored as verified) | `unscorable` (no
+    /// non-UB vector) | `c-baseline-invalid` (the C itself fails a non-UB
+    /// vector on a real cando outcome on this platform) | `infra-error` (a
+    /// build/runner/report failure on either side: a harness problem, never a
+    /// measurement).
     pub class: String,
     /// Pipeline facts.
     pub pipeline: CasePipeline,
@@ -853,9 +863,18 @@ pub struct SplitTotals {
     pub strict_pass: u32,
     /// `blind-spot` cases.
     pub blind_spots: u32,
-    /// Unverified cases whose latest candidate passed every non-UB vector
-    /// (oracle false negatives).
-    pub oracle_false_negatives: u32,
+    /// Unverified cases whose scored candidate (a finished attempt that the
+    /// oracle rejected on behavior) nevertheless passes every non-UB vector:
+    /// "vector-pass / oracle-red" — a lead to triage by hand (the oracle may
+    /// have caught a real bug the vectors cannot see), NOT a false negative
+    /// by itself.
+    pub vector_pass_oracle_red: u32,
+    /// `stale-verified` cases (counted in `scorable`, not in `verified`).
+    #[serde(default)]
+    pub stale_verified: u32,
+    /// `infra-error` cases (excluded from `scorable`; any is a harness error).
+    #[serde(default)]
+    pub infra_errors: u32,
     /// `unscorable` cases.
     pub unscorable: u32,
     /// `c-baseline-invalid` cases.
@@ -909,6 +928,7 @@ impl Scores {
             match c.class.as_str() {
                 "unscorable" => t.unscorable += 1,
                 "c-baseline-invalid" => t.c_baseline_invalid += 1,
+                "infra-error" => t.infra_errors += 1,
                 _ => {
                     t.scorable += 1;
                     t.vectors += c.c_baseline.pass + c.c_baseline.fail;
@@ -922,12 +942,15 @@ impl Scores {
                             t.verified += 1;
                             t.blind_spots += 1;
                         }
-                        _ => {
+                        other => {
+                            if other == "stale-verified" {
+                                t.stale_verified += 1;
+                            }
                             if c.candidate
                                 .as_ref()
                                 .is_some_and(|k| k.fail == 0 && k.not_run == 0 && k.pass > 0)
                             {
-                                t.oracle_false_negatives += 1;
+                                t.vector_pass_oracle_red += 1;
                             }
                         }
                     }
@@ -964,22 +987,53 @@ impl Scores {
     }
 }
 
+/// Whether a vector result is a harness/infrastructure failure rather than
+/// a measurement: the side did not build or link, the runner did not exit
+/// normally, or its report was missing/malformed. Real cando outcomes
+/// (`fail:VectorComparisonFailed`, `fail:Panic`, `fail:SegmentationFault`,
+/// `fail:UnknownFailure`, …) and `timeout` are measurements.
+pub fn is_infra_result(result: &str) -> bool {
+    matches!(
+        result,
+        "fail:dylib-build"
+            | "fail:build"
+            | "fail:no-report"
+            | "fail:bad-report"
+            | "fail:runner-killed"
+    ) || result.starts_with("fail:runner-exit-")
+}
+
+/// How a case's unit stands for scoring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verification {
+    /// Latest verdict green over the current digests, driver validated.
+    Verified,
+    /// Plan says verified/merged, but the evidence is not fresh and green.
+    Stale,
+    /// Not verified.
+    No,
+}
+
 /// Classify a case from its per-vector results (see [`CaseScore::class`]).
-pub fn classify_case(vectors: &[VectorScore], verified: bool) -> &'static str {
+pub fn classify_case(vectors: &[VectorScore], verification: Verification) -> &'static str {
     let non_ub: Vec<&VectorScore> = vectors.iter().filter(|v| v.c != "skip").collect();
     if non_ub.is_empty() {
         return "unscorable";
     }
+    let verified = verification == Verification::Verified;
+    if non_ub.iter().any(|v| is_infra_result(&v.c))
+        || (verified && non_ub.iter().any(|v| is_infra_result(&v.rust)))
+    {
+        return "infra-error";
+    }
     if non_ub.iter().any(|v| v.c != "pass") {
         return "c-baseline-invalid";
     }
-    if !verified {
-        return "unverified";
-    }
-    if non_ub.iter().all(|v| v.rust == "pass") {
-        "strict-pass"
-    } else {
-        "blind-spot"
+    match verification {
+        Verification::No => "unverified",
+        Verification::Stale => "stale-verified",
+        Verification::Verified if non_ub.iter().all(|v| v.rust == "pass") => "strict-pass",
+        Verification::Verified => "blind-spot",
     }
 }
 
@@ -1001,6 +1055,8 @@ pub struct Comparison {
     pub improvements: Vec<String>,
     /// Cases present on one side only.
     pub membership: Vec<String>,
+    /// Split totals that differ (reported; the per-vector lists say why).
+    pub totals_changes: Vec<String>,
 }
 
 /// Compare `now` against the committed `baseline`, per vector.
@@ -1031,6 +1087,18 @@ pub fn compare(baseline: &Scores, now: &Scores) -> Comparison {
             out.membership.push((*name).to_string());
             continue;
         };
+        let was_verified = matches!(o.class.as_str(), "strict-pass" | "blind-spot");
+        let lost = matches!(
+            n.class.as_str(),
+            "unverified" | "stale-verified" | "infra-error"
+        );
+        if was_verified && lost {
+            // Losing verified status is a regression whatever else changed
+            // (a move to c-baseline-invalid/unscorable is the C side or the
+            // corpus: drift, reported via the vector lists and totals).
+            out.regressions
+                .push(format!("{name}: {} -> {}", o.class, n.class));
+        }
         if o.inputs != n.inputs {
             out.input_changes.push((*name).to_string());
             continue;
@@ -1055,6 +1123,33 @@ pub fn compare(baseline: &Scores, now: &Scores) -> Comparison {
             }
         }
     }
+    if baseline.totals != now.totals {
+        let show = |t: &[SplitTotals]| {
+            t.iter()
+                .map(|t| {
+                    format!(
+                        "{}: strict {}/{} verified {} stale {} blind {} infra {} vectors {}/{}",
+                        t.split,
+                        t.strict_pass,
+                        t.scorable,
+                        t.verified,
+                        t.stale_verified,
+                        t.blind_spots,
+                        t.infra_errors,
+                        t.vectors_passed,
+                        t.vectors
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        out.totals_changes.push(format!(
+            "recorded [{}] now [{}]",
+            show(&baseline.totals),
+            show(&now.totals)
+        ));
+    }
+    out.regressions.sort();
     out
 }
 
@@ -1092,31 +1187,88 @@ mod tests {
     #[test]
     fn classification() {
         assert_eq!(
-            classify_case(&[vs("1", "skip", "skip")], true),
+            classify_case(&[vs("1", "skip", "skip")], Verification::Verified),
             "unscorable"
         );
-        assert_eq!(classify_case(&[], true), "unscorable");
+        assert_eq!(classify_case(&[], Verification::Verified), "unscorable");
         assert_eq!(
-            classify_case(&[vs("1", "fail:VectorComparisonFailed", "pass")], true),
+            classify_case(
+                &[vs("1", "fail:VectorComparisonFailed", "pass")],
+                Verification::Verified
+            ),
             "c-baseline-invalid"
         );
         assert_eq!(
-            classify_case(&[vs("1", "pass", "not-run")], false),
+            classify_case(&[vs("1", "pass", "not-run")], Verification::No),
             "unverified"
         );
         assert_eq!(
-            classify_case(&[vs("1", "pass", "pass"), vs("2", "skip", "skip")], true),
+            classify_case(
+                &[vs("1", "pass", "pass"), vs("2", "skip", "skip")],
+                Verification::Verified
+            ),
             "strict-pass"
         );
         assert_eq!(
-            classify_case(&[vs("1", "pass", "pass"), vs("2", "pass", "timeout")], true),
+            classify_case(
+                &[vs("1", "pass", "pass"), vs("2", "pass", "timeout")],
+                Verification::Verified
+            ),
             "blind-spot"
         );
     }
 
+    #[test]
+    fn infra_and_stale_are_never_measurements() {
+        // Review (M4): a harness failure must not read as a blind spot or as
+        // an invalid C baseline, and a stale "verified" must not score.
+        assert_eq!(
+            classify_case(
+                &[vs("1", "pass", "fail:dylib-build")],
+                Verification::Verified
+            ),
+            "infra-error"
+        );
+        assert_eq!(
+            classify_case(
+                &[vs("1", "fail:runner-exit-2", "not-run")],
+                Verification::No
+            ),
+            "infra-error"
+        );
+        assert_eq!(
+            classify_case(&[vs("1", "pass", "not-run")], Verification::Stale),
+            "stale-verified"
+        );
+        assert_eq!(
+            classify_case(&[vs("1", "pass", "fail:build")], Verification::No),
+            "unverified",
+            "an unverified side is never scored, so its build failure is moot"
+        );
+        assert_eq!(
+            classify_case(&[vs("1", "pass", "fail:Panic")], Verification::Verified),
+            "blind-spot",
+            "a real cando outcome is a measurement"
+        );
+    }
+
+    #[test]
+    fn losing_verified_status_is_a_regression_even_with_changed_inputs() {
+        let mut base = scores("pass", "pass", "e1");
+        base.cases[0].inputs.rust_crate = "blake3:verified-crate".into();
+        let mut now = scores("pass", "pass", "e1");
+        now.cases[0].class = "stale-verified".into();
+        now.cases[0].inputs.rust_crate = String::new();
+        now.finalize();
+        let r = compare(&base, &now);
+        assert_eq!(r.regressions.len(), 1, "{r:?}");
+        assert_eq!(r.input_changes.len(), 1);
+        assert_eq!(r.totals_changes.len(), 1);
+    }
+
     fn scores(rust: &str, c: &str, env: &str) -> Scores {
         let vectors = vec![vs("1.json", c, rust)];
-        let class = classify_case(&vectors, true).to_string();
+        let class = classify_case(&vectors, Verification::Verified).to_string();
         let mut s = Scores {
             schema: SCORES_SCHEMA_NAME.into(),
             schema_version: 1,
