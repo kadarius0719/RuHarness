@@ -1,76 +1,37 @@
-//! The executor (docs/SCHEMAS.md "M3 additions: executor + provider
-//! profiles"): pose one migration unit to a model as a translate turn plus up
-//! to `max_repairs` STATELESS repair turns, judge every candidate with the
-//! unit's oracle, and journal the trajectory in the attempts ledger.
-//! Promotion of a green candidate is the CLI's job, not this module's.
+//! The executor's migrate stage (docs/SCHEMAS.md "M3 additions: executor +
+//! provider profiles"): pose one migration unit to a model as a translate
+//! turn plus up to `max_repairs` STATELESS repair turns, judge every
+//! candidate with the unit's oracle, and journal the trajectory in the
+//! attempts ledger. Promotion of a green candidate is the CLI's job, not
+//! this module's.
 //!
-//! # Determinism
+//! The turn loop, journaling, the `external`/`replay`/live semantics,
+//! `--retry` samples, per-sample traces and verification-by-replay belong
+//! to the trajectory engine this stage shares with driver generation
+//! (`crate::trajectory`, whose module docs state the determinism, re-run
+//! and trust rules). What is migrate's own lives here: the prompts — FROZEN
+//! byte for byte, since recorded attempts must keep replaying
+//! (docs/M4-DESIGN.md R11) — the Rust emission spec and deny-scan, the
+//! harness-owned candidate crate, the oracle as judge, and the frozen
+//! attempt-id derivation.
 //!
-//! Every step is a pure function of the target tree, the provider identity
-//! and the model's replies: prompts contain no clock, counter, or absolute
-//! path (tool output quoted as evidence has this machine's paths scrubbed:
-//! candidate, target, toolchain, home and temp dirs), and the attempt id is
-//! content-derived.
+//! # Trust (migrate specifics)
 //!
-//! # Re-runs never destroy evidence
-//!
-//! A FINISHED attempt (`outcome != "in-progress"`) is evidence. Under no
-//! provider is its `attempt.json`, `candidate/` or `attempt-verdict.json`
-//! reset, deleted, or rewritten with different content. What a re-run of the
-//! same content-derived id does depends on the provider:
-//!
-//! - **trace-backed hand-off (`external`)**: an `in-progress` attempt is
-//!   RESUMED in its directory — the normal rhythm of this provider, whose
-//!   adapter errors with "awaiting response" (propagated unchanged) until
-//!   the reply file exists; the earlier turns replay from their traces. A
-//!   finished attempt is VERIFIED instead (see `replay` below): the
-//!   deterministic trajectory is re-run in a scratch dir, must reproduce the
-//!   record, and the on-disk record and candidate are returned untouched.
-//! - **live providers**: every call is a fresh sample, so a finished attempt
-//!   is refused ("already finished … pass --retry") before anything is
-//!   touched or sent. With [`MigrateParams::retry`] the new sample gets its
-//!   own id `<base-id>.r<N>` (N = 2, 3, … = 1 + the number of sample dirs
-//!   that exist for the base id) and its own directory. Live calls are
-//!   recorded under `<traces_dir>/<attempt-id>/` — per sample, never the
-//!   shared root — so samples cannot overwrite each other's traces. An
-//!   `in-progress` live attempt is what a crashed or interrupted run leaves
-//!   behind: it is resumed by STARTING OVER in the same directory (its
-//!   leftover candidate and verdict are dropped, every call is made again;
-//!   trace files of the interrupted run stay where they are and are
-//!   overwritten only where a request key recurs).
-//! - **`replay`** verifies a recorded attempt and writes nothing under
-//!   `attempts/`: the record whose translate `request_key` equals the one
-//!   computed from the tree is re-run from its traces (the sample's own
-//!   trace dir when it has one, else the root) in a scratch dir, and every
-//!   turn's `request_key`, `response_hash` and `result`, the
-//!   `candidate_digest` and the `outcome` must match the record.
-//!
-//! # Trust
-//!
-//! - C source, `facts.jsonl`, `plan.toml` and hazard records are hostile
-//!   input. Source files are read only through clean relative paths that
-//!   still resolve inside the target root (nothing else can be exfiltrated
-//!   to a provider), and travel JSON-string-encoded with `<` escaped inside
-//!   nonce-delimited blocks. Hazards contribute category and location only —
-//!   never message text. ABI lines are reduced to one printable line each.
+//! - Hazards contribute category and location only — never message text.
 //! - Model output is untrusted code. It is written only as `src/logic.rs`
 //!   and `src/ffi.rs` of a FRESH candidate directory whose `Cargo.toml` and
-//!   `src/lib.rs` the harness owns, and every directory written to is
-//!   checked, level by level, to be the real `migration/units/<id>/…`
-//!   directory rather than a symlink out of it.
-//! - Tool output fed back as repair evidence (compiler errors, driver
-//!   output) is bounded, reduced to printable ASCII, and quoted line by line
-//!   behind a `| ` prefix, so it can never imitate a prompt section.
+//!   `src/lib.rs` the harness owns.
 
-use crate::adapters::TraceAdapter;
-use crate::emission::{self, EmissionResult};
-use crate::providers::{
-    checked_complete, is_context_error, preflight, EnvLookup, ResolvedProvider,
+use crate::emission::{self, MIGRATE_SPEC, STDIO_OUTPUT_FNS};
+use crate::providers::ResolvedProvider;
+use crate::trajectory::{
+    abi_section, c_source_section, fresh_candidate_dir, printable, quote, read_sources,
+    scrub_paths, unit_section, unit_source_hash, write_new, Failure, Job, Judged, RunCtx,
+    SourceFile, Stage, StageTexts, BUILD_EVIDENCE_MAX_BYTES, CONTRACT_LINE_MAX_BYTES,
+    DETAIL_MAX_BYTES, FORMAT_EXPLANATION, MAX_FAILED_CHECKS,
 };
-use crate::triage::{encode_slice, is_clean_relative_path, is_kebab_token};
-use harness_core::attempts::{
-    self, AttemptRecord, Turn, ATTEMPT_SCHEMA_NAME, ATTEMPT_SCHEMA_VERSION,
-};
+use crate::triage::{is_clean_relative_path, is_kebab_token};
+use harness_core::attempts::{self, AttemptRecord};
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::facts::Facts;
@@ -78,33 +39,30 @@ use harness_core::hash;
 use harness_core::ledger::Ledger;
 use harness_core::observer::Finding;
 use harness_core::plan::{is_clean_segment, Plan, Unit};
-use harness_core::traits::{CompletionRequest, OracleStrategy};
+use harness_core::traits::OracleStrategy;
 use harness_core::verdict::{Check, Verdict};
-use std::io::Write;
 use std::path::{Path, PathBuf};
+
+// Names the (unchanged) M3 unit tests reach through `use super::*`.
+#[cfg(test)]
+use crate::adapters::TraceAdapter;
+#[cfg(test)]
+use crate::emission::EmissionResult;
+#[cfg(test)]
+use crate::trajectory::{
+    emission_notes, prompt_digest, reset_unfinished, sample_number, scrub_list, source_nonce,
+};
+#[cfg(test)]
+use harness_core::attempts::ATTEMPT_SCHEMA_NAME;
+#[cfg(test)]
+use harness_core::traits::CompletionRequest;
 
 /// The only oracle kind the executor can migrate against at M3.
 const ORACLE_KIND: &str = "c-abi-differential";
-/// Provider kind that verifies a recorded attempt without touching the ledger.
-const REPLAY_KIND: &str = "replay";
-/// `outcome` of an attempt whose trajectory has not ended.
-const IN_PROGRESS: &str = "in-progress";
-/// Most emission notes passed on to the model in one repair turn.
-const MAX_EMISSION_NOTES: usize = 5;
-/// Bound on each emission note, in bytes.
-const EMISSION_NOTE_MAX_BYTES: usize = 200;
-/// Bound on quoted `rust-build` output, in bytes.
-const BUILD_EVIDENCE_MAX_BYTES: usize = 6 * 1024;
-/// Bound on any other quoted check detail, in bytes.
-const DETAIL_MAX_BYTES: usize = 1024;
-/// Most failed checks quoted in one evidence section.
-const MAX_FAILED_CHECKS: usize = 8;
 /// Most differing driver-output lines shown.
 const MAX_DIFF_PAIRS: usize = 3;
 /// Bound on each quoted driver-output line, in bytes.
 const DIFF_LINE_MAX_BYTES: usize = 256;
-/// Bound on each `[ABI CONTRACT]` line, in bytes.
-const CONTRACT_LINE_MAX_BYTES: usize = 512;
 
 /// The harness-owned `src/lib.rs` of every candidate (docs/SCHEMAS.md "Trust
 /// boundaries"): the compiler confines `unsafe` to `ffi.rs`.
@@ -114,6 +72,7 @@ const CANDIDATE_LIB_RS: &str = "#![deny(unsafe_code)]\n\
 
 /// The fixed system prompt of every executor turn. No per-request text: the
 /// delimiter nonce is stated in the user content's `[C SOURCE]` header.
+/// FROZEN (docs/M4-DESIGN.md R11): recorded attempts replay against it.
 const SYSTEM_PROMPT: &str = "\
 You translate one C compilation unit into Rust for RuHarness, a C-to-Rust migration harness. \
 Your Rust replaces the C unit behind the identical C ABI and is judged by an automated \
@@ -201,6 +160,22 @@ two outputs must match byte for byte, and the whole program is run on hidden sam
 Rust linked in and must produce byte-identical output. Every build and run is sandboxed and \
 time-limited; a crash, a panic, or a timeout is a failure.";
 
+/// The fixed body of the `[STDOUT]` section — present ONLY for a unit whose
+/// C calls a C stdio output function, so every other unit's prompt (u001's
+/// above all) is byte-for-byte what it was.
+const STDOUT_PARAGRAPH: &str = "\
+The differential driver prints through C stdio too, and the oracle compares stdout byte for \
+byte, so everything this unit writes to stdout must reach the SAME C stdio stream, in the same \
+order relative to the driver's own output. Rust's std::io, print! and println! write through a \
+separate Rust-side stdout buffer, so their output would interleave differently with the \
+driver's: never use them. Instead — the ONE exception to the ban on foreign extern blocks — \
+src/ffi.rs may contain one `extern \"C\" { ... }` block that declares only C stdio output \
+functions (printf, puts, putchar, fputs, fputc, putc, fwrite, fprintf, vprintf) and wraps each \
+one it uses in a small safe `pub fn` (for example `pub fn put_byte(b: u8)` calling `putchar`), \
+which src/logic.rs calls. The simplest faithful way is to compute the exact bytes in safe Rust \
+and write each byte with `putchar`. Output to stderr is not compared; never redirect it to \
+stdout.";
+
 /// The `[TASK]` line of a translate turn.
 const TRANSLATE_TASK: &str = "\
 Translate the unit now. Reply in the emission contract layout, or with \
@@ -213,7 +188,22 @@ layout (or <blocked>reason</blocked>). Reminder: any inputs or outputs shown und
 are samples of a much larger hidden test set — do not special-case them; find and fix the \
 cause.";
 
-/// Executor inputs that are not the target itself.
+/// The migrate stage's texts and names (frozen: see [`SYSTEM_PROMPT`]).
+static MIGRATE_TEXTS: StageTexts = StageTexts {
+    first_kind: "translate",
+    attempts_subdir: "attempts",
+    stage: None,
+    system: SYSTEM_PROMPT,
+    spec: &MIGRATE_SPEC,
+    first_task: TRANSLATE_TASK,
+    repair_task: REPAIR_TASK,
+    current_section: "CURRENT RUST",
+    no_current: "(none: no reply so far could be parsed into the two files)\n",
+    earlier: "The files under [CURRENT RUST] are from your last parseable reply; they had",
+    prompt_inputs: "the unit's sources, plan entry and hazards",
+};
+
+/// Executor inputs that are not the target itself (shared by both stages).
 #[derive(Debug)]
 pub struct MigrateParams<'a> {
     /// The resolved provider profile to route completions through.
@@ -222,7 +212,7 @@ pub struct MigrateParams<'a> {
     pub model: &'a str,
     /// Response token budget of every turn.
     pub max_tokens: u32,
-    /// Stateless repair turns allowed after the translate turn.
+    /// Stateless repair turns allowed after the first turn.
     pub max_repairs: u32,
     /// Root of the unit's trace files. A LIVE call is recorded as a
     /// replayable trace (request + response) under
@@ -236,7 +226,7 @@ pub struct MigrateParams<'a> {
     /// the response files and would only reproduce itself.
     pub retry: bool,
     /// `replay` only: pin the recorded attempt to verify by id (e.g.
-    /// `a-0123456789ab.r2`). `None` = the recorded attempt whose translate
+    /// `a-0123456789ab.r2`). `None` = the recorded attempt whose first-turn
     /// request key matches, preferring an exact model match, then the
     /// lowest sample.
     pub attempt: Option<&'a str>,
@@ -267,26 +257,27 @@ pub struct MigrationOutcome {
 /// `Err` is always a HARNESS error, never a model outcome:
 /// - [`Error::InvalidPlan`] when the unit is not a `c-abi-differential` unit
 ///   with `driver` and `rust_crate` params (generating drivers is a later
-///   milestone), or when a directory to be written resolves outside
-///   `migration/units/<id>/`;
+///   milestone), when a source file of its include closure resolves outside
+///   the target's `[target] source_dir`, or when a directory to be written
+///   resolves outside `migration/units/<id>/`;
 /// - `attempt <id> already finished (<outcome>); pass --retry to record a
 ///   new sample` — a live provider, a finished attempt, no
 ///   [`MigrateParams::retry`]. Nothing was touched and nothing was sent;
 /// - "prompt does not fit provider context" — the preflight of
-///   [`checked_complete`], when the profile declares `context_tokens` and
-///   `prompt_bytes/3 + max_tokens` exceeds it. For the translate turn this
-///   happens before any call and before any attempt record exists. For a
-///   repair turn the attempt is first CLOSED (`red`/`format`): under this
+///   [`crate::checked_complete`], when the profile declares `context_tokens`
+///   and `prompt_bytes/3 + max_tokens` exceeds it. For the translate turn
+///   this happens before any call and before any attempt record exists. For
+///   a repair turn the attempt is first CLOSED (`red`/`format`): under this
 ///   profile the trajectory cannot continue, so it is over;
 /// - "prompt truncated by server" — a response reported fewer input tokens
-///   than `prompt_bytes/6` ([`checked_complete`]). The turn is void: it is
-///   not journaled and no trace of it is recorded. Unlike the preflight this
-///   is a fault of the endpoint's configuration, not a property of the
-///   trajectory, so the attempt is left RESUMABLE rather than closed: when
-///   no turn had completed, the empty `in-progress` attempt directory is
-///   removed again (there is nothing to keep); otherwise the record stays
-///   `in-progress` with the turns completed so far, and a re-run resumes
-///   (trace-backed) or starts the attempt over (live);
+///   than `prompt_bytes/6`. The turn is void: it is not journaled and no
+///   trace of it is recorded. Unlike the preflight this is a fault of the
+///   endpoint's configuration, not a property of the trajectory, so the
+///   attempt is left RESUMABLE rather than closed: when no turn had
+///   completed, the empty `in-progress` attempt directory is removed again
+///   (there is nothing to keep); otherwise the record stays `in-progress`
+///   with the turns completed so far, and a re-run resumes (trace-backed)
+///   or starts the attempt over (live);
 /// - a recorded attempt that does not reproduce (verification, below) —
 ///   listing every difference;
 /// - any adapter error, propagated unchanged — including the `external`
@@ -299,11 +290,11 @@ pub struct MigrationOutcome {
 /// holds the last oracle verdict; `candidate/` the last candidate written.
 /// Only an attempt that never finished is ever run in its directory (its
 /// leftover `candidate/` and verdict are removed up front, since the
-/// trajectory regenerates them); see the module docs for what happens to a
-/// finished one. Token fields are `Some` only for a live provider that
-/// reported a non-zero count. Live calls are recorded into
-/// `<traces_dir>/<attempt-id>/` right after they passed
-/// [`checked_complete`], before the reply is parsed.
+/// trajectory regenerates them); see the `trajectory` module docs for what
+/// happens to a finished one. Token fields are `Some` only for a live
+/// provider that reported a non-zero count. Live calls are recorded into
+/// `<traces_dir>/<attempt-id>/` right after they passed the context
+/// guards, before the reply is parsed.
 ///
 /// Verification — `provider.kind == "replay"`, or a finished attempt under
 /// a trace-backed provider — re-runs the recorded trajectory against a
@@ -315,7 +306,10 @@ pub struct MigrationOutcome {
 /// were reproduced. `replay` with no matching recorded attempt is an error.
 ///
 /// `plan` must contain `unit`; `hazards` are the confirmed findings for the
-/// unit, of which only category, file and span ever reach a prompt.
+/// unit, of which only category, file and span ever reach a prompt. A unit
+/// whose C calls a C stdio output function (per the facts' unresolved call
+/// refs from its include closure) gets a `[STDOUT]` section, and its
+/// `src/ffi.rs` may then declare those functions ([`emission::deny_scan_with`]).
 pub fn run_migration(
     params: &MigrateParams,
     oracle: &dyn OracleStrategy,
@@ -325,7 +319,6 @@ pub fn run_migration(
     unit: &Unit,
     hazards: &[Finding],
 ) -> Result<MigrationOutcome, Error> {
-    let provider = params.provider;
     let (driver_rel, crate_name) = preconditions(oracle, plan, unit)?;
 
     let root = target
@@ -336,541 +329,149 @@ pub fn run_migration(
 
     // Identity inputs first: the digests bind the attempt to exactly the
     // bytes that are put in front of the model.
-    let sources = read_sources(&root, facts, unit)?;
-    let pairs: Vec<(String, String)> = sources
-        .iter()
-        .map(|s| (s.path.clone(), hash::bytes_hash(&s.bytes)))
-        .collect();
-    let unit_source = hash::file_set_hash(&pairs);
+    let sources = read_sources(&root, &target.config.target.source_dir, facts, unit)?;
+    let unit_source = unit_source_hash(&sources);
     let driver = hash::file_hash(&root.join(driver_rel))?;
+    let stdio = stdio_output_calls(facts, &sources);
+    let pinned = pinned_sections(unit, &unit_source, hazards, &sources, &stdio)?;
 
-    let pinned = pinned_sections(unit, &unit_source, hazards, &sources)?;
-    let translate = completion_request(params, translate_user(&pinned));
-    // Before any record exists; `checked_complete` repeats it per call.
-    preflight(provider, &translate)?;
-    let translate_key = TraceAdapter::request_key(&translate)?;
-
-    let job = Job {
-        params,
+    let stage = MigrateStage {
         oracle,
         target,
         unit,
         crate_name,
-        pinned: &pinned,
+        build_dir: ledger.build_dir().join(&unit.id),
+        ffi_externs: if stdio.is_empty() {
+            Vec::new()
+        } else {
+            STDIO_OUTPUT_FNS.to_vec()
+        },
+    };
+    let outcome = Job {
+        params,
+        stage: &stage,
+        unit,
         ledger: &ledger,
         root: &root,
-    };
-
-    if provider.kind == REPLAY_KIND {
-        let recorded = find_recorded(&ledger, &unit.id, &translate_key, params)?;
-        // A live sample's traces live in its own dir; everything recorded
-        // before per-sample dirs existed, and every hand-off, in the root
-        // the replay adapter was constructed with.
-        let sample_traces = params.traces_dir.join(&recorded.id);
-        let sample_provider = sample_traces.is_dir().then(|| ResolvedProvider {
-            adapter: Box::new(TraceAdapter::new(&sample_traces, false)),
-            profile: provider.profile.clone(),
-            kind: provider.kind.clone(),
-            context_tokens: provider.context_tokens,
-            live: false,
-        });
-        job.verify_recorded(
-            &recorded,
-            sample_provider.as_ref().unwrap_or(provider),
-            translate,
-        )?;
-        return Ok(MigrationOutcome {
-            attempt_dir: attempts::attempt_dir(&ledger, &unit.id, &recorded.id),
-            record: recorded,
-            candidate_dir: None,
-        });
-    }
-
-    let base_id = attempts::attempt_id(
-        &unit.id,
-        &unit_source,
-        &driver,
-        &provider.kind,
-        params.model,
-        &translate_key,
-    );
-    let id = if provider.live {
-        live_sample_id(&ledger, &unit.id, &base_id, params.retry)?
-    } else {
-        let attempt_dir = attempts::attempt_dir(&ledger, &unit.id, &base_id);
-        match load_record(&attempt_dir, &base_id)? {
-            Some(finished) if finished.outcome != IN_PROGRESS => {
-                // Evidence is never rewritten: the deterministic trajectory
-                // is re-run in scratch and must reproduce the record.
-                job.verify_recorded(&finished, provider, translate)?;
-                let candidate_dir = recorded_candidate(&attempt_dir, &finished)?;
-                return Ok(MigrationOutcome {
-                    record: finished,
-                    attempt_dir,
-                    candidate_dir,
-                });
-            }
-            _ => base_id,
-        }
-    };
-
-    // From here on the attempt dir is a new or a never-finished one.
-    let attempt_dir = attempts::attempt_dir(&ledger, &unit.id, &id);
-    let mut record = AttemptRecord {
-        schema: ATTEMPT_SCHEMA_NAME.to_string(),
-        schema_version: ATTEMPT_SCHEMA_VERSION,
-        id: id.clone(),
-        unit: unit.id.clone(),
-        stage: None,
-        provider: provider.profile.clone(),
-        provider_kind: provider.kind.clone(),
-        model: params.model.to_string(),
-        prompt_digest: prompt_digest(&translate),
+        target_root: &target.root,
+        pinned: &pinned,
         unit_source,
         driver,
-        toolchain: Vec::new(),
-        outcome: IN_PROGRESS.to_string(),
-        turns: Vec::new(),
-        candidate_digest: String::new(),
-        promoted: false,
-    };
-    let work_rel = vec!["attempts".to_string(), id.clone()];
-    let work_dir = prepare_dir(&ledger, &unit.id, &work_rel)?;
-    reset_unfinished(&work_dir, &id)?;
-    record.store(&work_dir)?;
-
-    let max_turns = usize::try_from(params.max_repairs)
-        .unwrap_or(usize::MAX)
-        .saturating_add(1);
-    let run = job.run(
-        provider,
-        &work_dir,
-        &work_rel,
-        None,
-        provider.live.then(|| params.traces_dir.join(&id)),
-        max_turns,
-    );
-    let wrote_candidate = run.drive(&mut record, translate)?;
-
+    }
+    .run()?;
     Ok(MigrationOutcome {
-        record,
-        attempt_dir,
-        candidate_dir: wrote_candidate.then(|| work_dir.join("candidate")),
+        record: outcome.record,
+        attempt_dir: outcome.attempt_dir,
+        candidate_dir: outcome.candidate,
     })
 }
 
-/// What every run of one `run_migration` call shares.
-struct Job<'a> {
-    params: &'a MigrateParams<'a>,
+/// The migrate stage: the unit's oracle judges a harness-owned crate.
+struct MigrateStage<'a> {
     oracle: &'a dyn OracleStrategy,
     target: &'a TargetContext,
     unit: &'a Unit,
+    /// The unit's `rust_crate` param: the candidate's package name.
     crate_name: &'a str,
-    pinned: &'a str,
-    /// Rooted at the canonical target root.
-    ledger: &'a Ledger,
-    /// The canonical target root.
-    root: &'a Path,
+    /// The oracle's build dir for this unit (driver outputs).
+    build_dir: PathBuf,
+    /// Foreign functions `src/ffi.rs` may declare: the C stdio output
+    /// functions for a unit that prints, else none.
+    ffi_externs: Vec<&'static str>,
 }
 
-impl<'a> Job<'a> {
-    /// A run over `work_dir` (= the unit dir joined with `work_rel`).
-    fn run(
-        &self,
-        provider: &'a ResolvedProvider,
-        work_dir: &'a Path,
-        work_rel: &[String],
-        verifying: Option<&'a AttemptRecord>,
-        record_traces: Option<PathBuf>,
-        max_turns: usize,
-    ) -> Run<'a> {
-        Run {
-            params: self.params,
-            provider,
-            oracle: self.oracle,
-            target: self.target,
-            unit: self.unit,
-            crate_name: self.crate_name,
-            pinned: self.pinned,
-            work_dir,
-            candidate_rel: format!("{}/candidate", work_rel.join("/")),
-            build_dir: self.ledger.build_dir().join(&self.unit.id),
-            verifying,
-            record_traces,
-            max_turns,
-            scrub: scrub_list(
-                &work_dir.join("candidate"),
-                self.root,
-                &self.target.root,
-                &|name| std::env::var_os(name),
-                &std::env::temp_dir(),
-            ),
-        }
+impl Stage for MigrateStage<'_> {
+    fn texts(&self) -> &StageTexts {
+        &MIGRATE_TEXTS
     }
 
-    /// Verify `recorded`: re-run its trajectory, completions coming from
-    /// `provider`, against a scratch candidate — writing NOTHING under
-    /// `attempts/` — and require that it reproduces the record. The scratch
-    /// dir sits in the unit dir because the oracle only accepts crates
-    /// there; it is removed again whatever happens.
-    ///
-    /// The turn budget is the record's, not `max_repairs`: the budget that
-    /// ended a recorded `red`/`format` trajectory is a property of that run
-    /// (`attempt.json` does not store it), and any trajectory that ended by
-    /// itself reproduces under every budget that reaches its last turn.
-    fn verify_recorded(
+    fn attempt_id(
         &self,
-        recorded: &'a AttemptRecord,
-        provider: &'a ResolvedProvider,
-        translate: CompletionRequest,
-    ) -> Result<(), Error> {
-        if recorded.outcome == IN_PROGRESS {
+        unit: &str,
+        unit_source: &str,
+        driver: &str,
+        provider_kind: &str,
+        model: &str,
+        first_key: &str,
+    ) -> String {
+        attempts::attempt_id(unit, unit_source, driver, provider_kind, model, first_key)
+    }
+
+    fn judge(
+        &self,
+        ctx: &RunCtx,
+        files: &[String],
+        record: &mut AttemptRecord,
+    ) -> Result<Judged, Error> {
+        let [logic, ffi] = files else {
             return Err(Error::Invariant(format!(
-                "attempt {} is still in progress: only a finished attempt can be verified — \
-                 finish it with the provider that started it (`{}`)",
-                recorded.id,
-                printable(&recorded.provider, 64)
+                "internal: the migrate emission spec yields 2 files, got {}",
+                files.len()
             )));
-        }
-        let scratch_rel = vec![format!(".replay-{}", recorded.id)];
-        // A crashed verification may have left its scratch behind. The unit
-        // dir is verified first, so not even this removal goes through a
-        // symlink.
-        let unit_dir = prepare_dir(self.ledger, &self.unit.id, &[])?;
-        remove_path(&unit_dir.join(&scratch_rel[0]))?;
-        let scratch = prepare_dir(self.ledger, &self.unit.id, &scratch_rel)?;
-
-        let mut replayed = AttemptRecord {
-            toolchain: Vec::new(),
-            outcome: IN_PROGRESS.to_string(),
-            turns: Vec::new(),
-            candidate_digest: String::new(),
-            promoted: false,
-            ..recorded.clone()
         };
-        let driven = {
-            let run = self.run(
-                provider,
-                &scratch,
-                &scratch_rel,
-                Some(recorded),
-                None,
-                recorded.turns.len().max(1),
-            );
-            run.drive(&mut replayed, translate)
+        let violations = emission::deny_scan_with(logic, ffi, &self.ffi_externs);
+        if !violations.is_empty() {
+            let listed: Vec<String> = violations.iter().map(|v| format!("- {v}\n")).collect();
+            return Ok(Judged {
+                wrote_candidate: false,
+                failure: Some(Failure {
+                    class: "check",
+                    explanation: class_explanation("check"),
+                    evidence: listed.concat(),
+                }),
+            });
+        }
+        let candidate = write_candidate(ctx.work_dir, self.crate_name, logic, ffi)?;
+        let verdict = self.verify(&format!("{}/candidate", ctx.work_rel))?;
+        if !ctx.verifying {
+            verdict.store(&ctx.work_dir.join("attempt-verdict.json"))?;
+        }
+        // After the oracle ran: the digest then covers the Cargo.lock its
+        // build generated, as promotion will.
+        record.candidate_digest = hash::crate_content_hash(&candidate)?;
+        record.toolchain = verdict.inputs.toolchain.clone();
+        let failure = if verdict.green {
+            None
+        } else {
+            let class = classify(&verdict);
+            Some(Failure {
+                class,
+                explanation: verdict_explanation(class, &verdict),
+                evidence: oracle_evidence(ctx.scrub, &self.build_dir, class, &verdict),
+            })
         };
-        let _ = remove_path(&scratch);
-        driven?;
+        Ok(Judged {
+            wrote_candidate: true,
+            failure,
+        })
+    }
 
-        let differences = divergences(recorded, &replayed);
-        if differences.is_empty() {
-            return Ok(());
-        }
-        Err(Error::Invariant(format!(
-            "attempt {} does not reproduce from its traces — the recorded evidence was left \
-             untouched; {} difference(s): {}",
-            recorded.id,
-            differences.len(),
-            differences.join("; ")
-        )))
+    fn candidate_path(&self, work_dir: &Path) -> PathBuf {
+        work_dir.join("candidate")
+    }
+
+    fn candidate_digest(&self, path: &Path) -> Result<String, Error> {
+        hash::crate_content_hash(path)
     }
 }
 
-/// Every way `replayed` differs from `recorded` in what a verification
-/// compares: per turn `request_key`, `response_hash` and `result`, then
-/// `candidate_digest` and `outcome`. Token counts, provider names and the
-/// toolchain are NOT compared (a replay reports no usage and may run
-/// elsewhere). Recorded values are on-disk data: echoed printable, bounded.
-fn divergences(recorded: &AttemptRecord, replayed: &AttemptRecord) -> Vec<String> {
-    let show = |value: &str| printable(value, 80);
-    let mut out = Vec::new();
-    if recorded.turns.len() != replayed.turns.len() {
-        out.push(format!(
-            "turn count: recorded {}, replayed {}",
-            recorded.turns.len(),
-            replayed.turns.len()
-        ));
-    }
-    for (index, (was, now)) in recorded.turns.iter().zip(&replayed.turns).enumerate() {
-        for (field, was, now) in [
-            ("request_key", &was.request_key, &now.request_key),
-            ("response_hash", &was.response_hash, &now.response_hash),
-            ("result", &was.result, &now.result),
-        ] {
-            if was != now {
-                out.push(format!(
-                    "turn {} {field}: recorded {}, replayed {}",
-                    index + 1,
-                    show(was),
-                    show(now)
-                ));
-            }
-        }
-    }
-    for (field, was, now) in [
-        (
-            "candidate_digest",
-            &recorded.candidate_digest,
-            &replayed.candidate_digest,
-        ),
-        ("outcome", &recorded.outcome, &replayed.outcome),
-    ] {
-        if was != now {
-            out.push(format!(
-                "{field}: recorded {}, replayed {}",
-                show(was),
-                show(now)
-            ));
-        }
-    }
-    out
-}
-
-/// The record in `dir`, `None` when there is no `attempt.json` yet. The
-/// attempts ledger is target-owned input: a record filed under another id
-/// than its directory's name is refused rather than trusted.
-fn load_record(dir: &Path, id: &str) -> Result<Option<AttemptRecord>, Error> {
-    match AttemptRecord::load(dir) {
-        Ok(record) if record.id == id => Ok(Some(record)),
-        Ok(record) => Err(Error::Invariant(format!(
-            "{} holds a record with id {:?}, not `{id}` — the attempts ledger is inconsistent; \
-             refusing to touch it",
-            dir.join("attempt.json").display(),
-            printable(&record.id, 64)
-        ))),
-        Err(e) if e.is_not_found() => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-/// The sample directories that exist for `base` under `attempts_dir`, as
-/// (sample number, id) sorted by number: `<base>` is sample 1, `<base>.r<N>`
-/// sample N.
-fn sample_ids(attempts_dir: &Path, base: &str) -> Result<Vec<(u32, String)>, Error> {
-    let entries = match std::fs::read_dir(attempts_dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(Error::io(attempts_dir, e)),
-    };
-    let mut samples = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| Error::io(attempts_dir, e))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !entry.path().is_dir() {
-            continue;
-        }
-        if let Some(number) = sample_number(&name, base) {
-            samples.push((number, name));
-        }
-    }
-    samples.sort();
-    Ok(samples)
-}
-
-/// `Some(1)` for `base` itself, `Some(N)` for `<base>.r<N>` with N ≥ 2 in
-/// canonical decimal, else `None`.
-fn sample_number(id: &str, base: &str) -> Option<u32> {
-    if id == base {
-        return Some(1);
-    }
-    let digits = id.strip_prefix(base)?.strip_prefix(".r")?;
-    let number: u32 = digits.parse().ok()?;
-    (number >= 2 && number.to_string() == digits).then_some(number)
-}
-
-/// The id a LIVE run records under — decided before anything is created,
-/// written, or sent (module docs, "Re-runs never destroy evidence"):
-///
-/// - no record yet, or an `in-progress` one (an interrupted run): `base`
-///   itself — the attempt is started (over) in its directory;
-/// - `base` finished and no `retry`: refused, touching nothing;
-/// - `base` finished and `retry`: a new sample `<base>.r<N>`, N = 1 + the
-///   number of sample dirs that exist (bumped past any directory already
-///   there, so a gap left by a hand-deleted sample can never make two
-///   samples share a directory). An interrupted retry — the highest sample
-///   being `in-progress` — is started over instead of being abandoned next
-///   to yet another sample.
-fn live_sample_id(
-    ledger: &Ledger,
-    unit_id: &str,
-    base: &str,
-    retry: bool,
-) -> Result<String, Error> {
-    let attempts_dir = ledger.unit_dir(unit_id).join("attempts");
-    let finished = |id: &str| -> Result<Option<String>, Error> {
-        Ok(load_record(&attempts_dir.join(id), id)?
-            .filter(|record| record.outcome != IN_PROGRESS)
-            .map(|record| record.outcome))
-    };
-    let Some(outcome) = finished(base)? else {
-        return Ok(base.to_string());
-    };
-    if !retry {
-        return Err(Error::Invariant(format!(
-            "attempt {base} already finished ({}); pass --retry to record a new sample",
-            printable(&outcome, 32)
-        )));
-    }
-    let samples = sample_ids(&attempts_dir, base)?;
-    if let Some((number, latest)) = samples.last() {
-        if *number >= 2 && finished(latest)?.is_none() {
-            return Ok(latest.clone());
-        }
-    }
-    let mut number = u32::try_from(samples.len())
-        .unwrap_or(u32::MAX)
-        .saturating_add(1)
-        .max(2);
-    loop {
-        let id = format!("{base}.r{number}");
-        if std::fs::symlink_metadata(attempts_dir.join(&id)).is_err() {
-            return Ok(id);
-        }
-        number = number.checked_add(1).ok_or_else(|| {
-            Error::Invariant(format!("attempt {base}: sample numbers are exhausted"))
+impl MigrateStage<'_> {
+    /// Verify the candidate: the unit, with `rust_crate` pointed at
+    /// `candidate_rel` (relative to the unit dir).
+    fn verify(&self, candidate_rel: &str) -> Result<Verdict, Error> {
+        let mut unit = self.unit.clone();
+        let table = unit.oracle.as_mut().ok_or_else(|| {
+            Error::Invariant(format!(
+                "unit `{}` lost its [unit.oracle] table",
+                self.unit.id
+            ))
         })?;
+        table.insert(
+            "rust_crate".to_string(),
+            toml::Value::String(candidate_rel.to_string()),
+        );
+        self.oracle.verify(self.target, &unit)
     }
-}
-
-/// Drop what an interrupted run left in the attempt dir it is about to be
-/// started over in: `candidate/` and `attempt-verdict.json`, which the
-/// trajectory regenerates. The ONLY place the executor deletes ledger
-/// evidence — and it refuses when the record there is finished, whatever
-/// the caller believed.
-fn reset_unfinished(work_dir: &Path, id: &str) -> Result<(), Error> {
-    if let Some(record) = load_record(work_dir, id)? {
-        if record.outcome != IN_PROGRESS {
-            return Err(Error::Invariant(format!(
-                "internal: attempt {id} is finished ({}); its evidence is never reset",
-                printable(&record.outcome, 32)
-            )));
-        }
-    }
-    remove_path(&work_dir.join("candidate"))?;
-    remove_path(&work_dir.join("attempt-verdict.json"))
-}
-
-/// The candidate dir of a FINISHED, just-verified attempt — `None` when the
-/// attempt never wrote one. It must still be what the record says: the CLI
-/// promotes from it.
-fn recorded_candidate(
-    attempt_dir: &Path,
-    record: &AttemptRecord,
-) -> Result<Option<PathBuf>, Error> {
-    if record.candidate_digest.is_empty() {
-        return Ok(None);
-    }
-    let candidate = attempt_dir.join("candidate");
-    let on_disk = match hash::crate_content_hash(&candidate) {
-        Ok(digest) => digest,
-        Err(e) if e.is_not_found() => String::new(),
-        Err(e) => return Err(e),
-    };
-    if on_disk != record.candidate_digest {
-        return Err(Error::Invariant(format!(
-            "attempt {}: {} does not match the record's candidate_digest — the attempt \
-             directory was modified after the attempt finished",
-            record.id,
-            candidate.display()
-        )));
-    }
-    Ok(Some(candidate))
-}
-
-/// The recorded attempt a `replay` run verifies: the one pinned by
-/// [`MigrateParams::attempt`], else — among the unit's records whose FIRST
-/// turn has the translate request key computed from the tree — a finished
-/// one before an `in-progress` one, then an exact model match, then the
-/// lowest sample of the lowest id.
-fn find_recorded(
-    ledger: &Ledger,
-    unit_id: &str,
-    translate_key: &str,
-    params: &MigrateParams,
-) -> Result<AttemptRecord, Error> {
-    let attempts_dir = ledger.unit_dir(unit_id).join("attempts");
-    let matches_key = |record: &AttemptRecord| {
-        record
-            .turns
-            .first()
-            .is_some_and(|turn| turn.request_key == translate_key)
-    };
-    let explain = "replay verifies RECORDED attempts: it re-runs one from its traces and \
-                   compares; it never starts a new attempt. The translate prompt is a function \
-                   of the unit's sources, plan entry and hazards, the model string and \
-                   max_tokens — all must be what they were when the attempt was recorded";
-
-    if let Some(pinned) = params.attempt {
-        if !is_clean_segment(pinned) {
-            return Err(Error::Invariant(format!(
-                "--attempt {:?} is not an attempt id",
-                printable(pinned, 64)
-            )));
-        }
-        let record = load_record(&attempts_dir.join(pinned), pinned)?
-            .filter(|record| record.unit == unit_id)
-            .ok_or_else(|| {
-                Error::Invariant(format!(
-                    "unit `{unit_id}` has no recorded attempt `{pinned}` under {} — {explain}",
-                    attempts_dir.display()
-                ))
-            })?;
-        if !matches_key(&record) {
-            return Err(Error::Invariant(format!(
-                "attempt {pinned} was recorded for a different translate prompt (request key \
-                 {}, now {translate_key}) — {explain}",
-                record.turns.first().map_or_else(
-                    || "none".to_string(),
-                    |turn| printable(&turn.request_key, 16)
-                ),
-            )));
-        }
-        return Ok(record);
-    }
-
-    let entries = match std::fs::read_dir(&attempts_dir) {
-        Ok(entries) => Some(entries),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(Error::io(&attempts_dir, e)),
-    };
-    let mut candidates: Vec<AttemptRecord> = Vec::new();
-    for entry in entries.into_iter().flatten() {
-        let entry = entry.map_err(|e| Error::io(&attempts_dir, e))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !is_clean_segment(&name) {
-            continue;
-        }
-        if let Some(record) = load_record(&entry.path(), &name)? {
-            if record.unit == unit_id && matches_key(&record) {
-                candidates.push(record);
-            }
-        }
-    }
-    // The request key does not cover the provider, so attempts of several
-    // providers may match. Finished ones first (only they can be verified),
-    // then an exact model match, then base ids in order, each base before
-    // its retry samples, those by number.
-    let order = |record: &AttemptRecord| {
-        let (base, number) = record
-            .id
-            .rsplit_once(".r")
-            .and_then(|(base, _)| sample_number(&record.id, base).map(|n| (base.to_string(), n)))
-            .unwrap_or_else(|| (record.id.clone(), 1));
-        (
-            record.outcome == IN_PROGRESS,
-            record.model != params.model,
-            base,
-            number,
-        )
-    };
-    candidates.sort_by_key(order);
-    candidates.into_iter().next().ok_or_else(|| {
-        Error::Invariant(format!(
-            "unit `{unit_id}` has no recorded attempt whose translate request key is \
-             {translate_key} (searched {}) — {explain}",
-            attempts_dir.display()
-        ))
-    })
 }
 
 /// Refuse units the executor cannot migrate; returns the `driver` and
@@ -920,121 +521,41 @@ fn preconditions<'u>(
     Ok((driver, crate_name))
 }
 
-/// One source file of the unit's include closure.
-struct SourceFile {
-    /// Repo-relative path, as listed by the facts.
-    path: String,
-    /// Exact file bytes (hashed, and sent lossily decoded).
-    bytes: Vec<u8>,
-}
-
-/// Read the unit's include closure. `facts.jsonl` and `plan.toml` are
-/// target-owned, and whatever is read here is SENT TO THE PROVIDER — so a
-/// path must be clean and relative, and must still be inside the target
-/// root once symlinks are resolved.
-fn read_sources(root: &Path, facts: &Facts, unit: &Unit) -> Result<Vec<SourceFile>, Error> {
-    let closure = facts.include_closure(&unit.files);
-    if closure.is_empty() {
-        return Err(Error::InvalidPlan(format!(
-            "unit `{}` has no source files to migrate",
-            unit.id
-        )));
-    }
-    let mut sources = Vec::with_capacity(closure.len());
-    for path in closure {
-        if !is_clean_relative_path(&path) {
-            return Err(Error::Invariant(format!(
-                "unit `{}`: source path {path:?} is not a clean relative path — refusing to \
-                 read it (re-run `harness scan`)",
-                unit.id
-            )));
-        }
-        let joined = root.join(&path);
-        let resolved = joined.canonicalize().map_err(|e| Error::io(&joined, e))?;
-        if !resolved.starts_with(root) {
-            return Err(Error::Invariant(format!(
-                "unit `{}`: source path {path:?} resolves to {}, outside the target root — \
-                 refusing to send it to a model provider",
-                unit.id,
-                resolved.display()
-            )));
-        }
-        let bytes = std::fs::read(&resolved).map_err(|e| Error::io(&resolved, e))?;
-        sources.push(SourceFile { path, bytes });
-    }
-    Ok(sources)
-}
-
-/// Delimiter nonce: first 12 hex of blake3 over the unit id and every source
-/// path and byte. A pure function of the inputs (deterministic for replay)
-/// that depends on every source byte, so no file can contain its own
-/// delimiter without a hash fixed point.
-fn source_nonce(unit_id: &str, sources: &[SourceFile]) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(unit_id.as_bytes());
-    for source in sources {
-        hasher.update(b"\0");
-        hasher.update(source.path.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(&source.bytes);
-    }
-    hasher.finalize().to_hex()[..12].to_string()
-}
-
-/// Reduce target-derived text to ONE printable-ASCII line of at most
-/// `max_bytes` (tabs become spaces; everything else non-printable is
-/// dropped).
-fn printable(text: &str, max_bytes: usize) -> String {
-    text.chars()
-        .map(|c| if c == '\t' { ' ' } else { c })
-        .filter(|c| (' '..='~').contains(c))
-        .take(max_bytes)
+/// The C stdio output functions the unit's C calls: unresolved `call` refs
+/// from a file of its include closure to a name in [`STDIO_OUTPUT_FNS`], in
+/// that constant's order (so the `[STDOUT]` text is harness-chosen and
+/// deterministic, whatever the facts hold).
+fn stdio_output_calls(facts: &Facts, sources: &[SourceFile]) -> Vec<&'static str> {
+    STDIO_OUTPUT_FNS
+        .iter()
+        .copied()
+        .filter(|name| {
+            facts.refs.iter().any(|r| {
+                !r.resolved
+                    && r.refkind == "call"
+                    && r.to == *name
+                    && sources.iter().any(|s| s.path == r.file)
+            })
+        })
         .collect()
 }
 
-/// Quote tool output as data: printable ASCII only, at most `max_bytes`,
-/// every line behind a `| ` prefix so it can never sit at column 0.
-fn quote(text: &str, max_bytes: usize) -> String {
-    let mut clean: String = text
-        .chars()
-        .map(|c| if c == '\t' { ' ' } else { c })
-        .filter(|c| *c == '\n' || (' '..='~').contains(c))
-        .collect();
-    let cut = clean.len() > max_bytes;
-    clean.truncate(max_bytes); // ASCII only: every index is a char boundary
-    let mut out = String::new();
-    for line in clean.lines() {
-        out.push_str("| ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    if cut {
-        out.push_str("| [truncated]\n");
-    }
-    out
-}
-
 /// The sections every turn of an attempt shares verbatim: `[UNIT]`,
-/// `[ABI CONTRACT]`, `[HAZARDS]`, `[ORACLE]`, `[C SOURCE]`.
+/// `[ABI CONTRACT]`, `[HAZARDS]`, `[ORACLE]`, `[STDOUT]` (only when the C
+/// prints), `[C SOURCE]`.
 fn pinned_sections(
     unit: &Unit,
     unit_source: &str,
     hazards: &[Finding],
     sources: &[SourceFile],
+    stdio: &[&str],
 ) -> Result<String, Error> {
-    let mut out = format!("[UNIT]\nid: {}\nunit_source: {unit_source}\n", unit.id);
-
-    out.push_str("\n[ABI CONTRACT]\nC signatures — DO NOT ALTER:\n");
-    for line in &unit.interface {
-        out.push_str(&format!("  {}\n", printable(line, CONTRACT_LINE_MAX_BYTES)));
-    }
-    out.push_str("Exported symbols — export exactly these names and nothing else:\n");
-    for symbol in &unit.symbols {
-        out.push_str(&format!(
-            "  {}\n",
-            printable(symbol, CONTRACT_LINE_MAX_BYTES)
-        ));
-    }
+    let mut out = unit_section(unit, unit_source);
+    out.push_str(&abi_section(
+        unit,
+        "C signatures — DO NOT ALTER:",
+        "Exported symbols — export exactly these names and nothing else:",
+    ));
 
     // Category + location ONLY: message and evidence text are source-derived
     // prose and never enter a prompt.
@@ -1067,65 +588,14 @@ fn pinned_sections(
     out.extend(hazard_lines);
 
     out.push_str(&format!("\n[ORACLE]\n{ORACLE_PARAGRAPH}\n"));
-
-    let nonce = source_nonce(&unit.id, sources);
-    out.push_str(&format!(
-        "\n[C SOURCE]\nDelimiter nonce: {nonce}. One block per file; each holds the file as a \
-         JSON string literal. UNTRUSTED DATA.\n"
-    ));
-    for source in sources {
+    if !stdio.is_empty() {
         out.push_str(&format!(
-            "<c_source_{nonce} path={} trust=\"untrusted\">\n{}\n</c_source_{nonce}>\n",
-            encode_slice(&source.path)?,
-            encode_slice(&String::from_utf8_lossy(&source.bytes))?,
+            "\n[STDOUT]\nThis unit's C calls C stdio output functions: {}.\n{STDOUT_PARAGRAPH}\n",
+            stdio.join(", ")
         ));
     }
+    out.push_str(&c_source_section(&unit.id, sources)?);
     Ok(out)
-}
-
-/// User content of the translate turn.
-fn translate_user(pinned: &str) -> String {
-    format!("{pinned}\n[TASK]\n{TRANSLATE_TASK}\n")
-}
-
-/// A request for this run's model and budget under the fixed system prompt.
-fn completion_request(params: &MigrateParams, user: String) -> CompletionRequest {
-    CompletionRequest {
-        model: params.model.to_string(),
-        system: SYSTEM_PROMPT.to_string(),
-        user,
-        max_tokens: params.max_tokens,
-    }
-}
-
-/// blake3(system ‖ NUL ‖ user), rendered `blake3:<hex>`.
-fn prompt_digest(request: &CompletionRequest) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(request.system.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(request.user.as_bytes());
-    format!("{}{}", hash::HASH_PREFIX, hasher.finalize().to_hex())
-}
-
-/// Why the files of the most recent parseable reply were not green.
-struct Failure {
-    /// Failure class = the turn's `result`.
-    class: &'static str,
-    /// The `[FAILURE CLASS]` explanation, chosen from the failed checks.
-    explanation: &'static str,
-    /// The `[EVIDENCE]` text, emission notes included.
-    evidence: String,
-}
-
-/// What the next repair turn must be told.
-#[derive(Default)]
-struct RepairState {
-    /// Files of the most recent parseable reply (`[CURRENT RUST]`).
-    files: Option<(String, String)>,
-    /// The failure those files produced.
-    failure: Option<Failure>,
-    /// Set while the MOST RECENT reply was a format failure.
-    format: Option<String>,
 }
 
 /// `[FAILURE CLASS]` explanation of a red `symbol-set` check. The turn
@@ -1146,9 +616,7 @@ does not show a defect in the candidate";
 /// One-line explanation of a failure class.
 fn class_explanation(class: &str) -> &'static str {
     match class {
-        "format" => {
-            "your previous reply did not follow the emission contract, so nothing was built"
-        }
+        "format" => FORMAT_EXPLANATION,
         "check" => "your previous reply used prohibited constructs, so nothing was built",
         "build" => "the candidate crate failed to compile",
         "crash-timeout" => "the candidate built, but crashed, panicked, or timed out when run",
@@ -1199,107 +667,6 @@ fn verdict_explanation(class: &'static str, verdict: &Verdict) -> &'static str {
     }
 }
 
-/// The parser's leniency notes ([`EmissionResult::Files`] `guesses`) as
-/// evidence lines for the next repair turn: one line each, at most
-/// [`MAX_EMISSION_NOTES`]. Empty for a reply in the canonical layout.
-fn emission_notes(guesses: &[String]) -> String {
-    if guesses.is_empty() {
-        return String::new();
-    }
-    let mut out = String::from(
-        "emission notes — your previous reply was accepted, but only leniently; follow the \
-         emission contract layout exactly:\n",
-    );
-    for note in guesses.iter().take(MAX_EMISSION_NOTES) {
-        out.push_str(&format!("- {}\n", printable(note, EMISSION_NOTE_MAX_BYTES)));
-    }
-    if guesses.len() > MAX_EMISSION_NOTES {
-        out.push_str(&format!(
-            "({} more notes not shown)\n",
-            guesses.len() - MAX_EMISSION_NOTES
-        ));
-    }
-    out
-}
-
-/// This machine's absolute paths and what quoted tool output shows instead,
-/// LONGEST FIRST so that a directory inside another is replaced before its
-/// parent: the candidate dir (`<candidate>`), the target root as given and
-/// canonical (`<target>`), `$RUSTUP_HOME` or `<home>/.rustup` (`<rustup>`),
-/// `$CARGO_HOME` or `<home>/.cargo` (`<cargo>`), `$HOME` (`<home>`), and the
-/// temp dirs `$TMPDIR` / `temp_dir` (`<tmp>`) — each also in its canonical
-/// form (`/var/…` is `/private/var/…` on macOS). They would make prompts,
-/// and so trace keys, depend on who runs the harness where, and they are
-/// nobody's business. The oracle scrubs its details too; this list is the
-/// executor's own defense in depth. Relative and root (`/`) values are
-/// ignored: replacing them could only mangle text.
-fn scrub_list(
-    candidate_dir: &Path,
-    root: &Path,
-    target_root: &Path,
-    env: EnvLookup<'_>,
-    temp_dir: &Path,
-) -> Vec<(String, &'static str)> {
-    let var = |name: &str| {
-        env(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
-    let home = var("HOME").or_else(|| var("USERPROFILE"));
-    let under_home = |dir: &str| home.as_ref().map(|home| home.join(dir));
-    let host: [(Option<PathBuf>, &'static str); 5] = [
-        (
-            var("RUSTUP_HOME").or_else(|| under_home(".rustup")),
-            "<rustup>",
-        ),
-        (
-            var("CARGO_HOME").or_else(|| under_home(".cargo")),
-            "<cargo>",
-        ),
-        (home.clone(), "<home>"),
-        (var("TMPDIR"), "<tmp>"),
-        (Some(temp_dir.to_path_buf()), "<tmp>"),
-    ];
-    let mut paths: Vec<(PathBuf, &'static str)> = vec![
-        (candidate_dir.to_path_buf(), "<candidate>"),
-        (root.to_path_buf(), "<target>"),
-        (target_root.to_path_buf(), "<target>"),
-    ];
-    paths.extend(
-        host.into_iter()
-            .filter_map(|(path, label)| path.map(|path| (path, label))),
-    );
-
-    let mut list: Vec<(String, &'static str)> = Vec::new();
-    for (path, label) in paths {
-        if !path.is_absolute() {
-            continue;
-        }
-        for form in [Some(path.clone()), path.canonicalize().ok()]
-            .into_iter()
-            .flatten()
-        {
-            let text = form.display().to_string();
-            let text = text.trim_end_matches('/');
-            if text.len() > 1 && !list.iter().any(|(known, _)| known == text) {
-                list.push((text.to_string(), label));
-            }
-        }
-    }
-    // Stable: equally long paths keep the precedence of the order above.
-    list.sort_by_key(|(path, _)| std::cmp::Reverse(path.len()));
-    list
-}
-
-/// Replace every path of `scrub` (see [`scrub_list`]) in `text`.
-fn scrub_paths(scrub: &[(String, &'static str)], text: &str) -> String {
-    let mut text = text.to_string();
-    for (path, label) in scrub {
-        text = text.replace(path.as_str(), label);
-    }
-    text
-}
-
 /// Bounded `[EVIDENCE]` for a red verdict of the given class: the failed
 /// checks' details, scrubbed and quoted, plus the differing driver output
 /// lines (from `build_dir`) for a byte-compare failure.
@@ -1345,15 +712,6 @@ fn oracle_evidence(
         ));
     }
     out
-}
-
-/// Outcome when the turn budget is spent without a terminal turn.
-fn exhausted_outcome(turns: &[Turn]) -> &'static str {
-    if turns.iter().all(|t| t.result == "format") {
-        "format"
-    } else {
-        "red"
-    }
 }
 
 /// Up to [`MAX_DIFF_PAIRS`] differing line pairs of the differential driver's
@@ -1421,318 +779,6 @@ fn driver_diff(build_dir: &Path) -> Option<String> {
     ))
 }
 
-/// One run's fixed context.
-struct Run<'a> {
-    params: &'a MigrateParams<'a>,
-    /// Where completions come from: `params.provider`, or — verifying a
-    /// recorded live sample — a replay adapter over that sample's traces.
-    provider: &'a ResolvedProvider,
-    oracle: &'a dyn OracleStrategy,
-    target: &'a TargetContext,
-    unit: &'a Unit,
-    /// The unit's `rust_crate` param: the candidate's package name.
-    crate_name: &'a str,
-    /// The shared prompt sections.
-    pinned: &'a str,
-    /// Attempt dir — or the verification scratch dir.
-    work_dir: &'a Path,
-    /// `rust_crate` override handed to the oracle: the candidate dir
-    /// relative to the unit dir.
-    candidate_rel: String,
-    /// The oracle's build dir for this unit (driver outputs).
-    build_dir: PathBuf,
-    /// The recorded attempt being verified. `Some` = NOTHING is journaled.
-    verifying: Option<&'a AttemptRecord>,
-    /// Where each call is recorded as a replayable trace: a live sample's
-    /// own trace dir. `None` for trace-backed providers.
-    record_traces: Option<PathBuf>,
-    /// Turn budget (translate + repairs).
-    max_turns: usize,
-    /// Absolute paths replaced in quoted tool output ([`scrub_list`]).
-    scrub: Vec<(String, &'static str)>,
-}
-
-impl Run<'_> {
-    /// Drive the trajectory to its end, journaling after every turn.
-    /// Returns whether a candidate crate was written.
-    fn drive(
-        &self,
-        record: &mut AttemptRecord,
-        translate: CompletionRequest,
-    ) -> Result<bool, Error> {
-        let provider = self.provider;
-        let mut state = RepairState::default();
-        let mut wrote_candidate = false;
-        let mut request = translate;
-        let mut index = 0usize;
-        loop {
-            if index > 0 {
-                request = self.repair_request(&state, &record.turns);
-                if let Err(e) = preflight(provider, &request) {
-                    if self.verifying.is_some() {
-                        return Err(e); // nothing to close: nothing is journaled
-                    }
-                    // Not a model outcome — but under this profile the
-                    // trajectory cannot continue, so it is over, and the
-                    // ledger must not claim it is still in progress.
-                    let outcome = exhausted_outcome(&record.turns);
-                    self.finish(record, outcome)?;
-                    return Err(Error::Invariant(format!(
-                        "{e} (repair turn {index}; attempt {} closed as `{outcome}`)",
-                        record.id
-                    )));
-                }
-            }
-            let request_key = TraceAdapter::request_key(&request)?;
-            // Verifying: a request that is not the recorded one IS the
-            // finding. It is never sent — no adapter could answer it from the
-            // record's traces, and the `external` one would file it as a new
-            // pending request.
-            let recorded_key = self
-                .verifying
-                .and_then(|recorded| Some((recorded, recorded.turns.get(index)?)))
-                .filter(|(_, turn)| turn.request_key != request_key);
-            if let Some((recorded, turn)) = recorded_key {
-                return Err(Error::Invariant(format!(
-                    "attempt {} does not reproduce from its traces — the recorded evidence \
-                     was left untouched; turn {} request_key: recorded {}, replayed \
-                     {request_key} (the prompt is no longer the recorded one: the oracle's \
-                     evidence, the toolchain or the harness changed)",
-                    recorded.id,
-                    index + 1,
-                    printable(&turn.request_key, 16)
-                )));
-            }
-            let response = match checked_complete(provider, &request) {
-                Ok(response) => response,
-                Err(e) => return Err(self.call_failed(record, index, e)),
-            };
-            // Only a call that passed the context guards is ever recorded:
-            // a truncated one must not leave a normal replayable trace.
-            if let Some(dir) = &self.record_traces {
-                TraceAdapter::record(&prepare_trace_dir(dir)?, &request, &response)?;
-            }
-
-            let reported = (response.output_tokens > 0).then_some(response.output_tokens);
-            let parsed = emission::parse_emission(
-                &response.text,
-                response.stop(),
-                reported,
-                request.max_tokens,
-            );
-            let mut outcome: Option<&'static str> = None;
-            let result: &'static str = match parsed {
-                EmissionResult::Blocked(_) => {
-                    outcome = Some("blocked");
-                    "blocked"
-                }
-                EmissionResult::Truncated(_) => {
-                    outcome = Some("truncated");
-                    "truncated"
-                }
-                EmissionResult::Format(message) => {
-                    state.format = Some(message);
-                    "format"
-                }
-                EmissionResult::Files {
-                    logic,
-                    ffi,
-                    guesses,
-                } => {
-                    state.format = None;
-                    let violations = emission::deny_scan(&logic, &ffi);
-                    let failure = if violations.is_empty() {
-                        let candidate =
-                            write_candidate(self.work_dir, self.crate_name, &logic, &ffi)?;
-                        wrote_candidate = true;
-                        let verdict = self.verify()?;
-                        if self.verifying.is_none() {
-                            verdict.store(&self.work_dir.join("attempt-verdict.json"))?;
-                        }
-                        // After the oracle ran: the digest then covers the
-                        // Cargo.lock its build generated, as promotion will.
-                        record.candidate_digest = hash::crate_content_hash(&candidate)?;
-                        record.toolchain = verdict.inputs.toolchain.clone();
-                        if verdict.green {
-                            None
-                        } else {
-                            let class = classify(&verdict);
-                            Some(Failure {
-                                class,
-                                explanation: verdict_explanation(class, &verdict),
-                                evidence: oracle_evidence(
-                                    &self.scrub,
-                                    &self.build_dir,
-                                    class,
-                                    &verdict,
-                                ),
-                            })
-                        }
-                    } else {
-                        let listed: Vec<String> =
-                            violations.iter().map(|v| format!("- {v}\n")).collect();
-                        Some(Failure {
-                            class: "check",
-                            explanation: class_explanation("check"),
-                            evidence: listed.concat(),
-                        })
-                    };
-                    match failure {
-                        None => {
-                            outcome = Some("green");
-                            "green"
-                        }
-                        Some(mut failure) => {
-                            // What the parser had to guess is feedback too:
-                            // the next reply should not need the leniency.
-                            failure.evidence.push_str(&emission_notes(&guesses));
-                            let class = failure.class;
-                            state.files = Some((logic, ffi));
-                            state.failure = Some(failure);
-                            class
-                        }
-                    }
-                }
-            };
-
-            let usage = |n: u64| (provider.live && n > 0).then_some(n);
-            record.turns.push(Turn {
-                kind: if index == 0 { "translate" } else { "repair" }.to_string(),
-                result: result.to_string(),
-                request_key,
-                response_hash: hash::bytes_hash(response.text.as_bytes()),
-                input_tokens: usage(response.input_tokens),
-                output_tokens: usage(response.output_tokens),
-            });
-            if outcome.is_none() && index + 1 >= self.max_turns {
-                outcome = Some(exhausted_outcome(&record.turns));
-            }
-            if let Some(outcome) = outcome {
-                self.finish(record, outcome)?;
-                return Ok(wrote_candidate);
-            }
-            self.store(record)?;
-            index += 1;
-        }
-    }
-
-    /// The error to return when the call of turn `index` failed.
-    ///
-    /// - Verifying: propagated unchanged — nothing was journaled, so there
-    ///   is nothing to close.
-    /// - "prompt truncated by server" (or a preflight refusal): the turn is
-    ///   void, and the attempt is left RESUMABLE rather than closed — this
-    ///   is a fault of the endpoint's configuration, not an outcome of the
-    ///   trajectory. When no turn completed, the attempt dir this run just
-    ///   (re)created holds nothing but an empty `in-progress` record, and
-    ///   is removed again; otherwise the record — journaled after the last
-    ///   completed turn — already says `in-progress` with the turns so far,
-    ///   and stays. The error is propagated with that fact appended.
-    /// - Every other adapter error (the `external` hand-off's "awaiting
-    ///   response" above all) is propagated unchanged; the record says
-    ///   `in-progress`, which is exactly right.
-    fn call_failed(&self, record: &AttemptRecord, index: usize, e: Error) -> Error {
-        if self.verifying.is_some() || !is_context_error(&e) {
-            return e;
-        }
-        if !record.turns.is_empty() {
-            return Error::Invariant(format!(
-                "{e} (repair turn {index}; attempt {} stays `in-progress` with the {} turn(s) \
-                 completed — fix the endpoint and re-run)",
-                record.id,
-                record.turns.len()
-            ));
-        }
-        let removed = remove_path(self.work_dir).is_ok();
-        if let Some(attempts_dir) = self.work_dir.parent() {
-            // Only ever removes an EMPTY attempts/ dir (this run's own).
-            let _ = std::fs::remove_dir(attempts_dir);
-        }
-        Error::Invariant(format!(
-            "{e} (translate turn; no turn completed, so the empty attempt record {} {})",
-            record.id,
-            if removed {
-                "was removed again"
-            } else {
-                "could not be removed"
-            }
-        ))
-    }
-
-    /// Journal the record (a no-op while verifying).
-    fn store(&self, record: &AttemptRecord) -> Result<(), Error> {
-        if self.verifying.is_none() {
-            record.store(self.work_dir)?;
-        }
-        Ok(())
-    }
-
-    /// Close the record. `promoted` is the CLI's to set, after a promotion;
-    /// an attempt that ends here was never finished before, so never
-    /// promoted.
-    fn finish(&self, record: &mut AttemptRecord, outcome: &str) -> Result<(), Error> {
-        record.outcome = outcome.to_string();
-        record.promoted = false;
-        self.store(record)
-    }
-
-    /// Verify the candidate: the unit, with `rust_crate` pointed at it.
-    fn verify(&self) -> Result<Verdict, Error> {
-        let mut unit = self.unit.clone();
-        let table = unit.oracle.as_mut().ok_or_else(|| {
-            Error::Invariant(format!(
-                "unit `{}` lost its [unit.oracle] table",
-                self.unit.id
-            ))
-        })?;
-        table.insert(
-            "rust_crate".to_string(),
-            toml::Value::String(self.candidate_rel.clone()),
-        );
-        self.oracle.verify(self.target, &unit)
-    }
-
-    /// The stateless repair request: the pinned sections again, then the
-    /// current files, the failure, and the turn history.
-    fn repair_request(&self, state: &RepairState, turns: &[Turn]) -> CompletionRequest {
-        let current = match &state.files {
-            Some((logic, ffi)) => emission::render_files(logic, ffi),
-            None => "(none: no reply so far could be parsed into the two files)\n".to_string(),
-        };
-        let format_failure = class_explanation("format");
-        let (class, explanation, evidence) = match (&state.format, &state.failure) {
-            (Some(message), None) => ("format", format_failure, format!("{message}\n")),
-            (Some(message), Some(earlier)) => (
-                "format",
-                format_failure,
-                format!(
-                    "{message}\nThe files under [CURRENT RUST] are from your last parseable \
-                     reply; they had failed with class {} ({}):\n{}",
-                    earlier.class, earlier.explanation, earlier.evidence
-                ),
-            ),
-            (None, Some(failure)) => (failure.class, failure.explanation, failure.evidence.clone()),
-            (None, None) => (
-                "format",
-                format_failure,
-                "no usable reply so far\n".to_string(),
-            ),
-        };
-        let history: Vec<String> = turns
-            .iter()
-            .enumerate()
-            .map(|(i, turn)| format!("{}. {} -> {}\n", i + 1, turn.kind, turn.result))
-            .collect();
-        let user = format!(
-            "{}\n[CURRENT RUST]\n{current}\n[FAILURE CLASS]\n{class} — {explanation}\n\n\
-             [EVIDENCE]\n{evidence}\n[HISTORY]\n{}\n[TASK]\n{REPAIR_TASK}\n",
-            self.pinned,
-            history.concat()
-        );
-        completion_request(self.params, user)
-    }
-}
-
 /// `Cargo.toml` of a candidate: harness-owned — no dependencies, no build
 /// script, `panic = "abort"`, and an empty `[workspace]` so the crate can
 /// never join (or break) an enclosing workspace.
@@ -1764,12 +810,9 @@ fn write_candidate(
     logic: &str,
     ffi: &str,
 ) -> Result<PathBuf, Error> {
-    let dir = work_dir.join("candidate");
-    remove_path(&dir)?;
+    let dir = fresh_candidate_dir(work_dir)?;
     let src = dir.join("src");
-    for created in [&dir, &src] {
-        std::fs::create_dir(created).map_err(|e| Error::io(created, e))?;
-    }
+    std::fs::create_dir(&src).map_err(|e| Error::io(&src, e))?;
     let manifest = candidate_manifest(crate_name);
     for (path, content) in [
         (dir.join("Cargo.toml"), manifest.as_str()),
@@ -1777,97 +820,7 @@ fn write_candidate(
         (src.join("logic.rs"), logic),
         (src.join("ffi.rs"), ffi),
     ] {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| Error::io(&path, e))?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| Error::io(&path, e))?;
-    }
-    Ok(dir)
-}
-
-/// Remove whatever is at `path` WITHOUT following a symlink; a missing path
-/// is fine.
-fn remove_path(path: &Path) -> Result<(), Error> {
-    let removed = match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
-        Ok(_) => std::fs::remove_file(path),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    };
-    removed.map_err(|e| Error::io(path, e))
-}
-
-/// Create a live sample's trace dir (`<traces_dir>/<attempt-id>`, made only
-/// once there is a call to record) and check that it IS that directory: the
-/// attempt id is content-derived, hence predictable, and a hostile target
-/// could have committed a symlink under that name to redirect the writes.
-fn prepare_trace_dir(dir: &Path) -> Result<PathBuf, Error> {
-    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
-        return Err(Error::Invariant(format!(
-            "trace dir {} has no parent",
-            dir.display()
-        )));
-    };
-    std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
-    let expected = parent
-        .canonicalize()
-        .map_err(|e| Error::io(parent, e))?
-        .join(name);
-    match std::fs::create_dir(&expected) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(Error::io(&expected, e)),
-    }
-    let resolved = expected
-        .canonicalize()
-        .map_err(|e| Error::io(&expected, e))?;
-    if resolved != expected {
-        return Err(Error::InvalidPlan(format!(
-            "{} resolves to {} — refusing to record traces through a symlink",
-            expected.display(),
-            resolved.display()
-        )));
-    }
-    Ok(expected)
-}
-
-/// Create `migration/units/<unit>/<rel…>` one level at a time, checking
-/// after each level that it IS that directory once symlinks are resolved
-/// (docs/SCHEMAS.md "Trust boundaries": every write destination is checked
-/// to be inside the unit dir after canonicalization). Because each parent is
-/// verified before its child is created, nothing is ever created through a
-/// symlink a hostile target committed. `ledger` must be rooted at the
-/// canonical target root.
-fn prepare_dir(ledger: &Ledger, unit_id: &str, rel: &[String]) -> Result<PathBuf, Error> {
-    let unit_dir = ledger.unit_dir(unit_id);
-    let mut chain: Vec<PathBuf> = vec![ledger.dir()];
-    if let Some(units) = unit_dir.parent().filter(|p| *p != ledger.dir()) {
-        chain.push(units.to_path_buf());
-    }
-    chain.push(unit_dir.clone());
-    let mut dir = unit_dir;
-    for segment in rel {
-        dir.push(segment);
-        chain.push(dir.clone());
-    }
-    for level in &chain {
-        match std::fs::create_dir(level) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(Error::io(level, e)),
-        }
-        let resolved = level.canonicalize().map_err(|e| Error::io(level, e))?;
-        if resolved != *level {
-            return Err(Error::InvalidPlan(format!(
-                "unit `{unit_id}`: {} resolves to {} — refusing to write model output through \
-                 a symlink out of the unit directory",
-                level.display(),
-                resolved.display()
-            )));
-        }
+        write_new(&path, content)?;
     }
     Ok(dir)
 }
@@ -4314,6 +3267,252 @@ int add(int a, int b) { return a + b; }\n";
         assert!(written.join("src/logic.rs").exists());
         assert_eq!(std::fs::read_dir(outside.join("src")).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// The committed zopfli target (the M3 evidence lives there).
+    fn zopfli_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../targets/zopfli")
+    }
+
+    /// GOLDEN (docs/M4-DESIGN.md R11): the migrate prompt bytes and the
+    /// attempt-id derivation are FROZEN. For every recorded u001 attempt,
+    /// the translate request `run_migration` builds today — from the
+    /// committed tree, with the hazards the CLI selects — must have the
+    /// recorded `request_key` and `prompt_digest` and land under the
+    /// recorded attempt id. The run happens in a scratch copy of the tree
+    /// (only what the prompt and the id read), against a provider that
+    /// never answers, so nothing under `targets/` is touched.
+    #[test]
+    fn golden_recorded_u001_translate_requests_reproduce() {
+        use harness_core::observer::{self, FindingState, ObserverPaths};
+        const GOLDEN_UNIT: &str = "u001-katajainen";
+        let real = zopfli_root().canonicalize().unwrap();
+        let real_ledger = Ledger::new(real.clone());
+        let facts = Facts::load(&real_ledger.facts_path()).unwrap();
+        let plan = Plan::load(&real_ledger.plan_path()).unwrap();
+        let unit = plan.unit(GOLDEN_UNIT).unwrap();
+
+        // Hazards exactly as `harness migrate` selects them.
+        let findings = observer::FindingsFile::load(&ObserverPaths::findings(&real_ledger))
+            .unwrap()
+            .findings;
+        let annotations =
+            observer::load_annotations(&ObserverPaths::annotations(&real_ledger)).unwrap();
+        let triage = observer::TriageFile::load(&ObserverPaths::triage(&real_ledger)).unwrap();
+        let reviews = observer::load_reviews(&ObserverPaths::reviews(&real_ledger)).unwrap();
+        let hazards: Vec<Finding> = findings
+            .iter()
+            .chain(annotations.iter())
+            .filter(|f| {
+                observer::affected_units(&f.file, &plan, &facts).contains(&GOLDEN_UNIT)
+                    && matches!(
+                        observer::finding_state(f, &triage, &reviews),
+                        FindingState::Confirmed | FindingState::Reinstated
+                    )
+            })
+            .cloned()
+            .collect();
+
+        // Scratch copy: harness.toml, the include closure, the driver.
+        let copy =
+            std::env::temp_dir().join(format!("harness-llm-golden-u001-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&copy);
+        let driver_rel = unit.oracle_param_str("driver").unwrap();
+        let mut files = facts.include_closure(&unit.files);
+        files.push("harness.toml".into());
+        files.push(driver_rel.to_string());
+        for rel in &files {
+            let to = copy.join(rel);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(real.join(rel), &to).unwrap();
+        }
+        let target = TargetContext::load(&copy).unwrap();
+        let traces = copy.join("traces");
+
+        let recorded = attempts::load_unit_attempts(&real_ledger, GOLDEN_UNIT).unwrap();
+        assert_eq!(recorded.len(), 3, "the three M3 attempts");
+        for want in &recorded {
+            let (provider, seen) = scripted(
+                &want.provider_kind,
+                false,
+                vec![Err("awaiting response: golden".into())],
+            );
+            let params = MigrateParams {
+                provider: &provider,
+                model: &want.model,
+                max_tokens: 8192,
+                max_repairs: 3,
+                traces_dir: &traces,
+                retry: false,
+                attempt: None,
+            };
+            let err = run_migration(
+                &params,
+                &oracle(vec![]),
+                &target,
+                &facts,
+                &plan,
+                unit,
+                &hazards,
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("golden"), "{err}");
+            let request = seen.borrow()[0].clone();
+            assert_eq!(
+                TraceAdapter::request_key(&request).unwrap(),
+                want.turns[0].request_key,
+                "{}: translate request_key",
+                want.id
+            );
+            assert_eq!(prompt_digest(&request), want.prompt_digest, "{}", want.id);
+            let fresh = AttemptRecord::load(
+                &Ledger::new(target.root.clone())
+                    .unit_dir(GOLDEN_UNIT)
+                    .join("attempts")
+                    .join(&want.id),
+            )
+            .unwrap_or_else(|e| panic!("{}: no attempt under the recorded id: {e}", want.id));
+            assert_eq!(fresh.id, want.id);
+            assert_eq!(fresh.stage, None);
+            assert_eq!(fresh.prompt_digest, want.prompt_digest);
+            assert_eq!(fresh.unit_source, want.unit_source);
+            assert_eq!(fresh.driver, want.driver);
+        }
+        let _ = std::fs::remove_dir_all(&copy);
+    }
+
+    fn call_ref(file: &str, to: &str, resolved: bool) -> harness_core::facts::RefRecord {
+        harness_core::facts::RefRecord {
+            from: "add".into(),
+            file: file.into(),
+            to: to.into(),
+            refkind: "call".into(),
+            resolved,
+        }
+    }
+
+    /// Run once under `facts`, returning the translate request's user text.
+    fn translate_user_under(fx: &Fx, facts: &Facts, ffi: &str) -> (String, FakeOracle) {
+        let (provider, seen) = scripted("anthropic", false, vec![reply(emit(LOGIC, ffi))]);
+        let params = MigrateParams {
+            provider: &provider,
+            model: "m",
+            max_tokens: 4096,
+            max_repairs: 0,
+            traces_dir: &fx.traces,
+            retry: false,
+            attempt: None,
+        };
+        let fake = oracle(vec![green()]);
+        run_migration(&params, &fake, &fx.target, facts, &fx.plan, fx.unit(), &[]).unwrap();
+        let user = seen.borrow()[0].user.clone();
+        (user, fake)
+    }
+
+    #[test]
+    fn a_printing_unit_gets_a_stdout_section_and_may_declare_stdio() {
+        let fx = fixture("stdout");
+        let mut facts = fx.facts.clone();
+        facts.refs = vec![
+            call_ref("src/unit.c", "putchar", false),
+            call_ref("src/unit.c", "printf", false),
+            call_ref("src/unit.c", "malloc", false),
+        ];
+        let ffi = format!("{FFI}extern \"C\" {{\n    fn putchar(c: i32) -> i32;\n}}\n");
+        let (user, fake) = translate_user_under(&fx, &facts, &ffi);
+        let stdout = section(&user, "STDOUT");
+        assert!(
+            stdout.starts_with("This unit's C calls C stdio output functions: printf, putchar.\n"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("std::io, print! and println!"), "{stdout}");
+        assert!(stdout.contains("ONE exception"), "{stdout}");
+        // Pinned between [ORACLE] and [C SOURCE].
+        let at = |name: &str| user.find(&format!("\n[{name}]\n")).unwrap();
+        assert!(at("ORACLE") < at("STDOUT") && at("STDOUT") < at("C SOURCE"));
+        // The stdio foreign block passed the deny-scan and reached the oracle.
+        assert_eq!(fake.calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn only_unresolved_stdio_calls_from_the_closure_add_the_section() {
+        let fx = fixture("no-stdout");
+        let mut facts = fx.facts.clone();
+        facts.refs = vec![
+            call_ref("src/other.c", "printf", false), // not the unit's
+            call_ref("src/unit.c", "puts", true),     // a project function
+            call_ref("src/unit.c", "fopen", false),   // not an output fn
+        ];
+        let (user, _) = translate_user_under(&fx, &facts, FFI);
+        assert!(!user.contains("[STDOUT]"), "{user}");
+        let (plain, _) = translate_user_under(&fixture("no-stdout-plain"), &fx.facts, FFI);
+        assert_eq!(user, plain, "the prompt is exactly the no-refs prompt");
+
+        // Without the section, a foreign block is still a check failure.
+        let fx = fixture("no-stdout-extern");
+        let ffi = format!("{FFI}extern \"C\" {{ fn putchar(c: i32) -> i32; }}\n");
+        let (provider, _) = scripted("anthropic", false, vec![reply(emit(LOGIC, &ffi))]);
+        let outcome = run_with(&fx, &provider, &oracle(vec![]), 0, &[]).unwrap();
+        assert_eq!(results(&outcome.record), [("translate", "check")]);
+    }
+
+    /// R2 (docs/M4-DESIGN.md): prompt-bound reads are confined to
+    /// `[target] source_dir`, even inside the target root.
+    #[test]
+    fn sources_outside_source_dir_are_never_read() {
+        let fx = fixture("confined");
+        std::fs::create_dir_all(fx.target.root.join("heldout")).unwrap();
+        std::fs::write(
+            fx.target.root.join("heldout/vector.h"),
+            "HELDOUT-SENTINEL\n",
+        )
+        .unwrap();
+        let mut facts = fx.facts.clone();
+        facts.files[0].includes = vec!["src/unit.h".into(), "heldout/vector.h".into()];
+        let (provider, seen) = scripted("anthropic", false, vec![good()]);
+        let run = |facts: &Facts| {
+            let params = MigrateParams {
+                provider: &provider,
+                model: "m",
+                max_tokens: 4096,
+                max_repairs: 0,
+                traces_dir: &fx.traces,
+                retry: false,
+                attempt: None,
+            };
+            run_migration(
+                &params,
+                &oracle(vec![]),
+                &fx.target,
+                facts,
+                &fx.plan,
+                fx.unit(),
+                &[],
+            )
+        };
+        let err = run(&facts).unwrap_err();
+        assert!(matches!(err, Error::InvalidPlan(_)), "{err}");
+        assert!(
+            err.to_string()
+                .contains("outside the target's source_dir \"src\""),
+            "{err}"
+        );
+
+        #[cfg(unix)]
+        {
+            // A symlink inside source_dir that resolves out of it.
+            std::os::unix::fs::symlink(
+                fx.target.root.join("heldout/vector.h"),
+                fx.target.root.join("src/vector.h"),
+            )
+            .unwrap();
+            facts.files[0].includes = vec!["src/vector.h".into()];
+            let err = run(&facts).unwrap_err();
+            assert!(matches!(err, Error::InvalidPlan(_)), "{err}");
+            assert!(err.to_string().contains("source_dir"), "{err}");
+        }
+        assert!(seen.borrow().is_empty(), "nothing was sent");
+        assert!(!fx.attempts_dir().exists());
     }
 
     #[test]
