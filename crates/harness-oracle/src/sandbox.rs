@@ -1,8 +1,19 @@
 //! The oracle sandbox (docs/SCHEMAS.md "Trust boundaries"): on macOS every
 //! build and every run of target- or model-derived code is wrapped in
-//! `/usr/bin/sandbox-exec` with a generated SBPL profile — network denied,
-//! reads under the user's home denied except the target root and the Rust
-//! toolchain dirs, writes confined to explicitly listed locations and temp.
+//! `/usr/bin/sandbox-exec` with a generated SBPL profile.
+//!
+//! Two profile shapes:
+//! - the **tool profile** ([`render_profile`]) for `cc`/`cargo`/`rustc`/`nm`:
+//!   network denied, reads under the user's home denied except the target
+//!   root and the Rust toolchain dirs, writes confined to explicitly listed
+//!   locations and temp;
+//! - the **run profile** ([`render_run_profile`], M4 R1 run confinement) for
+//!   every binary the oracle built: network denied, `exec` of nothing but
+//!   the binary itself, reads denied under the user's home AND under the
+//!   target root except the binary and explicitly listed input files, and
+//!   writes confined to one fresh per-run temp dir. A candidate can thereby
+//!   no longer read an earlier run's output (e.g. the build dir's
+//!   `drv_c.out`) and replay it.
 //!
 //! Profiles are rendered from canonical paths only; a path containing a
 //! double quote or a backslash is rejected rather than escaped, so a hostile
@@ -86,12 +97,6 @@ pub(crate) struct ProfileSpec<'a> {
     pub write_dirs: &'a [PathBuf],
     /// Canonical single files the child may create or write.
     pub write_files: &'a [PathBuf],
-    /// When set (built-binary runs only), the ONLY program the child may
-    /// `exec`: the profile denies `process-exec*` and re-allows exactly this
-    /// canonical path, so a built binary cannot spawn helper processes and
-    /// `sandbox-exec` can still start the binary itself. `None` (the tool
-    /// profile, or an unsandboxed run) leaves `(allow default)` in force.
-    pub exec_only: Option<&'a Path>,
 }
 
 /// Render the SBPL profile for `spec`. SBPL is last-match-wins, so each
@@ -100,16 +105,6 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
     let home = spec.host.home.as_path();
     let mut out = String::new();
     out.push_str("(version 1)\n(allow default)\n(deny network*)\n");
-    // Built-binary runs may exec nothing but themselves: deny every exec,
-    // then re-allow the one binary (SBPL is last-match-wins, so the deny
-    // comes first). The allow is also what lets `sandbox-exec` start it.
-    if let Some(bin) = spec.exec_only {
-        out.push_str("(deny process-exec*)\n");
-        out.push_str(&format!(
-            "(allow process-exec (literal {}))\n",
-            sbpl_string(bin)?
-        ));
-    }
     out.push_str(&format!(
         "(deny file-read* (subpath {}))\n",
         sbpl_string(home)?
@@ -207,6 +202,54 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
     Ok(out)
 }
 
+/// What one run of a built binary may touch (R1 run confinement).
+#[derive(Debug, Clone)]
+pub(crate) struct RunSpec<'a> {
+    /// Host directories (the home directory is denied).
+    pub host: &'a HostDirs,
+    /// Canonical target root (denied, wherever it lives).
+    pub target_root: &'a Path,
+    /// Canonical path of the binary: the only program the run may `exec`,
+    /// and readable (the loader maps it).
+    pub bin: &'a Path,
+    /// Canonical input files the run may read (a whole-program sample).
+    pub read_files: &'a [PathBuf],
+    /// The fresh, canonical per-run temp dir: the only writable location.
+    pub tmpdir: &'a Path,
+}
+
+/// Render the run profile for `spec`. SBPL is last-match-wins, so each deny
+/// precedes the narrower allows that carve its exceptions:
+/// - `exec` of anything but the binary is denied (the allow is also what
+///   lets `sandbox-exec` start it);
+/// - reads under the home directory and under the target root are denied,
+///   except the binary, the listed inputs and the run's own temp dir;
+/// - writes are denied everywhere but the run's temp dir and three device
+///   nodes (`/dev/null`, `/dev/tty`, `/dev/dtracehelper`).
+pub(crate) fn render_run_profile(spec: &RunSpec<'_>) -> Result<String, Error> {
+    let bin = sbpl_string(spec.bin)?;
+    let tmp = sbpl_string(spec.tmpdir)?;
+    let mut out = String::new();
+    out.push_str("(version 1)\n(allow default)\n(deny network*)\n");
+    out.push_str("(deny process-exec*)\n");
+    out.push_str(&format!("(allow process-exec (literal {bin}))\n"));
+    out.push_str(&format!(
+        "(deny file-read* (subpath {}) (subpath {}))\n",
+        sbpl_string(&spec.host.home)?,
+        sbpl_string(spec.target_root)?
+    ));
+    out.push_str(&format!("(allow file-read* (literal {bin})"));
+    for file in spec.read_files {
+        out.push_str(&format!(" (literal {})", sbpl_string(file)?));
+    }
+    out.push_str(&format!(" (subpath {tmp}))\n"));
+    out.push_str(&format!(
+        "(deny file-write* (subpath \"/\"))\n(allow file-write* (subpath {tmp}) \
+         (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
+    ));
+    Ok(out)
+}
+
 /// Quote a path as an SBPL string literal. Paths must be absolute UTF-8 and
 /// free of `"`, `\` and control characters — such a path is refused outright
 /// (never escaped), so profile text cannot be injected through a directory
@@ -286,7 +329,6 @@ mod tests {
             toolchain: true,
             write_dirs: &write_dirs,
             write_files: &write_files,
-            exec_only: None,
         })
         .expect("renders");
         let expected = "\
@@ -305,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn run_profile_reads_only_the_target_root_and_writes_only_temp() {
+    fn a_non_toolchain_profile_reads_only_the_target_root() {
         let host = host();
         let text = render_profile(&ProfileSpec {
             host: &host,
@@ -313,11 +355,9 @@ mod tests {
             toolchain: false,
             write_dirs: &[],
             write_files: &[],
-            exec_only: None,
         })
         .expect("renders");
         assert!(text.contains("(deny network*)"), "{text}");
-        // With no exec restriction the default allow governs process-exec.
         assert!(!text.contains("process-exec"), "{text}");
         assert!(
             text.contains("(allow file-read* (subpath \"/Users/u/code/t\"))\n"),
@@ -327,12 +367,6 @@ mod tests {
         assert!(!text.contains(".rustup"), "{text}");
         assert!(!text.contains("file-read-metadata"), "{text}");
         assert!(!text.contains("rust-toolchain"), "{text}");
-        assert!(
-            text.contains(
-                "(allow file-write* (subpath \"/private/tmp\") (subpath \"/private/var/folders\")"
-            ),
-            "{text}"
-        );
     }
 
     #[test]
@@ -344,7 +378,6 @@ mod tests {
             toolchain: true,
             write_dirs: &[],
             write_files: &[],
-            exec_only: None,
         })
         .expect("renders");
         // Only the toolchain dirs' ancestor (the home itself) needs metadata.
@@ -364,7 +397,6 @@ mod tests {
             toolchain: true,
             write_dirs: &[],
             write_files: &[],
-            exec_only: None,
         })
         .expect("renders");
         assert!(
@@ -403,38 +435,67 @@ mod tests {
             toolchain: false,
             write_dirs: &write_dirs,
             write_files: &[],
-            exec_only: None,
         })
         .expect_err("injection attempt must fail");
         assert!(err.to_string().contains("sandbox"), "{err}");
     }
 
+    /// The whole run profile, byte for byte: exec only the binary, no reads
+    /// under home or the target root beyond the binary, the listed inputs and
+    /// the run's temp dir, writes only to that temp dir.
     #[test]
-    fn a_run_profile_denies_every_exec_but_the_binary_itself() {
+    fn the_run_profile_confines_a_built_binary() {
         let host = host();
         let bin = PathBuf::from("/Users/u/t/migration/build/u1/drv_rs");
-        let text = render_profile(&ProfileSpec {
+        let inputs = vec![PathBuf::from(
+            "/Users/u/t/migration/build/u1/sample_text.txt",
+        )];
+        let text = render_run_profile(&RunSpec {
             host: &host,
             target_root: Path::new("/Users/u/t"),
-            toolchain: false,
-            write_dirs: &[],
-            write_files: &[],
-            exec_only: Some(&bin),
+            bin: &bin,
+            read_files: &inputs,
+            tmpdir: Path::new("/private/var/folders/xy/T/ruharness-run-1-0"),
         })
         .expect("renders");
-        // Deny comes before the allow so last-match-wins leaves only the
-        // binary itself executable.
-        let deny = text.find("(deny process-exec*)").expect("deny present");
-        let allow = text
-            .find("(allow process-exec (literal \"/Users/u/t/migration/build/u1/drv_rs\"))")
-            .expect("allow present");
-        assert!(deny < allow, "{text}");
-        // The exec rules sit above the file rules, right after the network deny.
-        assert!(text.starts_with(
-            "(version 1)\n(allow default)\n(deny network*)\n\
-             (deny process-exec*)\n\
-             (allow process-exec (literal \"/Users/u/t/migration/build/u1/drv_rs\"))\n"
-        ));
+        let expected = "\
+(version 1)
+(allow default)
+(deny network*)
+(deny process-exec*)
+(allow process-exec (literal \"/Users/u/t/migration/build/u1/drv_rs\"))
+(deny file-read* (subpath \"/Users/u\") (subpath \"/Users/u/t\"))
+(allow file-read* (literal \"/Users/u/t/migration/build/u1/drv_rs\") (literal \"/Users/u/t/migration/build/u1/sample_text.txt\") (subpath \"/private/var/folders/xy/T/ruharness-run-1-0\"))
+(deny file-write* (subpath \"/\"))
+(allow file-write* (subpath \"/private/var/folders/xy/T/ruharness-run-1-0\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
+";
+        assert_eq!(text, expected);
+
+        // A target root outside the home directory is denied just the same.
+        let text = render_run_profile(&RunSpec {
+            host: &host,
+            target_root: Path::new("/private/var/folders/xy/T/target"),
+            bin: Path::new("/private/var/folders/xy/T/target/b"),
+            read_files: &[],
+            tmpdir: Path::new("/private/var/folders/xy/T/run"),
+        })
+        .expect("renders");
+        assert!(
+            text.contains("(subpath \"/private/var/folders/xy/T/target\"))\n"),
+            "{text}"
+        );
+        assert!(!text.contains("/private/tmp"), "{text}");
+
+        // Hostile characters are refused here too.
+        let bad = PathBuf::from("/t/x\") (subpath \"/");
+        assert!(render_run_profile(&RunSpec {
+            host: &host,
+            target_root: Path::new("/t"),
+            bin: Path::new("/t/b"),
+            read_files: std::slice::from_ref(&bad),
+            tmpdir: Path::new("/tmp/r"),
+        })
+        .is_err());
     }
 
     #[test]

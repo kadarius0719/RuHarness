@@ -135,7 +135,7 @@ impl Runner {
             )));
         }
         let shown = argv.join(" ");
-        let out = self.spawn(argv, profile, TOOL_ENV, &shown)?;
+        let out = self.spawn(argv, profile, TOOL_ENV, &[], &shown)?;
         match out.end {
             ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
             ChildEnd::Exited(status) => Err(Error::Invariant(format!(
@@ -153,18 +153,62 @@ impl Runner {
         }
     }
 
+    /// Run an allowlisted tool under the tool profile, keeping a tool
+    /// FAILURE apart from a harness error: `Ok(Ok(stdout))` on success,
+    /// `Ok(Err(text))` when the tool ran and failed (the bounded stderr
+    /// excerpt, or the timeout/overflow note — never the command line), and
+    /// `Err` only when it could not be run at all (allowlist, spawn). Used
+    /// where a compile failure is evidence (a failed check), not an error.
+    pub(crate) fn tool_outcome(&self, argv: &[String]) -> Result<Result<Vec<u8>, String>, Error> {
+        let exe = argv
+            .first()
+            .ok_or_else(|| Error::Invariant("oracle: empty argv".into()))?;
+        if !self.allowlist.iter().any(|a| a == exe) {
+            return Err(Error::Invariant(format!(
+                "executable `{exe}` is not on the [oracle] allowlist in harness.toml"
+            )));
+        }
+        let shown = argv.join(" ");
+        let out = self.spawn(argv, self.tool_profile.as_deref(), TOOL_ENV, &[], &shown)?;
+        Ok(match out.end {
+            ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
+            ChildEnd::Exited(status) => Err(format!(
+                "{exe} failed ({status}):\n{}",
+                stderr_excerpt(&out.stderr)
+            )),
+            ChildEnd::TimedOut => Err(format!("{exe} timed out after {}s", self.timeout.as_secs())),
+            ChildEnd::OutputOverflow => Err(format!(
+                "{exe} produced more than {} bytes of output",
+                self.max_output
+            )),
+        })
+    }
+
     /// Run a binary the oracle just built — by path, exempt from the name
     /// allowlist, with only `PATH` in its environment, under the given run
-    /// sandbox profile (`None` = unsandboxed). `verify` renders a per-binary
-    /// profile whose `process-exec` allow names exactly this binary, so each
-    /// built run is confined to executing only itself. Returns stdout; every
-    /// failure (including a timeout) is a [`RunFailure`] the caller turns into
-    /// a failed check.
+    /// sandbox profile (`None` = unsandboxed). Production runs go through
+    /// [`crate::confine::Confinement`], which renders the per-run profile and
+    /// temp dir; this raw form is for tests. Returns stdout; every failure
+    /// (including a timeout) is a [`RunFailure`] the caller turns into a
+    /// failed check.
+    #[cfg(test)]
     pub(crate) fn built_with_profile(
         &self,
         bin: &Path,
         args: &[&str],
         profile: Option<&str>,
+    ) -> Result<Vec<u8>, RunFailure> {
+        self.built_with_env(bin, args, profile, &[])
+    }
+
+    /// [`Runner::built_with_profile`] plus `extra_env` set explicitly on top
+    /// of [`BUILT_ENV`] (the confinement's per-run `TMPDIR`).
+    pub(crate) fn built_with_env(
+        &self,
+        bin: &Path,
+        args: &[&str],
+        profile: Option<&str>,
+        extra_env: &[(&str, &std::ffi::OsStr)],
     ) -> Result<Vec<u8>, RunFailure> {
         let bin_str = bin
             .to_str()
@@ -173,7 +217,7 @@ impl Runner {
         argv.extend(args.iter().map(|a| (*a).to_string()));
         let shown = argv.join(" ");
         let out = self
-            .spawn(&argv, profile, BUILT_ENV, &shown)
+            .spawn(&argv, profile, BUILT_ENV, extra_env, &shown)
             .map_err(|e| RunFailure::Failed(e.to_string()))?;
         match out.end {
             ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
@@ -196,13 +240,17 @@ impl Runner {
         argv: &[String],
         profile: Option<&str>,
         env_keys: &[&str],
+        extra_env: &[(&str, &std::ffi::OsStr)],
         shown: &str,
     ) -> Result<ChildOutput, Error> {
         let full: Vec<String> = match profile {
             Some(p) => sandbox::wrap(p, argv),
             None => argv.to_vec(),
         };
-        let cmd = scrubbed_command(&full, env_keys, &self.cwd)?;
+        let mut cmd = scrubbed_command(&full, env_keys, &self.cwd)?;
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
         run_with_timeout(cmd, shown, self.timeout, self.max_output)
     }
 }
@@ -692,7 +740,6 @@ mod tests {
             toolchain: true,
             write_dirs: &[],
             write_files: &[],
-            exec_only: None,
         })
         .expect("profile renders");
         let mut r = runner(Duration::from_secs(20));
@@ -728,7 +775,6 @@ mod tests {
             toolchain: false,
             write_dirs: &[],
             write_files: &[],
-            exec_only: None,
         })
         .expect("profile renders");
         let open = runner(Duration::from_secs(20));

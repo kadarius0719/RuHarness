@@ -65,7 +65,6 @@ impl ToolBench {
                 toolchain: true,
                 write_dirs: &[],
                 write_files: &[],
-                exec_only: None,
             })
             .expect("profile renders")
         });
@@ -98,6 +97,10 @@ impl ToolBench {
 
     pub(crate) fn build_root(&self) -> &Path {
         &self.build_root
+    }
+
+    pub(crate) fn runner(&self) -> &Runner {
+        &self.runner
     }
 
     pub(crate) fn symbol_ctx(&self) -> SymbolCtx<'_> {
