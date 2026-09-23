@@ -9,7 +9,7 @@ use clap::Subcommand;
 use harness_core::bench::{CorpusLock, Suite, SuiteCase};
 use harness_core::driver::DriverValidation;
 use harness_core::ledger::Ledger;
-use harness_core::plan::{self as plan_mod, OracleValue};
+use harness_core::plan as plan_mod;
 use harness_core::{attempts, hash, Facts, Plan, TargetContext};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -131,22 +131,6 @@ fn case_config(case: &SuiteCase, has_include: bool) -> String {
     )
 }
 
-/// The `[unit.oracle]` table `bench init` writes for a unit without one.
-fn oracle_entries(unit_id: &str, files: &[String]) -> Vec<(&'static str, OracleValue)> {
-    vec![
-        ("kind", OracleValue::Str("c-abi-differential".into())),
-        (
-            "driver",
-            OracleValue::Str(format!("migration/units/{unit_id}/driver.c")),
-        ),
-        (
-            "rust_crate",
-            OracleValue::Str(format!("{}_rs", unit_id.replace('-', "_"))),
-        ),
-        ("replaces", OracleValue::List(files.to_vec())),
-    ]
-}
-
 fn cmd_init(suite_dir: &Path, check: bool) -> Result<ExitCode> {
     let (suite, _lock) = load_verified(suite_dir)?;
     let mut drift: Vec<String> = Vec::new();
@@ -224,7 +208,7 @@ fn init_case(root: &Path, case: &SuiteCase) -> Result<()> {
         plan_mod::set_oracle_table_if_absent(
             &ledger.plan_path(),
             &unit.id,
-            &oracle_entries(&unit.id, &unit.files),
+            &crate::gen_driver::default_oracle_entries(&unit.id, &unit.files),
         )?;
     }
     Ok(())

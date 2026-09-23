@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod bench;
+mod gen_driver;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -17,7 +18,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Exit code for a red oracle verdict (distinct from clap's usage code 2).
-const EXIT_ORACLE_RED: u8 = 10;
+pub(crate) const EXIT_ORACLE_RED: u8 = 10;
 
 #[derive(Parser)]
 #[command(
@@ -120,6 +121,33 @@ enum Cmd {
         #[command(subcommand)]
         cmd: bench::BenchCmd,
     },
+    /// Generate a unit's differential driver through the configured LLM
+    /// provider and self-validate it against the original C
+    GenDriver {
+        /// Unit id from plan.toml
+        unit: String,
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Provider profile override (built-in or user-level profile name)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model override
+        #[arg(long)]
+        model: Option<String>,
+        /// Replace the unit's existing GENERATED driver with a new green one
+        #[arg(long)]
+        promote: bool,
+        /// Run target/model-derived code even though no sandbox is available
+        #[arg(long)]
+        allow_unsandboxed: bool,
+        /// Record a NEW sample when this live attempt already finished
+        #[arg(long)]
+        retry: bool,
+        /// Pin the recorded attempt a `--provider replay` run verifies
+        #[arg(long)]
+        attempt: Option<String>,
+    },
     /// Refresh the generated runtime view (AGENTS.md managed block)
     SyncRuntime {
         /// Target repository root
@@ -190,6 +218,25 @@ fn main() -> ExitCode {
         }),
         Cmd::SyncRuntime { target, check } => cmd_sync_runtime(target, check),
         Cmd::Bench { cmd } => bench::run(cmd),
+        Cmd::GenDriver {
+            unit,
+            target,
+            provider,
+            model,
+            promote,
+            allow_unsandboxed,
+            retry,
+            attempt,
+        } => gen_driver::cmd_gen_driver(gen_driver::GenDriverArgs {
+            unit,
+            target,
+            provider,
+            model,
+            promote,
+            allow_unsandboxed,
+            retry,
+            attempt,
+        }),
     };
     match result {
         Ok(code) => code,
@@ -296,7 +343,7 @@ pub(crate) fn plan_target(ctx: &TargetContext) -> Result<(Vec<String>, String, u
 /// on platforms without a sandbox unless the user explicitly accepts the risk
 /// (docs/SCHEMAS.md "Trust boundaries") — regardless of provider: an
 /// `external` candidate and the target's own driver.c run just the same.
-fn require_sandbox(allow_unsandboxed: bool, what: &str) -> Result<()> {
+pub(crate) fn require_sandbox(allow_unsandboxed: bool, what: &str) -> Result<()> {
     if harness_oracle::sandbox_mode() == "none" && !allow_unsandboxed {
         bail!(
             "no sandbox is available on this platform; `{what}` builds and runs target- and \
@@ -310,7 +357,7 @@ fn require_sandbox(allow_unsandboxed: bool, what: &str) -> Result<()> {
 /// symlink: created level by level under the canonical target root, refusing
 /// any component that is not a real directory. Target-owned trees are hostile
 /// — a committed `traces -> /elsewhere` must not redirect harness writes.
-fn safe_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<PathBuf> {
+pub(crate) fn safe_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<PathBuf> {
     let mut cur = root.to_path_buf();
     for comp in components {
         cur = cur.join(comp);
@@ -919,6 +966,20 @@ fn cmd_migrate(args: MigrateArgs) -> Result<ExitCode> {
             "unit `{unit_id}` is stale: source changed since planning; run `harness scan`, \
              then `harness plan`, review the diff, then migrate"
         );
+    }
+    // R6: once a unit has driver-generation history, its driver must carry a
+    // FRESH green validation — deleting driver-validation.json cannot relabel
+    // a generated driver as human-written.
+    if ledger.unit_dir(&unit_id).join("driver-attempts").exists()
+        || ledger.driver_validation_path(&unit_id).exists()
+    {
+        let state = bench::driver_state(&ctx, &facts, unit)?;
+        if state != "validated" {
+            bail!(
+                "unit `{unit_id}` has a generated driver whose validation is `{state}`; run \
+                 `harness gen-driver {unit_id}` (or re-validate) before migrating"
+            );
+        }
     }
 
     // Stage routing (§13.2): flag > [llm.migrate] > [llm].

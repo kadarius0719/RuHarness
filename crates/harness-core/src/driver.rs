@@ -72,9 +72,11 @@ impl Mutant {
 }
 
 /// Deterministic stratified sample of at most `max` mutants: every unit
-/// symbol first gets up to `ceil(max / |symbols|)` of the mutants inside its
-/// own body (in [`Mutant::order_key`] order), then the remaining slots are
-/// filled from all other mutants in key order. The result is sorted by key.
+/// symbol first gets up to `ceil((max / 2) / |symbols|)` of the mutants inside
+/// its own body (in [`Mutant::order_key`] order), then the remaining slots are
+/// filled from ALL mutants in key order. Half the budget is reserved for the
+/// fill so static helpers — where a unit's logic usually lives — are always
+/// sampled, even for a one-symbol unit. The result is sorted by key.
 pub fn sample_mutants(all: &[Mutant], symbols: &[String], max: usize) -> Vec<Mutant> {
     let mut keyed: Vec<(String, &Mutant)> = all.iter().map(|m| (m.order_key(), m)).collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
@@ -85,7 +87,7 @@ pub fn sample_mutants(all: &[Mutant], symbols: &[String], max: usize) -> Vec<Mut
     let per_symbol = if symbols.is_empty() {
         0
     } else {
-        max.div_ceil(symbols.len())
+        (max / 2).max(1).div_ceil(symbols.len())
     };
     let mut chosen: BTreeMap<String, &Mutant> = BTreeMap::new();
     for symbol in symbols {
@@ -381,6 +383,15 @@ mod tests {
         assert_eq!(s1, s2, "order of discovery must not matter");
         assert_eq!(s1.len(), 16);
         assert_eq!(s1.iter().filter(|m| m.function == "small").count(), 3);
+        // One exported symbol must not starve its static helpers.
+        let mut one: Vec<Mutant> = (0..40).map(|i| m("api", i, "arith")).collect();
+        one.extend((100..140).map(|i| m("helper", i, "arith")));
+        let s3 = sample_mutants(&one, &["api".to_string()], 24);
+        assert_eq!(s3.len(), 24);
+        assert!(
+            s3.iter().filter(|m| m.function == "helper").count() >= 6,
+            "{s3:?}"
+        );
         assert!(sample_mutants(&all, &symbols, 0).is_empty());
     }
 

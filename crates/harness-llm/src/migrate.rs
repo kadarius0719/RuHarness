@@ -423,6 +423,21 @@ impl Stage for MigrateStage<'_> {
         }
         let candidate = write_candidate(ctx.work_dir, self.crate_name, logic, ffi)?;
         let verdict = self.verify(&format!("{}/candidate", ctx.work_rel))?;
+        // A red `driver-shape` indicts the unit's DRIVER, not the candidate:
+        // it is never fed to the translator as evidence (and never journaled
+        // as a model outcome) — the attempt stays resumable once the driver
+        // is fixed or regenerated.
+        if let Some(shape) = verdict
+            .checks
+            .iter()
+            .find(|c| c.name == "driver-shape" && !c.passed)
+        {
+            return Err(Error::Invariant(format!(
+                "the unit's differential driver failed the driver-shape gate ({}); fix or \
+                 regenerate the driver (`harness gen-driver`) — this is not a candidate failure",
+                printable(&shape.detail, 300)
+            )));
+        }
         if !ctx.verifying {
             verdict.store(&ctx.work_dir.join("attempt-verdict.json"))?;
         }
@@ -640,6 +655,8 @@ fn classify(verdict: &Verdict) -> &'static str {
     let failed = || verdict.checks.iter().filter(|c| !c.passed);
     if failed().any(|c| c.name == "rust-build") {
         "build"
+    } else if failed().any(|c| c.name == "capabilities") {
+        "check"
     } else if failed()
         .filter(|c| !is_c_side(c))
         .any(|c| c.detail.contains("timed out") || c.detail.contains("run failed"))
@@ -662,10 +679,18 @@ fn verdict_explanation(class: &'static str, verdict: &Verdict) -> &'static str {
         C_SIDE_EXPLANATION
     } else if failed.iter().any(|c| c.name == "symbol-set") {
         SYMBOL_SET_EXPLANATION
+    } else if failed.iter().any(|c| c.name == "capabilities") {
+        CAPABILITIES_EXPLANATION
     } else {
         class_explanation(class)
     }
 }
+
+/// Why a `capabilities` failure stopped the oracle before linking.
+const CAPABILITIES_EXPLANATION: &str = "the candidate built, but its own code reaches \
+capabilities the C unit never uses (files, environment, processes, network, threads, clocks, \
+dynamic loading, or inline assembly), so nothing was linked or run; translate the unit's \
+behavior without them";
 
 /// Bounded `[EVIDENCE]` for a red verdict of the given class: the failed
 /// checks' details, scrubbed and quoted, plus the differing driver output
@@ -1610,6 +1635,68 @@ int add(int a, int b) { return a + b; }\n";
             section(&repair, "EVIDENCE"),
             "check `symbol-set` failed:\n| exported symbols differ: unexpected: helper; \
              missing: add\n"
+        );
+    }
+
+    /// Regression (M4 merge): a red `driver-shape` indicts the DRIVER; it must
+    /// never reach the translator as evidence nor close the attempt.
+    #[test]
+    fn a_driver_shape_failure_is_a_harness_error_not_a_turn() {
+        let fx = fixture("driver-shape");
+        let (provider, seen) = scripted("anthropic", false, vec![good()]);
+        let fake = oracle(vec![verdict(&[
+            ("symbol-set", true, "ok"),
+            ("capabilities", true, "ok"),
+            (
+                "driver-shape",
+                false,
+                "driver defines `rnd` (only `main` may be external)",
+            ),
+        ])]);
+        let err = run_with(&fx, &provider, &fake, 3, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("driver-shape gate"), "{err}");
+        assert!(err.contains("not a candidate failure"), "{err}");
+        assert_eq!(seen.borrow().len(), 1, "no repair turn may be posed");
+        let attempts =
+            attempts::load_unit_attempts(&Ledger::new(fx.target.root.clone()), UNIT).unwrap();
+        assert_eq!(attempts[0].outcome, "in-progress");
+        assert!(attempts[0].turns.is_empty());
+    }
+
+    /// A red `capabilities` check is the candidate's doing: class `check`,
+    /// explained as "nothing was linked or run", detail quoted as evidence.
+    #[test]
+    fn a_capabilities_failure_is_a_check_with_its_own_explanation() {
+        let fx = fixture("capabilities");
+        let (provider, seen) = scripted("anthropic", false, vec![good(), good()]);
+        let fake = oracle(vec![
+            verdict(&[
+                ("symbol-set", true, "ok"),
+                (
+                    "capabilities",
+                    false,
+                    "candidate references std::fs: _ZN3std2fs4read",
+                ),
+            ]),
+            green(),
+        ]);
+        let outcome = run_with(&fx, &provider, &fake, 1, &[]).unwrap();
+        assert_eq!(
+            results(&outcome.record),
+            [("translate", "check"), ("repair", "green")]
+        );
+        let repair = seen.borrow()[1].user.clone();
+        let class = section(&repair, "FAILURE CLASS");
+        assert!(
+            class.starts_with("check — the candidate built, but"),
+            "{class}"
+        );
+        assert!(class.contains("nothing was linked or run"), "{class}");
+        assert!(
+            section(&repair, "EVIDENCE").contains("| candidate references std::fs"),
+            "{repair}"
         );
     }
 
