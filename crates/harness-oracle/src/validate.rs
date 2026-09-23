@@ -12,7 +12,7 @@
 //! collide with the driver or a unit file.
 
 use crate::confine::Confinement;
-use crate::exec::{RunFailure, Runner};
+use crate::exec::{RunFailure, RunOutput, Runner};
 use crate::sandbox::{self, HostDirs, ProfileSpec};
 use crate::scrub::Scrubber;
 use crate::{shape, Base, CcInvocation};
@@ -314,7 +314,7 @@ impl Ctx<'_> {
         });
 
         // 4. determinism: three separate runs, identical, bounded.
-        let mut outputs: Vec<Vec<u8>> = Vec::new();
+        let mut outputs: Vec<RunOutput> = Vec::new();
         let mut run_failed: Option<Check> = None;
         let mut slowest = Duration::ZERO;
         for i in 0..DETERMINISM_RUNS {
@@ -354,7 +354,7 @@ impl Ctx<'_> {
         let pinned = outputs.first().cloned().unwrap_or_default();
         gate!(determinism_check(&outputs));
 
-        // 5. opt-levels: -O0 must print exactly what -O2 printed.
+        // 5. opt-levels: -O0 must print exactly what -O2 printed (both streams).
         let o0 = self.dv.join("drv_o0");
         let mut o0_inputs = driver_in.to_vec();
         o0_inputs.extend(self.unit_paths());
@@ -365,18 +365,21 @@ impl Ctx<'_> {
                     Err(e) => fail("opt-levels", format!("the -O0 build's run failed: {e}")),
                     Ok(out) if out == pinned => pass(
                         "opt-levels",
-                        format!("-O0 output identical to -O2 ({} bytes)", out.len()),
+                        format!("-O0 output identical to -O2 ({} bytes)", out.stdout.len()),
                     ),
-                    Ok(out) => fail(
-                        "opt-levels",
-                        format!(
-                        "the -O0 build prints something else than -O2 (lens {} vs {}, first diff \
-                         at byte {}) — undefined or unspecified behavior?",
-                        out.len(),
-                        pinned.len(),
-                        first_diff(&out, &pinned)
-                    ),
-                    ),
+                    Ok(out) => {
+                        let (stream, a, b) = differing_stream(&out, &pinned);
+                        fail(
+                            "opt-levels",
+                            format!(
+                                "the -O0 build prints something else than -O2{stream} (lens {} vs \
+                                 {}, first diff at byte {}) — undefined or unspecified behavior?",
+                                a.len(),
+                                b.len(),
+                                first_diff(a, b)
+                            ),
+                        )
+                    }
                 },
             }
         );
@@ -403,7 +406,7 @@ impl Ctx<'_> {
     fn mutation(
         &self,
         driver_obj: &Path,
-        pinned: &[u8],
+        pinned: &RunOutput,
         policy: &harness_core::config::DriverPolicy,
     ) -> Result<(MutationStats, Check), Error> {
         let mut all = Vec::new();
@@ -455,7 +458,7 @@ impl Ctx<'_> {
         index: usize,
         mutant: &harness_core::driver::Mutant,
         driver_obj: &Path,
-        pinned: &[u8],
+        pinned: &RunOutput,
         confined: &Confinement<'_>,
         originals: &[(String, Vec<u8>)],
     ) -> Result<MutantOutcome, Error> {
@@ -515,7 +518,7 @@ impl Ctx<'_> {
             return Ok(MutantOutcome::NotCompiled);
         }
         Ok(match confined.run(&bin, &[], &[]) {
-            Ok(out) if out == pinned => MutantOutcome::Survived,
+            Ok(out) if out == *pinned => MutantOutcome::Survived,
             Ok(_) | Err(RunFailure::Failed(_)) | Err(RunFailure::TimedOut { .. }) => {
                 MutantOutcome::Killed
             }
@@ -572,28 +575,32 @@ impl Ctx<'_> {
 }
 
 /// The `determinism` check over the collected runs.
-fn determinism_check(outputs: &[Vec<u8>]) -> Check {
-    let Some(first) = outputs.first() else {
+fn determinism_check(outputs: &[RunOutput]) -> Check {
+    let Some(pinned) = outputs.first() else {
         return fail("determinism", "no run completed".into());
     };
     if let Some((i, other)) = outputs
         .iter()
         .enumerate()
         .skip(1)
-        .find(|(_, o)| *o != first)
+        .find(|(_, o)| *o != pinned)
     {
+        let (stream, a, b) = differing_stream(other, pinned);
         return fail(
             "determinism",
             format!(
-                "run {} printed something else than run 1 (lens {} vs {}, first diff at byte {}) \
-                 — the output depends on addresses, uninitialized memory or other run state",
+                "run {} printed something else than run 1{stream} (lens {} vs {}, first diff at \
+                 byte {}) — the output depends on addresses, uninitialized memory or other run \
+                 state",
                 i + 1,
-                other.len(),
-                first.len(),
-                first_diff(other, first)
+                a.len(),
+                b.len(),
+                first_diff(a, b)
             ),
         );
     }
+    // Observations belong on stdout; stderr is compared, never required.
+    let first = &pinned.stdout;
     if first.is_empty() {
         return fail("determinism", "the driver printed nothing".into());
     }
@@ -616,6 +623,18 @@ fn determinism_check(outputs: &[Vec<u8>]) -> Check {
     )
 }
 
+/// Which streams two runs differ in, as a label for the detail, and the
+/// byte strings its lens/first-diff describe: stdout alone → no label (the
+/// wording predating stderr comparison); stderr alone → ` on stderr`; both →
+/// ` on stdout and stderr` (numbers for stdout).
+fn differing_stream<'a>(a: &'a RunOutput, b: &'a RunOutput) -> (&'static str, &'a [u8], &'a [u8]) {
+    match (a.stdout != b.stdout, a.stderr != b.stderr) {
+        (true, false) => ("", &a.stdout, &b.stdout),
+        (true, true) => (" on stdout and stderr", &a.stdout, &b.stdout),
+        _ => (" on stderr", &a.stderr, &b.stderr),
+    }
+}
+
 fn first_diff(a: &[u8], b: &[u8]) -> usize {
     a.iter()
         .zip(b.iter())
@@ -627,12 +646,23 @@ fn first_diff(a: &[u8], b: &[u8]) -> usize {
 mod tests {
     use super::*;
 
+    fn out(stdout: &[u8], stderr: &[u8]) -> RunOutput {
+        RunOutput {
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+        }
+    }
+
+    fn outs(stdout: &[&[u8]]) -> Vec<RunOutput> {
+        stdout.iter().map(|o| out(o, b"")).collect()
+    }
+
     #[test]
     fn determinism_rules() {
-        let ok = determinism_check(&[b"a\n".to_vec(), b"a\n".to_vec(), b"a\n".to_vec()]);
+        let ok = determinism_check(&outs(&[b"a\n", b"a\n", b"a\n"]));
         assert!(ok.passed, "{}", ok.detail);
         assert_eq!(ok.detail, "3 runs, 2 bytes, byte-identical");
-        let differs = determinism_check(&[b"a1".to_vec(), b"a1".to_vec(), b"a2".to_vec()]);
+        let differs = determinism_check(&outs(&[b"a1", b"a1", b"a2"]));
         assert!(!differs.passed);
         assert!(differs.detail.contains("run 3"), "{}", differs.detail);
         assert!(
@@ -640,10 +670,41 @@ mod tests {
             "{}",
             differs.detail
         );
-        assert!(!determinism_check(&[Vec::new(), Vec::new(), Vec::new()]).passed);
+        assert!(!determinism_check(&outs(&[b"", b"", b""])).passed);
         let big = vec![b'x'; MAX_DRIVER_OUTPUT + 1];
-        let too_big = determinism_check(&[big.clone(), big.clone(), big]);
+        let too_big = determinism_check(&outs(&[&big, &big, &big]));
         assert!(!too_big.passed);
         assert!(too_big.detail.contains("262144"), "{}", too_big.detail);
+    }
+
+    /// stderr is part of what a run printed: a run that differs only there
+    /// is not deterministic (M4: the stdout-only compare let a unit that
+    /// reports on stderr verify while wrong).
+    #[test]
+    fn determinism_compares_stderr_too() {
+        let differs = determinism_check(&[out(b"a\n", b"e1"), out(b"a\n", b"e2")]);
+        assert!(!differs.passed);
+        assert!(
+            differs
+                .detail
+                .contains("run 2 printed something else than run 1 on stderr"),
+            "{}",
+            differs.detail
+        );
+        assert!(
+            differs.detail.contains("first diff at byte 1"),
+            "{}",
+            differs.detail
+        );
+        let both = determinism_check(&[out(b"a\n", b"e1"), out(b"b\n", b"e2")]);
+        assert!(
+            both.detail
+                .contains("than run 1 on stdout and stderr (lens 2 vs 2, first diff at byte 0)"),
+            "{}",
+            both.detail
+        );
+        // stderr alone is not an observation: stdout must still say something.
+        assert!(!determinism_check(&[out(b"", b"e"), out(b"", b"e")]).passed);
+        assert!(determinism_check(&[out(b"a", b"e"), out(b"a", b"e")]).passed);
     }
 }

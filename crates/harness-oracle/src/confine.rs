@@ -13,7 +13,7 @@
 //! drv_c.out` and print it back. Nothing a C-side run writes survives it
 //! either — its temp dir is gone before the candidate side starts.
 
-use crate::exec::{RunFailure, Runner};
+use crate::exec::{RunFailure, RunOutput, Runner};
 use crate::sandbox::{self, HostDirs, RunSpec};
 use harness_core::error::Error;
 use std::path::{Path, PathBuf};
@@ -34,17 +34,42 @@ pub(crate) struct Confinement<'a> {
     pub target_root: &'a Path,
 }
 
+/// What the run's own temp dir path is replaced with in its output.
+pub(crate) const TMPDIR_TOKEN: &[u8] = b"$TMPDIR";
+
 impl Confinement<'_> {
     /// Run the built binary `bin` (canonical) with `args`, allowed to read the
     /// canonical `inputs` besides itself. Every failure — including a profile
     /// that cannot be rendered or a temp dir that cannot be created — is a
     /// [`RunFailure`], i.e. a failed check rather than a harness abort.
+    ///
+    /// Every occurrence of the run's fresh temp dir path in stdout and stderr
+    /// reads [`TMPDIR_TOKEN`]: the path is harness-injected per-run state, not
+    /// behavior, and each compared run (C side, Rust side, the three
+    /// determinism runs) gets a different one.
     pub(crate) fn run(
         &self,
         bin: &Path,
         args: &[&str],
         inputs: &[PathBuf],
-    ) -> Result<Vec<u8>, RunFailure> {
+    ) -> Result<RunOutput, RunFailure> {
+        self.run_raw(bin, args, inputs).map(|(tmp, out)| {
+            let path = tmp.as_os_str().as_encoded_bytes();
+            RunOutput {
+                stdout: replace_bytes(&out.stdout, path, TMPDIR_TOKEN),
+                stderr: replace_bytes(&out.stderr, path, TMPDIR_TOKEN),
+            }
+        })
+    }
+
+    /// [`Confinement::run`] without the temp dir replacement; also returns
+    /// the (already removed) temp dir path.
+    fn run_raw(
+        &self,
+        bin: &Path,
+        args: &[&str],
+        inputs: &[PathBuf],
+    ) -> Result<(PathBuf, RunOutput), RunFailure> {
         let tmp = RunTmp::create().map_err(|e| RunFailure::Failed(e.to_string()))?;
         let profile = match self.host {
             Some(host) => Some(
@@ -60,10 +85,32 @@ impl Confinement<'_> {
             None => None,
         };
         let env = [("TMPDIR", tmp.path().as_os_str())];
-        self.runner
-            .built_with_env(bin, args, profile.as_deref(), &env)
+        let out = self
+            .runner
+            .built_with_env(bin, args, profile.as_deref(), &env)?;
+        Ok((tmp.path().to_path_buf(), out))
         // `tmp` is dropped (removed) here, after the child is gone.
     }
+}
+
+/// `hay` with every non-overlapping occurrence of `needle` (non-empty)
+/// replaced by `with`, left to right.
+fn replace_bytes(hay: &[u8], needle: &[u8], with: &[u8]) -> Vec<u8> {
+    if needle.is_empty() {
+        return hay.to_vec();
+    }
+    let mut out = Vec::with_capacity(hay.len());
+    let mut i = 0;
+    while i < hay.len() {
+        if hay[i..].starts_with(needle) {
+            out.extend_from_slice(with);
+            i += needle.len();
+        } else {
+            out.push(hay[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// A fresh, canonical, per-run temp dir under the system temp dir, removed
@@ -213,7 +260,7 @@ int main(int argc, char **argv) {
         let open = r
             .built_with_env(&bin, &args, None, &[])
             .expect("unconfined probe runs");
-        let open = String::from_utf8_lossy(&open);
+        let open = String::from_utf8_lossy(&open.stdout);
         assert!(
             open.starts_with("read ALLOWED\nread ALLOWED\nread ALLOWED\nwrite ALLOWED\n"),
             "{open}"
@@ -227,10 +274,10 @@ int main(int argc, char **argv) {
             host: Some(&host),
             target_root: root,
         };
-        let out = confined
-            .run(&bin, &args, std::slice::from_ref(&sample))
+        let (_, out) = confined
+            .run_raw(&bin, &args, std::slice::from_ref(&sample))
             .expect("confined probe runs");
-        let out = String::from_utf8_lossy(&out).into_owned();
+        let out = String::from_utf8_lossy(&out.stdout).into_owned();
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 6, "{out}");
         assert_eq!(lines[0], "read denied", "drv_c.out must be unreadable");
@@ -258,8 +305,8 @@ int main(int argc, char **argv) {
         assert!(!run_tmp.exists(), "the run temp dir must be removed");
 
         // Two runs never share a temp dir.
-        let again = confined.run(&bin, &["t"], &[]).expect("second run");
-        let again = String::from_utf8_lossy(&again).into_owned();
+        let (_, again) = confined.run_raw(&bin, &["t"], &[]).expect("second run");
+        let again = String::from_utf8_lossy(&again.stdout).into_owned();
         assert!(!again.contains(tmp_line[1]), "{again} vs {out}");
     }
 
@@ -274,11 +321,39 @@ int main(int argc, char **argv) {
             host: None,
             target_root: tmp.path(),
         };
-        let out = confined.run(&bin, &["t"], &[]).expect("runs");
-        let out = String::from_utf8_lossy(&out).into_owned();
+        let (tmp_dir, out) = confined.run_raw(&bin, &["t"], &[]).expect("runs");
+        let out = String::from_utf8_lossy(&out.stdout).into_owned();
         let fields: Vec<&str> = out.trim().split(' ').collect();
         assert_eq!(fields.len(), 3, "{out}");
         assert_eq!(fields[2], "writable", "{out}");
+        assert_eq!(Path::new(fields[1]), tmp_dir, "{out}");
         assert!(!Path::new(fields[1]).exists(), "{out}");
+    }
+
+    /// Two runs of the same binary print their (different) temp dirs; what
+    /// the oracle compares is identical (review finding: a unit reporting a
+    /// temp file path on stderr would otherwise be a false stderr diff).
+    #[test]
+    fn the_run_tmpdir_is_replaced_in_compared_output() {
+        let tmp = TempDir::new("confine-token");
+        let bin = build_probe(tmp.path());
+        let r = runner(tmp.path());
+        let confined = Confinement {
+            runner: &r,
+            host: None,
+            target_root: tmp.path(),
+        };
+        let one = confined.run(&bin, &["t"], &[]).expect("runs");
+        let two = confined.run(&bin, &["t"], &[]).expect("runs");
+        assert_eq!(one, two);
+        assert_eq!(one.stdout, b"tmp $TMPDIR writable\n");
+    }
+
+    #[test]
+    fn replace_bytes_rules() {
+        assert_eq!(replace_bytes(b"a/t/b/t", b"/t", b"$T"), b"a$T/b$T");
+        assert_eq!(replace_bytes(b"aaa", b"aa", b"x"), b"xa");
+        assert_eq!(replace_bytes(b"abc", b"", b"x"), b"abc");
+        assert_eq!(replace_bytes(b"", b"a", b"x"), b"");
     }
 }

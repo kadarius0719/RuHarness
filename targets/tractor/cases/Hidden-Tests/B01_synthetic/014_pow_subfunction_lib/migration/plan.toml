@@ -3,7 +3,7 @@ target = "014_pow_subfunction_lib"
 
 [[unit]]
 id = "u-pow"
-status = "verified"
+status = "in-progress"
 files = ["test_case/src/pow.c"]
 source_hash = "blake3:b2be8029115482b20756a87753c49a6fb3ef7583fc17aee678e6fb51b053a400"
 symbols = ["feel_the_power", "my_pow"]

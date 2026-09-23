@@ -333,6 +333,7 @@ failure of 1–2):
    -Werror=return-type -Werror=uninitialized` driver + unit files.
 2. `symbols-called` — `nm -u` of the driver object ⊇ unit `symbols`.
 3. `determinism` — 3 runs, byte-identical stdout, exit 0, 1 ≤ bytes ≤ 256 KiB.
+   *(Superseded post-M4: stdout AND stderr are compared everywhere — docs/SCHEMAS.md.)*
 4. `opt-levels` — `-O0` build output == `-O2` output (UB smell).
 5. `sanitizers` — ASan+UBSan build, clean run (same flags as the oracle).
 6. `mutation` — see 5.4.

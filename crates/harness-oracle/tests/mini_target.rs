@@ -173,6 +173,80 @@ fn a_faithful_candidate_is_green_and_records_the_sandbox_mode() {
     );
 }
 
+/// A driver reporting part of the unit's behavior on stderr (M4:
+/// `014_pow_subfunction` does): the differential oracle compares both
+/// streams, so a candidate that is right on every stdout observation but
+/// wrong on the stderr one is red. Under the stdout-only compare it was green.
+#[test]
+fn a_candidate_wrong_only_on_stderr_is_red() {
+    const STDERR_DRIVER: &str = "#include <stdio.h>\n#include \"unit.h\"\n\
+         int main(void) {\n\
+           for (int i = 0; i < 100; i++) printf(\"%d\\n\", unit_add(i, i));\n\
+           fprintf(stderr, \"edge %d\\n\", unit_add(-77777, 1));\n\
+           return 0;\n\
+         }\n";
+    const WRONG_ON_EDGE: &str = "#[no_mangle]\n\
+pub extern \"C\" fn unit_add(a: i32, b: i32) -> i32 {\n    \
+if a == -77777 { 0 } else { a.wrapping_add(b) }\n}\n";
+
+    let tmp = TempDir::new("mini-stderr-red");
+    let (target, unit) = mini(tmp.path(), "", "", false, WRONG_ON_EDGE);
+    write(
+        &tmp.path().join("migration/units/u-mini/driver.c"),
+        STDERR_DRIVER,
+    );
+    let verdict = CAbiDifferential
+        .verify(&target, &unit)
+        .expect("oracle runs");
+    assert!(!verdict.green, "{}", describe(&verdict));
+    let diff = verdict
+        .checks
+        .iter()
+        .find(|c| c.name == "differential-driver")
+        .expect("differential check ran");
+    assert!(!diff.passed, "{}", describe(&verdict));
+    assert!(
+        diff.detail.starts_with("stdout identical (")
+            && diff
+                .detail
+                .contains("; stderr differs (lens 12 vs 7, first diff at byte 5)"),
+        "{}",
+        diff.detail
+    );
+    let build = tmp.path().join("migration/build/u-mini");
+    assert_eq!(
+        std::fs::read(build.join("drv_c.err")).unwrap(),
+        b"edge -77776\n"
+    );
+    assert_eq!(
+        std::fs::read(build.join("drv_rs.err")).unwrap(),
+        b"edge 0\n"
+    );
+
+    // The faithful candidate is green, and the detail says stderr was compared.
+    let tmp = TempDir::new("mini-stderr-green");
+    let (target, unit) = mini(tmp.path(), "", "", false, GOOD_LIB);
+    write(
+        &tmp.path().join("migration/units/u-mini/driver.c"),
+        STDERR_DRIVER,
+    );
+    let verdict = CAbiDifferential
+        .verify(&target, &unit)
+        .expect("oracle runs");
+    assert!(verdict.green, "{}", describe(&verdict));
+    let diff = verdict
+        .checks
+        .iter()
+        .find(|c| c.name == "differential-driver")
+        .expect("differential check ran");
+    assert!(
+        diff.detail
+            .ends_with(" bytes identical (stderr: 12 bytes identical)"),
+        "{}",
+        diff.detail
+    );
+}
+
 /// Field-by-field rendering (the test crate has no serde_json dependency).
 fn serde_json_like(v: &Verdict) -> String {
     format!(

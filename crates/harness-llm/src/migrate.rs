@@ -739,12 +739,25 @@ fn oracle_evidence(
     out
 }
 
-/// Up to [`MAX_DIFF_PAIRS`] differing line pairs of the differential driver's
-/// two outputs in `build_dir`, each with the nearest preceding `case ` line.
-/// `None` when the outputs are unavailable or do not differ by line.
+/// Up to [`MAX_DIFF_PAIRS`] differing line pairs per stream of the
+/// differential driver's outputs in `build_dir` — stdout (`drv_*.out`), then
+/// stderr (`drv_*.err`, which the oracle compares too) — each with the
+/// nearest preceding `case ` line. `None` when the outputs are unavailable
+/// or do not differ by line.
 fn driver_diff(build_dir: &Path) -> Option<String> {
-    let expected = std::fs::read(build_dir.join("drv_c.out")).ok()?;
-    let actual = std::fs::read(build_dir.join("drv_rs.out")).ok()?;
+    let stream = |ext: &str, what: &str| {
+        let expected = std::fs::read(build_dir.join(format!("drv_c.{ext}"))).ok()?;
+        let actual = std::fs::read(build_dir.join(format!("drv_rs.{ext}"))).ok()?;
+        stream_diff(&expected, &actual, what)
+    };
+    match (stream("out", "output"), stream("err", "stderr")) {
+        (None, None) => None,
+        (out, err) => Some(out.unwrap_or_default() + &err.unwrap_or_default()),
+    }
+}
+
+/// [`driver_diff`] for one stream; `what` names it in the heading.
+fn stream_diff(expected: &[u8], actual: &[u8], what: &str) -> Option<String> {
     // Lines, without the empty piece a terminating newline leaves behind.
     let lines = |bytes: &'_ [u8]| -> Vec<Vec<u8>> {
         let mut lines: Vec<Vec<u8>> = bytes.split(|b| *b == b'\n').map(<[u8]>::to_vec).collect();
@@ -753,7 +766,7 @@ fn driver_diff(build_dir: &Path) -> Option<String> {
         }
         lines
     };
-    let (expected, actual) = (lines(&expected), lines(&actual));
+    let (expected, actual) = (lines(expected), lines(actual));
     let show = |line: Option<&Vec<u8>>| match line {
         Some(bytes) => printable(&String::from_utf8_lossy(bytes), DIFF_LINE_MAX_BYTES),
         None => "(no such line)".to_string(),
@@ -798,7 +811,7 @@ fn driver_diff(build_dir: &Path) -> Option<String> {
         return None;
     }
     Some(format!(
-        "differential driver output, expected = the C unit, actual = your Rust ({differing} \
+        "differential driver {what}, expected = the C unit, actual = your Rust ({differing} \
          line(s) differ, first {} shown):\n{shown}",
         differing.min(MAX_DIFF_PAIRS)
     ))
@@ -3145,6 +3158,39 @@ int add(int a, int b) { return a + b; }\n";
                 "{line}"
             );
         }
+    }
+
+    /// The oracle compares stderr too, so a stderr-only difference must
+    /// reach the repair evidence (M4: `014_pow_subfunction` reports on
+    /// stderr); build dirs from before stderr capture have no `.err` files.
+    #[test]
+    fn driver_diff_shows_stderr_differences() {
+        let fx = fixture("stderr-diff");
+        let build = Ledger::new(fx.target.root.clone()).build_dir().join(UNIT);
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("drv_c.out"), "case 1\nok\n").unwrap();
+        std::fs::write(build.join("drv_rs.out"), "case 1\nok\n").unwrap();
+        assert_eq!(driver_diff(&build), None, "no .err files: nothing to show");
+
+        std::fs::write(build.join("drv_c.err"), "pow: domain error\n").unwrap();
+        std::fs::write(build.join("drv_rs.err"), "").unwrap();
+        let diff = driver_diff(&build).expect("stderr differs");
+        assert_eq!(
+            diff,
+            "differential driver stderr, expected = the C unit, actual = your Rust (1 line(s) \
+             differ, first 1 shown):\n| line 1\n|   expected: pow: domain error\n\
+             |   actual:   (no such line)\n"
+        );
+
+        std::fs::write(build.join("drv_rs.out"), "case 1\nbad\n").unwrap();
+        let both = driver_diff(&build).expect("both differ");
+        let stdout_at = both
+            .find("differential driver output")
+            .expect("stdout part");
+        let stderr_at = both
+            .find("differential driver stderr")
+            .expect("stderr part");
+        assert!(stdout_at < stderr_at, "{both}");
     }
 
     #[test]

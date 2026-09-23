@@ -80,7 +80,7 @@ pub use sandbox::sandbox_mode;
 pub use validate::validate_driver;
 
 use confine::Confinement;
-use exec::{RunFailure, Runner};
+use exec::{RunFailure, RunOutput, Runner};
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::hash;
@@ -602,7 +602,7 @@ impl CAbiDifferential {
         let replace_paths: Vec<PathBuf> = prep.replaces.iter().map(|(_, p)| p.clone()).collect();
 
         // 5. Differential driver: C-linked vs Rust-linked, byte-identical
-        // stdout. A crash or timeout of either binary is a failed check
+        // stdout AND stderr. A crash or timeout of either binary is a failed check
         // (evidence), never a harness error.
         let mut drv_c_inputs = vec![prep.driver.clone()];
         drv_c_inputs.extend(replace_paths.iter().cloned());
@@ -627,9 +627,11 @@ impl CAbiDifferential {
             confined.run(&build.join("drv_rs"), &[], &[]),
         ) {
             (Ok(out_c), Ok(out_rs)) => {
-                write_file(&build.join("drv_c.out"), &out_c)?;
-                write_file(&build.join("drv_rs.out"), &out_rs)?;
-                checks.push(diff_check("differential-driver", &out_c, &out_rs));
+                write_file(&build.join("drv_c.out"), &out_c.stdout)?;
+                write_file(&build.join("drv_rs.out"), &out_rs.stdout)?;
+                write_file(&build.join("drv_c.err"), &out_c.stderr)?;
+                write_file(&build.join("drv_rs.err"), &out_rs.stderr)?;
+                checks.push(run_diff_check("differential-driver", &out_c, &out_rs));
             }
             (c, r) => checks.push(run_failure_check("differential-driver", c, r)),
         }
@@ -739,7 +741,9 @@ impl CAbiDifferential {
                 confined.run(&build.join("whole_c"), &argv, inputs),
                 confined.run(&build.join("whole_mixed"), &argv, inputs),
             ) {
-                (Ok(gz_c), Ok(gz_mixed)) => checks.push(diff_check(&check_name, &gz_c, &gz_mixed)),
+                (Ok(gz_c), Ok(gz_mixed)) => {
+                    checks.push(run_diff_check(&check_name, &gz_c, &gz_mixed));
+                }
                 (c, r) => checks.push(run_failure_check(&check_name, c, r)),
             }
         }
@@ -753,7 +757,7 @@ impl CAbiDifferential {
 /// AddressSanitizer, so the candidate crate's `ffi.rs` shim is not
 /// sanitizer-verified here; its safety rests on the compiler-enforced shim
 /// structure and the differential/symbol-set checks (see the crate docs).
-fn sanitizer_check(run: Result<Vec<u8>, RunFailure>) -> Check {
+fn sanitizer_check(run: Result<RunOutput, RunFailure>) -> Check {
     let (passed, detail) = match run {
         Ok(_) => (true, "asan+ubsan clean".to_string()),
         Err(timeout @ RunFailure::TimedOut { .. }) => (false, timeout.to_string()),
@@ -772,8 +776,8 @@ fn sanitizer_check(run: Result<Vec<u8>, RunFailure>) -> Check {
 /// found a real C-baseline SIGBUS exactly this way.
 fn run_failure_check(
     name: &str,
-    c_side: Result<Vec<u8>, RunFailure>,
-    candidate: Result<Vec<u8>, RunFailure>,
+    c_side: Result<RunOutput, RunFailure>,
+    candidate: Result<RunOutput, RunFailure>,
 ) -> Check {
     let mut parts: Vec<String> = Vec::new();
     if let Err(e) = &c_side {
@@ -857,6 +861,49 @@ fn timeout_secs(target: &TargetContext) -> Result<Duration, Error> {
     Ok(Duration::from_secs(secs))
 }
 
+/// Compare two clean runs, stdout AND stderr, into a named check: a unit
+/// that reports on stderr is observable behavior too (M4: `014_pow_
+/// subfunction` verified while wrong under a stdout-only compare). The
+/// details keep the stdout-only wording whenever stderr agrees and is empty,
+/// so earlier evidence replays unchanged.
+fn run_diff_check(name: &str, c_side: &RunOutput, candidate: &RunOutput) -> Check {
+    let stdout = diff_check(name, &c_side.stdout, &candidate.stdout);
+    let (a, b) = (&c_side.stderr, &candidate.stderr);
+    if a == b {
+        if a.is_empty() {
+            return stdout;
+        }
+        let tail = format!(" (stderr: {} bytes identical)", a.len());
+        return Check {
+            detail: stdout.detail + &tail,
+            ..stdout
+        };
+    }
+    let stderr = format!(
+        "stderr differs (lens {} vs {}, first diff at byte {})",
+        a.len(),
+        b.len(),
+        first_diff(a, b)
+    );
+    Check {
+        name: name.into(),
+        passed: false,
+        detail: if stdout.passed {
+            format!("stdout identical ({} bytes); {stderr}", c_side.stdout.len())
+        } else {
+            format!("{}; {stderr}", stdout.detail)
+        },
+    }
+}
+
+/// Index of the first differing byte (the shorter length on a prefix).
+fn first_diff(a: &[u8], b: &[u8]) -> usize {
+    a.iter()
+        .zip(b.iter())
+        .position(|(x, y)| x != y)
+        .unwrap_or(a.len().min(b.len()))
+}
+
 /// Byte-compare two outputs into a named check.
 fn diff_check(name: &str, a: &[u8], b: &[u8]) -> Check {
     if a == b {
@@ -866,11 +913,7 @@ fn diff_check(name: &str, a: &[u8], b: &[u8]) -> Check {
             detail: format!("{} bytes identical", a.len()),
         }
     } else {
-        let idx = a
-            .iter()
-            .zip(b.iter())
-            .position(|(x, y)| x != y)
-            .unwrap_or(a.len().min(b.len()));
+        let idx = first_diff(a, b);
         Check {
             name: name.into(),
             passed: false,
@@ -1267,6 +1310,40 @@ mod tests {
     }
 
     #[test]
+    fn run_diff_check_compares_stderr_and_keeps_stdout_wording() {
+        let run = |o: &[u8], e: &[u8]| RunOutput {
+            stdout: o.to_vec(),
+            stderr: e.to_vec(),
+        };
+        // Empty, equal stderr: exactly the stdout-only details (replay-stable).
+        let ok = run_diff_check("x", &run(b"abc", b""), &run(b"abc", b""));
+        assert_eq!((ok.passed, ok.detail.as_str()), (true, "3 bytes identical"));
+        let bad = run_diff_check("x", &run(b"abc", b""), &run(b"abd", b""));
+        assert_eq!(
+            (bad.passed, bad.detail.as_str()),
+            (false, "outputs differ (lens 3 vs 3, first diff at byte 2)")
+        );
+        // Equal, non-empty stderr is reported as compared.
+        let ok = run_diff_check("x", &run(b"abc", b"e\n"), &run(b"abc", b"e\n"));
+        assert!(ok.passed);
+        assert_eq!(ok.detail, "3 bytes identical (stderr: 2 bytes identical)");
+        // A stderr-only difference fails.
+        let err = run_diff_check("x", &run(b"abc", b"e1"), &run(b"abc", b""));
+        assert!(!err.passed);
+        assert_eq!(
+            err.detail,
+            "stdout identical (3 bytes); stderr differs (lens 2 vs 0, first diff at byte 0)"
+        );
+        // Both differ: both reported, stdout first.
+        let both = run_diff_check("x", &run(b"abc", b"e1"), &run(b"abd", b"e2"));
+        assert_eq!(
+            both.detail,
+            "outputs differ (lens 3 vs 3, first diff at byte 2); \
+             stderr differs (lens 2 vs 2, first diff at byte 1)"
+        );
+    }
+
+    #[test]
     fn missing_required_param_is_an_invalid_plan() {
         let unit: Unit = toml::from_str(
             r#"
@@ -1487,7 +1564,10 @@ mod tests {
     fn timeouts_of_built_binaries_become_failed_checks() {
         let check = run_failure_check(
             "differential-driver",
-            Ok(b"fine".to_vec()),
+            Ok(RunOutput {
+                stdout: b"fine".to_vec(),
+                stderr: Vec::new(),
+            }),
             Err(RunFailure::TimedOut { secs: 120 }),
         );
         assert!(!check.passed);
@@ -1509,7 +1589,7 @@ mod tests {
         assert_eq!(san.detail, "timed out after 9s");
         let san = sanitizer_check(Err(RunFailure::Failed("asan: heap-use-after-free".into())));
         assert_eq!(san.detail, "sanitizer reported errors");
-        let san = sanitizer_check(Ok(Vec::new()));
+        let san = sanitizer_check(Ok(RunOutput::default()));
         assert!(san.passed);
         assert_eq!(san.detail, "asan+ubsan clean");
     }

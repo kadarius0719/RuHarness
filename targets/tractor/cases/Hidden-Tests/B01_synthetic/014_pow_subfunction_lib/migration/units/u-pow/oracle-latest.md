@@ -1,6 +1,6 @@
 # Oracle verdict — u-pow
 
-Verdict: **GREEN**
+Verdict: **RED**
 
 Inputs tested:
 - unit_source: `blake3:b2be8029115482b20756a87753c49a6fb3ef7583fc17aee678e6fb51b053a400`
@@ -12,6 +12,6 @@ Checks:
 - **symbol-set**: PASS — 2 exported symbol(s) match the unit's symbols exactly
 - **capabilities**: PASS — no capability beyond the C unit's (allowed: none); no asm
 - **driver-shape**: PASS — driver object defines only main, references only the unit and allowlisted libc; source lint clean
-- **differential-driver**: PASS — 10707 bytes identical
+- **differential-driver**: FAIL — stdout identical (10707 bytes); stderr differs (lens 4122 vs 0, first diff at byte 0)
 - **whole-program**: PASS — not configured for this target
 - **sanitizers**: PASS — asan+ubsan clean

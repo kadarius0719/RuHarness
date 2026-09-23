@@ -75,6 +75,18 @@ pub(crate) struct ChildOutput {
     pub stderr: Vec<u8>,
 }
 
+/// What a built binary that exited cleanly printed. Both streams are the
+/// observable behavior of a run: the differential oracle and driver
+/// validation compare them together (M4 found a unit reporting on stderr
+/// verified while wrong when only stdout was compared).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RunOutput {
+    /// Captured stdout.
+    pub stdout: Vec<u8>,
+    /// Captured stderr.
+    pub stderr: Vec<u8>,
+}
+
 /// Why a built binary's run is not usable as evidence of success. Always
 /// mapped to a failed [`harness_core::verdict::Check`], never a harness error.
 #[derive(Debug)]
@@ -200,7 +212,7 @@ impl Runner {
     /// allowlist, with only `PATH` in its environment, under the given run
     /// sandbox profile (`None` = unsandboxed). Production runs go through
     /// [`crate::confine::Confinement`], which renders the per-run profile and
-    /// temp dir; this raw form is for tests. Returns stdout; every failure
+    /// temp dir; this raw form is for tests. Returns stdout only; every failure
     /// (including a timeout) is a [`RunFailure`] the caller turns into a
     /// failed check.
     #[cfg(test)]
@@ -211,17 +223,19 @@ impl Runner {
         profile: Option<&str>,
     ) -> Result<Vec<u8>, RunFailure> {
         self.built_with_env(bin, args, profile, &[])
+            .map(|out| out.stdout)
     }
 
     /// [`Runner::built_with_profile`] plus `extra_env` set explicitly on top
-    /// of [`BUILT_ENV`] (the confinement's per-run `TMPDIR`).
+    /// of [`BUILT_ENV`] (the confinement's per-run `TMPDIR`), returning
+    /// both captured streams.
     pub(crate) fn built_with_env(
         &self,
         bin: &Path,
         args: &[&str],
         profile: Option<&str>,
         extra_env: &[(&str, &std::ffi::OsStr)],
-    ) -> Result<Vec<u8>, RunFailure> {
+    ) -> Result<RunOutput, RunFailure> {
         let bin_str = bin
             .to_str()
             .ok_or_else(|| RunFailure::Failed(format!("non-UTF-8 path: {}", bin.display())))?;
@@ -232,7 +246,10 @@ impl Runner {
             .spawn(&argv, profile, BUILT_ENV, extra_env, &shown)
             .map_err(|e| RunFailure::Failed(e.to_string()))?;
         match out.end {
-            ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
+            ChildEnd::Exited(status) if status.success() => Ok(RunOutput {
+                stdout: out.stdout,
+                stderr: out.stderr,
+            }),
             ChildEnd::Exited(status) => Err(RunFailure::Failed(format!(
                 "`{shown}` failed ({status}):\n{}",
                 stderr_excerpt(&out.stderr)

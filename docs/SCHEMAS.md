@@ -590,6 +590,24 @@ ends the run (nothing is linked or run).
   only writable place), no reads under the home dir or the target root except the
   binary and listed inputs, `exec` of nothing but itself.
 
+**Observable output = stdout AND stderr** (post-M4 oracle fix, 2026-09-23). A built binary's
+run that exits 0 is compared on both streams by `differential-driver` and every
+`whole-program:*` check; C and Rust sides are written to `build/<unit>/drv_{c,rs}.out`
+(stdout) and `drv_{c,rs}.err` (stderr). Detail wording is replay-stable: when both
+stderrs are empty and equal the detail is exactly the stdout-only form (`N bytes
+identical` / `outputs differ (lens a vs b, first diff at byte i)`); equal non-empty
+stderr appends ` (stderr: M bytes identical)`; a stderr difference reads `stdout
+identical (N bytes); stderr differs (lens …, first diff at byte …)` or appends
+`; stderr differs (…)` to a stdout difference. Repair evidence quotes stderr line
+diffs after stdout's under `differential driver stderr, …`. Before any comparison,
+every occurrence of the run's own fresh `TMPDIR` path in either stream reads `$TMPDIR`
+(harness-injected per-run state, different for every compared run). Validation details
+(`determinism`, `opt-levels`) label the stream: none (stdout only, the pre-fix
+wording), ` on stderr`, or ` on stdout and stderr` (lens/first diff of stdout).
+Migration note: before
+this, only stdout was compared — M4's `014_pow_subfunction` (reports on stderr)
+verified while wrong.
+
 ## Driver generation: `harness gen-driver <UNIT>`
 
 Same trajectory engine as `migrate` (generate turn + ≤ `max_repairs` stateless
@@ -622,8 +640,9 @@ repairs; external/replay/live semantics; `--retry` samples; replay verification)
 ```
 Checks, in order, stopping at the first failure: `driver-build` (strict `-Werror=`
 set on the driver's own TU), `driver-shape`, `symbols-called`, `determinism` (3 runs,
-byte-identical, exit 0, 1 B–256 KiB), `opt-levels` (-O0 == -O2), `sanitizers`,
-`mutation`.
+byte-identical stdout AND stderr, exit 0, stdout 1 B–256 KiB), `opt-levels` (-O0 ==
+-O2, both streams), `sanitizers`, `mutation` (a mutant is killed when EITHER stream
+differs from the pinned run, or it fails/times out).
 
 **Mutation adequacy.** Sites: every operator site in function bodies of the unit's
 `.c` files (outside preprocessor conditionals) — `arith relational logical bitwise

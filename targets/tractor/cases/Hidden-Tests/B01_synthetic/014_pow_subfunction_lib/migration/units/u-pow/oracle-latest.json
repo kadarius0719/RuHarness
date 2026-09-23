@@ -2,7 +2,7 @@
   "schema": "ruharness-verdict",
   "schema_version": 1,
   "unit": "u-pow",
-  "green": true,
+  "green": false,
   "inputs": {
     "unit_source": "blake3:b2be8029115482b20756a87753c49a6fb3ef7583fc17aee678e6fb51b053a400",
     "driver": "blake3:fa901952b3a5b05e4c15dab3744696d49e976ed158a5d453a4d3bcac2d4161f8",
@@ -35,8 +35,8 @@
     },
     {
       "name": "differential-driver",
-      "passed": true,
-      "detail": "10707 bytes identical"
+      "passed": false,
+      "detail": "stdout identical (10707 bytes); stderr differs (lens 4122 vs 0, first diff at byte 0)"
     },
     {
       "name": "whole-program",
