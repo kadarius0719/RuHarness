@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:33ae1df17d3639eaec046144188fd850a2f2ebfb173dcd2607bda687cfe41339","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:0cc6ecce4bdb27a412f24ed26a2ed2f4996970e811833c7d3e2302e63a8985cc","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:0cc6ecce4bdb27a412f24ed26a2ed2f4996970e811833c7d3e2302e63a8985cc","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"ima_parse","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int ima_parse(struct ima_info *info, const void *data)","span":[75,131]}
 {"k":"symbol","name":"test_case/src/lib.c::ima_bswap16","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static ima_u16_t ima_bswap16(ima_u16_t v)","span":[40,43]}
 {"k":"symbol","name":"test_case/src/lib.c::ima_bswap32","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static ima_u32_t ima_bswap32(ima_u32_t v)","span":[45,49]}

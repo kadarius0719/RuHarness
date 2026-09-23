@@ -1,5 +1,5 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/echo.h","hash":"blake3:0e6ec9aa5d5b119fc407fac5ad2929f8701423e6c1120061850979dc68953b2d","includes":[]}
-{"k":"file","path":"test_case/src/echo.c","hash":"blake3:68f820e73a0451fee11c6b179cb6fabdc25f9ebd4bd6602c735798075967d731","includes":[]}
+{"k":"file","path":"test_case/src/echo.c","hash":"blake3:68f820e73a0451fee11c6b179cb6fabdc25f9ebd4bd6602c735798075967d731","includes":["test_case/include/echo.h"]}
 {"k":"symbol","name":"echo","kind":"function","file":"test_case/src/echo.c","visibility":"public","signature":"int echo(int argc, char **argv)","span":[11,18]}
 {"k":"ref","from":"echo","file":"test_case/src/echo.c","to":"printf","refkind":"call","resolved":false}

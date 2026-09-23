@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/driver.h","hash":"blake3:6cad62bedcb4090f324408b4a5bb227d3afa079e42d6698753afb5ffe9ac4842","includes":[]}
-{"k":"file","path":"test_case/src/driver.c","hash":"blake3:64b08cd1a2e95a3f9d110e236f7a30e8e41d8a028999af9840d3e4e1355b2646","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:64b08cd1a2e95a3f9d110e236f7a30e8e41d8a028999af9840d3e4e1355b2646","includes":["test_case/include/driver.h"]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(const int *data, int len)","span":[14,20]}
 {"k":"symbol","name":"fma_array","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void fma_array(int *out, const int *mul1, const int *mul2, const int *add, int len)","span":[8,12]}
 {"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"fma_array","refkind":"call","resolved":true}

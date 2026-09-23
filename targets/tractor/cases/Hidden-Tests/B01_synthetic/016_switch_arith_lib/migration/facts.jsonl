@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/switch-arith.h","hash":"blake3:bd9a406592a7c8ff3d8904babca8deacd98ba649751abd33310f6c1e71049c87","includes":[]}
-{"k":"file","path":"test_case/src/switch-arith.c","hash":"blake3:04e25282a4af0ba61b7cc334d64d294ad1ac96279d9b5e81c2ac4f0debf8fa05","includes":[]}
+{"k":"file","path":"test_case/src/switch-arith.c","hash":"blake3:04e25282a4af0ba61b7cc334d64d294ad1ac96279d9b5e81c2ac4f0debf8fa05","includes":["test_case/include/switch-arith.h"]}
 {"k":"symbol","name":"perform_operations","kind":"function","file":"test_case/src/switch-arith.c","visibility":"public","signature":"unsigned int perform_operations(unsigned int a, unsigned int b)","span":[10,27]}
 {"k":"symbol","name":"switch_arith","kind":"function","file":"test_case/src/switch-arith.c","visibility":"public","signature":"void switch_arith(unsigned int seed)","span":[29,79]}
 {"k":"ref","from":"switch_arith","file":"test_case/src/switch-arith.c","to":"perform_operations","refkind":"call","resolved":true}

@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/staticdag.h","hash":"blake3:61245058a1a4eb7778897e21dd81805390b337abae14b76ad9bc4052671d2630","includes":[]}
-{"k":"file","path":"test_case/src/staticdag.c","hash":"blake3:683b0d0caff553f991dec9c5fd788d5123908097263ca45e4f15126c13b3b40a","includes":[]}
+{"k":"file","path":"test_case/src/staticdag.c","hash":"blake3:683b0d0caff553f991dec9c5fd788d5123908097263ca45e4f15126c13b3b40a","includes":["test_case/include/staticdag.h"]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/staticdag.c","visibility":"public","signature":"void driver(int val, int iterations)","span":[45,56]}
 {"k":"symbol","name":"path_add","kind":"function","file":"test_case/src/staticdag.c","visibility":"public","signature":"void path_add(int update)","span":[26,32]}
 {"k":"symbol","name":"path_mult","kind":"function","file":"test_case/src/staticdag.c","visibility":"public","signature":"void path_mult(int update)","span":[18,24]}

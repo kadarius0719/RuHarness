@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:7a5d3391dd7b2f04e55c6fc51d25791b16fddebe816bd968a522f3f196c851d1","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:43172d2821a233b1aef8289180c316204f0884ffa15515bc1d4461f10ea5e160","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:43172d2821a233b1aef8289180c316204f0884ffa15515bc1d4461f10ea5e160","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"c2AABBtoAABB","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int c2AABBtoAABB(c2AABB A, c2AABB B)","span":[65,71]}
 {"k":"symbol","name":"c2CircletoAABB","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int c2CircletoAABB(c2Circle A, c2AABB B)","span":[57,63]}
 {"k":"symbol","name":"c2CircletoCircle","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int c2CircletoCircle(c2Circle A, c2Circle B)","span":[49,55]}

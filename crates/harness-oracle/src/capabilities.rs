@@ -129,6 +129,19 @@ const CLASSES: &[Class] = &[
             "posix_spawnp",
             "system",
             "popen",
+            // Process control: at score time the candidate runs inside the
+            // corpus runner's process tree, so signalling or tracing it (or
+            // its parent) must be as unreachable as spawning.
+            "kill",
+            "killpg",
+            "raise",
+            "ptrace",
+            "getppid",
+            "sigaction",
+            "signal",
+            "pthread_kill",
+            "_exit",
+            "_Exit",
         ],
     },
     Class {

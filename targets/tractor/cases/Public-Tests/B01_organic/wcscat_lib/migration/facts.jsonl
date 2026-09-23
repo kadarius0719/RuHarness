@@ -1,4 +1,4 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:295a6248c7a896ca78b9aefaf5d770c4acb0e3b402a3d598de1408ddbe57237b","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:77301f6e6156c0c3ac119db3e6c6f7ec268ca3ec35d9811087d322b76967d4f3","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:77301f6e6156c0c3ac119db3e6c6f7ec268ca3ec35d9811087d322b76967d4f3","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"wcscat","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int wcscat(wchar_t *dst, size_t numElem, const wchar_t *src)","span":[5,21]}

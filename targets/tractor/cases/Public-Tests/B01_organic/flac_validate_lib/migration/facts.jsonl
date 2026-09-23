@@ -1,5 +1,5 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:a021801a120d655275ca19c210ed8a623c4e245dd04e3dacf03c8a87753e1adb","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:971adb7b22d536c647af713654a1daa51434236f630a04f2a04d06ad231303fe","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:971adb7b22d536c647af713654a1daa51434236f630a04f2a04d06ad231303fe","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"flac_validate","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int flac_validate(tflac *t)","span":[15,58]}
 {"k":"symbol","name":"tflac_size_memory","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"tflac_u32 tflac_size_memory(tflac_u32 blocksize)","span":[11,13]}

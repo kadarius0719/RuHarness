@@ -1,4 +1,4 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:b80025d641d6c5192e463d453e5c220394bf5f3c3f5659bcde784dbd5377aeca","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:88efb356fc7c9c38c1213466978f8c4019d070e97ee65672a869f06dfa8328a0","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:88efb356fc7c9c38c1213466978f8c4019d070e97ee65672a869f06dfa8328a0","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"premultiply","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void premultiply(cp_image_t *img)","span":[3,20]}

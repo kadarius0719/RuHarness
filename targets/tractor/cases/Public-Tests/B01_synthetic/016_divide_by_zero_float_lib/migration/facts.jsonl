@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/driver.h","hash":"blake3:ce405b35d99dcf71202adcb47aa700fca780dbaf6fdcd39b326c9aa3a0720aed","includes":[]}
-{"k":"file","path":"test_case/src/driver.c","hash":"blake3:90c64aec24c7495b957bb65f5322a8fc28ead2c7156657fe1b8b8f8916c6d7c5","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:90c64aec24c7495b957bb65f5322a8fc28ead2c7156657fe1b8b8f8916c6d7c5","includes":["test_case/include/driver.h"]}
 {"k":"symbol","name":"bad","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void bad(float data)","span":[23,27]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(float goodData, float badData)","span":[58,66]}
 {"k":"symbol","name":"good","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void good(float data)","span":[52,56]}

@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:6fccfb2612569909b2c4160331a1c2e539a4aee20aee335a87cd1a443cb3780a","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:2ed6e7e2cbf96cf1e758239442bbffe250b64793974fb777aedbfd92ada8ed84","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:2ed6e7e2cbf96cf1e758239442bbffe250b64793974fb777aedbfd92ada8ed84","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"normalize","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void normalize(float *dest, const float *src, int size)","span":[6,18]}
 {"k":"ref","from":"normalize","file":"test_case/src/lib.c","to":"memset","refkind":"call","resolved":false}
 {"k":"ref","from":"normalize","file":"test_case/src/lib.c","to":"sqrtf","refkind":"call","resolved":false}

@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/driver.h","hash":"blake3:187dbb03bafdb1246499f81d7d2a7fce875330996e3da96b68f39104104db617","includes":[]}
-{"k":"file","path":"test_case/src/driver.c","hash":"blake3:3b2da9e1b800bb306d538d38f0a298277d5e27950bc3b18697435e800a6977cb","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:3b2da9e1b800bb306d538d38f0a298277d5e27950bc3b18697435e800a6977cb","includes":["test_case/include/driver.h"]}
 {"k":"symbol","name":"bad","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void bad()","span":[23,40]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(int useGood)","span":[90,99]}
 {"k":"symbol","name":"good","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void good()","span":[84,88]}

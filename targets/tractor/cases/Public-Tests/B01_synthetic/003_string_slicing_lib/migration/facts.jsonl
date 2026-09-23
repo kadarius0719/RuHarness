@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/slicing.h","hash":"blake3:528db53a66e65c9f6a330fca26d8982ba7364d9281d3c0888182a5e54c2d2ec2","includes":[]}
-{"k":"file","path":"test_case/src/slicing.c","hash":"blake3:d4063ccb9d206b0b7c2149cef38a57a71f31e58f16d4bb8a2464ec9326a00a25","includes":[]}
+{"k":"file","path":"test_case/src/slicing.c","hash":"blake3:d4063ccb9d206b0b7c2149cef38a57a71f31e58f16d4bb8a2464ec9326a00a25","includes":["test_case/include/slicing.h"]}
 {"k":"symbol","name":"slice","kind":"function","file":"test_case/src/slicing.c","visibility":"public","signature":"int slice(char *mystr, int *start_ptr, int *stop_ptr)","span":[16,50]}
 {"k":"ref","from":"slice","file":"test_case/src/slicing.c","to":"printf","refkind":"call","resolved":false}
 {"k":"ref","from":"slice","file":"test_case/src/slicing.c","to":"strlen","refkind":"call","resolved":false}

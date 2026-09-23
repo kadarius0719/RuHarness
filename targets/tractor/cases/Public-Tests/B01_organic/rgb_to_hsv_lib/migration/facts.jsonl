@@ -1,4 +1,4 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:07baf3393a645b7c1e33a29165232759fccf2379af038206828209b3f3139557","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:0f1fc7a7398b71a9e33395af47b350edd0cd4ef02039bb1544d442dba0121901","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:0f1fc7a7398b71a9e33395af47b350edd0cd4ef02039bb1544d442dba0121901","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"rgb_to_hsv","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void rgb_to_hsv(float *dest, const float *src)","span":[3,38]}

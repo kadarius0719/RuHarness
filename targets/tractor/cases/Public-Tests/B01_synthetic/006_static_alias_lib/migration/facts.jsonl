@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/staticalias.h","hash":"blake3:b42169f0d160c106bc6f3370a1d744f2d41439da8ac0f9902af7ce449574b945","includes":[]}
-{"k":"file","path":"test_case/src/staticalias.c","hash":"blake3:f3e2efb056a457d28d22e04a4ff29c05f1e74ffc62daa56a23415ac95eaa56f8","includes":[]}
+{"k":"file","path":"test_case/src/staticalias.c","hash":"blake3:f3e2efb056a457d28d22e04a4ff29c05f1e74ffc62daa56a23415ac95eaa56f8","includes":["test_case/include/staticalias.h"]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/staticalias.c","visibility":"public","signature":"void driver(int initial_value, int iterations)","span":[22,30]}
 {"k":"symbol","name":"static_alias","kind":"function","file":"test_case/src/staticalias.c","visibility":"public","signature":"int* static_alias(int *outer)","span":[7,17]}
 {"k":"ref","from":"driver","file":"test_case/src/staticalias.c","to":"printf","refkind":"call","resolved":false}

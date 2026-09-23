@@ -126,6 +126,18 @@ impl Runner {
         argv: &[String],
         profile: Option<&str>,
     ) -> Result<Vec<u8>, Error> {
+        self.tool_with_env(argv, profile, &[])
+    }
+
+    /// [`Runner::tool_with_profile`] with `extra_env` set on top of
+    /// [`TOOL_ENV`] (the benchmark scorer build pins an empty, harness-owned
+    /// `CARGO_HOME`).
+    pub(crate) fn tool_with_env(
+        &self,
+        argv: &[String],
+        profile: Option<&str>,
+        extra_env: &[(&str, &std::ffi::OsStr)],
+    ) -> Result<Vec<u8>, Error> {
         let exe = argv
             .first()
             .ok_or_else(|| Error::Invariant("oracle: empty argv".into()))?;
@@ -135,7 +147,7 @@ impl Runner {
             )));
         }
         let shown = argv.join(" ");
-        let out = self.spawn(argv, profile, TOOL_ENV, &[], &shown)?;
+        let out = self.spawn(argv, profile, TOOL_ENV, extra_env, &shown)?;
         match out.end {
             ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
             ChildEnd::Exited(status) => Err(Error::Invariant(format!(
@@ -233,6 +245,33 @@ impl Runner {
                 self.max_output
             ))),
         }
+    }
+
+    /// Run a built binary like [`Runner::built_with_env`], but report HOW it
+    /// ended instead of treating a non-zero exit as a failure: the benchmark
+    /// scorer's runner exits 1 for a failed vector, a normal outcome.
+    pub(crate) fn built_status(
+        &self,
+        bin: &Path,
+        args: &[&str],
+        profile: Option<&str>,
+        extra_env: &[(&str, &std::ffi::OsStr)],
+    ) -> Result<crate::bench::RunStatus, Error> {
+        let bin_str = bin
+            .to_str()
+            .ok_or_else(|| Error::Invariant(format!("non-UTF-8 path: {}", bin.display())))?;
+        let mut argv: Vec<String> = vec![bin_str.to_string()];
+        argv.extend(args.iter().map(|a| (*a).to_string()));
+        let shown = argv.join(" ");
+        let out = self.spawn(&argv, profile, BUILT_ENV, extra_env, &shown)?;
+        Ok(match out.end {
+            ChildEnd::Exited(status) => match status.code() {
+                Some(code) => crate::bench::RunStatus::Exited(code),
+                None => crate::bench::RunStatus::Killed,
+            },
+            ChildEnd::TimedOut => crate::bench::RunStatus::TimedOut,
+            ChildEnd::OutputOverflow => crate::bench::RunStatus::Killed,
+        })
     }
 
     fn spawn(

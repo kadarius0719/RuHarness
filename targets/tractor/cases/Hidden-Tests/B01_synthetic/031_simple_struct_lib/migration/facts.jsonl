@@ -1,5 +1,5 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/simplestruct.h","hash":"blake3:532c48e4289a55655b4266db0f5d4c722c2ad3f92dcf309f41879acdfed02c47","includes":[]}
-{"k":"file","path":"test_case/src/simplestruct.c","hash":"blake3:a9a4a12546651bff47334602be717dc15dcf52a1d3dbc774a7824ed71480a335","includes":[]}
+{"k":"file","path":"test_case/src/simplestruct.c","hash":"blake3:a9a4a12546651bff47334602be717dc15dcf52a1d3dbc774a7824ed71480a335","includes":["test_case/include/simplestruct.h"]}
 {"k":"symbol","name":"isItMay","kind":"function","file":"test_case/src/simplestruct.c","visibility":"public","signature":"bool isItMay (struct Date date)","span":[7,9]}
 {"k":"symbol","name":"whatYearIsIt","kind":"function","file":"test_case/src/simplestruct.c","visibility":"public","signature":"int whatYearIsIt (struct Date date)","span":[11,13]}

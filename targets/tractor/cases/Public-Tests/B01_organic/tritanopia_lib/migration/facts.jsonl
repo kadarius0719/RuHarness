@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:d16411dd416390b9b19f29d9b069f08beb4d9305750779af609dfb93c4475872","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:d32357c98f7694a9134a3fa85f384d4379d5926c3799253cb800a7d6e25ea6a9","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:d32357c98f7694a9134a3fa85f384d4379d5926c3799253cb800a7d6e25ea6a9","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"test_case/src/lib.c::Tritanopia","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static void Tritanopia(float *Red, float *Green, float *Blue)","span":[48,53]}
 {"k":"symbol","name":"test_case/src/lib.c::cbApplyGammaRGB","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static cb_rgb cbApplyGammaRGB(cb_rgb RGB)","span":[35,46]}
 {"k":"symbol","name":"test_case/src/lib.c::cbDenorm","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static cb_rgb_255 cbDenorm(cb_rgb RGB)","span":[28,33]}

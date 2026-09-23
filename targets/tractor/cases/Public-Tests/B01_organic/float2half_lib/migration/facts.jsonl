@@ -1,4 +1,4 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:cb96b07d16a42e3cbe1ade90a1580f1b46f208da4e6581b90ead03f8fe9bed3c","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:5de377ebfdbaa57d7ecb40b2ec18af13b41b3421b4fe48c31b26a442441d9314","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:5de377ebfdbaa57d7ecb40b2ec18af13b41b3421b4fe48c31b26a442441d9314","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"float2half","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"uint16_t float2half(float flt)","span":[108,118]}

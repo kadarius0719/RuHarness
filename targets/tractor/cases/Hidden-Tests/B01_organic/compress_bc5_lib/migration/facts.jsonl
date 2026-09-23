@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:3e20a3c16d23cb7ba01e676a32619f304b62d96d8a2aa9efe5f6abf41b6565d5","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:2f2943a34631b3c08983d9df60f7cfdf601dd44bd3e9ce5fc0cfe6140a8bf36b","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:2f2943a34631b3c08983d9df60f7cfdf601dd44bd3e9ce5fc0cfe6140a8bf36b","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"compress_bc5","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void compress_bc5(unsigned char *dest, const unsigned char *src)","span":[45,48]}
 {"k":"symbol","name":"stb__CompressAlphaBlock","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void stb__CompressAlphaBlock(unsigned char *dest, unsigned char *src, int stride)","span":[3,42]}
 {"k":"ref","from":"compress_bc5","file":"test_case/src/lib.c","to":"stb__CompressAlphaBlock","refkind":"call","resolved":true}

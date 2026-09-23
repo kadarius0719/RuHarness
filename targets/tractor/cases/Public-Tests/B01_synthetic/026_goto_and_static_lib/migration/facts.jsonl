@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/driver.h","hash":"blake3:d964222aa8a7dc44529ea75ddd8a4b72b0da441830394fb33f33070fc210e5fc","includes":[]}
-{"k":"file","path":"test_case/src/driver.c","hash":"blake3:9195896614bcaf4463ca8977668a4236ac21d385a1111d757f2aeb32be836c10","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:9195896614bcaf4463ca8977668a4236ac21d385a1111d757f2aeb32be836c10","includes":["test_case/include/driver.h"]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(int x, int local_y, int z)","span":[39,43]}
 {"k":"symbol","name":"test_case/src/driver.c::multi_stage","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static int multi_stage(int x, int z)","span":[11,37]}
 {"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}

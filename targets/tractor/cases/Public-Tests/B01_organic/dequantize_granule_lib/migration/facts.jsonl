@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:a2edc5046632ecffb09229c56f8f110ba64937e5054931ac7918e0a877d26487","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:21eaa4521df45b7e62d13ade712ca6d1145d6d408053217e9943b0323ed23718","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:21eaa4521df45b7e62d13ade712ca6d1145d6d408053217e9943b0323ed23718","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"dequantize_granule","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int dequantize_granule(float *grbuf, bs_t *bs, L12_scale_info *sci, int group_size)","span":[17,43]}
 {"k":"symbol","name":"test_case/src/lib.c::get_bits","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static uint32_t get_bits(bs_t *bs, int n)","span":[3,15]}
 {"k":"ref","from":"dequantize_granule","file":"test_case/src/lib.c","to":"test_case/src/lib.c::get_bits","refkind":"call","resolved":true}

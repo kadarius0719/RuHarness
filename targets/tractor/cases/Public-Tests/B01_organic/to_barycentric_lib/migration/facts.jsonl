@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:cf65cb92e11f503468df2b1919bda64690785b9a287a6bdfc5681ca4432c8947","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:085764cba1e6aeadb51a110e1bf6c2df3587f867f96c47e96b4b9290bab402b2","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:085764cba1e6aeadb51a110e1bf6c2df3587f867f96c47e96b4b9290bab402b2","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"test_case/src/lib.c::lm_dot2","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static float lm_dot2(lm_vec2 a, lm_vec2 b)","span":[12,14]}
 {"k":"symbol","name":"test_case/src/lib.c::lm_sub2","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static lm_vec2 lm_sub2(lm_vec2 a, lm_vec2 b)","span":[8,10]}
 {"k":"symbol","name":"test_case/src/lib.c::lm_v2","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static lm_vec2 lm_v2(float x, float y)","span":[3,6]}

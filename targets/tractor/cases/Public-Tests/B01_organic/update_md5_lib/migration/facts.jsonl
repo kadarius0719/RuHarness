@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:76b9f551c712cdc5911e06898a9239e3014632e1a2afde5311d79b92426fcf83","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:1712b76f5ced9f40ad3c624e9426789a04a97d4493fdc8f21da8db44121fe32b","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:1712b76f5ced9f40ad3c624e9426789a04a97d4493fdc8f21da8db44121fe32b","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"tflac_md5_addsample","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void tflac_md5_addsample(tflac_md5 *m, tflac_u32 bits, tflac_uint val)","span":[16,31]}
 {"k":"symbol","name":"tflac_pack_u64le","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void tflac_pack_u64le(tflac_u8 *d, tflac_u64 n)","span":[5,14]}
 {"k":"symbol","name":"update_md5","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"tflac_u32 update_md5(tflac *t, const tflac_s32 *samples)","span":[33,51]}

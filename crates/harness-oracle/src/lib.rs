@@ -64,6 +64,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod bench;
 mod capabilities;
 mod confine;
 mod exec;
@@ -1095,6 +1096,42 @@ pub(crate) fn prepare_target_dir(crate_dir: &Path) -> Result<PathBuf, Error> {
 /// `cargo build --release --offline` of the staticlib crate at `crate_dir`
 /// into `target_dir` (from [`prepare_target_dir`]), under `profile`; returns
 /// the single `lib*.a` produced.
+/// Build a unit crate (the promoted crate, or an attempt's candidate) into
+/// its staticlib exactly as `verify` does — `cargo build --release --offline`
+/// into the crate's own `target/`, under the tool sandbox — and return the
+/// `lib*.a` path. `crate_dir` must resolve inside the target root. Used by
+/// the benchmark scorer (docs/SCHEMAS.md "M4 additions").
+pub fn build_crate_staticlib(target: &TargetContext, crate_dir: &Path) -> Result<PathBuf, Error> {
+    let root = target
+        .root
+        .canonicalize()
+        .map_err(|e| Error::io(&target.root, e))?;
+    let crate_dir = inside("bench", "crate dir", crate_dir, &root)?;
+    let target_dir = prepare_target_dir(&crate_dir)?;
+    let host = match sandbox_mode() {
+        "sandbox-exec" => Some(HostDirs::from_env()?),
+        _ => None,
+    };
+    let profile = match &host {
+        Some(host) => Some(sandbox::render_profile(&ProfileSpec {
+            host,
+            target_root: &root,
+            toolchain: true,
+            write_dirs: std::slice::from_ref(&target_dir),
+            write_files: &[crate_dir.join("Cargo.lock")],
+        })?),
+        None => None,
+    };
+    let runner = Runner {
+        cwd: root.clone(),
+        allowlist: vec!["cargo".into(), "rustc".into()],
+        timeout: timeout_secs(target)?,
+        max_output: exec::DEFAULT_MAX_OUTPUT,
+        tool_profile: profile.clone(),
+    };
+    build_staticlib(&runner, profile.as_deref(), &crate_dir, &target_dir)
+}
+
 pub(crate) fn build_staticlib(
     runner: &Runner,
     profile: Option<&str>,

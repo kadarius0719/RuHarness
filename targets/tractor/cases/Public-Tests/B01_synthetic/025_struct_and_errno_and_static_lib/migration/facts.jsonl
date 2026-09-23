@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/driver.h","hash":"blake3:b4d0d2da0519092e340372d8ce13921b9c0d40e4a40b45be321db760a413b386","includes":[]}
-{"k":"file","path":"test_case/src/driver.c","hash":"blake3:13009035fc5e4600a74530ee304700b0b35163b1fae4dc1beb4320ec7aaa554e","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:13009035fc5e4600a74530ee304700b0b35163b1fae4dc1beb4320ec7aaa554e","includes":["test_case/include/driver.h"]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(const char *in)","span":[58,66]}
 {"k":"symbol","name":"run","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void run(int extra_bedrooms)","span":[36,44]}
 {"k":"symbol","name":"test_case/src/driver.c::add_bedrooms","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static void add_bedrooms(house_t *house, int extra_bedrooms)","span":[24,26]}

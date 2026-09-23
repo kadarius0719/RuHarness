@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:a45e5581150b3886e3ef4baff912892196ce03d721114f1e9e20e394615d69b4","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:cf914808153e83834e51a160ee9fa70745391c3bdac93ae8ff136cb4085bbbdb","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:cf914808153e83834e51a160ee9fa70745391c3bdac93ae8ff136cb4085bbbdb","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"convex_clip","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int convex_clip(lm_vec2 *poly, int nPoly, const lm_vec2 *clip, int nClip, lm_vec2 *res)","span":[39,67]}
 {"k":"symbol","name":"test_case/src/lib.c::lm_cross2","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static inline float lm_cross2(lm_vec2 a, lm_vec2 b)","span":[14,16]}
 {"k":"symbol","name":"test_case/src/lib.c::lm_leftOf","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static inline int lm_leftOf(lm_vec2 a, lm_vec2 b, lm_vec2 c)","span":[18,21]}

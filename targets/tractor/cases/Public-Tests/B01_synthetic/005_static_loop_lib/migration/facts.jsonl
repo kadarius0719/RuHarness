@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/staticloop.h","hash":"blake3:df4af9ca2c7a43711f8005ae1ed0e57cb5cd368719622f82fcc23689c6c522b6","includes":[]}
-{"k":"file","path":"test_case/src/staticloop.c","hash":"blake3:d69b81fc71a71ede890bb99df86781e35144c3c77e392a4821339e38fc956f64","includes":[]}
+{"k":"file","path":"test_case/src/staticloop.c","hash":"blake3:d69b81fc71a71ede890bb99df86781e35144c3c77e392a4821339e38fc956f64","includes":["test_case/include/staticloop.h"]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/staticloop.c","visibility":"public","signature":"void driver(int stride)","span":[17,23]}
 {"k":"symbol","name":"static_sum","kind":"function","file":"test_case/src/staticloop.c","visibility":"public","signature":"int static_sum(int update)","span":[7,12]}
 {"k":"ref","from":"driver","file":"test_case/src/staticloop.c","to":"printf","refkind":"call","resolved":false}

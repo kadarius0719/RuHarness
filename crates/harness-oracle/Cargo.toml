@@ -7,6 +7,8 @@ license.workspace = true
 description = "RuHarness oracle strategies (c-abi-differential)"
 
 [dependencies]
+# serde_json: parsing the benchmark scorer's report (already a workspace dep).
+serde_json.workspace = true
 harness-core.workspace = true
 # Workspace path dependency (no crates.io addition): the oracle needs exactly
 # two pure functions of the C frontend — `mutants` (mutation sites for

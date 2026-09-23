@@ -1,5 +1,5 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/sieve.h","hash":"blake3:9b7e63c155bc5d0d4f9da0b94c2775cd776c73931308ce3c1fbd4bbc2aeee2bb","includes":[]}
-{"k":"file","path":"test_case/src/sieve.c","hash":"blake3:e55d05f00558e2dcb3307b8ee27b3f7ec1bc1638e75cbed617eae45c95b222ce","includes":[]}
+{"k":"file","path":"test_case/src/sieve.c","hash":"blake3:e55d05f00558e2dcb3307b8ee27b3f7ec1bc1638e75cbed617eae45c95b222ce","includes":["test_case/include/sieve.h"]}
 {"k":"symbol","name":"sieve","kind":"function","file":"test_case/src/sieve.c","visibility":"public","signature":"void sieve(int val)","span":[12,20]}
 {"k":"ref","from":"sieve","file":"test_case/src/sieve.c","to":"printf","refkind":"call","resolved":false}

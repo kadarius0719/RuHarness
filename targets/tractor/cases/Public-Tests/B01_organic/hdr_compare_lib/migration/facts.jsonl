@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:4175880633c35ddf20d0986168fb6c3c4262e02bbf7d6df91bfa682d86371a48","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:7cd2998a538a138973a3e0178351c66203f682bc85eabc6322ca43887b9a93aa","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:7cd2998a538a138973a3e0178351c66203f682bc85eabc6322ca43887b9a93aa","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"hdr_compare","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int hdr_compare(const uint8_t *h1, const uint8_t *h2)","span":[9,13]}
 {"k":"symbol","name":"test_case/src/lib.c::hdr_valid","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static int hdr_valid(const uint8_t *h)","span":[3,7]}
 {"k":"ref","from":"hdr_compare","file":"test_case/src/lib.c","to":"test_case/src/lib.c::hdr_valid","refkind":"call","resolved":true}

@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/pow.h","hash":"blake3:43f380d6edb06385d0c3b325c3f1e6ac8eca51bb045d133d717c8cba5635f361","includes":[]}
-{"k":"file","path":"test_case/src/pow.c","hash":"blake3:e019354f855681d5d7ec73b10f55fb1b8cb7b3193e2b1f734bbfa8640112172e","includes":[]}
+{"k":"file","path":"test_case/src/pow.c","hash":"blake3:e019354f855681d5d7ec73b10f55fb1b8cb7b3193e2b1f734bbfa8640112172e","includes":["test_case/include/pow.h"]}
 {"k":"symbol","name":"feel_the_power","kind":"function","file":"test_case/src/pow.c","visibility":"public","signature":"double feel_the_power(double base, double exponent)","span":[29,40]}
 {"k":"symbol","name":"my_pow","kind":"function","file":"test_case/src/pow.c","visibility":"public","signature":"double my_pow(double base, double exponent)","span":[13,26]}
 {"k":"ref","from":"feel_the_power","file":"test_case/src/pow.c","to":"my_pow","refkind":"call","resolved":true}

@@ -1,4 +1,4 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/lib.h","hash":"blake3:342a2cd22b0449c613432ddc47a1d1cd969dec07adf98b6ff283c443ff332855","includes":[]}
-{"k":"file","path":"test_case/src/lib.c","hash":"blake3:903e27371c2585e42cc64477b4f86c8ab3403fa7ec0f9159e6820463729819bd","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:903e27371c2585e42cc64477b4f86c8ab3403fa7ec0f9159e6820463729819bd","includes":["test_case/include/lib.h"]}
 {"k":"symbol","name":"bitwriter_add","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int bitwriter_add(tflac_bitwriter *bw, tflac_u32 bits, tflac_uint val)","span":[3,24]}

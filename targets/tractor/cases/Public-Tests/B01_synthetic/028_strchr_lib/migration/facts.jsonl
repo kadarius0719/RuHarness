@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/driver.h","hash":"blake3:b4d0d2da0519092e340372d8ce13921b9c0d40e4a40b45be321db760a413b386","includes":[]}
-{"k":"file","path":"test_case/src/driver.c","hash":"blake3:b2c913eace5cf4d0a0487fbd793df9d820e80d872e513c1e19b763d1ffd567d8","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:b2c913eace5cf4d0a0487fbd793df9d820e80d872e513c1e19b763d1ffd567d8","includes":["test_case/include/driver.h"]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(const char *in)","span":[17,20]}
 {"k":"symbol","name":"foo","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"int foo(const char *in, char c)","span":[9,15]}
 {"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"foo","refkind":"call","resolved":true}

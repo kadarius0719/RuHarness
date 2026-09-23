@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/driver.h","hash":"blake3:b4d0d2da0519092e340372d8ce13921b9c0d40e4a40b45be321db760a413b386","includes":[]}
-{"k":"file","path":"test_case/src/driver.c","hash":"blake3:2c827b97828761c75013afd37a282d43f8bb98eda79e12d34cf7abeb157dafdf","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:2c827b97828761c75013afd37a282d43f8bb98eda79e12d34cf7abeb157dafdf","includes":["test_case/include/driver.h"]}
 {"k":"symbol","name":"call_fma","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"int call_fma(const int *data, int len)","span":[14,28]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(const char *in)","span":[30,43]}
 {"k":"symbol","name":"fma_array","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void fma_array(int *restrict out, const int *mul1, const int *mul2, const int *add, int len)","span":[8,12]}

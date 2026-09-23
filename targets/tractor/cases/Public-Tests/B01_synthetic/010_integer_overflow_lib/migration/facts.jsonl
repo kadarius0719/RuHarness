@@ -1,6 +1,6 @@
 {"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
 {"k":"file","path":"test_case/include/driver.h","hash":"blake3:e971a524c36971260e39e5efc412cb7f2e9b8387e0d7d253c2cafff122b36f7a","includes":[]}
-{"k":"file","path":"test_case/src/driver.c","hash":"blake3:2e619a5dd04476ba6f0da6aa66426ef6339d26fc41a962fcf3d7a355f8dfd93c","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:2e619a5dd04476ba6f0da6aa66426ef6339d26fc41a962fcf3d7a355f8dfd93c","includes":["test_case/include/driver.h"]}
 {"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(char data)","span":[13,17]}
 {"k":"symbol","name":"printHexCharLine","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void printHexCharLine (char charHex)","span":[8,11]}
 {"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"printHexCharLine","refkind":"call","resolved":true}
