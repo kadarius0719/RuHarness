@@ -115,6 +115,10 @@ pub fn sample_mutants(all: &[Mutant], symbols: &[String], max: usize) -> Vec<Mut
 pub enum MutantOutcome {
     /// The mutated unit did not compile (discarded, never counted).
     NotCompiled,
+    /// Provably equivalent by Trivial Compiler Equivalence (Papadakis et al.,
+    /// ICSE 2015): its optimized object code is byte-identical to the
+    /// original's, so no driver can ever kill it. Discarded, never counted.
+    Equivalent,
     /// The driver's output changed, or it crashed / exited non-zero / timed out.
     Killed,
     /// Byte-identical output: the driver cannot tell this mutant apart.
@@ -142,8 +146,13 @@ pub struct MutationStats {
     pub sites: u32,
     /// Mutants sampled (≤ policy `max_mutants`).
     pub sampled: u32,
-    /// Sampled mutants that compiled.
+    /// Sampled mutants that compiled and are NOT TCE-equivalent (the
+    /// counted set).
     pub compiled: u32,
+    /// Sampled mutants discarded as TCE-equivalent (absent in records written
+    /// before this field existed = 0).
+    #[serde(default)]
+    pub equivalent: u32,
     /// Compiled mutants the driver killed.
     pub killed: u32,
     /// Compiled mutants that survived, sorted (file, line, operator).
@@ -165,9 +174,16 @@ pub fn evaluate_mutation(
     policy: &DriverPolicy,
 ) -> Result<(MutationStats, Check), Error> {
     let sampled = u32::try_from(results.len()).unwrap_or(u32::MAX);
-    let compiled_iter = results
-        .iter()
-        .filter(|(_, o)| *o != MutantOutcome::NotCompiled);
+    let counted =
+        |o: &MutantOutcome| !matches!(o, MutantOutcome::NotCompiled | MutantOutcome::Equivalent);
+    let equivalent = u32::try_from(
+        results
+            .iter()
+            .filter(|(_, o)| *o == MutantOutcome::Equivalent)
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    let compiled_iter = results.iter().filter(|(_, o)| counted(o));
     let compiled = u32::try_from(compiled_iter.clone().count()).unwrap_or(u32::MAX);
     let killed = u32::try_from(
         compiled_iter
@@ -198,6 +214,7 @@ pub fn evaluate_mutation(
         sites,
         sampled,
         compiled,
+        equivalent,
         killed,
         survivors,
     };
@@ -208,6 +225,18 @@ pub fn evaluate_mutation(
                 name: "mutation".into(),
                 passed: true,
                 detail: "n/a (0 sites)".into(),
+            },
+        ));
+    }
+    if compiled == 0 && equivalent > 0 {
+        return Ok((
+            stats,
+            Check {
+                name: "mutation".into(),
+                passed: true,
+                detail: format!(
+                    "n/a (all {equivalent} compiled mutant(s) are TCE-equivalent; {sites} sites)"
+                ),
             },
         ));
     }
@@ -226,7 +255,7 @@ pub fn evaluate_mutation(
     for symbol in symbols {
         let own: Vec<&MutantOutcome> = results
             .iter()
-            .filter(|(m, o)| &m.function == symbol && *o != MutantOutcome::NotCompiled)
+            .filter(|(m, o)| &m.function == symbol && counted(o))
             .map(|(_, o)| o)
             .collect();
         if own.len() >= 2 && !own.iter().any(|o| **o == MutantOutcome::Killed) {
@@ -242,8 +271,10 @@ pub fn evaluate_mutation(
     } else {
         format!("needs ≥ {} (small-n rule)", compiled - 1)
     };
-    let mut detail =
-        format!("killed {killed}/{compiled} compiled ({sampled} sampled of {sites} sites; {rule})");
+    let mut detail = format!(
+        "killed {killed}/{compiled} compiled ({sampled} sampled of {sites} sites, \
+             {equivalent} TCE-equivalent discarded; {rule})"
+    );
     if !unkilled_symbols.is_empty() {
         detail.push_str(&format!(
             "; no mutant killed in: {}",
@@ -451,6 +482,27 @@ mod tests {
         assert!(!c.passed, "{}", c.detail);
         assert!(c.detail.contains("no mutant killed in: g"), "{}", c.detail);
         assert_eq!(stats.survivors.len(), 2);
+    }
+
+    #[test]
+    fn tce_equivalent_mutants_are_discarded_not_counted() {
+        let sym = vec!["f".to_string()];
+        // 2 killed + 2 equivalent: small-n rule over the 2 counted mutants.
+        let mut r = results(2, 0, 0);
+        r.push((m("f", 400, "signedness"), MutantOutcome::Equivalent));
+        r.push((m("f", 401, "cast-delete"), MutantOutcome::Equivalent));
+        let (stats, c) = evaluate_mutation(4, &r, &sym, &POLICY).unwrap();
+        assert!(c.passed, "{}", c.detail);
+        assert_eq!((stats.compiled, stats.equivalent, stats.killed), (2, 2, 2));
+        assert!(stats.survivors.is_empty());
+        // All compiled mutants equivalent: n/a, flagged, not a harness error.
+        let all_eq = vec![(m("f", 1, "arith"), MutantOutcome::Equivalent)];
+        let (_, c) = evaluate_mutation(1, &all_eq, &sym, &POLICY).unwrap();
+        assert!(
+            c.passed && c.detail.contains("TCE-equivalent"),
+            "{}",
+            c.detail
+        );
     }
 
     #[test]

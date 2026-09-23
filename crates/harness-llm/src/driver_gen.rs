@@ -748,6 +748,7 @@ return 0;\n}\n";
             sites: 40,
             sampled: 24,
             compiled: 20,
+            equivalent: 0,
             killed: u32::try_from(20 - survivors.min(20)).unwrap(),
             survivors: (0..survivors)
                 .map(|i| Survivor {

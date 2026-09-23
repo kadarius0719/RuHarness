@@ -281,3 +281,48 @@ fn a_driver_outside_the_target_root_is_refused() {
         "{err:?}"
     );
 }
+
+/// Regression (M4 driver round 1, TRACTOR 037_cast_to_char_ptr_int_*): a
+/// `char` buffer copied with memcpy and read through an `unsigned char *`
+/// cast yields mutants (`char`→`unsigned char`, cast deletion) that compile
+/// to byte-identical objects. No driver can kill them; Trivial Compiler
+/// Equivalence must discard them instead of failing the small-n rule.
+#[test]
+fn tce_equivalent_mutants_are_discarded() {
+    let tmp = TempDir::new("dv-tce");
+    let (target, unit) = score_target(tmp.path());
+    write(
+        &tmp.path().join("src/score/unit.c"),
+        "#include \"unit.h\"\n#include <string.h>\n\
+         int unit_score(int x, int y) {\n\
+           char raw[sizeof(x)];\n\
+           memcpy(raw, &x, sizeof(x));\n\
+           const unsigned char *p = (const unsigned char *)raw;\n\
+           return p[0] + y;\n\
+         }\n\
+         int unit_twice(int x) { return x * 2 + 1; }\n",
+    );
+    let path = tmp
+        .path()
+        .join("migration/units/u-score/driver-attempts/d-000000000000/candidate/driver.c");
+    write(&path, GOOD_DRIVER);
+    let v = validate_driver(&target, &unit, &path).expect("validation runs");
+    let m = v.mutation.as_ref().expect("mutation ran");
+    eprintln!("{}\n{m:?}", describe(&v));
+    assert!(m.equivalent >= 1, "expected TCE-equivalent mutants: {m:?}");
+    // Line 4 (`char raw[...]` -> `unsigned char`) is equivalent: discarded.
+    // Line 6 (`const unsigned char *p` -> `signed`) is NOT (bytes >= 128
+    // sign-extend) and this driver never feeds such bytes: TCE must keep it
+    // as a genuine survivor — it discards only provable equivalence.
+    assert!(
+        m.survivors.iter().all(|s| s.line != 4),
+        "the equivalent line-4 mutant must not be a survivor: {m:?}"
+    );
+    assert!(
+        m.survivors
+            .iter()
+            .any(|s| s.line == 6 && s.operator == "signedness"),
+        "the non-equivalent line-6 mutant must survive this driver: {m:?}"
+    );
+    assert!(v.green, "{}", describe(&v));
+}

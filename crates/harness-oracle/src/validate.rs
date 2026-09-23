@@ -398,9 +398,28 @@ impl Ctx<'_> {
             runner: &mutant_runner,
             ..self.confined
         };
+        // Trivial Compiler Equivalence: every original unit file compiled
+        // once to an object with exactly the flags a mutant gets; a mutant
+        // whose object is byte-identical is provably equivalent (identical
+        // object code => identical linked program) and is never counted.
+        let mut originals: Vec<(String, Vec<u8>)> = Vec::new();
+        for (rel, path) in self.unit_c {
+            let dir = self.dv.join(format!("orig-{}", originals.len()));
+            std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
+            let obj = self.compile_object(path, &dir)?.ok_or_else(|| {
+                Error::Invariant(format!(
+                    "mutation: the ORIGINAL {rel} does not compile to an object on its own"
+                ))
+            })?;
+            originals.push((
+                rel.clone(),
+                std::fs::read(&obj).map_err(|e| Error::io(&obj, e))?,
+            ));
+        }
         let mut results = Vec::with_capacity(sampled.len());
         for (index, mutant) in sampled.into_iter().enumerate() {
-            let outcome = self.run_mutant(index, &mutant, driver_obj, pinned, &confined)?;
+            let outcome =
+                self.run_mutant(index, &mutant, driver_obj, pinned, &confined, &originals)?;
             results.push((mutant, outcome));
         }
         evaluate_mutation(sites, &results, &self.unit.symbols, policy)
@@ -413,6 +432,7 @@ impl Ctx<'_> {
         driver_obj: &Path,
         pinned: &[u8],
         confined: &Confinement<'_>,
+        originals: &[(String, Vec<u8>)],
     ) -> Result<MutantOutcome, Error> {
         let (_, original) = self
             .unit_c
@@ -436,14 +456,18 @@ impl Ctx<'_> {
 
         // The mutated copy's own quoted includes must still find the
         // original's neighbours: its original directory is searched first.
-        let orig_dir = original
-            .parent()
-            .ok_or_else(|| Error::Invariant(format!("{} has no parent", mutant.file)))?
-            .to_path_buf();
-        let includes: Vec<PathBuf> = std::iter::once(orig_dir)
-            .chain(self.base.includes())
-            .collect();
-        let mut inputs = vec![driver_obj.to_path_buf(), mutated_path];
+        let includes = self.mutant_includes(original)?;
+        let Some(mutant_obj) = self.compile_object_with(&mutated_path, &dir, &includes)? else {
+            return Ok(MutantOutcome::NotCompiled);
+        };
+        let obj_bytes = std::fs::read(&mutant_obj).map_err(|e| Error::io(&mutant_obj, e))?;
+        if originals
+            .iter()
+            .any(|(rel, bytes)| *rel == mutant.file && *bytes == obj_bytes)
+        {
+            return Ok(MutantOutcome::Equivalent);
+        }
+        let mut inputs = vec![driver_obj.to_path_buf(), mutant_obj];
         inputs.extend(
             self.unit_c
                 .iter()
@@ -471,6 +495,54 @@ impl Ctx<'_> {
                 MutantOutcome::Killed
             }
         })
+    }
+}
+
+impl Ctx<'_> {
+    /// `-I` order for a (possibly mutated copy of a) unit file: the
+    /// ORIGINAL file's directory first, then the usual include dirs.
+    fn mutant_includes(&self, original: &Path) -> Result<Vec<PathBuf>, Error> {
+        let orig_dir = original
+            .parent()
+            .ok_or_else(|| Error::Invariant(format!("{} has no parent", original.display())))?
+            .to_path_buf();
+        Ok(std::iter::once(orig_dir)
+            .chain(self.base.includes())
+            .collect())
+    }
+
+    /// Compile an original unit file to `<dir>/<stem>.o`.
+    fn compile_object(&self, source: &Path, dir: &Path) -> Result<Option<PathBuf>, Error> {
+        let includes = self.mutant_includes(source)?;
+        self.compile_object_with(source, dir, &includes)
+    }
+
+    /// `cc -c` of `source` into `<dir>/<stem>.o` with the mutant flags;
+    /// `None` when it does not compile.
+    fn compile_object_with(
+        &self,
+        source: &Path,
+        dir: &Path,
+        includes: &[PathBuf],
+    ) -> Result<Option<PathBuf>, Error> {
+        let stem = source
+            .file_stem()
+            .ok_or_else(|| Error::Invariant(format!("{} has no file stem", source.display())))?;
+        let mut name = stem.to_os_string();
+        name.push(".o");
+        let obj = dir.join(name);
+        let built = crate::cc_outcome(
+            self.runner,
+            &CcInvocation {
+                includes,
+                cflags: &["-c".to_string()],
+                quiet: true,
+                out: &obj,
+                inputs: &[source.to_path_buf()],
+                libs: &[],
+            },
+        )?;
+        Ok(built.is_ok().then_some(obj))
     }
 }
 
