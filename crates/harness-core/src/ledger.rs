@@ -75,6 +75,14 @@ impl Ledger {
         self.unit_dir(unit_id).join("oracle-latest.md")
     }
 
+    /// A unit's generated (or human-written) differential driver.
+    pub fn driver_path(&self, unit_id: &str) -> PathBuf {
+        self.unit_dir(unit_id).join("driver.c")
+    }
+    /// A unit's promoted driver self-validation record (M4).
+    pub fn driver_validation_path(&self, unit_id: &str) -> PathBuf {
+        self.unit_dir(unit_id).join("driver-validation.json")
+    }
     /// Gitignored scratch/build directory for oracle runs.
     pub fn build_dir(&self) -> PathBuf {
         self.dir().join("build")

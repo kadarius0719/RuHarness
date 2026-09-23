@@ -421,6 +421,7 @@ pub fn run_migration(
         schema_version: ATTEMPT_SCHEMA_VERSION,
         id: id.clone(),
         unit: unit.id.clone(),
+        stage: None,
         provider: provider.profile.clone(),
         provider_kind: provider.kind.clone(),
         model: params.model.to_string(),

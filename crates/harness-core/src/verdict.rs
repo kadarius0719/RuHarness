@@ -12,7 +12,7 @@ pub const VERDICT_SCHEMA_VERSION: u64 = 1;
 pub const VERDICT_SCHEMA_NAME: &str = "ruharness-verdict";
 
 /// One oracle check's outcome.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Check {
     /// Check name (e.g. `differential-driver`).
     pub name: String,
