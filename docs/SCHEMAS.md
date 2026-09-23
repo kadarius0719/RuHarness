@@ -703,6 +703,31 @@ runner}` + `heldout/tools/…` (never inside a target root), `scores.json`.
   (closed: `pass skip timeout not-run fail:<cando ResultType> fail:dylib-build
   fail:build fail:no-report fail:bad-report fail:runner-exit-<n> fail:runner-killed`).
   A vector's `has_ub` → `skip`, excluded from every denominator.
+- **scores.json — unmarked-UB additions** (post-M4, additive, `schema_version` stays 1;
+  no `deny_unknown_fields`, so older readers ignore them and newer ones default them;
+  every field is omitted when absent/zero, so earlier records stay byte-identical).
+  Design and rationale: docs/ORACLE-HARDENING.md §A, §A.R, §A.2.
+  - `vectors[].c_sanitized` (optional): the SANITIZED C pass, run only on a vector the
+    plain C passed and the verified Rust or scored candidate did not (on a non-infra
+    result). Closed: `clean` · `ub:<kind>` — EXCUSED; `<kind>` ∈ {`bounds-safety-trap`,
+    `stack-buffer-overflow`, `stack-buffer-underflow`, `heap-buffer-overflow`,
+    `global-buffer-overflow`, `dynamic-stack-buffer-overflow`, `heap-use-after-free`,
+    `stack-use-after-return`, `stack-use-after-scope`, `use-after-poison`} ·
+    `sanitizer:<other ASan kind | malformed-report>` (recorded, not excused) ·
+    `fail:<cando ResultType>` · `timeout` · the infra strings above (a PROBLEM, not
+    excused). An EXCUSED vector (`unmarked-ub`) is excluded from the case's non-UB set
+    exactly like `has_ub`.
+  - `cases[].sanitized_build` (optional): `asan+bounds-safety` | `asan` (the C does not
+    compile with `-fbounds-safety`) | `none` (did not build: a PROBLEM).
+  - `c_baseline`/`rust`/`candidate` counts gain `unmarked_ub`: an excused vector is
+    counted there INSTEAD of pass/fail on every side. `totals[]` gain
+    `vectors_unmarked_ub`.
+  - `environment` gains exactly one of `sanitized-pass: asan+bounds-safety` ·
+    `sanitized-pass: skipped (runtime-not-found)` · `sanitized-pass: skipped
+    (unsupported-platform)` — so a baseline recorded without the pass is incomparable
+    (exit 1) with one recorded with it: re-baselining is deliberate.
+  - `bench check`: a vector whose excusal is lost while its MEASURED Rust result is
+    not `pass` is a regression (exit 10); any other `c_sanitized` change is drift.
 
 ## CLI additions
 

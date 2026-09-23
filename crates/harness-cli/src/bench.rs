@@ -7,8 +7,9 @@
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use harness_core::bench::{
-    classify_case, compare, CaseInputs, CasePipeline, CaseScore, CorpusLock, Counts, Scores, Suite,
-    SuiteCase, VectorScore, Verification, SCORES_SCHEMA_NAME, SCORES_SCHEMA_VERSION,
+    classify_case, compare, is_infra_result, is_unmarked_ub, CaseInputs, CasePipeline, CaseScore,
+    CorpusLock, Counts, Scores, Suite, SuiteCase, VectorScore, Verification, SCORES_SCHEMA_NAME,
+    SCORES_SCHEMA_VERSION,
 };
 use harness_core::driver::DriverValidation;
 use harness_core::ledger::Ledger;
@@ -391,9 +392,15 @@ fn case_status(root: &Path) -> Result<String> {
 
 // ------------------------------------------------------------------ scoring
 
-fn tally(results: &[&str]) -> Counts {
+/// Counts of one side; `(result, excused)` per vector — an `unmarked-ub`
+/// vector is counted apart on every side (R-A4), whatever its result.
+fn tally(results: &[(&str, bool)]) -> Counts {
     let mut c = Counts::default();
-    for r in results {
+    for (r, excused) in results {
+        if *excused && *r != "skip" {
+            c.unmarked_ub += 1;
+            continue;
+        }
         match *r {
             "pass" => c.pass += 1,
             "skip" => c.skip += 1,
@@ -541,7 +548,21 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
     let runs = scorer.score_case(case, &cside, rust_lib.as_deref(), candidate_lib.as_deref())?;
     let verified = verification == Verification::Verified;
     let rust_missing = if verified { "fail:build" } else { "not-run" };
+    // §A.2 disclosure: a fallback to ASan-only (or no build at all) is
+    // printed, so a flaky bounds-safety compile is never silent.
+    match runs.sanitized_build.as_deref() {
+        Some("asan") => out(format!(
+            "bench: {}: sanitized C built WITHOUT -fbounds-safety (it does not compile with it)",
+            case.path
+        )),
+        Some("none") => problems.push(format!(
+            "{}: the sanitized C did not build (a harness problem; nothing excused)",
+            case.path
+        )),
+        _ => {}
+    }
     let vectors: Vec<VectorScore> = runs
+        .vectors
         .iter()
         .map(|r| VectorScore {
             name: r.name.clone(),
@@ -556,19 +577,45 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                         .unwrap_or_else(|| "fail:build".to_string()),
                 )
             },
+            c_sanitized: r.c_sanitized.clone(),
         })
         .collect();
+    for v in &vectors {
+        match v.c_sanitized.as_deref() {
+            // R-A11: the sanitized side failing to build/run is never silent.
+            Some(s) if is_infra_result(s) => problems.push(format!(
+                "{}/{}: sanitized C pass: {s} (a harness problem; the vector is not excused)",
+                case.path, v.name
+            )),
+            // R-A12: every excusal is disclosed with what it excused.
+            Some(s) if s.starts_with("ub:") => out(format!(
+                "bench: {}/{}: unmarked-ub ({}) — excused; plain C {}, Rust {}{}",
+                case.path,
+                v.name,
+                s.trim_start_matches("ub:"),
+                v.c,
+                v.rust,
+                v.candidate
+                    .as_deref()
+                    .map(|k| format!(", candidate {k}"))
+                    .unwrap_or_default()
+            )),
+            _ => {}
+        }
+    }
     let class = classify_case(&vectors, verification).to_string();
-    let c_baseline = tally(&vectors.iter().map(|v| v.c.as_str()).collect::<Vec<_>>());
-    let rust = tally(&vectors.iter().map(|v| v.rust.as_str()).collect::<Vec<_>>());
-    let candidate = (!inputs.candidate.is_empty()).then(|| {
+    let side = |f: &dyn Fn(&VectorScore) -> &str| -> Counts {
         tally(
             &vectors
                 .iter()
-                .map(|v| v.candidate.as_deref().unwrap_or("not-run"))
+                .map(|v| (f(v), is_unmarked_ub(v)))
                 .collect::<Vec<_>>(),
         )
-    });
+    };
+    let c_baseline = side(&|v| v.c.as_str());
+    let rust = side(&|v| v.rust.as_str());
+    let candidate = (!inputs.candidate.is_empty())
+        .then(|| side(&|v| v.candidate.as_deref().unwrap_or("not-run")));
     Ok(Scored {
         score: CaseScore {
             case: case.path.clone(),
@@ -579,6 +626,7 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
             c_baseline,
             rust,
             candidate,
+            sanitized_build: runs.sanitized_build.clone(),
             vectors,
         },
         problems,
@@ -633,9 +681,13 @@ fn compute(
                         case.split,
                         scored.score.class,
                         scored.score.c_baseline.pass,
-                        scored.score.vectors.len() as u32 - scored.score.c_baseline.skip,
+                        scored.score.vectors.len() as u32
+                            - scored.score.c_baseline.skip
+                            - scored.score.c_baseline.unmarked_ub,
                         scored.score.rust.pass,
-                        scored.score.vectors.len() as u32 - scored.score.c_baseline.skip,
+                        scored.score.vectors.len() as u32
+                            - scored.score.c_baseline.skip
+                            - scored.score.c_baseline.unmarked_ub,
                         scored
                             .score
                             .candidate
@@ -682,7 +734,8 @@ fn print_totals(scores: &Scores) {
         out(format!(
             "bench totals [{}]: strict-pass {}/{} scorable cases ({}) · verified {} (blind spots \
              {}) · stale-verified {} · vector-pass/oracle-red {} · non-UB vectors passed {}/{} \
-             ({}) · unscorable {} · C-baseline-invalid {} · infra-error {} · cases {}",
+             ({}) · unmarked-UB excused {} · unscorable {} · C-baseline-invalid {} · infra-error \
+             {} · cases {}",
             t.split,
             t.strict_pass,
             t.scorable,
@@ -694,6 +747,7 @@ fn print_totals(scores: &Scores) {
             t.vectors_passed,
             t.vectors,
             pct(t.vectors_passed, t.vectors),
+            t.vectors_unmarked_ub,
             t.unscorable,
             t.c_baseline_invalid,
             t.infra_errors,
@@ -957,6 +1011,20 @@ mod tests {
             candidate_digest: String::new(),
             promoted: false,
         }
+    }
+
+    /// R-A4: an excused vector counts as `unmarked_ub` on every side,
+    /// whatever its result, so totals agree with the class.
+    #[test]
+    fn excused_vectors_are_tallied_apart() {
+        let c = tally(&[
+            ("pass", false),
+            ("pass", true),
+            ("fail:Panic", true),
+            ("skip", false),
+            ("fail:Timeout", false),
+        ]);
+        assert_eq!((c.pass, c.fail, c.skip, c.unmarked_ub), (1, 1, 1, 2));
     }
 
     #[test]

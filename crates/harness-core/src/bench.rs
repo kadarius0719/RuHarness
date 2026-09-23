@@ -760,6 +760,15 @@ pub struct Counts {
     pub skip: u32,
     /// Vectors not run (no artifact to run).
     pub not_run: u32,
+    /// Vectors excused as `unmarked-ub` (the sanitized C pass proved the C
+    /// memory-unsafe on them — [`is_unmarked_ub`]); counted here INSTEAD of
+    /// pass/fail on every side, so totals and classes agree.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unmarked_ub: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// One vector's results. Result strings (closed): `pass`, `skip`,
@@ -775,6 +784,23 @@ pub struct VectorScore {
     /// Latest UNverified candidate's result, when one was scored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate: Option<String>,
+    /// The SANITIZED C pass (docs/ORACLE-HARDENING.md §A), run only on a
+    /// vector the plain C passed and the Rust or candidate did not. Closed:
+    /// `clean` | `ub:<allow-listed ASan kind>` (excused) |
+    /// `sanitizer:<other kind>` (recorded, not excused) | `fail:<cando
+    /// result>` (abnormal end without a report: not excused) | an infra
+    /// result ([`is_infra_result`]; a PROBLEM). Absent = not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_sanitized: Option<String>,
+}
+
+/// Whether a vector is excused as `unmarked-ub`: the sanitized C pass
+/// reported an allow-listed memory error on it. Excluded from a case's
+/// non-UB set exactly like `has_ub`, and counted separately.
+pub fn is_unmarked_ub(v: &VectorScore) -> bool {
+    v.c_sanitized
+        .as_deref()
+        .is_some_and(|s| s.starts_with("ub:"))
 }
 
 /// Digests a case's score is bound to (any change ⇒ re-score required).
@@ -844,6 +870,12 @@ pub struct CaseScore {
     /// Unverified-candidate counts, when one was scored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate: Option<Counts>,
+    /// Which sanitized C build ran for this case (docs/ORACLE-HARDENING.md
+    /// §A.2): `asan+bounds-safety` | `asan` (the C does not compile with
+    /// `-fbounds-safety`) | `none` (neither built: a PROBLEM). Absent = the
+    /// pass did not run for this case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sanitized_build: Option<String>,
     /// Per-vector results, sorted by name.
     pub vectors: Vec<VectorScore>,
 }
@@ -885,6 +917,9 @@ pub struct SplitTotals {
     pub vectors_passed: u32,
     /// UB vectors skipped (all cases).
     pub vectors_skipped: u32,
+    /// Vectors excused as `unmarked-ub` (all cases; [`is_unmarked_ub`]).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub vectors_unmarked_ub: u32,
 }
 
 /// `scores.json`.
@@ -925,6 +960,7 @@ impl Scores {
                 });
             t.cases += 1;
             t.vectors_skipped += c.c_baseline.skip;
+            t.vectors_unmarked_ub += c.c_baseline.unmarked_ub;
             match c.class.as_str() {
                 "unscorable" => t.unscorable += 1,
                 "c-baseline-invalid" => t.c_baseline_invalid += 1,
@@ -1016,7 +1052,10 @@ pub enum Verification {
 
 /// Classify a case from its per-vector results (see [`CaseScore::class`]).
 pub fn classify_case(vectors: &[VectorScore], verification: Verification) -> &'static str {
-    let non_ub: Vec<&VectorScore> = vectors.iter().filter(|v| v.c != "skip").collect();
+    let non_ub: Vec<&VectorScore> = vectors
+        .iter()
+        .filter(|v| v.c != "skip" && !is_unmarked_ub(v))
+        .collect();
     if non_ub.is_empty() {
         return "unscorable";
     }
@@ -1114,6 +1153,29 @@ pub fn compare(baseline: &Scores, now: &Scores) -> Comparison {
                 out.drift
                     .push(format!("{name}/{}: C {} -> {}", v.name, prev.c, v.c));
             }
+            if prev.c_sanitized != v.c_sanitized {
+                let show = |s: &Option<String>| s.as_deref().unwrap_or("not-run").to_string();
+                let change = format!(
+                    "{name}/{}: C sanitized {} -> {}",
+                    v.name,
+                    show(&prev.c_sanitized),
+                    show(&v.c_sanitized)
+                );
+                // An excusal that no longer holds while a MEASURED Rust still
+                // does not pass is a verified vector newly failing (R-A5);
+                // `not-run` (no verified unit: a candidate triggered the
+                // pass) is never a Rust regression.
+                if is_unmarked_ub(prev)
+                    && !is_unmarked_ub(v)
+                    && v.rust != "pass"
+                    && v.rust != "not-run"
+                {
+                    out.regressions
+                        .push(format!("{change} (excusal lost; Rust {})", v.rust));
+                } else {
+                    out.drift.push(change);
+                }
+            }
             if prev.rust == "pass" && v.rust != "pass" {
                 out.regressions
                     .push(format!("{name}/{}: Rust pass -> {}", v.name, v.rust));
@@ -1181,7 +1243,102 @@ mod tests {
             c: c.into(),
             rust: rust.into(),
             candidate: None,
+            c_sanitized: None,
         }
+    }
+
+    fn excused(name: &str, rust: &str) -> VectorScore {
+        VectorScore {
+            c_sanitized: Some("ub:stack-buffer-overflow".into()),
+            ..vs(name, "pass", rust)
+        }
+    }
+
+    /// docs/ORACLE-HARDENING.md §A: a vector the sanitized C proves
+    /// memory-unsafe is excluded like `has_ub`; any other sanitized result is
+    /// recorded and changes nothing.
+    #[test]
+    fn unmarked_ub_vectors_are_excluded_like_has_ub() {
+        // decorrelate's shape: correct Rust fails only the UB vector.
+        assert_eq!(
+            classify_case(
+                &[
+                    vs("1", "pass", "pass"),
+                    excused("2", "fail:VectorComparisonFailed")
+                ],
+                Verification::Verified
+            ),
+            "strict-pass"
+        );
+        // Every non-UB vector excused: nothing left to score.
+        assert_eq!(
+            classify_case(&[excused("1", "fail:Panic")], Verification::Verified),
+            "unscorable"
+        );
+        // Not excused: another kind, an abnormal end without a report, clean.
+        for other in [
+            "sanitizer:alloc-dealloc-mismatch",
+            "fail:SegmentationFault",
+            "clean",
+        ] {
+            let v = VectorScore {
+                c_sanitized: Some(other.into()),
+                ..vs("1", "pass", "fail:Panic")
+            };
+            assert!(!is_unmarked_ub(&v), "{other}");
+            assert_eq!(
+                classify_case(&[v], Verification::Verified),
+                "blind-spot",
+                "{other}"
+            );
+        }
+    }
+
+    #[test]
+    fn totals_count_unmarked_ub_apart() {
+        let mut s = scores("pass", "pass", "e");
+        s.cases[0].vectors.push(excused("2.json", "fail:Panic"));
+        s.cases[0].c_baseline.unmarked_ub = 1;
+        s.cases[0].rust.unmarked_ub = 1;
+        s.finalize();
+        let t = &s.totals[0];
+        assert_eq!((t.strict_pass, t.vectors, t.vectors_passed), (1, 1, 1));
+        assert_eq!(t.vectors_unmarked_ub, 1);
+        // Absent when zero: M4 records stay byte-identical.
+        let json = serde_json::to_string(&scores("pass", "pass", "e")).unwrap();
+        assert!(
+            !json.contains("unmarked_ub") && !json.contains("c_sanitized"),
+            "{json}"
+        );
+    }
+
+    /// R-A5: an excusal that stops holding while the Rust still fails is a
+    /// regression; other sanitized changes are drift.
+    #[test]
+    fn a_lost_excusal_with_a_failing_rust_is_a_regression() {
+        let mut base = scores("fail:Panic", "pass", "e1");
+        base.cases[0].vectors[0].c_sanitized = Some("ub:heap-buffer-overflow".into());
+        let mut now = base.clone();
+        now.cases[0].vectors[0].c_sanitized = Some("clean".into());
+        let r = compare(&base, &now);
+        assert_eq!(r.regressions.len(), 1, "{r:?}");
+        assert!(r.regressions[0].contains("excusal lost"), "{r:?}");
+
+        let mut drifted = base.clone();
+        drifted.cases[0].vectors[0].c_sanitized = Some("ub:stack-buffer-overflow".into());
+        let r = compare(&base, &drifted);
+        assert!(r.regressions.is_empty(), "{r:?}");
+        assert_eq!(r.drift.len(), 1);
+
+        // Code review: an unverified case (Rust `not-run`, the pass
+        // triggered by a candidate) never yields a Rust regression.
+        let mut unverified = base.clone();
+        unverified.cases[0].vectors[0].rust = "not-run".into();
+        let mut lost = unverified.clone();
+        lost.cases[0].vectors[0].c_sanitized = Some("clean".into());
+        let r = compare(&unverified, &lost);
+        assert!(r.regressions.is_empty(), "{r:?}");
+        assert_eq!(r.drift.len(), 1);
     }
 
     #[test]
@@ -1293,6 +1450,7 @@ mod tests {
                     ..Counts::default()
                 },
                 candidate: None,
+                sanitized_build: None,
                 vectors,
             }],
         };
