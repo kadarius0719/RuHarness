@@ -483,14 +483,56 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                 .find(|r| r.outcome == "green" && r.candidate_digest == inputs.driver)
                 .map(|r| r.turns.len() as u32);
             let m_attempts = attempts::load_unit_attempts(&ledger, &unit.id)?;
-            pipeline.migrate_turns = m_attempts
+            // The promoted attempt is the one whose candidate IS the unit
+            // crate on disk (docs/REPLAY-DESIGN.md §R R-5) — not the
+            // `promoted` flag, which an older attempt keeps after a newer one
+            // replaced its crate (014: both attempts say `promoted`).
+            let crate_digest = unit
+                .oracle_param_str("rust_crate")
+                .map(|name| ledger.unit_dir(&unit.id).join(name))
+                .filter(|dir| dir.join("Cargo.toml").is_file())
+                .map(|dir| hash::crate_content_hash(&dir))
+                .transpose()?;
+            // Only attempts bound to the CURRENT inputs can have produced
+            // the crate being scored (a re-run after a driver change can
+            // repeat an older attempt's candidate byte for byte).
+            let promoted: Vec<&attempts::AttemptRecord> = m_attempts
                 .iter()
-                .find(|r| r.promoted && r.outcome == "green")
-                .map(|r| r.turns.len() as u32);
-            pipeline.migrate_outcome = m_attempts
-                .last()
-                .map(|r| r.outcome.clone())
-                .unwrap_or_default();
+                .filter(|r| {
+                    r.outcome == "green"
+                        && r.unit_source == inputs.unit_source
+                        && r.driver == inputs.driver
+                        && crate_digest.as_deref() == Some(r.candidate_digest.as_str())
+                })
+                .collect();
+            let promoted_count = promoted.len();
+            if promoted_count > 1 {
+                problems.push(format!(
+                    "{}: {promoted_count} green attempts bound to the current inputs share the \
+                     crate's digest (ambiguous provenance)",
+                    case.path
+                ));
+            }
+            let promoted = (promoted_count == 1).then(|| promoted[0]);
+            pipeline.migrate_turns = promoted.map(|r| r.turns.len() as u32);
+            let finished: std::collections::BTreeSet<&str> = m_attempts
+                .iter()
+                .filter(|r| r.outcome != "in-progress")
+                .map(|r| r.outcome.as_str())
+                .collect();
+            pipeline.migrate_outcome = match (promoted, finished.len()) {
+                (Some(r), _) => r.outcome.clone(),
+                (None, 0) => m_attempts
+                    .first()
+                    .map(|r| r.outcome.clone())
+                    .unwrap_or_default(),
+                (None, 1) => finished
+                    .iter()
+                    .next()
+                    .map(|o| (*o).to_string())
+                    .unwrap_or_default(),
+                (None, _) => "mixed".to_string(),
+            };
             // "Verified" for scoring = plan status AND the latest verdict is
             // green over the CURRENT digests AND the driver is freshly
             // validated (R6). Anything less is `stale-verified`, never scored
@@ -513,6 +555,14 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                 } else {
                     Verification::Stale
                 };
+            }
+            if verification == Verification::Verified && promoted_count == 0 {
+                // R-5: a verified crate no recorded attempt produced has no
+                // provenance the benchmark can report.
+                problems.push(format!(
+                    "{}: the verified crate matches no green migrate attempt (provenance unknown)",
+                    case.path
+                ));
             }
             if verification == Verification::Verified {
                 let crate_name = unit.oracle_param_str("rust_crate").unwrap_or_default();
@@ -875,16 +925,105 @@ fn superseding_sample(
     let (base, number) = sample_of(&rec.id);
     records
         .iter()
-        .filter(|other| other.provider_kind == "external")
+        .filter(|other| other.provider_kind == "external" && other.outcome != "in-progress")
         .map(|other| (sample_of(&other.id), &other.id))
         .filter(|((other_base, n), _)| *other_base == base && *n > number)
         .max_by_key(|((_, n), _)| *n)
         .map(|(_, id)| id.clone())
 }
 
+/// How one recorded attempt fared in `bench check --replay`.
+enum ReplayResult {
+    /// Strict tier reproduced; the drifted turns (conformance).
+    Reproduces(Vec<usize>),
+    /// Re-judged on its recorded replies, it diverged (intact evidence);
+    /// the outcome the re-judged trajectory reached.
+    Diverged {
+        differences: Vec<String>,
+        outcome: String,
+    },
+    /// Not verifiable: integrity, binding, or a harness error.
+    Failed(String),
+    /// Not replayed, legitimately: why (`bound to superseded inputs`, or
+    /// `superseded by sample …`).
+    Skipped(String),
+}
+
+/// What one `superseded.jsonl` entry amounts to.
+#[derive(Debug, PartialEq, Eq)]
+enum EntryCheck {
+    /// Holds: the attempt is an expected divergence.
+    Holds,
+    /// No longer applies (the attempt was legitimately skipped): reported.
+    Moot(String),
+    /// A problem (fails the check).
+    Problem(String),
+}
+
+/// Whether one `superseded.jsonl` entry holds (docs/REPLAY-DESIGN.md §R
+/// R-7), given both attempts' records and replay results (`None` = not
+/// replayed: in progress, or bound to superseded inputs).
+/// `current_artifact`: the digest of what the benchmark scores for this
+/// stage (the unit crate, or the promoted driver) — an attempt whose
+/// candidate IS it cannot be superseded.
+fn check_supersession(
+    entry: &attempts::Supersession,
+    (old, old_result): (&attempts::AttemptRecord, Option<&ReplayResult>),
+    (new, new_result): (&attempts::AttemptRecord, Option<&ReplayResult>),
+    current_artifact: Option<&str>,
+) -> EntryCheck {
+    let problem = |why: &str| EntryCheck::Problem(why.to_string());
+    let replayed =
+        match old_result {
+            Some(ReplayResult::Diverged { outcome, .. }) => outcome,
+            Some(ReplayResult::Skipped(why)) => {
+                return EntryCheck::Moot(format!("{why}: the entry no longer applies"))
+            }
+            Some(ReplayResult::Reproduces(_)) => {
+                return problem("the superseded attempt still reproduces")
+            }
+            Some(ReplayResult::Failed(_)) => return problem(
+                "the superseded attempt is not verifiable (integrity or error); a supersession \
+                 never excuses that",
+            ),
+            None => return problem("the superseded attempt was not replayed (in progress)"),
+        };
+    if !old.candidate_digest.is_empty() && current_artifact == Some(old.candidate_digest.as_str()) {
+        return problem("the superseded attempt's candidate IS what the benchmark scores");
+    }
+    let successor_holds = matches!(new_result, Some(ReplayResult::Reproduces(_)))
+        && new.unit_source == old.unit_source
+        && new.driver == old.driver;
+    if !successor_holds {
+        return EntryCheck::Problem(format!(
+            "its successor {} is not a finished, reproducing attempt on the same inputs",
+            harness_llm::printable(&new.id, 64)
+        ));
+    }
+    if old.outcome == "green" && new.outcome != "green" {
+        return problem("a green attempt can only be superseded by a green one");
+    }
+    // A tightening: the judge rejects now what it accepted then. Anything
+    // else (green -> green by another path, red -> anything) may be LOOSER.
+    let tightening = old.outcome == "green" && replayed != "green";
+    if !tightening && !entry.loosening {
+        return problem(
+            "not a tightening (recorded green -> replayed not green): the judge may be LOOSER \
+             — mark the entry `\"loosening\": true` after review",
+        );
+    }
+    EntryCheck::Holds
+}
+
+/// `bench check --replay` (docs/REPLAY-DESIGN.md §R): every finished attempt
+/// bound to the current inputs is verified from its RECORDED evidence
+/// (strict tier) and reported `prompt: conformant | drifted`; supersession
+/// entries (`superseded.jsonl`, R-7) are checked against the results.
+/// Returns the problems (each fails the check).
 fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
     let (suite, _lock) = load_verified(suite_dir)?;
     let mut problems = Vec::new();
+    let (mut reproduced, mut drifted_attempts, mut expected, mut skipped) = (0, 0, 0, 0);
     for case in &suite.cases {
         let root = case.target_root(suite_dir);
         if !root.join("harness.toml").exists() || !Ledger::new(&root).plan_path().exists() {
@@ -896,6 +1035,13 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
         let facts = Facts::load(&ledger.facts_path())?;
         for unit in &plan.units {
             let llm = &ctx.config.llm;
+            let supersessions = match attempts::load_supersessions(&ledger, &unit.id) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    problems.push(format!("{} {}: superseded.jsonl: {e}", case.path, unit.id));
+                    Vec::new()
+                }
+            };
             for (stage, records, traces_sub, section) in [
                 (
                     "driver",
@@ -925,21 +1071,35 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                     _ => String::new(),
                 };
                 let hazards = crate::confirmed_hazards(&ledger, &plan, &facts, &unit.id)?;
+                let mut results: std::collections::BTreeMap<String, ReplayResult> =
+                    std::collections::BTreeMap::new();
                 for rec in records.iter().filter(|r| r.outcome != "in-progress") {
                     let stale = rec.unit_source != unit_source
                         || (stage == "migrate" && rec.driver != driver_now);
+                    let shown = harness_llm::printable(&rec.id, 64);
                     if stale {
+                        skipped += 1;
                         out(format!(
-                            "bench replay: {} {stage} {} skipped (bound to superseded inputs)",
-                            case.path, rec.id
+                            "bench replay: {} {stage} {shown} skipped (bound to superseded inputs)",
+                            case.path
                         ));
+                        results.insert(
+                            rec.id.clone(),
+                            ReplayResult::Skipped("bound to superseded inputs".into()),
+                        );
                         continue;
                     }
                     if let Some(newer) = superseding_sample(rec, &records) {
+                        skipped += 1;
+                        let why = format!(
+                            "superseded by sample {}",
+                            harness_llm::printable(&newer, 64)
+                        );
                         out(format!(
-                            "bench replay: {} {stage} {} skipped (superseded by sample {newer})",
-                            case.path, rec.id
+                            "bench replay: {} {stage} {shown} skipped ({why})",
+                            case.path
                         ));
+                        results.insert(rec.id.clone(), ReplayResult::Skipped(why));
                         continue;
                     }
                     let resolved = harness_llm::providers::resolve("replay", &traces)?;
@@ -952,12 +1112,12 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                         retry: false,
                         attempt: Some(&rec.id),
                     };
-                    let result = if stage == "driver" {
+                    let verified = if stage == "driver" {
                         let judge = |p: &Path| harness_oracle::validate_driver(&ctx, unit, p);
                         harness_llm::run_driver_generation(
                             &params, &judge, &ctx, &facts, &plan, unit,
                         )
-                        .map(|_| ())
+                        .map(|o| o.drifted.unwrap_or_default())
                     } else {
                         harness_llm::run_migration(
                             &params,
@@ -968,22 +1128,114 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                             unit,
                             &hazards,
                         )
-                        .map(|_| ())
+                        .map(|o| o.drifted.unwrap_or_default())
                     };
+                    let result = match verified {
+                        Ok(drifted) => ReplayResult::Reproduces(drifted),
+                        Err(harness_core::error::Error::Diverged {
+                            differences,
+                            replayed_outcome,
+                            ..
+                        }) => ReplayResult::Diverged {
+                            differences,
+                            outcome: replayed_outcome,
+                        },
+                        Err(e) => ReplayResult::Failed(e.to_string()),
+                    };
+                    results.insert(rec.id.clone(), result);
+                }
+
+                // What the benchmark scores for this stage: the unit crate
+                // (migrate) or the promoted driver.
+                let current_artifact = if stage == "migrate" {
+                    unit.oracle_param_str("rust_crate")
+                        .map(|name| ledger.unit_dir(&unit.id).join(name))
+                        .filter(|dir| dir.join("Cargo.toml").is_file())
+                        .map(|dir| hash::crate_content_hash(&dir))
+                        .transpose()?
+                } else {
+                    (!driver_now.is_empty()).then(|| driver_now.clone())
+                };
+                // R-7: every entry for this stage must hold; an entry never
+                // excuses an integrity failure or a still-reproducing attempt.
+                let entries: Vec<&attempts::Supersession> =
+                    supersessions.iter().filter(|e| e.stage == stage).collect();
+                let by_id = |id: &str| records.iter().find(|r| r.id == id);
+                let mut excused: std::collections::BTreeSet<&str> =
+                    std::collections::BTreeSet::new();
+                for entry in &entries {
+                    let label = format!(
+                        "{} {stage} {} (superseded.jsonl)",
+                        case.path,
+                        harness_llm::printable(&entry.attempt, 64)
+                    );
+                    let (Some(old), Some(new)) =
+                        (by_id(&entry.attempt), by_id(&entry.superseded_by))
+                    else {
+                        problems.push(format!("{label}: names an attempt that is not recorded"));
+                        continue;
+                    };
+                    let check = check_supersession(
+                        entry,
+                        (old, results.get(&old.id)),
+                        (new, results.get(&new.id)),
+                        current_artifact.as_deref(),
+                    );
+                    match check {
+                        EntryCheck::Holds => {
+                            excused.insert(old.id.as_str());
+                            expected += 1;
+                            out(format!(
+                                "bench replay: {} {stage} {} expected divergence (superseded by \
+                                 {}{}: {})",
+                                case.path,
+                                harness_llm::printable(&old.id, 64),
+                                harness_llm::printable(&new.id, 64),
+                                if entry.loosening { ", LOOSENING" } else { "" },
+                                harness_llm::printable(&entry.reason, 400)
+                            ));
+                        }
+                        EntryCheck::Moot(why) => out(format!("bench replay: {label}: {why}")),
+                        EntryCheck::Problem(why) => problems.push(format!("{label}: {why}")),
+                    }
+                }
+
+                for (id, result) in &results {
+                    let id = harness_llm::printable(id, 64);
                     match result {
-                        Ok(()) => out(format!(
-                            "bench replay: {} {stage} {} reproduces",
-                            case.path, rec.id
+                        ReplayResult::Skipped(_) => {}
+                        ReplayResult::Reproduces(drifted) => {
+                            reproduced += 1;
+                            if !drifted.is_empty() {
+                                drifted_attempts += 1;
+                            }
+                            out(format!(
+                                "bench replay: {} {stage} {id} reproduces; prompt: {}",
+                                case.path,
+                                harness_llm::conformance(drifted)
+                            ));
+                        }
+                        ReplayResult::Diverged { .. } if excused.contains(id.as_str()) => {}
+                        ReplayResult::Diverged { differences, .. } => problems.push(format!(
+                            "{} {stage} attempt {id} does not replay: {}",
+                            case.path,
+                            differences.join("; ")
                         )),
-                        Err(e) => problems.push(format!(
-                            "{} {stage} attempt {} does not replay: {e}",
-                            case.path, rec.id
+                        ReplayResult::Failed(e) => problems.push(format!(
+                            "{} {stage} attempt {id} does not replay: {e}",
+                            case.path
                         )),
                     }
                 }
             }
         }
     }
+    out(format!(
+        "bench replay: {reproduced} reproduce ({} conformant, {drifted_attempts} drifted), \
+         {expected} expected divergence(s), {skipped} skipped, {} problem(s)",
+        reproduced - drifted_attempts,
+        problems.len()
+    ));
     Ok(problems)
 }
 
@@ -1011,6 +1263,102 @@ mod tests {
             candidate_digest: String::new(),
             promoted: false,
         }
+    }
+
+    fn supersession(loosening: bool) -> attempts::Supersession {
+        attempts::Supersession {
+            schema: attempts::SUPERSEDED_SCHEMA_NAME.into(),
+            schema_version: 1,
+            attempt: "a-old".into(),
+            stage: "migrate".into(),
+            reason: "judge tightened".into(),
+            superseded_by: "a-new".into(),
+            loosening,
+        }
+    }
+
+    /// docs/REPLAY-DESIGN.md §R R-7 (as amended by the code review): an entry
+    /// holds only for an intact superseded attempt that diverges as a
+    /// TIGHTENING (recorded green, replayed not green) — anything else needs
+    /// `loosening` — succeeded by a reproducing attempt on the same inputs,
+    /// green if the old one was, and never for the artifact being scored.
+    #[test]
+    fn supersession_entries_are_checked_strictly() {
+        use EntryCheck::{Holds, Moot};
+        let old = attempts::AttemptRecord {
+            candidate_digest: "blake3:old-candidate".into(),
+            ..rec("a-old", "external")
+        };
+        let new = rec("a-new", "external");
+        let diverged = |outcome: &str| ReplayResult::Diverged {
+            differences: vec!["outcome".into()],
+            outcome: outcome.into(),
+        };
+        let red = diverged("red");
+        let ok = ReplayResult::Reproduces(vec![0]);
+        let e = supersession(false);
+        let check = |e: &attempts::Supersession, o, n, artifact| {
+            check_supersession(e, (&old, o), (&new, n), artifact)
+        };
+        assert_eq!(check(&e, Some(&red), Some(&ok), None), Holds);
+        let is_problem = |c: EntryCheck| matches!(c, EntryCheck::Problem(_));
+        let failed = ReplayResult::Failed("x".into());
+        for (label, o, n) in [
+            ("still reproduces", Some(&ok), Some(&ok)),
+            ("integrity", Some(&failed), Some(&ok)),
+            ("not replayed", None, Some(&ok)),
+            ("successor diverges", Some(&red), Some(&red)),
+            ("successor missing", Some(&red), None),
+        ] {
+            assert!(is_problem(check(&e, o, n, None)), "{label}");
+        }
+        // Green -> green by another path is not a tightening: flag needed.
+        let green_again = diverged("green");
+        assert!(is_problem(check(&e, Some(&green_again), Some(&ok), None)));
+        assert_eq!(
+            check(&supersession(true), Some(&green_again), Some(&ok), None),
+            Holds
+        );
+        // The candidate being scored cannot be superseded.
+        assert!(is_problem(check(
+            &e,
+            Some(&red),
+            Some(&ok),
+            Some(old.candidate_digest.as_str())
+        )));
+        // Legitimately skipped: moot, not a problem.
+        let stale = ReplayResult::Skipped("bound to superseded inputs".into());
+        assert!(matches!(check(&e, Some(&stale), Some(&ok), None), Moot(_)));
+        // Other inputs; a non-green successor of a green record; a red record.
+        let other_inputs = attempts::AttemptRecord {
+            unit_source: "blake3:other".into(),
+            ..new.clone()
+        };
+        assert!(is_problem(check_supersession(
+            &e,
+            (&old, Some(&red)),
+            (&other_inputs, Some(&ok)),
+            None
+        )));
+        let red_new = attempts::AttemptRecord {
+            outcome: "red".into(),
+            ..new.clone()
+        };
+        assert!(is_problem(check_supersession(
+            &e,
+            (&old, Some(&red)),
+            (&red_new, Some(&ok)),
+            None
+        )));
+        let red_old = attempts::AttemptRecord {
+            outcome: "red".into(),
+            ..old.clone()
+        };
+        let got = check_supersession(&e, (&red_old, Some(&green_again)), (&new, Some(&ok)), None);
+        assert!(
+            matches!(&got, EntryCheck::Problem(why) if why.contains("LOOSER")),
+            "{got:?}"
+        );
     }
 
     /// R-A4: an excused vector counts as `unmarked_ub` on every side,

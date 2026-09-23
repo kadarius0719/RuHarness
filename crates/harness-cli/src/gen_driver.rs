@@ -154,6 +154,12 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<ExitCode> {
         record.model,
         record.outcome.to_uppercase()
     ));
+    if let Some(drifted) = &outcome.drifted {
+        out(format!(
+            "gen-driver: verified from its recorded evidence; prompt: {}",
+            harness_llm::conformance(drifted)
+        ));
+    }
     if record.outcome != "green" {
         return Ok(ExitCode::from(EXIT_ORACLE_RED));
     }

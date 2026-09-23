@@ -831,9 +831,13 @@ pub struct CasePipeline {
     pub mutation: Option<(u32, u32)>,
     /// Turns the green driver attempt took.
     pub driver_turns: Option<u32>,
-    /// Turns the promoted (green) migrate attempt took.
+    /// Turns the promoted migrate attempt took — the unique green attempt
+    /// bound to the current inputs whose candidate IS the unit crate
+    /// (docs/REPLAY-DESIGN.md §R R-5).
     pub migrate_turns: Option<u32>,
-    /// Latest migrate attempt outcome (`""` when none).
+    /// The promoted attempt's outcome; without one, the common outcome of
+    /// the finished attempts, `mixed` when they differ, the only record's
+    /// outcome when none finished, `""` when there is no attempt.
     pub migrate_outcome: String,
     /// The unverified candidate scored for this case (`""` when none): only a
     /// FINISHED red attempt whose last turn failed on behavior (`oracle`) —

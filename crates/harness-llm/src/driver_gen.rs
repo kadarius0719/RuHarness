@@ -187,6 +187,9 @@ pub struct DriverOutcome {
     /// verifying a finished trace-backed attempt it is the ORIGINAL
     /// candidate, checked against the record's digest.
     pub candidate_driver: Option<PathBuf>,
+    /// After a verification: the drifted turns (see
+    /// [`crate::migrate::MigrationOutcome::drifted`]).
+    pub drifted: Option<Vec<usize>>,
 }
 
 /// Run one driver-generation attempt for `unit`: a `generate` turn, then
@@ -247,6 +250,7 @@ pub fn run_driver_generation(
         record: outcome.record,
         attempt_dir: outcome.attempt_dir,
         candidate_driver: outcome.candidate,
+        drifted: outcome.drifted,
     })
 }
 
@@ -843,6 +847,102 @@ return 0;\n}\n";
                 (name, bytes)
             })
             .collect()
+    }
+
+    /// docs/REPLAY-DESIGN.md §R R-8: HEAD's driver prompts, byte for byte,
+    /// one fixture per branch (generate; repair after each failure class,
+    /// mutation survivors included).
+    #[test]
+    fn driver_prompt_fixtures_match_heads_renders() {
+        use crate::trajectory::{check_prompt_fixture, fixture_text};
+        let fx = fixture("pf-generate");
+        let (provider, seen) = scripted("anthropic", false, vec![good()]);
+        run_with(&fx, &provider, &FakeJudge::with(vec![green()]), 0).unwrap();
+        check_prompt_fixture("driver-generate.txt", &fixture_text(&seen.borrow()[0]));
+        for (name, first) in [
+            (
+                "build",
+                failing_at(Some("driver-build"), "error: implicit declaration of `x`"),
+            ),
+            (
+                "check",
+                failing_at(Some("driver-shape"), "undefined symbol `fopen`"),
+            ),
+            (
+                "oracle",
+                failing_at(
+                    Some("determinism"),
+                    "run 2 printed something else than run 1",
+                ),
+            ),
+            (
+                "symbols-called",
+                failing_at(Some("symbols-called"), "the driver never calls: add"),
+            ),
+            (
+                "opt-levels",
+                failing_at(Some("opt-levels"), "the -O0 build prints something else"),
+            ),
+            (
+                "sanitizers",
+                failing_at(Some("sanitizers"), "sanitizer reported errors"),
+            ),
+            (
+                "crash-timeout",
+                failing_at(Some("determinism"), "run 1 failed: timed out after 10s"),
+            ),
+            ("mutation", weak(2)),
+        ] {
+            let fx = fixture(&format!("pf-driver-{name}"));
+            let (provider, seen) = scripted("anthropic", false, vec![good(), good()]);
+            run_with(&fx, &provider, &FakeJudge::with(vec![first, green()]), 1).unwrap();
+            check_prompt_fixture(
+                &format!("driver-repair-{name}.txt"),
+                &fixture_text(&seen.borrow()[1]),
+            );
+        }
+    }
+
+    /// R-8 guard: every driver prompt constant occurs in some fixture.
+    #[test]
+    fn every_driver_prompt_constant_is_covered_by_a_fixture() {
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/prompt-fixtures");
+        let mut all = String::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("driver-")
+            {
+                all.push_str(&std::fs::read_to_string(&path).unwrap());
+            }
+        }
+        let first_failed = |check: &str| failing_at(Some(check), "x");
+        for (name, text) in [
+            ("DRIVER_SYSTEM_PROMPT", DRIVER_SYSTEM_PROMPT),
+            ("DRIVER_CONTRACT", DRIVER_CONTRACT),
+            ("GENERATE_TASK", GENERATE_TASK),
+            ("DRIVER_REPAIR_TASK", DRIVER_REPAIR_TASK),
+            ("build", explanation("build", &first_failed("driver-build"))),
+            ("check", explanation("check", &first_failed("driver-shape"))),
+            (
+                "oracle",
+                explanation("oracle", &first_failed("determinism")),
+            ),
+            (
+                "crash-timeout",
+                explanation("crash-timeout", &first_failed("determinism")),
+            ),
+            ("mutation", explanation("oracle", &weak(1))),
+        ] {
+            assert!(
+                all.contains(text),
+                "prompt constant {name} occurs in no fixture"
+            );
+        }
     }
 
     #[test]

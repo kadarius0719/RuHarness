@@ -177,16 +177,186 @@ fn load_records(dir: &Path) -> Result<Vec<AttemptRecord>, Error> {
     for entry in entries {
         let entry = entry.map_err(|e| Error::io(&dir, e))?;
         if entry.path().join("attempt.json").exists() {
-            out.push(AttemptRecord::load(&entry.path())?);
+            let record = AttemptRecord::load(&entry.path())?;
+            // A record filed under another directory would let one attempt
+            // pose as another (provenance, supersession): refused.
+            if entry.file_name().to_str() != Some(record.id.as_str()) {
+                return Err(Error::parse(
+                    entry.path().join("attempt.json"),
+                    "the record's id is not its directory name",
+                ));
+            }
+            out.push(record);
         }
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(out)
 }
 
+/// `superseded.jsonl` schema name (docs/REPLAY-DESIGN.md §R R-7).
+pub const SUPERSEDED_SCHEMA_NAME: &str = "ruharness-superseded";
+/// `superseded.jsonl` schema version.
+pub const SUPERSEDED_SCHEMA_VERSION: u64 = 1;
+/// Longest `reason` kept (it is echoed in reports).
+const MAX_REASON_BYTES: usize = 400;
+/// Largest `superseded.jsonl` read.
+const MAX_SUPERSEDED_BYTES: u64 = 1024 * 1024;
+
+/// One line of `migration/units/<unit>/superseded.jsonl`: a finished attempt
+/// that is EXPECTED not to reproduce any more, and the attempt that replaced
+/// it. Hand-written, committed, reviewed; `bench check --replay` verifies
+/// every entry (docs/REPLAY-DESIGN.md §R R-7) — a line never excuses an
+/// integrity failure, and an entry for an attempt that still reproduces is
+/// itself a problem.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Supersession {
+    /// Always [`SUPERSEDED_SCHEMA_NAME`].
+    pub schema: String,
+    /// Schema version.
+    pub schema_version: u64,
+    /// The superseded attempt's id.
+    pub attempt: String,
+    /// `migrate` | `driver`.
+    pub stage: String,
+    /// Why (free text, reviewed; echoed printable and bounded).
+    pub reason: String,
+    /// The finished attempt that replaced it (same unit, stage and inputs).
+    pub superseded_by: String,
+    /// Set when the superseded attempt was NOT green: the judge accepts now
+    /// what it rejected then — always listed, never implied.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loosening: bool,
+}
+
+/// The unit's supersession entries, the LATEST line per `(stage, attempt)`
+/// winning, in file order of those lines. Absent file = none. The file is
+/// target-owned input: a symlink, a malformed line, an unknown schema, a
+/// stage other than `migrate`/`driver`, or an id that is not a clean
+/// segment is an error naming the line.
+pub fn load_supersessions(ledger: &Ledger, unit: &str) -> Result<Vec<Supersession>, Error> {
+    let path = ledger.unit_dir(unit).join("superseded.jsonl");
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(Error::io(&path, e)),
+    };
+    if !meta.file_type().is_file() {
+        return Err(Error::parse(
+            &path,
+            "not a regular file (symlinks are refused)",
+        ));
+    }
+    if meta.len() > MAX_SUPERSEDED_BYTES {
+        return Err(Error::parse(
+            &path,
+            format!("larger than {MAX_SUPERSEDED_BYTES} bytes"),
+        ));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
+    let mut out: Vec<Supersession> = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let bad = |why: String| Error::parse(&path, format!("line {}: {why}", n + 1));
+        let entry: Supersession = serde_json::from_str(line).map_err(|e| bad(e.to_string()))?;
+        if entry.schema != SUPERSEDED_SCHEMA_NAME {
+            return Err(bad("not a ruharness-superseded line".into()));
+        }
+        if entry.schema_version > SUPERSEDED_SCHEMA_VERSION {
+            return Err(Error::SchemaTooNew {
+                path: path.clone(),
+                found: entry.schema_version,
+                supported: SUPERSEDED_SCHEMA_VERSION,
+            });
+        }
+        if entry.stage != "migrate" && entry.stage != DRIVER_STAGE {
+            return Err(bad("stage must be `migrate` or `driver`".into()));
+        }
+        for id in [&entry.attempt, &entry.superseded_by] {
+            if !crate::plan::is_clean_segment(id) {
+                return Err(bad("attempt ids must be clean path segments".into()));
+            }
+        }
+        if entry.attempt == entry.superseded_by {
+            return Err(bad("an attempt cannot supersede itself".into()));
+        }
+        if entry.reason.trim().is_empty() || entry.reason.len() > MAX_REASON_BYTES {
+            return Err(bad(format!("reason must be 1..={MAX_REASON_BYTES} bytes")));
+        }
+        out.retain(|e| !(e.stage == entry.stage && e.attempt == entry.attempt));
+        out.push(entry);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn supersessions_load_latest_wins_and_refuse_bad_lines() {
+        let root = std::env::temp_dir().join(format!("ruharness-supersede-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ledger = Ledger::new(root.clone());
+        let dir = ledger.unit_dir("u");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(load_supersessions(&ledger, "u").unwrap().is_empty());
+        let line = |attempt: &str, reason: &str| {
+            format!(
+                "{{\"schema\":\"ruharness-superseded\",\"schema_version\":1,\"attempt\":\"{attempt}\",\
+                 \"stage\":\"migrate\",\"reason\":\"{reason}\",\"superseded_by\":\"a-b\"}}\n"
+            )
+        };
+        let path = dir.join("superseded.jsonl");
+        std::fs::write(
+            &path,
+            line("a-a", "first") + &line("a-a", "second") + &line("a-c", "x"),
+        )
+        .unwrap();
+        let got = load_supersessions(&ledger, "u").unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(
+            (got[0].attempt.as_str(), got[0].reason.as_str()),
+            ("a-a", "second")
+        );
+        assert_eq!(
+            (got[1].attempt.as_str(), got[1].reason.as_str()),
+            ("a-c", "x")
+        );
+        assert!(!got[0].loosening);
+        for (bad, expect) in [
+            (line("../x", "r"), "clean path segments"),
+            (line("a-b", "self"), "cannot supersede itself"),
+            (line("a-a", ""), "reason must be"),
+            (
+                line("a-a", "r").replace("ruharness-superseded", "other"),
+                "not a ruharness-superseded line",
+            ),
+            (
+                line("a-a", "r").replace("\"migrate\"", "\"verify\""),
+                "stage must be",
+            ),
+            (
+                line("a-a", "r").replace("\"schema_version\":1", "\"schema_version\":2"),
+                "schema_version 2",
+            ),
+        ] {
+            std::fs::write(&path, &bad).unwrap();
+            let err = load_supersessions(&ledger, "u").unwrap_err();
+            assert!(err.to_string().contains(expect), "{bad} -> {err}");
+        }
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&path).unwrap();
+            let real = root.join("elsewhere.jsonl");
+            std::fs::write(&real, line("a-a", "r")).unwrap();
+            std::os::unix::fs::symlink(&real, &path).unwrap();
+            let err = load_supersessions(&ledger, "u").unwrap_err();
+            assert!(err.to_string().contains("symlinks are refused"), "{err}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn attempt_ids_are_content_derived() {

@@ -282,6 +282,10 @@ pub struct MigrationOutcome {
     /// run never promotes). After verifying a finished trace-backed attempt
     /// it is the ORIGINAL candidate, checked against the record's digest.
     pub candidate_dir: Option<PathBuf>,
+    /// After a verification: the 0-based turns whose request HEAD would
+    /// render differently from the recorded one (empty = conformant; see
+    /// [`crate::conformance`]). `None` when nothing was verified.
+    pub drifted: Option<Vec<usize>>,
 }
 
 /// Run one migration attempt for `unit`: a translate turn, then repair turns
@@ -314,7 +318,10 @@ pub struct MigrationOutcome {
 ///   with the turns completed so far, and a re-run resumes (trace-backed)
 ///   or starts the attempt over (live);
 /// - a recorded attempt that does not reproduce (verification, below) —
-///   listing every difference;
+///   [`Error::Diverged`] under `replay`, listing every difference; for the
+///   re-run of a finished trace-backed attempt, a harness error that also
+///   names `--retry`; an intact-evidence check that fails first (integrity,
+///   binding) is an [`Error::Invariant`];
 /// - any adapter error, propagated unchanged — including the `external`
 ///   adapter's "awaiting response", after which a re-run resumes the same
 ///   attempt id — and any oracle (harness-side) error. `attempt.json` then
@@ -332,13 +339,17 @@ pub struct MigrationOutcome {
 /// guards, before the reply is parsed.
 ///
 /// Verification — `provider.kind == "replay"`, or a finished attempt under
-/// a trace-backed provider — re-runs the recorded trajectory against a
-/// scratch candidate (`migration/units/<unit>/.replay-<attempt-id>/`,
+/// a trace-backed provider — is EVIDENCE-FIRST (docs/REPLAY-DESIGN.md): the
+/// recorded request/response of every turn is loaded read-only and
+/// integrity-checked, the trajectory is re-judged on the recorded replies
+/// against a scratch candidate (`migration/units/<unit>/.replay-<id>/`,
 /// removed afterwards: the oracle only accepts crates inside the unit dir)
-/// with the turn budget of the record, writes NOTHING under `attempts/`,
-/// and returns the original record when every turn's `request_key`,
-/// `response_hash` and `result`, the `candidate_digest` and the `outcome`
-/// were reproduced. `replay` with no matching recorded attempt is an error.
+/// with the record's turn budget, NOTHING is written under `attempts/` or
+/// sent, and the original record is returned when every turn's `result`,
+/// the `candidate_digest` and the `outcome` reproduced (and no repair turn
+/// changed in its evidence alone); `drifted` names the turns HEAD would
+/// render differently. `replay` without `--attempt` and with no attempt
+/// posing HEAD's first request is refused, naming the recorded attempts.
 ///
 /// `plan` must contain `unit`; `hazards` are the confirmed findings for the
 /// unit, of which only category, file and span ever reach a prompt. A unit
@@ -398,6 +409,7 @@ pub fn run_migration(
         record: outcome.record,
         attempt_dir: outcome.attempt_dir,
         candidate_dir: outcome.candidate,
+        drifted: outcome.drifted,
     })
 }
 
@@ -765,7 +777,7 @@ fn oracle_evidence(
         // Only a byte-compare failure leaves fresh driver outputs; after
         // a crash the files on disk are a previous run's.
         if class == "oracle" && check.name == "differential-driver" {
-            if let Some(diff) = driver_diff(build_dir) {
+            if let Some(diff) = driver_diff(build_dir, scrub) {
                 out.push_str(&diff);
             }
         }
@@ -784,11 +796,11 @@ fn oracle_evidence(
 /// stderr (`drv_*.err`, which the oracle compares too) — each with the
 /// nearest preceding `case ` line. `None` when the outputs are unavailable
 /// or do not differ by line.
-fn driver_diff(build_dir: &Path) -> Option<String> {
+fn driver_diff(build_dir: &Path, scrub: &[(String, String)]) -> Option<String> {
     let stream = |ext: &str, what: &str| {
         let expected = std::fs::read(build_dir.join(format!("drv_c.{ext}"))).ok()?;
         let actual = std::fs::read(build_dir.join(format!("drv_rs.{ext}"))).ok()?;
-        stream_diff(&expected, &actual, what)
+        stream_diff(&expected, &actual, what, scrub)
     };
     match (stream("out", "output"), stream("err", "stderr")) {
         (None, None) => None,
@@ -796,8 +808,16 @@ fn driver_diff(build_dir: &Path) -> Option<String> {
     }
 }
 
-/// [`driver_diff`] for one stream; `what` names it in the heading.
-fn stream_diff(expected: &[u8], actual: &[u8], what: &str) -> Option<String> {
+/// [`driver_diff`] for one stream; `what` names it in the heading. Quoted
+/// lines are path-scrubbed like every other evidence (a C unit printing
+/// `__FILE__`, or any output naming the temp dir, would otherwise leak a
+/// machine path — which the engine refuses to send).
+fn stream_diff(
+    expected: &[u8],
+    actual: &[u8],
+    what: &str,
+    scrub: &[(String, String)],
+) -> Option<String> {
     // Lines, without the empty piece a terminating newline leaves behind.
     let lines = |bytes: &'_ [u8]| -> Vec<Vec<u8>> {
         let mut lines: Vec<Vec<u8>> = bytes.split(|b| *b == b'\n').map(<[u8]>::to_vec).collect();
@@ -808,7 +828,10 @@ fn stream_diff(expected: &[u8], actual: &[u8], what: &str) -> Option<String> {
     };
     let (expected, actual) = (lines(expected), lines(actual));
     let show = |line: Option<&Vec<u8>>| match line {
-        Some(bytes) => printable(&String::from_utf8_lossy(bytes), DIFF_LINE_MAX_BYTES),
+        Some(bytes) => printable(
+            &scrub_paths(scrub, &String::from_utf8_lossy(bytes)),
+            DIFF_LINE_MAX_BYTES,
+        ),
         None => "(no such line)".to_string(),
     };
 
@@ -1009,6 +1032,10 @@ int add(int a, int b) { return a + b; }\n";
     struct Scripted {
         replies: RefCell<VecDeque<Result<CompletionResponse, String>>>,
         seen: Seen,
+        /// Leave `<key>.request.json` + `.response.json` here for every
+        /// answered call — what a real hand-off leaves behind, and what
+        /// evidence-first verification reads.
+        record: Option<PathBuf>,
     }
 
     impl ProviderAdapter for Scripted {
@@ -1018,7 +1045,13 @@ int add(int a, int b) { return a + b; }\n";
         fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse, Error> {
             self.seen.borrow_mut().push(req.clone());
             match self.replies.borrow_mut().pop_front() {
-                Some(Ok(response)) => Ok(response),
+                Some(Ok(response)) => {
+                    if let Some(dir) = &self.record {
+                        std::fs::create_dir_all(dir).unwrap();
+                        TraceAdapter::record(dir, req, &response).unwrap();
+                    }
+                    Ok(response)
+                }
                 Some(Err(message)) => Err(Error::Invariant(message)),
                 None => Err(Error::Invariant("provider script exhausted".into())),
             }
@@ -1040,12 +1073,33 @@ int add(int a, int b) { return a + b; }\n";
         live: bool,
         replies: Vec<Result<CompletionResponse, String>>,
     ) -> (ResolvedProvider, Seen) {
+        scripted_in(None, kind, live, replies)
+    }
+
+    /// [`scripted`] that records every answered call under `dir`, as a real
+    /// hand-off does (so the attempt can be verified from its evidence).
+    fn scripted_in(
+        dir: Option<&Path>,
+        kind: &str,
+        live: bool,
+        replies: Vec<Result<CompletionResponse, String>>,
+    ) -> (ResolvedProvider, Seen) {
         let seen: Seen = Rc::default();
         let adapter = Scripted {
             replies: RefCell::new(replies.into()),
             seen: Rc::clone(&seen),
+            record: dir.map(Path::to_path_buf),
         };
         (resolved(Box::new(adapter), kind, live), seen)
+    }
+
+    /// The `external` hand-off, scripted, leaving its traces in the
+    /// fixture's trace root.
+    fn handoff(
+        fx: &Fx,
+        replies: Vec<Result<CompletionResponse, String>>,
+    ) -> (ResolvedProvider, Seen) {
+        scripted_in(Some(&fx.traces), "external", false, replies)
     }
 
     /// An end-of-turn reply with no usage reported.
@@ -2381,11 +2435,11 @@ int add(int a, int b) { return a + b; }\n";
             ]
         };
         let verdicts = || vec![diff_failure(), green()];
-        let (first_provider, first_seen) = scripted("external", false, script());
+        let (first_provider, first_seen) = handoff(&fx, script());
         let first = run_with(&fx, &first_provider, &oracle(verdicts()), 3, &[]).unwrap();
         let on_disk = std::fs::read(first.attempt_dir.join("attempt.json")).unwrap();
 
-        let (second_provider, second_seen) = scripted("external", false, script());
+        let (second_provider, second_seen) = scripted("external", false, vec![]);
         let second = run_with(&fx, &second_provider, &oracle(verdicts()), 3, &[]).unwrap();
         assert_eq!(second.record.id, first.record.id);
         assert_eq!(second.record, first.record);
@@ -2394,16 +2448,12 @@ int add(int a, int b) { return a + b; }\n";
             std::fs::read(second.attempt_dir.join("attempt.json")).unwrap(),
             on_disk
         );
-        // Every request — repairs included — is byte-identical, so a
-        // trace-backed adapter finds its earlier replies.
-        let keys = |seen: &Seen| -> Vec<String> {
-            seen.borrow()
-                .iter()
-                .map(|r| TraceAdapter::request_key(r).unwrap())
-                .collect()
-        };
-        assert_eq!(keys(&first_seen), keys(&second_seen));
-        assert_eq!(keys(&first_seen).len(), 3);
+        // Verified from the recorded evidence (nothing sent), and every
+        // request HEAD renders — repairs included — is byte-identical to
+        // the recorded one.
+        assert!(second_seen.borrow().is_empty());
+        assert_eq!(first_seen.borrow().len(), 3);
+        assert_eq!(second.drifted, Some(vec![]));
         assert_eq!(
             attempts::load_unit_attempts(&Ledger::new(fx.target.root.clone()), UNIT)
                 .unwrap()
@@ -2632,7 +2682,7 @@ int add(int a, int b) { return a + b; }\n";
             "error[E0382]: use of moved value (at {CRATE}/src/logic.rs:21:26)\n".repeat(160)
         );
         let red_build = move || verdict(&[("rust-build", false, long_detail.as_str())]);
-        let (provider, seen) = scripted("external", false, vec![good(), good()]);
+        let (provider, seen) = handoff(&fx, vec![good(), good()]);
         let first = run_with(&fx, &provider, &oracle(vec![red_build(), green()]), 1, &[]).unwrap();
         assert_eq!(
             results(&first.record),
@@ -2644,15 +2694,19 @@ int add(int a, int b) { return a + b; }\n";
             "{repair}"
         );
         // Re-running the finished attempt verifies it in `.replay-<id>/`: the
-        // path in the repair evidence must read as the recorded run's did.
-        let (provider, seen) = scripted("external", false, vec![good(), good()]);
+        // path in the repair evidence must read as the recorded run's did —
+        // HEAD's repair render is CONFORMANT (byte-identical to the recorded
+        // request; with turn 1 conformant, anything else would be a strict
+        // failure, docs/REPLAY-DESIGN.md §R R-3). Nothing is sent.
+        let (provider, seen) = scripted("external", false, vec![]);
         let again = run_with(&fx, &provider, &oracle(vec![red_build(), green()]), 1, &[]).unwrap();
         assert_eq!(again.record, first.record);
         assert_eq!(
-            seen.borrow()[1].user,
-            repair,
+            again.drifted,
+            Some(vec![]),
             "replayed repair prompt is byte-identical"
         );
+        assert!(seen.borrow().is_empty());
     }
 
     /// Regression (M4 correctness review): the oracle cuts RAW tool output
@@ -2667,15 +2721,14 @@ int add(int a, int b) { return a + b; }\n";
             "error[E0382]: use of moved value (at {CRATE}/src/logic.rs:21:26)\n".repeat(120)
         );
         let red_build = move || verdict(&[("rust-build", false, long_detail.as_str())]);
-        let (provider, seen) = scripted("external", false, vec![good(), good()]);
+        let (provider, _) = handoff(&fx, vec![good(), good()]);
         let first = run_with(&fx, &provider, &oracle(vec![red_build(), green()]), 1, &[]).unwrap();
-        let repair = seen.borrow()[1].user.clone();
-        let (provider, seen) = scripted("external", false, vec![good(), good()]);
+        let (provider, _) = scripted("external", false, vec![]);
         let again = run_with(&fx, &provider, &oracle(vec![red_build(), green()]), 1, &[]).unwrap();
         assert_eq!(again.record, first.record);
         assert_eq!(
-            seen.borrow()[1].user,
-            repair,
+            again.drifted,
+            Some(vec![]),
             "raw-cut evidence replays byte-identically"
         );
     }
@@ -2683,47 +2736,65 @@ int add(int a, int b) { return a + b; }\n";
     #[test]
     fn a_finished_external_attempt_is_verified_not_rewritten() {
         let fx = fixture("promoted");
-        let (provider, _) = scripted("external", false, vec![good()]);
+        let (provider, _) = handoff(&fx, vec![good()]);
         let first = run_with(&fx, &provider, &oracle(vec![green()]), 0, &[]).unwrap();
         let mut promoted = first.record.clone();
         promoted.promoted = true; // what the CLI records after promotion
         promoted.store(&first.attempt_dir).unwrap();
         let before = snapshot(&fx.unit_dir());
 
-        // A re-run reproduces the trajectory in scratch and hands back the
-        // ORIGINAL record and candidate (the CLI promotes from it).
-        let (provider, seen) = scripted("external", false, vec![good()]);
+        // A re-run reproduces the trajectory in scratch from its recorded
+        // evidence (nothing is sent) and hands back the ORIGINAL record and
+        // candidate (the CLI promotes from it).
+        let (provider, seen) = scripted("external", false, vec![]);
         let fake = oracle(vec![green()]);
         let again = run_with(&fx, &provider, &fake, 3, &[]).unwrap();
         assert_eq!(again.record, promoted);
         assert_eq!(again.attempt_dir, first.attempt_dir);
         assert_eq!(again.candidate_dir, first.candidate_dir);
-        assert_eq!(seen.borrow().len(), 1);
+        assert!(seen.borrow().is_empty());
         assert_eq!(
             fake.calls.borrow()[0].rust_crate,
             format!(".replay--{}/candidate", first.record.id)
         );
         assert_eq!(snapshot(&fx.unit_dir()), before, "nothing was rewritten");
 
-        // Different responses under the same id — the response files were
-        // edited after the attempt finished — are refused: the recorded
-        // evidence is never replaced by a different trajectory.
+        // A response file edited after the attempt finished is refused (an
+        // integrity error, before anything is judged): the recorded evidence
+        // is never replaced by a different trajectory.
         let other = LOGIC.replace("wrapping_add", "wrapping_sub");
-        let (provider, _) = scripted("external", false, vec![reply(emit(&other, FFI))]);
-        let err = run_with(&fx, &provider, &oracle(vec![green()]), 0, &[]).unwrap_err();
+        let response = fx.traces.join(format!(
+            "{}.response.json",
+            first.record.turns[0].request_key
+        ));
+        let saved = std::fs::read(&response).unwrap();
+        std::fs::write(
+            &response,
+            String::from_utf8(saved.clone())
+                .unwrap()
+                .replace("wrapping_add", "wrapping_sub"),
+        )
+        .unwrap();
+        let err = run_with(
+            &fx,
+            &scripted("external", false, vec![]).0,
+            &oracle(vec![]),
+            0,
+            &[],
+        )
+        .unwrap_err();
         let message = err.to_string();
-        assert!(matches!(err, Error::Invariant(_)), "{message}");
         assert!(
-            message.contains("does not reproduce") && message.contains("turn 1 response_hash"),
+            message.contains("integrity") && message.contains("response_hash"),
             "{message}"
         );
-        assert!(message.contains("candidate_digest"), "{message}");
+        std::fs::write(&response, &saved).unwrap();
         assert_eq!(snapshot(&fx.unit_dir()), before);
 
         // …and a candidate dir that no longer matches the record is not
         // handed to the CLI for promotion.
         std::fs::write(first.attempt_dir.join("candidate/src/logic.rs"), other).unwrap();
-        let (provider, _) = scripted("external", false, vec![good()]);
+        let (provider, _) = scripted("external", false, vec![]);
         let err = run_with(&fx, &provider, &oracle(vec![green()]), 0, &[]).unwrap_err();
         assert!(
             err.to_string()
@@ -2911,6 +2982,330 @@ int add(int a, int b) { return a + b; }\n";
         );
     }
 
+    /// [`run_opts`] with an explicit `max_tokens` — the cheapest way to
+    /// make HEAD render EVERY request differently, i.e. a prompt edit.
+    fn run_tokens(
+        fx: &Fx,
+        provider: &ResolvedProvider,
+        oracle: &FakeOracle,
+        max_tokens: u32,
+        attempt: Option<&str>,
+    ) -> Result<MigrationOutcome, Error> {
+        let params = MigrateParams {
+            provider,
+            model: "test-model",
+            max_tokens,
+            max_repairs: 3,
+            traces_dir: &fx.traces,
+            retry: false,
+            attempt,
+        };
+        run_migration(
+            &params,
+            oracle,
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &[],
+        )
+    }
+
+    /// docs/REPLAY-DESIGN.md: a prompt edit no longer orphans recorded
+    /// evidence. The pinned attempt is re-judged on its RECORDED replies
+    /// (strict: reproduces) and reported drifted on every turn; unpinned
+    /// replay refuses rather than guess; a changed JUDGE still fails.
+    #[test]
+    fn evidence_replay_survives_a_prompt_edit() {
+        let fx = fixture("prompt-edit");
+        let broken = LOGIC.replace("add(b)", "sub(b)");
+        let (provider, _) = handoff(&fx, vec![reply(emit(&broken, FFI)), good()]);
+        let verdicts = || vec![diff_failure(), green()];
+        let recorded = run_tokens(&fx, &provider, &oracle(verdicts()), 4096, None).unwrap();
+        assert_eq!(
+            results(&recorded.record),
+            [("translate", "oracle"), ("repair", "green")]
+        );
+        let id = recorded.record.id.clone();
+
+        // Same prompt: conformant.
+        let same = run_tokens(&fx, &replay_provider(&fx), &oracle(verdicts()), 4096, None).unwrap();
+        assert_eq!(same.record, recorded.record);
+        assert_eq!(same.drifted, Some(vec![]));
+
+        // "Edited" prompt, pinned: reproduces, every turn drifted.
+        let before = snapshot(&fx.unit_dir());
+        let edited = run_tokens(
+            &fx,
+            &replay_provider(&fx),
+            &oracle(verdicts()),
+            8192,
+            Some(&id),
+        )
+        .unwrap();
+        assert_eq!(edited.record, recorded.record);
+        assert_eq!(edited.drifted, Some(vec![0, 1]));
+        assert_eq!(
+            snapshot(&fx.unit_dir()),
+            before,
+            "verification writes nothing"
+        );
+
+        // Unpinned under the edited prompt: refuses, naming the attempt.
+        let err = run_tokens(&fx, &replay_provider(&fx), &oracle(vec![]), 8192, None).unwrap_err();
+        assert!(
+            err.to_string().contains("verify one with --attempt") && err.to_string().contains(&id),
+            "{err}"
+        );
+
+        // A changed judge is still a strict failure, typed.
+        let err = run_tokens(
+            &fx,
+            &replay_provider(&fx),
+            &oracle(vec![green()]),
+            8192,
+            Some(&id),
+        )
+        .unwrap_err();
+        match err {
+            Error::Diverged {
+                attempt,
+                differences,
+                replayed_outcome,
+            } => {
+                assert_eq!(replayed_outcome, "green");
+                assert_eq!(attempt, id);
+                assert!(
+                    differences
+                        .iter()
+                        .any(|d| d == "turn count: recorded 2, replayed 1"),
+                    "{differences:?}"
+                );
+            }
+            other => panic!("expected Diverged, got {other}"),
+        }
+    }
+
+    /// Rewrite the recorded request of turn `index` of `outcome`'s attempt
+    /// with `edit` applied to its user text: filed under its NEW key, and the
+    /// record re-pointed at it — what the record would hold had the harness
+    /// then rendered that turn differently.
+    fn rewrite_recorded_turn(
+        fx: &Fx,
+        outcome: &MigrationOutcome,
+        index: usize,
+        edit: impl Fn(&str) -> String,
+    ) {
+        let mut record = outcome.record.clone();
+        let old_key = record.turns[index].request_key.clone();
+        let (mut request, response) = TraceAdapter::load_recorded(&fx.traces, &old_key).unwrap();
+        request.user = edit(&request.user);
+        assert_ne!(
+            TraceAdapter::request_key(&request).unwrap(),
+            old_key,
+            "edit changed nothing"
+        );
+        TraceAdapter::record(&fx.traces, &request, &response).unwrap();
+        record.turns[index].request_key = TraceAdapter::request_key(&request).unwrap();
+        record.store(&outcome.attempt_dir).unwrap();
+    }
+
+    /// Code review (F-1): a template edit that touches only REPAIR turns is
+    /// drift, not a strict failure; a repair request that differs in its
+    /// [EVIDENCE] only (the judge's evidence changed) is.
+    #[test]
+    fn repair_template_drift_is_reported_and_evidence_drift_is_strict() {
+        let broken = || reply(emit(&LOGIC.replace("add(b)", "sub(b)"), FFI));
+        let verdicts = || vec![diff_failure(), green()];
+        let fx = fixture("repair-template-drift");
+        let (provider, _) = handoff(&fx, vec![broken(), good()]);
+        let recorded = run_with(&fx, &provider, &oracle(verdicts()), 3, &[]).unwrap();
+        // As if the repair task text had read differently when recorded.
+        rewrite_recorded_turn(&fx, &recorded, 1, |user| {
+            user.replace("Repair the candidate", "Repair the candidate now")
+        });
+        let replayed = run_with(&fx, &replay_provider(&fx), &oracle(verdicts()), 3, &[]).unwrap();
+        assert_eq!(replayed.drifted, Some(vec![1]));
+
+        let fx = fixture("repair-evidence-drift");
+        let (provider, _) = handoff(&fx, vec![broken(), good()]);
+        let recorded = run_with(&fx, &provider, &oracle(verdicts()), 3, &[]).unwrap();
+        rewrite_recorded_turn(&fx, &recorded, 1, |user| {
+            user.replace("first diff at byte 17", "first diff at byte 18")
+        });
+        let err = run_with(&fx, &replay_provider(&fx), &oracle(verdicts()), 3, &[]).unwrap_err();
+        assert!(
+            matches!(&err, Error::Diverged { differences, .. }
+                if differences.iter().any(|d| d.contains("drifted in its [EVIDENCE] only"))),
+            "{err}"
+        );
+    }
+
+    /// Code review (F-10): tampered evidence is an integrity error on the
+    /// replay path too — never a `Diverged` a supersession could excuse.
+    #[test]
+    fn tampered_evidence_is_never_a_divergence() {
+        let fx = fixture("tamper-replay");
+        let (provider, _) = handoff(&fx, vec![good()]);
+        let recorded = run_with(&fx, &provider, &oracle(vec![green()]), 3, &[]).unwrap();
+        let response = fx.traces.join(format!(
+            "{}.response.json",
+            recorded.record.turns[0].request_key
+        ));
+        let text = std::fs::read_to_string(&response).unwrap();
+        std::fs::write(&response, text.replace("wrapping_add", "wrapping_mul")).unwrap();
+        let err = run_with(&fx, &replay_provider(&fx), &oracle(vec![]), 3, &[]).unwrap_err();
+        assert!(!matches!(err, Error::Diverged { .. }), "{err}");
+        assert!(err.to_string().contains("integrity"), "{err}");
+    }
+
+    /// Code review (F-9): an attempt recorded for a replaced driver can pose
+    /// the same first request; unpinned replay verifies the BOUND one.
+    #[test]
+    fn unpinned_replay_prefers_the_attempt_bound_to_the_current_inputs() {
+        let fx = fixture("bound-first");
+        let (provider, _) = handoff(&fx, vec![good()]);
+        let old = run_with(&fx, &provider, &oracle(vec![green()]), 3, &[]).unwrap();
+        let driver = fx.unit_dir().join("driver.c");
+        let text = std::fs::read_to_string(&driver).unwrap();
+        std::fs::write(&driver, format!("{text}/* regenerated */\n")).unwrap();
+        // Same first request (the driver is not in the translate prompt):
+        // the hand-off's recorded reply answers, under a NEW id bound to the
+        // new driver.
+        let external = resolved(
+            Box::new(TraceAdapter::new(&fx.traces, true)),
+            "external",
+            false,
+        );
+        let new = run_with(&fx, &external, &oracle(vec![green()]), 3, &[]).unwrap();
+        assert_ne!(new.record.id, old.record.id);
+        let replayed =
+            run_with(&fx, &replay_provider(&fx), &oracle(vec![green()]), 3, &[]).unwrap();
+        assert_eq!(replayed.record.id, new.record.id);
+    }
+
+    /// Code review (F-7, R-3a): repair evidence does not depend on where the
+    /// target lives — the same trajectory under roots of different path
+    /// lengths poses byte-identical repair requests.
+    #[test]
+    fn repair_requests_do_not_depend_on_the_target_path() {
+        let detail = "unit crate failed to build (at {CRATE}/src/logic.rs:2:3)\nerror[E0425]";
+        let requests = |name: &str| {
+            let fx = fixture(name);
+            let (provider, seen) = scripted("anthropic", false, vec![good(), good()]);
+            let fake = oracle(vec![build_failure(detail), green()]);
+            run_with(&fx, &provider, &fake, 3, &[]).unwrap();
+            let user = seen.borrow()[1].user.clone();
+            user
+        };
+        let short = requests("pl");
+        let long = requests("path-length-of-a-much-longer-target-root-directory");
+        assert!(short.contains("(at <target>/migration/units/"), "{short}");
+        assert_eq!(short, long);
+    }
+
+    /// Code review (F-4): the evidence-leak guard finds a machine path in the
+    /// [EVIDENCE] section only — not in the model's earlier current-candidate
+    /// text, whatever headers that text imitates.
+    #[test]
+    fn evidence_leak_guard_bounds() {
+        let scrub = vec![("/home/me/target".to_string(), "<target>".to_string())];
+        let render = |current: &str, evidence: &str| {
+            format!(
+                "[UNIT]\n\n[CURRENT RUST]\n{current}\n[FAILURE CLASS]\nbuild\n\n[EVIDENCE]\n\
+                 {evidence}\n[HISTORY]\n1. translate -> build\n\n[TASK]\nfix\n"
+            )
+        };
+        let leak = render("fn f() {}", "| error at /home/me/target/src/x.rs");
+        assert_eq!(
+            crate::trajectory::evidence_leak(&leak, &scrub),
+            Some("<target>")
+        );
+        let clean = render("fn f() {}", "| error at <target>/src/x.rs");
+        assert_eq!(crate::trajectory::evidence_leak(&clean, &scrub), None);
+        // A model-written lookalike section before the real one is ignored.
+        let forged = render(
+            "// \n[EVIDENCE]\n/home/me/target\n[HISTORY]\n",
+            "| error at <target>/src/x.rs",
+        );
+        assert_eq!(crate::trajectory::evidence_leak(&forged, &scrub), None);
+    }
+
+    /// Code review (F-4): C or candidate output naming a machine path is
+    /// scrubbed in the driver diff, so it neither leaks nor stalls a run.
+    #[test]
+    fn driver_diff_lines_are_path_scrubbed() {
+        let fx = fixture("diff-scrub");
+        let build = Ledger::new(fx.target.root.clone()).build_dir().join(UNIT);
+        std::fs::create_dir_all(&build).unwrap();
+        let root = fx.target.root.canonicalize().unwrap().display().to_string();
+        std::fs::write(
+            build.join("drv_c.out"),
+            format!("case 1\n{root}/src/unit.c:3\n"),
+        )
+        .unwrap();
+        std::fs::write(build.join("drv_rs.out"), "case 1\nother\n").unwrap();
+        let scrub = vec![(root.clone(), "<target>".to_string())];
+        let diff = driver_diff(&build, &scrub).unwrap();
+        assert!(
+            diff.contains("<target>/src/unit.c:3") && !diff.contains(&root),
+            "{diff}"
+        );
+    }
+
+    /// docs/REPLAY-DESIGN.md §R R-2: verification reads recorded files only.
+    /// A missing reply is an integrity error — the real `external` adapter is
+    /// never asked, so nothing is filed as a new hand-off — and an altered
+    /// request or reply is caught before anything is judged.
+    #[test]
+    fn verification_never_files_a_handoff_and_checks_integrity() {
+        let fx = fixture("integrity");
+        let (provider, _) = handoff(&fx, vec![good()]);
+        let recorded = run_with(&fx, &provider, &oracle(vec![green()]), 3, &[]).unwrap();
+        let key = recorded.record.turns[0].request_key.clone();
+        let external = || {
+            resolved(
+                Box::new(TraceAdapter::new(&fx.traces, true)),
+                "external",
+                false,
+            )
+        };
+        let listing = || {
+            let mut names: Vec<String> = std::fs::read_dir(&fx.traces)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        // Intact: a re-run under the real hand-off verifies from the files.
+        let again = run_with(&fx, &external(), &oracle(vec![green()]), 3, &[]).unwrap();
+        assert_eq!(again.record, recorded.record);
+
+        let response = fx.traces.join(format!("{key}.response.json"));
+        let saved = std::fs::read(&response).unwrap();
+        std::fs::remove_file(&response).unwrap();
+        let before = listing();
+        let err = run_with(&fx, &external(), &oracle(vec![]), 3, &[]).unwrap_err();
+        assert!(err.to_string().contains("integrity"), "{err}");
+        assert!(!err.to_string().contains("awaiting"), "{err}");
+        assert_eq!(listing(), before, "no hand-off was filed");
+
+        // An altered reply, then an altered request.
+        let tampered = String::from_utf8(saved.clone())
+            .unwrap()
+            .replace("wrapping_add", "wrapping_sub");
+        std::fs::write(&response, tampered).unwrap();
+        let err = run_with(&fx, &external(), &oracle(vec![]), 3, &[]).unwrap_err();
+        assert!(err.to_string().contains("response_hash"), "{err}");
+        std::fs::write(&response, &saved).unwrap();
+        let request = fx.traces.join(format!("{key}.request.json"));
+        let text = std::fs::read_to_string(&request).unwrap();
+        std::fs::write(&request, text.replace("[TASK]", "[TASK] ")).unwrap();
+        let err = run_with(&fx, &external(), &oracle(vec![]), 3, &[]).unwrap_err();
+        assert!(err.to_string().contains("was altered"), "{err}");
+    }
+
     /// Regression (M3 review): `replay` used to run a NEW trajectory under a
     /// replay-kind id and return it unchecked — it verified nothing.
     #[test]
@@ -2918,7 +3313,7 @@ int add(int a, int b) { return a + b; }\n";
         let fx = fixture("replay-diverges");
         let broken = LOGIC.replace("add(b)", "sub(b)");
         let script = || vec![reply(emit(&broken, FFI)), good()];
-        let (provider, _) = scripted("external", false, script());
+        let (provider, _) = handoff(&fx, script());
         let recorded = run_with(
             &fx,
             &provider,
@@ -2933,11 +3328,12 @@ int add(int a, int b) { return a + b; }\n";
         );
         let before = snapshot(&fx.unit_dir());
 
-        // The same replies, but the oracle now judges turn 1 green.
-        let (provider, _) = scripted("replay", false, script());
+        // The same (recorded) replies, but the oracle now judges turn 1
+        // green: a typed divergence, the evidence intact.
+        let (provider, _) = scripted("replay", false, vec![]);
         let err = run_with(&fx, &provider, &oracle(vec![green()]), 3, &[]).unwrap_err();
         let message = err.to_string();
-        assert!(matches!(err, Error::Invariant(_)), "{message}");
+        assert!(matches!(err, Error::Diverged { .. }), "{message}");
         assert!(
             message.starts_with(&format!(
                 "attempt {} does not reproduce from its traces",
@@ -2954,31 +3350,21 @@ int add(int a, int b) { return a + b; }\n";
         }
         assert!(!message.contains("outcome:"), "both are green: {message}");
 
-        // Another reply under the recorded request key.
-        let (provider, _) = scripted("replay", false, vec![good()]);
-        let err = run_with(&fx, &provider, &oracle(vec![green()]), 3, &[]).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("turn 1 response_hash: recorded blake3:"),
-            "{err}"
-        );
-
-        // A repair prompt that is no longer the recorded one (here: other
-        // oracle evidence) is reported as such, not as a missing trace.
-        let (provider, seen) = scripted("replay", false, script());
-        let changed = oracle(vec![build_failure("error: something else")]);
+        // Another failure class on turn 1: a result divergence; the repair
+        // question HEAD would pose differs in its failure class too, so it is
+        // drift, not an evidence-only change (that one is strict — see
+        // `repair_template_drift_is_reported_and_evidence_drift_is_strict`).
+        // Nothing is ever sent.
+        let (provider, seen) = scripted("replay", false, vec![]);
+        let changed = oracle(vec![build_failure("error: something else"), green()]);
         let err = run_with(&fx, &provider, &changed, 3, &[]).unwrap_err();
         let message = err.to_string();
         assert!(
-            message.contains("turn 2 request_key: recorded ")
-                && message.contains("no longer the recorded one"),
+            message.contains("turn 1 result: recorded oracle, replayed build")
+                && !message.contains("[EVIDENCE] only"),
             "{message}"
         );
-        assert_eq!(
-            seen.borrow().len(),
-            1,
-            "the unrecorded request is never sent"
-        );
+        assert!(seen.borrow().is_empty(), "nothing is ever sent");
         assert_eq!(snapshot(&fx.unit_dir()), before, "evidence untouched");
     }
 
@@ -2987,7 +3373,7 @@ int add(int a, int b) { return a + b; }\n";
         let fx = fixture("replay-budget");
         let script = || vec![good(), good()];
         let verdicts = || vec![diff_failure(), diff_failure()];
-        let (provider, _) = scripted("external", false, script());
+        let (provider, _) = handoff(&fx, script());
         let recorded = run_with(&fx, &provider, &oracle(verdicts()), 1, &[]).unwrap();
         assert_eq!(recorded.record.outcome, "red");
         assert_eq!(recorded.record.turns.len(), 2);
@@ -2995,10 +3381,12 @@ int add(int a, int b) { return a + b; }\n";
         // A larger budget must not ask for a third, never-recorded turn; a
         // smaller one must not cut the verification short.
         for max_repairs in [5, 0] {
-            let (provider, seen) = scripted("replay", false, script());
-            let replayed = run_with(&fx, &provider, &oracle(verdicts()), max_repairs, &[]).unwrap();
+            let (provider, seen) = scripted("replay", false, vec![]);
+            let fake = oracle(verdicts());
+            let replayed = run_with(&fx, &provider, &fake, max_repairs, &[]).unwrap();
             assert_eq!(replayed.record, recorded.record);
-            assert_eq!(seen.borrow().len(), 2);
+            assert_eq!(fake.calls.borrow().len(), 2, "exactly the recorded turns");
+            assert!(seen.borrow().is_empty());
         }
     }
 
@@ -3024,7 +3412,7 @@ int add(int a, int b) { return a + b; }\n";
         assert_eq!(left, ["driver.c"], "nothing was created");
 
         // A record exists, but for another prompt (the source changed since).
-        let (provider, _) = scripted("external", false, vec![good()]);
+        let (provider, _) = handoff(&fx, vec![good()]);
         let recorded = run_with(&fx, &provider, &oracle(vec![green()]), 0, &[]).unwrap();
         std::fs::write(
             fx.target.root.join("src/unit.h"),
@@ -3048,8 +3436,7 @@ int add(int a, int b) { return a + b; }\n";
         )
         .unwrap_err();
         assert!(
-            err.to_string()
-                .contains("was recorded for a different translate prompt"),
+            err.to_string().contains("is bound to superseded inputs"),
             "{err}"
         );
         // An unknown or malformed pin.
@@ -3121,7 +3508,7 @@ int add(int a, int b) { return a + b; }\n";
         // The request key does not cover the provider: once ANOTHER
         // provider's finished attempt of the same request exists, replay
         // verifies that one, whatever the ids' order.
-        let (provider, _) = scripted("openai-compat", false, vec![good()]);
+        let (provider, _) = scripted_in(Some(&fx.traces), "openai-compat", false, vec![good()]);
         let finished = run_with(&fx, &provider, &oracle(vec![green()]), 3, &[]).unwrap();
         let (provider, _) = scripted("replay", false, vec![good()]);
         let replayed = run_with(&fx, &provider, &oracle(vec![green()]), 3, &[]).unwrap();
@@ -3131,7 +3518,7 @@ int add(int a, int b) { return a + b; }\n";
     #[test]
     fn verification_cleans_up_after_a_failed_trajectory_too() {
         let fx = fixture("replay-error");
-        let (provider, _) = scripted("external", false, vec![good()]);
+        let (provider, _) = handoff(&fx, vec![good()]);
         run_with(&fx, &provider, &oracle(vec![green()]), 0, &[]).unwrap();
         let before = snapshot(&fx.unit_dir());
         // The oracle errors (harness-side) in the middle of the replay.
@@ -3154,6 +3541,327 @@ int add(int a, int b) { return a + b; }\n";
             let err = run_with(&fx, &provider, &oracle(vec![green()]), 0, &[]).unwrap_err();
             assert!(err.to_string().contains("ledger is inconsistent"), "{err}");
             assert!(seen.borrow().is_empty());
+        }
+    }
+
+    /// [`crate::trajectory::check_prompt_fixture`] of one request.
+    fn check_prompt_fixture_named(name: &str, request: &CompletionRequest) {
+        crate::trajectory::check_prompt_fixture(name, &crate::trajectory::fixture_text(request));
+    }
+
+    /// Every request a scripted run poses under `facts` and `hazards`.
+    fn requests_of(
+        fx: &Fx,
+        facts: &Facts,
+        hazards: &[Finding],
+        replies: Vec<Result<CompletionResponse, String>>,
+        verdicts: Vec<Verdict>,
+    ) -> Vec<CompletionRequest> {
+        let (provider, seen) = scripted("anthropic", false, replies);
+        let params = MigrateParams {
+            provider: &provider,
+            model: "fixture-model",
+            max_tokens: 4096,
+            max_repairs: 3,
+            traces_dir: &fx.traces,
+            retry: false,
+            attempt: None,
+        };
+        let fake = oracle(verdicts);
+        let _ = run_migration(
+            &params,
+            &fake,
+            &fx.target,
+            facts,
+            &fx.plan,
+            fx.unit(),
+            hazards,
+        );
+        let requests = seen.borrow().clone();
+        requests
+    }
+
+    /// docs/REPLAY-DESIGN.md §R R-8: HEAD's migrate prompts, byte for byte,
+    /// one fixture per branch of the renderer.
+    #[test]
+    fn migrate_prompt_fixtures_match_heads_renders() {
+        let broken = || reply(emit(&LOGIC.replace("add(b)", "sub(b)"), FFI));
+        let fx = fixture("pf-plain");
+        let translate = requests_of(&fx, &fx.facts, &[], vec![good()], vec![green()]);
+        crate::trajectory::check_prompt_fixture(
+            "migrate-translate.txt",
+            &crate::trajectory::fixture_text(&translate[0]),
+        );
+
+        let fx = fixture("pf-stdout");
+        let mut printing = fx.facts.clone();
+        printing.refs = vec![call_ref("src/unit.c", "printf", false)];
+        let r = requests_of(&fx, &printing, &[], vec![good()], vec![green()]);
+        crate::trajectory::check_prompt_fixture(
+            "migrate-translate-stdout.txt",
+            &crate::trajectory::fixture_text(&r[0]),
+        );
+
+        let fx = fixture("pf-stderr");
+        std::fs::write(
+            fx.target.root.join("src/unit.c"),
+            format!("{C_SOURCE}void report(void) {{ fputs(\"range\\n\", stderr); }}\n"),
+        )
+        .unwrap();
+        let mut stderr = fx.facts.clone();
+        stderr.refs = vec![call_ref("src/unit.c", "fputs", false)];
+        let r = requests_of(&fx, &stderr, &[], vec![good()], vec![green()]);
+        crate::trajectory::check_prompt_fixture(
+            "migrate-translate-stderr.txt",
+            &crate::trajectory::fixture_text(&r[0]),
+        );
+
+        let fx = fixture("pf-hazards");
+        let hazards = [
+            hazard("ub-reliance", "src/unit.c"),
+            hazard("impl-contract", "src/unit.h"),
+        ];
+        let r = requests_of(&fx, &fx.facts, &hazards, vec![good()], vec![green()]);
+        crate::trajectory::check_prompt_fixture(
+            "migrate-translate-hazards.txt",
+            &crate::trajectory::fixture_text(&r[0]),
+        );
+
+        for (name, verdict) in [
+            (
+                "build",
+                build_failure("error[E0425]: cannot find value `c` in this scope"),
+            ),
+            ("oracle", diff_failure()),
+            (
+                "symbol-set",
+                verdict(&[("symbol-set", false, "unexpected export `printf`")]),
+            ),
+            (
+                "capabilities",
+                verdict(&[
+                    ("symbol-set", true, "ok"),
+                    (
+                        "capabilities",
+                        false,
+                        "the candidate reaches `fs`: std::fs::read",
+                    ),
+                ]),
+            ),
+            (
+                "c-side",
+                verdict(&[
+                    ("symbol-set", true, "ok"),
+                    (
+                        "differential-driver",
+                        false,
+                        "C-side run failed: terminated by signal 11",
+                    ),
+                ]),
+            ),
+            (
+                "crash-timeout",
+                verdict(&[
+                    ("symbol-set", true, "ok"),
+                    (
+                        "differential-driver",
+                        false,
+                        "candidate run failed: terminated by signal 6",
+                    ),
+                ]),
+            ),
+        ] {
+            let fx = fixture(&format!("pf-{name}"));
+            let r = requests_of(
+                &fx,
+                &fx.facts,
+                &[],
+                vec![broken(), good()],
+                vec![verdict, green()],
+            );
+            crate::trajectory::check_prompt_fixture(
+                &format!("migrate-repair-{name}.txt"),
+                &crate::trajectory::fixture_text(&r[1]),
+            );
+        }
+
+        // A reply the deny-scan refuses (class `check`: nothing was built).
+        let fx = fixture("pf-deny-scan");
+        let unsafe_logic = reply(emit(&format!("{LOGIC}\nfn f() {{ unsafe {{}} }}\n"), FFI));
+        let r = requests_of(
+            &fx,
+            &fx.facts,
+            &[],
+            vec![unsafe_logic, good()],
+            vec![green()],
+        );
+        check_prompt_fixture_named("migrate-repair-check.txt", &r[1]);
+
+        // A reply accepted only leniently (emission notes on the next turn).
+        let fx = fixture("pf-notes");
+        let lenient = reply(emission::render_files(
+            &LOGIC.replace("add(b)", "sub(b)"),
+            FFI,
+        ));
+        let r = requests_of(
+            &fx,
+            &fx.facts,
+            &[],
+            vec![lenient, good()],
+            vec![diff_failure(), green()],
+        );
+        check_prompt_fixture_named("migrate-repair-emission-notes.txt", &r[1]);
+
+        let fx = fixture("pf-format");
+        let r = requests_of(
+            &fx,
+            &fx.facts,
+            &[],
+            vec![reply("no code"), good()],
+            vec![green()],
+        );
+        crate::trajectory::check_prompt_fixture(
+            "migrate-repair-format.txt",
+            &crate::trajectory::fixture_text(&r[1]),
+        );
+
+        let fx = fixture("pf-format-after");
+        let r = requests_of(
+            &fx,
+            &fx.facts,
+            &[],
+            vec![broken(), reply("no code"), good()],
+            vec![diff_failure(), green()],
+        );
+        crate::trajectory::check_prompt_fixture(
+            "migrate-repair-format-after-parse.txt",
+            &crate::trajectory::fixture_text(&r[2]),
+        );
+    }
+
+    /// R-8 guard: every migrate prompt constant occurs in some fixture, so
+    /// an edit to any of them shows up as a fixture diff.
+    #[test]
+    fn every_migrate_prompt_constant_is_covered_by_a_fixture() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/prompt-fixtures");
+        let mut all = String::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("migrate-")
+            {
+                all.push_str(&std::fs::read_to_string(&path).unwrap());
+            }
+        }
+        let constants = [
+            ("SYSTEM_PROMPT", SYSTEM_PROMPT),
+            ("ORACLE_PARAGRAPH", ORACLE_PARAGRAPH),
+            ("STDOUT_PARAGRAPH", STDOUT_PARAGRAPH),
+            ("STDERR_COMPARED", STDERR_COMPARED),
+            ("TRANSLATE_TASK", TRANSLATE_TASK),
+            ("REPAIR_TASK", REPAIR_TASK),
+            ("FORMAT_EXPLANATION", FORMAT_EXPLANATION),
+            ("SYMBOL_SET_EXPLANATION", SYMBOL_SET_EXPLANATION),
+            ("CAPABILITIES_EXPLANATION", CAPABILITIES_EXPLANATION),
+            ("C_SIDE_EXPLANATION", C_SIDE_EXPLANATION),
+            ("build", class_explanation("build")),
+            ("check", class_explanation("check")),
+            ("oracle", class_explanation("oracle")),
+            ("crash-timeout", class_explanation("crash-timeout")),
+            (
+                "emission notes",
+                "emission notes — your previous reply was accepted, but only leniently",
+            ),
+            ("earlier", MIGRATE_TEXTS.earlier),
+            ("no_current", MIGRATE_TEXTS.no_current),
+        ];
+        for (name, text) in constants {
+            assert!(
+                all.contains(text),
+                "prompt constant {name} occurs in no fixture"
+            );
+        }
+    }
+
+    /// docs/REPLAY-DESIGN.md §R R-3(b), checked on every repair fixture of
+    /// both stages: the [EVIDENCE] section holds no absolute path, and every
+    /// line in it is either quoted tool output (`| `) or one of the
+    /// harness's own fixed lead-ins — a tripwire for any new evidence text
+    /// that would reach a prompt unquoted.
+    #[test]
+    fn repair_fixture_evidence_is_quoted_or_a_known_lead_in() {
+        const LEAD_INS: [&str; 7] = [
+            "check `",
+            "- ",
+            "emission notes — ",
+            "surviving mutants — ",
+            "The files under [CURRENT RUST] are from your last parseable reply",
+            "differential driver ",
+            "src/logic.rs is missing: ",
+        ];
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/prompt-fixtures");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.contains("-repair-") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let start = text.rfind("\n[EVIDENCE]\n").expect("an evidence section") + 12;
+            let end = text[start..]
+                .find("\n[HISTORY]\n")
+                .map_or(text.len(), |e| start + e);
+            for line in text[start..end].lines() {
+                assert!(
+                    line.is_empty()
+                        || line.starts_with("| ")
+                        || LEAD_INS.iter().any(|lead| line.starts_with(lead)),
+                    "{name}: unquoted evidence line {line:?}"
+                );
+                for root in ["/Users/", "/home/", "/private/", "/var/", "/tmp/"] {
+                    assert!(!line.contains(root), "{name}: machine path in {line:?}");
+                }
+            }
+            checked += 1;
+        }
+        assert!(checked >= 15, "only {checked} repair fixtures");
+    }
+
+    /// docs/REPLAY-DESIGN.md §R R-9 (a), PERMANENT (prompt bytes are locked
+    /// by fixtures, not frozen): u001's recorded attempts stay bound to the
+    /// tree — HEAD's unit_source and driver are the recorded ones, and every
+    /// id re-derives from its recorded first request key.
+    #[test]
+    fn u001_attempts_stay_bound_and_their_ids_rederive() {
+        let real = zopfli_root().canonicalize().unwrap();
+        let ledger = Ledger::new(real.clone());
+        let facts = Facts::load(&ledger.facts_path()).unwrap();
+        let plan = Plan::load(&ledger.plan_path()).unwrap();
+        let unit = plan.unit("u001-katajainen").unwrap();
+        let target = TargetContext::load(&real).unwrap();
+        let sources = read_sources(&real, &target.config.target.source_dir, &facts, unit).unwrap();
+        let unit_source = unit_source_hash(&sources);
+        let driver = hash::file_hash(&real.join(unit.oracle_param_str("driver").unwrap())).unwrap();
+        let recorded = attempts::load_unit_attempts(&ledger, &unit.id).unwrap();
+        assert_eq!(recorded.len(), 3, "the three M3 attempts");
+        for want in &recorded {
+            assert_eq!(want.unit_source, unit_source, "{}", want.id);
+            assert_eq!(want.driver, driver, "{}", want.id);
+            assert_eq!(
+                attempts::attempt_id(
+                    &unit.id,
+                    &want.unit_source,
+                    &want.driver,
+                    &want.provider_kind,
+                    &want.model,
+                    &want.turns[0].request_key,
+                ),
+                want.id
+            );
         }
     }
 
@@ -3317,11 +4025,15 @@ int add(int a, int b) { return a + b; }\n";
         std::fs::create_dir_all(&build).unwrap();
         std::fs::write(build.join("drv_c.out"), "case 1\nok\n").unwrap();
         std::fs::write(build.join("drv_rs.out"), "case 1\nok\n").unwrap();
-        assert_eq!(driver_diff(&build), None, "no .err files: nothing to show");
+        assert_eq!(
+            driver_diff(&build, &[]),
+            None,
+            "no .err files: nothing to show"
+        );
 
         std::fs::write(build.join("drv_c.err"), "pow: domain error\n").unwrap();
         std::fs::write(build.join("drv_rs.err"), "").unwrap();
-        let diff = driver_diff(&build).expect("stderr differs");
+        let diff = driver_diff(&build, &[]).expect("stderr differs");
         assert_eq!(
             diff,
             "differential driver stderr, expected = the C unit, actual = your Rust (1 line(s) \
@@ -3330,7 +4042,7 @@ int add(int a, int b) { return a + b; }\n";
         );
 
         std::fs::write(build.join("drv_rs.out"), "case 1\nbad\n").unwrap();
-        let both = driver_diff(&build).expect("both differ");
+        let both = driver_diff(&build, &[]).expect("both differ");
         let stdout_at = both
             .find("differential driver output")
             .expect("stdout part");

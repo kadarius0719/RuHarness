@@ -500,11 +500,50 @@ Committed evidence per attempt (source only; `attempts/**/target/` is gitignored
   replays only the latest `external` sample of a base; earlier ones are reported
   `skipped (superseded by sample …)`. Without `--retry`, a finished `external`
   attempt that no longer reproduces is an error naming the flag.
-- `provider = "replay"` VERIFIES a recorded attempt: it locates the record whose
-  translate `request_key` matches (or the one pinned with `--attempt`), re-runs the
-  trajectory from its traces in a scratch dir, and compares turn-by-turn
-  `request_key`, `response_hash`, `result`, plus `candidate_digest` and `outcome` —
-  any divergence is an error. It writes nothing to the attempts ledger.
+- **Verification is evidence-first** (post-M4; docs/REPLAY-DESIGN.md, §R
+  authoritative). `provider = "replay"` VERIFIES the attempt pinned with `--attempt`,
+  else the one whose first-turn `request_key` is the one HEAD would send (none →
+  refused, listing the unit's finished attempts). A re-run of a finished trace-backed
+  attempt verifies it the same way. Verification never uses a provider adapter:
+  1. **Integrity** (else an error, never a divergence): ≥ 1 turn; bound to the
+     current `unit_source`/`driver`; the id re-derives from the recorded fields and
+     turn-1 key; per turn, `<key>.request.json`/`.response.json` (the sample's own
+     trace dir when it has one, else the root; `key` = 8 lowercase hex; regular files
+     only, ≤ 16 MiB) — the request re-serializes to its key, names the record's
+     model, turn 1 matches `prompt_digest`; the reply hashes to `response_hash`.
+  2. **Strict tier:** the trajectory is driven on the RECORDED replies with HEAD's
+     parser and judge in a scratch dir (budget = the recorded turn count); per-turn
+     `result`, turn count, `candidate_digest` and `outcome` must match. A repair turn
+     whose HEAD-rendered request differs from the recorded one ONLY inside
+     `[EVIDENCE]` is a strict failure too (the judge's evidence changed); a difference
+     anywhere else is a template or input change — drift, reported. Under `--provider
+     replay` a strict failure is the typed error `Diverged` ("does not reproduce …");
+     a re-run of a finished trace-backed attempt that diverges is a harness error that
+     names `--retry`.
+  3. **Conformance:** a turn is `drifted` when HEAD would render its request
+     differently; reported as `prompt: conformant | drifted (turns …)`.
+  It writes nothing to the attempts ledger and sends nothing. Every HEAD-rendered
+  repair request is also checked to quote no scrub-list machine path in
+  `[EVIDENCE]` (a harness error; nothing is sent).
+- **`superseded.jsonl`** (`units/<id>/`, hand-written, append-only by convention;
+  `{"schema":"ruharness-superseded","schema_version":1,"attempt","stage":
+  "migrate"|"driver","reason","superseded_by","loosening"?}`, one object per line,
+  the latest line per `(stage, attempt)` wins). `bench check --replay` requires, per
+  entry: the attempt exists, is intact and DIVERGES (strict tier); its candidate is
+  not what the benchmark scores (the unit crate / the promoted driver); its successor
+  is finished, reproduces, has the same `unit_source` and `driver`, and is green if
+  the superseded attempt was; the divergence is a TIGHTENING (recorded green, replayed
+  not green) unless the entry says `"loosening": true` (listed as LOOSENING). An entry
+  whose attempt was legitimately skipped (bound to superseded inputs, or a redundant
+  `.rN` sample) is reported as no longer applying, not a problem. Any other failure is
+  a problem; an entry never excuses an integrity failure. The reader refuses symlinks,
+  files over 1 MiB, non-segment ids, and reasons outside 1..=400 bytes. Attempt
+  records whose id is not their directory name are refused everywhere.
+- **Prompt fixtures:** `crates/harness-llm/tests/prompt-fixtures/*.txt` hold HEAD's
+  rendered requests per prompt branch; `cargo test` compares byte for byte
+  (`RUHARNESS_UPDATE_PROMPT_FIXTURES=1` rewrites). A prompt edit lands with its
+  fixture diff. The attempt-id DERIVATION is frozen; prompt BYTES are locked, not
+  frozen.
 - The `prompt truncated by server` and context-preflight checks apply to every
   stage (`observe` and `migrate`); a rejected call leaves no replayable trace.
 
@@ -743,7 +782,15 @@ runner}` + `heldout/tools/…` (never inside a target root), `scores.json`.
   `scores.json`: exit 0 ok · 10 a Rust vector `pass` → not pass with unchanged
   inputs, or a re-verify/re-validate problem · 1 incomparable (environment, lock or
   membership differs, or a case's inputs changed — re-score required). A C-side
-  flip is reported as environment drift, never a regression.
+  flip is reported as environment drift, never a regression. With `--replay`, every
+  finished attempt bound to the current inputs is verified evidence-first (above) and
+  printed `reproduces; prompt: conformant|drifted (turns …)` or `expected divergence
+  (superseded by …)`; a divergence without a valid `superseded.jsonl` entry, an
+  integrity failure, or an invalid entry is a problem (exit 10). Totals line:
+  `N reproduce (C conformant, D drifted), E expected divergence(s), S skipped, P
+  problem(s)`. The benchmark's "promoted attempt" is the unique green attempt whose
+  `candidate_digest` equals the unit crate on disk (not the `promoted` flag); none
+  for a verified unit, or several, is a problem.
 
 ## Writer table additions
 
@@ -754,3 +801,4 @@ runner}` + `heldout/tools/…` (never inside a target root), `scores.json`.
 | plan `[unit.oracle]` (only when absent) | `bench init`, `gen-driver` |
 | `suite.toml` `[[case]]`/`[[excluded]]`, `corpus.lock` | `bench vendor` |
 | `scores.json` | `bench score --write` |
+| `units/<id>/superseded.jsonl` | a human (reviewed); verified by `bench check --replay` |

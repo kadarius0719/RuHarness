@@ -41,6 +41,25 @@ pub enum Error {
     /// Any other invariant violation, described in prose.
     #[error("{0}")]
     Invariant(String),
+    /// A recorded attempt, re-judged by HEAD on its RECORDED replies, did not
+    /// reproduce its record (docs/REPLAY-DESIGN.md): a finding about the
+    /// harness or the judge — its evidence is intact (an integrity failure
+    /// is an [`Error::Invariant`] instead).
+    #[error(
+        "attempt {attempt} does not reproduce from its traces — the recorded evidence was left \
+         untouched; {} difference(s): {}",
+        .differences.len(),
+        .differences.join("; ")
+    )]
+    Diverged {
+        /// The attempt id.
+        attempt: String,
+        /// The strict-tier differences, in order.
+        differences: Vec<String>,
+        /// The outcome the re-judged trajectory reached (a supersession of a
+        /// green record needs `loosening` unless this is not green).
+        replayed_outcome: String,
+    },
 }
 
 impl Error {

@@ -47,11 +47,28 @@
 //!   again; trace files of the interrupted run stay where they are and are
 //!   overwritten only where a request key recurs).
 //! - **`replay`** verifies a recorded attempt and writes nothing under the
-//!   attempts ledger: the record whose first-turn `request_key` equals the
-//!   one computed from the tree is re-run from its traces (the sample's own
-//!   trace dir when it has one, else the root) in a scratch dir, and every
-//!   turn's `request_key`, `response_hash` and `result`, the
-//!   `candidate_digest` and the `outcome` must match the record.
+//!   attempts ledger: the record pinned by `--attempt`, else the one whose
+//!   first-turn `request_key` equals the one computed from the tree.
+//!
+//! # Verification is evidence-first (docs/REPLAY-DESIGN.md, §R authoritative)
+//!
+//! Verifying a finished attempt never re-derives its requests to find its
+//! replies: every turn's RECORDED request/response pair is loaded by the key
+//! the record holds (the sample's own trace dir when it has one, else the
+//! root), read-only — no provider adapter is involved, so nothing is ever
+//! sent or filed. Integrity comes first (each request re-serializes to its
+//! key, each reply hashes to its `response_hash`, turn 1 matches
+//! `prompt_digest`, the model matches, the id re-derives, the record is bound
+//! to the current `unit_source`/`driver`). Then the trajectory is driven on
+//! the recorded replies with HEAD's parser and judge in a scratch dir, and
+//! every turn's `result`, the `candidate_digest` and the `outcome` must match
+//! (the STRICT tier). HEAD still renders the request it would send at every
+//! turn: a turn whose rendered key differs from the recorded one is
+//! `drifted` (the CONFORMANCE report). A drifted REPAIR turn that differs
+//! from its recorded request ONLY inside `[EVIDENCE]` is a strict failure
+//! too — the repair evidence changed (nondeterminism, a leaked path, a
+//! changed judge); a difference anywhere else is a template or input change,
+//! reported as drift only.
 //!
 //! # Trust
 //!
@@ -207,6 +224,9 @@ pub(crate) struct Outcome {
     pub(crate) attempt_dir: PathBuf,
     /// The last candidate written, or the verified original.
     pub(crate) candidate: Option<PathBuf>,
+    /// After a verification: the 0-based turns whose request HEAD would
+    /// render differently (empty = conformant). `None` = nothing verified.
+    pub(crate) drifted: Option<Vec<usize>>,
 }
 
 /// Everything one stage run is bound to.
@@ -242,26 +262,12 @@ impl<'a> Job<'a> {
 
         if provider.kind == REPLAY_KIND {
             let recorded = self.find_recorded(&first_key)?;
-            // A live sample's traces live in its own dir; everything recorded
-            // before per-sample dirs existed, and every hand-off, in the root
-            // the replay adapter was constructed with.
-            let sample_traces = params.traces_dir.join(&recorded.id);
-            let sample_provider = sample_traces.is_dir().then(|| ResolvedProvider {
-                adapter: Box::new(TraceAdapter::new(&sample_traces, false)),
-                profile: provider.profile.clone(),
-                kind: provider.kind.clone(),
-                context_tokens: provider.context_tokens,
-                live: false,
-            });
-            self.verify_recorded(
-                &recorded,
-                sample_provider.as_ref().unwrap_or(provider),
-                first,
-            )?;
+            let drifted = self.verify_recorded(&recorded, first)?;
             return Ok(Outcome {
                 attempt_dir: self.attempts_dir().join(&recorded.id),
                 record: recorded,
                 candidate: None,
+                drifted: Some(drifted),
             });
         }
 
@@ -279,7 +285,7 @@ impl<'a> Job<'a> {
             let attempt_dir = self.attempts_dir().join(&base_id);
             match load_record(&attempt_dir, &base_id)? {
                 Some(finished) if finished.outcome != IN_PROGRESS && params.retry => {
-                    match self.trace_backed_sample(&base_id, provider, &first)? {
+                    match self.trace_backed_sample(&base_id, &first)? {
                         TraceBackedSample::Run(id) => id,
                         TraceBackedSample::Reproduces(outcome) => return Ok(*outcome),
                     }
@@ -287,10 +293,11 @@ impl<'a> Job<'a> {
                 Some(finished) if finished.outcome != IN_PROGRESS => {
                     // Evidence is never rewritten: the deterministic
                     // trajectory is re-run in scratch and must reproduce it.
-                    self.verify_recorded(&finished, provider, first)
+                    let drifted = self
+                        .verify_recorded(&finished, first)
                         .map_err(|e| match e {
-                            Error::Invariant(text) => Error::Invariant(format!(
-                                "{text} — pass --retry to record a new sample (the latest \
+                            diverged @ Error::Diverged { .. } => Error::Invariant(format!(
+                                "{diverged} — pass --retry to record a new sample (the latest \
                                  sample is re-verified first)"
                             )),
                             other => other,
@@ -300,6 +307,7 @@ impl<'a> Job<'a> {
                         record: finished,
                         attempt_dir,
                         candidate,
+                        drifted: Some(drifted),
                     });
                 }
                 _ => base_id,
@@ -347,6 +355,7 @@ impl<'a> Job<'a> {
             record,
             candidate: wrote_candidate.then(|| self.stage.candidate_path(&work_dir)),
             attempt_dir: work_dir,
+            drifted: None,
         })
     }
 
@@ -374,16 +383,22 @@ impl<'a> Job<'a> {
         provider: &'a ResolvedProvider,
         work_dir: &'a Path,
         work_rel: &[String],
-        verifying: Option<&'a AttemptRecord>,
+        verifying: Option<(&'a AttemptRecord, Vec<RecordedPair>)>,
         record_traces: Option<PathBuf>,
         max_turns: usize,
     ) -> Run<'a> {
+        let (verifying, recorded_pairs) = match verifying {
+            Some((record, pairs)) => (Some(record), pairs),
+            None => (None, Vec::new()),
+        };
         Run {
             job: self,
             provider,
             work_dir,
             work_rel: work_rel.join("/"),
             verifying,
+            recorded_pairs,
+            drifted: std::cell::RefCell::new(Vec::new()),
             record_traces,
             max_turns,
             scrub: {
@@ -436,7 +451,6 @@ impl<'a> Job<'a> {
     fn trace_backed_sample(
         &self,
         base: &str,
-        provider: &ResolvedProvider,
         first: &CompletionRequest,
     ) -> Result<TraceBackedSample, Error> {
         let attempts_dir = self.attempts_dir();
@@ -455,15 +469,14 @@ impl<'a> Job<'a> {
         if record.outcome == IN_PROGRESS {
             return Ok(TraceBackedSample::Run(latest.clone()));
         }
-        if self
-            .replay_divergences(&record, provider, first.clone())?
-            .is_empty()
-        {
+        let replay = self.replay_divergences(&record, first.clone())?;
+        if replay.differences.is_empty() {
             let candidate = self.recorded_candidate(&latest_dir, &record)?;
             return Ok(TraceBackedSample::Reproduces(Box::new(Outcome {
                 record,
                 attempt_dir: latest_dir,
                 candidate,
+                drifted: Some(replay.drifted),
             })));
         }
         live_sample_id(&attempts_dir, base, true).map(TraceBackedSample::Run)
@@ -482,30 +495,104 @@ impl<'a> Job<'a> {
     fn verify_recorded(
         &self,
         recorded: &AttemptRecord,
-        provider: &ResolvedProvider,
         first: CompletionRequest,
-    ) -> Result<(), Error> {
-        let differences = self.replay_divergences(recorded, provider, first)?;
-        if differences.is_empty() {
-            return Ok(());
+    ) -> Result<Vec<usize>, Error> {
+        let replay = self.replay_divergences(recorded, first)?;
+        if replay.differences.is_empty() {
+            return Ok(replay.drifted);
         }
-        Err(Error::Invariant(format!(
-            "attempt {} does not reproduce from its traces — the recorded evidence was left \
-             untouched; {} difference(s): {}",
-            recorded.id,
-            differences.len(),
-            differences.join("; ")
-        )))
+        Err(Error::Diverged {
+            attempt: recorded.id.clone(),
+            differences: replay.differences,
+            replayed_outcome: replay.outcome,
+        })
     }
 
-    /// The differences between `recorded` and its trajectory re-run in
-    /// scratch (see [`Job::verify_recorded`]); empty = it reproduces.
+    /// Load and check every recorded turn of `recorded` BEFORE anything is
+    /// judged (module docs, "Verification is evidence-first"). Any failure
+    /// is an INTEGRITY error — never a divergence (a superseded attempt must
+    /// still be intact evidence).
+    fn recorded_pairs(&self, recorded: &AttemptRecord) -> Result<Vec<RecordedPair>, Error> {
+        let integrity =
+            |what: String| Error::Invariant(format!("attempt {}: integrity: {what}", recorded.id));
+        if recorded.turns.is_empty() {
+            return Err(integrity("a finished record with no turns".into()));
+        }
+        if recorded.turns.len() > MAX_RECORDED_TURNS {
+            return Err(integrity(format!(
+                "{} turns (at most {MAX_RECORDED_TURNS} are verified)",
+                recorded.turns.len()
+            )));
+        }
+        if recorded.unit_source != self.unit_source || recorded.driver != self.driver {
+            return Err(Error::Invariant(format!(
+                "attempt {} is bound to superseded inputs (its unit source or driver is not the \
+                 current one): it can no longer be verified against this tree",
+                recorded.id
+            )));
+        }
+        let base = recorded
+            .id
+            .rsplit_once(".r")
+            .filter(|(base, _)| sample_number(&recorded.id, base).is_some())
+            .map_or(recorded.id.as_str(), |(base, _)| base);
+        let derived = self.stage.attempt_id(
+            &recorded.unit,
+            &recorded.unit_source,
+            &recorded.driver,
+            &recorded.provider_kind,
+            &recorded.model,
+            &recorded.turns[0].request_key,
+        );
+        if derived != base {
+            return Err(integrity(format!(
+                "its id does not re-derive from its recorded fields (derived {derived})"
+            )));
+        }
+        // A live sample's traces live in its own dir; everything recorded
+        // before per-sample dirs existed, and every hand-off, in the root.
+        let root = &self.params.traces_dir;
+        let sample = root.join(&recorded.id);
+        let dir = match std::fs::symlink_metadata(&sample) {
+            Ok(meta) if meta.file_type().is_dir() => sample,
+            _ => root.to_path_buf(),
+        };
+        let mut pairs = Vec::with_capacity(recorded.turns.len());
+        for (index, turn) in recorded.turns.iter().enumerate() {
+            let (request, response) = TraceAdapter::load_recorded(&dir, &turn.request_key)
+                .map_err(|e| integrity(format!("turn {}: {e}", index + 1)))?;
+            if hash::bytes_hash(response.text.as_bytes()) != turn.response_hash {
+                return Err(integrity(format!(
+                    "turn {}: the recorded reply does not hash to its response_hash",
+                    index + 1
+                )));
+            }
+            if request.model != recorded.model {
+                return Err(integrity(format!(
+                    "turn {}: the recorded request names another model",
+                    index + 1
+                )));
+            }
+            if index == 0 && prompt_digest(&request) != recorded.prompt_digest {
+                return Err(integrity(
+                    "turn 1: the recorded request does not match prompt_digest".into(),
+                ));
+            }
+            pairs.push((request, response));
+        }
+        Ok(pairs)
+    }
+
+    /// The strict-tier differences between `recorded` and its trajectory
+    /// re-run in scratch on its recorded replies (see
+    /// [`Job::verify_recorded`]; empty = it reproduces), plus the drifted
+    /// turns. `Err` = not verifiable at all (integrity, binding, a harness
+    /// error) — never a divergence.
     fn replay_divergences(
         &self,
         recorded: &AttemptRecord,
-        provider: &ResolvedProvider,
         first: CompletionRequest,
-    ) -> Result<Vec<String>, Error> {
+    ) -> Result<Replay, Error> {
         if recorded.outcome == IN_PROGRESS {
             return Err(Error::Invariant(format!(
                 "attempt {} is still in progress: only a finished attempt can be verified — \
@@ -526,6 +613,7 @@ impl<'a> Job<'a> {
         // A crashed verification may have left its scratch behind. The unit
         // dir is verified first, so not even this removal goes through a
         // symlink.
+        let pairs = self.recorded_pairs(recorded)?;
         let unit_dir = prepare_dir(self.ledger, &self.unit.id, &[])?;
         remove_path(&unit_dir.join(&scratch_rel[0]))?;
         let scratch = prepare_dir(self.ledger, &self.unit.id, &scratch_rel)?;
@@ -538,20 +626,37 @@ impl<'a> Job<'a> {
             promoted: false,
             ..recorded.clone()
         };
-        let driven = {
+        let (driven, drifted) = {
             let run = self.run_in(
-                provider,
+                self.params.provider,
                 &scratch,
                 &scratch_rel,
-                Some(recorded),
+                Some((recorded, pairs)),
                 None,
-                recorded.turns.len().max(1),
+                recorded.turns.len(),
             );
-            run.drive(&mut replayed, first)
+            let driven = run.drive(&mut replayed, first);
+            (driven, run.drifted.take())
         };
         let _ = remove_path(&scratch);
         driven?;
-        Ok(divergences(recorded, &replayed))
+        let mut differences = divergences(recorded, &replayed);
+        // R-3 (as amended by the code review): a repair question HEAD would
+        // pose differently ONLY in its evidence means the judge's evidence
+        // changed — nondeterministic, leaking, or a changed judge; any other
+        // difference is a template or input change, reported as drift.
+        differences.extend(drifted.iter().filter(|(_, only)| *only).map(|(index, _)| {
+            format!(
+                "turn {} request drifted in its [EVIDENCE] only (the repair evidence changed: \
+                 nondeterminism, a leaked path, or a changed judge)",
+                index + 1
+            )
+        }));
+        Ok(Replay {
+            differences,
+            drifted: drifted.into_iter().map(|(index, _)| index).collect(),
+            outcome: replayed.outcome,
+        })
     }
 
     /// The candidate of a FINISHED, just-verified attempt — `None` when the
@@ -612,25 +717,16 @@ impl<'a> Job<'a> {
                     printable(pinned, 64)
                 )));
             }
-            let record = load_record(&attempts_dir.join(pinned), pinned)?
+            // Evidence-first: a pinned attempt is verified from its own
+            // recorded requests, whatever HEAD would ask today.
+            return load_record(&attempts_dir.join(pinned), pinned)?
                 .filter(|record| record.unit == unit_id)
                 .ok_or_else(|| {
                     Error::Invariant(format!(
                         "unit `{unit_id}` has no recorded attempt `{pinned}` under {} — {explain}",
                         attempts_dir.display()
                     ))
-                })?;
-            if !matches_key(&record) {
-                return Err(Error::Invariant(format!(
-                    "attempt {pinned} was recorded for a different {first_kind} prompt (request \
-                     key {}, now {first_key}) — {explain}",
-                    record.turns.first().map_or_else(
-                        || "none".to_string(),
-                        |turn| printable(&turn.request_key, 16)
-                    ),
-                )));
-            }
-            return Ok(record);
+                });
         }
 
         let entries = match std::fs::read_dir(&attempts_dir) {
@@ -639,6 +735,7 @@ impl<'a> Job<'a> {
             Err(e) => return Err(Error::io(&attempts_dir, e)),
         };
         let mut candidates: Vec<AttemptRecord> = Vec::new();
+        let mut finished: Vec<String> = Vec::new();
         for entry in entries.into_iter().flatten() {
             let entry = entry.map_err(|e| Error::io(&attempts_dir, e))?;
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -648,8 +745,37 @@ impl<'a> Job<'a> {
             if let Some(record) = load_record(&entry.path(), &name)? {
                 if record.unit == unit_id && matches_key(&record) {
                     candidates.push(record);
+                } else if record.unit == unit_id && record.outcome != IN_PROGRESS {
+                    let stale =
+                        record.unit_source != self.unit_source || record.driver != self.driver;
+                    finished.push(if stale {
+                        format!("{} (stale inputs)", record.id)
+                    } else {
+                        record.id
+                    });
                 }
             }
+        }
+        // R-1: no attempt poses HEAD's first question — refuse and name the
+        // recorded ones rather than guess which to verify.
+        if candidates.is_empty() && !finished.is_empty() {
+            finished.sort();
+            let shown: Vec<String> = finished
+                .iter()
+                .take(8)
+                .map(|id| printable(id, 40))
+                .collect();
+            return Err(Error::Invariant(format!(
+                "unit `{unit_id}` has no recorded attempt whose {first_kind} request is the one \
+                 HEAD would send (key {first_key}); its finished attempts were recorded under \
+                 another prompt — verify one with --attempt: {}{}",
+                shown.join(", "),
+                if finished.len() > shown.len() {
+                    ", …"
+                } else {
+                    ""
+                }
+            )));
         }
         // The request key does not cover the provider, so attempts of several
         // providers may match. Finished ones first (only they can be verified),
@@ -665,6 +791,9 @@ impl<'a> Job<'a> {
                 .unwrap_or_else(|| (record.id.clone(), 1));
             (
                 record.outcome == IN_PROGRESS,
+                // Bound to the current inputs first: an attempt for a
+                // replaced driver can pose the same first request.
+                record.unit_source != self.unit_source || record.driver != self.driver,
                 record.model != self.params.model,
                 base,
                 number,
@@ -870,6 +999,24 @@ fn exhausted_outcome(turns: &[Turn]) -> &'static str {
     }
 }
 
+/// A recorded turn's request and reply, as [`TraceAdapter::load_recorded`]
+/// read them.
+type RecordedPair = (CompletionRequest, harness_core::traits::CompletionResponse);
+
+/// A verification's result (see [`Job::replay_divergences`]).
+struct Replay {
+    /// Strict-tier differences; empty = reproduces.
+    differences: Vec<String>,
+    /// 0-based turns HEAD would render differently (conformance).
+    drifted: Vec<usize>,
+    /// The outcome the re-judged trajectory reached.
+    outcome: String,
+}
+
+/// Most turns a recorded attempt may have to be verified (every turn's pair
+/// is loaded up front; the default budget is 1 + 3).
+const MAX_RECORDED_TURNS: usize = 64;
+
 /// What the next repair turn must be told.
 #[derive(Default)]
 struct RepairState {
@@ -891,8 +1038,14 @@ struct Run<'a> {
     work_dir: &'a Path,
     /// `work_dir` relative to the unit dir, `/`-joined.
     work_rel: String,
-    /// The recorded attempt being verified. `Some` = NOTHING is journaled.
+    /// The recorded attempt being verified. `Some` = NOTHING is journaled,
+    /// nothing is sent: each turn's reply is its recorded one.
     verifying: Option<&'a AttemptRecord>,
+    /// Verifying: the recorded request/reply of every turn, integrity-checked.
+    recorded_pairs: Vec<RecordedPair>,
+    /// Verifying: the turns whose HEAD-rendered request differs from the
+    /// recorded one, each with whether it differs ONLY inside `[EVIDENCE]`.
+    drifted: std::cell::RefCell<Vec<(usize, bool)>>,
     /// Where each call is recorded as a replayable trace: a live sample's
     /// own trace dir. `None` for trace-backed providers.
     record_traces: Option<PathBuf>,
@@ -916,10 +1069,24 @@ impl Run<'_> {
         loop {
             if index > 0 {
                 request = self.repair_request(&state, &record.turns);
-                if let Err(e) = preflight(provider, &request) {
-                    if self.verifying.is_some() {
-                        return Err(e); // nothing to close: nothing is journaled
-                    }
+                // R-3 render invariant: evidence is machine-independent. A
+                // path the scrub list names surviving into [EVIDENCE] is a
+                // harness bug — it would reach the provider and make the
+                // prompt depend on this machine — so nothing is sent.
+                if let Some(label) = evidence_leak(&request.user, &self.scrub) {
+                    return Err(Error::Invariant(format!(
+                        "harness bug: the repair evidence of turn {} quotes a machine path \
+                         ({label}); nothing was sent",
+                        index + 1
+                    )));
+                }
+                // Verifying sends nothing, so no profile limit applies.
+                let checked = if self.verifying.is_none() {
+                    preflight(provider, &request)
+                } else {
+                    Ok(())
+                };
+                if let Err(e) = checked {
                     // Not a model outcome — but under this profile the
                     // trajectory cannot continue, so it is over, and the
                     // ledger must not claim it is still in progress.
@@ -931,42 +1098,53 @@ impl Run<'_> {
                     )));
                 }
             }
-            let request_key = TraceAdapter::request_key(&request)?;
-            // Verifying: a request that is not the recorded one IS the
-            // finding. It is never sent — no adapter could answer it from the
-            // record's traces, and the `external` one would file it as a new
-            // pending request.
-            let recorded_key = self
-                .verifying
-                .and_then(|recorded| Some((recorded, recorded.turns.get(index)?)))
-                .filter(|(_, turn)| turn.request_key != request_key);
-            if let Some((recorded, turn)) = recorded_key {
-                return Err(Error::Invariant(format!(
-                    "attempt {} does not reproduce from its traces — the recorded evidence \
-                     was left untouched; turn {} request_key: recorded {}, replayed \
-                     {request_key} (the prompt is no longer the recorded one: the judge's \
-                     evidence, the toolchain or the harness changed)",
-                    recorded.id,
-                    index + 1,
-                    printable(&turn.request_key, 16)
-                )));
-            }
-            let response = match checked_complete(provider, &request) {
-                Ok(response) => response,
-                Err(e) => return Err(self.call_failed(record, index, e)),
+            let head_key = TraceAdapter::request_key(&request)?;
+            // Verifying: the RECORDED turn is judged, whatever HEAD would
+            // ask — HEAD's rendering only decides conformance (module docs).
+            // Nothing is ever sent.
+            let (request_key, response, max_tokens) = match self.verifying {
+                Some(recorded) => {
+                    let (Some(turn), Some((recorded_request, recorded_response))) =
+                        (recorded.turns.get(index), self.recorded_pairs.get(index))
+                    else {
+                        return Err(Error::Invariant(format!(
+                            "attempt {}: turn {} is not recorded",
+                            recorded.id,
+                            index + 1
+                        )));
+                    };
+                    if turn.request_key != head_key {
+                        let evidence_only =
+                            index > 0 && same_but_evidence(&request, recorded_request);
+                        self.drifted.borrow_mut().push((index, evidence_only));
+                    }
+                    (
+                        turn.request_key.clone(),
+                        recorded_response.clone(),
+                        recorded_request.max_tokens,
+                    )
+                }
+                None => {
+                    let response = match checked_complete(provider, &request) {
+                        Ok(response) => response,
+                        Err(e) => return Err(self.call_failed(record, index, e)),
+                    };
+                    // Only a call that passed the context guards is ever
+                    // recorded: a truncated one must not leave a normal
+                    // replayable trace.
+                    if let Some(dir) = &self.record_traces {
+                        TraceAdapter::record(&prepare_trace_dir(dir)?, &request, &response)?;
+                    }
+                    (head_key, response, request.max_tokens)
+                }
             };
-            // Only a call that passed the context guards is ever recorded:
-            // a truncated one must not leave a normal replayable trace.
-            if let Some(dir) = &self.record_traces {
-                TraceAdapter::record(&prepare_trace_dir(dir)?, &request, &response)?;
-            }
 
             let reported = (response.output_tokens > 0).then_some(response.output_tokens);
             let parsed = emission::parse_spec(
                 &response.text,
                 response.stop(),
                 reported,
-                request.max_tokens,
+                max_tokens,
                 texts.spec,
             );
             let mut outcome: Option<&'static str> = None;
@@ -1138,6 +1316,91 @@ impl Run<'_> {
             texts.repair_task
         );
         self.job.request(user)
+    }
+}
+
+/// The label of the first scrub-list path (see [`scrub_list`]) that occurs
+/// in the `[EVIDENCE]` section of a HEAD-rendered repair request, if any.
+/// The section is located from the END (the last `[EVIDENCE]` header, up to
+/// the `[HISTORY]` header after it): model text in the earlier
+/// current-candidate section cannot shift it, and quoted evidence lines all
+/// start with `| `, so they cannot imitate either header.
+pub(crate) fn evidence_leak<'s>(user: &str, scrub: &'s [(String, String)]) -> Option<&'s str> {
+    let section = &user[evidence_range(user)?];
+    scrub
+        .iter()
+        .find(|(path, _)| section.contains(path.as_str()))
+        .map(|(_, label)| label.as_str())
+}
+
+/// The byte range of the `[EVIDENCE]` section of a repair request's user
+/// text: from the LAST `\n[EVIDENCE]\n` header to the `\n[HISTORY]\n`
+/// header after it (see [`evidence_leak`] for why from the end).
+fn evidence_range(user: &str) -> Option<std::ops::Range<usize>> {
+    let start = user.rfind("\n[EVIDENCE]\n")?;
+    let end = user[start..]
+        .find("\n[HISTORY]\n")
+        .map_or(user.len(), |end| start + end);
+    Some(start..end)
+}
+
+/// Whether two repair requests are equal once each one's `[EVIDENCE]`
+/// section is blanked — i.e. they differ (if at all) in evidence alone.
+fn same_but_evidence(head: &CompletionRequest, recorded: &CompletionRequest) -> bool {
+    let blank = |user: &str| match evidence_range(user) {
+        Some(range) => format!("{}{}", &user[..range.start], &user[range.end..]),
+        None => user.to_string(),
+    };
+    head.model == recorded.model
+        && head.system == recorded.system
+        && head.max_tokens == recorded.max_tokens
+        && blank(&head.user) == blank(&recorded.user)
+}
+
+/// A rendered request as a prompt fixture: everything the key hashes.
+#[cfg(test)]
+pub(crate) fn fixture_text(req: &CompletionRequest) -> String {
+    format!(
+        "model: {}\nmax_tokens: {}\n=== SYSTEM ===\n{}\n=== USER ===\n{}",
+        req.model, req.max_tokens, req.system, req.user
+    )
+}
+
+/// Compare `text` with the committed prompt fixture `name`
+/// (`tests/prompt-fixtures/`); `RUHARNESS_UPDATE_PROMPT_FIXTURES=1`
+/// rewrites it instead. docs/REPLAY-DESIGN.md §R R-8: every prompt edit
+/// lands with its fixture diff in the same commit, where it is reviewed.
+#[cfg(test)]
+pub(crate) fn check_prompt_fixture(name: &str, text: &str) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/prompt-fixtures")
+        .join(name);
+    if std::env::var("RUHARNESS_UPDATE_PROMPT_FIXTURES").as_deref() == Ok("1") {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+        return;
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+        panic!(
+            "missing prompt fixture {} — render it with RUHARNESS_UPDATE_PROMPT_FIXTURES=1 \
+             and review it",
+            path.display()
+        )
+    });
+    if want != text {
+        let (line, (w, g)) = want
+            .lines()
+            .chain(std::iter::repeat("<end>"))
+            .zip(text.lines().chain(std::iter::repeat("<end>")))
+            .enumerate()
+            .find(|(_, (w, g))| w != g)
+            .unwrap_or((0, ("", "")));
+        panic!(
+            "HEAD's prompt differs from fixture {name} at line {}:\n  fixture: {w}\n  HEAD:    \
+             {g}\nA prompt edit must update its fixture in the same commit \
+             (RUHARNESS_UPDATE_PROMPT_FIXTURES=1 cargo test) so the diff is reviewed.",
+            line + 1
+        );
     }
 }
 

@@ -409,6 +409,9 @@ fn parse_messages_response(body: &str) -> Result<CompletionResponse, Error> {
     })
 }
 
+/// Largest trace file [`TraceAdapter::load_recorded`] reads.
+pub const MAX_TRACE_BYTES: u64 = 16 * 1024 * 1024;
+
 /// Trace-based adapter: replays recorded responses, or (in `external` mode)
 /// writes request files for an out-of-band model runtime to answer.
 ///
@@ -441,6 +444,67 @@ impl TraceAdapter {
             .map_err(|e| Error::Invariant(format!("serialize completion request: {e}")))?;
         let hex = blake3::hash(canonical.as_bytes()).to_hex().to_string();
         Ok(hex[..8].to_string())
+    }
+
+    /// Read the RECORDED request/response pair stored under `key` in `dir`
+    /// — the evidence-first replay's only way to a recorded turn
+    /// (docs/REPLAY-DESIGN.md §R R-2). Read-only: never writes, never files
+    /// a hand-off. `key` must be exactly 8 lowercase hex digits before it
+    /// becomes a path component; the dir and both files must be real
+    /// (non-symlink) entries of bounded size; the request must re-serialize
+    /// to `key`.
+    pub fn load_recorded(
+        dir: &Path,
+        key: &str,
+    ) -> Result<(CompletionRequest, CompletionResponse), Error> {
+        if key.len() != 8
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(Error::Invariant(format!(
+                "recorded request key {:?} is not 8 lowercase hex digits",
+                key.chars().take(16).collect::<String>()
+            )));
+        }
+        let regular = |path: &Path| -> Result<(), Error> {
+            let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
+            let is_dir = path == dir && meta.file_type().is_dir();
+            if !(meta.file_type().is_file() || is_dir) {
+                return Err(Error::Invariant(format!(
+                    "{} is not a regular file or directory (symlinks are refused)",
+                    path.display()
+                )));
+            }
+            if meta.file_type().is_file() && meta.len() > MAX_TRACE_BYTES {
+                return Err(Error::Invariant(format!(
+                    "{} exceeds {MAX_TRACE_BYTES} bytes",
+                    path.display()
+                )));
+            }
+            Ok(())
+        };
+        regular(dir)?;
+        let read = |ext: &str| -> Result<(PathBuf, String), Error> {
+            let path = dir.join(format!("{key}.{ext}.json"));
+            regular(&path)?;
+            let text = std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
+            Ok((path, text))
+        };
+        let (req_path, req_text) = read("request")?;
+        let request: CompletionRequest =
+            serde_json::from_str(&req_text).map_err(|e| Error::parse(&req_path, e.to_string()))?;
+        let actual = Self::request_key(&request)?;
+        if actual != key {
+            return Err(Error::Invariant(format!(
+                "{} hashes to request key {actual}, not {key}: the recorded request was altered",
+                req_path.display()
+            )));
+        }
+        let (resp_path, resp_text) = read("response")?;
+        let response: CompletionResponse = serde_json::from_str(&resp_text)
+            .map_err(|e| Error::parse(&resp_path, e.to_string()))?;
+        Ok((request, response))
     }
 
     /// The `<key>.request.json` path for a request.

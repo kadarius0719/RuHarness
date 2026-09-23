@@ -58,3 +58,21 @@ pub use emission::{deny_scan, parse_emission, EmissionResult};
 pub use migrate::{run_migration, MigrateParams, MigrationOutcome};
 pub use providers::{checked_complete, ProviderProfile, ResolvedProvider};
 pub use triage::{run_triage, TriageOutcome};
+
+/// `text` reduced to printable ASCII and cut to `max_bytes` — how
+/// on-disk, target-owned strings are echoed in reports.
+pub fn printable(text: &str, max_bytes: usize) -> String {
+    trajectory::printable(text, max_bytes)
+}
+
+/// The conformance report of a verified attempt (docs/REPLAY-DESIGN.md §R
+/// R-4): `conformant`, or `drifted (turns 1, 3)` — 1-based turns whose
+/// request HEAD would render differently from the recorded one.
+pub fn conformance(drifted: &[usize]) -> String {
+    if drifted.is_empty() {
+        "conformant".to_string()
+    } else {
+        let turns: Vec<String> = drifted.iter().map(|i| (i + 1).to_string()).collect();
+        format!("drifted (turns {})", turns.join(", "))
+    }
+}
