@@ -38,6 +38,9 @@
 //!   fuses multiply-add even at `-O0`; the reference Linux build and Rust do
 //!   not) and gets `-I` for `[target] include_dirs` after the source dir;
 //!   the flag is recorded as `cflags: -ffp-contract=off` in `toolchain`;
+//! - (post-M4) a clean run's observable behavior is stdout AND stderr,
+//!   recorded as `observable: stdout+stderr` in `toolchain` — records
+//!   without it were judged by the stdout-only oracle;
 //! - every run of a built binary is confined (module `confine`, R1): a fresh
 //!   per-run `TMPDIR`, no reads under the home dir or the target root beyond
 //!   the binary and its listed inputs;
@@ -105,6 +108,10 @@ pub(crate) const FP_CONTRACT_OFF: &str = "-ffp-contract=off";
 
 /// The `inputs.toolchain` entry recording [`FP_CONTRACT_OFF`].
 pub(crate) const CFLAGS_TOOLCHAIN_ENTRY: &str = "cflags: -ffp-contract=off";
+
+/// The `inputs.toolchain` entry recording what a clean run is judged on
+/// (differential checks and driver validation): both streams.
+pub(crate) const OBSERVABLE_TOOLCHAIN_ENTRY: &str = "observable: stdout+stderr";
 
 /// The sanitizer build flags (verify's `sanitizers` check and
 /// `validate_driver`'s use the same).
@@ -492,13 +499,15 @@ impl CAbiDifferential {
 
         // Digests of the tree actually tested (after the build attempt, so a
         // freshly generated Cargo.lock is part of the rust_crate digest),
-        // plus the toolchain identities, the sandbox mode and the cflags.
+        // plus the toolchain identities, the sandbox mode, the cflags and
+        // the observable streams.
         let mut inputs = compute_inputs(target, unit, &facts)?;
         inputs.toolchain = vec![
             rustc_version.clone(),
             cc_version,
             format!("sandbox: {}", sandbox_mode()),
             CFLAGS_TOOLCHAIN_ENTRY.to_string(),
+            OBSERVABLE_TOOLCHAIN_ENTRY.to_string(),
         ];
 
         let rust_lib = match build_result {

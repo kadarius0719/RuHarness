@@ -220,10 +220,12 @@ pub struct MigrateParams<'a> {
     /// adapters (`external`, `replay`) keep reading and writing the dir they
     /// were constructed with, normally this root.
     pub traces_dir: &'a Path,
-    /// Live providers only: when this attempt already finished, record a
-    /// NEW sample `<base-id>.r<N>` in its own directory instead of refusing.
-    /// Ignored by trace-backed providers, whose trajectory is a function of
-    /// the response files and would only reproduce itself.
+    /// When this attempt already finished, record a NEW sample
+    /// `<base-id>.r<N>` in its own directory instead of refusing (live
+    /// providers). Trace-backed providers, whose trajectory is a function of
+    /// the response files and the judge, record one only when the latest
+    /// sample no longer reproduces (e.g. the oracle changed); otherwise the
+    /// latest sample is verified and returned.
     pub retry: bool,
     /// `replay` only: pin the recorded attempt to verify by id (e.g.
     /// `a-0123456789ab.r2`). `None` = the recorded attempt whose first-turn
@@ -2761,6 +2763,113 @@ int add(int a, int b) { return a + b; }\n";
             snapshot(&fx.unit_dir()),
             before,
             "replay left the unit dir as it found it"
+        );
+    }
+
+    /// Post-M4: once the oracle judges differently (it began comparing
+    /// stderr), a finished hand-off attempt no longer reproduces, and
+    /// `--retry` used to be ignored for trace-backed providers — the unit
+    /// could never be re-migrated with the same model. Now `--retry` records
+    /// a new sample only when the latest one does not reproduce, reusing the
+    /// recorded answer for every identical request.
+    #[test]
+    fn external_retry_records_a_new_sample_only_when_the_latest_does_not_reproduce() {
+        let fx = fixture("external-retry");
+        let external = || {
+            resolved(
+                Box::new(TraceAdapter::new(&fx.traces, true)),
+                "external",
+                false,
+            )
+        };
+        let pending = || -> Vec<PathBuf> {
+            let mut out: Vec<PathBuf> = std::fs::read_dir(&fx.traces)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|p| {
+                    p.to_string_lossy().ends_with(".request.json")
+                        && !PathBuf::from(
+                            p.to_string_lossy()
+                                .replace(".request.json", ".response.json"),
+                        )
+                        .exists()
+                })
+                .collect();
+            out.sort();
+            out
+        };
+        let answer = |path: &Path| {
+            let request: CompletionRequest =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            TraceAdapter::record(&fx.traces, &request, &good().unwrap()).unwrap();
+        };
+        let retry = |verdicts: Vec<Verdict>| {
+            run_opts(&fx, &external(), &oracle(verdicts), 3, &[], true, None)
+        };
+
+        // Recorded under the old judge: turn 1 green.
+        run_with(&fx, &external(), &oracle(vec![]), 3, &[]).unwrap_err();
+        answer(&pending()[0]);
+        let base = run_with(&fx, &external(), &oracle(vec![green()]), 3, &[]).unwrap();
+        assert_eq!(base.record.outcome, "green");
+        let base_json = std::fs::read(base.attempt_dir.join("attempt.json")).unwrap();
+
+        // Still reproducing: --retry verifies it and records nothing.
+        let same = retry(vec![green()]).unwrap();
+        assert_eq!(same.record, base.record);
+        assert_eq!(
+            attempts::load_unit_attempts(&Ledger::new(fx.target.root.clone()), UNIT)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // The judge changed. Without --retry: refused, with the hint.
+        let err = run_with(&fx, &external(), &oracle(vec![diff_failure()]), 3, &[]).unwrap_err();
+        assert!(
+            err.to_string().contains("does not reproduce")
+                && err.to_string().contains("pass --retry"),
+            "{err}"
+        );
+        // With --retry: base re-verified (red), then sample 2 — its turn 1
+        // is the recorded answer (no new translate request), and only the
+        // repair is handed off.
+        let err = retry(vec![diff_failure(), diff_failure()]).unwrap_err();
+        assert!(err.to_string().starts_with("awaiting response: "), "{err}");
+        let waiting = pending();
+        assert_eq!(waiting.len(), 1, "only the repair request is new");
+        let r2 = format!("{}.r2", base.record.id);
+        let journaled =
+            attempts::load_unit_attempts(&Ledger::new(fx.target.root.clone()), UNIT).unwrap();
+        let sample = journaled.iter().find(|r| r.id == r2).expect("sample 2");
+        assert_eq!(sample.outcome, "in-progress");
+        assert_eq!(
+            sample.turns[0].response_hash,
+            base.record.turns[0].response_hash
+        );
+
+        // Answered: the resumed sample finishes green; the base is untouched.
+        answer(&waiting[0]);
+        let done = retry(vec![diff_failure(), green()]).unwrap();
+        assert_eq!(done.record.id, r2);
+        assert_eq!(
+            results(&done.record),
+            [("translate", "oracle"), ("repair", "green")]
+        );
+        assert_eq!(
+            std::fs::read(base.attempt_dir.join("attempt.json")).unwrap(),
+            base_json,
+            "the older sample's evidence is never rewritten"
+        );
+
+        // Sample 2 reproduces: --retry again records nothing new.
+        let again = retry(vec![diff_failure(), green()]).unwrap();
+        assert_eq!(again.record, done.record);
+        assert_eq!(
+            attempts::load_unit_attempts(&Ledger::new(fx.target.root.clone()), UNIT)
+                .unwrap()
+                .len(),
+            2
         );
     }
 

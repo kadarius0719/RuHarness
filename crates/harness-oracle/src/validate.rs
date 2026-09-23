@@ -144,6 +144,7 @@ fn run(
             cc_version,
             format!("sandbox: {}", sandbox::sandbox_mode()),
             crate::CFLAGS_TOOLCHAIN_ENTRY.to_string(),
+            crate::OBSERVABLE_TOOLCHAIN_ENTRY.to_string(),
         ],
     };
     let ctx = Ctx {

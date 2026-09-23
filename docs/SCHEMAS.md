@@ -492,6 +492,14 @@ Committed evidence per attempt (source only; `attempts/**/target/` is gitignored
   NEW sample `a-<12hex>.r<N>` (N = 2, 3, …) in its own directory. Live traces are
   recorded per sample under `traces/<attempt-id>/`, so samples never overwrite each
   other. (`external` resumes are deterministic re-derivations of the same record.)
+  For `external` (trace-backed), `--retry` (post-M4) first re-verifies the LATEST
+  sample of the base id: if it reproduces it is returned and nothing is recorded; if
+  it does not (the oracle or toolchain changed) a new sample `<base>.r<N>` is
+  recorded, its requests answered by the recorded response files wherever the
+  request key recurs and handed off where it does not. `bench check --replay`
+  replays only the latest `external` sample of a base; earlier ones are reported
+  `skipped (superseded by sample …)`. Without `--retry`, a finished `external`
+  attempt that no longer reproduces is an error naming the flag.
 - `provider = "replay"` VERIFIES a recorded attempt: it locates the record whose
   translate `request_key` matches (or the one pinned with `--attempt`), re-runs the
   trajectory from its traces in a scratch dir, and compares turn-by-turn
@@ -592,7 +600,8 @@ ends the run (nothing is linked or run).
 
 **Observable output = stdout AND stderr** (post-M4 oracle fix, 2026-09-23). A built binary's
 run that exits 0 is compared on both streams by `differential-driver` and every
-`whole-program:*` check; C and Rust sides are written to `build/<unit>/drv_{c,rs}.out`
+`whole-program:*` check (verdict and driver-validation `inputs.toolchain` gain a final
+`observable: stdout+stderr` entry; a record without it was judged on stdout only); C and Rust sides are written to `build/<unit>/drv_{c,rs}.out`
 (stdout) and `drv_{c,rs}.err` (stderr). Detail wording is replay-stable: when both
 stderrs are empty and equal the detail is exactly the stdout-only form (`N bytes
 identical` / `outputs differ (lens a vs b, first diff at byte i)`); equal non-empty
@@ -633,7 +642,7 @@ repairs; external/replay/live semantics; `--retry` samples; replay verification)
 
 ```json
 {"schema":"ruharness-driver-validation","schema_version":1,"unit":"u-lib","green":true,
- "inputs":{"unit_source":"blake3:…","driver":"blake3:…","toolchain":["rustc …","Apple clang …","sandbox: sandbox-exec","cflags: -ffp-contract=off"]},
+ "inputs":{"unit_source":"blake3:…","driver":"blake3:…","toolchain":["rustc …","Apple clang …","sandbox: sandbox-exec","cflags: -ffp-contract=off","observable: stdout+stderr"]},
  "policy":{"max_mutants":24,"min_kill_permille":600},
  "checks":[{"name":"driver-build","passed":true,"detail":"…"}, …],
  "mutation":{"sites":36,"sampled":24,"compiled":22,"equivalent":2,"killed":20,"survivors":[{"file":"…","line":5,"function":"rev16","operator":"literal"}]}}

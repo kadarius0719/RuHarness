@@ -149,12 +149,13 @@ fn a_faithful_candidate_is_green_and_records_the_sandbox_mode() {
     );
     let toolchain = &verdict.inputs.toolchain;
     assert_eq!(
-        toolchain[toolchain.len() - 2],
+        toolchain[toolchain.len() - 3],
         format!("sandbox: {}", sandbox_mode())
     );
+    assert_eq!(toolchain[toolchain.len() - 2], "cflags: -ffp-contract=off");
     assert_eq!(
         toolchain.last().map(String::as_str),
-        Some("cflags: -ffp-contract=off")
+        Some("observable: stdout+stderr")
     );
     // The candidate sets panic = "abort", so the abort baseline was used.
     assert!(tmp

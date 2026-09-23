@@ -791,6 +791,43 @@ fn cmd_check(suite_dir: &Path, replay: bool, jobs: usize) -> Result<ExitCode> {
 /// Replay-verify every recorded driver and migrate attempt of every case
 /// from its traces (zero tokens). Returns one problem per attempt that no
 /// longer reproduces.
+/// `(base id, sample number)` of an attempt id: `<base>` is sample 1,
+/// `<base>.r<N>` sample N.
+fn sample_of(id: &str) -> (&str, u32) {
+    id.rsplit_once(".r")
+        .and_then(|(base, n)| {
+            n.parse::<u32>()
+                .ok()
+                // Canonical numbers only (`.r02` is not sample 2).
+                .filter(|v| *v >= 2 && v.to_string() == n)
+                .map(|v| (base, v))
+        })
+        .unwrap_or((id, 1))
+}
+
+/// For a hand-off (`external`) record: the id of a later sample of the same
+/// base, if one exists. A trace-backed trajectory is a function of the
+/// response files and the judge, so a later sample exists only because this
+/// one stopped reproducing (`--retry` records one in no other case) — e.g.
+/// the oracle began comparing stderr. Only the latest sample must replay;
+/// live samples are independent and all must.
+fn superseding_sample(
+    rec: &attempts::AttemptRecord,
+    records: &[attempts::AttemptRecord],
+) -> Option<String> {
+    if rec.provider_kind != "external" {
+        return None;
+    }
+    let (base, number) = sample_of(&rec.id);
+    records
+        .iter()
+        .filter(|other| other.provider_kind == "external")
+        .map(|other| (sample_of(&other.id), &other.id))
+        .filter(|((other_base, n), _)| *other_base == base && *n > number)
+        .max_by_key(|((_, n), _)| *n)
+        .map(|(_, id)| id.clone())
+}
+
 fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
     let (suite, _lock) = load_verified(suite_dir)?;
     let mut problems = Vec::new();
@@ -844,6 +881,13 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                         ));
                         continue;
                     }
+                    if let Some(newer) = superseding_sample(rec, &records) {
+                        out(format!(
+                            "bench replay: {} {stage} {} skipped (superseded by sample {newer})",
+                            case.path, rec.id
+                        ));
+                        continue;
+                    }
                     let resolved = harness_llm::providers::resolve("replay", &traces)?;
                     let params = harness_llm::MigrateParams {
                         provider: &resolved,
@@ -887,4 +931,62 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
         }
     }
     Ok(problems)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harness_core::attempts::{AttemptRecord, ATTEMPT_SCHEMA_NAME};
+
+    fn rec(id: &str, kind: &str) -> AttemptRecord {
+        AttemptRecord {
+            schema: ATTEMPT_SCHEMA_NAME.into(),
+            schema_version: 1,
+            id: id.into(),
+            unit: "u".into(),
+            stage: None,
+            provider: kind.into(),
+            provider_kind: kind.into(),
+            model: "m".into(),
+            prompt_digest: String::new(),
+            unit_source: String::new(),
+            driver: String::new(),
+            toolchain: vec![],
+            outcome: "green".into(),
+            turns: vec![],
+            candidate_digest: String::new(),
+            promoted: false,
+        }
+    }
+
+    #[test]
+    fn sample_numbers() {
+        assert_eq!(sample_of("a-0123456789ab"), ("a-0123456789ab", 1));
+        assert_eq!(sample_of("a-0123456789ab.r2"), ("a-0123456789ab", 2));
+        assert_eq!(sample_of("a-0123456789ab.r13"), ("a-0123456789ab", 13));
+        assert_eq!(sample_of("a-0123456789ab.r02"), ("a-0123456789ab.r02", 1));
+        assert_eq!(sample_of("a-0123456789ab.r1"), ("a-0123456789ab.r1", 1));
+    }
+
+    /// Only the latest hand-off sample of a base must replay (a later one
+    /// exists only because the earlier one stopped reproducing); live
+    /// samples are independent, and other bases never supersede.
+    #[test]
+    fn only_later_external_samples_supersede() {
+        let records = vec![
+            rec("a-aaaaaaaaaaaa", "external"),
+            rec("a-aaaaaaaaaaaa.r2", "external"),
+            rec("a-aaaaaaaaaaaa.r3", "external"),
+            rec("a-bbbbbbbbbbbb", "external"),
+            rec("a-cccccccccccc", "openai-compat"),
+            rec("a-cccccccccccc.r2", "openai-compat"),
+        ];
+        let sup = |i: usize| superseding_sample(&records[i], &records);
+        assert_eq!(sup(0).as_deref(), Some("a-aaaaaaaaaaaa.r3"));
+        assert_eq!(sup(1).as_deref(), Some("a-aaaaaaaaaaaa.r3"));
+        assert_eq!(sup(2), None);
+        assert_eq!(sup(3), None);
+        assert_eq!(sup(4), None, "live samples all replay");
+        assert_eq!(sup(5), None);
+    }
 }

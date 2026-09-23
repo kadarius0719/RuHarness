@@ -93,12 +93,13 @@ fn u001_katajainen_is_green_with_the_m3_trust_boundaries() {
     assert!(driver_bytes > 100_000, "{}", verdict.checks[3].detail);
 
     // Evidence: rustc, cc, the sandbox mode actually applied, and the R4
-    // cflags every C compile carried.
+    // cflags every C compile carried, and the observable streams.
     let toolchain = &verdict.inputs.toolchain;
-    assert_eq!(toolchain.len(), 4, "{toolchain:?}");
+    assert_eq!(toolchain.len(), 5, "{toolchain:?}");
     assert!(toolchain[0].starts_with("rustc "), "{toolchain:?}");
     assert_eq!(toolchain[2], format!("sandbox: {}", sandbox_mode()));
     assert_eq!(toolchain[3], "cflags: -ffp-contract=off");
+    assert_eq!(toolchain[4], "observable: stdout+stderr");
     if cfg!(target_os = "macos") {
         assert_eq!(sandbox_mode(), "sandbox-exec");
     }

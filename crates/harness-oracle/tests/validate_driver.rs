@@ -138,6 +138,11 @@ fn a_good_driver_is_green_with_mutation_stats() {
         .inputs
         .toolchain
         .iter()
+        .any(|t| t == "observable: stdout+stderr"));
+    assert!(v
+        .inputs
+        .toolchain
+        .iter()
         .any(|t| t.starts_with("sandbox: ")));
     // Mutants were written under the unit build dir, never next to the unit.
     let dv = tmp.path().join("migration/build/u-score/dv");

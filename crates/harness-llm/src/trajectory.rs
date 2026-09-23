@@ -29,6 +29,11 @@
 //!   finished attempt is VERIFIED instead (see `replay` below): the
 //!   deterministic trajectory is re-run in a scratch dir, must reproduce the
 //!   record, and the on-disk record and candidate are returned untouched.
+//!   With [`MigrateParams::retry`] the LATEST sample is verified instead,
+//!   and only when it no longer reproduces (the judge or toolchain changed)
+//!   is a new sample `<base-id>.r<N>` recorded, its turns answered from the
+//!   recorded responses until a request differs (see
+//!   [`Job::trace_backed_sample`]).
 //! - **live providers**: every call is a fresh sample, so a finished attempt
 //!   is refused ("already finished … pass --retry") before anything is
 //!   touched or sent. With [`MigrateParams::retry`] the new sample gets its
@@ -273,10 +278,23 @@ impl<'a> Job<'a> {
         } else {
             let attempt_dir = self.attempts_dir().join(&base_id);
             match load_record(&attempt_dir, &base_id)? {
+                Some(finished) if finished.outcome != IN_PROGRESS && params.retry => {
+                    match self.trace_backed_sample(&base_id, provider, &first)? {
+                        TraceBackedSample::Run(id) => id,
+                        TraceBackedSample::Reproduces(outcome) => return Ok(*outcome),
+                    }
+                }
                 Some(finished) if finished.outcome != IN_PROGRESS => {
                     // Evidence is never rewritten: the deterministic
                     // trajectory is re-run in scratch and must reproduce it.
-                    self.verify_recorded(&finished, provider, first)?;
+                    self.verify_recorded(&finished, provider, first)
+                        .map_err(|e| match e {
+                            Error::Invariant(text) => Error::Invariant(format!(
+                                "{text} — pass --retry to record a new sample (the latest \
+                                 sample is re-verified first)"
+                            )),
+                            other => other,
+                        })?;
                     let candidate = self.recorded_candidate(&attempt_dir, &finished)?;
                     return Ok(Outcome {
                         record: finished,
@@ -400,6 +418,57 @@ impl<'a> Job<'a> {
         }
     }
 
+    /// `--retry` under a trace-backed provider when `base` finished. Its
+    /// trajectory is a function of the response files, the tree and the
+    /// judge, so a new sample is only ever recorded when the latest one no
+    /// longer reproduces — the judge changed (post-M4: the oracle began
+    /// comparing stderr) or the toolchain did. Then:
+    ///
+    /// - the latest sample `in-progress` (an interrupted retry): resumed;
+    /// - the latest sample finished and reproducing: returned as is — nothing
+    ///   new is recorded, however often `--retry` is passed;
+    /// - the latest sample finished and NOT reproducing: a new sample
+    ///   `<base>.r<N>`. Requests identical to recorded ones are answered by
+    ///   their recorded responses (the same hand-off answers the same
+    ///   prompt); the first request that differs is handed off anew.
+    ///
+    /// Evidence is never rewritten: the older samples stay as recorded.
+    fn trace_backed_sample(
+        &self,
+        base: &str,
+        provider: &ResolvedProvider,
+        first: &CompletionRequest,
+    ) -> Result<TraceBackedSample, Error> {
+        let attempts_dir = self.attempts_dir();
+        let samples = sample_ids(&attempts_dir, base)?;
+        let Some((_, latest)) = samples.last() else {
+            return Err(Error::Invariant(format!(
+                "attempt {base}: no sample directory found"
+            )));
+        };
+        let latest_dir = attempts_dir.join(latest);
+        let Some(record) = load_record(&latest_dir, latest)? else {
+            return Err(Error::Invariant(format!(
+                "attempt {latest}: sample directory without attempt.json"
+            )));
+        };
+        if record.outcome == IN_PROGRESS {
+            return Ok(TraceBackedSample::Run(latest.clone()));
+        }
+        if self
+            .replay_divergences(&record, provider, first.clone())?
+            .is_empty()
+        {
+            let candidate = self.recorded_candidate(&latest_dir, &record)?;
+            return Ok(TraceBackedSample::Reproduces(Box::new(Outcome {
+                record,
+                attempt_dir: latest_dir,
+                candidate,
+            })));
+        }
+        live_sample_id(&attempts_dir, base, true).map(TraceBackedSample::Run)
+    }
+
     /// Verify `recorded`: re-run its trajectory, completions coming from
     /// `provider`, against a scratch candidate — writing NOTHING under the
     /// attempts ledger — and require that it reproduces the record. The
@@ -416,6 +485,27 @@ impl<'a> Job<'a> {
         provider: &ResolvedProvider,
         first: CompletionRequest,
     ) -> Result<(), Error> {
+        let differences = self.replay_divergences(recorded, provider, first)?;
+        if differences.is_empty() {
+            return Ok(());
+        }
+        Err(Error::Invariant(format!(
+            "attempt {} does not reproduce from its traces — the recorded evidence was left \
+             untouched; {} difference(s): {}",
+            recorded.id,
+            differences.len(),
+            differences.join("; ")
+        )))
+    }
+
+    /// The differences between `recorded` and its trajectory re-run in
+    /// scratch (see [`Job::verify_recorded`]); empty = it reproduces.
+    fn replay_divergences(
+        &self,
+        recorded: &AttemptRecord,
+        provider: &ResolvedProvider,
+        first: CompletionRequest,
+    ) -> Result<Vec<String>, Error> {
         if recorded.outcome == IN_PROGRESS {
             return Err(Error::Invariant(format!(
                 "attempt {} is still in progress: only a finished attempt can be verified — \
@@ -461,18 +551,7 @@ impl<'a> Job<'a> {
         };
         let _ = remove_path(&scratch);
         driven?;
-
-        let differences = divergences(recorded, &replayed);
-        if differences.is_empty() {
-            return Ok(());
-        }
-        Err(Error::Invariant(format!(
-            "attempt {} does not reproduce from its traces — the recorded evidence was left \
-             untouched; {} difference(s): {}",
-            recorded.id,
-            differences.len(),
-            differences.join("; ")
-        )))
+        Ok(divergences(recorded, &replayed))
     }
 
     /// The candidate of a FINISHED, just-verified attempt — `None` when the
@@ -702,6 +781,15 @@ pub(crate) fn sample_number(id: &str, base: &str) -> Option<u32> {
     let digits = id.strip_prefix(base)?.strip_prefix(".r")?;
     let number: u32 = digits.parse().ok()?;
     (number >= 2 && number.to_string() == digits).then_some(number)
+}
+
+/// What `--retry` under a trace-backed provider does (see
+/// [`Job::trace_backed_sample`]).
+enum TraceBackedSample {
+    /// Run (start or resume) this sample id.
+    Run(String),
+    /// The latest sample reproduces: its verified outcome, nothing recorded.
+    Reproduces(Box<Outcome>),
 }
 
 /// The id a LIVE run records under — decided before anything is created,
