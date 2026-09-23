@@ -719,3 +719,43 @@ cannot be SET UP (temp dir, sandbox profile) is a harness `Error` — never text
 model as repair evidence (§16.2: sandbox misconfiguration is a harness bug). Kept as
 before, deliberately: a built binary that cannot be SPAWNED stays a run failure (the
 M3 decision and its test). Regression test fails without the change.
+
+## 2026-09-23 — Research spikes (§15) for the two remaining blind-spot classes
+
+Both run in cheap subagents (read-only; held-out vectors not read for design).
+
+**A. Unmarked-UB vectors (the `decorrelate` class).** The C writes `residuals_0[5]`
+through a pointer decayed from a 5-element struct member; the -O0 baseline "passes" by
+luck, correct Rust fails → a false blind spot. Findings: `-fsanitize=bounds` would NOT
+catch it (decay erases the static bound — clang UBSan docs); ASan does (stack redzone).
+Dlopen'ing an ASan dylib into the scorer's uninstrumented runner aborts ("interceptors
+not installed"; rust-lang/rust#79934), and `DYLD_INSERT_LIBRARIES` would be purged by
+the SIP-protected `/usr/bin/sandbox-exec`. **Experiment (this session, macOS 26.5
+arm64, Apple clang 21):** a Rust host linked with `-C link-arg=<clang>/lib/darwin/
+libclang_rt.asan_osx_dynamic.dylib` (+ rpath) dlopens an `-fsanitize=address,undefined`
+dylib and reports the decayed-pointer write as `stack-buffer-overflow` (exit 134), also
+under `sandbox-exec`; the uninstrumented dylib silently returns. **Direction:** a
+sanitized scoring pass — the corpus's own runner built a second time with the ASan
+runtime as a link dependency (no vendored-code change) + the C baseline built with the
+oracle's `SANITIZER_FLAGS`; a non-`has_ub` vector that trips a sanitizer on the C side
+is `unmarked-ub`: excluded like `has_ub`, counted and disclosed separately. Linux: same
+build, no loader issue. Rejected: dlopen + `DYLD_INSERT_LIBRARIES` (SIP), trap-only
+UBSan (misses this class), per-vector generated C mains (re-implements the scorer's
+marshalling). Risk: signed-overflow/alignment reports in intentionally-UB synthetic
+cases — report sanitizer kind; revisit if a runner cannot be relinked.
+
+**B. FFI-boundary blind spots (the `read_scalefactors` class).** The verified Rust's
+`ffi.rs` eagerly builds `slice::from_raw_parts(buf, len)` with `len` derived from a
+bit-limit field, not an allocation size; the C walks the buffer lazily. The LLM driver
+never drove consumption past the physical buffer. Options: coverage-guided fuzzing —
+rejected today (Apple clang 21 ships no `libclang_rt.fuzzer_osx.a`; cargo-fuzz needs
+nightly: rust-fuzz book); LLM-prompted boundary cases — a complement, no guarantee;
+**harness-generated boundary battery** (tree-sitter-c finds pointer+length pairs in
+signatures/struct fields; values 0, 1, N−1, N, N+1, null+len) mutating the validated
+driver's inputs, run differentially — chosen direction. In-contract filter = the C side
+is sanitizer-clean on that input (as RustAssure, arXiv:2510.07604, filters on C defined
+behavior); any Rust crash on an in-contract input fails. Risks: indirect length
+encodings (sentinels, cross-struct) missed; runtime bound. Revisit when a libFuzzer
+runtime is an approved dependency and stable Rust gains instrumentation.
+
+Both become written designs + adversarial design review before any code (M4 process).
