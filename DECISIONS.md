@@ -662,3 +662,51 @@ Report (150 B01 tests incl. executables, Linux containers, the official harness)
 **Budget:** answering ≈ 22 K Sonnet-class + ≈ 9 K Haiku output tokens per verified unit
 (approximate, from agent transcripts; per-request usage unmeasured — see §16 carry-
 forward `harness usage`).
+
+## 2026-09-23 — Post-M4: the stderr oracle hole, fixed and demonstrated end to end
+
+**Defect.** `differential-driver` (and `whole-program:*`) compared stdout only.
+`014_pow_subfunction` reports domain/range errors on stderr; its Rust dropped them and
+verified. Two causes, both fixed: the oracle (`ef94105`) and the translate prompt, which
+told every printing unit "Output to stderr is not compared" (`c075eee`).
+
+**Oracle semantics (normative in docs/SCHEMAS.md "Observable output").** A clean run's
+observable behavior is stdout AND stderr, everywhere a run is judged: the differential
+checks, driver validation (determinism, -O0 vs -O2, mutation kills), and repair evidence
+(stderr line diffs). Detail strings are unchanged when both stderrs are empty, so
+recorded evidence of stdout-only units replays byte-identically. Records gain the
+toolchain entry `observable: stdout+stderr` (provenance, as `cflags:` in M4).
+Adversarial review (1 reviewer, 4 lenses) found one real measurement defect, fixed: each
+confined run has its own fresh `TMPDIR`, so any stderr naming it would be a false diff
+or false non-determinism — the run's temp-dir path now reads `$TMPDIR` in captured
+output. Minor: validation details now label `on stderr` / `on stdout and stderr`.
+
+**Prompt.** Only a unit whose C names `stderr` (whole-token scan of its closure) gets the
+corrected sentence (write it with `eprint!`: unbuffered like C's stderr; the
+capabilities gate allows `std::io::stdio`). Every other printing unit keeps the M4
+sentence verbatim — a deliberate, recorded inaccuracy that keeps their recorded traces
+replayable; a candidate that writes stderr anyway fails the oracle (a repair turn, never
+a wrong verdict). Revisit at the next deliberate prompt revision (it will invalidate
+every recorded request key — see "interface fencing" below).
+
+**Executor gap found and fixed (`85e77bd`).** `--retry` was silently ignored for the
+`external` provider on the premise that a trace-backed trajectory can only reproduce
+itself — false as soon as the judge changes. 014's finished attempt stopped
+reproducing and could never be re-sampled. Now `--retry` re-verifies the latest sample
+and records `<base>.r<N>` only when it does not reproduce (identical requests reuse
+their recorded answers); `bench check --replay` replays only the latest `external`
+sample of a base. Regression tests fail without each fix.
+
+**Demonstration.** Under the new oracle `bench check` (vs the M4 `scores.json`) exited
+10: `PROBLEM: 014_pow_subfunction_lib: verified unit's oracle is RED`, nothing else
+(stale-verified 0: every validated driver re-validated with stderr compared). `verify` demoted the
+unit; re-migrated through the audited hand-off with Haiku 4.5 (2 batches, 0 breaches,
+0 deviations): turn 1 red on stderr (`NaN` vs C's `nan`, shown as a stderr line diff),
+turn 2 green; held-out score 7/7 strict pass (was 5/7, a blind spot). The M4 attempt
+`a-4adfe6d56ab0` stays as evidence of the stdout-only verification.
+
+**Re-baseline** (`bench score --write`, all cases re-verified under the new oracle):
+released-hidden strict pass **15/18** (83.3%; was 14/18), verified 17, blind spots **2**
+(decorrelate — unmarked C UB; read_scalefactors — FFI boundary), vectors 83/89; hidden
+synthetic 8/9 (vectors 19/20; was 7/9, 17/20), hidden organic unchanged 7/9. Public unchanged:
+70/77, 0 blind spots, 908/950. No other case changed class.

@@ -17,15 +17,15 @@
       "cases": 20,
       "scorable": 18,
       "verified": 17,
-      "strict_pass": 14,
-      "blind_spots": 3,
+      "strict_pass": 15,
+      "blind_spots": 2,
       "vector_pass_oracle_red": 0,
       "stale_verified": 0,
       "infra_errors": 0,
       "unscorable": 1,
       "c_baseline_invalid": 1,
       "vectors": 89,
-      "vectors_passed": 81,
+      "vectors_passed": 83,
       "vectors_skipped": 73
     },
     {
@@ -1271,7 +1271,7 @@
     {
       "case": "Hidden-Tests/B01_synthetic/014_pow_subfunction_lib",
       "split": "hidden",
-      "class": "blind-spot",
+      "class": "strict-pass",
       "pipeline": {
         "unit": "u-pow",
         "status": "verified",
@@ -1289,7 +1289,7 @@
         "unit_source": "blake3:b2be8029115482b20756a87753c49a6fb3ef7583fc17aee678e6fb51b053a400",
         "driver": "blake3:fa901952b3a5b05e4c15dab3744696d49e976ed158a5d453a4d3bcac2d4161f8",
         "validation": "blake3:85b52d1ae8b1a6e9426eb99008ad0b1be9d3744c0f6575bf0cc3869ef3ed2b87",
-        "rust_crate": "blake3:9a320a3d627fa6304f94eb51d483647e6daeea8ac75e81ab0e8e67f2def3e14b",
+        "rust_crate": "blake3:7b0058880f2fe6f02beb87dacf357fab6261548c811519ffa69377ff40d646fd",
         "candidate": ""
       },
       "c_baseline": {
@@ -1299,8 +1299,8 @@
         "not_run": 0
       },
       "rust": {
-        "pass": 5,
-        "fail": 2,
+        "pass": 7,
+        "fail": 0,
         "skip": 0,
         "not_run": 0
       },
@@ -1313,12 +1313,12 @@
         {
           "name": "test11.json",
           "c": "pass",
-          "rust": "fail:VectorComparisonFailed"
+          "rust": "pass"
         },
         {
           "name": "test12.json",
           "c": "pass",
-          "rust": "fail:VectorComparisonFailed"
+          "rust": "pass"
         },
         {
           "name": "test2.json",

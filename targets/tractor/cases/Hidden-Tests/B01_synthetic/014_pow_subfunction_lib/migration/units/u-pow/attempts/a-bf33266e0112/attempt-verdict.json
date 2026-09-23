@@ -6,7 +6,7 @@
   "inputs": {
     "unit_source": "blake3:b2be8029115482b20756a87753c49a6fb3ef7583fc17aee678e6fb51b053a400",
     "driver": "blake3:fa901952b3a5b05e4c15dab3744696d49e976ed158a5d453a4d3bcac2d4161f8",
-    "rust_crate": "blake3:7b0058880f2fe6f02beb87dacf357fab6261548c811519ffa69377ff40d646fd",
+    "rust_crate": "blake3:6f9fbfceb8c6e7d24dad318e4089dfbb4f98c16e026bbfc8cd51b05fc5ccc931",
     "replaces": [
       "test_case/src/pow.c"
     ],
