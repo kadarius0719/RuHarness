@@ -48,6 +48,22 @@ commit in `DECISIONS.md`). Its plan currently holds 11 units in dependency order
 `u001-katajainen` (length-limited Huffman codes) is migrated to safe Rust behind the
 identical C ABI and oracle-verified, with zero human-written Rust.
 
+**M4 benchmark result** (DARPA TRACTOR public corpus v2, Battery-01 library cases,
+macOS arm64, recorded in `targets/tractor/scores.json`). Headline = per-case strict
+pass (every non-UB held-out vector passes) over scorable cases:
+
+| Split | Strict pass | Oracle-verified | Blind spots | Non-UB vectors |
+|---|---|---|---|---|
+| public (80 cases) | **70/77** (90.9%) | 70 | 0 | 908/950 |
+| released-hidden (20 cases) | **14/18** (77.8%) | 17 | 3 | 81/89 |
+
+A *blind spot* is a unit the oracle verified that still fails a held-out vector:
+exactly what the benchmark exists to find (all three are diagnosed in
+`DECISIONS.md`; one exposes a real oracle hole — stderr not compared — fixed next). These are
+public-vector scores (the vectors predate the answering models' training cutoff),
+**not comparable** to the First TRACTOR Evaluation Report (different case set,
+platform and scoring harness). See `targets/tractor/README.md` for what a score means.
+
 ## How it works, in plain English
 
 **The problem.** You have C code you want in Rust. An AI model can write the Rust,

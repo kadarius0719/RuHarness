@@ -617,3 +617,48 @@ needs `targets/tractor/.scorer-vendor` — see targets/tractor/README.md).
    Linux sandbox; post-M4 user direction (TUI cockpit, feature-workflow view, C-vs-Rust
    perf baselines — see memory/roadmap and the TUI design brief summary in the chat
    record: thin CLI wrapper, ledger-derived, `--json` events first).
+
+## 2026-09-23 — M4 complete: final scores (recorded) and the regression suite demonstrated
+
+`targets/tractor/scores.json` recorded by `bench score --write --jobs 6` (re-verifies
+and re-validates every case first); `bench check` against it → exit 0 ("no
+regression"). Environment as recorded in the file: rustc 1.94.1, Apple clang 21.0.0,
+macOS 26.5.2 aarch64, `sandbox-exec`, C baseline `cc -shared -fPIC -O0
+-ffp-contract=off`. The final numbers equal the preliminary ones exactly.
+
+**Headline: per-case strict pass over scorable cases** (scorable = cases minus
+`unscorable` (every vector UB-marked, or none) minus `c-baseline-invalid` (the C
+itself fails its vectors on this platform)). Vectors = non-UB vectors of scorable
+cases (C-baseline pass+fail); passed = the Rust side's passes.
+
+| Split / origin | Cases | Scorable | Strict pass | Verified | Blind spots | Vectors passed |
+|---|---|---|---|---|---|---|
+| public organic | 38 | 37 | 36 (97.3%) | 36 | 0 | 748/772 |
+| public synthetic | 42 | 40 | 34 (85.0%) | 34 | 0 | 160/178 |
+| **public** | **80** | **77** | **70 (90.9%)** | **70** | **0** | **908/950 (95.6%)** |
+| hidden organic | 10 | 9 | 7 (77.8%) | 9 | 2 | 64/69 |
+| hidden synthetic | 10 | 9 | 7 (77.8%) | 8 | 1 | 17/20 |
+| **released-hidden** | **20** | **18** | **14 (77.8%)** | **17** | **3** | **81/89 (91.0%)** |
+
+Every non-strict-pass case is one of: **blind spot** (verified, fails vectors) —
+hidden `decorrelate` (unmarked C UB in the vector), `read_scalefactors` (FFI shim
+segfaults on 3/6), synthetic `014_pow_subfunction` (stderr not compared — the oracle
+hole); **unverified** (no verified unit; scores 0 vectors) — public `float2half`, `011`,
+`012`, `015`, `017`, `018`, `043` (digraphs, no unit), hidden `027`; **unscorable** —
+public `update_md5`, `008_long_run`, hidden `md5_transform`; **C-baseline-invalid** —
+public `007_errno_pow`, hidden `016_switch_arith`. 0 stale-verified, 0
+vector-pass/oracle-red, 0 infra-error.
+
+**What the evidence supports, precisely:** on this platform, of the 87 units the oracle
+verified in scorable cases, 84 pass every held-out non-UB vector and 3 do not (all
+three diagnosed; one is an oracle defect, one a UB-in-vector measurement artifact, one
+a genuine FFI-boundary blind spot). The hidden split is not a contamination-free
+held-out measure (released Feb 2026, before the answering models' cutoff); the
+public-vector score carries the same disclosed risk. Answering models were Claude
+subagents (drivers Sonnet 5, translations Haiku 4.5, four units escalated to Sonnet 5)
+behind the audited blind hand-off. NOT comparable to the First TRACTOR Evaluation
+Report (150 B01 tests incl. executables, Linux containers, the official harness).
+
+**Budget:** answering ≈ 22 K Sonnet-class + ≈ 9 K Haiku output tokens per verified unit
+(approximate, from agent transcripts; per-request usage unmeasured — see §16 carry-
+forward `harness usage`).
