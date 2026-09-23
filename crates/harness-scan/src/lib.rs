@@ -8,9 +8,25 @@
 //! Known, deliberate gap (recorded in DECISIONS.md): calls made through
 //! function pointers (e.g. qsort comparators) are invisible here — that is
 //! detector material for M2, not a scan feature.
+//!
+//! M4 additions:
+//! - quoted includes resolve against the including file's directory, then
+//!   each `[target] include_dirs` entry in order (first hit in the scanned
+//!   file set wins); a resolution outside `source_dir` is never recorded,
+//!   and the file walk never follows a symlink out of `source_dir` — so the
+//!   include closure (and every prompt built from it) is confined to
+//!   `source_dir` (docs/M4-DESIGN.md R2);
+//! - [`mutants`]: the mutation sites of one `.c` file (R5);
+//! - [`lint_driver`]: the driver source lint of the `driver-shape` gate (R1).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+
+mod lint;
+mod mutate;
+
+pub use lint::{lint_driver, DRIVER_SYSTEM_INCLUDES};
+pub use mutate::mutants;
 
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
@@ -63,8 +79,18 @@ impl LanguageFrontend for CFrontend {
 
     fn scan(&self, target: &TargetContext) -> Result<Facts, Error> {
         let src_dir = target.root.join(&target.config.target.source_dir);
+        let src_canon = src_dir.canonicalize().map_err(|e| Error::io(&src_dir, e))?;
         let mut abs_files: Vec<PathBuf> = Vec::new();
-        collect_source_files(&src_dir, &mut abs_files)?;
+        let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
+        collect_source_files(&src_dir, &src_canon, &mut visited, &mut abs_files)?;
+        let source_rel = lexical_segments(&target.config.target.source_dir).unwrap_or_default();
+        let include_dirs: Vec<Vec<String>> = target
+            .config
+            .target
+            .include_dirs
+            .iter()
+            .filter_map(|d| lexical_segments(d))
+            .collect();
 
         // (repo-relative path, absolute path), sorted by relative path.
         let mut files: Vec<(String, PathBuf)> = Vec::with_capacity(abs_files.len());
@@ -93,8 +119,9 @@ impl LanguageFrontend for CFrontend {
             collect_includes(root, src, &mut raw_includes);
             let includes: Vec<String> = raw_includes
                 .iter()
-                .filter_map(|raw| resolve_include(rel, raw))
-                .filter(|resolved| scanned.contains(resolved))
+                .filter_map(|raw| {
+                    resolve_quoted_include(rel, raw, &include_dirs, &source_rel, &scanned)
+                })
                 .collect::<BTreeSet<String>>()
                 .into_iter()
                 .collect();
@@ -165,14 +192,36 @@ impl LanguageFrontend for CFrontend {
     }
 }
 
-/// Recursively collect `*.c` and `*.h` files under `dir`.
-fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Error> {
+/// Recursively collect `*.c` and `*.h` files under `dir`. Every entry is
+/// canonicalized first: one that resolves outside `src_canon` (a symlink out
+/// of `source_dir`) is skipped, and a directory already walked (a symlink
+/// cycle) is not walked again.
+fn collect_source_files(
+    dir: &Path,
+    src_canon: &Path,
+    visited: &mut BTreeSet<PathBuf>,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), Error> {
+    let canon_dir = dir.canonicalize().map_err(|e| Error::io(dir, e))?;
+    if !visited.insert(canon_dir) {
+        return Ok(());
+    }
     let entries = std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))?;
+    let mut paths: Vec<PathBuf> = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| Error::io(dir, e))?;
-        let path = entry.path();
+        paths.push(entry.map_err(|e| Error::io(dir, e))?.path());
+    }
+    paths.sort();
+    for path in paths {
+        // A dangling symlink, or one leading out of source_dir, is not source.
+        let Ok(canon) = path.canonicalize() else {
+            continue;
+        };
+        if !canon.starts_with(src_canon) {
+            continue;
+        }
         if path.is_dir() {
-            collect_source_files(&path, out)?;
+            collect_source_files(&path, src_canon, visited, out)?;
         } else if matches!(
             path.extension().and_then(|e| e.to_str()),
             Some("c") | Some("h")
@@ -199,22 +248,65 @@ fn repo_relative(root: &Path, path: &Path) -> Result<String, Error> {
     Ok(parts.join("/"))
 }
 
-/// Lexically resolve a quoted include `raw` against the directory of the
-/// repo-relative `including` file. Returns `None` when the path escapes the
-/// target root.
-fn resolve_include(including: &str, raw: &str) -> Option<String> {
-    let mut parts: Vec<&str> = including.split('/').collect();
-    parts.pop(); // drop the file name, keeping its directory
+/// The clean segments of a repo-relative path (`.`/empty segments dropped,
+/// `..` applied). `None` when the path is absolute or escapes the root.
+fn lexical_segments(path: &str) -> Option<Vec<String>> {
+    if path.starts_with('/') {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            s => parts.push(s.to_string()),
+        }
+    }
+    Some(parts)
+}
+
+/// Lexically resolve the quoted include `raw` against the segments of
+/// `base_dir`. `None` when the result escapes the target root.
+fn resolve_against(base_dir: &[String], raw: &str) -> Option<Vec<String>> {
+    if raw.starts_with('/') {
+        return None;
+    }
+    let mut parts: Vec<String> = base_dir.to_vec();
     for seg in raw.split('/') {
         match seg {
             "" | "." => {}
             ".." => {
                 parts.pop()?;
             }
-            s => parts.push(s),
+            s => parts.push(s.to_string()),
         }
     }
-    Some(parts.join("/"))
+    Some(parts)
+}
+
+/// Resolve the quoted include `raw` of the repo-relative `including` file the
+/// way a compiler with `-I<include_dirs…>` would: the including file's own
+/// directory first, then each include dir in order. The first candidate
+/// that lies inside `source_dir` AND is in the scanned file set wins; a
+/// candidate outside `source_dir` is never recorded (R2: prompt-bound reads
+/// are confined to `source_dir`).
+fn resolve_quoted_include(
+    including: &str,
+    raw: &str,
+    include_dirs: &[Vec<String>],
+    source_dir: &[String],
+    scanned: &BTreeSet<String>,
+) -> Option<String> {
+    let mut own_dir: Vec<String> = including.split('/').map(str::to_string).collect();
+    own_dir.pop(); // drop the file name, keeping its directory
+    std::iter::once(&own_dir)
+        .chain(include_dirs.iter())
+        .filter_map(|base| resolve_against(base, raw))
+        .filter(|parts| parts.len() > source_dir.len() && parts.starts_with(source_dir))
+        .map(|parts| parts.join("/"))
+        .find(|candidate| scanned.contains(candidate))
 }
 
 /// Recursively collect the raw paths of quoted `#include "x"` directives.
@@ -396,5 +488,114 @@ mod tests {
             again.to_canonical_bytes().expect("bytes"),
             "canonical bytes differ between two scans"
         );
+    }
+
+    /// A throwaway target root under the system temp dir, removed on drop.
+    struct TempTarget(PathBuf);
+
+    impl TempTarget {
+        fn new(tag: &str, include_dirs: &str) -> TempTarget {
+            static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "ruharness-scan-{tag}-{}-{}",
+                std::process::id(),
+                COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("src")).expect("src dir");
+            std::fs::write(
+                dir.join("harness.toml"),
+                format!(
+                    "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"src\"\n\
+                     include_dirs = {include_dirs}\n"
+                ),
+            )
+            .expect("harness.toml");
+            TempTarget(dir.canonicalize().expect("canonical"))
+        }
+
+        fn write(&self, rel: &str, text: &str) {
+            let path = self.0.join(rel);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+            std::fs::write(path, text).expect("write");
+        }
+
+        fn includes_of(&self, rel: &str) -> Vec<String> {
+            let target = TargetContext::load(&self.0).expect("target loads");
+            let facts = CFrontend.scan(&target).expect("scan");
+            facts
+                .files
+                .iter()
+                .find(|f| f.path == rel)
+                .map(|f| f.includes.clone())
+                .unwrap_or_else(|| panic!("{rel} not scanned: {:?}", facts.files))
+        }
+    }
+
+    impl Drop for TempTarget {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn quoted_includes_search_own_dir_then_include_dirs_in_order() {
+        let t = TempTarget::new("incdirs", "[\"src/include\", \"src/more\"]");
+        t.write(
+            "src/lib/a.c",
+            "#include \"lib.h\"\n#include \"dup.h\"\n#include \"only_more.h\"\n\
+             #include \"missing.h\"\nint a(void) { return 0; }\n",
+        );
+        t.write("src/lib/dup.h", "/* own dir wins */\n");
+        t.write("src/include/lib.h", "int a(void);\n");
+        t.write("src/include/dup.h", "/* shadowed */\n");
+        t.write(
+            "src/more/lib.h",
+            "/* shadowed by the first include dir */\n",
+        );
+        t.write("src/more/only_more.h", "\n");
+        assert_eq!(
+            t.includes_of("src/lib/a.c"),
+            vec![
+                "src/include/lib.h".to_string(),
+                "src/lib/dup.h".to_string(),
+                "src/more/only_more.h".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_resolution_outside_source_dir_is_never_recorded() {
+        let t = TempTarget::new("incescape", "[\"src/include\"]");
+        t.write(
+            "src/a.c",
+            "#include \"../../outside/x.h\"\n#include \"../outside/x.h\"\n\
+             #include \"../src/ok.h\"\nint a(void) { return 0; }\n",
+        );
+        t.write("src/ok.h", "\n");
+        t.write("src/include/.keep.h", "\n");
+        // Exists, but outside source_dir: from src/include, `../../outside/x.h`
+        // lands on it lexically, and from src/, `../outside/x.h` does too.
+        t.write("outside/x.h", "secret\n");
+        assert_eq!(t.includes_of("src/a.c"), vec!["src/ok.h".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_walk_never_follows_a_symlink_out_of_source_dir() {
+        let t = TempTarget::new("symlink", "[]");
+        t.write(
+            "src/a.c",
+            "#include \"escape/x.h\"\nint a(void) { return 0; }\n",
+        );
+        t.write("outside/x.h", "secret\n");
+        std::os::unix::fs::symlink(t.0.join("outside"), t.0.join("src/escape")).expect("symlink");
+        // A cycle back into source_dir is walked once, not forever.
+        std::os::unix::fs::symlink(t.0.join("src"), t.0.join("src/loop")).expect("symlink");
+        let target = TargetContext::load(&t.0).expect("target loads");
+        let facts = CFrontend.scan(&target).expect("scan terminates");
+        let paths: Vec<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["src/a.c"]);
+        assert!(facts.files[0].includes.is_empty());
     }
 }

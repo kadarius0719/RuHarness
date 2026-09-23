@@ -9,6 +9,12 @@ allowlist = ["cc", "cargo", "rustc", "nm"]
 # keys below are owned by the c-abi-differential oracle kind
 extra_link_args = ["-lm"]
 
+# Opt-in whole-program check (M4 R8): the harness runs the whole program as
+# `<binary> -c <sample>` over its deterministic samples (flags only here; the
+# harness appends the sample path).
+[oracle.whole_program]
+args = ["-c"]
+
 [llm]
 provider = "external"
 model = "claude-sonnet-5"

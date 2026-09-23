@@ -33,25 +33,52 @@
 //!   stderr is machine-path-scrubbed (module `scrub`) before it leaves the
 //!   crate, so committed verdicts are byte-identical across machines.
 //!
+//! M4 additions (docs/M4-DESIGN.md §R):
+//! - every C compile passes `-ffp-contract=off` (R4: Apple clang on arm64
+//!   fuses multiply-add even at `-O0`; the reference Linux build and Rust do
+//!   not) and gets `-I` for `[target] include_dirs` after the source dir;
+//!   the flag is recorded as `cflags: -ffp-contract=off` in `toolchain`;
+//! - every run of a built binary is confined (module `confine`, R1): a fresh
+//!   per-run `TMPDIR`, no reads under the home dir or the target root beyond
+//!   the binary and its listed inputs;
+//! - two new gating checks right after `symbol-set`, each ending the run on
+//!   failure: `capabilities` (R2, module `capabilities`) and `driver-shape`
+//!   (R1, module `shape`);
+//! - the whole-program check is opt-in via `[oracle.whole_program] args`
+//!   (R8);
+//! - [`validate_driver`]: C-vs-C self-validation of a generated driver with
+//!   mutation adequacy (module `validate`, R5).
+//!
 //! What the oracle does NOT prove (docs/SCHEMAS.md "Trust boundaries"): the
 //! `sanitizers` check instruments the C baseline and driver only. Stable Rust
 //! has no AddressSanitizer, so the candidate's `ffi.rs` shim is NOT
 //! sanitizer-verified — its safety rests on the compiler-enforced shim
 //! structure (`#[deny(unsafe_code)]` in `logic`, `unsafe` confined to `ffi`)
 //! and on the differential and symbol-set checks, not on ASan/UBSan coverage.
+//!
+//! Dependency note: this crate depends on `harness-scan` (a workspace path
+//! dependency, no crates.io addition) for exactly two pure functions —
+//! `mutants` and `lint_driver` — so the tree-sitter C grammar has a single
+//! owner and the oracle never re-implements C parsing.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod capabilities;
+mod confine;
 mod exec;
 mod sandbox;
 mod scrub;
+mod shape;
 mod symbols;
 #[cfg(test)]
 mod testutil;
+mod validate;
 
 pub use sandbox::sandbox_mode;
+pub use validate::validate_driver;
 
+use confine::Confinement;
 use exec::{RunFailure, Runner};
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
@@ -68,6 +95,27 @@ use std::time::Duration;
 /// Tools the c-abi-differential kind runs by name; all four must be on the
 /// core-owned `[oracle] allowlist`.
 const REQUIRED_TOOLS: [&str; 4] = ["cc", "cargo", "rustc", "nm"];
+
+/// Passed to EVERY C compile the oracle runs (R4). Without it Apple clang on
+/// arm64 contracts `a*b+c` into an FMA even at `-O0`, while the reference
+/// Linux x86-64 build and Rust never do, so float-heavy units would differ
+/// for reasons that are not the translation's fault.
+pub(crate) const FP_CONTRACT_OFF: &str = "-ffp-contract=off";
+
+/// The `inputs.toolchain` entry recording [`FP_CONTRACT_OFF`].
+pub(crate) const CFLAGS_TOOLCHAIN_ENTRY: &str = "cflags: -ffp-contract=off";
+
+/// The sanitizer build flags (verify's `sanitizers` check and
+/// `validate_driver`'s use the same).
+pub(crate) const SANITIZER_FLAGS: [&str; 4] = [
+    "-fsanitize=address,undefined",
+    "-fno-sanitize-recover=all",
+    "-g",
+    "-O1",
+];
+
+/// Most flags `[oracle.whole_program] args` may hold (R8).
+const MAX_WHOLE_PROGRAM_ARGS: usize = 4;
 
 /// The `[unit.oracle] kind` string handled by [`CAbiDifferential`].
 pub const C_ABI_DIFFERENTIAL_KIND: &str = "c-abi-differential";
@@ -133,15 +181,103 @@ pub fn compute_inputs(
     })
 }
 
+/// The target-level resolution `verify` and `validate_driver` share:
+/// validated config and canonical, containment-checked directories. Pure
+/// inspection — building it never spawns a process or creates anything.
+#[derive(Debug)]
+pub(crate) struct Base {
+    /// Canonical target root (cwd of every child).
+    pub root: PathBuf,
+    /// Canonical source dir (`[target] source_dir`), inside `root`.
+    pub source_dir: PathBuf,
+    /// Canonical `[target] include_dirs`, in order, each inside `source_dir`.
+    pub include_dirs: Vec<PathBuf>,
+    /// `[oracle] timeout_secs`.
+    pub timeout: Duration,
+    /// The core-owned tool allowlist.
+    pub allowlist: Vec<String>,
+}
+
+impl Base {
+    /// Validate the tool allowlist (`tools` must all be on it), the timeout,
+    /// the unit id, and resolve the source/include dirs.
+    pub(crate) fn new(target: &TargetContext, unit: &Unit, tools: &[&str]) -> Result<Base, Error> {
+        let timeout = timeout_secs(target)?;
+        let allowlist = target.config.oracle_allowlist();
+        for tool in tools {
+            if !allowlist.iter().any(|a| a == tool) {
+                return Err(Error::Invariant(format!(
+                    "oracle kind `{C_ABI_DIFFERENTIAL_KIND}` needs `{tool}` on the [oracle] \
+                     allowlist in harness.toml (required: {})",
+                    tools.join(", ")
+                )));
+            }
+        }
+        // The id becomes a path segment under both units/ and build/.
+        if !harness_core::plan::is_clean_segment(&unit.id) || unit.id == symbols::BASELINE_DIR {
+            return Err(Error::InvalidPlan(format!(
+                "unit id {:?} cannot be used as a directory name by the oracle",
+                unit.id
+            )));
+        }
+        let root = target
+            .root
+            .canonicalize()
+            .map_err(|e| Error::io(&target.root, e))?;
+        let source_dir = inside(
+            &unit.id,
+            "[target] source_dir",
+            &root.join(&target.config.target.source_dir),
+            &root,
+        )?;
+        // Include dirs must stay inside source_dir after symlink resolution
+        // too (R2: nothing outside source_dir reaches a compile or a prompt).
+        let mut include_dirs = Vec::new();
+        for dir in &target.config.target.include_dirs {
+            include_dirs.push(inside(
+                &unit.id,
+                "[target] include_dirs entry",
+                &root.join(dir),
+                &source_dir,
+            )?);
+        }
+        Ok(Base {
+            root,
+            source_dir,
+            include_dirs,
+            timeout,
+            allowlist,
+        })
+    }
+
+    /// `-I` dirs in search order: the source dir, then the include dirs.
+    pub(crate) fn includes(&self) -> Vec<PathBuf> {
+        std::iter::once(self.source_dir.clone())
+            .chain(self.include_dirs.iter().cloned())
+            .collect()
+    }
+
+    /// Create (if needed) and resolve `(ledger build dir, unit build dir)`.
+    /// Build dirs are gitignored scratch, but their location is still
+    /// target-controlled (a committed symlink): resolve, then check.
+    pub(crate) fn build_dirs(&self, unit_id: &str) -> Result<(PathBuf, PathBuf), Error> {
+        let build_root_raw = Ledger::new(self.root.clone()).build_dir();
+        std::fs::create_dir_all(&build_root_raw).map_err(|e| Error::io(&build_root_raw, e))?;
+        let build_root = inside(unit_id, "ledger build dir", &build_root_raw, &self.root)?;
+        let build_raw = build_root.join(unit_id);
+        std::fs::create_dir_all(&build_raw).map_err(|e| Error::io(&build_raw, e))?;
+        let build = inside(unit_id, "unit build dir", &build_raw, &build_root)?;
+        Ok((build_root, build))
+    }
+}
+
 /// Everything `verify` derives from target-owned input, validated BEFORE any
 /// subprocess runs: canonical, containment-checked paths plus the validated
 /// kind-owned config.
 #[derive(Debug)]
 struct Prepared {
-    /// Canonical target root (cwd of every child).
-    root: PathBuf,
-    /// Canonical source dir (`[target] source_dir`), inside `root`.
-    source_dir: PathBuf,
+    /// Target-level resolution (root, source/include dirs, timeout, tools).
+    base: Base,
     /// Canonical ledger build dir, inside `root`.
     build_root: PathBuf,
     /// Canonical unit build dir (`<build_root>/<unit.id>`).
@@ -157,10 +293,8 @@ struct Prepared {
     replaces: Vec<(String, PathBuf)>,
     /// Validated `[oracle] extra_link_args`.
     link_args: Vec<String>,
-    /// `[oracle] timeout_secs`.
-    timeout: Duration,
-    /// The core-owned tool allowlist.
-    allowlist: Vec<String>,
+    /// Validated `[oracle.whole_program] args`; `None` = not configured.
+    whole_program: Option<Vec<String>>,
 }
 
 impl Prepared {
@@ -170,39 +304,15 @@ impl Prepared {
         // Config first: a hostile harness.toml is refused before anything
         // else is even looked at.
         let link_args = extra_link_args(target)?;
-        let timeout = timeout_secs(target)?;
-        let allowlist = target.config.oracle_allowlist();
-        for tool in REQUIRED_TOOLS {
-            if !allowlist.iter().any(|a| a == tool) {
-                return Err(Error::Invariant(format!(
-                    "oracle kind `{C_ABI_DIFFERENTIAL_KIND}` needs `{tool}` on the [oracle] \
-                     allowlist in harness.toml (required: {})",
-                    REQUIRED_TOOLS.join(", ")
-                )));
-            }
-        }
-
-        // The id becomes a path segment under both units/ and build/.
-        if !harness_core::plan::is_clean_segment(&unit.id) || unit.id == symbols::BASELINE_DIR {
-            return Err(Error::InvalidPlan(format!(
-                "unit id {:?} cannot be used as a directory name by the oracle",
-                unit.id
-            )));
-        }
+        let whole_program = whole_program_args(target)?;
+        let base = Base::new(target, unit, &REQUIRED_TOOLS)?;
         let driver_rel = required_param(unit, "driver")?;
         let rust_crate = required_param(unit, "rust_crate")?;
 
-        let root = target
-            .root
-            .canonicalize()
-            .map_err(|e| Error::io(&target.root, e))?;
+        let root = base.root.clone();
         let ledger = Ledger::new(root.clone());
         let inside_root = |what: &str, path: &Path| inside(&unit.id, what, path, &root);
 
-        let source_dir = inside_root(
-            "[target] source_dir",
-            &root.join(&target.config.target.source_dir),
-        )?;
         let driver = inside_root("driver", &root.join(driver_rel))?;
         let mut replaces = Vec::new();
         for rel in unit.oracle_param_list("replaces") {
@@ -226,18 +336,9 @@ impl Prepared {
             None
         };
 
-        // Build dirs are gitignored scratch, but their location is still
-        // target-controlled (a committed symlink): resolve, then check.
-        let build_root_raw = ledger.build_dir();
-        std::fs::create_dir_all(&build_root_raw).map_err(|e| Error::io(&build_root_raw, e))?;
-        let build_root = inside_root("ledger build dir", &build_root_raw)?;
-        let build_raw = build_root.join(&unit.id);
-        std::fs::create_dir_all(&build_raw).map_err(|e| Error::io(&build_raw, e))?;
-        let build = inside(&unit.id, "unit build dir", &build_raw, &build_root)?;
-
+        let (build_root, build) = base.build_dirs(&unit.id)?;
         Ok(Prepared {
-            root,
-            source_dir,
+            base,
             build_root,
             build,
             crate_dir,
@@ -245,8 +346,7 @@ impl Prepared {
             driver,
             replaces,
             link_args,
-            timeout,
-            allowlist,
+            whole_program,
         })
     }
 }
@@ -273,10 +373,12 @@ impl OracleStrategy for CAbiDifferential {
     }
 
     /// Run the checks for `unit` and return a content-bound verdict:
-    /// `symbol-set`, `differential-driver`, `whole-program:<sample>` ×3 and
-    /// `sanitizers` — or a lone red `rust-build` / `symbol-set` when the
-    /// candidate does not get that far (nothing of a candidate that fails the
-    /// symbol-set check is ever linked or run).
+    /// `symbol-set`, `capabilities`, `driver-shape`, `differential-driver`,
+    /// `whole-program:<sample>` ×3 (or one `whole-program` "not configured"
+    /// check) and `sanitizers` — or a verdict that stops at a lone red
+    /// `rust-build`, or at the first red of the three gating checks
+    /// (`symbol-set`, `capabilities`, `driver-shape`): nothing of a candidate
+    /// or driver that fails one of them is ever linked or run.
     ///
     /// The caller (the CLI) persists the verdict and updates plan status;
     /// this method writes nothing outside the ledger build dir and the unit
@@ -303,14 +405,8 @@ impl CAbiDifferential {
         scrubber: &Scrubber,
     ) -> Result<Verdict, Error> {
         let prep = Prepared::new(target, unit)?;
-        let facts_path = Ledger::new(target.root.clone()).facts_path();
-        if !facts_path.exists() {
-            return Err(Error::Invariant(format!(
-                "facts file missing at {}; run `harness scan` first",
-                facts_path.display()
-            )));
-        }
-        let facts = Facts::load(&facts_path)?;
+        let facts = load_facts(target)?;
+        let root = &prep.base.root;
 
         // The crate's target dir is created by the harness, so the sandboxed
         // cargo needs no write access to the crate dir itself.
@@ -321,10 +417,10 @@ impl CAbiDifferential {
 
         // Sandbox profiles. Tools (cc, cargo, rustc, nm) may write the unit
         // build dir, the crate's target/ and its Cargo.lock. Built binaries —
-        // the only place candidate code executes — may write temp only, so a
-        // run can never tamper with an artifact a later step consumes, and get
-        // a per-binary run profile (rendered by `run_built` below) that denies
-        // executing anything but the binary itself.
+        // the only place candidate code executes — run confined (module
+        // `confine`): a fresh TMPDIR is their only writable place, and they
+        // may read nothing under the home dir or the target root but
+        // themselves and their listed inputs, nor exec anything else.
         let host = match sandbox_mode() {
             "sandbox-exec" => Some(HostDirs::from_env()?),
             _ => None,
@@ -340,43 +436,25 @@ impl CAbiDifferential {
                     .collect();
                 Some(sandbox::render_profile(&ProfileSpec {
                     host,
-                    target_root: &prep.root,
+                    target_root: root,
                     toolchain: true,
                     write_dirs: &write_dirs,
                     write_files: &write_files,
-                    exec_only: None,
                 })?)
             }
             None => None,
         };
         let runner = Runner {
-            cwd: prep.root.clone(),
-            allowlist: prep.allowlist.clone(),
-            timeout: prep.timeout,
+            cwd: root.clone(),
+            allowlist: prep.base.allowlist.clone(),
+            timeout: prep.base.timeout,
             max_output: exec::DEFAULT_MAX_OUTPUT,
             tool_profile,
         };
-
-        // Run a binary the oracle just built under a run profile that denies
-        // `process-exec` of anything but that binary. A profile-render failure
-        // (only possible on a pathological path) becomes a run failure, i.e. a
-        // red check, rather than aborting the whole verification.
-        let run_built = |bin: &Path, args: &[&str]| -> Result<Vec<u8>, RunFailure> {
-            let profile = match &host {
-                Some(host) => match sandbox::render_profile(&ProfileSpec {
-                    host,
-                    target_root: &prep.root,
-                    toolchain: false,
-                    write_dirs: &[],
-                    write_files: &[],
-                    exec_only: Some(bin),
-                }) {
-                    Ok(p) => Some(p),
-                    Err(e) => return Err(RunFailure::Failed(e.to_string())),
-                },
-                None => None,
-            };
-            runner.built_with_profile(bin, args, profile.as_deref())
+        let confined = Confinement {
+            runner: &runner,
+            host: host.as_ref(),
+            target_root: root,
         };
 
         // The single place check details are scrubbed: every verdict this
@@ -413,12 +491,13 @@ impl CAbiDifferential {
 
         // Digests of the tree actually tested (after the build attempt, so a
         // freshly generated Cargo.lock is part of the rust_crate digest),
-        // plus the toolchain identities and the sandbox mode applied.
+        // plus the toolchain identities, the sandbox mode and the cflags.
         let mut inputs = compute_inputs(target, unit, &facts)?;
         inputs.toolchain = vec![
             rustc_version.clone(),
             cc_version,
             format!("sandbox: {}", sandbox_mode()),
+            CFLAGS_TOOLCHAIN_ENTRY.to_string(),
         ];
 
         let rust_lib = match build_result {
@@ -438,20 +517,24 @@ impl CAbiDifferential {
         // 2. Symbol set: the staticlib must export exactly the unit's
         // symbols. A candidate that also defines `printf` could forge every
         // later check, so a failure here ends the run — it is never linked.
-        let panic_abort = match &prep.crate_dir {
+        let (panic_abort, crate_dir) = match &prep.crate_dir {
             Some(dir) => {
                 let manifest = dir.join("Cargo.toml");
                 let text =
                     std::fs::read_to_string(&manifest).map_err(|e| Error::io(&manifest, e))?;
-                symbols::manifest_sets_panic_abort(&text)
+                (symbols::manifest_sets_panic_abort(&text), dir.clone())
             }
-            None => false,
+            None => {
+                return Err(Error::Invariant(
+                    "unit crate built but its directory is gone".into(),
+                ))
+            }
         };
         let symbol_check = symbols::symbol_set_check(
             &symbols::SymbolCtx {
                 runner: &runner,
                 host: host.as_ref(),
-                root: &prep.root,
+                root,
                 build_root: &prep.build_root,
                 rustc_version: &rustc_version,
             },
@@ -465,35 +548,82 @@ impl CAbiDifferential {
             return Ok(finish(inputs, checks));
         }
 
+        // 3. Capabilities (R2): the candidate's own code may not reach fs /
+        // env / process / net / os / thread / time beyond what the C unit
+        // itself uses, nor carry asm. Gating: never linked when red.
+        let caps = capabilities::capabilities_check(
+            &runner,
+            &rust_lib,
+            &crate_dir,
+            &capabilities::unit_classes(&facts, unit),
+        )?;
+        let caps_ok = caps.passed;
+        checks.push(caps);
+        if !caps_ok {
+            return Ok(finish(inputs, checks));
+        }
+
+        // 4. Driver shape (R1): the driver, compiled alone with the flags of
+        // its real builds, may define only `main`, call only the unit and the
+        // libc allowlist, carry no weak symbol, and pass the source lint.
+        let includes = prep.base.includes();
+        let shape_obj = prep.build.join("driver_shape.o");
+        let shape_check = match cc_outcome(
+            &runner,
+            &CcInvocation {
+                includes: &includes,
+                cflags: &["-c".to_string()],
+                quiet: true,
+                out: &shape_obj,
+                inputs: std::slice::from_ref(&prep.driver),
+                libs: &[],
+            },
+        )? {
+            Err(stderr) => shape::not_compiled(&stderr),
+            Ok(_) => {
+                let syms = shape::object_symbols(&runner, &shape_obj)?;
+                let source = std::fs::read(&prep.driver).map_err(|e| Error::io(&prep.driver, e))?;
+                let lint = harness_scan::lint_driver(
+                    &source,
+                    &unit.symbols,
+                    &unit_header_names(target, &facts, unit),
+                );
+                shape::shape_check(shape::object_violations(&syms, &unit.symbols), lint)
+            }
+        };
+        let shape_ok = shape_check.passed;
+        checks.push(shape_check);
+        if !shape_ok {
+            return Ok(finish(inputs, checks));
+        }
+
         let build = &prep.build;
-        let source_dir = &prep.source_dir;
         let replace_paths: Vec<PathBuf> = prep.replaces.iter().map(|(_, p)| p.clone()).collect();
 
-        // 3. Differential driver: C-linked vs Rust-linked, byte-identical
+        // 5. Differential driver: C-linked vs Rust-linked, byte-identical
         // stdout. A crash or timeout of either binary is a failed check
         // (evidence), never a harness error.
         let mut drv_c_inputs = vec![prep.driver.clone()];
         drv_c_inputs.extend(replace_paths.iter().cloned());
         let drv_rs_inputs = vec![prep.driver.clone(), rust_lib.clone()];
-        cc_compile(
-            &runner,
-            source_dir,
-            &build.join("drv_c"),
-            &drv_c_inputs,
-            &[],
-            &[],
-        )?;
-        cc_compile(
-            &runner,
-            source_dir,
-            &build.join("drv_rs"),
-            &drv_rs_inputs,
-            &[],
-            &[],
-        )?;
+        let cc = |out: &Path, inputs: &[PathBuf], cflags: &[String], libs: &[String]| {
+            cc_compile(
+                &runner,
+                &CcInvocation {
+                    includes: &includes,
+                    cflags,
+                    quiet: true,
+                    out,
+                    inputs,
+                    libs,
+                },
+            )
+        };
+        cc(&build.join("drv_c"), &drv_c_inputs, &[], &[])?;
+        cc(&build.join("drv_rs"), &drv_rs_inputs, &[], &[])?;
         match (
-            run_built(&build.join("drv_c"), &[]),
-            run_built(&build.join("drv_rs"), &[]),
+            confined.run(&build.join("drv_c"), &[], &[]),
+            confined.run(&build.join("drv_rs"), &[], &[]),
         ) {
             (Ok(out_c), Ok(out_rs)) => {
                 write_file(&build.join("drv_c.out"), &out_c)?;
@@ -503,15 +633,70 @@ impl CAbiDifferential {
             (c, r) => checks.push(run_failure_check("differential-driver", c, r)),
         }
 
-        // 4. Whole-program: all C vs (all minus replaces) + staticlib, run
-        // over the deterministic samples.
+        // 6. Whole-program (opt-in, R8): all C vs (all minus replaces) +
+        // staticlib, run with the configured flags over the deterministic
+        // samples.
+        match &prep.whole_program {
+            None => checks.push(Check {
+                name: "whole-program".into(),
+                passed: true,
+                detail: "not configured for this target".into(),
+            }),
+            Some(args) => {
+                checks.extend(self.whole_program(&prep, unit, &confined, args, &rust_lib)?);
+            }
+        }
+
+        // 7. Sanitizers on the C-side driver (validates driver + baseline).
+        let san_flags: Vec<String> = SANITIZER_FLAGS.iter().map(|s| (*s).to_string()).collect();
+        let san_bin = build.join("drv_c_san");
+        match cc(&san_bin, &drv_c_inputs, &san_flags, &[]) {
+            Ok(()) => checks.push(sanitizer_check(confined.run(&san_bin, &[], &[]))),
+            Err(e) => checks.push(Check {
+                name: "sanitizers".into(),
+                passed: false,
+                detail: format!("sanitizer build failed: {e}"),
+            }),
+        }
+
+        Ok(finish(inputs, checks))
+    }
+
+    /// The configured whole-program checks: build all-C and mixed, then one
+    /// `whole-program:<sample>` check per deterministic sample. Each run may
+    /// read exactly its sample; the harness appends the sample path to the
+    /// configured flags.
+    fn whole_program(
+        &self,
+        prep: &Prepared,
+        unit: &Unit,
+        confined: &Confinement<'_>,
+        args: &[String],
+        rust_lib: &Path,
+    ) -> Result<Vec<Check>, Error> {
+        let source_dir = &prep.base.source_dir;
+        let build = &prep.build;
+        let includes = prep.base.includes();
+        let cc = |out: &Path, inputs: &[PathBuf]| {
+            cc_compile(
+                confined.runner,
+                &CcInvocation {
+                    includes: &includes,
+                    cflags: &[],
+                    quiet: true,
+                    out,
+                    inputs,
+                    libs: &prep.link_args,
+                },
+            )
+        };
         let mut c_files: Vec<PathBuf> = Vec::new();
         for entry in std::fs::read_dir(source_dir).map_err(|e| Error::io(source_dir, e))? {
             let path = entry.map_err(|e| Error::io(source_dir, e))?.path();
             if path.extension().and_then(|e| e.to_str()) == Some("c") {
                 // Canonical + contained, like every other compiler input: a
                 // symlinked .c must not pull in a file outside the target.
-                c_files.push(inside(&unit.id, "source file", &path, &prep.root)?);
+                c_files.push(inside(&unit.id, "source file", &path, &prep.base.root)?);
             }
         }
         c_files.sort();
@@ -519,6 +704,7 @@ impl CAbiDifferential {
         // Every `replaces` entry must actually match a collected C file —
         // otherwise the mixed link silently degenerates to C-vs-C and the
         // check proves nothing.
+        let replace_paths: Vec<PathBuf> = prep.replaces.iter().map(|(_, p)| p.clone()).collect();
         for (rel, canon) in &prep.replaces {
             if !c_files.contains(canon) {
                 return Err(Error::InvalidPlan(format!(
@@ -532,24 +718,11 @@ impl CAbiDifferential {
             .iter()
             .filter(|p| !replace_paths.contains(p))
             .cloned()
-            .chain(std::iter::once(rust_lib))
+            .chain(std::iter::once(rust_lib.to_path_buf()))
             .collect();
-        cc_compile(
-            &runner,
-            source_dir,
-            &build.join("whole_c"),
-            &c_files,
-            &[],
-            &prep.link_args,
-        )?;
-        cc_compile(
-            &runner,
-            source_dir,
-            &build.join("whole_mixed"),
-            &mixed,
-            &[],
-            &prep.link_args,
-        )?;
+        cc(&build.join("whole_c"), &c_files)?;
+        cc(&build.join("whole_mixed"), &mixed)?;
+        let mut checks = Vec::new();
         for sample in write_samples(build)? {
             let name = sample
                 .file_name()
@@ -557,44 +730,19 @@ impl CAbiDifferential {
                 .unwrap_or("sample")
                 .to_string();
             let sample_str = path_str(&sample)?.to_string();
+            let mut argv: Vec<&str> = args.iter().map(String::as_str).collect();
+            argv.push(&sample_str);
             let check_name = format!("whole-program:{name}");
+            let inputs = std::slice::from_ref(&sample);
             match (
-                run_built(&build.join("whole_c"), &["-c", &sample_str]),
-                run_built(&build.join("whole_mixed"), &["-c", &sample_str]),
+                confined.run(&build.join("whole_c"), &argv, inputs),
+                confined.run(&build.join("whole_mixed"), &argv, inputs),
             ) {
                 (Ok(gz_c), Ok(gz_mixed)) => checks.push(diff_check(&check_name, &gz_c, &gz_mixed)),
                 (c, r) => checks.push(run_failure_check(&check_name, c, r)),
             }
         }
-
-        // 5. Sanitizers on the C-side driver (validates driver + baseline).
-        let san_flags: Vec<String> = [
-            "-fsanitize=address,undefined",
-            "-fno-sanitize-recover=all",
-            "-g",
-            "-O1",
-        ]
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-        let san_bin = build.join("drv_c_san");
-        match cc_compile(
-            &runner,
-            source_dir,
-            &san_bin,
-            &drv_c_inputs,
-            &san_flags,
-            &[],
-        ) {
-            Ok(()) => checks.push(sanitizer_check(run_built(&san_bin, &[]))),
-            Err(e) => checks.push(Check {
-                name: "sanitizers".into(),
-                passed: false,
-                detail: format!("sanitizer build failed: {e}"),
-            }),
-        }
-
-        Ok(finish(inputs, checks))
+        Ok(checks)
     }
 }
 
@@ -734,34 +882,172 @@ fn diff_check(name: &str, a: &[u8], b: &[u8]) -> Check {
     }
 }
 
-/// Compile with cc:
-/// `cc <cflags> [-O2 unless cflags sets -O*] -w -I<dir> -o <out> <inputs…> <libs…>`.
+/// The kind-owned `[oracle.whole_program]` table (R8): `None` when absent —
+/// the whole-program check is opt-in. `args` holds FLAGS only (each matching
+/// `^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$`, at most 4); the harness appends the
+/// sample path. Anything else — a path, a value with `=`, a fifth flag, an
+/// unknown key, a non-table — is an [`Error::InvalidPlan`] before any
+/// subprocess runs.
+fn whole_program_args(target: &TargetContext) -> Result<Option<Vec<String>>, Error> {
+    let Some(value) = target.config.oracle.get("whole_program") else {
+        return Ok(None);
+    };
+    let table = value.as_table().ok_or_else(|| {
+        Error::InvalidPlan(format!(
+            "[oracle.whole_program] must be a table with an `args` array, got {value}"
+        ))
+    })?;
+    if let Some(key) = table.keys().find(|k| k.as_str() != "args") {
+        return Err(Error::InvalidPlan(format!(
+            "[oracle.whole_program] key `{key}` is not supported (only `args`)"
+        )));
+    }
+    let entries = match table.get("args") {
+        None => return Ok(Some(Vec::new())),
+        Some(v) => v.as_array().ok_or_else(|| {
+            Error::InvalidPlan(format!(
+                "[oracle.whole_program] args must be an array of flags, got {v}"
+            ))
+        })?,
+    };
+    if entries.len() > MAX_WHOLE_PROGRAM_ARGS {
+        return Err(Error::InvalidPlan(format!(
+            "[oracle.whole_program] args has {} entries; at most {MAX_WHOLE_PROGRAM_ARGS} flags \
+             are accepted",
+            entries.len()
+        )));
+    }
+    let mut args = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match entry.as_str() {
+            Some(flag) if is_allowed_whole_program_flag(flag) => args.push(flag.to_string()),
+            _ => {
+                return Err(Error::InvalidPlan(format!(
+                    "[oracle.whole_program] args entry {entry} is not allowed: only flags \
+                     (^-{{1,2}}[A-Za-z0-9][A-Za-z0-9-]*$) are accepted; the harness appends the \
+                     sample path itself"
+                )))
+            }
+        }
+    }
+    Ok(Some(args))
+}
+
+/// True iff `flag` matches `^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$`.
+fn is_allowed_whole_program_flag(flag: &str) -> bool {
+    let body = flag
+        .strip_prefix("--")
+        .or_else(|| flag.strip_prefix('-'))
+        .unwrap_or("");
+    body.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+        && body.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Load the ledger's facts (written by `harness scan`).
+pub(crate) fn load_facts(target: &TargetContext) -> Result<Facts, Error> {
+    let facts_path = Ledger::new(target.root.clone()).facts_path();
+    if !facts_path.exists() {
+        return Err(Error::Invariant(format!(
+            "facts file missing at {}; run `harness scan` first",
+            facts_path.display()
+        )));
+    }
+    Facts::load(&facts_path)
+}
+
+/// The quoted-include names a driver may use for the unit's own headers:
+/// every header of the unit's include closure as its repo-relative path, its
+/// basename, and its path relative to `source_dir` and to each include dir.
+pub(crate) fn unit_header_names(target: &TargetContext, facts: &Facts, unit: &Unit) -> Vec<String> {
+    let clean = |p: &str| {
+        p.split('/')
+            .filter(|s| !s.is_empty() && *s != ".")
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    let search: Vec<String> = std::iter::once(&target.config.target.source_dir)
+        .chain(target.config.target.include_dirs.iter())
+        .map(|d| clean(d))
+        .collect();
+    let mut names = std::collections::BTreeSet::new();
+    for header in facts
+        .include_closure(&unit.files)
+        .into_iter()
+        .filter(|p| p.ends_with(".h"))
+    {
+        if let Some(base) = header.rsplit('/').next() {
+            names.insert(base.to_string());
+        }
+        for dir in &search {
+            if let Some(rel) = header.strip_prefix(&format!("{dir}/")) {
+                names.insert(rel.to_string());
+            }
+        }
+        names.insert(header);
+    }
+    names.into_iter().collect()
+}
+
+/// One C compiler invocation. EVERY compile the oracle runs goes through
+/// [`cc_argv`], so `-ffp-contract=off` (R4) and the include search order
+/// (source dir, then `[target] include_dirs`) are uniform:
+/// `cc -ffp-contract=off <cflags> [-O2 unless cflags sets -O*] [-w]
+/// -I<dir>… -o <out> <inputs…> <libs…>`.
 ///
 /// `libs` (e.g. `-lm` from `extra_link_args`) go AFTER the inputs: linkers
 /// with `--as-needed` defaults (Ubuntu gcc) drop libraries listed before the
 /// objects that reference them.
-fn cc_compile(
-    runner: &Runner,
-    include_dir: &Path,
-    out: &Path,
-    inputs: &[PathBuf],
-    cflags: &[String],
-    libs: &[String],
-) -> Result<(), Error> {
-    let mut argv: Vec<String> = vec!["cc".to_string()];
-    argv.extend(cflags.iter().cloned());
-    if !cflags.iter().any(|f| f.starts_with("-O")) {
+pub(crate) struct CcInvocation<'a> {
+    /// `-I` dirs, in search order.
+    pub includes: &'a [PathBuf],
+    /// Extra flags (`-c`, `-O0`, sanitizers, warnings).
+    pub cflags: &'a [String],
+    /// Suppress warnings (`-w`); false for the strict driver build.
+    pub quiet: bool,
+    /// Output path.
+    pub out: &'a Path,
+    /// Source/object/archive inputs.
+    pub inputs: &'a [PathBuf],
+    /// Trailing libraries.
+    pub libs: &'a [String],
+}
+
+/// The argv for `inv` (see [`CcInvocation`]).
+pub(crate) fn cc_argv(inv: &CcInvocation<'_>) -> Result<Vec<String>, Error> {
+    let mut argv: Vec<String> = vec!["cc".to_string(), FP_CONTRACT_OFF.to_string()];
+    argv.extend(inv.cflags.iter().cloned());
+    if !inv.cflags.iter().any(|f| f.starts_with("-O")) {
         argv.push("-O2".to_string());
     }
-    argv.push("-w".to_string());
-    argv.push(format!("-I{}", path_str(include_dir)?));
+    if inv.quiet {
+        argv.push("-w".to_string());
+    }
+    for dir in inv.includes {
+        argv.push(format!("-I{}", path_str(dir)?));
+    }
     argv.push("-o".to_string());
-    argv.push(path_str(out)?.to_string());
-    for input in inputs {
+    argv.push(path_str(inv.out)?.to_string());
+    for input in inv.inputs {
         argv.push(path_str(input)?.to_string());
     }
-    argv.extend(libs.iter().cloned());
-    runner.tool(&argv).map(|_| ())
+    argv.extend(inv.libs.iter().cloned());
+    Ok(argv)
+}
+
+/// Compile; any failure is an `Err` (a harness-side build).
+pub(crate) fn cc_compile(runner: &Runner, inv: &CcInvocation<'_>) -> Result<(), Error> {
+    runner.tool(&cc_argv(inv)?).map(|_| ())
+}
+
+/// Compile where a failure is EVIDENCE: `Ok(Err(stderr excerpt))` when the
+/// compiler ran and failed.
+pub(crate) fn cc_outcome(
+    runner: &Runner,
+    inv: &CcInvocation<'_>,
+) -> Result<Result<(), String>, Error> {
+    Ok(runner.tool_outcome(&cc_argv(inv)?)?.map(|_| ()))
 }
 
 /// First stdout line of an allowlisted tool (toolchain identity strings).
@@ -971,6 +1257,125 @@ mod tests {
     }
 
     #[test]
+    fn whole_program_flags_are_flags_only() {
+        for ok in ["-c", "--quiet", "-O2", "--i-1", "-9"] {
+            assert!(is_allowed_whole_program_flag(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "-",
+            "--",
+            "---x",
+            "c",
+            "/etc/passwd",
+            "--out=x",
+            "-c x",
+            "-c\n",
+            "-\u{e9}",
+            "--_x",
+        ] {
+            assert!(!is_allowed_whole_program_flag(bad), "{bad:?}");
+        }
+        assert_eq!(
+            whole_program_args(&context_with_oracle("")).expect("absent"),
+            None
+        );
+        assert_eq!(
+            whole_program_args(&context_with_oracle(
+                "[oracle.whole_program]\nargs = [\"-c\"]"
+            ))
+            .expect("valid"),
+            Some(vec!["-c".to_string()])
+        );
+        let err = whole_program_args(&context_with_oracle(
+            "[oracle.whole_program]\nargs = [\"-c\"]\ncmd = \"sh\"",
+        ))
+        .expect_err("unknown key");
+        assert!(err.to_string().contains("`cmd`"), "{err}");
+    }
+
+    /// Every compile carries `-ffp-contract=off` first (R4) and the include
+    /// dirs in search order; `quiet` controls `-w`; an explicit `-O*` wins.
+    #[test]
+    fn cc_argv_is_uniform() {
+        let includes = vec![PathBuf::from("/t/src"), PathBuf::from("/t/src/include")];
+        let inputs = vec![PathBuf::from("/t/d.c")];
+        let argv = cc_argv(&CcInvocation {
+            includes: &includes,
+            cflags: &["-c".to_string()],
+            quiet: true,
+            out: Path::new("/t/b/d.o"),
+            inputs: &inputs,
+            libs: &["-lm".to_string()],
+        })
+        .expect("argv");
+        assert_eq!(
+            argv,
+            [
+                "cc",
+                "-ffp-contract=off",
+                "-c",
+                "-O2",
+                "-w",
+                "-I/t/src",
+                "-I/t/src/include",
+                "-o",
+                "/t/b/d.o",
+                "/t/d.c",
+                "-lm"
+            ]
+        );
+        let strict = cc_argv(&CcInvocation {
+            includes: &includes,
+            cflags: &["-O0".to_string()],
+            quiet: false,
+            out: Path::new("/t/b/x"),
+            inputs: &inputs,
+            libs: &[],
+        })
+        .expect("argv");
+        assert!(!strict.contains(&"-w".to_string()), "{strict:?}");
+        assert!(!strict.contains(&"-O2".to_string()), "{strict:?}");
+        assert_eq!(strict[1], FP_CONTRACT_OFF);
+    }
+
+    #[test]
+    fn unit_header_names_cover_paths_basenames_and_search_relative_forms() {
+        let mut target = context_with_oracle("");
+        target.config.target.source_dir = "./src/".into();
+        target.config.target.include_dirs = vec!["src/include".into()];
+        let facts = Facts {
+            frontend: "t".into(),
+            files: vec![
+                harness_core::facts::FileRecord {
+                    path: "src/u.c".into(),
+                    hash: String::new(),
+                    includes: vec!["src/include/sub/api.h".into()],
+                },
+                harness_core::facts::FileRecord {
+                    path: "src/include/sub/api.h".into(),
+                    hash: String::new(),
+                    includes: Vec::new(),
+                },
+            ],
+            ..Facts::default()
+        };
+        let unit: Unit = toml::from_str(
+            "id = \"u\"\nstatus = \"pending\"\nfiles = [\"src/u.c\"]\nsymbols = [\"f\"]\n",
+        )
+        .expect("unit");
+        assert_eq!(
+            unit_header_names(&target, &facts, &unit),
+            vec![
+                "api.h".to_string(),
+                "include/sub/api.h".to_string(),
+                "src/include/sub/api.h".to_string(),
+                "sub/api.h".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn link_args_accept_only_dash_l_names() {
         for ok in ["-lm", "-lstdc++", "-lfoo_bar", "-lz.1", "-lpthread-2"] {
             assert!(is_allowed_link_arg(ok), "{ok}");
@@ -1108,8 +1513,8 @@ mod tests {
         let unit = unit_with("u1", "migration/units/u1/driver.c", "u_rs", "src/u.c");
         let prep = Prepared::new(&target, &unit).expect("valid unit prepares");
         let root = tmp.path();
-        assert_eq!(prep.root, root);
-        assert_eq!(prep.source_dir, root.join("src"));
+        assert_eq!(prep.base.root, root);
+        assert_eq!(prep.base.source_dir, root.join("src"));
         assert_eq!(prep.driver, root.join("migration/units/u1/driver.c"));
         assert_eq!(
             prep.crate_dir.as_deref(),
@@ -1123,7 +1528,7 @@ mod tests {
             vec![("src/u.c".to_string(), root.join("src/u.c"))]
         );
         assert_eq!(prep.link_args, vec!["-lm".to_string()]);
-        assert_eq!(prep.timeout, Duration::from_secs(30));
+        assert_eq!(prep.base.timeout, Duration::from_secs(30));
     }
 
     #[test]

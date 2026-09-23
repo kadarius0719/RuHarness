@@ -604,7 +604,6 @@ pub(crate) fn baseline_table(ctx: &SymbolCtx<'_>, panic_abort: bool) -> Result<B
             toolchain: true,
             write_dirs: std::slice::from_ref(&target_dir),
             write_files: &[dir.join("Cargo.lock")],
-            exec_only: None,
         })?),
         None => None,
     };
