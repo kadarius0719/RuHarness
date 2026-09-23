@@ -3,7 +3,7 @@ target = "bin2hex_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:5930a61f26908ddfc08555fff4919b019aee258ce18c43cc06e38da64d76db13"
 symbols = ["bin2hex"]

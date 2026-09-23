@@ -3,7 +3,7 @@ target = "max_size_frame_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:d1f6547829462c7f7a7c721501c6c379be20ed9fdc16d91488eed325310e86b1"
 symbols = ["max_size_frame"]

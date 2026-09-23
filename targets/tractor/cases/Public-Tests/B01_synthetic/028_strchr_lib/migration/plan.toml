@@ -3,7 +3,7 @@ target = "028_strchr_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:598bb26fe742dfe6c2436b8f95e1a74cfe9f7e88a2208fed8a7ba31bf06b8046"
 symbols = ["driver", "foo"]

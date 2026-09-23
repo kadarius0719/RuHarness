@@ -3,7 +3,7 @@ target = "flac_validate_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:d166c15157a8e64d0ce607727cf17c650a1d27e5098fcaa6bcf29b44fb329ed5"
 symbols = ["flac_validate", "tflac_size_memory"]

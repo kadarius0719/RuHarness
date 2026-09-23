@@ -3,7 +3,7 @@ target = "004_loop_lib"
 
 [[unit]]
 id = "u-loop"
-status = "pending"
+status = "verified"
 files = ["test_case/src/loop.c"]
 source_hash = "blake3:96addbc1740e7ed93f710119baf98f41255ff3c8968972e12231f96f783d7519"
 symbols = ["loop"]

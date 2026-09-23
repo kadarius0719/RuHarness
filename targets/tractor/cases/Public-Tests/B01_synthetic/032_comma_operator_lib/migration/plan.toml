@@ -3,7 +3,7 @@ target = "032_comma_operator_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:388da6c7aa0e9e592b681c4196cc77f6b5e43349c4583de9d531fc8c36b72d4f"
 symbols = ["driver"]

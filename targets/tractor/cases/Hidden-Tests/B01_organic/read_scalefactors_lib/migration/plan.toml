@@ -3,7 +3,7 @@ target = "read_scalefactors_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:fd0540b200009a06059b084eacaeec0d1fc6278ce0274d3ff5a119836da8deb0"
 symbols = ["read_scalefactors"]

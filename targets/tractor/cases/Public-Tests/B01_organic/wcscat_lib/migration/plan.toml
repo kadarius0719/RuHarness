@@ -3,7 +3,7 @@ target = "wcscat_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:3a095e7f1434bdbb5e16f179474d4ac575200c151c79b213ddb0311018b211a5"
 symbols = ["wcscat"]

@@ -3,7 +3,7 @@ target = "ima_decode_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:430cd45acf0d65d376f095e8d497a9a7e6745d0c6ef4d657eb4d510270dfdc07"
 symbols = ["ima_decode"]

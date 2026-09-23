@@ -3,7 +3,7 @@ target = "gaussian_kernel_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:2b4cf0ac6679d17c788618b9c6f953c350c361901c43c7acfd0caa37ae908ddf"
 symbols = ["gaussian_kernel"]

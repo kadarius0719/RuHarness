@@ -3,7 +3,7 @@ target = "compress_bc5_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:e6cf3003aba1959402a240870c6c262eea3064628f32d3ce3dda40c001476212"
 symbols = ["compress_bc5", "stb__CompressAlphaBlock"]

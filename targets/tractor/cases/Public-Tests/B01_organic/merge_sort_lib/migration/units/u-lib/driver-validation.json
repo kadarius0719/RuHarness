@@ -1,0 +1,64 @@
+{
+  "schema": "ruharness-driver-validation",
+  "schema_version": 1,
+  "unit": "u-lib",
+  "green": true,
+  "inputs": {
+    "unit_source": "blake3:b40e7c9ea622f12bac0c314901e6c7a1a30721b8c296454f5a188d2d4a604273",
+    "driver": "blake3:1a82b88d0b4e6ae4378d6b695f0a8381b840f8d0b8cda0815213ad388438fb78",
+    "toolchain": [
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "policy": {
+    "max_mutants": 24,
+    "min_kill_permille": 600
+  },
+  "checks": [
+    {
+      "name": "driver-build",
+      "passed": true,
+      "detail": "compiles with -Wall -Werror=implicit-function-declaration -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=format -Werror=return-type -Werror=uninitialized; links against 1 unit file(s)"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "symbols-called",
+      "passed": true,
+      "detail": "calls all 1 unit symbol(s)"
+    },
+    {
+      "name": "determinism",
+      "passed": true,
+      "detail": "3 runs, 28306 bytes, byte-identical"
+    },
+    {
+      "name": "opt-levels",
+      "passed": true,
+      "detail": "-O0 output identical to -O2 (28306 bytes)"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    },
+    {
+      "name": "mutation",
+      "passed": true,
+      "detail": "killed 21/21 compiled (24 sampled of 26 sites, 3 TCE-equivalent discarded; needs ≥ 0.600)"
+    }
+  ],
+  "mutation": {
+    "sites": 26,
+    "sampled": 24,
+    "compiled": 21,
+    "equivalent": 3,
+    "killed": 21,
+    "survivors": []
+  }
+}

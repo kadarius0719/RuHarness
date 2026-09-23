@@ -1,0 +1,83 @@
+{
+  "schema": "ruharness-driver-validation",
+  "schema_version": 1,
+  "unit": "u-driver",
+  "green": false,
+  "inputs": {
+    "unit_source": "blake3:e5342a5f849e45cc94933e6be910af6311b29efcf39d27756b6679fdf8a8e78d",
+    "driver": "blake3:ead15088f6e8c14cdaff9dd08d57d11650760dc1eb7438d981c87c7dce7a8ddc",
+    "toolchain": [
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "policy": {
+    "max_mutants": 24,
+    "min_kill_permille": 600
+  },
+  "checks": [
+    {
+      "name": "driver-build",
+      "passed": true,
+      "detail": "compiles with -Wall -Werror=implicit-function-declaration -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=format -Werror=return-type -Werror=uninitialized; links against 1 unit file(s)"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "symbols-called",
+      "passed": true,
+      "detail": "calls all 2 unit symbol(s)"
+    },
+    {
+      "name": "determinism",
+      "passed": true,
+      "detail": "3 runs, 12819 bytes, byte-identical"
+    },
+    {
+      "name": "opt-levels",
+      "passed": true,
+      "detail": "-O0 output identical to -O2 (12819 bytes)"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    },
+    {
+      "name": "mutation",
+      "passed": false,
+      "detail": "killed 6/9 compiled (13 sampled of 13 sites, 4 TCE-equivalent discarded; needs ≥ 8 (small-n rule))"
+    }
+  ],
+  "mutation": {
+    "sites": 13,
+    "sampled": 13,
+    "compiled": 9,
+    "equivalent": 4,
+    "killed": 6,
+    "survivors": [
+      {
+        "file": "test_case/src/driver.c",
+        "line": 21,
+        "function": "driver",
+        "operator": "literal"
+      },
+      {
+        "file": "test_case/src/driver.c",
+        "line": 23,
+        "function": "driver",
+        "operator": "arith"
+      },
+      {
+        "file": "test_case/src/driver.c",
+        "line": 23,
+        "function": "driver",
+        "operator": "literal"
+      }
+    ]
+  }
+}

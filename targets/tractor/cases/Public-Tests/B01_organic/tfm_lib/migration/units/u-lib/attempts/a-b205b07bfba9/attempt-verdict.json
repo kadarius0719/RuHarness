@@ -1,0 +1,52 @@
+{
+  "schema": "ruharness-verdict",
+  "schema_version": 1,
+  "unit": "u-lib",
+  "green": true,
+  "inputs": {
+    "unit_source": "blake3:98c2e57ae66f31ba394c341fad084a197fbf5d96b558997320c032de9b87561b",
+    "driver": "blake3:c88747a16e863dcc36faa11fe9cf9f5fd883e6661567fabfda9cc2f60b1d486e",
+    "rust_crate": "blake3:fc60b4a458c319a183cf605be390025f2ec022315e5f0bffbd13555b8e3e7274",
+    "replaces": [
+      "test_case/src/lib.c"
+    ],
+    "toolchain": [
+      "rustc 1.94.1 (e408947bf 2026-03-25)",
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "checks": [
+    {
+      "name": "symbol-set",
+      "passed": true,
+      "detail": "1 exported symbol(s) match the unit's symbols exactly"
+    },
+    {
+      "name": "capabilities",
+      "passed": true,
+      "detail": "no capability beyond the C unit's (allowed: none); no asm"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "differential-driver",
+      "passed": true,
+      "detail": "8620 bytes identical"
+    },
+    {
+      "name": "whole-program",
+      "passed": true,
+      "detail": "not configured for this target"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    }
+  ]
+}

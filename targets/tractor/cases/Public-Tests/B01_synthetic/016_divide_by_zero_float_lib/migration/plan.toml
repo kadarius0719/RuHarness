@@ -3,7 +3,7 @@ target = "016_divide_by_zero_float_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:0a2eff480d034efc6a2ef4ad585128d8a358b5769f3436abdc9d3677c35086e3"
 symbols = ["bad", "driver", "good", "printIntLine", "printLine"]

@@ -1,0 +1,55 @@
+{
+  "schema": "ruharness-attempt",
+  "schema_version": 1,
+  "id": "a-5accff7ee1f6",
+  "unit": "u-lib",
+  "provider": "external",
+  "provider_kind": "external",
+  "model": "claude-haiku-4-5-20251001",
+  "prompt_digest": "blake3:debe2d7f420e6f8ffc562cbbf7c34921607146da49b8a1a52fe6fd68140c8bce",
+  "unit_source": "blake3:2b4cf0ac6679d17c788618b9c6f953c350c361901c43c7acfd0caa37ae908ddf",
+  "driver": "blake3:a4555b02226816bddc9f2cbeae1b37a79d62a5b7cbfbe561894b5fada480ff6a",
+  "toolchain": [
+    "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+    "sandbox: sandbox-exec",
+    "cflags: -ffp-contract=off"
+  ],
+  "outcome": "red",
+  "turns": [
+    {
+      "kind": "translate",
+      "result": "oracle",
+      "request_key": "a1879f34",
+      "response_hash": "blake3:8d481dc72387f5514ee43997c6399b19a54a3d43fc6ab72ca20e9e91e1c13393",
+      "input_tokens": null,
+      "output_tokens": null
+    },
+    {
+      "kind": "repair",
+      "result": "oracle",
+      "request_key": "50cbc183",
+      "response_hash": "blake3:311f26dc23911ff9ac24f3e258418e80d72fd41634c69b524c55fdbbe01d8b0c",
+      "input_tokens": null,
+      "output_tokens": null
+    },
+    {
+      "kind": "repair",
+      "result": "crash-timeout",
+      "request_key": "e9310788",
+      "response_hash": "blake3:d59732fbd54da7c8cf090f6577bd9842b5bb57b82efcc298283afc8c2c625e45",
+      "input_tokens": null,
+      "output_tokens": null
+    },
+    {
+      "kind": "repair",
+      "result": "oracle",
+      "request_key": "fb4c1f04",
+      "response_hash": "blake3:f154a662d9d26d12b975da31f990f2d8c12da8265beec348e37b87f31cc31a5c",
+      "input_tokens": null,
+      "output_tokens": null
+    }
+  ],
+  "candidate_digest": "blake3:25ffb3aadf8295df3efd38f607b17fbea16df05865c4aa5b02ec3e17ff8f3ecc",
+  "promoted": false
+}

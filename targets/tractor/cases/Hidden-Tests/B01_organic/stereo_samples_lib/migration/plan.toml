@@ -3,7 +3,7 @@ target = "stereo_samples_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:a0fabf948029c1adc317931d487f254b0326fb48430990b1634290dfce7f0009"
 symbols = ["stereo_samples"]

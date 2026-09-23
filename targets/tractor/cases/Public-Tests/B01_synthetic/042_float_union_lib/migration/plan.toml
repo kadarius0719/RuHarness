@@ -3,7 +3,7 @@ target = "042_float_union_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:0c73b8904121fcc561c41ada263115bbae1470c98c0324629263a47b7860b921"
 symbols = ["driver"]

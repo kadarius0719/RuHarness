@@ -3,7 +3,7 @@ target = "merge_sort_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:b40e7c9ea622f12bac0c314901e6c7a1a30721b8c296454f5a188d2d4a604273"
 symbols = ["merge_sort"]

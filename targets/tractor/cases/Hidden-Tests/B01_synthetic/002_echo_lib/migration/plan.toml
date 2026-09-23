@@ -3,7 +3,7 @@ target = "002_echo_lib"
 
 [[unit]]
 id = "u-echo"
-status = "pending"
+status = "verified"
 files = ["test_case/src/echo.c"]
 source_hash = "blake3:f517c5e22e1912d60969c8f5720b849e85bf3e5ffdcd60c5b36dc4259e46493f"
 symbols = ["echo"]

@@ -3,7 +3,7 @@ target = "md5_transform_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:5ff8bee91a8cb8c9b9fbcc798fdfcd71851a49ada8516a85f54b26d5f122da81"
 symbols = ["md5_transform", "tflac_unpack_u32le"]

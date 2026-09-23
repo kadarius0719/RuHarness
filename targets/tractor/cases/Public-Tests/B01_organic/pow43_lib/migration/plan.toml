@@ -3,7 +3,7 @@ target = "pow43_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:9690d398d8b84db2e0534da2adcda4873ff4688085ac118267648c77d64a22ba"
 symbols = ["pow43"]

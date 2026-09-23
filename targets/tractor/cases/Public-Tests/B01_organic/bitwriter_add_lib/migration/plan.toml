@@ -3,7 +3,7 @@ target = "bitwriter_add_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:9474c1b95801a5d931ccb25bf9c6cf76931c6df64c47174b17105dce86728221"
 symbols = ["bitwriter_add"]

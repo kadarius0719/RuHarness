@@ -3,7 +3,7 @@ target = "029_strcspn_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:24a2236e27d7cf1545b69bc05890961cfac73eaca9a6c04a48abd774c4feb951"
 symbols = ["driver"]

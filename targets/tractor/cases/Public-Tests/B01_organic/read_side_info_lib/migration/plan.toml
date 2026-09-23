@@ -3,7 +3,7 @@ target = "read_side_info_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:5baca75ba6a6af4e7d82fd08f3f7f755e404d34da9e564edb0e93b8c5362dc2e"
 symbols = ["read_side_info"]

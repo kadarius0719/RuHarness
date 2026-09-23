@@ -3,7 +3,7 @@ target = "031_disjoint_arrays_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:aa3127cb9944a960c04d826c69f8ca1c60a15e6c7d4ef5df9fc13d1ca798b85c"
 symbols = ["call_fma", "driver", "fma_array"]

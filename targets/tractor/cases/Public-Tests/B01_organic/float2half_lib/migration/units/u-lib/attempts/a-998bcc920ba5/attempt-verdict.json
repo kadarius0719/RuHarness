@@ -1,0 +1,52 @@
+{
+  "schema": "ruharness-verdict",
+  "schema_version": 1,
+  "unit": "u-lib",
+  "green": false,
+  "inputs": {
+    "unit_source": "blake3:b9d49670f3dc236a819a1e70c8ced21b1e3c2b0f455eaaf0e5deea0aececdd28",
+    "driver": "blake3:45d9be7687ec389d7483cc025731affc4e5c10b6c9e893192a479120529467f8",
+    "rust_crate": "blake3:84e4cd71aec58444b94dd6d80bc2f6c441454e6c9b48cb80f1a3f7aff089d2da",
+    "replaces": [
+      "test_case/src/lib.c"
+    ],
+    "toolchain": [
+      "rustc 1.94.1 (e408947bf 2026-03-25)",
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "checks": [
+    {
+      "name": "symbol-set",
+      "passed": true,
+      "detail": "1 exported symbol(s) match the unit's symbols exactly"
+    },
+    {
+      "name": "capabilities",
+      "passed": true,
+      "detail": "no capability beyond the C unit's (allowed: none); no asm"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "differential-driver",
+      "passed": false,
+      "detail": "candidate run failed: `<target>/migration/build/u-lib/drv_rs` failed (signal: 6 (SIGABRT)):\n\nthread '<unnamed>' panicked at src/logic.rs:109:24:\nindex out of bounds: the len is 508 but the index is 510\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "name": "whole-program",
+      "passed": true,
+      "detail": "not configured for this target"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    }
+  ]
+}

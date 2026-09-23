@@ -3,7 +3,7 @@ target = "003_string_slicing_lib"
 
 [[unit]]
 id = "u-slicing"
-status = "pending"
+status = "verified"
 files = ["test_case/src/slicing.c"]
 source_hash = "blake3:f0006e443ca70900289af80274d1158956861803fa1fdee2caa3cd04f169b207"
 symbols = ["slice"]

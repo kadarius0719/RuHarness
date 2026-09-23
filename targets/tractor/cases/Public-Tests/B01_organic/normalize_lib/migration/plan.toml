@@ -3,7 +3,7 @@ target = "normalize_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:44a69b9e06439864a5fde1cc4a26152b5050c641eeb31d83d8899a10d5bf4920"
 symbols = ["normalize"]

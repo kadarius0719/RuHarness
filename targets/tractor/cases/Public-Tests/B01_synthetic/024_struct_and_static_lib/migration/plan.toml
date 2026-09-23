@@ -3,7 +3,7 @@ target = "024_struct_and_static_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:cc0ed22e3bf771e84d79fe296b90c883330bb6256f643568324db66ca6f5eb25"
 symbols = ["driver", "run"]

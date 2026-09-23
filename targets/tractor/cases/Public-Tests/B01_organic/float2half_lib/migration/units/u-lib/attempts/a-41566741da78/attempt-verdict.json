@@ -1,0 +1,27 @@
+{
+  "schema": "ruharness-verdict",
+  "schema_version": 1,
+  "unit": "u-lib",
+  "green": false,
+  "inputs": {
+    "unit_source": "blake3:b9d49670f3dc236a819a1e70c8ced21b1e3c2b0f455eaaf0e5deea0aececdd28",
+    "driver": "blake3:45d9be7687ec389d7483cc025731affc4e5c10b6c9e893192a479120529467f8",
+    "rust_crate": "blake3:2282e0e4f5178a4c774f711f9333d6669001d098c440647eef75c8ec55cc8749",
+    "replaces": [
+      "test_case/src/lib.c"
+    ],
+    "toolchain": [
+      "rustc 1.94.1 (e408947bf 2026-03-25)",
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "checks": [
+    {
+      "name": "rust-build",
+      "passed": false,
+      "detail": "unit crate failed to build: `cargo build --release --offline --manifest-path <target>/migration/units/u-lib/attempts/a-41566741da78/candidate/Cargo.toml --target-dir <target>/migration/units/u-lib/attempts/a-41566741da78/candidate/target` failed (exit status: 101):\n   Compiling u_lib_rs v0.1.0 (<target>/migration/units/u-lib/attempts/a-41566741da78/candidate)\nerror[E0308]: mismatched types\n  --> src/logic.rs:1:28\n   |\n 1 |   const M_BASE: [u16; 512] = [\n   |  _____________________---____^\n   | |                     |\n   | |                     help: consider specifying the actual array length: `476`\n 2 | |     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,\n 3 | |     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,\n 4 | |     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,\n...  |\n54 | |     0xfc00, 0xfc00, 0xfc00, 0xfc00, 0xfc00, 0xfc00, 0xfc00, 0xfc00,\n55 | | ];\n   | |_^ expected an array with a size of 512, found one with a size of 476\n\nFor more information about this error, try `rustc --explain E0308`.\nerror: could not compile `u_lib_rs` (lib) due to 1 previous error\n"
+    }
+  ]
+}

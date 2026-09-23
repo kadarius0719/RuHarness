@@ -3,7 +3,7 @@ target = "to_barycentric_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:0501b40ca32ae370fec5e17815a2eb9b6a4f30eb127551a99db34b02577bc2e1"
 symbols = ["to_barycentric"]

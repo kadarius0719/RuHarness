@@ -3,7 +3,7 @@ target = "next_double_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:af811e4a635658f903138bc67285d5695c2ea6f0df6d3331dfac5e76142689ca"
 symbols = ["next_double"]

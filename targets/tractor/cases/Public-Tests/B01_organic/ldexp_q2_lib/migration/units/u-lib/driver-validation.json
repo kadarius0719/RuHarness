@@ -1,0 +1,77 @@
+{
+  "schema": "ruharness-driver-validation",
+  "schema_version": 1,
+  "unit": "u-lib",
+  "green": true,
+  "inputs": {
+    "unit_source": "blake3:1df4525ff013e7142cf284042ecadb885df14011f7e371b644ceff91e78e6699",
+    "driver": "blake3:ddf05a81fce879a8ce14e59946f7d11895b9dc6f049abbab34314639bfaeac58",
+    "toolchain": [
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "policy": {
+    "max_mutants": 24,
+    "min_kill_permille": 600
+  },
+  "checks": [
+    {
+      "name": "driver-build",
+      "passed": true,
+      "detail": "compiles with -Wall -Werror=implicit-function-declaration -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=format -Werror=return-type -Werror=uninitialized; links against 1 unit file(s)"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "symbols-called",
+      "passed": true,
+      "detail": "calls all 1 unit symbol(s)"
+    },
+    {
+      "name": "determinism",
+      "passed": true,
+      "detail": "3 runs, 41492 bytes, byte-identical"
+    },
+    {
+      "name": "opt-levels",
+      "passed": true,
+      "detail": "-O0 output identical to -O2 (41492 bytes)"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    },
+    {
+      "name": "mutation",
+      "passed": true,
+      "detail": "killed 16/18 compiled (19 sampled of 19 sites, 1 TCE-equivalent discarded; needs ≥ 0.600)"
+    }
+  ],
+  "mutation": {
+    "sites": 19,
+    "sampled": 19,
+    "compiled": 18,
+    "equivalent": 1,
+    "killed": 16,
+    "survivors": [
+      {
+        "file": "test_case/src/lib.c",
+        "line": 4,
+        "function": "ldexp_q2",
+        "operator": "literal"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 8,
+        "function": "ldexp_q2",
+        "operator": "literal"
+      }
+    ]
+  }
+}

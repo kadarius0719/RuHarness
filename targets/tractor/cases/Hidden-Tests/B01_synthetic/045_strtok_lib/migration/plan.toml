@@ -3,7 +3,7 @@ target = "045_strtok_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:c4ec5a1d32f4b5a13f4c6b8660c680225e8b8aecd5084fdb1a1b767dfce481bc"
 symbols = ["driver"]

@@ -3,7 +3,7 @@ target = "encode_quant_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:59f1f65ceba55d94abd05df0796d5fe47650ebbfdc1cc0a074fa78b86590c060"
 symbols = ["encode_quant"]

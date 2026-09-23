@@ -3,7 +3,7 @@ target = "png_qsort_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:096b0f6c0f6d3fdbdabcd59337ed510451120b03b3f0a0b6990221b6b0eab553"
 symbols = ["qsort"]

@@ -3,7 +3,7 @@ target = "027_ctype_ascii_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:f7eff6e0843bd30e56ceec34a848a4601be2afc28a87bec544397fcc291ced39"
 symbols = ["driver"]

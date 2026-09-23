@@ -3,7 +3,7 @@ target = "022_stdlib_div_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:c4aab8953e94a974cbef17ffe74d35a0569639348ff76b3a37cc407df06a09ba"
 symbols = ["driver"]

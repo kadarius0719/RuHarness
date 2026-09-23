@@ -3,7 +3,7 @@ target = "013_poor_quality_addition_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:bb4b96fd3063fd61976f71869ec25d9fd10f611dbc6decb75c13fef8965cddcd"
 symbols = ["bad", "driver", "good", "printIntLine", "printLine"]

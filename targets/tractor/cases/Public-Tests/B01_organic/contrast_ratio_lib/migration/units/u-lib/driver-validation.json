@@ -1,0 +1,101 @@
+{
+  "schema": "ruharness-driver-validation",
+  "schema_version": 1,
+  "unit": "u-lib",
+  "green": true,
+  "inputs": {
+    "unit_source": "blake3:e27a6eab0b4cacf7fb4c7a69660575d57fc404ca2877e52090e0ce8a3bda29b8",
+    "driver": "blake3:f831d315efd6812e604414f2a3aa94aaba1154766f6b14774c23c10819f9ac3a",
+    "toolchain": [
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "policy": {
+    "max_mutants": 24,
+    "min_kill_permille": 600
+  },
+  "checks": [
+    {
+      "name": "driver-build",
+      "passed": true,
+      "detail": "compiles with -Wall -Werror=implicit-function-declaration -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=format -Werror=return-type -Werror=uninitialized; links against 1 unit file(s)"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "symbols-called",
+      "passed": true,
+      "detail": "calls all 1 unit symbol(s)"
+    },
+    {
+      "name": "determinism",
+      "passed": true,
+      "detail": "3 runs, 3926 bytes, byte-identical"
+    },
+    {
+      "name": "opt-levels",
+      "passed": true,
+      "detail": "-O0 output identical to -O2 (3926 bytes)"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    },
+    {
+      "name": "mutation",
+      "passed": true,
+      "detail": "killed 16/22 compiled (24 sampled of 34 sites, 2 TCE-equivalent discarded; needs ≥ 0.600)"
+    }
+  ],
+  "mutation": {
+    "sites": 34,
+    "sampled": 24,
+    "compiled": 22,
+    "equivalent": 2,
+    "killed": 16,
+    "survivors": [
+      {
+        "file": "test_case/src/lib.c",
+        "line": 6,
+        "function": "cbLuminance",
+        "operator": "relational"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 8,
+        "function": "cbLuminance",
+        "operator": "relational"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 26,
+        "function": "contrast_ratio",
+        "operator": "cast-delete"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 26,
+        "function": "contrast_ratio",
+        "operator": "cast-delete"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 27,
+        "function": "contrast_ratio",
+        "operator": "cast-delete"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 27,
+        "function": "contrast_ratio",
+        "operator": "cast-delete"
+      }
+    ]
+  }
+}

@@ -3,7 +3,7 @@ target = "023_struct_and_errno_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:eaf8225dac1e1c827215912ddfeaaab36b3b787674ee8c1afa40241222daf392"
 symbols = ["driver", "run"]

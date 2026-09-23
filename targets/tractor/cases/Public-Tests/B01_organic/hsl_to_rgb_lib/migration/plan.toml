@@ -3,7 +3,7 @@ target = "hsl_to_rgb_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:e04fc46efddadf1ad08f8b50f658746b2c9bc59ea3cc139ced0d45a843b14c06"
 symbols = ["hsl_to_rgb"]

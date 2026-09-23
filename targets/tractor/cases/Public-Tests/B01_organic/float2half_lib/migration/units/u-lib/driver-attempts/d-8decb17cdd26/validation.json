@@ -1,0 +1,107 @@
+{
+  "schema": "ruharness-driver-validation",
+  "schema_version": 1,
+  "unit": "u-lib",
+  "green": true,
+  "inputs": {
+    "unit_source": "blake3:b9d49670f3dc236a819a1e70c8ced21b1e3c2b0f455eaaf0e5deea0aececdd28",
+    "driver": "blake3:45d9be7687ec389d7483cc025731affc4e5c10b6c9e893192a479120529467f8",
+    "toolchain": [
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "policy": {
+    "max_mutants": 24,
+    "min_kill_permille": 600
+  },
+  "checks": [
+    {
+      "name": "driver-build",
+      "passed": true,
+      "detail": "compiles with -Wall -Werror=implicit-function-declaration -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=format -Werror=return-type -Werror=uninitialized; links against 1 unit file(s)"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "symbols-called",
+      "passed": true,
+      "detail": "calls all 1 unit symbol(s)"
+    },
+    {
+      "name": "determinism",
+      "passed": true,
+      "detail": "3 runs, 50424 bytes, byte-identical"
+    },
+    {
+      "name": "opt-levels",
+      "passed": true,
+      "detail": "-O0 output identical to -O2 (50424 bytes)"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    },
+    {
+      "name": "mutation",
+      "passed": true,
+      "detail": "killed 15/22 compiled (24 sampled of 1034 sites, 2 TCE-equivalent discarded; needs ≥ 0.600)"
+    }
+  ],
+  "mutation": {
+    "sites": 1034,
+    "sampled": 24,
+    "compiled": 22,
+    "equivalent": 2,
+    "killed": 15,
+    "survivors": [
+      {
+        "file": "test_case/src/lib.c",
+        "line": 79,
+        "function": "",
+        "operator": "table-element"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 92,
+        "function": "",
+        "operator": "table-element"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 97,
+        "function": "",
+        "operator": "table-element"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 97,
+        "function": "",
+        "operator": "table-element"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 100,
+        "function": "",
+        "operator": "table-element"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 101,
+        "function": "",
+        "operator": "table-element"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 101,
+        "function": "",
+        "operator": "table-element"
+      }
+    ]
+  }
+}

@@ -3,7 +3,7 @@ target = "005_static_loop_lib"
 
 [[unit]]
 id = "u-staticloop"
-status = "pending"
+status = "verified"
 files = ["test_case/src/staticloop.c"]
 source_hash = "blake3:e2d8bf1f4a16129f6b4304180471bc2cdc48fe432814a0919b85d8bb915c4752"
 symbols = ["driver", "static_sum"]

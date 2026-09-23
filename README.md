@@ -39,7 +39,7 @@ engineering decision, research spike, and milestone handoff is in
 | **M1** — ledger + schemas | Fact model, plan, content-bound verdicts, multi-unit ordering, workspace, CI | ✅ |
 | **M2** — observer | Gotcha detectors, risk scoring, LLM triage, human review loop, runtime-view sync | ✅ |
 | **M3** — executor + provider #2 | `harness migrate` (translate → oracle → repair), sandboxed execution, two wire adapters proven live | ✅ |
-| **M4** — benchmark | DARPA TRACTOR public corpus scores as regression suite | next |
+| **M4** — benchmark | TRACTOR B01 library suite (100 cases), LLM driver generation with C-vs-C self-validation, held-out scoring with the corpus's own runners, scores as regression suite | ✅ |
 | **M5** — extension proof | External detector plugin + `EXTENDING.md` | — |
 | **M6+** — Phase 2 spike | Second language frontend, golden-test oracle | — |
 
@@ -112,7 +112,7 @@ cargo install --path crates/harness-cli
 harness state status --target targets/zopfli
 ```
 
-**3. Run the judge on the piece that's already migrated** — expect six `PASS` lines and `GREEN`
+**3. Run the judge on the piece that's already migrated** — expect eight `PASS` lines and `GREEN`
 ```bash
 harness verify u001-katajainen --target targets/zopfli
 ```
@@ -281,6 +281,30 @@ Regenerates the managed block in the target's `AGENTS.md` (current state, next
 units by risk, the exact commands) with a content hash; `--check` is CI-usable.
 The ledger stays the single source of truth — the view is always derived.
 
+```bash
+cargo run -p harness-cli -- gen-driver u-lib --target targets/tractor/cases/Public-Tests/B01_organic/rev16_lib --model claude-sonnet-5
+```
+Asks a model for the unit's **differential driver** (a C `main` that calls every
+exported function with deterministic inputs and prints everything), then validates it
+against the ORIGINAL C only: strict build, `driver-shape` (it may define only `main`
+and call only the unit and allowlisted libc), every symbol called, three identical
+runs, `-O0` == `-O2`, ASan/UBSan, and **mutation adequacy** — deliberately broken
+copies of the C must change its output (provably-equivalent mutants are discarded by
+Trivial Compiler Equivalence). A green driver is promoted to
+`migration/units/<id>/driver.c` with `driver-validation.json`; `migrate` then refuses a
+unit whose generated driver is not freshly validated.
+
+```bash
+cargo run -p harness-cli -- bench status --suite targets/tractor
+```
+The benchmark suite: `bench vendor --from <checkout>` (pinned, checksummed copy of the
+corpus), `bench verify-corpus`, `bench init` (every case becomes a harness target),
+`bench status` (per-case pipeline progress), `bench score [--case …] [--write]`
+(scores oracle-verified Rust on the corpus's held-out vectors with the corpus's own
+runners, sandboxed; `--write` re-verifies everything first and records `scores.json`),
+and `bench check [--replay]` (the regression suite: re-verify, re-validate, re-score,
+compare per vector — exit 10 on a regression). See `targets/tractor/README.md`.
+
 Exit codes (stable contract): `0` ok/green · `1` harness error · `2` usage ·
 `10` oracle red (for `migrate`: red, blocked, truncated, or format). Machine consumers read the ledger files, not stdout.
 
@@ -289,13 +313,19 @@ Exit codes (stable contract): `0` ok/green · `1` harness error · `2` usage ·
 ```
 crates/
   harness-core/     # fact model, schemas, plan, verdicts, observer, risk, planner, traits
-  harness-scan/     # C frontend (tree-sitter) implementing LanguageFrontend
+  harness-scan/     # C frontend (tree-sitter): facts, mutation sites, driver lint
   harness-detect/   # built-in hazard detectors (c-treesitter-v1 suite)
   harness-llm/      # provider profiles + adapters (anthropic, openai-compat,
-                    #   replay/external), triage pass, the migrate executor
-  harness-oracle/   # c-abi-differential OracleStrategy: sandbox, symbol-set check
+                    #   replay/external), triage pass, and the shared trajectory
+                    #   engine behind migrate + driver generation
+  harness-oracle/   # c-abi-differential OracleStrategy: sandbox + run confinement,
+                    #   symbol-set/capabilities/driver-shape gates, validate_driver,
+                    #   held-out benchmark scorer
   harness-cli/      # the `harness` binary
 docs/SCHEMAS.md     # normative ledger schemas, v1
+targets/tractor/    # TRACTOR B01 library suite: suite.toml, corpus.lock, cases/ (one
+                    #   harness target per case), heldout/ (vectors + corpus scorer,
+                    #   never inside a target root), scores.json, handoff-tools/
 targets/zopfli/     # vendored migration target (pinned)
   harness.toml      #   target config
   AGENTS.md         #   generated runtime view (managed block; `harness sync-runtime`)

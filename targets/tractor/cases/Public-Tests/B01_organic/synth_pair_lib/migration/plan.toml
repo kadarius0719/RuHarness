@@ -3,7 +3,7 @@ target = "synth_pair_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:809e15c263fc5b99483836183ebcf5851c95879d3c34078ed9f3c02379117966"
 symbols = ["synth_pair"]

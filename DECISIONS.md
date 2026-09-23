@@ -459,3 +459,117 @@ that flips red→green); escalation tiers + budget enforcement + `harness usage`
 enum strings already reserved); deny-by-default sandbox profile; Linux sandbox
 (Landlock/unshare); nightly `-Zsanitizer` for ffi shims; canary injection set;
 facts.db export; proptest.
+
+## 2026-09-23 — M4 research spike (§15), design, and the adversarial design review
+
+Two source-verified sweeps (corpus + scorer mechanics; LLM test/driver generation) and
+direct verification of the corpus and its scorer:
+
+- **Corpus:** `github.com/DARPA-TRACTOR-Program/PUBLIC-Test-Corpus` (MIT, Distribution A),
+  tags `v1` (6ec7ae6, 2026-02-20) and `v2` (**37960ee08a7c…**, 2026-09-14, pinned). No
+  upstream checksum manifest, no Cargo.lock. 346 case dirs; 150 non-SPHINCS library
+  cases; B01 = 80 public library cases + 20 `Hidden-Tests` library cases (released with
+  v1 — public since Feb 2026, i.e. NOT post-cutoff for any model used here).
+- **Scorer:** the corpus's own `cando2` runners — one vector per invocation, `dlopen`s
+  `lib<library>.dylib` from `build-ninja/` (C) or `translated_rust/target/release/`
+  (Rust), compares serialized state + stdout/stderr patterns; `has_ub` vectors → Skip.
+  42/42 B01 synthetic runners override `library:`/`symbol:`. First Evaluation Report:
+  150 B01 tests (incl. 51 executables, hidden tests, Linux containers), best performer
+  98.7% — our number is NOT comparable (different set, platform, and scorer harness).
+- **Driver generation evidence:** determinism re-runs, sanitizers and mutation adequacy
+  are supported; line coverage is a poor gate (advisory only); same-model test+code
+  generation risks correlated blind spots → different model per stage.
+
+**Design** (docs/M4-DESIGN.md): three layers that cannot see each other — a generated
+driver (the oracle's test, pinned by the ORIGINAL C), the Rust translation, and the
+corpus's public vectors, which never gate anything and never reach a prompt: they
+MEASURE how good "oracle-green" is. **Adversarial design review (4 lenses):** security
+**flawed**, measurement validity **flawed**, architecture and feasibility sound-with-
+fixes; twelve resolutions R1–R12 (authoritative §R) — driver forgery gate
+(`driver-shape`: object symbol allowlist + source lint) and run confinement (built
+binaries read nothing under the target root — this also closed a latent M3 hole: a
+candidate could read the previous turn's `drv_c.out`); held-out material never inside a
+target root + capability parity for candidates; per-runner library/symbol names;
+`-ffp-contract=off` everywhere (measured: Apple clang fuses FMA even at -O0; the -O0
+`hsv_to_rgb` baseline failed 1/80 vectors until disabled); mutation gate hardening;
+scorer supply chain (vendored, checksum-verified, `--frozen`); per-case strict pass as
+the headline; replay-stable contracts.
+
+**Dependencies (§11.1):** no new crates.io dependency in the harness. `harness-oracle`
+gains `serde_json` (already a workspace dependency; parses the scorer's report) and a
+path dependency on `harness-scan` (mutation sites + driver lint have one tree-sitter
+owner). The corpus scorer's ~147 crates are the CORPUS's, locked in
+`heldout/Cargo.lock`, vendored into a gitignored dir and built offline — never linked
+into the harness. One portability patch to a scorer DEPENDENCY (`process-fun-core`
+uses Linux-only `pipe2`; `cando2` cannot build on macOS without it) is hash-locked and
+documented in `targets/tractor/heldout/patches/PATCHES.md`.
+
+## 2026-09-23 — M4 run protocol, incidents, and bugs the run found
+
+**Who answered.** No cloud keys; the local 1B model cannot hold the contract (M3). All
+model calls went through the `external` hand-off, answered by Claude subagents:
+**drivers by Sonnet 5** (`claude-sonnet-5`), **translations by Haiku 4.5**
+(`claude-haiku-4-5-20251001`), escalating ONE tier to Sonnet 5 only after a Haiku
+attempt exhausted its 1+3-turn budget red (a documented simplification of §16.2's "after
+2 failed iterations": the harness cannot close an attempt early without forging a
+reply). `--model` is the ACTUAL answering model this time (M3 recorded a placeholder).
+Token usage per request is unmeasured (`null`); as logged by the agents' transcripts,
+answering cost ≈ 1.63 M Sonnet output tokens (drivers), 0.79 M Haiku + 0.36 M Sonnet
+output tokens (translations) — ≈ 22 K Sonnet-class and ≈ 9 K Haiku output tokens per
+verified unit, agent overhead included (approximate).
+
+**Blindness, audited mechanically.** Requests are rendered into isolated batch dirs
+outside the repo (index kept outside too); each answering agent may only Read/Write
+there; its transcript is audited before ANY answer is imported
+(`targets/tractor/handoff-tools/`, results in `targets/tractor/handoff-audit.jsonl`):
+51 batches, 687 tool calls, **0 breaches**, 4 deviations (an agent listing its own
+batch dir, editing its own answer — recorded verbatim, blindness preserved), 296
+answers imported. What it does NOT prove: anything about training data (vectors and
+organic C are public), or the orchestrating session (which had read some vectors while
+building the scorer; it only ever sent the fixed template in the tools README).
+
+**Incident — workflow agents are not blind.** The first driver round used Workflow
+agents; those are framed with the user's latest chat message and all ten answered the
+chat instead (0 answers, every tool call out of protocol, some listing repo paths). The
+audit caught it; nothing reached a ledger. Hand-offs use plain subagents since.
+
+**Bugs the run found (each fixed with a regression test that fails without the fix):**
+1. *Mutation gate vs equivalent mutants* (7cd8a52): tiny units (4–6 sites) had mutants
+   that compile to byte-identical objects (`char`→`unsigned char` on a memcpy buffer, a
+   pointer-cast deletion) — unkillable, so the small-n rule made units unvalidatable.
+   **Trivial Compiler Equivalence** (Papadakis et al., ICSE 2015) now discards them:
+   117 of 1447 compiled mutants suite-wide.
+2. *Replay path leak — latent since M3* (0122106, 627224f): replay verification runs in
+   `.replay-<id>/` but compiler evidence quotes the candidate's path; no attempt with
+   build-failure evidence could ever reproduce. Alias applied in the scrub stage, BEFORE
+   evidence is bounded (the paths differ in length, so truncation moved).
+3. *Rust panic thread ids* (644f9c5): Rust 1.94 prints the OS thread id in panic
+   messages; the evidence changed every run, so three attempts re-requested turn 2 on
+   every resume and never progressed (15 orphaned answers). Scrubbed in the oracle.
+4. *Raw stderr cut before any alias* (543660e): length-preserving replay scratch names.
+
+**Findings recorded, not papered over:** `ima_decode_lib`'s turn-2 candidate has UB in
+its unsafe FFI shim and dies with SIGABRT or SIGBUS nondeterministically; the signal is
+repair evidence, so that finished attempt only replays when the crash repeats (the final
+verified crate is deterministic). `043_iso646_and_digraphs_lib` is written with C
+digraphs, which tree-sitter-c cannot parse (no unit; stays in the denominator).
+
+## 2026-09-23 — M4 code review (4 lenses) and fix pass
+
+Security: bench scoring had no sandbox floor (fixed: refuses without
+`--allow-unsandboxed`); the inline-assembly ban was bypassable by a renaming import
+(`use core::arch::asm as z; z!(…)` compiled under the scaffolding — fixed: any
+asm-family identifier or `::arch` path fails `capabilities`). Correctness: a slow weak
+driver bought mutation kills with the clock (7/22 → 22/22; fixed: a driver run over 3 s
+fails determinism — all 91 drivers run < 0.4 s); raw-cut replay divergence (bug 4);
+`bench check --replay` false failures (shared hazard helper; stale records skipped).
+Measurement integrity: "verified" for scoring now requires a fresh green verdict and a
+validated driver (`stale-verified` otherwise); harness failures are `infra-error`, never
+a blind spot; the unsound "oracle false negative" class became `vector-pass/oracle-red`
+over finished behavior-rejected attempts only; `bench check` judges regressions per case
+(changed inputs elsewhere never mask them) and `score --write` re-verifies first.
+Contracts: implementation matched SCHEMAS.md exactly; README was stale (updated).
+Carry-forwards from review (MINOR): confinement setup failures surface as run failures;
+`crash-timeout` label can be triggered by driver stderr text; `evaluate_mutation`'s
+all-equivalent n/a is suite-wide, not per file; `interface` lines reach the trusted
+`[ABI CONTRACT]` region un-fenced (length-capped, printable) — injection hardening.

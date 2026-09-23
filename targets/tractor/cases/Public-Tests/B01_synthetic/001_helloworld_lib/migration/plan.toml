@@ -3,7 +3,7 @@ target = "001_helloworld_lib"
 
 [[unit]]
 id = "u-hello"
-status = "pending"
+status = "verified"
 files = ["test_case/src/hello.c"]
 source_hash = "blake3:ac0d6799ec4fe4b0deb85576627112ca20054e704194803dc3b3ddf92554b6ff"
 symbols = ["helloworld"]

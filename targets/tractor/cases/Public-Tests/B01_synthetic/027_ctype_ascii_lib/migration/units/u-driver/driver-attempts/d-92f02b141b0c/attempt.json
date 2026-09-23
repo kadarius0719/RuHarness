@@ -1,0 +1,31 @@
+{
+  "schema": "ruharness-attempt",
+  "schema_version": 1,
+  "id": "d-92f02b141b0c",
+  "unit": "u-driver",
+  "stage": "driver",
+  "provider": "external",
+  "provider_kind": "external",
+  "model": "claude-sonnet-5",
+  "prompt_digest": "blake3:5b28baefe7b436f1038d3b67f70611f51577773fbd5965f28749bd531838cba9",
+  "unit_source": "blake3:f7eff6e0843bd30e56ceec34a848a4601be2afc28a87bec544397fcc291ced39",
+  "driver": "",
+  "toolchain": [
+    "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+    "sandbox: sandbox-exec",
+    "cflags: -ffp-contract=off"
+  ],
+  "outcome": "green",
+  "turns": [
+    {
+      "kind": "generate",
+      "result": "green",
+      "request_key": "4b5b8032",
+      "response_hash": "blake3:f863d04f9e5136824359827dc2379ce09e1b26c3de7f8ec543d39a8a7386da55",
+      "input_tokens": null,
+      "output_tokens": null
+    }
+  ],
+  "candidate_digest": "blake3:34f03cea6f3f01e4a1a053e18bf3265ec3d2afd5a2c1c5bb12c87b0c6288822a",
+  "promoted": false
+}

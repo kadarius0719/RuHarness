@@ -3,7 +3,7 @@ target = "030_mutable_buffer_overlap_extrahard_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:ea2af5d4d038c98577e38bf11ab056e365493596f89efb2d1a97b58b80e19ddd"
 symbols = ["driver", "fma_array"]

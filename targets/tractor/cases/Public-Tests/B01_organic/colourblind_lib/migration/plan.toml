@@ -3,7 +3,7 @@ target = "colourblind_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:0dc448e0a4ed2254b6cc1873921d4bfe0ceef064f422158c11d0618900956f31"
 symbols = ["colourblind"]

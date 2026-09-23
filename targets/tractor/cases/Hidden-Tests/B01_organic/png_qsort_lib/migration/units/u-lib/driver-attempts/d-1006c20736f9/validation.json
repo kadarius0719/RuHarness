@@ -1,0 +1,77 @@
+{
+  "schema": "ruharness-driver-validation",
+  "schema_version": 1,
+  "unit": "u-lib",
+  "green": true,
+  "inputs": {
+    "unit_source": "blake3:096b0f6c0f6d3fdbdabcd59337ed510451120b03b3f0a0b6990221b6b0eab553",
+    "driver": "blake3:1ee8bd763b1b635eabe0aef510810c2e01ef32992082f01cd86260282b4b4457",
+    "toolchain": [
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "policy": {
+    "max_mutants": 24,
+    "min_kill_permille": 600
+  },
+  "checks": [
+    {
+      "name": "driver-build",
+      "passed": true,
+      "detail": "compiles with -Wall -Werror=implicit-function-declaration -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=format -Werror=return-type -Werror=uninitialized; links against 1 unit file(s)"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "symbols-called",
+      "passed": true,
+      "detail": "calls all 1 unit symbol(s)"
+    },
+    {
+      "name": "determinism",
+      "passed": true,
+      "detail": "3 runs, 12542 bytes, byte-identical"
+    },
+    {
+      "name": "opt-levels",
+      "passed": true,
+      "detail": "-O0 output identical to -O2 (12542 bytes)"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    },
+    {
+      "name": "mutation",
+      "passed": true,
+      "detail": "killed 22/24 compiled (24 sampled of 25 sites, 0 TCE-equivalent discarded; needs ≥ 0.600)"
+    }
+  ],
+  "mutation": {
+    "sites": 25,
+    "sampled": 24,
+    "compiled": 24,
+    "equivalent": 0,
+    "killed": 22,
+    "survivors": [
+      {
+        "file": "test_case/src/lib.c",
+        "line": 10,
+        "function": "qsort",
+        "operator": "relational"
+      },
+      {
+        "file": "test_case/src/lib.c",
+        "line": 14,
+        "function": "qsort",
+        "operator": "relational"
+      }
+    ]
+  }
+}

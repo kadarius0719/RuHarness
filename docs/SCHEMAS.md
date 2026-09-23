@@ -531,3 +531,173 @@ exactly like a red verdict.
 - `harness verify` gains `--allow-unsandboxed` (see Trust boundaries).
 - `harness state status` additionally flags a done-claiming status whose verdict is
   STALE as a CONTRADICTION, and prints a per-unit attempts summary.
+
+---
+
+# M4 additions: driver generation, benchmark suites (v1)
+
+Reviewed by a 4-lens adversarial design panel 2026-09-23 (security and measurement
+validity: "flawed"; architecture and feasibility: sound/feasible with fixes). The
+reviewed design and its twelve resolutions are in docs/M4-DESIGN.md (§R is
+authoritative); this section is the contract as implemented.
+
+## harness.toml additions (all optional; additive)
+
+```toml
+[target]
+include_dirs = ["test_case/include"]  # clean relative paths INSIDE source_dir; searched
+                                      # after the including file's own dir
+
+[oracle.whole_program]                # OPT-IN (was implicit and zopfli-specific before M4)
+args = ["-c"]                         # flags only: ^-{1,2}[A-Za-z0-9][A-Za-z0-9-]*$, <= 4;
+                                      # the harness appends the sample path
+[llm.driver]                          # stage override, same keys + clamps as [llm.migrate]
+provider = "external"
+model = "claude-sonnet-5"
+
+[driver]
+max_mutants = 24                      # range 16..=64 (clamped from BELOW too)
+min_kill_ratio = 0.6                  # range 0.5..=1.0 (recorded as permille)
+```
+Without `[oracle.whole_program]` the verdict carries one `whole-program` check,
+passed, detail `not configured for this target` (migration note: zopfli gained
+`args = ["-c"]`; its verdict is unchanged).
+
+## Oracle checks added to every `verify` (c-abi-differential)
+
+Order: `symbol-set` → `capabilities` → `driver-shape` → `differential-driver` →
+`whole-program:*` → `sanitizers`. A red `symbol-set`, `capabilities` or `driver-shape`
+ends the run (nothing is linked or run).
+
+- **Every C compile passes `-ffp-contract=off`** (Apple clang on arm64 fuses
+  multiply-add even at -O0; the reference Linux build and Rust do not);
+  `inputs.toolchain` gains `cflags: -ffp-contract=off`.
+- **`capabilities`**: undefined symbols of the candidate crate's OWN archive members
+  may not reach the classes `fs env process net os thread time dl syscall` (std paths
+  by legacy mangling; libc names incl. process control: `kill raise ptrace sigaction
+  signal getppid _exit …`) unless the C unit's own unresolved calls use that class;
+  no `asm!`/`global_asm!`/`naked_asm!` anywhere in `src/`. `std::thread::local` is
+  exempt (`thread_local!`). No candidate member found → fails closed.
+- **`driver-shape`** (the driver is target-owned or model-written): compiled alone,
+  its object defines exactly `main`; its undefined symbols ⊆ unit symbols ∪ a fixed
+  libc allowlist (stdout/stderr printing, pure mem*/str*, malloc family, abs/div,
+  libm, ctype, errno, compiler-emitted fortify/stack-protector names — fortify only
+  as `__<allowed>_chk`); no weak references; plus a tree-sitter source lint (no asm,
+  attributes, pragmas, `__` identifiers, function-like macros, `##`, digraphs,
+  `#include` beyond the unit's headers and a fixed system set, unit symbols only as
+  callees or prototypes, no `%p`, no `uintptr_t`/`intptr_t`).
+- **Run confinement** for every run of a built binary: a fresh per-run `TMPDIR` (the
+  only writable place), no reads under the home dir or the target root except the
+  binary and listed inputs, `exec` of nothing but itself.
+
+## Driver generation: `harness gen-driver <UNIT>`
+
+Same trajectory engine as `migrate` (generate turn + ≤ `max_repairs` stateless
+repairs; external/replay/live semantics; `--retry` samples; replay verification).
+
+- **Attempts**: `units/<id>/driver-attempts/<d-id>/{attempt.json, candidate/driver.c,
+  validation.json}`; traces/hand-offs in `units/<id>/driver-traces/`.
+  `attempt.json` = the M3 attempt schema plus `"stage": "driver"` (optional field,
+  omitted for migrate — pre-M4 records stay byte-identical); `driver` = `""`.
+  Id: `d-` + 12 hex of blake3(`driver` ‖ NUL ‖ unit ‖ NUL ‖ unit_source ‖ NUL ‖
+  provider_kind ‖ NUL ‖ model ‖ NUL ‖ generate request_key). Migrate ids are frozen
+  (golden test). `Turn.kind` is OPEN, display-only: `translate | generate | repair`.
+- **Emission**: the path `driver.c` alone on a line, a ```c fence (```C or an
+  untagged fence with the path label tolerated), the entire file, closing fence,
+  final line `RUHARNESS_END_OF_OUTPUT`; or `<blocked>reason</blocked>`.
+- **Turn results** from the first failed validation check: `driver-build` → `build`;
+  `driver-shape`/`symbols-called` → `check`; `determinism`/`opt-levels`/
+  `sanitizers`/`mutation` → `oracle`; a timed-out run → `crash-timeout`.
+- **Prompt confinement**: every source file put in any prompt (both stages) must
+  resolve inside `source_dir`.
+
+### driver-validation.json (`ruharness-driver-validation`, v1)
+
+```json
+{"schema":"ruharness-driver-validation","schema_version":1,"unit":"u-lib","green":true,
+ "inputs":{"unit_source":"blake3:…","driver":"blake3:…","toolchain":["rustc …","Apple clang …","sandbox: sandbox-exec","cflags: -ffp-contract=off"]},
+ "policy":{"max_mutants":24,"min_kill_permille":600},
+ "checks":[{"name":"driver-build","passed":true,"detail":"…"}, …],
+ "mutation":{"sites":36,"sampled":24,"compiled":22,"equivalent":2,"killed":20,"survivors":[{"file":"…","line":5,"function":"rev16","operator":"literal"}]}}
+```
+Checks, in order, stopping at the first failure: `driver-build` (strict `-Werror=`
+set on the driver's own TU), `driver-shape`, `symbols-called`, `determinism` (3 runs,
+byte-identical, exit 0, 1 B–256 KiB), `opt-levels` (-O0 == -O2), `sanitizers`,
+`mutation`.
+
+**Mutation adequacy.** Sites: every operator site in function bodies of the unit's
+`.c` files (outside preprocessor conditionals) — `arith relational logical bitwise
+shift literal not-delete cast-delete signedness string-literal` — plus
+`table-element` in file-scope initializer lists. Sampling (no RNG): each unit symbol
+first gets up to `ceil((max/2)/|symbols|)` of its own body's mutants in
+blake3-key order, the rest of the budget fills from all mutants. **Trivial Compiler
+Equivalence**: a mutant whose `-c` object is byte-identical to the original file's is
+`equivalent` — discarded, never counted. Gate over the counted (compiled,
+non-equivalent) mutants n: n ≥ 10 → killed ≥ ratio·n; 1 ≤ n < 10 → killed ≥ n − 1;
+every unit symbol with ≥ 2 counted mutants in its own body has ≥ 1 kill. 0 sites or
+all equivalent → passes, flagged `n/a`. Sites but nothing compiles → harness error.
+
+**Promotion.** Green → `units/<id>/driver.c` is written, RE-VALIDATED IN PLACE, and
+only then `driver-validation.json` is stored (red → rolled back). gen-driver never
+replaces a driver that has no validation record (human-written) or a configured
+driver elsewhere; replacing a generated one needs `--promote`. **Provenance (R6):**
+once `driver-attempts/` exists (or a validation record does), `migrate` requires a
+FRESH green validation. A red `driver-shape` during `migrate` is a harness error (the
+driver's fault), never translator evidence.
+
+## Benchmark suites: `targets/<suite>/`
+
+Layout: `suite.toml`, `corpus.lock`, `cases/<upstream path>/` (one harness target
+each: upstream `test_case/` + harness files), `heldout/<upstream path>/{test_vectors,
+runner}` + `heldout/tools/…` (never inside a target root), `scores.json`.
+
+- **suite.toml** (v1): `name`, `[upstream] repo tag commit` (40-hex), `[[battery]] dir
+  split` (`public|hidden`), DERIVED `[[case]] path split library symbol runner`
+  (`library`/`symbol` from the runner's `harness!` literals, else the case-dir
+  defaults), `[[excluded]] path reason`.
+- **corpus.lock** (canonical JSONL, sorted by path): header
+  `{"k":"header","schema":"ruharness-corpus-lock","schema_version":1,"repo","tag","commit"}`,
+  then `{"k":"file","path","upstream","hash"}`; `upstream = ""` marks a
+  harness-authored LOCKED file (`heldout/Cargo.toml`, `heldout/Cargo.lock`,
+  `heldout/patches/**`). Verification: every locked file a regular file, `nlink == 1`,
+  exact name, matching hash; every regular file under `cases/`, `heldout/` locked or
+  harness-owned (`cases/<case>/{harness.toml,AGENTS.md,CLAUDE.md}`,
+  `cases/<case>/migration/**`, anchored to suite cases); no symlinks or special files;
+  no case-folded path collisions.
+- **scores.json** (`ruharness-bench-scores`, v1): `suite`, `corpus_lock`,
+  `scorer_lock` (digests), `environment` (rustc, cc, OS + arch, sandbox, baseline
+  cflags), `totals[]` per split (`cases scorable verified strict_pass blind_spots
+  oracle_false_negatives unscorable c_baseline_invalid vectors vectors_passed
+  vectors_skipped`), `cases[]` sorted by path: `class` (closed: `strict-pass |
+  blind-spot | unverified | unscorable | c-baseline-invalid`), `pipeline`, `inputs`
+  (unit_source, driver, validation, rust_crate, candidate digests), `c_baseline`,
+  `rust`, optional `candidate` counts, `vectors[]` sorted by name with results
+  (closed: `pass skip timeout not-run fail:<cando ResultType> fail:dylib-build
+  fail:build fail:no-report fail:bad-report fail:runner-exit-<n> fail:runner-killed`).
+  A vector's `has_ub` → `skip`, excluded from every denominator.
+
+## CLI additions
+
+- `harness gen-driver <UNIT> [--target] [--provider] [--model] [--promote] [--retry]
+  [--attempt ID] [--allow-unsandboxed]` — exit 0 green · 10 red/blocked/truncated/
+  format · 1 harness error (incl. awaiting external responses).
+- `harness bench vendor --suite DIR --from CHECKOUT` — checkout's detached HEAD must
+  equal the pin; never overwrites a vendored file with different bytes.
+- `harness bench verify-corpus | status | init [--check] --suite DIR`.
+- `harness bench score --suite DIR [--case NAME]… [--write]`.
+- `harness bench check --suite DIR [--replay]` — re-verifies verified units,
+  re-validates generated drivers, re-scores, compares per vector with the committed
+  `scores.json`: exit 0 ok · 10 a Rust vector `pass` → not pass with unchanged
+  inputs, or a re-verify/re-validate problem · 1 incomparable (environment, lock or
+  membership differs, or a case's inputs changed — re-score required). A C-side
+  flip is reported as environment drift, never a regression.
+
+## Writer table additions
+
+| File | Writer |
+|---|---|
+| `units/<id>/driver-attempts/**`, `driver-traces/**` | `gen-driver` |
+| `units/<id>/driver.c`, `driver-validation.json` | `gen-driver` (promotion) |
+| plan `[unit.oracle]` (only when absent) | `bench init`, `gen-driver` |
+| `suite.toml` `[[case]]`/`[[excluded]]`, `corpus.lock` | `bench vendor` |
+| `scores.json` | `bench score --write` |

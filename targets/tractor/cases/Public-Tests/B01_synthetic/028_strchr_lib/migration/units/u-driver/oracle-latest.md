@@ -1,0 +1,17 @@
+# Oracle verdict — u-driver
+
+Verdict: **GREEN**
+
+Inputs tested:
+- unit_source: `blake3:598bb26fe742dfe6c2436b8f95e1a74cfe9f7e88a2208fed8a7ba31bf06b8046`
+- rust_crate: `blake3:610177d9b013277384f0d5a32c732d43c09b7627cac286f7474dfc898c256518`
+- driver: `blake3:36daecc62675f46c1bcaf3736ac297e6bec3462fbe226e2d3c1aa9ea49ebfb58`
+- toolchain: rustc 1.94.1 (e408947bf 2026-03-25); Apple clang version 21.0.0 (clang-2100.1.1.101); sandbox: sandbox-exec; cflags: -ffp-contract=off
+
+Checks:
+- **symbol-set**: PASS — 2 exported symbol(s) match the unit's symbols exactly
+- **capabilities**: PASS — no capability beyond the C unit's (allowed: none); no asm
+- **driver-shape**: PASS — driver object defines only main, references only the unit and allowlisted libc; source lint clean
+- **differential-driver**: PASS — 1944 bytes identical
+- **whole-program**: PASS — not configured for this target
+- **sanitizers**: PASS — asan+ubsan clean

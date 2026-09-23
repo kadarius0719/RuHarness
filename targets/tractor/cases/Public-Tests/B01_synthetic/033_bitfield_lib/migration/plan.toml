@@ -3,7 +3,7 @@ target = "033_bitfield_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:ffa761a2e9374ea7a97043e9993511977a848e2d2aca62da5d7640c15d8afbed"
 symbols = ["driver", "print_foo"]

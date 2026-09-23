@@ -1,0 +1,27 @@
+{
+  "schema": "ruharness-attempt",
+  "schema_version": 1,
+  "id": "d-c045211ca688",
+  "unit": "u-driver",
+  "stage": "driver",
+  "provider": "external",
+  "provider_kind": "external",
+  "model": "claude-sonnet-5",
+  "prompt_digest": "blake3:25411d5e0fa9e1f54027b75948635aa8ad1a29864795d3be609a50c21a161fd7",
+  "unit_source": "blake3:7db57f97899c391f1bffe5d79a21fb263bcbf9e64213a30a2a27c7850d9b7bb6",
+  "driver": "",
+  "toolchain": [],
+  "outcome": "blocked",
+  "turns": [
+    {
+      "kind": "generate",
+      "result": "blocked",
+      "request_key": "35d6d991",
+      "response_hash": "blake3:c57f5457fd9fefefc75dd7312ba038639133c7dc7b5eccb9e01b3a26710d0567",
+      "input_tokens": null,
+      "output_tokens": null
+    }
+  ],
+  "candidate_digest": "",
+  "promoted": false
+}

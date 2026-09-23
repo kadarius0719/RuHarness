@@ -1,0 +1,31 @@
+{
+  "schema": "ruharness-attempt",
+  "schema_version": 1,
+  "id": "a-2dbc8ce59491",
+  "unit": "u-staticalias",
+  "provider": "external",
+  "provider_kind": "external",
+  "model": "claude-sonnet-5",
+  "prompt_digest": "blake3:c657655b7ca34b4ceebf62af765cfd3aac58003570273c740dd9682b3e4fbd20",
+  "unit_source": "blake3:f22edbb6005daba6c8b7055f800f03f4b94e35122085fd88270497662ceb67e9",
+  "driver": "blake3:dbc3687eec24ae6d66fbf1f7c6d005103558d83cf69af2af84585a1649d1950a",
+  "toolchain": [
+    "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+    "sandbox: sandbox-exec",
+    "cflags: -ffp-contract=off"
+  ],
+  "outcome": "green",
+  "turns": [
+    {
+      "kind": "translate",
+      "result": "green",
+      "request_key": "ae45853d",
+      "response_hash": "blake3:f7d44ccb9a9f72d752e86b601adf04ffb7046037203391c82f35d75d64e37001",
+      "input_tokens": null,
+      "output_tokens": null
+    }
+  ],
+  "candidate_digest": "blake3:4aa0ef9ea4ceb03db7d47a7c2aed21c0362b3f8b56dc49c6b489ee4affa42300",
+  "promoted": true
+}

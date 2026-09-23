@@ -3,7 +3,7 @@ target = "tritanopia_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:53edbd5bde9d872b4e89e1bf357d07f064843d6a7d3eee0fc895e91a3fa57c4a"
 symbols = ["tritanopia"]

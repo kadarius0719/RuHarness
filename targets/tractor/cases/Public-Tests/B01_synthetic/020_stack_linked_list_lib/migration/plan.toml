@@ -3,7 +3,7 @@ target = "020_stack_linked_list_lib"
 
 [[unit]]
 id = "u-simplestruct"
-status = "pending"
+status = "verified"
 files = ["test_case/src/simplestruct.c"]
 source_hash = "blake3:f2f24bde177c2285ebc5370494882f8042ed6e067b580bd32c9eff1dd0e128a2"
 symbols = ["smallestValue"]

@@ -3,7 +3,7 @@ target = "009_stack_buffer_overflow_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:91d71462bf3ee5a9e7a18aea74b98596c564aa93a1c67d0dcb20fb8c4bba9123"
 symbols = ["bad", "driver", "good", "printIntLine", "printLine"]

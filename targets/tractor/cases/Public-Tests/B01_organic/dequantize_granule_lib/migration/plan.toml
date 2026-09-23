@@ -3,7 +3,7 @@ target = "dequantize_granule_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:dda4400dd40b557deea6a32830e165fe7e997ac43a5fadf2dff066e7f69fd097"
 symbols = ["dequantize_granule"]

@@ -3,7 +3,7 @@ target = "update_md5_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:969a223ddf64fc5dba75b64f4afb6de864c5f5c830aa99bcac8a39fc66aaefb2"
 symbols = ["tflac_md5_addsample", "tflac_pack_u64le", "update_md5"]

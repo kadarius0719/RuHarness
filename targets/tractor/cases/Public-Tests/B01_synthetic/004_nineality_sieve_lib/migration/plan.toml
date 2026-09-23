@@ -3,7 +3,7 @@ target = "004_nineality_sieve_lib"
 
 [[unit]]
 id = "u-sieve"
-status = "pending"
+status = "verified"
 files = ["test_case/src/sieve.c"]
 source_hash = "blake3:8e5ff33d4bf1f997d720eadff90de8310ca2f2c484ee60fa0075e9c1bdff4e02"
 symbols = ["sieve"]

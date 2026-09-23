@@ -3,7 +3,7 @@ target = "019_integer_overflow_char_max_multiply_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:8a180813d88663fef64a89a2835860abab43c81e56cf1c287f81584343757202"
 symbols = ["bad", "driver", "good", "printHexCharLine", "printLine"]

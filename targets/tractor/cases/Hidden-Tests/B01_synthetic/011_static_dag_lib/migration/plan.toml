@@ -3,7 +3,7 @@ target = "011_static_dag_lib"
 
 [[unit]]
 id = "u-staticdag"
-status = "pending"
+status = "verified"
 files = ["test_case/src/staticdag.c"]
 source_hash = "blake3:29b96a0cb2833054597344abcc35a423344ba6195e98d99ef59da6d93cee23db"
 symbols = ["driver", "path_add", "path_mult", "path_subtract", "static_update"]

@@ -3,7 +3,7 @@ target = "030_integer_underflow_char_min_multiply_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:2b94231df914e202333a0039dd54cc93835dd33a98a525cd0d012843da2a7425"
 symbols = ["bad", "driver", "good", "printHexCharLine", "printLine"]

@@ -3,7 +3,7 @@ target = "premultiply_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:0168011a816987c96803c875ed98bc42cc4ab0ecb95cf12eba9a691d9ae14d2f"
 symbols = ["premultiply"]

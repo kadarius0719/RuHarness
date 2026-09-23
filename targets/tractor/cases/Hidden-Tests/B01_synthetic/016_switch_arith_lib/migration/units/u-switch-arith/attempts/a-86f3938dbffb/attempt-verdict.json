@@ -1,0 +1,52 @@
+{
+  "schema": "ruharness-verdict",
+  "schema_version": 1,
+  "unit": "u-switch-arith",
+  "green": false,
+  "inputs": {
+    "unit_source": "blake3:973d7b1335fae3af86fedb612bc97307c0aa713b8c0289687f1bf740311ae80e",
+    "driver": "blake3:40423462cddc69b2da3d04886dca92197bc13e4aeca81502ac99a1a86aa29db7",
+    "rust_crate": "blake3:a2692659dfd28a297016bc00d6c7b6a38bfb2cc0dd6e96b26cf2c04918212247",
+    "replaces": [
+      "test_case/src/switch-arith.c"
+    ],
+    "toolchain": [
+      "rustc 1.94.1 (e408947bf 2026-03-25)",
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "checks": [
+    {
+      "name": "symbol-set",
+      "passed": true,
+      "detail": "2 exported symbol(s) match the unit's symbols exactly"
+    },
+    {
+      "name": "capabilities",
+      "passed": true,
+      "detail": "no capability beyond the C unit's (allowed: none); no asm"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "differential-driver",
+      "passed": false,
+      "detail": "outputs differ (lens 16880 vs 16961, first diff at byte 8116)"
+    },
+    {
+      "name": "whole-program",
+      "passed": true,
+      "detail": "not configured for this target"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    }
+  ]
+}

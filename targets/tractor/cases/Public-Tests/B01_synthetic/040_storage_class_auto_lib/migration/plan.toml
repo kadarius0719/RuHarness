@@ -3,7 +3,7 @@ target = "040_storage_class_auto_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:0c4a9532a2d0918634d8ff44809aa5b26a627866c3a870b45bc39b0c8d2b5c62"
 symbols = ["driver"]

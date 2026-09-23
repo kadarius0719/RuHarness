@@ -3,7 +3,7 @@ target = "006_static_alias_lib"
 
 [[unit]]
 id = "u-staticalias"
-status = "pending"
+status = "verified"
 files = ["test_case/src/staticalias.c"]
 source_hash = "blake3:f22edbb6005daba6c8b7055f800f03f4b94e35122085fd88270497662ceb67e9"
 symbols = ["driver", "static_alias"]

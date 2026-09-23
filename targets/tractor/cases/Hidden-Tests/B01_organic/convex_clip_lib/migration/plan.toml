@@ -3,7 +3,7 @@ target = "convex_clip_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:aab2f851333b6b05d7c740b46a7c4c59d3a5696c3e0d28b28320cb7f6fd0a12e"
 symbols = ["convex_clip"]

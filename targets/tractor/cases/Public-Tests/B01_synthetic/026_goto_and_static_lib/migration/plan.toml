@@ -3,7 +3,7 @@ target = "026_goto_and_static_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:aae2062b3389912724ae68ddc6c59c49fc428fffbe65161a82cd28e7f375d799"
 symbols = ["driver"]

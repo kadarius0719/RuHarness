@@ -3,7 +3,7 @@ target = "hdr_bitrate_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:a65d63b7716304a8f794f55037efc8201171633227d298b3b1d6c51ad5abc805"
 symbols = ["hdr_bitrate"]

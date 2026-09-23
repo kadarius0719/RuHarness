@@ -1,0 +1,95 @@
+{
+  "schema": "ruharness-driver-validation",
+  "schema_version": 1,
+  "unit": "u-driver",
+  "green": true,
+  "inputs": {
+    "unit_source": "blake3:aa3127cb9944a960c04d826c69f8ca1c60a15e6c7d4ef5df9fc13d1ca798b85c",
+    "driver": "blake3:b44657f863c44656a340356fa270d89679882a9588c69ec9b49b27d5cded12e9",
+    "toolchain": [
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "policy": {
+    "max_mutants": 24,
+    "min_kill_permille": 600
+  },
+  "checks": [
+    {
+      "name": "driver-build",
+      "passed": true,
+      "detail": "compiles with -Wall -Werror=implicit-function-declaration -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=format -Werror=return-type -Werror=uninitialized; links against 1 unit file(s)"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "symbols-called",
+      "passed": true,
+      "detail": "calls all 3 unit symbol(s)"
+    },
+    {
+      "name": "determinism",
+      "passed": true,
+      "detail": "3 runs, 2366 bytes, byte-identical"
+    },
+    {
+      "name": "opt-levels",
+      "passed": true,
+      "detail": "-O0 output identical to -O2 (2366 bytes)"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    },
+    {
+      "name": "mutation",
+      "passed": true,
+      "detail": "killed 16/21 compiled (21 sampled of 21 sites, 0 TCE-equivalent discarded; needs ≥ 0.600)"
+    }
+  ],
+  "mutation": {
+    "sites": 21,
+    "sampled": 21,
+    "compiled": 21,
+    "equivalent": 0,
+    "killed": 16,
+    "survivors": [
+      {
+        "file": "test_case/src/driver.c",
+        "line": 9,
+        "function": "fma_array",
+        "operator": "relational"
+      },
+      {
+        "file": "test_case/src/driver.c",
+        "line": 20,
+        "function": "call_fma",
+        "operator": "literal"
+      },
+      {
+        "file": "test_case/src/driver.c",
+        "line": 20,
+        "function": "call_fma",
+        "operator": "literal"
+      },
+      {
+        "file": "test_case/src/driver.c",
+        "line": 21,
+        "function": "call_fma",
+        "operator": "relational"
+      },
+      {
+        "file": "test_case/src/driver.c",
+        "line": 31,
+        "function": "driver",
+        "operator": "literal"
+      }
+    ]
+  }
+}

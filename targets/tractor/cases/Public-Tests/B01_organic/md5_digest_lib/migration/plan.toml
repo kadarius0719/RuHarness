@@ -3,7 +3,7 @@ target = "md5_digest_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:7074e93361f13786ed83ed09b6cda2a3969db4622e19a389b5e7ea68dd46d8db"
 symbols = ["md5_digest"]

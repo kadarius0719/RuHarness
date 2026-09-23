@@ -1,0 +1,34 @@
+{
+  "schema": "ruharness-attempt",
+  "schema_version": 1,
+  "id": "a-64ebe52cf5a1",
+  "unit": "u-switch-arith",
+  "provider": "external",
+  "provider_kind": "external",
+  "model": "claude-haiku-4-5-20251001",
+  "prompt_digest": "blake3:ac8267c0e26ead12fc186512e78e7c18f1f760a094444dd9a095b122d5ad455d",
+  "unit_source": "blake3:973d7b1335fae3af86fedb612bc97307c0aa713b8c0289687f1bf740311ae80e",
+  "driver": "blake3:40423462cddc69b2da3d04886dca92197bc13e4aeca81502ac99a1a86aa29db7",
+  "toolchain": [],
+  "outcome": "blocked",
+  "turns": [
+    {
+      "kind": "translate",
+      "result": "check",
+      "request_key": "e3b79fbe",
+      "response_hash": "blake3:73e188d90f1f97c5dcab49a2e7a094638debd721aa8668747302f52881be4ef9",
+      "input_tokens": null,
+      "output_tokens": null
+    },
+    {
+      "kind": "repair",
+      "result": "blocked",
+      "request_key": "9aa78bce",
+      "response_hash": "blake3:66603d3a9bb5f42f6f4b13a7afe441b10d90613ffe6078702e29e56f2e13d9c8",
+      "input_tokens": null,
+      "output_tokens": null
+    }
+  ],
+  "candidate_digest": "",
+  "promoted": false
+}

@@ -3,7 +3,7 @@ target = "tfm_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:98c2e57ae66f31ba394c341fad084a197fbf5d96b558997320c032de9b87561b"
 symbols = ["tfm"]

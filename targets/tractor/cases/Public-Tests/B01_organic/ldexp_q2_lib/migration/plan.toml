@@ -3,7 +3,7 @@ target = "ldexp_q2_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:1df4525ff013e7142cf284042ecadb885df14011f7e371b644ceff91e78e6699"
 symbols = ["ldexp_q2"]

@@ -3,7 +3,7 @@ target = "010_integer_overflow_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:4af12fe55ef2f033bf4ccf591fada7372eceb7ac3406d69babcc9eb326d749cd"
 symbols = ["driver", "printHexCharLine"]

@@ -3,7 +3,7 @@ target = "refine_block_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:e30cff08f04a082bfade029e681570b9764a32502f268f79a0fcef20b2443fa1"
 symbols = ["refine_block"]

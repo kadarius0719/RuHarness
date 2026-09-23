@@ -3,7 +3,7 @@ target = "div_euclid_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:b79b1d15dd5d854e756f9f04b030c54a869ad00dde24a13b7097851fe037723e"
 symbols = ["div_euclid"]

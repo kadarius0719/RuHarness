@@ -3,7 +3,7 @@ target = "contrast_ratio_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:e27a6eab0b4cacf7fb4c7a69660575d57fc404ca2877e52090e0ce8a3bda29b8"
 symbols = ["contrast_ratio"]

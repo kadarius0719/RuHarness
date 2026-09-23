@@ -1,0 +1,31 @@
+{
+  "schema": "ruharness-attempt",
+  "schema_version": 1,
+  "id": "a-57a175bdf988",
+  "unit": "u-lib",
+  "provider": "external",
+  "provider_kind": "external",
+  "model": "claude-haiku-4-5-20251001",
+  "prompt_digest": "blake3:1f35adf95224454dba7eff1e339574b00672b90a9c5192fa84750f44b16c7214",
+  "unit_source": "blake3:809e15c263fc5b99483836183ebcf5851c95879d3c34078ed9f3c02379117966",
+  "driver": "blake3:92efd2fd36ad6d2160c357e94eb15ad128921b9b7dc8b3359d1a7db6aec8ba0b",
+  "toolchain": [
+    "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+    "sandbox: sandbox-exec",
+    "cflags: -ffp-contract=off"
+  ],
+  "outcome": "green",
+  "turns": [
+    {
+      "kind": "translate",
+      "result": "green",
+      "request_key": "e79197bd",
+      "response_hash": "blake3:66339c6d50361322f28be5e5c5b653ee19dea2bc13a9df5b592644932ce7efa6",
+      "input_tokens": null,
+      "output_tokens": null
+    }
+  ],
+  "candidate_digest": "blake3:3450d2c2cb5c7191708ecf9be52509f36e4e736f6e541bf6562c2a40335d3170",
+  "promoted": true
+}

@@ -3,7 +3,7 @@ target = "037_cast_to_char_ptr_int_no_strict_aliasing_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:006d3cc1e09b2cc333c8475b4cd0f844796e174116551ecab9a55a520dcb11a3"
 symbols = ["driver"]

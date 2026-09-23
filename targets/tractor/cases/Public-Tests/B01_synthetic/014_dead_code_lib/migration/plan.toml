@@ -3,7 +3,7 @@ target = "014_dead_code_lib"
 
 [[unit]]
 id = "u-driver"
-status = "pending"
+status = "verified"
 files = ["test_case/src/driver.c"]
 source_hash = "blake3:afcdb741591f96d0f31db8e2189efcbefa13d0c44f83a47fd36a18799b063a7f"
 symbols = ["bad", "driver", "good", "printLine"]

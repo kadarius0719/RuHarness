@@ -3,7 +3,7 @@ target = "update_frame_header_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:7abf119d4889f54da3e7188b130ccd3fe98ff0e0cc62495e23c358a8ca96ee00"
 symbols = ["update_frame_header"]

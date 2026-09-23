@@ -3,7 +3,7 @@ target = "collided_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:83601a730fca78ea3369dbd6daeb3b764e278c9a347e541259e0c16c370cf89a"
 symbols = ["c2AABBtoAABB", "c2CircletoAABB", "c2CircletoCircle", "c2Clampv", "c2Dot", "c2Maxv", "c2Minv", "c2Sub", "c2V", "collided"]

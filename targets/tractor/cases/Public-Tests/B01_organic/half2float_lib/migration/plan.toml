@@ -3,7 +3,7 @@ target = "half2float_lib"
 
 [[unit]]
 id = "u-lib"
-status = "pending"
+status = "verified"
 files = ["test_case/src/lib.c"]
 source_hash = "blake3:64f21638049a47641d06409cfbc3040797f145c8cb44a2da65ca641413361267"
 symbols = ["half2float"]

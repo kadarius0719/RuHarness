@@ -1,0 +1,52 @@
+{
+  "schema": "ruharness-verdict",
+  "schema_version": 1,
+  "unit": "u-staticalias",
+  "green": false,
+  "inputs": {
+    "unit_source": "blake3:f22edbb6005daba6c8b7055f800f03f4b94e35122085fd88270497662ceb67e9",
+    "driver": "blake3:dbc3687eec24ae6d66fbf1f7c6d005103558d83cf69af2af84585a1649d1950a",
+    "rust_crate": "blake3:d9283dc9d4d193ff9f5a5a8b37c938bf8133731f3428590c5160528d8fdfea35",
+    "replaces": [
+      "test_case/src/staticalias.c"
+    ],
+    "toolchain": [
+      "rustc 1.94.1 (e408947bf 2026-03-25)",
+      "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sandbox: sandbox-exec",
+      "cflags: -ffp-contract=off"
+    ]
+  },
+  "checks": [
+    {
+      "name": "symbol-set",
+      "passed": true,
+      "detail": "2 exported symbol(s) match the unit's symbols exactly"
+    },
+    {
+      "name": "capabilities",
+      "passed": true,
+      "detail": "no capability beyond the C unit's (allowed: none); no asm"
+    },
+    {
+      "name": "driver-shape",
+      "passed": true,
+      "detail": "driver object defines only main, references only the unit and allowlisted libc; source lint clean"
+    },
+    {
+      "name": "differential-driver",
+      "passed": false,
+      "detail": "outputs differ (lens 1365 vs 1376, first diff at byte 840)"
+    },
+    {
+      "name": "whole-program",
+      "passed": true,
+      "detail": "not configured for this target"
+    },
+    {
+      "name": "sanitizers",
+      "passed": true,
+      "detail": "asan+ubsan clean"
+    }
+  ]
+}
