@@ -1,21 +1,26 @@
 //! The executor's emission contract (docs/SCHEMAS.md "Emission contract"):
-//! turning one untrusted model reply into exactly `src/logic.rs` and
-//! `src/ffi.rs` — or into a closed reason why not.
+//! turning one untrusted model reply into exactly the files of a stage's
+//! [`FileSpec`] — `src/logic.rs` and `src/ffi.rs` for migrate
+//! ([`MIGRATE_SPEC`]), `driver.c` for driver generation ([`DRIVER_SPEC`]) —
+//! or into a closed reason why not.
 //!
 //! Everything here is a pure function of its arguments (no I/O, no clock),
 //! so a trajectory replayed from traces parses identically.
 //!
-//! - [`parse_emission`] never returns partial files: any truncation signal
-//!   yields [`EmissionResult::Truncated`], and file paths are resolved by
+//! - [`parse_spec`] never returns partial files: any truncation signal
+//!   yields [`ParsedEmission::Truncated`], and file paths are resolved by
 //!   EXACT allowlist lookup — a path is never sanitized into acceptance.
+//!   [`parse_emission`] is the migrate spec's historical entry point; its
+//!   behavior is byte-for-byte what it was before specs existed.
 //! - [`deny_scan`] is **quality feedback only**. It tells the model early,
 //!   in words, about constructs the structure rules forbid; it is trivially
 //!   evadable and nothing relies on it. The security boundaries are the
 //!   compiler-enforced lint structure of the harness-owned `src/lib.rs`, the
 //!   oracle's symbol-set check, and the sandbox (docs/SCHEMAS.md "Trust
-//!   boundaries").
-//! - [`render_files`] is the inverse of the parser for well-formed files: it
-//!   is how a repair turn shows the model its current candidate.
+//!   boundaries"). It applies to the migrate stage only.
+//! - [`render_spec`] (and [`render_files`] for migrate) is the inverse of
+//!   the parser for well-formed files: it is how a repair turn shows the
+//!   model its current candidate.
 
 use harness_core::traits::StopKind;
 
@@ -23,11 +28,46 @@ use harness_core::traits::StopKind;
 pub const LOGIC_PATH: &str = "src/logic.rs";
 /// The C-ABI shim file of a candidate crate (allowlisted emission path).
 pub const FFI_PATH: &str = "src/ffi.rs";
+/// The generated differential driver (driver-stage emission path).
+pub const DRIVER_PATH: &str = "driver.c";
 /// The line that must end a complete reply.
 pub const END_SENTINEL: &str = "RUHARNESS_END_OF_OUTPUT";
 
-/// The closed set of paths a reply may provide.
-const ALLOWLIST: [&str; 2] = [LOGIC_PATH, FFI_PATH];
+/// One stage's emission contract: the closed, ordered set of paths a reply
+/// may provide and the language its fences are rendered in. The fence
+/// language is never REQUIRED of a reply — paths come from labels, info
+/// strings or first lines — so a `C`-tagged or untagged fence under a path
+/// label is accepted exactly as a `c`-tagged one is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileSpec {
+    /// Accepted paths, in the order [`ParsedEmission::Files`] returns them.
+    pub paths: &'static [&'static str],
+    /// Info string of rendered fences and of format messages (`rust`, `c`).
+    pub fence_lang: &'static str,
+    /// Language named in lint messages (`Rust`, `C`).
+    pub language: &'static str,
+}
+
+/// The migrate stage: `src/logic.rs` + `src/ffi.rs` in `rust` fences.
+pub const MIGRATE_SPEC: FileSpec = FileSpec {
+    paths: &[LOGIC_PATH, FFI_PATH],
+    fence_lang: "rust",
+    language: "Rust",
+};
+
+/// The driver stage: exactly `driver.c` in a `c` fence.
+pub const DRIVER_SPEC: FileSpec = FileSpec {
+    paths: &[DRIVER_PATH],
+    fence_lang: "c",
+    language: "C",
+};
+
+/// The C stdio output functions: a C unit calling any of them prints, and a
+/// migrate candidate's `src/ffi.rs` may then declare them — and nothing
+/// else — in a foreign block ([`deny_scan_with`]).
+pub const STDIO_OUTPUT_FNS: [&str; 9] = [
+    "printf", "puts", "putchar", "fputs", "fputc", "putc", "fwrite", "fprintf", "vprintf",
+];
 /// A reply whose reported output tokens come within this many tokens of the
 /// budget is treated as truncated.
 const TOKEN_CAP_MARGIN: u32 = 8;
@@ -66,15 +106,59 @@ pub enum EmissionResult {
     Format(String),
 }
 
-/// Parse one reply under the emission contract.
+/// What one model reply amounted to under a [`FileSpec`]: the spec-generic
+/// form of [`EmissionResult`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedEmission {
+    /// Every file of the spec, complete, in [`FileSpec::paths`] order (`\n`
+    /// line ends, trailing newline).
+    Files {
+        /// File contents, one per spec path.
+        files: Vec<String>,
+        /// Notes on every leniency applied (see [`EmissionResult::Files`]).
+        guesses: Vec<String>,
+    },
+    /// See [`EmissionResult::Blocked`].
+    Blocked(String),
+    /// See [`EmissionResult::Truncated`].
+    Truncated(String),
+    /// See [`EmissionResult::Format`].
+    Format(String),
+}
+
+/// Parse one reply under the MIGRATE emission contract ([`MIGRATE_SPEC`]);
+/// [`parse_spec`] states the rules.
+pub fn parse_emission(
+    text: &str,
+    stop: StopKind,
+    output_tokens: Option<u64>,
+    max_tokens: u32,
+) -> EmissionResult {
+    match parse_spec(text, stop, output_tokens, max_tokens, &MIGRATE_SPEC) {
+        ParsedEmission::Files { files, guesses } => match <[String; 2]>::try_from(files) {
+            Ok([logic, ffi]) => EmissionResult::Files {
+                logic,
+                ffi,
+                guesses,
+            },
+            // Unreachable: `parse_spec` returns one file per spec path.
+            Err(_) => EmissionResult::Format(format!("{FFI_PATH} is missing")),
+        },
+        ParsedEmission::Blocked(reason) => EmissionResult::Blocked(reason),
+        ParsedEmission::Truncated(signal) => EmissionResult::Truncated(signal),
+        ParsedEmission::Format(message) => EmissionResult::Format(message),
+    }
+}
+
+/// Parse one reply under the emission contract of `spec`.
 ///
 /// `stop` is the normalized stop kind of the response, `output_tokens` the
 /// provider-reported output usage when known, `max_tokens` the request's
 /// budget. Precedence, first match wins:
 ///
 /// 1. `stop == MaxTokens`, or `output_tokens >= max_tokens - 8` →
-///    [`EmissionResult::Truncated`];
-/// 2. `stop == Refusal` → [`EmissionResult::Blocked`];
+///    [`ParsedEmission::Truncated`];
+/// 2. `stop == Refusal` → [`ParsedEmission::Blocked`];
 /// 3. the text is normalized (CRLF → LF, leading BOM dropped) and leading
 ///    `<think>…</think>` spans are stripped — an unclosed one is `Truncated`;
 /// 4. fenced blocks are scanned: an opening fence is a column-0 line of ≥ 3
@@ -99,42 +183,44 @@ pub enum EmissionResult {
 ///    `title="src/logic.rs"`); the block's first content line when it is
 ///    exactly a path (optionally as a `//` comment), which is then dropped.
 ///    A leading `./` is normalized away and the result must EXACTLY equal
-///    [`LOGIC_PATH`] or [`FFI_PATH`] — every other block is ignored. The last
+///    one of the spec's paths — every other block is ignored. The last
 ///    block for a path wins;
-/// 8. a missing or blank file → [`EmissionResult::Format`];
+/// 8. a missing or blank file → [`ParsedEmission::Format`] (the first such
+///    path in spec order is reported);
 /// 9. elision lints → `Format`: a line that is exactly `// ...`, or one
 ///    containing `rest of the`, `unchanged`, `omitted` or `same as before`
 ///    (ASCII case-insensitive); likewise the HTML entities `&lt;`, `&gt;`,
 ///    `&amp;`.
-pub fn parse_emission(
+pub fn parse_spec(
     text: &str,
     stop: StopKind,
     output_tokens: Option<u64>,
     max_tokens: u32,
-) -> EmissionResult {
+    spec: &FileSpec,
+) -> ParsedEmission {
     if stop == StopKind::MaxTokens {
-        return EmissionResult::Truncated(
+        return ParsedEmission::Truncated(
             "the provider reported that the output hit the token cap".into(),
         );
     }
     let cap = u64::from(max_tokens.saturating_sub(TOKEN_CAP_MARGIN));
     if let Some(used) = output_tokens {
         if used >= cap {
-            return EmissionResult::Truncated(format!(
+            return ParsedEmission::Truncated(format!(
                 "the output used {used} of {max_tokens} tokens (within {TOKEN_CAP_MARGIN} of \
                  the cap)"
             ));
         }
     }
     if stop == StopKind::Refusal {
-        return EmissionResult::Blocked("the provider refused or filtered the request".into());
+        return ParsedEmission::Blocked("the provider refused or filtered the request".into());
     }
 
     let normalized = text.replace("\r\n", "\n");
     let without_bom = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
     let body = match strip_leading_think(without_bom) {
         Ok(body) => body,
-        Err(signal) => return EmissionResult::Truncated(signal),
+        Err(signal) => return ParsedEmission::Truncated(signal),
     };
 
     // Fence scan. `blocks` holds (first line a label may sit on, opening
@@ -160,7 +246,7 @@ pub fn parse_emission(
         }
     }
     if let Some((start, _)) = open {
-        return EmissionResult::Truncated(format!(
+        return ParsedEmission::Truncated(format!(
             "the output ended inside the code block opened on line {}",
             start + 1
         ));
@@ -170,21 +256,21 @@ pub fn parse_emission(
     // (which needs to know whether the reply delivered any file), but its
     // notes are reported after the sentinel note, in reading order.
     let mut path_notes: Vec<String> = Vec::new();
-    let mut found: [Option<String>; 2] = [None, None];
+    let mut found: Vec<Option<String>> = vec![None; spec.paths.len()];
     let mut ignored = 0usize;
     for &(floor, start, end) in &blocks {
         let mut content: &[&str] = &lines[start + 1..end];
         let ticks = lines[start].chars().take_while(|c| *c == '`').count();
         let info = lines[start][ticks..].trim();
-        let path = if let Some((path, tidy)) = label_path(&lines[floor..start]) {
+        let path = if let Some((path, tidy)) = label_path(spec, &lines[floor..start]) {
             if !tidy {
                 path_notes.push(format!("{path}: path label needed cleanup"));
             }
             Some(path)
-        } else if let Some(path) = info_path(info) {
+        } else if let Some(path) = info_path(spec, info) {
             path_notes.push(format!("{path}: path taken from the fence info string"));
             Some(path)
-        } else if let Some(path) = content.first().and_then(|line| first_line_path(line)) {
+        } else if let Some(path) = content.first().and_then(|line| first_line_path(spec, line)) {
             path_notes.push(format!(
                 "{path}: path taken from the first line of the block (line dropped)"
             ));
@@ -201,7 +287,11 @@ pub fn parse_emission(
             ));
             continue;
         };
-        let slot = usize::from(path == FFI_PATH);
+        let slot = spec
+            .paths
+            .iter()
+            .position(|allowed| *allowed == path)
+            .unwrap_or(0); // `path` IS one of `spec.paths`: allowlist lookup
         if found[slot].is_some() {
             path_notes.push(format!("{path}: emitted more than once (last one wins)"));
         }
@@ -213,7 +303,7 @@ pub fn parse_emission(
     let prose = outside.join("\n");
     let delivered_files = found.iter().any(Option::is_some);
     if let Some(reason) = blocked_reason(&prose, delivered_files) {
-        return EmissionResult::Blocked(reason);
+        return ParsedEmission::Blocked(reason);
     }
 
     let mut guesses: Vec<String> = Vec::new();
@@ -223,7 +313,7 @@ pub fn parse_emission(
                 "{END_SENTINEL} is missing (accepted: the turn ended normally)"
             )),
             _ => {
-                return EmissionResult::Truncated(format!(
+                return ParsedEmission::Truncated(format!(
                     "{END_SENTINEL} is missing and the turn did not end normally"
                 ))
             }
@@ -231,27 +321,35 @@ pub fn parse_emission(
     }
     guesses.extend(path_notes);
 
-    let require = |path: &str, file: Option<String>| match file {
-        Some(file) if !file.trim().is_empty() => Ok(file),
-        Some(_) => Err(EmissionResult::Format(format!("{path} is empty"))),
-        None => Err(EmissionResult::Format(format!(
-            "{path} is missing: expected the path alone on a line, then a column-0 ```rust \
-             fence holding the entire file ({} code block(s) found, {ignored} without an \
-             accepted path; only {LOGIC_PATH} and {FFI_PATH} are accepted)",
-            blocks.len()
-        ))),
-    };
-    let [logic, ffi] = found;
-    let logic = match require(LOGIC_PATH, logic) {
-        Ok(file) => file,
-        Err(failure) => return failure,
-    };
-    let ffi = match require(FFI_PATH, ffi) {
-        Ok(file) => file,
-        Err(failure) => return failure,
-    };
+    let accepted = format!(
+        "only {} {} accepted",
+        spec.paths.join(" and "),
+        if spec.paths.len() == 1 { "is" } else { "are" }
+    );
+    let mut files: Vec<String> = Vec::with_capacity(found.len());
+    for (path, file) in spec.paths.iter().zip(found) {
+        match file {
+            Some(file) if !file.trim().is_empty() => files.push(file),
+            Some(_) => return ParsedEmission::Format(format!("{path} is empty")),
+            None => {
+                return ParsedEmission::Format(format!(
+                    "{path} is missing: expected the path alone on a line, then a column-0 \
+                     ```{} fence holding the entire file ({} code block(s) found, {ignored} \
+                     without an accepted path; {accepted})",
+                    spec.fence_lang,
+                    blocks.len()
+                ))
+            }
+        }
+    }
 
-    let hits = lint_files(&[(LOGIC_PATH, &logic), (FFI_PATH, &ffi)]);
+    let named: Vec<(&str, &str)> = spec
+        .paths
+        .iter()
+        .copied()
+        .zip(files.iter().map(String::as_str))
+        .collect();
+    let hits = lint_files(&named);
     if !hits.is_empty() {
         let shown: Vec<&str> = hits
             .iter()
@@ -260,7 +358,13 @@ pub fn parse_emission(
             .collect();
         let more = hits.len().saturating_sub(MAX_LINT_HITS);
         let mut message = format!(
-            "the files are not complete, literal Rust source — {}",
+            "the {} not complete, literal {} source — {}",
+            if spec.paths.len() == 1 {
+                "file is"
+            } else {
+                "files are"
+            },
+            spec.language,
             shown.join("; ")
         );
         if more > 0 {
@@ -270,25 +374,29 @@ pub fn parse_emission(
             ". Emit every file in full: no placeholder comments, no abbreviation, no HTML \
              escaping",
         );
-        return EmissionResult::Format(message);
+        return ParsedEmission::Format(message);
     }
 
-    EmissionResult::Files {
-        logic,
-        ffi,
-        guesses,
-    }
+    ParsedEmission::Files { files, guesses }
 }
 
-/// Render two files in the emission layout (path line, column-0 fence, the
-/// entire file, closing fence) — WITHOUT the final [`END_SENTINEL`] line.
-///
-/// The fence is `rust`-tagged and at least three backticks long; it grows
-/// past the longest column-0 backtick run in either file, so the rendering
-/// always parses back to the same files.
+/// Render two files in the MIGRATE emission layout — [`render_spec`] over
+/// [`MIGRATE_SPEC`].
 pub fn render_files(logic: &str, ffi: &str) -> String {
+    render_spec(&MIGRATE_SPEC, &[logic, ffi])
+}
+
+/// Render `files` (one per spec path, in order) in the emission layout
+/// (path line, column-0 fence, the entire file, closing fence) — WITHOUT
+/// the final [`END_SENTINEL`] line.
+///
+/// The fence is tagged with the spec's language and at least three
+/// backticks long; it grows past the longest column-0 backtick run in any
+/// file, so the rendering always parses back to the same files.
+pub fn render_spec<S: AsRef<str>>(spec: &FileSpec, files: &[S]) -> String {
     let mut out = String::new();
-    for (path, file) in [(LOGIC_PATH, logic), (FFI_PATH, ffi)] {
+    for (path, file) in spec.paths.iter().zip(files) {
+        let file = file.as_ref();
         let longest_run = file
             .lines()
             .map(|line| line.chars().take_while(|c| *c == '`').count())
@@ -298,7 +406,8 @@ pub fn render_files(logic: &str, ffi: &str) -> String {
         out.push_str(path);
         out.push('\n');
         out.push_str(&fence);
-        out.push_str("rust\n");
+        out.push_str(spec.fence_lang);
+        out.push('\n');
         out.push_str(file);
         if !file.ends_with('\n') {
             out.push('\n');
@@ -330,6 +439,16 @@ pub fn render_files(logic: &str, ffi: &str) -> String {
 /// `export_name`, `link_section`, `#[used`, and the word `unsafe` anywhere
 /// in `src/logic.rs` (comments included).
 pub fn deny_scan(logic: &str, ffi: &str) -> Vec<String> {
+    deny_scan_with(logic, ffi, &[])
+}
+
+/// [`deny_scan`], except that `src/ffi.rs` may hold foreign blocks that
+/// declare nothing but `fn`s named in `ffi_externs` (optionally `pub`,
+/// `safe` or `unsafe`) — the migrate stage passes [`STDIO_OUTPUT_FNS`] for a
+/// unit whose C prints, so the candidate can write through the C stdio
+/// stream. Every other rule is unchanged; with an empty `ffi_externs` this
+/// IS [`deny_scan`].
+pub fn deny_scan_with(logic: &str, ffi: &str, ffi_externs: &[&str]) -> Vec<String> {
     /// (needle in the whitespace-free text, what to tell the model).
     const SUBSTRING_RULES: [(&str, &str); 11] = [
         (
@@ -379,7 +498,20 @@ pub fn deny_scan(logic: &str, ffi: &str) -> Vec<String> {
                     .into(),
             );
         }
-        if has_foreign_extern_block(&squeezed) {
+        if path == FFI_PATH && !ffi_externs.is_empty() {
+            let bodies = foreign_extern_bodies(&squeezed);
+            let stray = bodies
+                .iter()
+                .any(|body| !body.is_some_and(|body| declares_only(body, ffi_externs)));
+            if stray {
+                hits.push(format!(
+                    "foreign `extern {{ … }}` block declaring something other than the C stdio \
+                     output functions allowed under [STDOUT] ({}) — only `fn` declarations of \
+                     those functions",
+                    ffi_externs.join(", ")
+                ));
+            }
+        } else if has_foreign_extern_block(&squeezed) {
             hits.push(
                 "foreign `extern { … }` block — declaring or calling C functions is not allowed \
                  (`extern \"C\" fn` definitions are fine)"
@@ -519,13 +651,13 @@ fn is_line_decoration(before: &str) -> bool {
         && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// EXACT allowlist lookup after normalizing leading `./`.
-fn allowlisted(candidate: &str) -> Option<&'static str> {
+/// EXACT lookup in the spec's paths after normalizing leading `./`.
+fn allowlisted(spec: &FileSpec, candidate: &str) -> Option<&'static str> {
     let mut path = candidate;
     while let Some(rest) = path.strip_prefix("./") {
         path = rest;
     }
-    ALLOWLIST.iter().copied().find(|allowed| *allowed == path)
+    spec.paths.iter().copied().find(|allowed| *allowed == path)
 }
 
 /// Markdown decoration a path label may be wrapped in.
@@ -537,7 +669,7 @@ fn is_label_decoration(c: char) -> bool {
 /// [`PATH_LOOKBACK_LINES`] above a fence. `above` is the prose between the
 /// previous block and the fence. Returns the path and whether the label was
 /// already the bare path.
-fn label_path(above: &[&str]) -> Option<(&'static str, bool)> {
+fn label_path(spec: &FileSpec, above: &[&str]) -> Option<(&'static str, bool)> {
     let label = above
         .iter()
         .rev()
@@ -554,14 +686,14 @@ fn label_path(above: &[&str]) -> Option<(&'static str, bool)> {
         }
     }
     let cleaned = cleaned.trim_end_matches(|c: char| c == ':' || is_label_decoration(c));
-    let path = allowlisted(cleaned)?;
+    let path = allowlisted(spec, cleaned)?;
     Some((path, label.trim() == path))
 }
 
 /// A path in a fence info string: a whole token, the part of a token after
 /// `:` (`rust:src/logic.rs`), or an attribute value (`title="src/logic.rs"`).
-fn info_path(info: &str) -> Option<&'static str> {
-    let unquote = |s: &str| allowlisted(s.trim_matches(|c| c == '"' || c == '\''));
+fn info_path(spec: &FileSpec, info: &str) -> Option<&'static str> {
+    let unquote = |s: &str| allowlisted(spec, s.trim_matches(|c| c == '"' || c == '\''));
     info.split_whitespace().find_map(|token| {
         unquote(token)
             .or_else(|| token.split_once(':').and_then(|(_, rest)| unquote(rest)))
@@ -571,9 +703,9 @@ fn info_path(info: &str) -> Option<&'static str> {
 
 /// The path when a block's first content line is exactly one, bare or as a
 /// `//` comment.
-fn first_line_path(line: &str) -> Option<&'static str> {
+fn first_line_path(spec: &FileSpec, line: &str) -> Option<&'static str> {
     let line = line.trim();
-    allowlisted(line.strip_prefix("//").map_or(line, str::trim_start))
+    allowlisted(spec, line.strip_prefix("//").map_or(line, str::trim_start))
 }
 
 /// Elision and HTML-escaping lints over the parsed files.
@@ -615,6 +747,43 @@ fn has_foreign_extern_block(squeezed: &str) -> bool {
         rest = after;
     }
     false
+}
+
+/// The body of every foreign block in the whitespace-free `squeezed` text
+/// (found exactly as [`has_foreign_extern_block`] finds them); `None` for a
+/// block that is never closed.
+fn foreign_extern_bodies(squeezed: &str) -> Vec<Option<&str>> {
+    const KEYWORD: &str = "extern";
+    let mut bodies = Vec::new();
+    let mut rest = squeezed;
+    while let Some(at) = rest.find(KEYWORD) {
+        let after = &rest[at + KEYWORD.len()..];
+        let after_abi = match after.strip_prefix('"') {
+            Some(abi) => abi.find('"').map_or(abi, |end| &abi[end + 1..]),
+            None => after,
+        };
+        if let Some(body) = after_abi.strip_prefix('{') {
+            bodies.push(body.find('}').map(|end| &body[..end]));
+        }
+        rest = after;
+    }
+    bodies
+}
+
+/// True when every item of a whitespace-free foreign-block `body` is a
+/// `fn` declaration (optionally `pub`, then `safe` or `unsafe`) of a name
+/// in `allowed`.
+fn declares_only(body: &str, allowed: &[&str]) -> bool {
+    body.split(';').filter(|item| !item.is_empty()).all(|item| {
+        let item = item.strip_prefix("pub").unwrap_or(item);
+        let item = item
+            .strip_prefix("safe")
+            .or_else(|| item.strip_prefix("unsafe"))
+            .unwrap_or(item);
+        item.strip_prefix("fn")
+            .and_then(|rest| rest.split_once('('))
+            .is_some_and(|(name, _)| allowed.contains(&name))
+    })
 }
 
 /// True when `squeezed` invokes the macro `name` with any delimiter, not
@@ -1299,6 +1468,171 @@ mod tests {
         );
         let logic = format!("{LOGIC}pub fn f(p: *const u8) -> u8 {{ un\tsafe {{ *p }} }}\n");
         assert_eq!(deny_scan(&logic, FFI).len(), 1);
+    }
+
+    const DRIVER: &str = "#include <stdio.h>\n#include \"unit.h\"\n\
+                          int main(void) {\n    printf(\"%d\\n\", add(1, 2));\n    return 0;\n}\n";
+
+    fn parse_driver(text: &str) -> ParsedEmission {
+        parse_spec(text, StopKind::EndTurn, None, 8192, &DRIVER_SPEC)
+    }
+
+    fn driver_of(text: &str) -> (String, Vec<String>) {
+        match parse_driver(text) {
+            ParsedEmission::Files { mut files, guesses } => {
+                assert_eq!(files.len(), 1);
+                (files.remove(0), guesses)
+            }
+            other => panic!("expected the driver, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_migrate_spec_through_parse_spec_is_parse_emission() {
+        let text = canonical();
+        assert_eq!(
+            parse_spec(&text, StopKind::EndTurn, None, 8192, &MIGRATE_SPEC),
+            ParsedEmission::Files {
+                files: vec![LOGIC.to_string(), FFI.to_string()],
+                guesses: vec![],
+            }
+        );
+        assert_eq!(
+            render_spec(&MIGRATE_SPEC, &[LOGIC, FFI]),
+            render_files(LOGIC, FFI)
+        );
+    }
+
+    #[test]
+    fn the_driver_spec_accepts_exactly_driver_c() {
+        let rendered = render_spec(&DRIVER_SPEC, &[DRIVER]);
+        assert!(
+            rendered.starts_with("driver.c\n```c\n#include"),
+            "{rendered}"
+        );
+        let (driver, guesses) = driver_of(&format!("{rendered}{END_SENTINEL}\n"));
+        assert_eq!(driver, DRIVER);
+        assert!(guesses.is_empty(), "{guesses:?}");
+
+        // `C`-tagged, untagged, and info-string/first-line paths are
+        // tolerated exactly as the rust spec tolerates them.
+        for text in [
+            format!("driver.c\n```C\n{DRIVER}```\n{END_SENTINEL}\n"),
+            format!("driver.c\n```\n{DRIVER}```\n{END_SENTINEL}\n"),
+            format!("**driver.c**\n```c\n{DRIVER}```\n{END_SENTINEL}\n"),
+            format!("```c driver.c\n{DRIVER}```\n{END_SENTINEL}\n"),
+            format!("```c\n// driver.c\n{DRIVER}```\n{END_SENTINEL}\n"),
+            format!("```c\n./driver.c\n{DRIVER}```\n{END_SENTINEL}\n"),
+        ] {
+            assert_eq!(driver_of(&text).0, DRIVER, "{text}");
+        }
+
+        // The migrate paths are not driver paths, and vice versa.
+        let message = match parse_driver(&canonical()) {
+            ParsedEmission::Format(message) => message,
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            message.starts_with(
+                "driver.c is missing: expected the path alone on a line, then a column-0 ```c \
+                 fence"
+            ),
+            "{message}"
+        );
+        assert!(message.ends_with("only driver.c is accepted)"), "{message}");
+        let driver_reply = format!("{rendered}{END_SENTINEL}\n");
+        assert!(format_message(&driver_reply).contains("src/logic.rs is missing"));
+        for label in ["src/driver.c", "driver.h", "../driver.c", "DRIVER.C"] {
+            let text = format!("{label}\n```c\n{DRIVER}```\n{END_SENTINEL}\n");
+            assert!(
+                matches!(parse_driver(&text), ParsedEmission::Format(_)),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_driver_spec_shares_blocked_truncated_think_and_lints() {
+        let canonical_driver = format!("{}{END_SENTINEL}\n", render_spec(&DRIVER_SPEC, &[DRIVER]));
+        assert_eq!(
+            parse_driver("<blocked>needs a callback</blocked>"),
+            ParsedEmission::Blocked("needs a callback".into())
+        );
+        assert!(matches!(
+            parse_spec(
+                &canonical_driver,
+                StopKind::MaxTokens,
+                None,
+                8192,
+                &DRIVER_SPEC
+            ),
+            ParsedEmission::Truncated(_)
+        ));
+        assert!(matches!(
+            parse_driver(&format!("driver.c\n```c\n{DRIVER}")),
+            ParsedEmission::Truncated(_)
+        ));
+        let thinking = format!("<think>plan</think>\n{canonical_driver}");
+        assert_eq!(driver_of(&thinking).0, DRIVER);
+        assert!(matches!(
+            parse_driver(&format!("<think>still\n{canonical_driver}")),
+            ParsedEmission::Truncated(_)
+        ));
+        let elided = format!(
+            "{}{END_SENTINEL}\n",
+            render_spec(&DRIVER_SPEC, &[format!("{DRIVER}// ...\n")])
+        );
+        match parse_driver(&elided) {
+            ParsedEmission::Format(message) => {
+                assert!(
+                    message.starts_with(
+                        "the file is not complete, literal C source — driver.c line 7"
+                    ),
+                    "{message}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn stdio_externs_are_allowed_in_ffi_only_when_passed() {
+        let block = "extern \"C\" {\n    fn putchar(c: i32) -> i32;\n    pub fn printf(f: *const u8, ...) -> i32;\n}\n";
+        let ffi = format!("{FFI}{block}");
+        assert!(deny_scan(LOGIC, &ffi)
+            .iter()
+            .any(|v| v.contains("foreign `extern")));
+        assert_eq!(
+            deny_scan_with(LOGIC, &ffi, &STDIO_OUTPUT_FNS),
+            Vec::<String>::new()
+        );
+        let unsafe_block = "unsafe extern \"C\" { pub safe fn putchar(c: i32) -> i32; }\n";
+        assert_eq!(
+            deny_scan_with(LOGIC, &format!("{FFI}{unsafe_block}"), &STDIO_OUTPUT_FNS),
+            Vec::<String>::new()
+        );
+        // Anything else in the block — another function, a static — and any
+        // foreign block in logic.rs stays a violation.
+        for stray in [
+            "extern \"C\" { fn system(c: *const u8) -> i32; }\n",
+            "extern \"C\" { fn putchar(c: i32) -> i32; static stdout: *mut u8; }\n",
+            "extern \"C\" { fn putchar(c: i32) -> i32;\n",
+        ] {
+            let violations = deny_scan_with(LOGIC, &format!("{FFI}{stray}"), &STDIO_OUTPUT_FNS);
+            assert!(
+                violations
+                    .iter()
+                    .any(|v| v.starts_with("src/ffi.rs: foreign `extern { … }` block declaring")),
+                "{stray}: {violations:?}"
+            );
+        }
+        let violations = deny_scan_with(&format!("{LOGIC}{block}"), FFI, &STDIO_OUTPUT_FNS);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.starts_with("src/logic.rs: foreign `extern")),
+            "{violations:?}"
+        );
     }
 
     #[test]
