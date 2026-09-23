@@ -258,7 +258,7 @@ pub(crate) fn plan_target(ctx: &TargetContext) -> Result<(Vec<String>, String, u
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
     // Planning from stale facts would write stale hashes and strand verify
     // in a refusal loop — refuse up front instead.
-    let stale = stale_fact_files(&ctx, &facts);
+    let stale = stale_fact_files(ctx, &facts);
     if stale > 0 {
         bail!("facts.jsonl is stale ({stale} file(s) changed on disk); run `harness scan` first");
     }
