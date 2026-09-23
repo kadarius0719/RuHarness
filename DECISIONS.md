@@ -573,3 +573,47 @@ Carry-forwards from review (MINOR): confinement setup failures surface as run fa
 `crash-timeout` label can be triggered by driver stderr text; `evaluate_mutation`'s
 all-equivalent n/a is suite-wide, not per file; `interface` lines reach the trusted
 `[ABI CONTRACT]` region un-fenced (length-capped, printable) — injection hardening.
+
+## 2026-09-23 — M4 state at session end (§17 handoff) — READ THIS FIRST
+
+**Branch:** `claude/rust-migration-harness-02116f` (worktree), all work committed through
+93cd89b. NOT yet merged to `main` / pushed — do that after the final score lands.
+
+**Results so far (preliminary `bench score`, oracle as run, macOS arm64):**
+- public split: strict-pass **70/77** scorable cases (90.9%), 70 verified, **0 blind
+  spots**, 908/950 non-UB vectors; unscorable 2, C-baseline-invalid 1 (007 errno_pow).
+- released-hidden split: strict-pass **14/18** (77.8%), 17 verified, **3 blind spots**,
+  81/89 vectors; unscorable 1, C-baseline-invalid 1 (016 switch_arith: glibc `rand`).
+- Pipeline: 91/99 drivers validated (8 blocked: UB-only units + 007/017), 89/99 units
+  verified; float2half unfinished (Sonnet escalation mid-repair), 043 digraphs no unit.
+- **The 3 blind spots, diagnosed** (the key M4 finding): `decorrelate` — the vector
+  exercises UNMARKED C UB (writes residuals[5] of a [5] array); `014_pow_subfunction` —
+  the unit reports on **stderr and the differential oracle compares only stdout**
+  (a real oracle hole; fix next); `read_scalefactors` — verified Rust segfaults on 3
+  vectors: its FFI shim sizes slices from struct fields in ways the driver never broke.
+- Not comparable to the First TRACTOR Evaluation Report (different set, platform,
+  harness); public-vector score, contamination risk disclosed (see M4 protocol entry).
+
+**In flight at handoff:** `harness bench score --suite targets/tractor --write` (old
+sequential binary, re-verifies + re-validates every case, ~2 h). If `scores.json` is
+absent, re-run it (now parallel):
+`cargo run -q -p harness-cli -- bench score --suite targets/tractor --write --jobs 6`
+(remove a stale `targets/tractor/.bench/LOCK` first if no run is active; the scorer
+needs `targets/tractor/.scorer-vendor` — see targets/tractor/README.md).
+
+**Next actions, in order:**
+1. Record `scores.json`, fill the final numbers into the M4 write-up above (per split,
+   organic vs synthetic, n's), commit; run `bench check` (expect exit 0) — the
+   regression suite demonstrated.
+2. Merge to `main`, push (solo-dev rule), update README status numbers.
+3. Fix the stderr oracle hole (compare driver stderr C vs Rust in
+   `differential-driver`); re-verify; `bench check` should then report
+   `014_pow_subfunction` as a lost-verified REGRESSION — the suite working as intended;
+   re-migrate it.
+4. Carry-forwards: FFI boundary fuzzing (slice sizes / null pointers — the
+   read_scalefactors class); UB-vector detection (run vectors on the C under ASan to
+   auto-flag unmarked-UB vectors like decorrelate); confinement setup failures as
+   harness errors; §16 escalation automation + `harness usage`; interface-line fencing;
+   Linux sandbox; post-M4 user direction (TUI cockpit, feature-workflow view, C-vs-Rust
+   perf baselines — see memory/roadmap and the TUI design brief summary in the chat
+   record: thin CLI wrapper, ledger-derived, `--json` events first).
