@@ -837,3 +837,43 @@ HANDOFF_ROOT must be outside the repo; HANDOFF_TRANSCRIPTS = the session's tasks
 The scorer needs the gitignored `targets/tractor/.scorer-vendor/` (copy-on-write clone
 from another worktree with `cp -cR`, or re-vendor per targets/tractor/README.md); the
 first sanitized scoring run builds a second scorer (~2 min).
+
+## 2026-09-23 — PROPOSAL (awaiting user decision): prompt edits vs recorded-trace replay
+
+**Problem.** `request_key` = 8 hex of blake3(serialized {model, system, user,
+max_tokens}); replay RE-RENDERS each turn from current code and looks the recorded
+response up by that key, then re-runs the oracle. One edited sentence therefore
+orphans all 203 recorded attempts (328 requests); re-recording would cost ~2.8M output
+tokens and produce DIFFERENT evidence. Blocked: fencing `[ABI CONTRACT]` lines
+(security), a translator hint for design B, and a now-false sentence ("Output to stderr
+is not compared") left in 72 recorded requests' prompts by the unit-conditional
+workaround.
+
+**Review** (workflow: 3 research sweeps, 44 sourced findings; 3 competing designs, each
+adversarially refuted; synthesis). No design had a fatal flaw. Ranking:
+1. **Evidence-first replay + prompt-conformance lock** (7/10) — replay loads each turn by
+   the RECORDED key, checks the bytes hash to it, re-runs the CURRENT parser + oracle and
+   requires the same results/candidate/outcome; a separate conformance report says
+   whether today's renderer would send the same bytes (turn-1 rows enforced in
+   `cargo test`/CI as a lockfile; repair rows in `bench check --replay`), naming drifted
+   sections. Rules: only the latest prompt may ever SEND a request; a default re-run
+   verifies existing evidence (`--new-trial` to start fresh); supersession is an
+   explicit `expected-divergence` record, never implied by a newer attempt; scores are
+   reported per prompt fingerprint. Stops proving (for drifted turns only): that HEAD
+   would pose the same question. Borrowed from Inspect's re-scoring of stored outputs,
+   mergewatch's prompt lockfile, inspect_evals task versioning, Restate divergence
+   messages; skipped: semantic caches, body-blind cassettes (pydantic-ai#8023),
+   hosted registries, new crates.
+2. Sealed/pinned prompt versions (the original proposal, strengthened) (6/10) — sound
+   and mature practice (Temporal/DBOS-style versioning) but keeps every old renderer
+   (incl. evidence formatter) in the binary forever to re-prove bytes already
+   committed; old versions can still send requests (reopens the injection hole the ABI
+   fence closes unless forbidden); does not address oracle/rustc drift inside
+   [EVIDENCE].
+
+**Defect found and verified this session.** `bench check --replay` would fail today on
+014's M4 attempt `a-4adfe6d56ab0`: the stderr prompt fix gave 014 a new first request
+(a new base id), and `superseding_sample` only covers `.rN` samples of the same base.
+Verified: replaying it errors ("recorded for a different translate prompt"); the new
+attempt `a-bf33266e0112` replays GREEN. Both designs fix it with an explicit
+supersession record. Not patched pending the decision.
