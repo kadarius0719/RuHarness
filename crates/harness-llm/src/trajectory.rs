@@ -881,6 +881,21 @@ impl Run<'_> {
                             "green"
                         }
                         Some(mut failure) => {
+                            // Verifying runs in `.replay-<id>/`, but the
+                            // recorded run ran in `<attempts subdir>/<id>/`;
+                            // evidence quoting the candidate's path (compiler
+                            // output does) must read as the recorded run's
+                            // did, or no such trajectory could reproduce.
+                            if let Some(recorded) = self.verifying {
+                                let unit = &self.job.unit.id;
+                                failure.evidence = failure.evidence.replace(
+                                    &format!("/migration/units/{unit}/{}/", self.work_rel),
+                                    &format!(
+                                        "/migration/units/{unit}/{}/{}/",
+                                        texts.attempts_subdir, recorded.id
+                                    ),
+                                );
+                            }
                             // What the parser had to guess is feedback too:
                             // the next reply should not need the leniency.
                             failure.evidence.push_str(&emission_notes(&guesses));

@@ -1089,10 +1089,22 @@ int add(int a, int b) { return a + b; }\n";
                 std::fs::write(build.join("drv_c.out"), c_side).unwrap();
                 std::fs::write(build.join("drv_rs.out"), rust_side).unwrap();
             }
-            self.verdicts
+            let mut verdict = self
+                .verdicts
                 .borrow_mut()
                 .pop_front()
-                .ok_or_else(|| Error::Invariant("oracle script exhausted".into()))
+                .ok_or_else(|| Error::Invariant("oracle script exhausted".into()))?;
+            // `{CRATE}` stands for the candidate's path as the real oracle's
+            // scrubbed compiler output quotes it.
+            let quoted = format!(
+                "<target>/migration/units/{}/{}",
+                unit.id,
+                unit.oracle_param_str("rust_crate").unwrap()
+            );
+            for check in &mut verdict.checks {
+                check.detail = check.detail.replace("{CRATE}", &quoted);
+            }
+            Ok(verdict)
         }
     }
 
@@ -2535,6 +2547,44 @@ int add(int a, int b) { return a + b; }\n";
         let err = reset_unfinished(&first.attempt_dir, &first.record.id).unwrap_err();
         assert!(err.to_string().contains("never reset"), "{err}");
         assert_eq!(snapshot(&first.attempt_dir), before);
+    }
+
+    /// Regression (M4 run): evidence quoting the candidate's path (every
+    /// compiler error does) differed between the recorded run
+    /// (`attempts/<id>/candidate`) and its replay (`.replay-<id>/candidate`),
+    /// so the repair prompt — and every later turn — could never reproduce.
+    #[test]
+    fn a_build_failure_quoting_the_candidate_path_replays() {
+        let fx = fixture("replay-path");
+        let red_build = || {
+            verdict(&[(
+                "rust-build",
+                false,
+                "unit crate failed to build: `cargo build --manifest-path {CRATE}/Cargo.toml`\n\
+                 error[E0384]: cannot assign twice to immutable variable (at {CRATE}/src/logic.rs)",
+            )])
+        };
+        let (provider, seen) = scripted("external", false, vec![good(), good()]);
+        let first = run_with(&fx, &provider, &oracle(vec![red_build(), green()]), 1, &[]).unwrap();
+        assert_eq!(
+            results(&first.record),
+            [("translate", "build"), ("repair", "green")]
+        );
+        let repair = seen.borrow()[1].user.clone();
+        assert!(
+            repair.contains(&format!("attempts/{}/candidate", first.record.id)),
+            "{repair}"
+        );
+        // Re-running the finished attempt verifies it in `.replay-<id>/`: the
+        // path in the repair evidence must read as the recorded run's did.
+        let (provider, seen) = scripted("external", false, vec![good(), good()]);
+        let again = run_with(&fx, &provider, &oracle(vec![red_build(), green()]), 1, &[]).unwrap();
+        assert_eq!(again.record, first.record);
+        assert_eq!(
+            seen.borrow()[1].user,
+            repair,
+            "replayed repair prompt is byte-identical"
+        );
     }
 
     #[test]
