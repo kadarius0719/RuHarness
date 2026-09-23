@@ -415,11 +415,7 @@ fn explanation(class: &str, validation: &DriverValidation) -> &'static str {
 /// Bounded `[EVIDENCE]` of a red validation: every failed check's name and
 /// scrubbed, quoted detail (a build log up to the build bound), and — for a
 /// failed `mutation` check — the surviving mutants.
-fn evidence(
-    scrub: &[(String, &'static str)],
-    validation: &DriverValidation,
-    multi_file: bool,
-) -> String {
+fn evidence(scrub: &[(String, String)], validation: &DriverValidation, multi_file: bool) -> String {
     let failed: Vec<&Check> = validation.checks.iter().filter(|c| !c.passed).collect();
     if failed.is_empty() {
         return "the driver validation was red without a failed check\n".to_string();

@@ -128,7 +128,7 @@ pub(crate) struct RunCtx<'a> {
     /// Verifying a recorded attempt: the judge's record is NOT journaled.
     pub(crate) verifying: bool,
     /// Absolute paths replaced in quoted tool output ([`scrub_list`]).
-    pub(crate) scrub: &'a [(String, &'static str)],
+    pub(crate) scrub: &'a [(String, String)],
 }
 
 /// A stage's fixed texts and names. Every string is harness-authored.
@@ -368,13 +368,35 @@ impl<'a> Job<'a> {
             verifying,
             record_traces,
             max_turns,
-            scrub: scrub_list(
-                &work_dir.join("candidate"),
-                self.root,
-                self.target_root,
-                &|name| std::env::var_os(name),
-                &std::env::temp_dir(),
-            ),
+            scrub: {
+                let mut scrub = scrub_list(
+                    &work_dir.join("candidate"),
+                    self.root,
+                    self.target_root,
+                    &|name| std::env::var_os(name),
+                    &std::env::temp_dir(),
+                );
+                // Verifying runs in `.replay-<id>/`, the recorded run ran in
+                // `<attempts subdir>/<id>/`: judged evidence quoting the
+                // candidate's path (compiler output does) must read as the
+                // recorded run's did — BEFORE it is bounded, since the two
+                // paths differ in length and truncation would differ too.
+                if let Some(recorded) = verifying {
+                    let unit = &self.unit.id;
+                    scrub.insert(
+                        0,
+                        (
+                            format!("/migration/units/{unit}/{}/", work_rel.join("/")),
+                            format!(
+                                "/migration/units/{unit}/{}/{}/",
+                                self.stage.texts().attempts_subdir,
+                                recorded.id
+                            ),
+                        ),
+                    );
+                }
+                scrub
+            },
         }
     }
 
@@ -781,7 +803,7 @@ struct Run<'a> {
     /// Turn budget (first turn + repairs).
     max_turns: usize,
     /// Absolute paths replaced in quoted tool output ([`scrub_list`]).
-    scrub: Vec<(String, &'static str)>,
+    scrub: Vec<(String, String)>,
 }
 
 impl Run<'_> {
@@ -881,21 +903,6 @@ impl Run<'_> {
                             "green"
                         }
                         Some(mut failure) => {
-                            // Verifying runs in `.replay-<id>/`, but the
-                            // recorded run ran in `<attempts subdir>/<id>/`;
-                            // evidence quoting the candidate's path (compiler
-                            // output does) must read as the recorded run's
-                            // did, or no such trajectory could reproduce.
-                            if let Some(recorded) = self.verifying {
-                                let unit = &self.job.unit.id;
-                                failure.evidence = failure.evidence.replace(
-                                    &format!("/migration/units/{unit}/{}/", self.work_rel),
-                                    &format!(
-                                        "/migration/units/{unit}/{}/{}/",
-                                        texts.attempts_subdir, recorded.id
-                                    ),
-                                );
-                            }
                             // What the parser had to guess is feedback too:
                             // the next reply should not need the leniency.
                             failure.evidence.push_str(&emission_notes(&guesses));
@@ -1253,7 +1260,7 @@ pub(crate) fn scrub_list(
     target_root: &Path,
     env: EnvLookup<'_>,
     temp_dir: &Path,
-) -> Vec<(String, &'static str)> {
+) -> Vec<(String, String)> {
     let var = |name: &str| {
         env(name)
             .filter(|value| !value.is_empty())
@@ -1284,7 +1291,7 @@ pub(crate) fn scrub_list(
             .filter_map(|(path, label)| path.map(|path| (path, label))),
     );
 
-    let mut list: Vec<(String, &'static str)> = Vec::new();
+    let mut list: Vec<(String, String)> = Vec::new();
     for (path, label) in paths {
         if !path.is_absolute() {
             continue;
@@ -1296,7 +1303,7 @@ pub(crate) fn scrub_list(
             let text = form.display().to_string();
             let text = text.trim_end_matches('/');
             if text.len() > 1 && !list.iter().any(|(known, _)| known == text) {
-                list.push((text.to_string(), label));
+                list.push((text.to_string(), label.to_string()));
             }
         }
     }
@@ -1306,10 +1313,10 @@ pub(crate) fn scrub_list(
 }
 
 /// Replace every path of `scrub` (see [`scrub_list`]) in `text`.
-pub(crate) fn scrub_paths(scrub: &[(String, &'static str)], text: &str) -> String {
+pub(crate) fn scrub_paths(scrub: &[(String, String)], text: &str) -> String {
     let mut text = text.to_string();
     for (path, label) in scrub {
-        text = text.replace(path.as_str(), label);
+        text = text.replace(path.as_str(), label.as_str());
     }
     text
 }

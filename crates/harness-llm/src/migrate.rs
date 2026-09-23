@@ -696,7 +696,7 @@ behavior without them";
 /// checks' details, scrubbed and quoted, plus the differing driver output
 /// lines (from `build_dir`) for a byte-compare failure.
 fn oracle_evidence(
-    scrub: &[(String, &'static str)],
+    scrub: &[(String, String)],
     build_dir: &Path,
     class: &str,
     verdict: &Verdict,
@@ -2556,14 +2556,14 @@ int add(int a, int b) { return a + b; }\n";
     #[test]
     fn a_build_failure_quoting_the_candidate_path_replays() {
         let fx = fixture("replay-path");
-        let red_build = || {
-            verdict(&[(
-                "rust-build",
-                false,
-                "unit crate failed to build: `cargo build --manifest-path {CRATE}/Cargo.toml`\n\
-                 error[E0384]: cannot assign twice to immutable variable (at {CRATE}/src/logic.rs)",
-            )])
-        };
+        // Longer than the build-evidence bound, so the quoted evidence is
+        // TRUNCATED: `.replay-<id>` and `attempts/<id>` differ in length, and
+        // a rewrite applied after bounding would cut at a different byte.
+        let long_detail = format!(
+            "unit crate failed to build: `cargo build --manifest-path {{CRATE}}/Cargo.toml`\n{}",
+            "error[E0382]: use of moved value (at {CRATE}/src/logic.rs:21:26)\n".repeat(160)
+        );
+        let red_build = move || verdict(&[("rust-build", false, long_detail.as_str())]);
         let (provider, seen) = scripted("external", false, vec![good(), good()]);
         let first = run_with(&fx, &provider, &oracle(vec![red_build(), green()]), 1, &[]).unwrap();
         assert_eq!(
