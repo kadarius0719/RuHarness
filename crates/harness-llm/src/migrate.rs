@@ -173,41 +173,11 @@ src/ffi.rs may contain one `extern \"C\" { ... }` block that declares only C std
 functions (printf, puts, putchar, fputs, fputc, putc, fwrite, fprintf, vprintf) and wraps each \
 one it uses in a small safe `pub fn` (for example `pub fn put_byte(b: u8)` calling `putchar`), \
 which src/logic.rs calls. The simplest faithful way is to compute the exact bytes in safe Rust \
-and write each byte with `putchar`. Output to stderr is not compared; never redirect it to \
-stdout.";
-
-/// The last sentence of [`STDOUT_PARAGRAPH`]. True only while the oracle
-/// compared stdout alone (M4); kept verbatim for units whose C never names
-/// `stderr`, so their prompts — and the request keys their recorded traces
-/// replay under — stay byte-identical. A candidate of such a unit that
-/// writes to stderr anyway is caught by the oracle (a repair turn, never a
-/// wrong verdict).
-const STDERR_UNCOMPARED: &str = "Output to stderr is not compared; never redirect it to stdout.";
-
-/// What replaces [`STDERR_UNCOMPARED`] for a unit whose C names `stderr`
-/// (post-M4: the oracle compares both streams; `014_pow_subfunction`
-/// verified while dropping its stderr reports, as this prompt told it to).
-const STDERR_COMPARED: &str = "\
-Output to stderr IS compared too, byte for byte, as a stream of its own: whatever this unit \
-writes to C's stderr, your Rust must write to stderr with identical bytes, in the same order. \
-C's stderr is unbuffered and so is Rust's, so write it with eprint! — the one permitted use of \
-Rust's std::io in this unit. Never drop it and never redirect it to stdout.";
-
-/// Whether any of the unit's C files names the `stderr` stream (the
-/// identifier as a whole token; a comment naming it only makes the prompt
-/// describe the oracle more precisely).
-fn names_stderr(sources: &[SourceFile]) -> bool {
-    const TOKEN: &[u8] = b"stderr";
-    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    sources.iter().any(|source| {
-        let bytes = &source.bytes;
-        (0..bytes.len().saturating_sub(TOKEN.len() - 1)).any(|i| {
-            bytes[i..].starts_with(TOKEN)
-                && (i == 0 || !ident(bytes[i - 1]))
-                && bytes.get(i + TOKEN.len()).is_none_or(|b| !ident(*b))
-        })
-    })
-}
+and write each byte with `putchar`. Output to stderr IS compared too, byte for byte, as a stream \
+of its own: whatever this unit writes to C's stderr, your Rust must write to stderr with \
+identical bytes, in the same order. C's stderr is unbuffered and so is Rust's, so write it with \
+eprint! — the one permitted use of Rust's std::io in this unit. Never drop it and never \
+redirect it to stdout.";
 
 /// The `[TASK]` line of a translate turn.
 const TRANSLATE_TASK: &str = "\
@@ -651,13 +621,8 @@ fn pinned_sections(
 
     out.push_str(&format!("\n[ORACLE]\n{ORACLE_PARAGRAPH}\n"));
     if !stdio.is_empty() {
-        let paragraph = if names_stderr(sources) {
-            STDOUT_PARAGRAPH.replace(STDERR_UNCOMPARED, STDERR_COMPARED)
-        } else {
-            STDOUT_PARAGRAPH.to_string()
-        };
         out.push_str(&format!(
-            "\n[STDOUT]\nThis unit's C calls C stdio output functions: {}.\n{paragraph}\n",
+            "\n[STDOUT]\nThis unit's C calls C stdio output functions: {}.\n{STDOUT_PARAGRAPH}\n",
             stdio.join(", ")
         ));
     }
@@ -3760,7 +3725,6 @@ int add(int a, int b) { return a + b; }\n";
             ("SYSTEM_PROMPT", SYSTEM_PROMPT),
             ("ORACLE_PARAGRAPH", ORACLE_PARAGRAPH),
             ("STDOUT_PARAGRAPH", STDOUT_PARAGRAPH),
-            ("STDERR_COMPARED", STDERR_COMPARED),
             ("TRANSLATE_TASK", TRANSLATE_TASK),
             ("REPAIR_TASK", REPAIR_TASK),
             ("FORMAT_EXPLANATION", FORMAT_EXPLANATION),
@@ -4514,47 +4478,6 @@ int add(int a, int b) { return a + b; }\n";
         assert!(at("ORACLE") < at("STDOUT") && at("STDOUT") < at("C SOURCE"));
         // The stdio foreign block passed the deny-scan and reached the oracle.
         assert_eq!(fake.calls.borrow().len(), 1);
-    }
-
-    /// Post-M4: the oracle compares stderr, so a unit whose C writes to it
-    /// must not be told otherwise; every other printing unit's section is
-    /// byte-identical to M4's (its traces keep replaying).
-    #[test]
-    fn a_unit_naming_stderr_is_told_stderr_is_compared() {
-        assert!(STDOUT_PARAGRAPH.ends_with(STDERR_UNCOMPARED));
-        let fx = fixture("stderr-section");
-        std::fs::write(
-            fx.target.root.join("src/unit.c"),
-            format!("{C_SOURCE}void report(void) {{ fputs(\"range\\n\", stderr); }}\n"),
-        )
-        .unwrap();
-        let mut facts = fx.facts.clone();
-        facts.refs = vec![call_ref("src/unit.c", "fputs", false)];
-        let (user, _) = translate_user_under(&fx, &facts, FFI);
-        let stdout = section(&user, "STDOUT");
-        assert!(stdout.contains(STDERR_COMPARED), "{stdout}");
-        assert!(!stdout.contains(STDERR_UNCOMPARED), "{stdout}");
-
-        let fx = fixture("stdout-only-section");
-        let (user, _) = translate_user_under(&fx, &facts, FFI);
-        let stdout = section(&user, "STDOUT");
-        assert!(
-            stdout.ends_with(&format!("{STDOUT_PARAGRAPH}\n")),
-            "{stdout}"
-        );
-    }
-
-    #[test]
-    fn stderr_is_matched_as_a_whole_token() {
-        let src = |text: &str| SourceFile {
-            path: "u.c".into(),
-            bytes: text.as_bytes().to_vec(),
-        };
-        assert!(names_stderr(&[src("fprintf(stderr, \"x\");")]));
-        assert!(names_stderr(&[src("stderr")]));
-        assert!(!names_stderr(&[src("my_stderr_count++;")]));
-        assert!(!names_stderr(&[src("stderrp")]));
-        assert!(!names_stderr(&[src("")]));
     }
 
     #[test]
