@@ -55,12 +55,15 @@ pass (every non-UB held-out vector passes) over scorable cases:
 | Split | Strict pass | Oracle-verified | Blind spots | Non-UB vectors |
 |---|---|---|---|---|
 | public (80 cases) | **70/77** (90.9%) | 70 | 0 | 908/950 |
-| released-hidden (20 cases) | **15/18** (83.3%) | 17 | 2 | 83/89 |
+| released-hidden (20 cases) | **15/17** (88.2%) | 16 | 1 | 83/87 |
 
 A *blind spot* is a unit the oracle verified that still fails a held-out vector:
 exactly what the benchmark exists to find. M4 found three, all diagnosed in
-`DECISIONS.md`; one was a real oracle hole (stderr was not compared), now fixed and
-that unit re-migrated — hence 15/18, up from M4's 14/18. These are public-vector scores (the vectors predate the answering models' training cutoff),
+`DECISIONS.md`: one was a real oracle hole (stderr was not compared) — fixed, the unit
+re-migrated; one was the corpus's own undefined behavior — its two vectors are now
+excused, with disclosure, by a sanitized-C pass (`unmarked-UB`), which leaves that case
+unscorable; one (an FFI-boundary bug in the Rust) remains open. M4 recorded 14/18.
+These are public-vector scores (the vectors predate the answering models' training cutoff),
 **not comparable** to the First TRACTOR Evaluation Report (different case set,
 platform and scoring harness). See `targets/tractor/README.md` for what a score means.
 

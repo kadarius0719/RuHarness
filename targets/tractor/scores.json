@@ -9,24 +9,26 @@
     "Apple clang version 21.0.0 (clang-2100.1.1.101)",
     "os: macOS 26.5.2 aarch64",
     "sandbox: sandbox-exec",
-    "baseline: cc -shared -fPIC -O0 -ffp-contract=off"
+    "baseline: cc -shared -fPIC -O0 -ffp-contract=off",
+    "sanitized-pass: asan+bounds-safety"
   ],
   "totals": [
     {
       "split": "hidden",
       "cases": 20,
-      "scorable": 18,
-      "verified": 17,
+      "scorable": 17,
+      "verified": 16,
       "strict_pass": 15,
-      "blind_spots": 2,
+      "blind_spots": 1,
       "vector_pass_oracle_red": 0,
       "stale_verified": 0,
       "infra_errors": 0,
-      "unscorable": 1,
+      "unscorable": 2,
       "c_baseline_invalid": 1,
-      "vectors": 89,
+      "vectors": 87,
       "vectors_passed": 83,
-      "vectors_skipped": 73
+      "vectors_skipped": 73,
+      "vectors_unmarked_ub": 2
     },
     {
       "split": "public",
@@ -172,7 +174,7 @@
     {
       "case": "Hidden-Tests/B01_organic/decorrelate_lib",
       "split": "hidden",
-      "class": "blind-spot",
+      "class": "unscorable",
       "pipeline": {
         "unit": "u-lib",
         "status": "verified",
@@ -194,27 +196,32 @@
         "candidate": ""
       },
       "c_baseline": {
-        "pass": 2,
+        "pass": 0,
         "fail": 0,
         "skip": 0,
-        "not_run": 0
+        "not_run": 0,
+        "unmarked_ub": 2
       },
       "rust": {
         "pass": 0,
-        "fail": 2,
+        "fail": 0,
         "skip": 0,
-        "not_run": 0
+        "not_run": 0,
+        "unmarked_ub": 2
       },
+      "sanitized_build": "asan+bounds-safety",
       "vectors": [
         {
           "name": "1.json",
           "c": "pass",
-          "rust": "fail:UnknownFailure"
+          "rust": "fail:UnknownFailure",
+          "c_sanitized": "ub:bounds-safety-trap"
         },
         {
           "name": "2.json",
           "c": "pass",
-          "rust": "fail:UnknownFailure"
+          "rust": "fail:UnknownFailure",
+          "c_sanitized": "ub:bounds-safety-trap"
         }
       ]
     },
@@ -1010,6 +1017,7 @@
         "skip": 0,
         "not_run": 0
       },
+      "sanitized_build": "asan",
       "vectors": [
         {
           "name": "1.json",
@@ -1019,17 +1027,20 @@
         {
           "name": "2.json",
           "c": "pass",
-          "rust": "fail:SegmentationFault"
+          "rust": "fail:SegmentationFault",
+          "c_sanitized": "clean"
         },
         {
           "name": "3.json",
           "c": "pass",
-          "rust": "fail:SegmentationFault"
+          "rust": "fail:SegmentationFault",
+          "c_sanitized": "clean"
         },
         {
           "name": "4.json",
           "c": "pass",
-          "rust": "fail:SegmentationFault"
+          "rust": "fail:SegmentationFault",
+          "c_sanitized": "clean"
         },
         {
           "name": "5.json",

@@ -70,3 +70,9 @@ commit and never overwrites a vendored file with different bytes.
   Report's 150-test rates (which include executables, hidden tests, Linux).
 - The vectors are public since Feb 2026 (before the answering models' training
   cutoff): a **public-vector score**, not a contamination-free held-out measure.
+- **Unmarked-UB vectors are excused, with disclosure.** A vector the C passes but
+  the Rust fails is re-run against the C built with `-fbounds-safety` + ASan; if the
+  C itself is proven memory-unsafe on it, the vector is `unmarked-ub` — excluded like
+  `has_ub`, counted in `vectors_unmarked_ub`, and listed per vector in `scores.json`
+  (`c_sanitized`). A vector the plain C fails is never excused. See
+  `docs/ORACLE-HARDENING.md` §A.

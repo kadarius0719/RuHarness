@@ -759,3 +759,81 @@ encodings (sentinels, cross-struct) missed; runtime bound. Revisit when a libFuz
 runtime is an approved dependency and stable Rust gains instrumentation.
 
 Both become written designs + adversarial design review before any code (M4 process).
+
+## 2026-09-23 — Unmarked-UB vectors: the sanitized-C scoring pass (design A, implemented)
+
+Design, reviews and the revision: docs/ORACLE-HARDENING.md §A (§A.R, §A.2, §A.3
+authoritative); contract: docs/SCHEMAS.md "scores.json — unmarked-UB additions".
+
+**Rule.** A vector the plain C passed but the verified Rust or scored candidate did not
+is re-run against a SANITIZED C; if the C itself is proven memory-unsafe on it — an
+allow-listed ASan report, or a `-fbounds-safety` trap — the vector is `unmarked-ub`:
+excluded like `has_ub`, counted (`unmarked_ub`, `vectors_unmarked_ub`) and printed with
+its paired Rust result. A vector the plain C fails is never excused (no laundering of
+c-baseline-invalid cases); UBSan is deliberately not used (it fires on intentional
+two's-complement idioms the Rust must reproduce).
+
+**The finding that changed the design.** The ASan-only mechanism (spike + 3-lens review
+all agreed) excused NOTHING end to end: cando's uninstrumented runner owns every
+vector's state, so `residuals[5]` lands inside memory ASan never poisoned. Apple clang's
+`-fbounds-safety` (bounds-carrying local pointers, no runtime) traps it under the
+unmodified runner; unannotated pointer-arithmetic code does not compile with it, so the
+pass falls back to ASan (read_scalefactors — correctly NOT excused: its failures are a
+genuine Rust bug). Lesson recorded: a spike's premise about a third-party harness's
+memory ownership must be verified by running it, not by reading the C alone.
+
+**Mechanism.** The corpus's own runner is built a second time with the ASan runtime as
+a link dependency (`--target <host>` + `target.<triple>.rustflags`, so build scripts and
+proc-macros are untouched); no vendored-code change; no `DYLD_*` (SIP's sandbox-exec
+would purge it). `ASAN_OPTIONS` harness-set. Reports are read from cando's report
+(`output.stderr`), where cando captures its per-vector child's stderr.
+
+**Reviews.** Design 3 lenses (all sound-with-fixes: R-A1..R-A12); code 2 lenses:
+security clean; correctness — a lost excusal on an unverified case read as a Rust
+regression (fixed, test), the bounds-safety fallback was silent (now recorded per case
+as `sanitized_build` and printed); contract text amended to the real strings.
+
+**Re-baseline** (`bench score --write`; the environment fingerprint gained
+`sanitized-pass: asan+bounds-safety`, so the M4 baseline is deliberately incomparable):
+released-hidden strict pass **15/17** (88.2%; scorable 18 → 17: decorrelate is now
+`unscorable`, both its vectors excused as `bounds-safety-trap`), verified 16, blind
+spots **1** (read_scalefactors), vectors 83/87. Public unchanged: 70/77, 0 blind spots,
+908/950, 0 excused. The pass ran on exactly the two cases where it could change a class.
+
+## 2026-09-23 — Session end (§17 handoff) — READ THIS FIRST
+
+**State.** All work on `main` (fast-forwarded from branch
+`claude/rust-migration-harness-7d1c42`) and pushed at each milestone. M4 closed
+(scores.json recorded; regression suite demonstrated twice: exit 0 on the M4 baseline,
+exit 10 when the stderr fix exposed 014). Post-M4 oracle hardening done: stderr
+compared (+ prompt fix for stderr-writing units), `--retry` for hand-off attempts,
+confinement setup failures are harness errors, sanitized-C pass for unmarked-UB
+vectors. Current scores: public 70/77 (0 blind spots), released-hidden 15/17 (1 blind
+spot: read_scalefactors).
+
+**Next actions, in order.**
+1. **Design B** (FFI-boundary blind spots, read_scalefactors): the DRAFT in
+   docs/ORACLE-HARDENING.md §B → adversarial design review (3–4 lenses) → implement →
+   code review → re-migrate read_scalefactors under the new check → re-baseline.
+2. **Decision needed from the user — prompt versioning.** Any change to prompt text
+   changes every request key, so every recorded attempt stops replaying (§16.2 makes
+   replay mandatory for harness development). Fencing `interface` lines (M4 review
+   carry-forward) and a translator hint for B both need it. Proposal: versioned prompt
+   templates — `attempt.json` records the template version; replay renders the
+   version the attempt was recorded under; new attempts use the latest. Until decided,
+   prompts stay byte-identical except via NEW stages or unit-conditional sections
+   (the stderr precedent).
+3. §16 escalation automation + `harness usage` (per-request tokens are `null` for
+   hand-offs: usage must be recorded from the answering runtime or stay unknown).
+4. Carry-forward (MINOR): the `crash-timeout` classifier matches substrings of check
+   details that can quote child stderr; a structural fix changes recorded turn
+   `result`s (replay-compared) — bundle with the prompt-versioning work.
+5. After the above (user direction): TUI cockpit (CLI hardening first), feature-workflow
+   view, C-vs-Rust performance baselines — each starts with its own spike.
+
+**Environment notes.** Model calls go through the `external` hand-off answered by plain
+Agent subagents (never Workflow agents), audited with targets/tractor/handoff-tools;
+HANDOFF_ROOT must be outside the repo; HANDOFF_TRANSCRIPTS = the session's tasks dir.
+The scorer needs the gitignored `targets/tractor/.scorer-vendor/` (copy-on-write clone
+from another worktree with `cp -cR`, or re-vendor per targets/tractor/README.md); the
+first sanitized scoring run builds a second scorer (~2 min).
