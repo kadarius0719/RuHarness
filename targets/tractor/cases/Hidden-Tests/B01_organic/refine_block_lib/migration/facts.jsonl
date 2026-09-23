@@ -1,0 +1,8 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:87f3af753aee996f09a0911e7fafde6d626a7a4a87e71e62d778f48689c558f7","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:142ebf0e1641c777423d4d7f10d6b9a5492f40a938d6e4f9c5811e4b1c614ebd","includes":[]}
+{"k":"symbol","name":"refine_block","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int refine_block(unsigned char *block, unsigned short *pmax16, unsigned short *pmin16, unsigned int mask)","span":[118,178]}
+{"k":"symbol","name":"test_case/src/lib.c::stb__Quantize5","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static unsigned short stb__Quantize5(float x)","span":[102,108]}
+{"k":"symbol","name":"test_case/src/lib.c::stb__Quantize6","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static unsigned short stb__Quantize6(float x)","span":[110,116]}
+{"k":"ref","from":"refine_block","file":"test_case/src/lib.c","to":"test_case/src/lib.c::stb__Quantize5","refkind":"call","resolved":true}
+{"k":"ref","from":"refine_block","file":"test_case/src/lib.c","to":"test_case/src/lib.c::stb__Quantize6","refkind":"call","resolved":true}

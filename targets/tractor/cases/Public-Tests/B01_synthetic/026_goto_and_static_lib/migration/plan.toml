@@ -1,0 +1,19 @@
+schema_version = 1
+target = "026_goto_and_static_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:0b9dbb42b5bd1c30a10079d20924b8f91be5a1025032bed3ab4ede7807901358"
+symbols = ["driver"]
+interface = ["void driver(int x, int local_y, int z)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

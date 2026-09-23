@@ -1,0 +1,13 @@
+{
+  "stdout": {
+    "pattern": "-121\n"
+  },
+  "lib_state_in": {
+    "x": -123,
+    "y": -8
+  },
+  "lib_state_out": {
+    "x": -123,
+    "y": -8
+  }
+}

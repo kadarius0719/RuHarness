@@ -1,0 +1,13 @@
+{
+  "stdout": {
+    "pattern": "2\n"
+  },
+  "lib_state_in": {
+    "s1": "Hello, world!",
+    "s2": "l"
+  },
+  "lib_state_out": {
+    "s1": "Hello, world!",
+    "s2": "l"
+  }
+}

@@ -1,0 +1,19 @@
+schema_version = 1
+target = "012_uninit_int_ptr_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:0aa2b3d14d645fb133f84a1e525a4d40143c8928517455dbdf26f2dbd58537b0"
+symbols = ["bad", "driver", "good", "printIntPtrLine"]
+interface = ["void bad()", "void driver(int useGood)", "void good()", "void printIntPtrLine(const int *intNumber)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

@@ -1,0 +1,255 @@
+{
+	"lib_state_in": {
+		"a": [
+			{
+				"texture_id": 16,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 4,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 34,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 2,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 15,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 15,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 3,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 33,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 1,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 14,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 14,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 2,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 32,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 0,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 13,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 16,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 4,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 34,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 2,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 15,
+				"sort_bits": 16000
+			}
+		],
+		"b": [],
+		"size": 20
+	},
+	"lib_state_out": {
+		"a": [
+			{
+				"texture_id": 34,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 33,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 32,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 34,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 2,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 1,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 0,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 2,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 16,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 15,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 14,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 16,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 4,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 15,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 3,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 14,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 2,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 13,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 4,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 15,
+				"sort_bits": 16000
+			}
+		],
+		"b": [
+			{
+				"texture_id": 34,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 33,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 2,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 1,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 16,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 15,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 4,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 15,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 3,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 14,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 32,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 34,
+				"sort_bits": 0
+			},
+			{
+				"texture_id": 0,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 2,
+				"sort_bits": 22
+			},
+			{
+				"texture_id": 14,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 16,
+				"sort_bits": 800
+			},
+			{
+				"texture_id": 2,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 13,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 4,
+				"sort_bits": 16000
+			},
+			{
+				"texture_id": 15,
+				"sort_bits": 16000
+			}
+		],
+		"size": 20
+	}
+}

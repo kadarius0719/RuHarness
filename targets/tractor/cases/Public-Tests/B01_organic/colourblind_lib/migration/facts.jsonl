@@ -1,0 +1,10 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:9a5ee374f7b0386a56647a5b399dfe4ce2807265ebb437577f39c35dfa34d85c","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:a0b40444974bbb9c18e54923eb281325df3a197c172613d04b6f56e838d44974","includes":[]}
+{"k":"symbol","name":"colourblind","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void colourblind(cb_impairment Impairment, float *R, float *G, float *B)","span":[24,35]}
+{"k":"symbol","name":"test_case/src/lib.c::Deuteranopia","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static void Deuteranopia(float *Red, float *Green, float *Blue)","span":[10,15]}
+{"k":"symbol","name":"test_case/src/lib.c::Protanopia","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static void Protanopia(float *Red, float *Green, float *Blue)","span":[3,8]}
+{"k":"symbol","name":"test_case/src/lib.c::Tritanopia","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static void Tritanopia(float *Red, float *Green, float *Blue)","span":[17,22]}
+{"k":"ref","from":"colourblind","file":"test_case/src/lib.c","to":"test_case/src/lib.c::Deuteranopia","refkind":"call","resolved":true}
+{"k":"ref","from":"colourblind","file":"test_case/src/lib.c","to":"test_case/src/lib.c::Protanopia","refkind":"call","resolved":true}
+{"k":"ref","from":"colourblind","file":"test_case/src/lib.c","to":"test_case/src/lib.c::Tritanopia","refkind":"call","resolved":true}

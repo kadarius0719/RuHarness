@@ -1,0 +1,39 @@
+{
+	"lib_state_in": {
+		"bin": [],
+		"bin_maxlen": 8,
+		"hex": [ 55, 54, 48, 48, 99, 56, 48, 49, 0 ],
+		"hex_len": 8,
+		"ignore": [],
+		"hex_end_p": 0,
+		"returns": 0
+	},
+	"lib_state_out": {
+		"bin": [
+			118,
+			0,
+			200,
+			1,
+			0,
+			0,
+			0,
+			0
+		],
+		"bin_maxlen": 8,
+		"hex": [
+			55,
+			54,
+			48,
+			48,
+			99,
+			56,
+			48,
+			49,
+			0
+		],
+		"hex_len": 8,
+		"ignore": [],
+		"hex_end_p": 0,
+		"returns": 4
+	}
+}

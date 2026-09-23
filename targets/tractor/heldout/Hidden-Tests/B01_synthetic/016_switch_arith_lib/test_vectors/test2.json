@@ -1,0 +1,11 @@
+{
+  "lib_state_in": {
+    "seed": 3003680906
+  },
+  "lib_state_out": {
+    "seed": 3003680906
+  },
+  "stdout": {
+    "pattern": "Result: 3270878818 — Thinks it's the boss of all unsigned ints.\n"
+  }
+}

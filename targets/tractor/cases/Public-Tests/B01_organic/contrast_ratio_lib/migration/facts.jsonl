@@ -1,0 +1,9 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:2b62575166f9152c55afa7b7f6d01a0da248a0c6c61eb008e585104734b08303","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:e6c5d37b444c06450372239f6d843999445f71576082954735b6ed4b88b6c3c5","includes":[]}
+{"k":"symbol","name":"contrast_ratio","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"float contrast_ratio(cb_rgb_255 A, cb_rgb_255 B)","span":[25,29]}
+{"k":"symbol","name":"test_case/src/lib.c::cbContrastRatio","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static float cbContrastRatio(float RA, float GA, float BA, float RB, float GB, float BB)","span":[13,23]}
+{"k":"symbol","name":"test_case/src/lib.c::cbLuminance","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static float cbLuminance(float R, float G, float B)","span":[5,11]}
+{"k":"ref","from":"contrast_ratio","file":"test_case/src/lib.c","to":"test_case/src/lib.c::cbContrastRatio","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::cbContrastRatio","file":"test_case/src/lib.c","to":"test_case/src/lib.c::cbLuminance","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::cbLuminance","file":"test_case/src/lib.c","to":"pow","refkind":"call","resolved":false}

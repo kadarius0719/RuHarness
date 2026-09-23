@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "A: 2\nx: 2\n"
+  },
+  "lib_state_in": {
+    "input": "asdfAXXAasdxf\nanother line with an x"
+  },
+  "lib_state_out": {
+    "input": "asdfAXXAasdxf\nanother line with an x"
+  }
+}

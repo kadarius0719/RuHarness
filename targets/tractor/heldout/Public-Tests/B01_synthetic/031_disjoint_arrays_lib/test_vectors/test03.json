@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "3\n"
+  },
+  "lib_state_in": {
+    "input": "1\n2\n3"
+  },
+  "lib_state_out": {
+    "input": "1\n2\n3"
+  }
+}

@@ -1,0 +1,22 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/driver.h","hash":"blake3:ce405b35d99dcf71202adcb47aa700fca780dbaf6fdcd39b326c9aa3a0720aed","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:90c64aec24c7495b957bb65f5322a8fc28ead2c7156657fe1b8b8f8916c6d7c5","includes":[]}
+{"k":"symbol","name":"bad","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void bad(float data)","span":[23,27]}
+{"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(float goodData, float badData)","span":[58,66]}
+{"k":"symbol","name":"good","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void good(float data)","span":[52,56]}
+{"k":"symbol","name":"printIntLine","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void printIntLine (int intNumber)","span":[18,21]}
+{"k":"symbol","name":"printLine","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void printLine (const char * line)","span":[10,16]}
+{"k":"symbol","name":"test_case/src/driver.c::goodB2G","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static void goodB2G(float data)","span":[39,50]}
+{"k":"symbol","name":"test_case/src/driver.c::goodG2B","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static void goodG2B()","span":[29,37]}
+{"k":"ref","from":"bad","file":"test_case/src/driver.c","to":"printIntLine","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"bad","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"good","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}
+{"k":"ref","from":"good","file":"test_case/src/driver.c","to":"test_case/src/driver.c::goodB2G","refkind":"call","resolved":true}
+{"k":"ref","from":"good","file":"test_case/src/driver.c","to":"test_case/src/driver.c::goodG2B","refkind":"call","resolved":true}
+{"k":"ref","from":"printIntLine","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}
+{"k":"ref","from":"printLine","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}
+{"k":"ref","from":"test_case/src/driver.c::goodB2G","file":"test_case/src/driver.c","to":"fabs","refkind":"call","resolved":false}
+{"k":"ref","from":"test_case/src/driver.c::goodB2G","file":"test_case/src/driver.c","to":"printIntLine","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/driver.c::goodB2G","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/driver.c::goodG2B","file":"test_case/src/driver.c","to":"printIntLine","refkind":"call","resolved":true}

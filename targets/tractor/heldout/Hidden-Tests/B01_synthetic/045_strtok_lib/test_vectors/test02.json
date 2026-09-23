@@ -1,0 +1,9 @@
+{
+  "lib_state_in": {
+    "s_in": "ab::cd/e_f\n/g h\nij:"
+  },
+  "lib_state_out": {},
+  "stdout": {
+    "pattern": "line ab\nline cd\nline e_f\nline g h\nline ij\n"
+  }
+}

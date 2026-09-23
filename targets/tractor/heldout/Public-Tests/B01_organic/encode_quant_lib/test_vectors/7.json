@@ -1,0 +1,20 @@
+{
+  "lib_state_in": {
+    "uni": 10,
+    "step": 15,
+    "pred": 200,
+    "tgt": 180,
+    "tgt2": 190,
+    "lsbit": 1,
+    "returns": 0
+  },
+  "lib_state_out": {
+    "uni": 10,
+    "step": 15,
+    "pred": 200,
+    "tgt": 180,
+    "tgt2": 190,
+    "lsbit": 1,
+    "returns": 11
+  }
+}

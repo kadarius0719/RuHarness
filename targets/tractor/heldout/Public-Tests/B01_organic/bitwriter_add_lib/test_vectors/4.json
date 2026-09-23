@@ -1,0 +1,19 @@
+{
+  "has_ub": "shift exponent 18446744073709551580 is too large for 64-bit type 'tflac_uint'",
+  "lib_state_in": {
+    "bits": 100,
+    "returns": 6,
+    "s_bits": 2,
+    "s_tot": 3,
+    "s_val": 1,
+    "val": 5
+  },
+  "lib_state_out": {
+    "bits": 100,
+    "returns": 0,
+    "s_bits": 102,
+    "s_tot": 103,
+    "s_val": 335544320,
+    "val": 5
+  }
+}

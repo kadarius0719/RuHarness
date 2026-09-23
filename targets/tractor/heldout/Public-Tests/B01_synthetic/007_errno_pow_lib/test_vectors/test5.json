@@ -1,0 +1,12 @@
+{
+  "lib_state_in": {
+    "base": 10,
+    "exponent": -2,
+    "returns": 0
+  },
+  "lib_state_out": {
+    "base": 10,
+    "exponent": -2,
+    "returns": 0.01
+  }
+}

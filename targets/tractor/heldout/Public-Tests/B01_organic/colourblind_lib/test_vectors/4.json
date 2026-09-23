@@ -1,0 +1,14 @@
+{
+	"lib_state_in": {
+		"impairment": "CbProtanopia",
+		"r": 2.0017891e19,
+		"g": 1530328900000.0,
+		"b": -4.1168735e-22
+	},
+	"lib_state_out": {
+		"impairment": "CbProtanopia",
+		"r": 3.4141928e18,
+		"g": 3.4141928e18,
+		"b": -9.042369e16
+	}
+}

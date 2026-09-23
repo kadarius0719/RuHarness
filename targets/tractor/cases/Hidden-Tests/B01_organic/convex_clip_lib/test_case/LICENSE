@@ -1,0 +1,12 @@
+/***********************************************************
+* A single header file OpenGL lightmapping library         *
+* https://github.com/ands/lightmapper                      *
+* no warranty implied | use at your own risk               *
+* author: Andreas Mantler (ands) | last change: 10.05.2018 *
+*                                                          *
+* License:                                                 *
+* This software is in the public domain.                   *
+* Where that dedication is not recognized,                 *
+* you are granted a perpetual, irrevocable license to copy *
+* and modify this file however you want.                   *
+***********************************************************/

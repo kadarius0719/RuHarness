@@ -1,0 +1,19 @@
+schema_version = 1
+target = "028_strchr_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:31d18078fe3aba143052f59bc0c734145a9857c07e81e56b6d4fb55a7ec11477"
+symbols = ["driver", "foo"]
+interface = ["void driver(const char *in)", "int foo(const char *in, char c)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

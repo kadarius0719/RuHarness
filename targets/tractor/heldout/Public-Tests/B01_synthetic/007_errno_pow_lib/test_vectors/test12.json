@@ -1,0 +1,15 @@
+{
+  "lib_state_in": {
+    "base": 0,
+    "exponent": -1,
+    "returns": 0
+  },
+  "lib_state_out": {
+    "base": 0,
+    "exponent": -1,
+    "returns": -1
+  },
+  "stderr": {
+    "pattern": "Range error: pow(0.00, -1.00) caused overflow or underflow.\n"
+  }
+}

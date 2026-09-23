@@ -1,0 +1,19 @@
+schema_version = 1
+target = "read_side_info_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:6b85a95b00754e82aabb63409cea0eeca9ac6dbb81c66b5f41b237d4e03606c8"
+symbols = ["read_side_info"]
+interface = ["int read_side_info(bs_t *bs, L3_gr_info_t *gr, const uint8_t *hdr)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

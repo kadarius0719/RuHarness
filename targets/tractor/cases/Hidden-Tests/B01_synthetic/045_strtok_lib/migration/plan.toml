@@ -1,0 +1,19 @@
+schema_version = 1
+target = "045_strtok_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:09c0efa062f2b005991a570847e956f927d41b32a241d25c85a3dfda2eb1f6b5"
+symbols = ["driver"]
+interface = ["void driver(char *s_in)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

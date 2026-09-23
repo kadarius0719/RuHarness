@@ -1,0 +1,31 @@
+{ "lib_state_in": {
+  "bs": [
+    {
+      "buf": [
+        10,
+        0
+      ],
+      "pos": 0,
+      "limit": 0
+    }
+  ],
+  "pba": [],
+  "scfcod": [],
+  "bands": 0,
+  "scf": []
+},"lib_state_out": {
+  "bs": [
+    {
+      "buf": [
+        10,
+        0
+      ],
+      "pos": 0,
+      "limit": 0
+    }
+  ],
+  "pba": [],
+  "scfcod": [],
+  "bands": 0,
+  "scf": []
+} }

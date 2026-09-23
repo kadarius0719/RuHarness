@@ -1,0 +1,10 @@
+{
+  "lib_state_in": {
+    "x": 64,
+    "returns": 0.0
+  },
+  "lib_state_out": {
+    "x": 64,
+    "returns": 256.0000000000000000
+  }
+}

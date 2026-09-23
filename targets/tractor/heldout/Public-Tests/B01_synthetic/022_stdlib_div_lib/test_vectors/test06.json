@@ -1,0 +1,12 @@
+{
+  "rc": -8,
+  "has_ub": "Divides by 0",
+  "lib_state_in": {
+    "x": 37,
+    "y": 0
+  },
+  "lib_state_out": {
+    "x": 37,
+    "y": 0
+  }
+}

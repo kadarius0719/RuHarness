@@ -1,0 +1,12 @@
+{
+  "stdout": {
+    "pattern": "^alphanumeric: 0\nalphabetic: 0\nlowercase: 0\nuppercase: 0\ndigit: 0\nhexadecimal: 0\ncontrol: 0\ngraphical: [1-9][0-9]*\nspace: 0\nblank: 0\nprinting: [1-9][0-9]*\npunctuation: [1-9][0-9]*\nto lower: \\\\\nto upper: \\\\\n$",
+    "is_regex": true
+  },
+  "lib_state_in": {
+    "c": "\\"
+  },
+  "lib_state_out": {
+    "c": "\\"
+  }
+}

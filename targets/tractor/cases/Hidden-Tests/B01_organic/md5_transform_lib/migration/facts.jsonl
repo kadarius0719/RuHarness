@@ -1,0 +1,6 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:6f2359fede3412f6250bd4ff18eb6a04212ee34258d9c360886f0decacc74944","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:b48751d395b1b972a1657039c9378d38011366e7f7c9445109fa26b3c7de3408","includes":[]}
+{"k":"symbol","name":"md5_transform","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void md5_transform(tflac_md5 *m)","span":[8,355]}
+{"k":"symbol","name":"tflac_unpack_u32le","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"tflac_u32 tflac_unpack_u32le(const tflac_u8 *d)","span":[3,6]}
+{"k":"ref","from":"md5_transform","file":"test_case/src/lib.c","to":"tflac_unpack_u32le","refkind":"call","resolved":true}

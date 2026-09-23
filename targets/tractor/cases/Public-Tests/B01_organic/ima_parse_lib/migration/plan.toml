@@ -1,0 +1,19 @@
+schema_version = 1
+target = "ima_parse_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:621b43978cd7a03a51ddd7dd7cafbf9597dc19015b964f434212f2b09e8a7a06"
+symbols = ["ima_parse"]
+interface = ["int ima_parse(struct ima_info *info, const void *data)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

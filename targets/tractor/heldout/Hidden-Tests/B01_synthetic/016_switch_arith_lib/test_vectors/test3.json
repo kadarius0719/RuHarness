@@ -1,0 +1,11 @@
+{
+  "lib_state_in": {
+    "seed": 1993862192
+  },
+  "lib_state_out": {
+    "seed": 1993862192
+  },
+  "stdout": {
+    "pattern": "Result: 285696383 — Built entirely from left shifts and dreams.\n"
+  }
+}

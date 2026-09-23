@@ -1,0 +1,13 @@
+{
+  "stdout": {
+    "pattern": "loop\nx\ny\nloop\nx\ny\nx\nloop\nx\n"
+  },
+  "lib_state_in": {
+    "x": 4,
+    "y": 2
+  },
+  "lib_state_out": {
+    "x": 4,
+    "y": 2
+  }
+}

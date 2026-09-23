@@ -1,0 +1,19 @@
+schema_version = 1
+target = "020_stack_linked_list_lib"
+
+[[unit]]
+id = "u-simplestruct"
+status = "pending"
+files = ["test_case/src/simplestruct.c"]
+source_hash = "blake3:90e319e350ea49189c4dc635017cba97a363484e2e93b761531bf2b7e4d2a8e5"
+symbols = ["smallestValue"]
+interface = ["int smallestValue (struct ListNode *head)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-simplestruct/driver.c"
+rust_crate = "u_simplestruct_rs"
+replaces = ["test_case/src/simplestruct.c"]

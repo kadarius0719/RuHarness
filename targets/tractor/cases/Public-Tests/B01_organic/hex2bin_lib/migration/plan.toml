@@ -1,0 +1,19 @@
+schema_version = 1
+target = "hex2bin_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:24ae7b29714b4ccabd583d2814f3f2fdf665806d52f8c58927a23e51b1d99be4"
+symbols = ["hex2bin"]
+interface = ["int hex2bin(uint8_t *bin, size_t bin_maxlen, const char *hex, size_t hex_len, const char *ignore, const char **hex_end_p)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

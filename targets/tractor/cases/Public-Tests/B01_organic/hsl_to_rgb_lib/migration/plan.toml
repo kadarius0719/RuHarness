@@ -1,0 +1,19 @@
+schema_version = 1
+target = "hsl_to_rgb_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:f18bd5e16b74069d2da3fe8f5a8f8719bc1475812eaa697d8df2c8eee31fda89"
+symbols = ["hsl_to_rgb"]
+interface = ["void hsl_to_rgb(float *dest, const float *src)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

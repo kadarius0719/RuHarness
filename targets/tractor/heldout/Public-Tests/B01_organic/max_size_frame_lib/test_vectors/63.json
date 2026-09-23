@@ -1,0 +1,14 @@
+{
+  "lib_state_in": {
+    "blocksize": 8192,
+    "channels": 32,
+    "bitdepth": 16,
+    "returns": 0
+  },
+  "lib_state_out": {
+    "blocksize": 8192,
+    "channels": 32,
+    "bitdepth": 16,
+    "returns": 524338
+  }
+}

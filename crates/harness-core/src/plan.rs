@@ -495,3 +495,56 @@ pub fn set_status(path: &Path, unit_id: &str, status: UnitStatus) -> Result<(), 
     t["status"] = toml_edit::value(status.as_str());
     crate::ledger::write_atomic(path, doc.to_string().as_bytes())
 }
+
+/// The `[unit.oracle]` writer used by `harness bench init` (docs/SCHEMAS.md
+/// "M4 additions" writer table): when the unit has NO `oracle` table, create
+/// one with `entries` (string or string-list values, in order) and return
+/// `true`; an existing table is never touched (`false`). Surgical edit via
+/// `toml_edit`; everything else in the file is preserved.
+pub fn set_oracle_table_if_absent(
+    path: &Path,
+    unit_id: &str,
+    entries: &[(&str, OracleValue)],
+) -> Result<bool, Error> {
+    let text = std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| Error::parse(path, format!("{e}")))?;
+    let units = doc
+        .get_mut("unit")
+        .and_then(|i| i.as_array_of_tables_mut())
+        .ok_or_else(|| Error::parse(path, "`unit` is not an array of tables"))?;
+    let t = units
+        .iter_mut()
+        .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(unit_id))
+        .ok_or_else(|| Error::UnknownUnit(unit_id.to_string()))?;
+    if t.contains_key("oracle") {
+        return Ok(false);
+    }
+    let mut table = toml_edit::Table::new();
+    for (key, value) in entries {
+        let item = match value {
+            OracleValue::Str(s) => toml_edit::value(s.as_str()),
+            OracleValue::List(items) => {
+                let mut array = toml_edit::Array::new();
+                for s in items {
+                    array.push(s.as_str());
+                }
+                toml_edit::value(array)
+            }
+        };
+        table.insert(key, item);
+    }
+    t.insert("oracle", toml_edit::Item::Table(table));
+    crate::ledger::write_atomic(path, doc.to_string().as_bytes())?;
+    Ok(true)
+}
+
+/// A value written by [`set_oracle_table_if_absent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OracleValue {
+    /// A string value.
+    Str(String),
+    /// A list of strings.
+    List(Vec<String>),
+}

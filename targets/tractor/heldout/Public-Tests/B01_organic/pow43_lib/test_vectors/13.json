@@ -1,0 +1,10 @@
+{
+  "lib_state_in": {
+    "x": -10,
+    "returns": 0.0
+  },
+  "lib_state_out": {
+    "x": -10,
+    "returns": -10.9027242660522461
+  }
+}

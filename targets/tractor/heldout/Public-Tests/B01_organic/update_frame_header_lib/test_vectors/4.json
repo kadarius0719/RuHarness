@@ -1,0 +1,22 @@
+{
+	"lib_state_in": {
+		"t": {
+			"samplerate": 882000,
+			"channels": 0,
+			"bitdepth": 8,
+			"channel_mode": 1,
+			"frame_header": 0,
+			"cur_blocksize": 576
+		}
+	},
+	"lib_state_out": {
+		"t": {
+			"samplerate": 882000,
+			"channels": 0,
+			"bitdepth": 8,
+			"channel_mode": 1,
+			"frame_header": 4294451586,
+			"cur_blocksize": 576
+		}
+	}
+}

@@ -1,0 +1,13 @@
+{
+  "stdout": {
+    "pattern": "6\n"
+  },
+  "lib_state_in": {
+    "s1": "foobar",
+    "s2": "xyz"
+  },
+  "lib_state_out": {
+    "s1": "foobar",
+    "s2": "xyz"
+  }
+}

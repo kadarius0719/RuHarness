@@ -1,0 +1,19 @@
+schema_version = 1
+target = "normalize_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:f76153e767fa9e539fd8f4aa61e891acb168299246e9a95e46efa711add47517"
+symbols = ["normalize"]
+interface = ["void normalize(float *dest, const float *src, int size)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

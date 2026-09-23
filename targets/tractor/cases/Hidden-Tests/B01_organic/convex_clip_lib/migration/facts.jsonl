@@ -1,0 +1,16 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:a45e5581150b3886e3ef4baff912892196ce03d721114f1e9e20e394615d69b4","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:cf914808153e83834e51a160ee9fa70745391c3bdac93ae8ff136cb4085bbbdb","includes":[]}
+{"k":"symbol","name":"convex_clip","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int convex_clip(lm_vec2 *poly, int nPoly, const lm_vec2 *clip, int nClip, lm_vec2 *res)","span":[39,67]}
+{"k":"symbol","name":"test_case/src/lib.c::lm_cross2","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static inline float lm_cross2(lm_vec2 a, lm_vec2 b)","span":[14,16]}
+{"k":"symbol","name":"test_case/src/lib.c::lm_leftOf","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static inline int lm_leftOf(lm_vec2 a, lm_vec2 b, lm_vec2 c)","span":[18,21]}
+{"k":"symbol","name":"test_case/src/lib.c::lm_lineIntersection","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static lm_bool lm_lineIntersection(lm_vec2 x0, lm_vec2 x1, lm_vec2 y0, lm_vec2 y1, lm_vec2 *res)","span":[23,37]}
+{"k":"symbol","name":"test_case/src/lib.c::lm_sub2","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static inline lm_vec2 lm_sub2(lm_vec2 a, lm_vec2 b)","span":[10,12]}
+{"k":"symbol","name":"test_case/src/lib.c::lm_v2","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static inline lm_vec2 lm_v2(float x, float y)","span":[5,8]}
+{"k":"ref","from":"convex_clip","file":"test_case/src/lib.c","to":"test_case/src/lib.c::lm_leftOf","refkind":"call","resolved":true}
+{"k":"ref","from":"convex_clip","file":"test_case/src/lib.c","to":"test_case/src/lib.c::lm_lineIntersection","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::lm_leftOf","file":"test_case/src/lib.c","to":"test_case/src/lib.c::lm_cross2","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::lm_leftOf","file":"test_case/src/lib.c","to":"test_case/src/lib.c::lm_sub2","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::lm_lineIntersection","file":"test_case/src/lib.c","to":"test_case/src/lib.c::lm_cross2","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::lm_lineIntersection","file":"test_case/src/lib.c","to":"test_case/src/lib.c::lm_sub2","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::lm_sub2","file":"test_case/src/lib.c","to":"test_case/src/lib.c::lm_v2","refkind":"call","resolved":true}

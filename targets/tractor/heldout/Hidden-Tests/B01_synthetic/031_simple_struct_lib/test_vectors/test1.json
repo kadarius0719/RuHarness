@@ -1,0 +1,18 @@
+{
+  "lib_state_in": {
+    "date": {
+      "month": 12,
+      "day": 11,
+      "year": 1993
+    },
+    "returns": false
+  },
+  "lib_state_out": {
+    "date": {
+      "month": 12,
+      "day": 11,
+      "year": 1993
+    },
+    "returns": false
+  }
+}

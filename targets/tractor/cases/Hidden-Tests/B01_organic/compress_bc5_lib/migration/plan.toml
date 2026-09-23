@@ -1,0 +1,19 @@
+schema_version = 1
+target = "compress_bc5_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:4fd5bf3b810f7be37f4224e84090cbc15a8fffe5a996eb6f9e25fe0ec195e33b"
+symbols = ["compress_bc5", "stb__CompressAlphaBlock"]
+interface = ["void compress_bc5(unsigned char *dest, const unsigned char *src)", "void stb__CompressAlphaBlock(unsigned char *dest, unsigned char *src, int stride)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

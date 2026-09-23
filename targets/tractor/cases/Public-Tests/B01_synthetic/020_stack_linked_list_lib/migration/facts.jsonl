@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/simplestruct.h","hash":"blake3:0c90ec1163a92795144d3864bcc503673e50eb64b28ba61cc0d62a1f040aee23","includes":[]}
+{"k":"file","path":"test_case/src/simplestruct.c","hash":"blake3:03102f1fa705250df781e953ab19771688990ca123970b5522b1a2ad25fc87ce","includes":[]}
+{"k":"symbol","name":"smallestValue","kind":"function","file":"test_case/src/simplestruct.c","visibility":"public","signature":"int smallestValue (struct ListNode *head)","span":[6,18]}

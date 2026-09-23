@@ -5,3 +5,17 @@ target/
 /targets/zopfli/migration/units/*/attempts/*/candidate/target/
 /targets/zopfli/migration/units/*/.promote-*/
 /targets/zopfli/migration/units/*/.*.prev/
+
+# M4 benchmark suite scratch (never committed): vendored scorer crates
+# (checksum-verified against heldout/Cargo.lock at build time) and scoring
+# build dirs.
+targets/tractor/.scorer-vendor/
+targets/tractor/.bench/
+# Per-case ledgers of the benchmark suite: same scratch rules as zopfli.
+# Hand-off/replay TRACES are deliberately NOT ignored here: the corpus is
+# public (MIT), and committed traces make `bench check --replay` reproducible
+# from a cold checkout (DECISIONS.md, M4).
+/targets/tractor/cases/**/migration/build/
+/targets/tractor/cases/**/migration/units/*/.promote-*/
+/targets/tractor/cases/**/migration/units/*/.*.prev/
+/targets/tractor/cases/**/migration/units/*/.replay-*/

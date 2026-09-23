@@ -1,0 +1,7 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:0933fb332eded5e4f1957b0a17840e0a9eb36b86578d1849c623d30d72726806","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:fb8133dcbe6cec1e6160016c20cba0944f761e5a229ce83ba8dcde6392a7d7bd","includes":[]}
+{"k":"symbol","name":"stereo_samples","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int stereo_samples(btac1c_s16 *ibuf0, btac1c_s16 *ibuf1, int len)","span":[30,57]}
+{"k":"symbol","name":"test_case/src/lib.c::btac1c2_fakesqrt","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static btac1c_s64 btac1c2_fakesqrt(btac1c_s64 val)","span":[5,28]}
+{"k":"ref","from":"stereo_samples","file":"test_case/src/lib.c","to":"test_case/src/lib.c::btac1c2_fakesqrt","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::btac1c2_fakesqrt","file":"test_case/src/lib.c","to":"test_case/src/lib.c::btac1c2_fakesqrt","refkind":"call","resolved":true}

@@ -1,0 +1,12 @@
+{
+  "argv": [],
+  "stdout": {
+    "pattern": "-3\n"
+  },
+  "lib_state_in": {
+    "input": "41\n123\n-3"
+  },
+  "lib_state_out": {
+    "input": "41\n123\n-3"
+  }
+}

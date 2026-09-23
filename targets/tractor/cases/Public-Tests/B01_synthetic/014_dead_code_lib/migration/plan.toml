@@ -1,0 +1,19 @@
+schema_version = 1
+target = "014_dead_code_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:6e12702ae4162ee95fe602978cd384e5b5ad7cd771ae8c3d6a113435077b1132"
+symbols = ["bad", "driver", "good", "printLine"]
+interface = ["void bad()", "void driver()", "void good()", "void printLine(const char *line)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

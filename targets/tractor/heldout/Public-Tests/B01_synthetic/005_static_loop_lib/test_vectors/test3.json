@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "0\n-1\n-3\n-6\n-10\n-15\n-21\n-28\n-36\n-45\n"
+  },
+  "lib_state_in": {
+    "update": -1
+  },
+  "lib_state_out": {
+    "update": -1
+  }
+}

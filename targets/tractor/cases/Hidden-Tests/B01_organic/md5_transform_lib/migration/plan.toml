@@ -1,0 +1,19 @@
+schema_version = 1
+target = "md5_transform_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:ef7ccb12737076b48731d7ec30fa30efcf72c185fe1f8f06c5341a5250c81ecd"
+symbols = ["md5_transform", "tflac_unpack_u32le"]
+interface = ["void md5_transform(tflac_md5 *m)", "tflac_u32 tflac_unpack_u32le(const tflac_u8 *d)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

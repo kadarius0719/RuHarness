@@ -1,0 +1,19 @@
+schema_version = 1
+target = "read_scalefactors_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:ce5b1031718420d5836cade2cbe94dcc8f9a503a4eabc78d9a935ddb853315d4"
+symbols = ["read_scalefactors"]
+interface = ["void read_scalefactors(bs_t *bs, uint8_t *pba, uint8_t *scfcod, int bands, float *scf)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

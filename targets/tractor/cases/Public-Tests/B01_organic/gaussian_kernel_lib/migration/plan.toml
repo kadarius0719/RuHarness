@@ -1,0 +1,19 @@
+schema_version = 1
+target = "gaussian_kernel_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:82f8ef1af6384f6a231f979c6d515416c30c4730c1ea8896a1ab90b0dd169f62"
+symbols = ["gaussian_kernel"]
+interface = ["void gaussian_kernel(float *dest, int size, float radius)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

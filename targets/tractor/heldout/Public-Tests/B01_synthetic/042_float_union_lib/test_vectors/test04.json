@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "443b1ae4d6e2ef50 0x1.b1ae4d6e2ef5p+68 500000000000000000000.0000\n"
+  },
+  "lib_state_in": {
+    "f": 5E+20
+  },
+  "lib_state_out": {
+    "f": 5E+20
+  }
+}

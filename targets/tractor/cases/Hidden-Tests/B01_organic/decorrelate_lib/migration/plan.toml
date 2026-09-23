@@ -1,0 +1,19 @@
+schema_version = 1
+target = "decorrelate_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:7b0e93892cbc482bfda77357a02a13da9bfde24a003ce77f7832f9c112c1c4d7"
+symbols = ["decorrelate"]
+interface = ["void decorrelate(tflac *t, tflac_u32 channel, tflac_u32 stride)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

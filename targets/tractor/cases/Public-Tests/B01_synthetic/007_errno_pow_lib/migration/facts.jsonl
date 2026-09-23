@@ -1,0 +1,6 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/pow.h","hash":"blake3:84637db776df148ddf274b708c5826a984f9eec0d32ddda6fe1bb8876d01d85b","includes":[]}
+{"k":"file","path":"test_case/src/pow.c","hash":"blake3:cb4a968dbcc188ebbe4726324820d39a67843b59cee3655d315798cfebaaef23","includes":[]}
+{"k":"symbol","name":"my_pow","kind":"function","file":"test_case/src/pow.c","visibility":"public","signature":"double my_pow(double base, double exponent)","span":[12,30]}
+{"k":"ref","from":"my_pow","file":"test_case/src/pow.c","to":"fprintf","refkind":"call","resolved":false}
+{"k":"ref","from":"my_pow","file":"test_case/src/pow.c","to":"pow","refkind":"call","resolved":false}

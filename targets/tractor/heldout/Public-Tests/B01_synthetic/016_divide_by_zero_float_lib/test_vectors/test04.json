@@ -1,0 +1,7 @@
+{
+  "has_ub": "Divides by zero: floating point",
+  "lib_state_in": {
+    "good_data": 3.0,
+    "bad_data": 0.0
+  }
+}

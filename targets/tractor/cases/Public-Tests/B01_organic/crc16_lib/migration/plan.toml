@@ -1,0 +1,19 @@
+schema_version = 1
+target = "crc16_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:3c480afdeba2e62f0647fb855d28eff95897f811b583a1a4e6d6819b5ccfb91c"
+symbols = ["crc16"]
+interface = ["tflac_u16 crc16(const tflac_u8 *d, tflac_u32 len, tflac_u16 crc16)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

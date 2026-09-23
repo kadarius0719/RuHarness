@@ -1,0 +1,19 @@
+schema_version = 1
+target = "025_struct_and_errno_and_static_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:ac25a2e075f63a097014f792a267d6ecaa4b42bb7560224f04923e72fe99e635"
+symbols = ["driver", "run"]
+interface = ["void driver(const char *in)", "void run(int extra_bedrooms)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

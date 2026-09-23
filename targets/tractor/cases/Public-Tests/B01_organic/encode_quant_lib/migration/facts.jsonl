@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:5ae90704615ba20626f22c9694a66984f84c2366aae760cf99041e6df6a885fa","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:df7aca569ee9182d64eb972837dcd6064b77c8a5575d723fb6a8865b8793e656","includes":[]}
+{"k":"symbol","name":"encode_quant","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int encode_quant(int uni, int step, int pred, int tgt, int tgt2, int lsbit)","span":[3,62]}

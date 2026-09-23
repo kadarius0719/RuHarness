@@ -1,0 +1,5 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:1318f41f96285e2b2aa070199f63bbf764a037d41430e216f7f645e9579eaee3","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:af59fe702472b64b12cd4bfd2422fbb8080222bb496943ac38a0594d37da76da","includes":[]}
+{"k":"symbol","name":"tfm","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void tfm(float *dest, const float *src, int count)","span":[5,32]}
+{"k":"ref","from":"tfm","file":"test_case/src/lib.c","to":"sqrtf","refkind":"call","resolved":false}

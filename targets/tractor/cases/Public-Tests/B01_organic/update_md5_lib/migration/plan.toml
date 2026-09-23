@@ -1,0 +1,19 @@
+schema_version = 1
+target = "update_md5_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:1a6fb769fb896d881a16f363c56c9df2d30eed2b9895531b8f10c89b93f43302"
+symbols = ["tflac_md5_addsample", "tflac_pack_u64le", "update_md5"]
+interface = ["void tflac_md5_addsample(tflac_md5 *m, tflac_u32 bits, tflac_uint val)", "void tflac_pack_u64le(tflac_u8 *d, tflac_u64 n)", "tflac_u32 update_md5(tflac *t, const tflac_s32 *samples)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

@@ -1,0 +1,16 @@
+# Harness-authored scorer workspace (docs/SCHEMAS.md "M4 additions").
+# NOT upstream: hash-locked in ../corpus.lock like every vendored file.
+# Members = the corpus's scorer library + exactly the suite's case runners
+# (never `runner/fuzz`, which declares its own workspace). Built only with
+# `--frozen` against the vendored, checksum-verified dependency sources.
+[workspace]
+resolver = "3"
+members = [
+    "tools/cando2",
+    "Public-Tests/*/*_lib/runner",
+    "Hidden-Tests/*/*_lib/runner",
+]
+
+# Minimal portability patches to scorer dependencies — see patches/PATCHES.md.
+[patch.crates-io]
+process-fun-core = { path = "patches/process-fun-core" }

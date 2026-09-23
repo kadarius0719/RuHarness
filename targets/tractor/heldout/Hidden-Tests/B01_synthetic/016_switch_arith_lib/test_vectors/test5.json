@@ -1,0 +1,11 @@
+{
+  "lib_state_in": {
+    "seed": 1044156074
+  },
+  "lib_state_out": {
+    "seed": 1044156074
+  },
+  "stdout": {
+    "pattern": "Result: 3903814041 — It tried to divide by zero but thought better of it.\n"
+  }
+}

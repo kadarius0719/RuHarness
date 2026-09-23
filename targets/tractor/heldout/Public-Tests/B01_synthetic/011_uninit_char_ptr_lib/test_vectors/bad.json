@@ -1,0 +1,6 @@
+{
+  "has_ub": "Program is killed after segmentation fault",
+  "lib_state_in": {
+    "use_good": 0
+  }
+}

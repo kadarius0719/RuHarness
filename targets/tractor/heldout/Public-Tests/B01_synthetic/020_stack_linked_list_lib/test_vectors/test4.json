@@ -1,0 +1,10 @@
+{
+        "lib_state_in": {
+                "values": [-10, 3],
+                "returns": 0
+        },
+        "lib_state_out": {
+                "values": [-10, 3],
+                "returns": -10
+        }
+}

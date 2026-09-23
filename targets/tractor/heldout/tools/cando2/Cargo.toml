@@ -1,0 +1,36 @@
+# © 2026 Massachusetts Institute of Technology
+# MIT License
+
+[package]
+name = "cando2"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.94.1"
+
+[lints.rust]
+unexpected_cfgs = "allow"
+
+[features]
+default = ["full"]
+full = ["dep:argh", "dep:getrandom", "dep:serde", "dep:serde_json"]
+
+[dependencies]
+arbitrary = { version = "1.4.1", features = ["derive"] }
+libloading = "0.8.7"
+argh = { version = "0.1.13", optional = true }
+getrandom = { version = "0.3.3", optional = true, features = ["std"] }
+serde = { version = "1.0.219", optional = true, features = ["derive"] }
+serde_json = { optional = true, version = "1.0.140", features = ["arbitrary_precision", "float_roundtrip", "preserve_order"] }
+clap = { version = "4.5.60", features = ["derive"] }
+libc = "0.2.183"
+nix = { version = "0.31.2", features = ["process", "fs"] }
+fork = "0.7.0"
+process-fun = "0.1.2"
+process-fun-core = "0.1.2"
+procspawn = { path = "./procspawn/", version = "1.0.1", features = ["test-support"] }
+diffy = "0.4.2"
+regex = "1.12.3"
+wait-timeout = "0.2.1"
+tempfile = "3.27.0"
+approx = "0.5.1"
+num-traits = "0.2.19"

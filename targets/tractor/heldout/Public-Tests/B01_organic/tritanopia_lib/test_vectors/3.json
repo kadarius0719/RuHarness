@@ -1,0 +1,27 @@
+{
+  "has_ub": "-55.5838 is outside the range of representable values of type 'unsigned char'",
+  "lib_state_in": {
+    "returns": {
+      "b": 238,
+      "g": 217,
+      "r": 145
+    },
+    "rgb": {
+      "b": 253,
+      "g": 23,
+      "r": 92
+    }
+  },
+  "lib_state_out": {
+    "returns": {
+      "b": 101,
+      "g": 101,
+      "r": 201
+    },
+    "rgb": {
+      "b": 253,
+      "g": 23,
+      "r": 92
+    }
+  }
+}

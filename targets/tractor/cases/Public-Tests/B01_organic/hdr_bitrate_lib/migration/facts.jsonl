@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:455c42c03795e752d74f709d77ef05e4b32b34cbaad20622b96f271fe4ba07ca","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:cdaab249fb012d66e34751de1f70bf84e6427dee81ed354de6eec7e74b93350b","includes":[]}
+{"k":"symbol","name":"hdr_bitrate","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"unsigned hdr_bitrate(const uint8_t *h)","span":[3,14]}

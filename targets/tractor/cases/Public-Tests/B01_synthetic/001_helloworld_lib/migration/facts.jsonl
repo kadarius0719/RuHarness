@@ -1,0 +1,5 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/hello.h","hash":"blake3:6cd8731637469e00fc0840f5ee542f889f294395dd6085e36dd75a4625ff4906","includes":[]}
+{"k":"file","path":"test_case/src/hello.c","hash":"blake3:cd72e619c1390a9a13e4f3ffe3dc1c42d46e56d23e81e24f4c6fa45608478b3d","includes":[]}
+{"k":"symbol","name":"helloworld","kind":"function","file":"test_case/src/hello.c","visibility":"public","signature":"int helloworld()","span":[8,11]}
+{"k":"ref","from":"helloworld","file":"test_case/src/hello.c","to":"printf","refkind":"call","resolved":false}

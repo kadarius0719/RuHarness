@@ -1,0 +1,10 @@
+{
+  "lib_state_in": {
+    "flt": 6.553600000e+04,
+    "returns": 0
+  },
+  "lib_state_out": {
+    "flt": 6.553600000e+04,
+    "returns": 31744
+  }
+}

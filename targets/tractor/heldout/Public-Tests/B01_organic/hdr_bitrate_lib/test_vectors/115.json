@@ -1,0 +1,19 @@
+{
+  "has_ub": "index -1 out of bounds",
+  "lib_state_in": {
+    "h": [
+      0,
+      9,
+      160
+    ],
+    "returns": 0
+  },
+  "lib_state_out": {
+    "h": [
+      0,
+      9,
+      160
+    ],
+    "returns": 160
+  }
+}

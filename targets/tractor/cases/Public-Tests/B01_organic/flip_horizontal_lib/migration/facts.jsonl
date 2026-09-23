@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:60729e376386568042bd20bc838136d394507d0ce6edd883edaab9096bb6a82e","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:8d0a85e9970eda6b24400a76511b97e7dbc34e65c5aa4cc2fda097f55287a978","includes":[]}
+{"k":"symbol","name":"flip_horizontal","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void flip_horizontal(cp_image_t *img)","span":[3,19]}

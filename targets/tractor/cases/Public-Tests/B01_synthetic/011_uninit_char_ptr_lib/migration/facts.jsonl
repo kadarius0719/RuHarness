@@ -1,0 +1,12 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/driver.h","hash":"blake3:187dbb03bafdb1246499f81d7d2a7fce875330996e3da96b68f39104104db617","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:f6c5a55ab7bb851fe614bc0ade5a7cb321aa863d786473ff0382de59402c9c49","includes":[]}
+{"k":"symbol","name":"bad","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void bad()","span":[16,20]}
+{"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(int useGood)","span":[29,39]}
+{"k":"symbol","name":"good","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void good()","span":[22,27]}
+{"k":"symbol","name":"printLine","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void printLine(const char *line)","span":[8,14]}
+{"k":"ref","from":"bad","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"bad","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"good","refkind":"call","resolved":true}
+{"k":"ref","from":"good","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}
+{"k":"ref","from":"printLine","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}

@@ -1,0 +1,19 @@
+schema_version = 1
+target = "004_loop_lib"
+
+[[unit]]
+id = "u-loop"
+status = "pending"
+files = ["test_case/src/loop.c"]
+source_hash = "blake3:315390dff0c9df16416121dfeaa094936aca97135cda6be5179e82ce352de4f4"
+symbols = ["loop"]
+interface = ["void loop(int max_val)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-loop/driver.c"
+rust_crate = "u_loop_rs"
+replaces = ["test_case/src/loop.c"]

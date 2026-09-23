@@ -1,0 +1,17 @@
+{
+  "stdout": {
+    "pattern": "3 5 1 -42\n"
+  },
+  "lib_state_in": {
+    "x": 3,
+    "y": 5,
+    "b": true,
+    "z": -42
+  },
+  "lib_state_out": {
+    "x": 3,
+    "y": 5,
+    "b": true,
+    "z": -42
+  }
+}

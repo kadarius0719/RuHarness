@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "3ff3ae147ae147ae 0x1.3ae147ae147aep+0 1.2300\n"
+  },
+  "lib_state_in": {
+    "f": 1.23
+  },
+  "lib_state_out": {
+    "f": 1.23
+  }
+}

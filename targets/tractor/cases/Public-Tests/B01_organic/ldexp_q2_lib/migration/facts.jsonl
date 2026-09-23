@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:ffcb15b71aab9ff984fad12f2d1e2fe41dd2e5614b937e61f1c04589ae4972ac","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:c705d607a70781c0c38f86d2ee3e5ebeea130e0209de5af2eab7d081b521dfb8","includes":[]}
+{"k":"symbol","name":"ldexp_q2","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"float ldexp_q2(float y, int exp_q2)","span":[3,12]}

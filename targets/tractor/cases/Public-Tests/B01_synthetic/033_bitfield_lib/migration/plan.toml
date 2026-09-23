@@ -1,0 +1,19 @@
+schema_version = 1
+target = "033_bitfield_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:ee3ff5ab147a2a796cc2a456fed7959396254def43537ea836fa8e19c68fc14f"
+symbols = ["driver", "print_foo"]
+interface = ["void driver(unsigned int x, unsigned int y, bool b, int z)", "void print_foo(const foo_t *foo)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

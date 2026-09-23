@@ -1,0 +1,13 @@
+{
+  "rc": -11,
+  "argv": [],
+  "has_ub": "This test should segfault",
+  "lib_state_in": {
+    "good_data": 2000000000,
+    "bad_data": 2000000000
+  },
+  "lib_state_out": {
+    "good_data": 2000000000,
+    "bad_data": 2000000000
+  }
+}

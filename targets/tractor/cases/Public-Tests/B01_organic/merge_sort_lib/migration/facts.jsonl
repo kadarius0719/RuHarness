@@ -1,0 +1,12 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:80b9f26c5378dccfec6d111bfab30c28be0988ecf41176456bf8ecb2234da5b7","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:0ad5c9a415992c2ad4fb942d6c4ef43460eb15c303be06f2efccb684867aaebd","includes":[]}
+{"k":"symbol","name":"merge_sort","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void merge_sort(spritebatch_sprite_t *a, spritebatch_sprite_t *b, int size)","span":[41,45]}
+{"k":"symbol","name":"test_case/src/lib.c::spritebatch_internal_merge_sort_iteration","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static void spritebatch_internal_merge_sort_iteration(spritebatch_sprite_t *a, int lo, int split, int hi, spritebatch_sprite_t *b)","span":[14,29]}
+{"k":"symbol","name":"test_case/src/lib.c::spritebatch_internal_merge_sort_recurse","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static void spritebatch_internal_merge_sort_recurse(spritebatch_sprite_t *b, int lo, int hi, spritebatch_sprite_t *a)","span":[31,39]}
+{"k":"symbol","name":"test_case/src/lib.c::spritebatch_internal_sprite_less_than_or_equal","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static int spritebatch_internal_sprite_less_than_or_equal(spritebatch_sprite_t *a, spritebatch_sprite_t *b)","span":[5,12]}
+{"k":"ref","from":"merge_sort","file":"test_case/src/lib.c","to":"memcpy","refkind":"call","resolved":false}
+{"k":"ref","from":"merge_sort","file":"test_case/src/lib.c","to":"test_case/src/lib.c::spritebatch_internal_merge_sort_recurse","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::spritebatch_internal_merge_sort_iteration","file":"test_case/src/lib.c","to":"test_case/src/lib.c::spritebatch_internal_sprite_less_than_or_equal","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::spritebatch_internal_merge_sort_recurse","file":"test_case/src/lib.c","to":"test_case/src/lib.c::spritebatch_internal_merge_sort_iteration","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::spritebatch_internal_merge_sort_recurse","file":"test_case/src/lib.c","to":"test_case/src/lib.c::spritebatch_internal_merge_sort_recurse","refkind":"call","resolved":true}

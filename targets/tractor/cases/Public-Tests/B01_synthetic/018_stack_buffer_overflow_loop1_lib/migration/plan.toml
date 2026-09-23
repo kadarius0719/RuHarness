@@ -1,0 +1,19 @@
+schema_version = 1
+target = "018_stack_buffer_overflow_loop1_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:bd767d7d503c31c4bd1167ed96577edcfd2dd625aff18fceb73c1eda6671ec69"
+symbols = ["bad", "driver", "good", "printIntLine", "printLine"]
+interface = ["void bad()", "void driver(int useGood)", "void good()", "void printIntLine (int intNumber)", "void printLine (const char * line)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

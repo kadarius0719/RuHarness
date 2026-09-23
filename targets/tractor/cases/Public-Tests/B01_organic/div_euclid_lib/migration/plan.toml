@@ -1,0 +1,19 @@
+schema_version = 1
+target = "div_euclid_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:fd3e43460f53ef588e4b5ec0e823fad35f27abcf27c0678497aad68ab8ae95ab"
+symbols = ["div_euclid"]
+interface = ["int div_euclid(int v1, int v2)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

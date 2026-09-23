@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "The house has 2 floors, 5 bedrooms, and 2.5 bathrooms\nThe house has 3 floors, 5 bedrooms, and 2.5 bathrooms\nThe house has 3 floors, 5 bedrooms, and 3.5 bathrooms\nThe house has 3 floors, 10 bedrooms, and 3.5 bathrooms\nThe house has 3 floors, 10 bedrooms, and 3.5 bathrooms\nThe house has 4 floors, 10 bedrooms, and 3.5 bathrooms\nThe house has 4 floors, 10 bedrooms, and 4.5 bathrooms\nThe house has 4 floors, 15 bedrooms, and 4.5 bathrooms\n"
+  },
+  "lib_state_in": {
+    "x": 5
+  },
+  "lib_state_out": {
+    "x": 5
+  }
+}

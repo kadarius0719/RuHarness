@@ -1,0 +1,19 @@
+schema_version = 1
+target = "016_switch_arith_lib"
+
+[[unit]]
+id = "u-switch-arith"
+status = "pending"
+files = ["test_case/src/switch-arith.c"]
+source_hash = "blake3:2efc318341c649b7621312d8e84220a49fcd2890f8a1a98dc4ef9a20da10a992"
+symbols = ["perform_operations", "switch_arith"]
+interface = ["unsigned int perform_operations(unsigned int a, unsigned int b)", "void switch_arith(unsigned int seed)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-switch-arith/driver.c"
+rust_crate = "u_switch_arith_rs"
+replaces = ["test_case/src/switch-arith.c"]

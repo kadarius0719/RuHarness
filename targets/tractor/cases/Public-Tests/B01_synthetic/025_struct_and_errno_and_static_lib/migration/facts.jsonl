@@ -1,0 +1,19 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/driver.h","hash":"blake3:b4d0d2da0519092e340372d8ce13921b9c0d40e4a40b45be321db760a413b386","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:13009035fc5e4600a74530ee304700b0b35163b1fae4dc1beb4320ec7aaa554e","includes":[]}
+{"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(const char *in)","span":[58,66]}
+{"k":"symbol","name":"run","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void run(int extra_bedrooms)","span":[36,44]}
+{"k":"symbol","name":"test_case/src/driver.c::add_bedrooms","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static void add_bedrooms(house_t *house, int extra_bedrooms)","span":[24,26]}
+{"k":"symbol","name":"test_case/src/driver.c::add_floor","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static void add_floor(house_t *house)","span":[20,22]}
+{"k":"symbol","name":"test_case/src/driver.c::add_floor_to_the_house","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static void add_floor_to_the_house()","span":[28,30]}
+{"k":"symbol","name":"test_case/src/driver.c::parse_val","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static bool parse_val(const char *str, int *val)","span":[46,56]}
+{"k":"symbol","name":"test_case/src/driver.c::print_the_house","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static void print_the_house()","span":[32,34]}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"run","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"test_case/src/driver.c::parse_val","refkind":"call","resolved":true}
+{"k":"ref","from":"run","file":"test_case/src/driver.c","to":"test_case/src/driver.c::add_bedrooms","refkind":"call","resolved":true}
+{"k":"ref","from":"run","file":"test_case/src/driver.c","to":"test_case/src/driver.c::add_floor_to_the_house","refkind":"call","resolved":true}
+{"k":"ref","from":"run","file":"test_case/src/driver.c","to":"test_case/src/driver.c::print_the_house","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/driver.c::add_floor_to_the_house","file":"test_case/src/driver.c","to":"test_case/src/driver.c::add_floor","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/driver.c::parse_val","file":"test_case/src/driver.c","to":"strtol","refkind":"call","resolved":false}
+{"k":"ref","from":"test_case/src/driver.c::print_the_house","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}

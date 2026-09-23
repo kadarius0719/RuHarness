@@ -1,0 +1,41 @@
+{ "lib_state_in": {
+  "items": [
+    {
+      "img_index": 2296327,
+      "size": {
+        "x": 0,
+        "y": 0
+      },
+      "min": {
+        "x": 0,
+        "y": 0
+      },
+      "max": {
+        "x": 0,
+        "y": 0
+      },
+      "fit": 0
+    }
+  ],
+  "count": 0
+},"lib_state_out": {
+  "items": [
+    {
+      "img_index": 2296327,
+      "size": {
+        "x": 0,
+        "y": 0
+      },
+      "min": {
+        "x": 0,
+        "y": 0
+      },
+      "max": {
+        "x": 0,
+        "y": 0
+      },
+      "fit": 0
+    }
+  ],
+  "count": 1
+} }

@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "Hello World!\n"
+  },
+  "lib_state_in": {
+    "returns": 0
+  },
+  "lib_state_out": {
+    "returns": 0
+  }
+}

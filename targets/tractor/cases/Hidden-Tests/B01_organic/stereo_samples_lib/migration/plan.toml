@@ -1,0 +1,19 @@
+schema_version = 1
+target = "stereo_samples_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:f850d6f4da71ff472b0d244182c14a74ee4b5e8f6f700b7debe50e7eedbc7514"
+symbols = ["stereo_samples"]
+interface = ["int stereo_samples(btac1c_s16 *ibuf0, btac1c_s16 *ibuf1, int len)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

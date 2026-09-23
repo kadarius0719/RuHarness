@@ -1,0 +1,19 @@
+schema_version = 1
+target = "flac_validate_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:499aeb3b9339e588aab1f62bca3fec55b582a1edc962157a2e6862c75a919370"
+symbols = ["flac_validate", "tflac_size_memory"]
+interface = ["int flac_validate(tflac *t)", "tflac_u32 tflac_size_memory(tflac_u32 blocksize)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

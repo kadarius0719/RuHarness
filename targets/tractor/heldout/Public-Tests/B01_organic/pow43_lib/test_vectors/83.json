@@ -1,0 +1,11 @@
+{
+  "has_ub": "index -984 out of bounds",
+  "lib_state_in": {
+    "returns": 0.0,
+    "x": -1000
+  },
+  "lib_state_out": {
+    "returns": -2.051766e+35,
+    "x": -1000
+  }
+}

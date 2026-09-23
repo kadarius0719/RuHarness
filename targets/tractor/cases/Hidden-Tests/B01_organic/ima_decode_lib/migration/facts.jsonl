@@ -1,0 +1,12 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:6ba7b9d45ca17785faa340a08d7066afd627dba94527be440d2fda44ae59197c","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:250e483696fd30b963854ef407045eba3de7d545ac2d108ab4f86a7286ead0c1","includes":[]}
+{"k":"symbol","name":"ima_decode","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void ima_decode(ima_output_t *output, unsigned channel_count, const struct ima_block *block, ima_u64_t decode_count, struct ima_channel_state *state)","span":[41,117]}
+{"k":"symbol","name":"test_case/src/lib.c::ima_bswap16","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static ima_u16_t ima_bswap16(ima_u16_t v)","span":[5,7]}
+{"k":"symbol","name":"test_case/src/lib.c::ima_btoh16","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static ima_u16_t ima_btoh16(ima_u16_t v)","span":[9,9]}
+{"k":"symbol","name":"test_case/src/lib.c::ima_clamp_index","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static int ima_clamp_index(int index)","span":[25,31]}
+{"k":"symbol","name":"test_case/src/lib.c::ima_clamp_predict","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static int ima_clamp_predict(int predict)","span":[33,39]}
+{"k":"ref","from":"ima_decode","file":"test_case/src/lib.c","to":"test_case/src/lib.c::ima_btoh16","refkind":"call","resolved":true}
+{"k":"ref","from":"ima_decode","file":"test_case/src/lib.c","to":"test_case/src/lib.c::ima_clamp_index","refkind":"call","resolved":true}
+{"k":"ref","from":"ima_decode","file":"test_case/src/lib.c","to":"test_case/src/lib.c::ima_clamp_predict","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/lib.c::ima_btoh16","file":"test_case/src/lib.c","to":"test_case/src/lib.c::ima_bswap16","refkind":"call","resolved":true}

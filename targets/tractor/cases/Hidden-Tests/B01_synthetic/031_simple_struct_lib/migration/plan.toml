@@ -1,0 +1,19 @@
+schema_version = 1
+target = "031_simple_struct_lib"
+
+[[unit]]
+id = "u-simplestruct"
+status = "pending"
+files = ["test_case/src/simplestruct.c"]
+source_hash = "blake3:23bd243cbd34ce40b52a741b591312abca9d3dd35914b06a46aa5aba4b5f1a15"
+symbols = ["isItMay", "whatYearIsIt"]
+interface = ["bool isItMay (struct Date date)", "int whatYearIsIt (struct Date date)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-simplestruct/driver.c"
+rust_crate = "u_simplestruct_rs"
+replaces = ["test_case/src/simplestruct.c"]

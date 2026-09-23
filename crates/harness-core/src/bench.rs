@@ -39,6 +39,10 @@ pub const HELDOUT_DIR: &str = "heldout";
 /// Harness-authored files inside `heldout/` that are hash-locked (never
 /// exempt): the scorer workspace manifest and its dependency lock.
 pub const LOCAL_LOCKED: [&str; 2] = ["heldout/Cargo.toml", "heldout/Cargo.lock"];
+/// Harness-authored dir inside `heldout/` whose every file is hash-locked:
+/// minimal, documented portability patches to scorer DEPENDENCIES (applied
+/// via `[patch.crates-io]`; never to the corpus's own sources).
+pub const LOCAL_LOCKED_DIR: &str = "heldout/patches";
 /// Harness-owned file names allowed directly in a case target root.
 pub const CASE_LOCAL_FILES: [&str; 3] = ["harness.toml", "AGENTS.md", "CLAUDE.md"];
 /// Upstream tool dirs vendored into `heldout/` (scorer library). Their
@@ -473,7 +477,8 @@ fn line<T: Serialize>(value: &T) -> Result<String, Error> {
 /// from the batteries (single-`.c` library cases with a runner; others are
 /// recorded as excluded), copies `test_case/` into `cases/`, `test_vectors/`
 /// (regular `*.json` files only) and `runner/{Cargo.toml,src/**}` into
-/// `heldout/`, plus the scorer tool dirs (minus `tests/`), and returns the
+/// `heldout/`, plus the scorer tool dirs (minus `tests/`; dotfiles are never
+/// vendored), and returns the
 /// updated suite and the lock of every copied file. Harness-authored
 /// `LOCAL_LOCKED` files that already exist are locked too.
 ///
@@ -594,6 +599,25 @@ pub fn vendor(suite_dir: &Path, suite: &Suite, from: &Path) -> Result<(Suite, Co
             });
         }
     }
+    let patches = suite_dir.join(LOCAL_LOCKED_DIR);
+    if patches.is_dir() {
+        let mut local: Vec<LockedFile> = Vec::new();
+        // Reuse the tree copier's walk by "copying" the dir onto itself: the
+        // byte-equality guard makes that a pure hashing pass.
+        copy_tree(
+            suite_dir,
+            LOCAL_LOCKED_DIR,
+            suite_dir,
+            ".",
+            &|_| true,
+            &mut local,
+        )?;
+        for mut f in local {
+            f.path = f.upstream.clone();
+            f.upstream = String::new();
+            files.push(f);
+        }
+    }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     out.validate().map_err(Error::Invariant)?;
     Ok((
@@ -649,6 +673,11 @@ fn copy_tree(
                     dir.display()
                 )));
             };
+            // Dotfiles (`.gitignore`, …) are upstream VCS metadata, never
+            // built or scored — and never clean paths under plan rules.
+            if name.starts_with('.') {
+                continue;
+            }
             let rel = if sub.is_empty() {
                 name.clone()
             } else {

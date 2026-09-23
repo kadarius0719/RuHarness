@@ -1,0 +1,18 @@
+{
+	"lib_state_in": {
+		"s_val": 1,
+		"s_bits": 2,
+		"s_tot": 3,
+		"bits": 4,
+		"val": 100,
+		"returns": 6
+	},
+	"lib_state_out": {
+		"s_val": 1152921504606846977,
+		"s_bits": 6,
+		"s_tot": 7,
+		"bits": 4,
+		"val": 100,
+		"returns": 0
+	}
+}

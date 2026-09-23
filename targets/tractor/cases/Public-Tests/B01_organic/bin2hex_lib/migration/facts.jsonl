@@ -1,0 +1,5 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:dff81baa44150e6b763b54f4f5228bebe2075e2eec2201064518769c2a6e16cd","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:fa9b31def1ba692616ae23bb92c923d09ea73a9f633bc6aaeedb18f225ce7944","includes":[]}
+{"k":"symbol","name":"bin2hex","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"char *bin2hex(char *hex, size_t hex_maxlen, const uint8_t *bin, size_t bin_len)","span":[6,27]}
+{"k":"ref","from":"bin2hex","file":"test_case/src/lib.c","to":"abort","refkind":"call","resolved":false}

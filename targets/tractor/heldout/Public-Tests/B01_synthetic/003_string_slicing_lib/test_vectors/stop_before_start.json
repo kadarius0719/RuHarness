@@ -1,0 +1,17 @@
+{
+  "stdout": {
+    "pattern": "Error: stop must come after start!\n"
+  },
+  "lib_state_in": {
+    "mystr": "String to index into",
+    "start_ptr": 10,
+    "stop_ptr": 9,
+    "returns": 0
+  },
+  "lib_state_out": {
+    "mystr": "String to index into",
+    "start_ptr": 10,
+    "stop_ptr": 9,
+    "returns": 1
+  }
+}

@@ -1,0 +1,19 @@
+schema_version = 1
+target = "half2float_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:45f5a1cb6605e01706d371e20c46c6a4d6b74f922ffd0734990772112365d845"
+symbols = ["half2float"]
+interface = ["float half2float(uint16_t h)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

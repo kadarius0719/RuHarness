@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "80a29649\n"
+  },
+  "lib_state_in": {
+    "x": 1.234E+6
+  },
+  "lib_state_out": {
+    "x": 1.234E+6
+  }
+}

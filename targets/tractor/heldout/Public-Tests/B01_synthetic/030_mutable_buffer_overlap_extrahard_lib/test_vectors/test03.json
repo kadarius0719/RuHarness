@@ -1,0 +1,21 @@
+{
+  "stdout": {
+    "pattern": "1806\n15252\n6\n"
+  },
+  "lib_state_in": {
+    "data": [
+      42,
+      123,
+      -3
+    ],
+    "len": 3
+  },
+  "lib_state_out": {
+    "data": [
+      42,
+      123,
+      -3
+    ],
+    "len": 3
+  }
+}

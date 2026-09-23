@@ -1,0 +1,19 @@
+schema_version = 1
+target = "001_helloworld_lib"
+
+[[unit]]
+id = "u-hello"
+status = "pending"
+files = ["test_case/src/hello.c"]
+source_hash = "blake3:2b061df755e56c121247091ac9a0d15988da2fdc5a50da84ffb957d3696da45e"
+symbols = ["helloworld"]
+interface = ["int helloworld()"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-hello/driver.c"
+rust_crate = "u_hello_rs"
+replaces = ["test_case/src/hello.c"]

@@ -1,0 +1,14 @@
+{
+	"lib_state_in": {
+		"hex": [0,0,0],
+		"hex_maxlen": 3,
+		"bin": [255],
+		"bin_len": 1
+	},
+	"lib_state_out": {
+		"hex": [102,102,0],
+		"hex_maxlen": 3,
+		"bin": [255],
+		"bin_len": 1
+	}
+}

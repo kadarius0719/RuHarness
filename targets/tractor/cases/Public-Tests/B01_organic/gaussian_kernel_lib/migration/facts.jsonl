@@ -1,0 +1,5 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:608af46a7f7b05aae544cd266ee88955ead0dbb55ca758baef52d124771da997","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:ba336eb1caea2a5fcb6c542cb2cc5a04d3a1cd4e88572c468aad3c09854c7990","includes":[]}
+{"k":"symbol","name":"gaussian_kernel","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void gaussian_kernel(float *dest, int size, float radius)","span":[5,28]}
+{"k":"ref","from":"gaussian_kernel","file":"test_case/src/lib.c","to":"expf","refkind":"call","resolved":false}

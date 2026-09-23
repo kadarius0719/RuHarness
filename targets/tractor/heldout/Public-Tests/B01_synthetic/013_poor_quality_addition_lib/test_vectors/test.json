@@ -1,0 +1,7 @@
+{
+  "stdout": {
+    "pattern": "Calling good()...\n0\n2\nFinished good()\nCalling bad()...\n0\n0\nFinished bad()\n"
+  },
+  "lib_state_in": {},
+  "lib_state_out": {}
+}

@@ -1,0 +1,19 @@
+schema_version = 1
+target = "029_strcspn_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:eb56a1ecc51f5062991e3a91b23893caf41cd2e61a908fc76cfdb2c25c678a79"
+symbols = ["driver"]
+interface = ["void driver(const char *s1, const char *s2)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

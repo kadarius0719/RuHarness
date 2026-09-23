@@ -1,0 +1,13 @@
+{
+  "stdout": {
+    "pattern": "Calling good()...\n50\n33\nFinished good()\nCalling bad()...\n25\nFinished bad()\n"
+  },
+  "lib_state_in": {
+    "good_data": 3.0,
+    "bad_data": 4.0
+  },
+  "lib_state_out": {
+    "good_data": 3.0,
+    "bad_data": 4.0
+  }
+}

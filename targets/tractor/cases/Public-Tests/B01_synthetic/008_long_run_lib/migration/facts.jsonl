@@ -1,0 +1,9 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/long.h","hash":"blake3:6e28687d3585447c3d604c725d95f2242dcfa5a2227ad6f804c147c13eb4efec","includes":[]}
+{"k":"file","path":"test_case/src/long.c","hash":"blake3:855a25fdcddf08fc2ce12cac5fa249653b2d1b321b57d74b4604524a8ea70478","includes":[]}
+{"k":"symbol","name":"long_exec","kind":"function","file":"test_case/src/long.c","visibility":"public","signature":"void long_exec(unsigned int seed)","span":[29,47]}
+{"k":"symbol","name":"perform_expensive_operations","kind":"function","file":"test_case/src/long.c","visibility":"public","signature":"void perform_expensive_operations()","span":[16,27]}
+{"k":"ref","from":"long_exec","file":"test_case/src/long.c","to":"perform_expensive_operations","refkind":"call","resolved":true}
+{"k":"ref","from":"long_exec","file":"test_case/src/long.c","to":"printf","refkind":"call","resolved":false}
+{"k":"ref","from":"long_exec","file":"test_case/src/long.c","to":"rand","refkind":"call","resolved":false}
+{"k":"ref","from":"long_exec","file":"test_case/src/long.c","to":"srand","refkind":"call","resolved":false}

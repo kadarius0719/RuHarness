@@ -1,0 +1,19 @@
+schema_version = 1
+target = "collided_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:8afc950eb780e5c761199376d63f65c406ec25d7d14c8b5ce5872f000f302187"
+symbols = ["c2AABBtoAABB", "c2CircletoAABB", "c2CircletoCircle", "c2Clampv", "c2Dot", "c2Maxv", "c2Minv", "c2Sub", "c2V", "collided"]
+interface = ["int c2AABBtoAABB(c2AABB A, c2AABB B)", "int c2CircletoAABB(c2Circle A, c2AABB B)", "int c2CircletoCircle(c2Circle A, c2Circle B)", "c2v c2Clampv(c2v a, c2v lo, c2v hi)", "float c2Dot(c2v a, c2v b)", "c2v c2Maxv(c2v a, c2v b)", "c2v c2Minv(c2v a, c2v b)", "c2v c2Sub(c2v a, c2v b)", "c2v c2V(float x, float y)", "int collided(const void *A, C2_TYPE typeA, const void *B, C2_TYPE typeB)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

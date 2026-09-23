@@ -1,0 +1,5 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/driver.h","hash":"blake3:ff8a695cbface0088378d53e3f7d05b9d956e8546e616299a02ef3f4b44eddf6","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:4943d8fc00ed83a0f2a745ef2025acc999cc13e3bde869f7c3140ceaf8692ede","includes":[]}
+{"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(int x)","span":[8,12]}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}

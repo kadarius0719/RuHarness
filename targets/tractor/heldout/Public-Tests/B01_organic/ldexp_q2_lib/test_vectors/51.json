@@ -1,0 +1,13 @@
+{
+  "has_ub": "shift exponent -250 is negative",
+  "lib_state_in": {
+    "exp_q2": -1000,
+    "returns": 0.0,
+    "y": 1.0
+  },
+  "lib_state_out": {
+    "exp_q2": -1000,
+    "returns": 0.015625,
+    "y": 1.0
+  }
+}

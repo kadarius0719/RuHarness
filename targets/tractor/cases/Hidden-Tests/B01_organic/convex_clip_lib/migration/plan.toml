@@ -1,0 +1,19 @@
+schema_version = 1
+target = "convex_clip_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:bab72318f1bca18655c3056e0d6888b80d0fe86ff4a8cf497701f35eb1b2e885"
+symbols = ["convex_clip"]
+interface = ["int convex_clip(lm_vec2 *poly, int nPoly, const lm_vec2 *clip, int nClip, lm_vec2 *res)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

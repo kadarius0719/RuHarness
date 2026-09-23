@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:3799198f6e0c2a714235e568878c8d3620f0c5f5f2695b70906f22f76aa1fe32","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:aeb5ede1c9c5ab6b08c8053b6fcadad8ffb80a8adeeb70fe15878c54df792418","includes":[]}
+{"k":"symbol","name":"pow43","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"float pow43(int x)","span":[34,48]}

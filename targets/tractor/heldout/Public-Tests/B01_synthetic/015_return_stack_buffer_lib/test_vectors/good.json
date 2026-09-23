@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "helperGood1 string\n"
+  },
+  "lib_state_in": {
+    "use_good": 1
+  },
+  "lib_state_out": {
+    "use_good": 1
+  }
+}

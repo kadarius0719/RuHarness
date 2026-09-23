@@ -1,0 +1,726 @@
+# RuHarness benchmark suite (docs/SCHEMAS.md "M4 additions").
+# [[case]] and [[excluded]] are DERIVED by `harness bench vendor`.
+schema_version = 1
+name = "tractor-b01-lib"
+excluded = []
+
+[upstream]
+repo = "https://github.com/DARPA-TRACTOR-Program/PUBLIC-Test-Corpus"
+tag = "v2"
+commit = "37960ee08a7c644ee66e29855eca33903f702e67"
+
+[[battery]]
+dir = "Public-Tests/B01_organic"
+split = "public"
+
+[[battery]]
+dir = "Public-Tests/B01_synthetic"
+split = "public"
+
+[[battery]]
+dir = "Hidden-Tests/B01_organic"
+split = "hidden"
+
+[[battery]]
+dir = "Hidden-Tests/B01_synthetic"
+split = "hidden"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/compress_bc5_lib"
+split = "hidden"
+library = "compress_bc5_lib"
+symbol = "compress_bc5"
+runner = "_compress_bc5_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/convex_clip_lib"
+split = "hidden"
+library = "convex_clip_lib"
+symbol = "convex_clip"
+runner = "_convex_clip_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/decorrelate_lib"
+split = "hidden"
+library = "decorrelate_lib"
+symbol = "decorrelate"
+runner = "_decorrelate_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/ima_decode_lib"
+split = "hidden"
+library = "ima_decode_lib"
+symbol = "ima_decode"
+runner = "_ima_decode_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/md5_transform_lib"
+split = "hidden"
+library = "md5_transform_lib"
+symbol = "md5_transform"
+runner = "_md5_transform_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/png_qsort_lib"
+split = "hidden"
+library = "png_qsort_lib"
+symbol = "qsort"
+runner = "_png_qsort_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/predict_sample_lib"
+split = "hidden"
+library = "predict_sample_lib"
+symbol = "predict_sample"
+runner = "_predict_sample_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/read_scalefactors_lib"
+split = "hidden"
+library = "read_scalefactors_lib"
+symbol = "read_scalefactors"
+runner = "_read_scalefactors_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/refine_block_lib"
+split = "hidden"
+library = "refine_block_lib"
+symbol = "refine_block"
+runner = "_refine_block_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_organic/stereo_samples_lib"
+split = "hidden"
+library = "stereo_samples_lib"
+symbol = "stereo_samples"
+runner = "_stereo_samples_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/002_echo_lib"
+split = "hidden"
+library = "echo"
+symbol = "echo"
+runner = "_002_echo_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/004_loop_lib"
+split = "hidden"
+library = "Loop"
+symbol = "loop"
+runner = "_004_loop_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/011_static_dag_lib"
+split = "hidden"
+library = "StaticDag"
+symbol = "driver"
+runner = "_011_static_dag_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/014_pow_subfunction_lib"
+split = "hidden"
+library = "pow"
+symbol = "feel_the_power"
+runner = "_014_pow_subfunction_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/016_switch_arith_lib"
+split = "hidden"
+library = "switch-arith"
+symbol = "switch_arith"
+runner = "_016_switch_arith_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/027_stack_buffer_overflow_loop2_lib"
+split = "hidden"
+library = "driver"
+symbol = "driver"
+runner = "_027_stack_buffer_overflow_loop2_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/030_integer_underflow_char_min_multiply_lib"
+split = "hidden"
+library = "driver"
+symbol = "driver"
+runner = "_030_integer_underflow_char_min_multiply_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/031_simple_struct_lib"
+split = "hidden"
+library = "SimpleStruct"
+symbol = "isItMay"
+runner = "_031_simple_struct_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/045_strtok_lib"
+split = "hidden"
+library = "driver"
+symbol = "driver"
+runner = "_045_strtok_cando_librunner"
+
+[[case]]
+path = "Hidden-Tests/B01_synthetic/048_mutable_buffer_overlap2_lib"
+split = "hidden"
+library = "driver"
+symbol = "driver"
+runner = "_048_mutable_buffer_overlap2_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/bin2hex_lib"
+split = "public"
+library = "bin2hex_lib"
+symbol = "bin2hex"
+runner = "_bin2hex_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/bitwriter_add_lib"
+split = "public"
+library = "bitwriter_add_lib"
+symbol = "bitwriter_add"
+runner = "_bitwriter_add_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/collided_lib"
+split = "public"
+library = "collided_lib"
+symbol = "collided"
+runner = "_collided_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/colourblind_lib"
+split = "public"
+library = "colourblind_lib"
+symbol = "colourblind"
+runner = "_colourblind_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/contrast_ratio_lib"
+split = "public"
+library = "contrast_ratio_lib"
+symbol = "contrast_ratio"
+runner = "_contrast_ratio_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/crc16_lib"
+split = "public"
+library = "crc16_lib"
+symbol = "crc16"
+runner = "_crc16_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/dequantize_granule_lib"
+split = "public"
+library = "dequantize_granule_lib"
+symbol = "dequantize_granule"
+runner = "_dequantize_granule_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/div_euclid_lib"
+split = "public"
+library = "div_euclid_lib"
+symbol = "div_euclid"
+runner = "_div_euclid_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/encode_quant_lib"
+split = "public"
+library = "encode_quant_lib"
+symbol = "encode_quant"
+runner = "_encode_quant_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/flac_validate_lib"
+split = "public"
+library = "flac_validate_lib"
+symbol = "flac_validate"
+runner = "_flac_validate_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/flip_horizontal_lib"
+split = "public"
+library = "flip_horizontal_lib"
+symbol = "flip_horizontal"
+runner = "_flip_horizontal_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/float2half_lib"
+split = "public"
+library = "float2half_lib"
+symbol = "float2half"
+runner = "_float2half_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/gaussian_kernel_lib"
+split = "public"
+library = "gaussian_kernel_lib"
+symbol = "gaussian_kernel"
+runner = "_gaussian_kernel_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/half2float_lib"
+split = "public"
+library = "half2float_lib"
+symbol = "half2float"
+runner = "_half2float_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/hdr_bitrate_lib"
+split = "public"
+library = "hdr_bitrate_lib"
+symbol = "hdr_bitrate"
+runner = "_hdr_bitrate_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/hdr_compare_lib"
+split = "public"
+library = "hdr_compare_lib"
+symbol = "hdr_compare"
+runner = "_hdr_compare_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/hex2bin_lib"
+split = "public"
+library = "hex2bin_lib"
+symbol = "hex2bin"
+runner = "_hex2bin_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/hsl_to_rgb_lib"
+split = "public"
+library = "hsl_to_rgb_lib"
+symbol = "hsl_to_rgb"
+runner = "_hsl_to_rgb_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/hsv_to_rgb_lib"
+split = "public"
+library = "hsv_to_rgb_lib"
+symbol = "hsv_to_rgb"
+runner = "_hsv_to_rgb_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/ima_parse_lib"
+split = "public"
+library = "ima_parse_lib"
+symbol = "ima_parse"
+runner = "_ima_parse_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/ldexp_q2_lib"
+split = "public"
+library = "ldexp_q2_lib"
+symbol = "ldexp_q2"
+runner = "_ldexp_q2_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/max_size_frame_lib"
+split = "public"
+library = "max_size_frame_lib"
+symbol = "max_size_frame"
+runner = "_max_size_frame_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/md5_digest_lib"
+split = "public"
+library = "md5_digest_lib"
+symbol = "md5_digest"
+runner = "_md5_digest_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/merge_sort_lib"
+split = "public"
+library = "merge_sort_lib"
+symbol = "merge_sort"
+runner = "_merge_sort_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/next_double_lib"
+split = "public"
+library = "next_double_lib"
+symbol = "next_double"
+runner = "_next_double_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/normalize_lib"
+split = "public"
+library = "normalize_lib"
+symbol = "normalize"
+runner = "_normalize_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/pow43_lib"
+split = "public"
+library = "pow43_lib"
+symbol = "pow43"
+runner = "_pow43_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/premultiply_lib"
+split = "public"
+library = "premultiply_lib"
+symbol = "premultiply"
+runner = "_premultiply_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/read_side_info_lib"
+split = "public"
+library = "read_side_info_lib"
+symbol = "read_side_info"
+runner = "_read_side_info_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/rev16_lib"
+split = "public"
+library = "rev16_lib"
+symbol = "rev16"
+runner = "_rev16_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/rgb_to_hsv_lib"
+split = "public"
+library = "rgb_to_hsv_lib"
+symbol = "rgb_to_hsv"
+runner = "_rgb_to_hsv_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/synth_pair_lib"
+split = "public"
+library = "synth_pair_lib"
+symbol = "synth_pair"
+runner = "_synth_pair_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/tfm_lib"
+split = "public"
+library = "tfm_lib"
+symbol = "tfm"
+runner = "_tfm_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/to_barycentric_lib"
+split = "public"
+library = "to_barycentric_lib"
+symbol = "to_barycentric"
+runner = "_to_barycentric_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/tritanopia_lib"
+split = "public"
+library = "tritanopia_lib"
+symbol = "tritanopia"
+runner = "_tritanopia_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/update_frame_header_lib"
+split = "public"
+library = "update_frame_header_lib"
+symbol = "update_frame_header"
+runner = "_update_frame_header_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/update_md5_lib"
+split = "public"
+library = "update_md5_lib"
+symbol = "update_md5"
+runner = "_update_md5_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_organic/wcscat_lib"
+split = "public"
+library = "wcscat_lib"
+symbol = "wcscat"
+runner = "_wcscat_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/001_helloworld_lib"
+split = "public"
+library = "hello"
+symbol = "helloworld"
+runner = "_001_helloworld_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/003_string_slicing_lib"
+split = "public"
+library = "String_Slice"
+symbol = "slice"
+runner = "_003_string_slicing_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/004_nineality_sieve_lib"
+split = "public"
+library = "Sieve"
+symbol = "sieve"
+runner = "_004_nineality_sieve_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/005_static_loop_lib"
+split = "public"
+library = "StaticLoop"
+symbol = "driver"
+runner = "_005_static_loop_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/006_static_alias_lib"
+split = "public"
+library = "StaticAlias"
+symbol = "driver"
+runner = "_006_static_alias_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/007_errno_pow_lib"
+split = "public"
+library = "pow"
+symbol = "my_pow"
+runner = "_007_errno_pow_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/008_long_run_lib"
+split = "public"
+library = "long"
+symbol = "long_exec"
+runner = "_008_long_run_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/009_stack_buffer_overflow_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_009_stack_buffer_overflow_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/010_integer_overflow_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_010_integer_overflow_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/011_uninit_char_ptr_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_011_uninit_char_ptr_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/012_uninit_int_ptr_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_012_uninit_int_ptr_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/013_poor_quality_addition_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_013_poor_quality_addition_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/014_dead_code_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_014_dead_code_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/015_return_stack_buffer_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_015_return_stack_buffer_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/016_divide_by_zero_float_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_016_divide_by_zero_float_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/017_signed_length_confusion_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_017_signed_length_confusion_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/018_stack_buffer_overflow_loop1_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_018_stack_buffer_overflow_loop1_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/019_integer_overflow_char_max_multiply_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_019_integer_overflow_char_max_multiply_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/020_stack_linked_list_lib"
+split = "public"
+library = "SimpleList"
+symbol = "smallestValue"
+runner = "_020_stack_linked_list_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/021_complex_goto_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_021_complex_goto_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/022_stdlib_div_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_022_stdlib_div_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/023_struct_and_errno_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_023_struct_and_errno_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/024_struct_and_static_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_024_struct_and_static_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/025_struct_and_errno_and_static_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_025_struct_and_errno_and_static_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/026_goto_and_static_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_026_goto_and_static_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/027_ctype_ascii_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_027_ctype_ascii_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/028_strchr_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_028_strchr_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/029_strcspn_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_029_strcspn_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/030_mutable_buffer_overlap_extrahard_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_030_mutable_buffer_overlap_extrahard_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/031_disjoint_arrays_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_031_disjoint_arrays_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/032_comma_operator_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_032_comma_operator_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/033_bitfield_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_033_bitfield_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/034_cast_to_char_ptr_int_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_034_cast_to_char_ptr_int_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/035_cast_to_char_ptr_float_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_035_cast_to_char_ptr_float_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/036_cast_to_char_ptr_struct_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_036_cast_to_char_ptr_struct_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/037_cast_to_char_ptr_int_no_strict_aliasing_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_037_cast_to_char_ptr_int_no_strict_aliasing_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/038_cast_to_char_ptr_float_no_strict_aliasing_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_038_cast_to_char_ptr_float_no_strict_aliasing_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/039_cast_to_char_ptr_struct_no_strict_aliasing_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_039_cast_to_char_ptr_struct_no_strict_aliasing_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/040_storage_class_auto_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_040_storage_class_auto_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/041_storage_class_register_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_041_storage_class_register_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/042_float_union_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_042_float_union_cando_librunner"
+
+[[case]]
+path = "Public-Tests/B01_synthetic/043_iso646_and_digraphs_lib"
+split = "public"
+library = "driver"
+symbol = "driver"
+runner = "_043_iso646_and_digraphs_cando_librunner"

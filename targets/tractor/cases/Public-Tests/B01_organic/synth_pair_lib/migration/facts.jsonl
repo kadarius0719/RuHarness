@@ -1,0 +1,6 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:d3187b5dfff37f72f584849d7a888b5709865ca68d1df5222ebc648fa88d79ca","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:a6ace5bc10d69d1cb4696ab6e77ba0dcec107ce8274271fd9a697a2c64ced143","includes":[]}
+{"k":"symbol","name":"synth_pair","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void synth_pair(mp3d_sample_t *pcm, int nch, const float *z)","span":[13,34]}
+{"k":"symbol","name":"test_case/src/lib.c::mp3d_scale_pcm","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static int16_t mp3d_scale_pcm(float sample)","span":[3,11]}
+{"k":"ref","from":"synth_pair","file":"test_case/src/lib.c","to":"test_case/src/lib.c::mp3d_scale_pcm","refkind":"call","resolved":true}

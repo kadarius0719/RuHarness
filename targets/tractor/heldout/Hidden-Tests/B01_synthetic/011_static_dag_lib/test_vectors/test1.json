@@ -1,0 +1,13 @@
+{
+  "lib_state_in": {
+    "val": 1,
+    "iterations": 3
+  },
+  "lib_state_out": {
+    "val": 1,
+    "iterations": 3
+  },
+  "stdout": {
+    "pattern": "1\n1\n0\n1\n1\n0\n1\n1\n0\n"
+  }
+}

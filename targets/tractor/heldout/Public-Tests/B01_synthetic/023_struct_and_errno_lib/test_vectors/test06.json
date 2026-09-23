@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "An error occurred\n"
+  },
+  "lib_state_in": {
+    "input": "20000000000000000000"
+  },
+  "lib_state_out": {
+    "input": "20000000000000000000"
+  }
+}

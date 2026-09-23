@@ -1,0 +1,19 @@
+schema_version = 1
+target = "007_errno_pow_lib"
+
+[[unit]]
+id = "u-pow"
+status = "pending"
+files = ["test_case/src/pow.c"]
+source_hash = "blake3:18772a30361906e0aee0aa83062ea07e1c08089c37280d49ca6edb55b9c9ef11"
+symbols = ["my_pow"]
+interface = ["double my_pow(double base, double exponent)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-pow/driver.c"
+rust_crate = "u_pow_rs"
+replaces = ["test_case/src/pow.c"]

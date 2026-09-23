@@ -1,0 +1,14 @@
+{
+	"lib_state_in": {
+		"dest": [],
+		"size": 1,
+		"radius": 1000000000.0
+	},
+	"lib_state_out": {
+		"dest": [
+			1.0
+		],
+		"size": 1,
+		"radius": 1000000000.0
+	}
+}

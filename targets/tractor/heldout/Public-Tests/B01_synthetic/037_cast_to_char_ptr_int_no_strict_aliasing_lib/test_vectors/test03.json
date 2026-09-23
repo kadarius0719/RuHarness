@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "ffffff7f\n"
+  },
+  "lib_state_in": {
+    "x": 2147483647
+  },
+  "lib_state_out": {
+    "x": 2147483647
+  }
+}

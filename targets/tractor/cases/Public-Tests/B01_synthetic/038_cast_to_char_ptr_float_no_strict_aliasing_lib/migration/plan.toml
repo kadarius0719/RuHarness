@@ -1,0 +1,19 @@
+schema_version = 1
+target = "038_cast_to_char_ptr_float_no_strict_aliasing_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:7cb0815ac274305a9eaf11fad280e72190ea72046bf1839f7ef56d6c8632da7f"
+symbols = ["driver"]
+interface = ["void driver(float x)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

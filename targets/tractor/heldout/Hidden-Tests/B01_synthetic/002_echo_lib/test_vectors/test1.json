@@ -1,0 +1,21 @@
+{
+  "lib_state_in": {
+    "argc": 2,
+    "argv": [
+      "executable",
+      "Print"
+    ],
+    "returns": 0
+  },
+  "lib_state_out": {
+    "argc": 2,
+    "argv": [
+      "executable",
+      "Print"
+    ],
+    "returns": 0
+  },
+  "stdout": {
+    "pattern": "Print\n"
+  }
+}

@@ -1,0 +1,19 @@
+schema_version = 1
+target = "006_static_alias_lib"
+
+[[unit]]
+id = "u-staticalias"
+status = "pending"
+files = ["test_case/src/staticalias.c"]
+source_hash = "blake3:3b1b6d5c50c200f6aedc54945de15874b24fe58602503c792ade2f3f0b108c62"
+symbols = ["driver", "static_alias"]
+interface = ["void driver(int initial_value, int iterations)", "int* static_alias(int *outer)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-staticalias/driver.c"
+rust_crate = "u_staticalias_rs"
+replaces = ["test_case/src/staticalias.c"]

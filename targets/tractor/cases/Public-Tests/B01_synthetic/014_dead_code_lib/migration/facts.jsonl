@@ -1,0 +1,18 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/driver.h","hash":"blake3:582278a9d9c89c5a8c7b5515b6e394d914260da88eb61c0513c608c94a489239","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:ed690669f9f95426f4f750c078e7f0758c5166596c8c471343150fb13fc9d494","includes":[]}
+{"k":"symbol","name":"bad","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void bad()","span":[22,25]}
+{"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver()","span":[38,46]}
+{"k":"symbol","name":"good","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void good()","span":[32,36]}
+{"k":"symbol","name":"printLine","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void printLine(const char *line)","span":[9,15]}
+{"k":"symbol","name":"test_case/src/driver.c::helperBad","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static void helperBad()","span":[17,20]}
+{"k":"symbol","name":"test_case/src/driver.c::helperGood","kind":"function","file":"test_case/src/driver.c","visibility":"internal","signature":"static void helperGood()","span":[27,30]}
+{"k":"ref","from":"bad","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"bad","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"good","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}
+{"k":"ref","from":"good","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}
+{"k":"ref","from":"good","file":"test_case/src/driver.c","to":"test_case/src/driver.c::helperGood","refkind":"call","resolved":true}
+{"k":"ref","from":"printLine","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}
+{"k":"ref","from":"test_case/src/driver.c::helperBad","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}
+{"k":"ref","from":"test_case/src/driver.c::helperGood","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}

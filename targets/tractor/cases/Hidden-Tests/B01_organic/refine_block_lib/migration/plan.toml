@@ -1,0 +1,19 @@
+schema_version = 1
+target = "refine_block_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:60a01d2ba6955f75242806f0b609bfdfce6b77c3ac43c43664317d394e918251"
+symbols = ["refine_block"]
+interface = ["int refine_block(unsigned char *block, unsigned short *pmax16, unsigned short *pmin16, unsigned int mask)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

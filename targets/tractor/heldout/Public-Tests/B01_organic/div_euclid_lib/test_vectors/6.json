@@ -1,0 +1,12 @@
+{
+  "lib_state_in": {
+    "v1": -10,
+    "v2": -3,
+    "returns": 0
+  },
+  "lib_state_out": {
+    "v1": -10,
+    "v2": -3,
+    "returns": 4
+  }
+}

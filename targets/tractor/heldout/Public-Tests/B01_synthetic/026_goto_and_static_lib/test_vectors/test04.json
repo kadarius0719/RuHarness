@@ -1,0 +1,15 @@
+{
+  "stdout": {
+    "pattern": "Error: x == 1 but y != 2\nOperation failed\nResult: 2\n"
+  },
+  "lib_state_in": {
+    "x": 1,
+    "y": 555,
+    "z": 3
+  },
+  "lib_state_out": {
+    "x": 1,
+    "y": 555,
+    "z": 3
+  }
+}

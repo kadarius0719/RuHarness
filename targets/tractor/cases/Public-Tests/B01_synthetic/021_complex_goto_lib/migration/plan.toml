@@ -1,0 +1,19 @@
+schema_version = 1
+target = "021_complex_goto_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:4c4766454d361a73fb81ba86682f190a56ea36e77143e42bbfedbc16be39257e"
+symbols = ["driver"]
+interface = ["void driver(int x, int y)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

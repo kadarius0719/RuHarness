@@ -1,0 +1,19 @@
+schema_version = 1
+target = "030_mutable_buffer_overlap_extrahard_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:713d179d43c1ee2caf468bd887e7a968df408c805a2740018d8b753b0c068947"
+symbols = ["driver", "fma_array"]
+interface = ["void driver(const int *data, int len)", "void fma_array(int *out, const int *mul1, const int *mul2, const int *add, int len)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

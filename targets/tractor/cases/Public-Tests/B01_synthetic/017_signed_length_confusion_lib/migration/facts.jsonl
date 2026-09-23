@@ -1,0 +1,9 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/driver.h","hash":"blake3:031e904aa3e969c2c32b02600ecfa6cabcbd42902763754febd40143c2e395bf","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:42eb02ae1a2332390c447c14466cbc35e1c350965080e1e20567d274d0343ad5","includes":[]}
+{"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(int data)","span":[18,30]}
+{"k":"symbol","name":"printLine","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void printLine (const char * line)","span":[10,16]}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"memset","refkind":"call","resolved":false}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"printLine","refkind":"call","resolved":true}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"strncpy","refkind":"call","resolved":false}
+{"k":"ref","from":"printLine","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}

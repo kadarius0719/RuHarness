@@ -1,0 +1,6 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:2afd0ae8b5b33cb23af8852d54b061dd2ea0217ad5748a62187d076b340ef9cf","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:b7f3fd443743ef0ea2fd4018d0451f0597221e0207ff55e7f905a80e4cc4bfeb","includes":[]}
+{"k":"symbol","name":"next_double","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"double next_double(cn_rnd_t *rnd)","span":[14,20]}
+{"k":"symbol","name":"test_case/src/lib.c::cn_rnd_next","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static uint64_t cn_rnd_next(cn_rnd_t *rnd)","span":[3,12]}
+{"k":"ref","from":"next_double","file":"test_case/src/lib.c","to":"test_case/src/lib.c::cn_rnd_next","refkind":"call","resolved":true}

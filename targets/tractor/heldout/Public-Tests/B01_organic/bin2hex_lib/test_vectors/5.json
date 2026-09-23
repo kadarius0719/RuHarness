@@ -1,0 +1,26 @@
+{
+	"lib_state_in": {
+		"hex": [0,0,0,0,0,0,0],
+		"hex_maxlen": 8,
+		"bin": [0,0,0],
+		"bin_len": 3
+	},
+	"lib_state_out": {
+		"hex": [
+			48,
+			48,
+			48,
+			48,
+			48,
+			48,
+			0
+		],
+		"hex_maxlen": 8,
+		"bin": [
+			0,
+			0,
+			0
+		],
+		"bin_len": 3
+	}
+}

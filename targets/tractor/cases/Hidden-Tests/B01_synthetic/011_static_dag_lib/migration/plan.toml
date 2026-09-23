@@ -1,0 +1,19 @@
+schema_version = 1
+target = "011_static_dag_lib"
+
+[[unit]]
+id = "u-staticdag"
+status = "pending"
+files = ["test_case/src/staticdag.c"]
+source_hash = "blake3:5444fbf2911bfb8f84a2663e9e62322a211b24f72363c4a83b73943c8a7b792f"
+symbols = ["driver", "path_add", "path_mult", "path_subtract", "static_update"]
+interface = ["void driver(int val, int iterations)", "void path_add(int update)", "void path_mult(int update)", "void path_subtract(int update)", "int static_update(bool update, int new_value)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-staticdag/driver.c"
+rust_crate = "u_staticdag_rs"
+replaces = ["test_case/src/staticdag.c"]

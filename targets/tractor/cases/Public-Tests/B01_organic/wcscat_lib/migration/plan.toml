@@ -1,0 +1,19 @@
+schema_version = 1
+target = "wcscat_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:d7240edf4b003bcaabd2bc4de4c0734231328885d92d74eb4821756f78c04932"
+symbols = ["wcscat"]
+interface = ["int wcscat(wchar_t *dst, size_t numElem, const wchar_t *src)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

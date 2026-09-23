@@ -1,0 +1,19 @@
+schema_version = 1
+target = "005_static_loop_lib"
+
+[[unit]]
+id = "u-staticloop"
+status = "pending"
+files = ["test_case/src/staticloop.c"]
+source_hash = "blake3:3bcb979e7a2b06926c6883c4baefd1385cbcd5f91c6352306406c034fb0c7772"
+symbols = ["driver", "static_sum"]
+interface = ["void driver(int stride)", "int static_sum(int update)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-staticloop/driver.c"
+rust_crate = "u_staticloop_rs"
+replaces = ["test_case/src/staticloop.c"]

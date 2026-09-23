@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:01df56c907ee44158f316ef18a59b80fee1ca21135c31f3eeeddebd0f902fff4","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:10f3869036a6bedcec1f500034602c7ef6c7e6c189328e195afd6f066c21055a","includes":[]}
+{"k":"symbol","name":"decorrelate","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void decorrelate(tflac *t, tflac_u32 channel, tflac_u32 stride)","span":[3,34]}

@@ -1,0 +1,25 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:7a5d3391dd7b2f04e55c6fc51d25791b16fddebe816bd968a522f3f196c851d1","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:43172d2821a233b1aef8289180c316204f0884ffa15515bc1d4461f10ea5e160","includes":[]}
+{"k":"symbol","name":"c2AABBtoAABB","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int c2AABBtoAABB(c2AABB A, c2AABB B)","span":[65,71]}
+{"k":"symbol","name":"c2CircletoAABB","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int c2CircletoAABB(c2Circle A, c2AABB B)","span":[57,63]}
+{"k":"symbol","name":"c2CircletoCircle","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int c2CircletoCircle(c2Circle A, c2Circle B)","span":[49,55]}
+{"k":"symbol","name":"c2Clampv","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"c2v c2Clampv(c2v a, c2v lo, c2v hi)","span":[35,37]}
+{"k":"symbol","name":"c2Dot","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"float c2Dot(c2v a, c2v b)","span":[45,47]}
+{"k":"symbol","name":"c2Maxv","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"c2v c2Maxv(c2v a, c2v b)","span":[25,28]}
+{"k":"symbol","name":"c2Minv","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"c2v c2Minv(c2v a, c2v b)","span":[30,33]}
+{"k":"symbol","name":"c2Sub","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"c2v c2Sub(c2v a, c2v b)","span":[39,43]}
+{"k":"symbol","name":"c2V","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"c2v c2V(float x, float y)","span":[18,23]}
+{"k":"symbol","name":"collided","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int collided(const void *A, C2_TYPE typeA, const void *B, C2_TYPE typeB)","span":[73,98]}
+{"k":"ref","from":"c2CircletoAABB","file":"test_case/src/lib.c","to":"c2Clampv","refkind":"call","resolved":true}
+{"k":"ref","from":"c2CircletoAABB","file":"test_case/src/lib.c","to":"c2Dot","refkind":"call","resolved":true}
+{"k":"ref","from":"c2CircletoAABB","file":"test_case/src/lib.c","to":"c2Sub","refkind":"call","resolved":true}
+{"k":"ref","from":"c2CircletoCircle","file":"test_case/src/lib.c","to":"c2Dot","refkind":"call","resolved":true}
+{"k":"ref","from":"c2CircletoCircle","file":"test_case/src/lib.c","to":"c2Sub","refkind":"call","resolved":true}
+{"k":"ref","from":"c2Clampv","file":"test_case/src/lib.c","to":"c2Maxv","refkind":"call","resolved":true}
+{"k":"ref","from":"c2Clampv","file":"test_case/src/lib.c","to":"c2Minv","refkind":"call","resolved":true}
+{"k":"ref","from":"c2Maxv","file":"test_case/src/lib.c","to":"c2V","refkind":"call","resolved":true}
+{"k":"ref","from":"c2Minv","file":"test_case/src/lib.c","to":"c2V","refkind":"call","resolved":true}
+{"k":"ref","from":"collided","file":"test_case/src/lib.c","to":"c2AABBtoAABB","refkind":"call","resolved":true}
+{"k":"ref","from":"collided","file":"test_case/src/lib.c","to":"c2CircletoAABB","refkind":"call","resolved":true}
+{"k":"ref","from":"collided","file":"test_case/src/lib.c","to":"c2CircletoCircle","refkind":"call","resolved":true}

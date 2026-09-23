@@ -1,0 +1,5 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/loop.h","hash":"blake3:67e36bba851beb2b9ca8db806adaba5ddb736732586c60391213fbd86b4d145a","includes":[]}
+{"k":"file","path":"test_case/src/loop.c","hash":"blake3:c2655811fb0231443694f5d95df22ec089fe133c5bfc07371508680aa1b870e0","includes":[]}
+{"k":"symbol","name":"loop","kind":"function","file":"test_case/src/loop.c","visibility":"public","signature":"void loop(int max_val)","span":[11,15]}
+{"k":"ref","from":"loop","file":"test_case/src/loop.c","to":"printf","refkind":"call","resolved":false}

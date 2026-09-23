@@ -1,0 +1,17 @@
+{
+  "stdout": {
+    "pattern": "at do yo\n"
+  },
+  "lib_state_in": {
+    "mystr": "what do you think will happen when we pass 128 characters? this program doesn't use a static buffer, so hopefully it will work just fine. let's see what happens!",
+    "start_ptr": 2,
+    "stop_ptr": 10,
+    "returns": 0
+  },
+  "lib_state_out": {
+    "mystr": "what do you think will happen when we pass 128 characters? this program doesn't use a static buffer, so hopefully it will work just fine. let's see what happens!",
+    "start_ptr": 2,
+    "stop_ptr": 10,
+    "returns": 0
+  }
+}

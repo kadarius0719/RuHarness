@@ -1,0 +1,17 @@
+{
+  "stdout": {
+    "pattern": "lo \n"
+  },
+  "lib_state_in": {
+    "mystr": "Hello World!",
+    "start_ptr": 3,
+    "stop_ptr": 6,
+    "returns": 0
+  },
+  "lib_state_out": {
+    "mystr": "Hello World!",
+    "start_ptr": 3,
+    "stop_ptr": 6,
+    "returns": 0
+  }
+}

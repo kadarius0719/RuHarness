@@ -1,0 +1,11 @@
+{
+  "lib_state_in": {
+    "seed": 2097197891
+  },
+  "lib_state_out": {
+    "seed": 2097197891
+  },
+  "stdout": {
+    "pattern": "Result: 1782765650 — The number is as calm as a sleeping sloth.\n"
+  }
+}

@@ -1,0 +1,32 @@
+{
+	"lib_state_in": {
+		"t": {
+			"blocksize": 16,
+			"samplerate": 0,
+			"channels": 0,
+			"bitdepth": 0,
+			"channel_mode": 0,
+			"max_rice_value": 0,
+			"min_partition_order": 0,
+			"max_partition_order": 0,
+			"partition_order": 0,
+			"cur_blocksize": 0
+		},
+		"returns": 0
+	},
+	"lib_state_out": {
+		"t": {
+			"blocksize": 16,
+			"samplerate": 0,
+			"channels": 0,
+			"bitdepth": 0,
+			"channel_mode": 0,
+			"max_rice_value": 0,
+			"min_partition_order": 0,
+			"max_partition_order": 0,
+			"partition_order": 0,
+			"cur_blocksize": 0
+		},
+		"returns": -1
+	}
+}

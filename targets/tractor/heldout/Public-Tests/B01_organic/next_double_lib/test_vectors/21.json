@@ -1,0 +1,14 @@
+{
+  "lib_state_in": {
+    "rnd": {
+      "state": [4095, 0]
+    },
+    "returns": 0.0
+  },
+  "lib_state_out": {
+    "rnd": {
+      "state": [0, 34351607871]
+    },
+    "returns": 1.86220439069018084e-09
+  }
+}

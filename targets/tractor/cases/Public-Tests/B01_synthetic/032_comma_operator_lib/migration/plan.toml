@@ -1,0 +1,19 @@
+schema_version = 1
+target = "032_comma_operator_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:f59dde1f8560f6b230f6d70a83ba94464dd12757ad3cfe67b28d2e7f9d484341"
+symbols = ["driver"]
+interface = ["void driver(int x)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

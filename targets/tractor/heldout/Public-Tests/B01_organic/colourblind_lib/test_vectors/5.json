@@ -1,0 +1,14 @@
+{
+	"lib_state_in": {
+		"impairment": "CbDeuteranopia",
+		"r": 6.412092e25,
+		"g": -9.7957434e30,
+		"b": -2.9033463e-37
+	},
+	"lib_state_out": {
+		"impairment": "CbDeuteranopia",
+		"r": -6.556661e30,
+		"g": -6.556661e30,
+		"b": -2.7286599e29
+	}
+}

@@ -1,0 +1,19 @@
+schema_version = 1
+target = "predict_sample_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:8d4403505ccf8e4dbdc55662f4f376288f20aecb0cab67aeaf4113afd762a9ae"
+symbols = ["predict_sample"]
+interface = ["int predict_sample(int *psamp, int idx, int pfcn, btac1c_idxstate *ridx)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

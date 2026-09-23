@@ -1,0 +1,19 @@
+{
+	"lib_state_in": {
+		"dst": [0],
+		"numElem": 1,
+		"src": [67, 68],
+		"returns": 0
+	},
+	"lib_state_out": {
+		"dst": [
+			0
+		],
+		"numElem": 1,
+		"src": [
+			67,
+			68
+		],
+		"returns": 34
+	}
+}

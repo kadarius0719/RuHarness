@@ -1,0 +1,19 @@
+schema_version = 1
+target = "dequantize_granule_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:2014afc779ee39197ba542f87c40aaff81677cb7b85f0eeefbc743a5bde6fec4"
+symbols = ["dequantize_granule"]
+interface = ["int dequantize_granule(float *grbuf, bs_t *bs, L12_scale_info *sci, int group_size)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

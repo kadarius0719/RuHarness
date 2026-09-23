@@ -1,0 +1,11 @@
+{
+  "lib_state_in": {
+    "max_val": 1
+  },
+  "lib_state_out": {
+    "max_val": 1
+  },
+  "stdout": {
+    "pattern": "0\n1\n"
+  }
+}

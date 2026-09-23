@@ -1,0 +1,6 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:688e97184b27e5a38bb2456f19590bcf76c63f797b187e7223cac7f1ff308a8b","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:9f0cd02e68cef6bee6c3b1d3fd267158dc6d80c12f11719415585428081871c8","includes":[]}
+{"k":"symbol","name":"read_scalefactors","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void read_scalefactors(bs_t *bs, uint8_t *pba, uint8_t *scfcod, int bands, float *scf)","span":[17,60]}
+{"k":"symbol","name":"test_case/src/lib.c::get_bits","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static uint32_t get_bits(bs_t *bs, int n)","span":[3,15]}
+{"k":"ref","from":"read_scalefactors","file":"test_case/src/lib.c","to":"test_case/src/lib.c::get_bits","refkind":"call","resolved":true}

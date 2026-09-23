@@ -1,0 +1,14 @@
+{
+	"lib_state_in": {
+		"impairment": "CbTritanopia",
+		"r": 6.811047e37,
+		"g": -2.8628843e-18,
+		"b": 5.46637e-13
+	},
+	"lib_state_out": {
+		"impairment": "CbTritanopia",
+		"r": 6.811047e37,
+		"g": -3.0554358e27,
+		"b": 2.119121e28
+	}
+}

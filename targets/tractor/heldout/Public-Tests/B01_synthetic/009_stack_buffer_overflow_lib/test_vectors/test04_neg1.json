@@ -1,0 +1,13 @@
+{
+  "stdout": {
+    "pattern": "Calling good()...\n0\n0\n0\n0\n0\n0\n0\n1\n0\n0\nERROR: Array index is out-of-bounds\nFinished good()\nCalling bad()...\n0\n0\n0\n0\n0\n1\n0\n0\n0\n0\nFinished bad()\n"
+  },
+  "lib_state_in": {
+    "good_data": -2,
+    "bad_data": 5
+  },
+  "lib_state_out": {
+    "good_data": -2,
+    "bad_data": 5
+  }
+}

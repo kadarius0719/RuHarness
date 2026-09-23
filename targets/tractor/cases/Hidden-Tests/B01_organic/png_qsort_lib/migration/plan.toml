@@ -1,0 +1,19 @@
+schema_version = 1
+target = "png_qsort_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:4bea5ca184d0de7be64745045bc5cc874e565db2b1d37b1733c58e3734494169"
+symbols = ["qsort"]
+interface = ["void qsort(cp_integer_image_t *items, int count)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

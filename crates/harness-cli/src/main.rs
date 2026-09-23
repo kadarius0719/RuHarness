@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+mod bench;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use harness_core::ledger::Ledger;
@@ -113,6 +115,11 @@ enum Cmd {
         #[arg(long)]
         attempt: Option<String>,
     },
+    /// Benchmark suites: vendor, verify, score, regression-check
+    Bench {
+        #[command(subcommand)]
+        cmd: bench::BenchCmd,
+    },
     /// Refresh the generated runtime view (AGENTS.md managed block)
     SyncRuntime {
         /// Target repository root
@@ -136,7 +143,7 @@ enum StateCmd {
 
 /// Print a line to stdout, ignoring EPIPE (`harness ... | head` must exit
 /// with a documented code, not a broken-pipe panic).
-fn out(line: String) {
+pub(crate) fn out(line: String) {
     let _ = writeln!(std::io::stdout(), "{line}");
 }
 
@@ -182,6 +189,7 @@ fn main() -> ExitCode {
             attempt,
         }),
         Cmd::SyncRuntime { target, check } => cmd_sync_runtime(target, check),
+        Cmd::Bench { cmd } => bench::run(cmd),
     };
     match result {
         Ok(code) => code,
@@ -195,10 +203,7 @@ fn main() -> ExitCode {
 fn cmd_scan(target: PathBuf) -> Result<ExitCode> {
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
-    let frontend = harness_scan::CFrontend;
-    let facts = frontend.scan(&ctx)?;
-    std::fs::create_dir_all(ledger.dir()).context("creating migration dir")?;
-    facts.store(&ledger.facts_path())?;
+    let facts = scan_target(&ctx)?;
     out(format!(
         "scan: {} files, {} symbols, {} refs -> {}",
         facts.files.len(),
@@ -207,6 +212,15 @@ fn cmd_scan(target: PathBuf) -> Result<ExitCode> {
         ledger.facts_path().display()
     ));
     Ok(ExitCode::SUCCESS)
+}
+
+/// Scan `ctx` and write `facts.jsonl` (the body of `harness scan`).
+pub(crate) fn scan_target(ctx: &TargetContext) -> Result<Facts> {
+    let ledger = Ledger::new(&ctx.root);
+    let facts = harness_scan::CFrontend.scan(ctx)?;
+    std::fs::create_dir_all(ledger.dir()).context("creating migration dir")?;
+    facts.store(&ledger.facts_path())?;
+    Ok(facts)
 }
 
 /// Count facts file records whose hash no longer matches the working tree.
@@ -224,6 +238,21 @@ fn stale_fact_files(ctx: &TargetContext, facts: &Facts) -> usize {
 
 fn cmd_plan(target: PathBuf) -> Result<ExitCode> {
     let ctx = TargetContext::load(&target)?;
+    let (changes, order_line, units) = plan_target(&ctx)?;
+    if changes.is_empty() {
+        out(format!("plan: no changes ({units} units)"));
+    } else {
+        for c in &changes {
+            out(format!("plan: {c}"));
+        }
+    }
+    out(format!("plan: execution order: {order_line}"));
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Reconcile and write `plan.toml` (the body of `harness plan`): returns the
+/// change lines, the execution-order line and the unit count.
+pub(crate) fn plan_target(ctx: &TargetContext) -> Result<(Vec<String>, String, usize)> {
     let ledger = Ledger::new(&ctx.root);
     let facts =
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
@@ -260,15 +289,7 @@ fn cmd_plan(target: PathBuf) -> Result<ExitCode> {
         .collect::<Vec<_>>()
         .join(" -> ");
     harness_core::ledger::write_atomic(&plan_path, content.as_bytes())?;
-    if changes.is_empty() {
-        out(format!("plan: no changes ({} units)", computed.len()));
-    } else {
-        for c in &changes {
-            out(format!("plan: {c}"));
-        }
-    }
-    out(format!("plan: execution order: {order_line}"));
-    Ok(ExitCode::SUCCESS)
+    Ok((changes, order_line, computed.len()))
 }
 
 /// Every command that builds or runs target- or model-derived code refuses

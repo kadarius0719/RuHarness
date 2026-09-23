@@ -1,0 +1,19 @@
+schema_version = 1
+target = "016_divide_by_zero_float_lib"
+
+[[unit]]
+id = "u-driver"
+status = "pending"
+files = ["test_case/src/driver.c"]
+source_hash = "blake3:23da45edb6a92dde2902694c6e72007ecccd987b80d52c0239d10e7209819f87"
+symbols = ["bad", "driver", "good", "printIntLine", "printLine"]
+interface = ["void bad(float data)", "void driver(float goodData, float badData)", "void good(float data)", "void printIntLine (int intNumber)", "void printLine (const char * line)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-driver/driver.c"
+rust_crate = "u_driver_rs"
+replaces = ["test_case/src/driver.c"]

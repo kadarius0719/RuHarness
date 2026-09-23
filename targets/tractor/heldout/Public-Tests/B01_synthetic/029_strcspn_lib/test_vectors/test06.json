@@ -1,0 +1,13 @@
+{
+  "stdout": {
+    "pattern": "4\n"
+  },
+  "lib_state_in": {
+    "s1": "case",
+    "s2": "CASE"
+  },
+  "lib_state_out": {
+    "s1": "case",
+    "s2": "CASE"
+  }
+}

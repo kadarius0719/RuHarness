@@ -1,0 +1,11 @@
+{
+  "stdout": {
+    "pattern": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+  },
+  "lib_state_in": {
+    "data": 98
+  },
+  "lib_state_out": {
+    "data": 98
+  }
+}

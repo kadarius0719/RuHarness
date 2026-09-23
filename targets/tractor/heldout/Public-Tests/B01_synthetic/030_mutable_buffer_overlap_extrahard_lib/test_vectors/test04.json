@@ -1,0 +1,17 @@
+{
+  "has_ub": "Overflow",
+  "lib_state_in": {
+    "data": [
+      2147483647,
+      500
+    ],
+    "len": 2
+  },
+  "lib_state_out": {
+    "data": [
+      2147483647,
+      500
+    ],
+    "len": 2
+  }
+}

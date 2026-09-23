@@ -1,0 +1,15 @@
+{
+  "stdout": {
+    "pattern": "Ok!\nResult: 0\n"
+  },
+  "lib_state_in": {
+    "x": 1,
+    "y": 2,
+    "z": 3
+  },
+  "lib_state_out": {
+    "x": 1,
+    "y": 2,
+    "z": 3
+  }
+}

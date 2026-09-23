@@ -1,0 +1,19 @@
+schema_version = 1
+target = "002_echo_lib"
+
+[[unit]]
+id = "u-echo"
+status = "pending"
+files = ["test_case/src/echo.c"]
+source_hash = "blake3:dac6a665ab58887cc3e3ce9b57ce701c76ea2dc5920f1d8922d26399fbb7bd23"
+symbols = ["echo"]
+interface = ["int echo(int argc, char **argv)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-echo/driver.c"
+rust_crate = "u_echo_rs"
+replaces = ["test_case/src/echo.c"]

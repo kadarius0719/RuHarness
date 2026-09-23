@@ -1,0 +1,19 @@
+schema_version = 1
+target = "014_pow_subfunction_lib"
+
+[[unit]]
+id = "u-pow"
+status = "pending"
+files = ["test_case/src/pow.c"]
+source_hash = "blake3:f2a98ddca86e0da5b19f0a40fc50f3323395fe4f36de0c9cb54facebdca5edd9"
+symbols = ["feel_the_power", "my_pow"]
+interface = ["double feel_the_power(double base, double exponent)", "double my_pow(double base, double exponent)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-pow/driver.c"
+rust_crate = "u_pow_rs"
+replaces = ["test_case/src/pow.c"]

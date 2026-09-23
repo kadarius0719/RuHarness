@@ -1,0 +1,19 @@
+schema_version = 1
+target = "hdr_bitrate_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:83b548021fc40dfa964acbbc113d3485bda3a3da9bbf7b6138eeb61603d860e3"
+symbols = ["hdr_bitrate"]
+interface = ["unsigned hdr_bitrate(const uint8_t *h)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

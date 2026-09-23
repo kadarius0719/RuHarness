@@ -1,0 +1,7 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:5a432c8f394656b5a8873e184cc99743168fd6ca1e56b49259d0aaa0d41c0fdc","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:872f99a931383217f559b007e639aa5b39a322c418c6a98b88ffce7059906796","includes":[]}
+{"k":"symbol","name":"qsort","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"void qsort(cp_integer_image_t *items, int count)","span":[9,26]}
+{"k":"symbol","name":"test_case/src/lib.c::cp_perimeter_pred","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static int cp_perimeter_pred(cp_integer_image_t *a, cp_integer_image_t *b)","span":[3,7]}
+{"k":"ref","from":"qsort","file":"test_case/src/lib.c","to":"qsort","refkind":"call","resolved":true}
+{"k":"ref","from":"qsort","file":"test_case/src/lib.c","to":"test_case/src/lib.c::cp_perimeter_pred","refkind":"call","resolved":true}

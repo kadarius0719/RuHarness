@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:76c280ae41cbcb2858bd5a8e6a5dff8760a8a5b5276206d6bef57c6e272c5666","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:df9c3df1a8563879032181cc055421a37fdac176926ea3f443b8e98870895f13","includes":[]}
+{"k":"symbol","name":"max_size_frame","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"tflac_u32 max_size_frame(tflac_u32 blocksize, tflac_u32 channels, tflac_u32 bitdepth)","span":[3,10]}

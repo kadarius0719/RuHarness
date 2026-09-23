@@ -1,0 +1,19 @@
+schema_version = 1
+target = "008_long_run_lib"
+
+[[unit]]
+id = "u-long"
+status = "pending"
+files = ["test_case/src/long.c"]
+source_hash = "blake3:a1c9a95861f6dc8b6ec4b4d4f65364feda1987b9d4d7425d5343b677c9d7f3ad"
+symbols = ["long_exec", "perform_expensive_operations"]
+interface = ["void long_exec(unsigned int seed)", "void perform_expensive_operations()"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-long/driver.c"
+rust_crate = "u_long_rs"
+replaces = ["test_case/src/long.c"]

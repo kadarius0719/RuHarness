@@ -1,0 +1,19 @@
+schema_version = 1
+target = "003_string_slicing_lib"
+
+[[unit]]
+id = "u-slicing"
+status = "pending"
+files = ["test_case/src/slicing.c"]
+source_hash = "blake3:7c7bb8bb984ebf1e101380bd99d087a5fd34f4f9db4f6e49de38923fea57c216"
+symbols = ["slice"]
+interface = ["int slice(char *mystr, int *start_ptr, int *stop_ptr)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-slicing/driver.c"
+rust_crate = "u_slicing_rs"
+replaces = ["test_case/src/slicing.c"]

@@ -1,0 +1,7 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/driver.h","hash":"blake3:0fb6a19c6a19ef2fd034241c5adcde4abeaf5b74d0d4d591d00bfcc947950939","includes":[]}
+{"k":"file","path":"test_case/src/driver.c","hash":"blake3:bdec6233c5dc8e34094f86127fb8bde1e79b23eb7c86f8d4f1120c21deb2c304","includes":[]}
+{"k":"symbol","name":"driver","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void driver(unsigned int x, unsigned int y, bool b, int z)","span":[20,23]}
+{"k":"symbol","name":"print_foo","kind":"function","file":"test_case/src/driver.c","visibility":"public","signature":"void print_foo(const foo_t *foo)","span":[16,18]}
+{"k":"ref","from":"driver","file":"test_case/src/driver.c","to":"print_foo","refkind":"call","resolved":true}
+{"k":"ref","from":"print_foo","file":"test_case/src/driver.c","to":"printf","refkind":"call","resolved":false}

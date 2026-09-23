@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:460ecef54b03e45a4a3070fb8a5e4c689c7c0f42d864faaf41e5218d8197f3c3","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:c423cd04ed6087a9dd658e1bc3fb1a211ce907b4314dd50a8f2f553bd0311f26","includes":[]}
+{"k":"symbol","name":"predict_sample","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int predict_sample(int *psamp, int idx, int pfcn, btac1c_idxstate *ridx)","span":[3,89]}

@@ -1,0 +1,19 @@
+schema_version = 1
+target = "004_nineality_sieve_lib"
+
+[[unit]]
+id = "u-sieve"
+status = "pending"
+files = ["test_case/src/sieve.c"]
+source_hash = "blake3:6feb88a9f45534c683a434a066f38c435879bd4b464ec2e55788642e17997349"
+symbols = ["sieve"]
+interface = ["void sieve(int val)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-sieve/driver.c"
+rust_crate = "u_sieve_rs"
+replaces = ["test_case/src/sieve.c"]

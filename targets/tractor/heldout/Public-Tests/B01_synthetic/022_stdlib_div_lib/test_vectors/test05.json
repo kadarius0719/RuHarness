@@ -1,0 +1,13 @@
+{
+  "stdout": {
+    "pattern": "quotient: 0, remainder: 0\n"
+  },
+  "lib_state_in": {
+    "x": 0,
+    "y": 37
+  },
+  "lib_state_out": {
+    "x": 0,
+    "y": 37
+  }
+}

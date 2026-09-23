@@ -1,0 +1,15 @@
+{
+  "stdout": {
+    "pattern": "Error: x != 1\nOperation failed\nResult: 1\n"
+  },
+  "lib_state_in": {
+    "x": 8,
+    "y": 2,
+    "z": 3
+  },
+  "lib_state_out": {
+    "x": 8,
+    "y": 2,
+    "z": 3
+  }
+}

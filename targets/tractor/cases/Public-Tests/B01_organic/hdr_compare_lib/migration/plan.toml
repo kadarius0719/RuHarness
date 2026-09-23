@@ -1,0 +1,19 @@
+schema_version = 1
+target = "hdr_compare_lib"
+
+[[unit]]
+id = "u-lib"
+status = "pending"
+files = ["test_case/src/lib.c"]
+source_hash = "blake3:c166aa0c761d589d63888db03575a1be27c1d1d84654e40fb3fe1629d4d7a217"
+symbols = ["hdr_compare"]
+interface = ["int hdr_compare(const uint8_t *h1, const uint8_t *h2)"]
+depends_on = []
+test_strategy = ""
+done_criteria = ""
+
+[unit.oracle]
+kind = "c-abi-differential"
+driver = "migration/units/u-lib/driver.c"
+rust_crate = "u_lib_rs"
+replaces = ["test_case/src/lib.c"]

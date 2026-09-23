@@ -1,0 +1,6 @@
+{"k":"header","schema":"ruharness-facts","schema_version":1,"frontend":"c-tree-sitter"}
+{"k":"file","path":"test_case/include/lib.h","hash":"blake3:088d574a40327bc9c89de921a44c5e0d67ec0ac928bd8191fabcae770d67e402","includes":[]}
+{"k":"file","path":"test_case/src/lib.c","hash":"blake3:43df5c273bdb4c0d36c9e26261d19321fe422e5c3b5a3aa851588b91e113dcce","includes":[]}
+{"k":"symbol","name":"read_side_info","kind":"function","file":"test_case/src/lib.c","visibility":"public","signature":"int read_side_info(bs_t *bs, L3_gr_info_t *gr, const uint8_t *hdr)","span":[17,163]}
+{"k":"symbol","name":"test_case/src/lib.c::get_bits","kind":"function","file":"test_case/src/lib.c","visibility":"internal","signature":"static uint32_t get_bits(bs_t *bs, int n)","span":[3,15]}
+{"k":"ref","from":"read_side_info","file":"test_case/src/lib.c","to":"test_case/src/lib.c::get_bits","refkind":"call","resolved":true}
