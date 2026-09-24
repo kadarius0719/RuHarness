@@ -1290,3 +1290,40 @@ release notes; github.com repos of difftastic (issues #693/#1064), lazygit keybi
 diffnav, git-split-diffs, crush; jj docs; neovim diff.txt; developers.openai.com Codex review docs;
 code.claude.com docs (mcp, headless); modelcontextprotocol.io spec 2025-06-18 transports;
 nexte.st signal-handling design; doc.rust-lang.org cargo external-tools; rust-lang/rust#93857.
+
+## 2026-09-24 — CLI hardening: design and adversarial design review (15 confirmed, 0 refuted)
+
+`docs/CLI-HARDENING.md` designs the milestone the review cockpit needs from the CLI: a writer
+lock, `migrate --no-promote` + `harness promote`, cancellation that kills sandboxed process
+groups, and a `--json` events mode. Four review lenses (concurrency, crash consistency &
+signals, contract & consumers, dependencies & security), every finding attacked by an
+independent verifier against the code: 15 confirmed, 0 refuted; §R of the design holds each
+resolution. The ones that changed the design's direction:
+- **fd-lock dropped** — std `File::try_lock` (Rust 1.89) is the same `flock(2)` call with zero
+  crates; the workspace `rust-version` moves 1.85 → 1.89. `signal-hook` stands (std has no
+  signal API). The spike had missed std's lock because it considered only `O_EXCL` as the
+  std option — recorded here so the next spike checks std first.
+- **A try-lock "holder" probe is a bug** (it takes the exclusive lock for microseconds and can
+  fail a real writer with a dead pid in the message): readers only ever READ the holder line.
+- **The promotion protocol was not crash-proof** even before this design: recovery was keyed on
+  `.<crate>.prev`, which a FIRST promotion never creates and which is removed before the
+  attempt's `promoted` flag is written. One marker now spans the protocol, the green tail is
+  idempotent in a fixed order, and `recover_promotion` resolves every marker by evidence.
+- **Cancellation must be a state the spawn choke point observes**, not just a group kill: a
+  SIGKILLed child reaped by the 50 ms poll would be journaled as a `crash-timeout` turn and
+  close the attempt red — evidence manufactured by Ctrl-C. `Error::Interrupted` is never a
+  `ChildEnd`; `built_with_env` gains the outer/inner result shape `tool_outcome` has.
+- **The harness must die BY the signal** (`emulate_default_handler`), not exit 130: measured on
+  this machine, interactive bash 3.2 and zsh 5.9 continue a `for u in …` loop after a child
+  that exits 130 and abort it after a child that dies by SIGINT.
+- **`harness promote` binds the record to the current inputs** (`unit_source` + `driver`, the
+  R-5 provenance rule) and re-establishes migrate's preconditions (plan staleness, R6 driver
+  freshness); `[llm.migrate] promote_on_green = false` makes "Accept = explicit act" sticky
+  across the several invocations one `external` attempt takes.
+- **Events carry ledger values verbatim** (the Turn's closed `result` set, a `UnitReport` struct
+  shared by the human line, the event, the cockpit and the MCP bridge) and machine `kind`s come
+  from typed errors (`Locked`, `Stale`, `Awaiting { attempt }`, `Interrupted`), not prose
+  matching; the lock's in-place write follows the symlink discipline of every other write.
+Follow-ups (not this milestone): `verify` lacks the R6 gate; driver-attempt Accept; queueing on
+contention; an async client for cooperative cancellation.
+
