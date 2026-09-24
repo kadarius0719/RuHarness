@@ -34,18 +34,25 @@ Then, in order:
   hand-off, and re-baseline `scores.json`. The translator hint it wants is now an ordinary
   prompt edit: update the fixtures with `RUHARNESS_UPDATE_PROMPT_FIXTURES=1`, review the
   diff, and land it in the same commit.
-* **Then ask the user which track comes next.** Their stated direction after M4 (see the
-  memory and the DECISIONS M4 roadmap notes): a TUI review cockpit (CLI hardening first:
-  writer lock, `migrate --no-promote` + `harness promote`, cancellation, a `--json`
-  events mode), a feature-workflow view, and C-vs-Rust performance baselines. The
-  briefing's M5 is the extension proof (an external detector plugin + `EXTENDING.md`).
-  Smaller carry-forwards:
+* **Then the TUI track (user decision, 2026-09-23 — do not ask again).** Start with a
+  §15 research spike (current Rust TUI crates and their maintenance, dependency weight,
+  how comparable tools present side-by-side code review), then design → adversarial
+  design review → implementation. The design brief from the M4 roadmap notes (DECISIONS.md
+  and memory): a thin, read-mostly "review cockpit" crate (`harness-tui`) derived from the
+  ledger that spawns the `harness` CLI for every write; C beside Rust aligned by function;
+  Accept = an explicit promote of a green attempt; Modify = a steer note that becomes a
+  new oracle-judged turn (hand edits only as a labelled override); chat lives in Claude
+  Code (via a small harness-mcp), not in the TUI. **CLI hardening comes first**, as its
+  own milestone: a writer lock, `migrate --no-promote` + `harness promote`, cancellation
+  that kills sandboxed process groups, and a `--json` events mode for the TUI to consume.
+  Keep it feature-gated and lean (§10.3); vet every crate.
+* After the TUI: the feature-workflow view and the C-vs-Rust performance baselines (the
+  user's other post-M4 wishes), then the briefing's M5 (external detector plugin +
+  `EXTENDING.md`). Carry-forwards to fold in where they fit:
   - §16 escalation automation + `harness usage`;
-  - the `crash-timeout` classifier, which matches substrings of details that can quote
-    child stderr;
+  - the `crash-timeout` classifier;
   - a Linux sandbox;
-  - the two deferred replay items: default-run evidence reuse / `--new-trial`, and
-    per-prompt score labels.
+  - the two deferred replay items.
 
 Environment (re-check; don't assume):
 - There are no cloud API keys, so model calls go through the `external` hand-off.
