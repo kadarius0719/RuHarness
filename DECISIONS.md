@@ -1174,3 +1174,119 @@ their object untouched or partly touched in any driver call, so the check can on
 over-run past the object's extent there; disclosed per case by `bench boundary`. This is the
 calibration the design gates opt-in on: 0 false reds in 42 non-vacuous outcomes.
 
+## 2026-09-23 — `read_scalefactors` re-migrated on the boundary-aware oracle (the blind spot closed)
+
+Opted in (`[unit.oracle] boundary = true`) and re-run through the audited hand-off (plain
+Sonnet 5 subagents, `targets/tractor/handoff-tools`, `HANDOFF_ROOT` outside the repo). HEAD's
+translate prompt differs from the one the old attempt was recorded under, so the harness
+opened a NEW trial `a-13c941dfff95` (R-1) rather than a `.rN` sample; the old green
+`a-28d8ddc411f9` is superseded by an explicit `superseded.jsonl` tightening entry naming it.
+Three rounds, 0 breaches, 0 deviations (17 tool calls, all inside the batch dirs):
+1. **translate → red at `bs`** — the fresh Sonnet translation derived every slice length
+   from `limit`/`bands` and dereferenced `bs` at entry (its own report says so), exactly the
+   pattern of the M4 verified crate; every other check passed (driver output byte-identical).
+2. **repair → red at `scfcod`** — `bs` made lazy (an accessor), `scfcod[i]` still read for
+   every band; the check moved to the next object.
+3. **repair → GREEN** — `scfcod` read only under `ba != 0`, as the C does: "Rust stays inside
+   the C's footprint: 31 call(s), 124 guarded object(s) (6 untouched by the C, 86 partially
+   touched, 0 widened) … tail and head layouts clean; note: in call 3 the C reads the driver's
+   stack through a pointer field (unchecked)" — the disclosed limit, surfaced.
+Promoted with `--promote` (re-verified from the recorded evidence, `prompt: conformant`,
+nothing sent); `oracle-latest.json` green with `boundary: sancov+guard-pages rt=fe651697`.
+The re-migration ran on the UNHINTED prompt (B.R-13): the repair explanation alone carried
+the fix in two turns. Gates and the re-baseline follow in the next entry.
+
+## 2026-09-24 — read_scalefactors re-baselined: the blind spot is closed (hidden 16/17, blind spots 0)
+
+`bench check --suite targets/tractor --replay --jobs 6`: `198 reproduce (1 conformant, 197
+drifted), 2 expected divergence(s), 0 skipped, 0 problem(s)` — the new `a-13c941dfff95` is the
+one conformant attempt (recorded under HEAD's prompt), `a-28d8ddc411f9` is reported as an
+expected divergence through its `superseded.jsonl` entry, no regression on unchanged cases.
+`bench score --write`: hidden strict-pass 15/17 → **16/17 (94.1%)**, blind spots 1 → **0**,
+non-UB vectors 83/87 → 86/87; public unchanged (70/77, 908/950). `read_scalefactors_lib`
+moves from `blind-spot` (Rust segfaulted on 3/6 held-out vectors while verified green) to
+`strict-pass` 6/6, `migrate_turns` 1 → 3. The M4 briefing's last known blind spot is gone;
+nothing else in the suite moved.
+
+
+## 2026-09-24 — TUI track: §15 research spike (four time-boxed spikes, Sonnet subagents, verified against crates.io/RustSec/repos and this workspace)
+
+Scope per the kickoff: CLI hardening first (writer lock, `migrate --no-promote` + `harness promote`,
+cancellation killing sandboxed process groups, `--json` events), then a thin read-mostly
+`harness-tui` review cockpit driven from the ledger, with chat in Claude Code through a small
+`harness-mcp`. Numbers below are measured (`cargo tree -e normal --prefix none | sort -u | wc -l`
+in scratch projects; RustSec queried per crate, the query validated against a crate known to have
+advisories). Workspace today: edition 2021, `rust-version = "1.85"`, toolchain 1.94.1, no tokio,
+no crossterm/ratatui/diff/highlight crate; `tree-sitter 0.27` already in the graph.
+
+**Spike 1 — TUI stack.** Options: ratatui 0.30.2 (2026-06-19, active; split into ratatui-core/
+-widgets/-macros at 0.30) on crossterm 0.29.0 (crates.io 2025-04, repo commits 2026-09; the
+crates.io release just hasn't been cut) — 61 unique crates for the base; termion (unix-only, no
+event-stream parity), termwiz (wezterm's weight), cursive (stale since 2024-08), iocraft 0.9
+(new, React-like, credible but immature), tui-realm (framework overhead). Helpers: similar 3.2
+(+1 crate) over imara-diff/diffy; tree-sitter-highlight 0.27 (+9, fewer here since the core is
+already resolved) over syntect 5.3 (+31 via onig/fancy-regex) and synoptic (stale); editor widgets
+(tui-textarea stale, edtui +56) rejected — the cockpit is read-mostly and every write goes through
+the CLI; tui-scrollview (+7) only if `Paragraph` scroll offsets prove insufficient. No advisories on
+any candidate. Full recommended combo: 78 unique crates, `cargo audit` clean over 109. **Chosen
+default:** ratatui 0.30 (`default-features = false`, `crossterm`) + crossterm 0.29 + similar +
+tree-sitter-highlight, in a separate `harness-tui` crate so the `harness` CLI's own tree does not
+grow. **MSRV:** ratatui 0.30 declares 1.88 and tree-sitter-highlight 0.27 declares 1.90; the
+workspace's `rust-version = "1.85"` is bumped to 1.90 when `harness-tui` lands (ratatui 0.29 at
+MSRV 1.74 is the fallback if 1.85 must hold). **Revisit when** ratatui ships another breaking
+release, crossterm cuts a new release, or the cockpit grows in-place editing.
+
+**Spike 2 — side-by-side review presentation.** Surveyed delta, difftastic, diffnav, gitui,
+lazygit, tig, jj's `scm-diff-editor`, git-split-diffs, vim diff mode, Claude Code, aider, Codex CLI,
+opencode/crush (accept/modify specifics UNVERIFIED), and GitHub/Gerrit/Phabricator/Reviewable as
+interaction references. Findings that transfer: difftastic aligns by syntax node, i.e. "align by
+function" is a known-good idea; unequal-height sides are padded with filler lines (vim, GitHub);
+lazygit's `E` (edit this hunk in `$EDITOR`) is the precedent for a labelled hand edit; Codex keeps
+"propose/apply" and "review" as separate modes; none of the terminal tools attach a note to an
+accept/reject, and crush buries diffs in the chat stream — both are what the cockpit exists to fix.
+**Chosen default:** a vertically stacked list of function PAIRS (C left, Rust right, filler-padded
+to equal height) with a thin persistent rail of functions carrying per-function verdict dots; the
+function boundary is the unit of navigation (`]f`/`[f`), no synced scrollbars; below a measured
+column threshold (explicit override flag; difftastic's width auto-detection regressed three times)
+collapse to unified-stacked C-then-Rust per pair. Keys: `j/k`, `]f/[f`, `a` accept (only when
+green), `m` steer note, `e` labelled hand edit, `v` verdict detail. **Revisit when** the
+function-to-symbol mapping stops being 1:1.
+
+**Spike 3 — CLI hardening mechanisms.** (1) Writer lock: fd-lock 4.0.4 (flock, RAII, +3 crates:
+rustix/bitflags/errno; released by the kernel on crash) over fs4 1.1 (same backend, non-RAII API —
+the fallback), fslock/file-lock (fcntl record locks are process-scoped: closing any fd drops the
+lock), and the existing hand-rolled `create_new` `BenchLock` (harness-oracle/src/bench.rs:612 —
+no staleness detection, tells the user to delete it). Lock file `migration/.lock`; pid/host written
+for diagnostics only. (2) Process groups: already done — exec.rs:355 `process_group(0)`, group kill
+via `/bin/kill -KILL -- -<pgid>` (exec.rs:365), tested, and `sandbox-exec` execs in place so the
+pgid survives. The MISSING piece is CLI-level SIGINT/SIGTERM handling: because children lead their
+own groups, a terminal Ctrl-C reaches only the CLI (cargo-nextest has the same shape and
+re-broadcasts). signal-hook 0.4.4 (+2) over ctrlc 3.5 (+5 on macOS via nix + the objc2/dispatch2
+bridge, single handler) and tokio (not in the tree; harness-llm is synchronous). (3) `--json`
+events: NDJSON on stdout, zero new deps (serde_json present), header line with the SCHEMAS.md
+envelope, `k`-discriminated events, human logs on stderr — cargo's `reason` NDJSON and Claude Code's
+`stream-json` as the models; `gh --json` is a snapshot shape, right for status queries only.
+(4) Promotion today (harness-cli/src/main.rs:1090-1160) stages `.promote-<id>/`, two-rename swaps,
+re-verifies IN PLACE and rolls back on non-green, with evidence-based crash recovery
+(`recover_interrupted_promotion`); a standalone `harness promote <unit> <attempt>` relocates that
+block unchanged. Gotcha: drivers have a second, simpler promotion path (gen_driver.rs) without crash
+recovery. **Revisit when** fd-lock goes 2 years without a release, ledgers move to network storage
+(flock/NFS), tokio enters the tree, or attempts get GC'd before promotion.
+
+**Spike 4 — MCP server.** rmcp 3.4.1 (official SDK, 2026-09-23, MSRV 1.88) needs tokio and adds
+56 crates for a stdio-only server (its RUSTSEC-2026-0189 is HTTP-transport only); rust-mcp-sdk 2.0
+(active, unofficial) as fallback; mcpr/mcp_rust_sdk/mcp-server abandoned. **Chosen default:**
+hand-rolled JSON-RPC 2.0 over stdio, zero new crates (~150–300 lines): protocol version 2025-06-18,
+newline-delimited, nothing but protocol on stdout; `initialize`, `notifications/initialized`,
+`tools/list`, `tools/call`, `ping`, `-32601` otherwise — all Claude Code requires (`claude mcp add`
+/ project `.mcp.json`). **Revisit when** a second transport or OAuth is needed, or tokio enters the
+workspace for another reason.
+
+**Direction (no change):** the spikes confirm the brief; the only new decision is the MSRV bump.
+Total new crates for the whole track: fd-lock, signal-hook (CLI, +5 unique); ratatui+crossterm,
+similar, tree-sitter-highlight (harness-tui only). Sources: crates.io API and docs.rs pages for
+every crate named; RustSec advisory-db (GitHub API + local clone HEAD 2026-09-14); ratatui v0.30
+release notes; github.com repos of difftastic (issues #693/#1064), lazygit keybindings, gitui,
+diffnav, git-split-diffs, crush; jj docs; neovim diff.txt; developers.openai.com Codex review docs;
+code.claude.com docs (mcp, headless); modelcontextprotocol.io spec 2025-06-18 transports;
+nexte.st signal-handling design; doc.rust-lang.org cargo external-tools; rust-lang/rust#93857.

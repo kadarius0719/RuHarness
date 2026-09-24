@@ -14,6 +14,7 @@ done_criteria = ""
 
 [unit.oracle]
 kind = "c-abi-differential"
+boundary = true
 driver = "migration/units/u-lib/driver.c"
 rust_crate = "u_lib_rs"
 replaces = ["test_case/src/lib.c"]

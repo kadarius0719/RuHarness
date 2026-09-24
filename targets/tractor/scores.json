@@ -18,15 +18,15 @@
       "cases": 20,
       "scorable": 17,
       "verified": 16,
-      "strict_pass": 15,
-      "blind_spots": 1,
+      "strict_pass": 16,
+      "blind_spots": 0,
       "vector_pass_oracle_red": 0,
       "stale_verified": 0,
       "infra_errors": 0,
       "unscorable": 2,
       "c_baseline_invalid": 1,
       "vectors": 87,
-      "vectors_passed": 83,
+      "vectors_passed": 86,
       "vectors_skipped": 73,
       "vectors_unmarked_ub": 2
     },
@@ -984,7 +984,7 @@
     {
       "case": "Hidden-Tests/B01_organic/read_scalefactors_lib",
       "split": "hidden",
-      "class": "blind-spot",
+      "class": "strict-pass",
       "pipeline": {
         "unit": "u-lib",
         "status": "verified",
@@ -994,7 +994,7 @@
           23
         ],
         "driver_turns": 1,
-        "migrate_turns": 1,
+        "migrate_turns": 3,
         "migrate_outcome": "green",
         "candidate_attempt": ""
       },
@@ -1002,7 +1002,7 @@
         "unit_source": "blake3:fd0540b200009a06059b084eacaeec0d1fc6278ce0274d3ff5a119836da8deb0",
         "driver": "blake3:b2544df11d7df6bd265ac4be3f30210309cee3432d8d78fa8ca87cb61f1e1263",
         "validation": "blake3:a01157b914b637fbde895c63f142cbbcd5c9911aac151e8a6853c531deb5fc4e",
-        "rust_crate": "blake3:d3dcc4921246a88469dc34d5570b1dbde30702c65f0a483dd1b66979a4cd135a",
+        "rust_crate": "blake3:f98321590a55e90ae5462ee98a5d8a05aaf35a26a73455e99290bd2ab4444d26",
         "candidate": ""
       },
       "c_baseline": {
@@ -1012,12 +1012,11 @@
         "not_run": 0
       },
       "rust": {
-        "pass": 3,
-        "fail": 3,
+        "pass": 6,
+        "fail": 0,
         "skip": 0,
         "not_run": 0
       },
-      "sanitized_build": "asan",
       "vectors": [
         {
           "name": "1.json",
@@ -1027,20 +1026,17 @@
         {
           "name": "2.json",
           "c": "pass",
-          "rust": "fail:SegmentationFault",
-          "c_sanitized": "clean"
+          "rust": "pass"
         },
         {
           "name": "3.json",
           "c": "pass",
-          "rust": "fail:SegmentationFault",
-          "c_sanitized": "clean"
+          "rust": "pass"
         },
         {
           "name": "4.json",
           "c": "pass",
-          "rust": "fail:SegmentationFault",
-          "c_sanitized": "clean"
+          "rust": "pass"
         },
         {
           "name": "5.json",

@@ -6,7 +6,7 @@
   "inputs": {
     "unit_source": "blake3:fd0540b200009a06059b084eacaeec0d1fc6278ce0274d3ff5a119836da8deb0",
     "driver": "blake3:b2544df11d7df6bd265ac4be3f30210309cee3432d8d78fa8ca87cb61f1e1263",
-    "rust_crate": "blake3:f98321590a55e90ae5462ee98a5d8a05aaf35a26a73455e99290bd2ab4444d26",
+    "rust_crate": "blake3:9c3de25344170e47b62c971619dc5cc3ebd06f89bdeb8ea6650351b13f3c1ea5",
     "replaces": [
       "test_case/src/lib.c"
     ],
