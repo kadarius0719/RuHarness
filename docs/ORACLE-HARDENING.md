@@ -2,8 +2,8 @@
 
 Status: **A implemented** (design review 3 lenses; code review 2 lenses; §A.R + §A.2 +
 §A.3 authoritative; normative contract in docs/SCHEMAS.md). **B designed and adversarially
-reviewed** (§B, 2026-09-23; §B.R is AUTHORITATIVE where it amends §B; B.R-2's mechanism choice
-awaits the user's decision — DECISIONS.md).
+reviewed** (§B, 2026-09-23; §B.R is AUTHORITATIVE where it amends §B; B.R-2 DECIDED by the user:
+mechanical baseline now, a model-written additive driver only as a calibration-triggered revisit).
 Spikes and the experiment behind A: DECISIONS.md, "Research spikes (§15) for the two
 remaining blind-spot classes".
 
@@ -227,384 +227,290 @@ touches.
    window. Result: the tightened C runs were clean and byte-identical to the measurement
    run in both layouts (window flush against the following page, or against the preceding
    page). The **verified Rust faulted** on `scfcod` in case 0 (the C touches 0 of 5
-   elements). A Rust with one change (read `scfcod[i]` only when `ba != 0`) passed with
-   identical output. The same results hold under a run-like `sandbox-exec` profile.
-5. **One more requirement follows from the prototype.** The driver's own read-back after a
-   call (it prints `bs->pos`) made `bs` "touched" in every case. That masks the other
-   eager dereference (`&mut *bs` when the C never reads `bs`, the likely held-out crash).
-   Windows must therefore be measured and enforced **per unit call**, not over the whole run.
+   elements). Under per-call windows (item 5) a Rust that only makes `scfcod` lazy is
+   still red — at `bs`, which it still dereferences in calls where the C never touches it
+   (§B.R-10, reproduced); a fully lazy Rust passes with identical output. The same results
+   hold under a run-like `sandbox-exec` profile.
+5. **Windows must be per call.** The driver's own read-back after a call (it prints
+   `bs->pos`) makes `bs` "touched" over the whole run, masking the eager `&mut *bs`.
+   Windows are measured and enforced **per unit call**, not over the whole run — under the
+   decided mechanism, fresh shadows per call give this by construction.
 6. **Nothing else works on stable** (re-checked): no Miri or `-Zsanitizer` on stable
    1.94–1.98; `ub_checks` in `from_raw_parts` checks alignment, null and size only; there
    is no libFuzzer runtime in Apple clang. Stable rustc can trace loads
    (`-C passes=sancov-module`), but it misses memcpy and depends on LLVM-internal flags, so
    it is not used; the Rust side is judged by guard pages only.
 
-### B.2 Rule (normative once approved)
+> **Revision note (2026-09-23, after the review and the user's decision):** B.2–B.13 below are
+> the DECIDED mechanical mechanism (§B.R-2). The original model-written boundary-driver stage
+> (B.3 `rh_in`, B.7/B.8) is in git history at 67a8cea and remains the §B.13 revisit trigger.
 
-For a unit with a **boundary driver**, and for every call the driver makes to a unit
-symbol: during that call, the Rust may touch (load or store) only allocations the C
-touches during the same call, and within each allocation only elements inside the C's
-window for it. The window is the union, over the whole run, of the elements the C touches
-in that allocation during unit calls. Everything else about the run must also match the C
-(both streams and the exit status), in both layouts.
+### B.2 Rule (normative)
 
-- **"Allocation"** means one call of the harness copy-in API (B.3) by the boundary driver.
-- **"Element"** means `elem_size` bytes as the driver declares them (the pointee's
-  `sizeof`). Granularity is per element, so reading a whole struct is never a violation
-  once the C reads any byte of it.
-- **Accesses by the driver outside unit calls never count**, and are always allowed.
-- **A Rust access outside the rule faults and the check is red.** Nothing is excused.
-- **Scope.** Allocations made any other way (driver stack, statics, malloc), the unit's own
-  stack, heap and globals, and slices *created* but never accessed are outside the rule.
-  They are disclosed limits (B.9).
+For a unit whose plan entry opts in (`[unit.oracle] boundary = true`), and for every call the
+unit's validated `driver.c` makes to a unit symbol: during that call, the Rust may touch (load or
+store) only the objects the C touches during the same call, and within each object only the
+elements inside the C's window for that (call, object). Everything else about the run must match
+the C — both streams and the exit status — in both layouts.
 
-### B.3 The guard runtime (harness-owned C, `include_str!`)
+- **"Object"** is the driver-owned memory an argument points into, as ASan locates it in the
+  measure build: the enclosing stack variable, heap block or global, exactly. A pointer ASan
+  cannot place (unit-owned or uninstrumented memory, a string literal, NULL) is passed through
+  unshadowed and counted ("unshadowed").
+- **"Element"** means `sizeof *p` bytes for the parameter `p` the object arrives through (1 byte
+  for `void *` and incomplete pointees: "granularity unchecked"). Granularity is per element, so
+  reading a whole struct element is never a violation once the C reads any byte of it.
+- **"Window"** is the element-rounded hull of the C's traced accesses to that object during that
+  call, replaced by the whole object when a learned untraced access falls outside it (then the
+  check proves object-level containment for that (call, object), not element-level; such
+  objects are NAMED in the detail).
+- Accesses by the driver outside unit calls are always allowed. Memory reached only through a
+  pointer field of an object is outside the rule (B.9; a partial detector reports it).
+- A Rust access outside the rule faults and the check is red; nothing is excused. A reference or
+  `&[T; N]` created at the boundary may be read early by the optimizer on any path — such reds
+  are real (the C accepts the pointer without reading it).
 
-`ruharness_guard.h` (the driver includes it) declares one function and one macro:
+### B.3 The runtime (harness-owned C, `include_str!`; §B.R-1 integrity built in)
+
+`ruharness_guard.c` is compiled into every boundary build (with `-DRUHARNESS_MEASURE` in the
+measure build, where it references `__asan_locate_address`). The driver never sees it: the
+driver TU is compiled unmodified with `-D<sym>=ruharness_call_<sym>` for every unit symbol, so
+every call goes through the generated wrapper (B.6), which is the runtime's only client.
+
+| `RUHARNESS_GUARD` | Build | Behavior |
+|---|---|---|
+| `measure` | `bd_measure` | arguments pass through; the sancov callbacks record per-(call, object) byte hulls; the record is written to `$TMPDIR/ruharness-guard.out` at exit |
+| `learn-tail` / `learn-head` | `bd_c` | windows enforced; an in-call fault inside a shadow is recorded, the whole object opened, execution continues |
+| `tail` / `head` | `bd_c`, `bd_rs` | windows enforced; an in-call fault is recorded and the run ends with exit status 97 |
+
+`RUHARNESS_GUARD_WINDOWS` names the harness-written window table (a listed input; not secret —
+B.9).
+
+- **`ruharness_enter(sym, frame)`** starts call *n*. Measure: records `call n sym`. Tight/learn:
+  the table's call *n* must name `sym`, else `RH-DIVERGED call=n` and `_exit(97)`.
+- **`ruharness_arg(param, p, elem)`** returns the pointer the unit is given. Measure: locates
+  `p` (`__asan_locate_address`: kind ∈ {stack, heap, global}, `0 ≤ off ≤ size`, `size > 0`),
+  dedupes objects within the call by base address, records `arg n param obj:j:off_bytes` (or
+  `null` / `pass`), returns `p`. Tight/learn: the table's classification (null / pass / obj) must
+  match, else `RH-DIVERGED arg=n:param`; for an object, a fresh reservation `[gap][pages][gap]`
+  (`PROT_NONE`; `gap = clamp(size, 64 KiB, 1 MiB)`, page-rounded) is mapped, the object's bytes
+  copied in with the window's anchor (its end in tail layouts, its start in head layouts)
+  exactly on a page boundary — a page-aligned address ± a multiple of `elem` keeps alignment —
+  and only the window's pages opened; the shadow pointer `base' + off` is returned.
+- **`ruharness_ret(p)`** relocates a pointer-typed return value that points into a shadow
+  (`[base', base'+size]`) back to the original object.
+- **`ruharness_exit()`** ends the call: (1) integrity (below); (2) relocation — every
+  pointer-sized aligned word in every shadow that points into any shadow of this call is rewritten
+  to the original object (out-params such as `hex2bin`'s `hex_end_p`); (3) copy-back of every
+  shadow whose bytes changed (`memcmp`, so string literals and `const` globals work); (4) the
+  reservations stay mapped `PROT_NONE` for the rest of the run — no address is ever reused.
+- **Integrity (B.R-1), on every `exit` and once at normal end:** (1) **signal accounting** —
+  `getrusage(RUSAGE_SELF).ru_nsignals` is read at `enter`; every signal delivered during the
+  call must have been serviced by the runtime's own handler (a candidate that installs its own
+  handler through an unlisted route, survives its fault and restores everything before
+  returning still leaves the delivery count behind — reproduced: such a candidate is
+  `RH-TAMPER signal`); (2) `sigaction(SIGSEGV | SIGBUS, NULL, &cur)` must still name the
+  runtime's handler with its flags; (3) `task_get_exception_ports` and
+  `thread_get_exception_ports(EXC_MASK_BAD_ACCESS)` must equal what `init` recorded; (4) a
+  private `PROT_NONE` canary page, read under `sigsetjmp`, must reach the handler. Any
+  deviation: `RH-TAMPER <signal|handler|exception-port|canary>` and `_exit(97)`. What (1)–(4)
+  cannot see: a Mach exception port (no signal is generated) installed AND removed inside the
+  call — that route exists only through the `mach_msg` family, which the `signal` class
+  denies (B.8); the residual is disclosed in B.9.
+- **Fault handler** (`SA_SIGINFO | SA_ONSTACK`, static alternate stack): a fault inside a
+  reservation's range plus gap during a call → tight: `RH-FAULT call=n object=j byte=b` on stderr
+  (after a leading newline), `fault n j b` in the out file, `_exit(97)`; learn: `learn n j b`,
+  open the whole object, return. Outside every reservation, or outside a call: restore the default
+  disposition and return — the process dies by its own signal, exactly as without the runtime.
+  Never prints an address.
+- **Measure-mode tracing (`__sanitizer_cov_{load,store}{1,2,4,8,16}`):** inside a call, an
+  access inside a located object updates its (call, object) hull; an access in
+  `[frame, stack top)` outside every object is recorded once as `foreign n stack` (B.R-11); the
+  probe's store outside calls counts the canary (`probe 1`).
+- **Limits:** 65 536 calls, 16 objects per call, 16 MiB per object, 65 536 reservations per run
+  (they are never unmapped); a limit is `RH-ERROR <reason>` and `_exit(96)` — a red C-side
+  check ("not applicable"), never candidate evidence. A reentrant unit call is `RH-ERROR`.
+
+### B.4 The check, phase by phase
+
+Builds go into a fresh `build/<unit>/bd/`; the runtime, its header, the probe and the generated
+wrapper are written there and `-I<bd>` comes first. Every C compile passes `-ffp-contract=off`.
+
+| Build | Driver TU | Unit C | Runtime | Link |
+|---|---|---|---|---|
+| `bd_measure` | `-O0 -fsanitize=address`, renames | `-O1`, sancov (`-fsanitize-coverage=edge,trace-loads,trace-stores`) | `-DRUHARNESS_MEASURE`, probe instrumented | `-fsanitize=address` |
+| `bd_c` | `-O0`, renames | `-O0` | plain | plain |
+| `bd_rs` | `-O0`, renames | — (staticlib) | plain | plain |
+
+0. **Plain reference.** `driver.c` + unit C at `-O0`, run once: the expected streams.
+1. **Phase M: measure.** `bd_measure` in `measure` mode must exit 0 with streams equal to the
+   plain run's (else the unit is re-measured at `-O0`; if that differs too: red, C side). The out
+   file (B.5) is parsed strictly; `probe 1` required; every instrumented unit object must
+   reference `__sanitizer_cov_*` (`nm`). Windows = element-rounded hulls per (call, object).
+2. **Phase L: learn.** One `learn-tail` and one `learn-head` run of `bd_c` (exit 0 required).
+   Each learned `(n, j, byte)` outside the window widens that (call, object) to the whole object
+   and marks it widened. No repetition: for a deterministic C a second round finds nothing.
+3. **Phase C: confirm.** `bd_c` strictly in `tail`, then `head`: exit 0 and streams identical to
+   the plain run. This proves the windows cover every C access, traced or not. Failure: red,
+   `boundary driver invalid (C side): …` (B.R-5).
+4. **Phase R: judge.** `bd_rs` strictly in `tail`, then `head`, stopping at the first failing
+   layout. Each run must exit 0 with streams identical to the plain run. `fault n j b` → red with
+   the harness's own detail: the call, symbol and parameter, the object's size in elements, the
+   category (below the C's window / above it / the C does not touch it in that call) and the
+   window; a widened object is named as such. `RH-DIVERGED` / `RH-TAMPER` → red ("the Rust
+   changed the driver's control flow" / "the guard was tampered with"); any other exit or output
+   difference → the standard wording.
+
+**Where it sits in `verify`:** named `boundary`, last, after `sanitizers`, and only when every
+earlier check passed. Only for an opted-in unit; otherwise NO check entry and NO toolchain entry
+(a stated exception to the whole-program "not configured" precedent, so every other verdict stays
+byte-identical). When it ran, `inputs.toolchain` gains `boundary: sancov+guard-pages
+rt=<8 hex of blake3(runtime ‖ headers ‖ probe ‖ wrapper template)>`, placed before `observable`.
+Preconditions, checked before any build (each a red C-side detail, closed set): a fresh green
+driver validation; every interface line parses (B.6) and names a plan symbol; ≥ 1 data-pointer
+parameter; no `signal`/`mem` class in the unit's own C; no `no_sanitize` attribute or
+`#pragma clang attribute` in the unit's sources; macOS + clang (until the Linux sandbox).
+
+**Class and evidence (B.R-6):** RH-FAULT, RH-DIVERGED, RH-TAMPER and output differences are
+`oracle`; any other candidate crash or timeout is `crash-timeout`; harness details never contain
+"run failed" or "timed out". The repair explanation names the call, parameter and window and
+authorizes `ffi.rs` to test the C's own conditions before converting a pointer, or to pass an
+accessor closure into `logic` (B.R-13).
+
+### B.5 Harness-parsed files (strict, capped, numbers only)
+
+`$TMPDIR/ruharness-guard.out` (written by the runtime, read back before the temp dir is removed:
+regular file, no symlink, ≤ 16 MiB). Measure:
+`ruharness-guard 1 measure` · `probe <0|1>` · `call <n> <sym>` · `arg <n> <param>
+null|pass|obj:<j>:<off>` · `obj <n> <j> <size> <elem> <lo> <hi>` (byte hull; `0 0` = untouched)
+· `foreign <n> stack` · `end`. Learn: header, `learn <n> <j> <byte>`…, `end`. Tight: header,
+optional `diverged call|arg …`, `fault <n> <j> <byte>` or `tamper <what>`, or `end`. The window
+table the harness writes: `ruharness-windows 1 <calls> <layout>` · `call <n> <sym>` · `arg …` ·
+`obj <n> <j> <size> <elem> <lo> <hi>` (elements) · `end`. Ids dense and in order; every bound
+checked; names resolved from the harness's own interface parse. A malformed file is a red C-side
+check. (A hostile unit can weaken its own check, never cause a false red — B.9.)
+
+### B.6 The wrapper, generated from the interface lines
+
+Each plan `interface` line must parse (`harness_scan::parse_interface`) as one function
+declaration of a plan symbol with every parameter named and no attribute, preprocessor, brace,
+semicolon or variadic syntax — else the unit is not applicable (red C-side detail).
+Classification: a parameter with a pointer or array declarator that is not a function pointer is
+a data pointer; a parameter not classified syntactically is probed with the compiler
+(`-fsyntax-only`, the unit's headers): `_Static_assert(__builtin_classify_type(p) != 5, "")`
+failing ⇒ a typedef'd data pointer; then `(void)sizeof(char[sizeof *p])` compiling (under
+`-Werror=pointer-arith`) ⇒ `elem = sizeof *p`, else 1 ("granularity unchecked").
 
 ```c
-void *rh_in_at(int line, const void *src, size_t count, size_t elem_size);
-#define rh_in(src, count, elem_size) rh_in_at(__LINE__, (src), (count), (elem_size))
+#include <the unit's own headers, as its .c files spell them>
+#include "ruharness_guard_internal.h"
+<interface line, function renamed ruharness_call_<sym>>
+{
+    ruharness_enter(<i>, __builtin_frame_address(0));
+    __typeof__(<p>) rh_<p> = (__typeof__(<p>))ruharness_arg(<k>, (const void *)<p>, sizeof *<p> /* or 1 */);
+    …
+    <R> rh_ret = <sym>(<rh_ or plain args>);      /* void: no rh_ret */
+    rh_ret = (<R>)ruharness_ret((void *)rh_ret);    /* pointer returns only */
+    ruharness_exit();
+    return rh_ret;
+}
 ```
 
-- **What it returns:** a pointer to `count` elements of `elem_size` bytes, initialized from
-  `src` (zeros when `src` is NULL), valid until the process exits. It is never freed and
-  never NULL, even when `count` is 0.
-- **Limits:** at most 4096 allocations per run; each at most 16 MiB; at most 256 MiB in
-  total. A violation prints `RH-ERROR <reason>` on stderr and calls `_exit(96)`.
-- **Layout:** each allocation is its own reservation of `[guard page][elements][guard
-  page]`, placed so that either the window end (tail layout) or the window start (head
-  layout) falls exactly on a page boundary. Placement keeps `elem_size` alignment, because
-  a page-aligned address plus or minus a multiple of `elem_size` stays aligned (B.1-4).
+Symbol and parameter names are plain C identifiers by construction (the parse refuses others),
+so nothing else reaches a `-D` argument or the file. The renamed line is the interface line with
+its declarator identifier replaced (byte range from the parse), never re-emitted from parts.
 
-`ruharness_guard.c`, the runtime, is compiled without instrumentation and linked into every
-boundary build. Its mode comes from harness-set environment variables. (The confined run's
-environment is cleared; neither the driver nor a Rust candidate may read the environment,
-because of driver-shape and capabilities.)
+### B.7 Ledger, bench, replay
 
-| `RUHARNESS_GUARD` | Used by | Behavior |
-|---|---|---|
-| unset / `full` | validation runs | every allocation fully accessible; tail-flush at `count` |
-| `measure` | phase M | `full` + trace callbacks, counted only inside unit calls; writes `$TMPDIR/ruharness-guard.out` at exit |
-| `learn-tail` / `learn-head` | phase L (C only) | windows enforced; an in-call fault is recorded, the allocation opened for the rest of that call, execution continues |
-| `tail` / `head` | phases C and R | windows enforced; an in-call fault prints `RH-FAULT …` and `_exit(97)` |
+Nothing new is recorded per unit: the check is a function of `driver.c`, the unit source, the
+crate and the harness (its `rt=` digest). Opt-in is the plan key `[unit.oracle] boundary = true`
+(kind-owned, validated). `harness verify` runs it inside the ordinary verdict; a red demotes as
+any red does. **Calibration** (B.R-10): `harness bench boundary --suite DIR [--case NAME]…` runs
+phases 0–R for every verified unit that has a data-pointer parameter, writes NOTHING (no
+verdicts, no scores), and prints per unit: green / red (category, call, parameter) / not
+applicable (reason) / vacuous (every data-pointer object fully widened or unshadowed), plus
+widened objects, unshadowed arguments and a power figure per parameter (calls where the C leaves
+its object untouched or partially touched). The stratified calibration set and the eager-fixed-
+size-read stance are decided and recorded before the run. Turning the check on for a unit is a
+reviewed plan edit; a recorded green attempt that then goes red is handled by the existing
+judge-change transition (`migrate --retry` → `.rN`, or a new trial plus `superseded.jsonl` —
+B.R "refuted C1").
 
-`RUHARNESS_GUARD_WINDOWS` names the window table: a harness-written file, passed as a
-listed input.
+Bench: `bench check`'s recheck simply re-verifies (the check is part of `verify`); an opted-in
+unit whose verdict goes red is a PROBLEM (exit 10), never an abort. No `environment` entry, no
+schema change to `scores.json`.
 
-- **Wrapper.** The harness generates `ruharness_calls.c` from the unit's interface lines
-  (B.6). The boundary driver's translation unit is compiled with
-  `-D<sym>=ruharness_call_<sym>` for every unit symbol, so every call the driver makes goes
-  through a wrapper. The wrapper calls `ruharness_enter(sym)`, classifies each pointer
-  argument (`ruharness_arg`: NULL, inside allocation *a* at element *k*, or foreign), calls
-  the real symbol, then calls `ruharness_exit()`. The same wrapper object is linked into
-  the C-linked and the Rust-linked builds; only what it calls differs. Nothing in the unit's
-  C or the Rust crate changes.
-- **Enforcement (tight modes).**
-  - Outside calls, every allocation the driver touches is opened lazily. The fault handler
-    opens the whole allocation and returns, so the access retries.
-  - On `enter`, every open allocation is closed (`PROT_NONE`). Then only allocations the C
-    touched in this call are opened, each exposing exactly its window.
-  - On `exit`, they are closed again. The cost per call is proportional to the allocations
-    involved, not to all allocations.
-- **Fault handler.** It handles SIGSEGV and SIGBUS with `SA_SIGINFO|SA_ONSTACK` on a static
-  alternate stack. What it does depends on where the fault lands:
-  - **In a reservation, during a call:** it writes
-    `RH-FAULT call=<n> allocation=<a> element=<k> layout=<tail|head>` and `_exit(97)`
-    (strict), or records the fault (learn modes).
-  - **In a reservation, outside calls:** it opens the allocation and retries. If the fault
-    is outside `[0, count)`, it prints `RH-OVERRUN` and `_exit(97)`.
-  - **Anywhere else:** it restores the default disposition and returns, so the process dies
-    by its own signal, exactly as without the runtime.
-  - It prints no addresses, so evidence stays deterministic across ASLR.
-- **Diverged allocation sequence.** If, in a tight run, allocation *a*'s `count` or
-  `elem_size` differs from the table, the Rust has changed the driver's control flow. The
-  runtime prints `RH-DIVERGED allocation=<a>` once on stderr (so the stderr compare is red)
-  and gives every later allocation full access.
-- **Canary.** A harness-owned `ruharness_probe.c` is compiled with the coverage flags in
-  the measure build. In measure mode, `init` stores through it into a private page. If no
-  callback fires, the output says `probe 0`, and the harness reports "load/store tracing is
-  inactive in this toolchain" as a harness error.
+### B.8 Capabilities (B.R-8)
 
-### B.4 The check, phase by phase (in `verify` and in boundary validation)
-
-Builds go into a fresh `build/<unit>/bd/`. They are compiled at `-O0` with
-`-ffp-contract=off`. The boundary driver is **copied into `bd/`** next to the runtime
-header, and `-I<bd>` comes before every target include. This way a target file named
-`ruharness_guard.h` can never shadow the harness header (a quoted include searches the
-includer's directory first).
-
-| Build | Driver TU | Unit C | Plus |
-|---|---|---|---|
-| `bd_measure` | plain, `-D` renames | **instrumented** | wrapper, runtime, instrumented probe |
-| `bd_c` | plain, `-D` renames | plain | wrapper, runtime, probe |
-| `bd_rs` | plain, `-D` renames | — (staticlib) | wrapper, runtime, probe |
-
-1. **Phase M: measure.** Run `bd_measure` once in `measure` mode. It must exit 0. Its
-   output file is parsed strictly (B.5). The canary must be on. Every traced unit access
-   must fall inside `[0, count)` of its allocation; otherwise the C itself overruns the
-   driver's allocation, and the driver is invalid. The output gives:
-   - per allocation: its source line, `count`, `elem_size`, and the window `[lo, hi)`
-     (element-rounded union of traced in-call accesses);
-   - per call: the set `touched(call)` of allocations the C touched;
-   - per call and pointer argument: NULL, allocation and element, or foreign.
-2. **Phase L: learn** the C's untraced accesses (C only, at most 4 rounds per layout). Run
-   `bd_c` in `learn-tail`, then `learn-head`. For every recorded fault `(call c, allocation
-   a, element k)`:
-   - add `a` to `touched(c)`;
-   - if `k` is outside `a`'s window, widen the window to `[0, count)`;
-   - if `k` is outside `[0, count)`, the driver is invalid (the C overruns its allocation).
-
-   Repeat until a learn round records nothing. If that has not happened after 4 rounds,
-   the driver is invalid ("the C's untraced accesses do not converge").
-3. **Phase C: confirm.** Run `bd_c` strictly in `tail` and in `head`. Both must exit 0, and
-   both streams must be byte-identical to phase M. This proves the final windows cover
-   every C access, traced or not. The detail records how many allocations were widened.
-4. **Phase R: judge** (verify only). Run `bd_rs` strictly in `tail` and in `head`. Each run
-   must exit 0 with both streams byte-identical to phase C in the same layout.
-   - An `RH-FAULT` line makes the check red. The harness writes the detail from its own
-     measurement: which call and symbol, which parameter the allocation was passed as
-     (when it was passed directly), the allocation's source line, `count` × `elem_size`,
-     the element touched, and the C's window. For example: "the Rust touched element 0 of
-     `scfcod` in call 1 of read_scalefactors (boundary-driver.c line 43; 5 × 1 bytes); the
-     C touches none of it in that call".
-   - An `RH-DIVERGED` line makes the check red: the output differs.
-   - Any other crash, exit or output difference makes the check red, with the standard
-     wording (`candidate run failed …` / `outputs differ …`).
-
-**Where the check sits in `verify`.** It is named `boundary-driver` and comes last, after
-`sanitizers`, and runs **only when every earlier check passed**. Recorded red turns
-therefore keep their evidence and their class byte-for-byte (§R-3 of the replay design).
-
-- **No boundary driver** (no `units/<id>/boundary-driver.c`): `passed: true`, detail
-  `not configured for this unit`.
-- **Boundary driver present, but C-side phases M/L/C fail:** harness error (the driver's
-  fault, never candidate evidence). This follows the driver-shape precedent. Verify of such
-  a unit stops until the boundary driver is regenerated.
-- **Unsupported toolchain** (the probe build does not compile, or the canary is off): also
-  a harness error, never a silent pass. Revisit with the Linux sandbox.
-
-**Verdict inputs.**
-- `VerdictInputs.boundary_driver` is the digest of `boundary-driver.c`. It is `#[serde(default,
-  skip_serializing_if = "String::is_empty")]`, so every verdict without one stays
-  byte-identical.
-- When the check ran, the toolchain gains the entry `boundary: sancov+guard-pages`.
-
-### B.5 Harness-parsed files (strict, capped)
-
-- **`$TMPDIR/ruharness-guard.out`** (written by the runtime inside the confined run; read
-  back by a new `Confinement` method before the temp dir is removed; regular file only, no
-  symlink, ≤ 4 MiB). The format is line-based ASCII:
-  - `ruharness-guard 1`
-  - `probe <0|1>`
-  - `alloc <a> <line> <count> <elem> <lo> <hi>`
-  - `call <n> <sym>`
-  - `arg <n> <param> null|foreign|<a>:<k>`
-  - `touch <n> <a>`
-  - `end`
-
-  The harness checks every field: ids dense and in order, `lo ≤ hi ≤ count`,
-  `count × elem` within the limits, `sym`/`param` within the harness's own interface
-  parse. No target text ever appears in the file; names are resolved by the harness.
-  Anything malformed is a harness error (the file is written by harness code; a
-  hostile unit could scribble on it, which can only produce an error or a weaker check,
-  never a false red, because phase C re-proves every window).
-- **The window table** (`bd/windows-<layout>.txt`, written by the harness) has the same
-  line discipline: `ruharness-windows 1 <n>` then `alloc <a> <count> <elem> <lo> <hi>`
-  and `touch <n> <a>`.
-
-### B.6 The wrapper: generated from the interface lines
-
-- **Validation of each interface line (target-derived).** tree-sitter must parse it as
-  exactly one declaration whose declarator is a function declarator named exactly the
-  plan symbol. It may contain no `{`, `;`, `#` or newline, and every parameter must be
-  named and non-variadic. Otherwise `gen-driver --boundary` refuses the unit (unsupported
-  signature). This reuses harness-scan's grammar; no new crate.
-- **Parameter classification.** A *data pointer* is a parameter whose declarator contains a
-  pointer or array declarator, and is not a function pointer. Typedef'd pointer types are
-  not recognized; they are passed through and disclosed as unchecked.
-- **Generated text:**
-
-  ```c
-  #include <the unit's headers, as the unit's .c files include them>
-  #include "ruharness_guard_internal.h"
-  #define SYM ruharness_call_SYM
-  <interface line>
-  #undef SYM
-  { ruharness_enter(i); ruharness_arg(0, p0); … ; __typeof__(SYM(args)) r = SYM(args);
-    ruharness_exit(); return r; }        /* void: no r */
-  ```
-
-  Symbol names are checked against `^[A-Za-z_][A-Za-z0-9_]*$` before they reach a `-D`
-  argument or the file.
-
-### B.7 The boundary driver and its validation (a new stage)
-
-- **Stage `boundary-driver`.** `harness gen-driver <UNIT> --boundary [--provider] [--model]
-  [--promote] [--retry] [--attempt ID]`. The trajectory engine is the same as for
-  `gen-driver`. The attempts, traces and ids are all new:
-  - attempts go under `units/<id>/boundary-attempts/<b-id>/`, traces under
-    `units/<id>/boundary-traces/`;
-  - the id is `b-` + 12 hex of blake3(`boundary-driver` ‖ NUL ‖ unit ‖ NUL ‖ unit_source ‖
-    NUL ‖ driver ‖ NUL ‖ provider_kind ‖ NUL ‖ model ‖ NUL ‖ first request_key);
-  - `stage: "boundary-driver"`, and `driver` is the digest of the unit's validated `driver.c`
-    (the attempt is bound to it, because the prompt contains it).
-
-  Existing stages, ids and records are untouched.
-- **Preconditions:**
-  - the unit has a fresh green driver validation;
-  - every interface line passes B.6;
-  - at least one data-pointer parameter exists ("nothing to guard").
-- **Prompt:** its own system prompt and `[BOUNDARY CONTRACT]`.
-  - **Sections:** `[UNIT]`, `[ABI CONTRACT]`, `[POINTER PARAMETERS]` (the harness's B.6
-    classification, as nonce-fenced JSON lines), `[C SOURCE]`, `[VALIDATED DRIVER]` (the
-    unit's `driver.c` as an untrusted nonce-fenced JSON string: "start from its cases"),
-    `[GUARD API]` (the header text).
-  - **Rules:**
-    - every buffer and struct passed to a unit symbol, or reachable from one through a
-      pointer field, comes from `rh_in` with `elem_size` = `sizeof` the pointee;
-    - allocate at least what the C contract needs — the harness shrinks every allocation to
-      what the C touches;
-    - use malloc only for memory the unit frees or reallocates;
-    - make fresh allocations for every call;
-    - cover calls where the C touches part of an argument or none of it (zero counts, early
-      returns, flags that skip optional arguments, short reads);
-    - never read argv, the environment or files;
-    - print every observation (the driver contract's output rules).
-- **Emission.** The file `boundary-driver.c` (a new `FileSpec`); a promoted green candidate
-  becomes `units/<id>/boundary-driver.c`.
-- **Validation** (`validate_boundary_driver`, C only, `boundary-validation.json`, schema
-  `ruharness-boundary-validation` v1). It stops at the first failure:
-  1. **`boundary-build`:** the strict warning set on the driver TU (with the header, the
-     `-D` renames and the wrapper linked), and a link with the unit's C at `-O0`.
-  2. **`boundary-shape`:**
-     - the object defines only `main`;
-     - its undefined symbols ⊆ unit symbols ∪ the driver libc allowlist ∪ {`rh_in_at`};
-     - the lint variant passes (it allows exactly `#include "ruharness_guard.h"` besides the
-       unit's headers);
-     - `rh_in` is called at least once.
-  3. **`determinism`:** 3 runs in `full` mode; both streams identical; exit 0; the size and
-     time bounds of driver validation.
-  4. **`sanitizers`:** the ASan+UBSan C build in `full` mode is clean.
-  5. **`footprint`:** phases M, L and C of B.4. The detail gives the number of calls and
-     allocations, the elements the C touches out of the elements allocated, and how many
-     allocations were widened.
-  6. **`coverage`:** from phase M's argument records:
-     - no call passes a foreign pointer to a data-pointer parameter;
-     - every data-pointer parameter of every symbol that has one receives an allocation at
-       least once.
-
-  The record is green iff all checks pass. There is no mutation gate (the driver's job is
-  extent, and behavior is already gated by `driver.c`) and no `-O0`-vs-`-O2` gate (every
-  boundary build is `-O0`).
-- **Promotion** mirrors `driver.c`:
-  - the file is written atomically;
-  - it is re-validated in place;
-  - `boundary-validation.json` is stored only if that run is green;
-  - a human-written `boundary-driver.c` (no record) is never replaced;
-  - replacing a generated one needs `--promote`.
-
-### B.8 Ledger, bench, replay, capabilities
-
-- **Bench.**
-  - `CaseInputs` gains `boundary_driver` and `boundary_validation` digests (serde default,
-    omitted when empty). Every other case stays byte-identical. An opted-in case shows up
-    as "inputs changed", which deliberately forces a re-score.
-  - `CasePipeline` gains an informational `boundary`: `validated | stale | failed |
-    missing`.
-  - A case with a boundary driver counts as Verified only when the boundary validation is
-    fresh and green, and the verdict's `boundary_driver` equals the file's digest.
-  - The recheck re-validates the boundary driver.
-  - There is no `environment` entry. Following the stderr-fix precedent, a changed verdict
-    surfaces as an exit-10 PROBLEM rather than being masked as incomparable.
-- **Replay.**
-  - `bench check --replay` gains the stage `boundary-driver`, judged by
-    `validate_boundary_driver`.
-  - `superseded.jsonl` `stage` gains `boundary-driver`.
-  - `harness state status` staleness includes the digest.
-- **Capabilities hardening** (closes a hole that guard pages would otherwise open). The
-  candidate's own archive members may not reference `mmap munmap mprotect madvise
-  mach_vm_protect vm_protect mach_vm_allocate mach_vm_deallocate mach_vm_map vm_allocate
-  vm_deallocate sigaltstack`. These join the `os` class, whose C-side allowance works as
-  for the other classes.
-- **Opting in, and the migration.** A unit opts in by having a promoted boundary driver.
-  - Its recorded green migrate attempts are then re-judged by the new check. For
-    read_scalefactors this is a tightening (green → red), recorded in `superseded.jsonl`
-    after the unit is re-migrated and the new crate promoted. The scored artifact itself
-    can never be superseded.
-  - Recorded red turns are unchanged, because the check runs only when all earlier checks
-    pass.
+`mem` class (memory mapping/protection and Mach VM entry points), never implied by
+fs/process/net; `signal` class — fault interception: `sigaction signal sigaltstack sigprocmask
+pthread_sigmask sigset sigvec bsd_signal __sigaction`, the exception-port setters
+(`task_set_exception_ports thread_set_exception_ports task_swap_exception_ports
+thread_swap_exception_ports`), raw Mach messaging (`mach_msg mach_msg_overwrite mach_msg2
+mach_msg_trap mach_msg2_trap`), port and thread creation (`mach_port_allocate
+mach_port_insert_right mach_port_construct thread_create thread_create_running
+thread_set_state thread_resume`) and the `_kernelrpc_*` traps — split out of `process`.
+Verified against the 191 recorded candidate crates: none references any of these names. An opted-in unit's candidate is never granted `mem`
+or `signal`; references to `rh_*`, `ruharness_*` or `__sanitizer_cov_*` are always rejected.
+These are policy and defense in depth; the soundness claim is B.R-1's integrity check.
 
 ### B.9 What the check does not prove (disclosed)
 
-- **Slice creation without access.** A slice longer than the C's window is UB in Rust even
-  when it is never read, and nothing on stable can see it. The translator hint (B.10)
-  targets it.
-- **Memory outside `rh_in`.** Memory the driver did not allocate with `rh_in` is not
-  checked, nor is anything reached only through typedef'd pointer parameters.
-- **Widened allocations.** Where the C touches an allocation through untraced code
-  (memcpy, struct copies), that allocation's window is its whole extent. This is counted
-  and disclosed per check.
-- **Driver coverage.** An input the boundary driver never exercises is not tested, the same
-  limit every driver has.
-- **Unsupported programs.** Threads, a unit that installs its own SIGSEGV/SIGBUS handler,
-  and variadic or unnamed-parameter interfaces are refused or unsupported.
-- **Platform.** macOS arm64 with clang only, until the Linux sandbox. The runtime already
-  handles SIGSEGV and 4 KiB pages.
+- **Slice creation without access** is invisible on stable Rust; the boundary is judged by
+  accesses (including the optimizer's early reads of boundary references).
+- **Memory reached only through a pointer field** of an object (`bs->buf`): unchecked; the
+  measure-mode driver-stack detector reports "reached through a pointer field: unchecked" when
+  the C reads the driver's stack through one. Revisit trigger: a model-written additive driver
+  that shadows nested buffers (the original B.7/B.8, git history 67a8cea), IF calibration shows
+  this gap matters in practice (user decision 2026-09-23).
+- **Unshadowed arguments** (string literals, unit-owned memory, pointers ASan cannot place) and
+  **widened objects** (reached through untraced code: `memcpy`, struct copies, libc): only
+  object-level containment; both named per check. A unit whose data-pointer objects are all
+  unshadowed or widened is "vacuous" and not counted as boundary-checked.
+- **Threat model.** The unit's C is the reference by construction: it runs inside the measuring
+  process and can weaken its own check (touch everything, forge the record, fork a writer)
+  exactly as it can fail its own vectors under §A; no transport change closes that. Against a
+  test-aware candidate the guarantee is B.R-1's tamper detection (signal accounting, handler,
+  exception ports, canary), not the capability classes; windows are not secret. Residual: a
+  candidate that reaches an exception-port setter through a route no class lists, and removes
+  the port before returning, is not detected — the known routes (`mach_msg` and the traps) are
+  denied lexically, and inline assembly is banned. Syscalls on closed pages return `EFAULT` rather than faulting: units
+  whose C passes caller buffers to `read`/`write`/`recv`-family calls are not applicable.
+- **Unsupported:** threads, a unit installing its own SIGSEGV/SIGBUS handler, reentrant unit
+  calls (callbacks into unit symbols), variadic or unnamed-parameter interfaces, non-macOS
+  (until the Linux sandbox: SIGSEGV, 4 KiB pages, gcc without sancov).
 
-### B.10 Translator hint (a separate, later commit; an ordinary prompt edit)
+### B.10 Translator hint — deferred (B.R-13)
 
-For units whose interface has a data-pointer parameter only (the conditional-section
-precedent of `[STDOUT]`, so no other unit's prompt changes), the translate prompt gains a
-pinned `[POINTERS]` section. It explicitly amends STRUCTURE's "ffi.rs holds only …
-pointer-to-slice conversion" rule:
+The check ships with the repair explanation of B.4 only. `read_scalefactors` is re-migrated on
+the unhinted prompt. A proactive `[POINTERS]` section is added — as its own commit with its
+fixture diff — only if calibration re-migrations show repair failing within budget.
 
-- treat every pointer argument as pointing to exactly as much memory as the C accesses on
-  that call, since callers may size buffers that tightly;
-- never build a slice longer than the C provably accesses on that call (a length computed
-  from a field — a bit limit, a capacity — is not the caller's allocation);
-- convert a pointer to a reference or slice only on the paths where the C dereferences it;
-- when how far the C reads depends on the data, pass the logic function a closure
-  (`impl Fn(usize) -> T`) that does the raw read at exactly the index the C reads. This
-  keeps ONE call into logic, and logic.rs stays safe.
+### B.11 Rollout and calibration (B.R-10)
 
-The repair explanation for a red `boundary-driver` check says the same. The hint lands in
-its own commit with its fixture diff, after the check, and each commit gets its own
-`bench check --replay` gate.
-
-### B.11 Rollout and calibration
-
-There is no prior art to calibrate the false-red rate against (DECISIONS.md, spike Q5).
-
-- **First:** read_scalefactors. Its boundary driver must turn its verdict red. Then
-  re-migrate it through the audited hand-off (a new trial under the hinted prompt),
-  supersede the old green attempt, and re-baseline.
-- **Proposed calibration set:** all 14 verified pointer-taking units of the released-hidden
-  split (read_scalefactors included). Each red is diagnosed by hand, as a real extent
-  divergence or a false red. A false red is a design finding, fixed in the rule, not
-  excused.
-- **The full rollout** (56 verified pointer units) is a follow-up, decided on the
-  calibration numbers and recorded with its trigger.
+Step 0: `bench score --write` at HEAD before any B oracle code (the six pre-existing
+`pipeline.migrate_outcome` drifts). Then: the four `read_scalefactors` Rust variants as oracle
+regression fixtures (verified → red at `scfcod`; scfcod-lazy → red at `bs`; fully lazy → green;
+`buf` over-read → red). Then `bench boundary` over the stratified set (14 hidden pointer units +
+the public organic units whose verified `ffi.rs` builds a fixed-length or field-derived slice),
+splits reported separately; every red diagnosed by hand — a false red is a rule finding, fixed in
+the rule, never excused. Then opt in `read_scalefactors`, re-migrate it through the audited
+hand-off, supersede the old green attempt, re-baseline. The remaining pointer units are opted in
+on the calibration numbers, recorded with their trigger.
 
 ### B.12 Not doing
 
-- Model-sized guarded buffers (the draft): the model cannot know N, and here the harness
-  measures it.
-- Rust-side sancov: it misses memcpy and relies on LLVM-internal flags.
-- libc interceptors for precision: phase L makes them unnecessary for soundness; revisit if
-  widening proves common.
-- Interposing `malloc`: it is not the caller's memory.
-- Per-call windows placed separately per call: an allocation has one address.
-- An `environment` entry.
-- A new crate.
+The model-written boundary driver (revisit trigger in B.9). Rust-side sancov. libc interceptors
+(widening is named; trigger in B.13). Interposing `malloc`. Keeping windows secret. A tightness
+gate. An `environment` entry. A new crate.
 
 ### B.13 Revisit when
 
-- Widening proves frequent (then add interceptors for `mem*`/`str*`).
-- The Linux sandbox lands (runtime selection, gcc lacks trace-loads).
-- LLVM's speculative loads (`llvm.speculative.load`, PR #179642) reach Apple clang or
-  rustc. The runtime's guard would then see legal over-reads.
-- Calibration finds a false-red class.
+- Calibration shows the nested-pointer-field gap matters (→ the additive model-written driver).
+- Widening exceeds 25 % of any data-pointer parameter's bytes across the calibration set (→
+  `mem*`/`str*` interceptors in the measure build).
+- The Linux sandbox lands (signal, page size, gcc).
+- LLVM's speculative loads (`llvm.speculative.load`) reach Apple clang or rustc.
 
 ### B.R — Adversarial design review (4 lenses, 20 verified findings) — AUTHORITATIVE where it amends §B
 

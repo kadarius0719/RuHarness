@@ -927,7 +927,7 @@ The last row is the point of the change: both prompt edits touched every prompt,
 every recorded attempt still re-judges to its record. Under the old engine the same
 edits would have left zero replayable attempts.
 
-## 2026-09-23 — Design B: research re-check, design, adversarial review; DECISION PENDING (user)
+## 2026-09-23 — Design B: research re-check, design, adversarial review; DECIDED (user): mechanical
 
 **Baseline at session start (zero tokens):** tree clean and green (424 tests); `bench check
 --replay --jobs 6` → `198 reproduce (0 conformant, 198 drifted), 1 expected divergence(s), 0
@@ -1000,3 +1000,73 @@ checked), the wrapper + compiler classifier probe, verify integration (check las
 failure, omitted when not configured), the four fixtures; adversarial code review; calibration
 run over the stratified set (zero tokens under B.R-2); re-migrate `read_scalefactors` on the
 unhinted prompt through the audited hand-off; supersede its old green attempt; re-baseline.
+
+**DECIDED (user, 2026-09-23): "Mechanical now, model-written later if calibration shows it's
+needed."** §B.R-2's mechanism is the always-on baseline; a model-written additive boundary driver
+(the original §B.7/§B.8, kept in git history at 67a8cea) becomes a §B.13 revisit trigger: adopt
+it only if calibration shows the nested-pointer-field gap (§B.R-11) matters in practice. §B's body
+is being revised to the decided mechanism; step 0 of the gates (`bench score --write` at HEAD)
+runs first.
+
+**Runtime v3 validated before the Rust port (2026-09-23).** The mechanical runtime, run through
+a scratch orchestrator implementing §B.4 on three real cases under a run-like sandbox profile:
+`read_scalefactors` — verified Rust RED at `bs` in call 1 ("the C does not touch it in that
+call"), scfcod-lazy RED at `bs`, fully lazy GREEN, the `bs->buf` over-read GREEN with the
+driver-stack detector firing (the disclosed pointer-field limit, correctly surfaced);
+`hex2bin` (pointer out-param, 31 string-literal pass-throughs) — C byte-identical in both
+layouts, verified Rust GREEN; `006_static_alias` (pointer return, two symbols) — GREEN. Tamper
+experiments: macOS maintains `ru_nsignals` (3 handled faults → 0→3), and a candidate that
+installs its own handler, survives its over-read and restores the handler before returning is
+GREEN under the after-call checks alone and `RH-TAMPER signal` with signal accounting — added
+to §B.R-1 as check (1). The new `signal`-class names occur in none of the 191 recorded crates.
+
+## 2026-09-23 — Design B implemented (mechanical, §B.R-2); gates green; calibration next
+
+**What landed** (every workspace gate green: fmt, clippy `-D warnings`, 443 tests):
+- `harness-oracle/src/boundary/`: the runtime (`ruharness_guard.c`, its header, the
+  probe) — per-call copy-in shadows located by ASan in the measure build, tail/head
+  layouts, learn mode, pointer relocation on exit, no address reuse, and the §B.R-1
+  integrity checks (signal accounting, handler, exception ports, canary).
+- `harness-oracle/src/boundary.rs`: the pure half — strict parsers of the run records,
+  windows and learning, the window table, the generated call wrapper and the compiler
+  classification probes (baseline / is-pointer / pointee-complete), the runtime digest.
+- `harness-oracle/src/boundary_run.rs`: phases 0/M/L/C/R and the `boundary` check; every
+  C-side outcome a failed check with the shared lead-in
+  (`harness_core::verdict::BOUNDARY_C_SIDE_LEAD_IN`), never an `Err`.
+- `verify`: the check runs last, only for `[unit.oracle] boundary = true`, only when every
+  earlier check passed; the toolchain entry `boundary: sancov+guard-pages rt=<8 hex>`.
+  `CAbiDifferential::boundary_only` is the calibration entry point; `harness bench
+  boundary` loops a suite with it, writing nothing.
+- `capabilities`: `mem` and `signal` classes; an opted-in unit's candidate never gets
+  either; `ruharness_*`/`__sanitizer_cov_*` references are always red (tests).
+- `harness-scan`: `parse_interface` exposes the declarator span, pointer returns and
+  function-pointer parameters. `confine.rs`: `Extras` (harness-set `RUHARNESS_*` variables,
+  strict read-back of one temp-dir file; test).
+- The migrate judge: a C-side `boundary` failure is a harness error like a red
+  `driver-shape`; a candidate-caused red gets `BOUNDARY_EXPLANATION` (class `oracle`) with
+  its fixture `migrate-repair-boundary.txt` and the guard entry — a prompt edit confined to
+  a new failure branch; no existing fixture changed.
+- Tests: `harness-oracle/tests/boundary.rs` — a synthetic unit shaped like the blind spot
+  (a struct read only on some path, a buffer read up to `n`, a pointer return the driver
+  dereferences): no entry when not opted in (byte-identity), green for a faithful
+  candidate (16 calls, 40 objects, 17 untouched, 16 partial, relocation proven by the
+  dereferenced return), red for an object the C never touches and for a read past the
+  window with the harness's wording, a candidate that alters fault delivery caught by
+  `capabilities` first and by the runtime (`RH-TAMPER handler`) through the calibration
+  entry point, the C-side lead-in when an interface line names a type the headers do not
+  declare, and the gate (a red `symbol-set` → no `boundary` entry).
+- Contracts: docs/SCHEMAS.md "The boundary check"; README.
+
+**Verified through the CLI on the corpus before the tests were written:**
+`read_scalefactors` red ("in call 1 of read_scalefactors, the Rust touched the object
+passed as `bs` (1 x 16 bytes) the C does not touch it in that call"); `hex2bin` green (57
+calls, 114 objects, 31 literals unshadowed); `collided` not applicable — its helper
+symbols' types live only in `lib.c` (the driver redeclares them), which the harness cannot
+know: the baseline probe reports it honestly. That probe exists because the first version
+took ANY compile failure of the is-pointer probe as "pointer" and produced a nonsense
+wrapper for a by-value struct.
+
+**Next:** the calibration run (`bench boundary` over the suite, zero tokens) →
+adversarial code review → fix pass → opt in `read_scalefactors`, re-migrate it on the
+unhinted prompt through the audited hand-off, supersede its old green attempt, re-baseline.
+

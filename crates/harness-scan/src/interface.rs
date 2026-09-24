@@ -21,6 +21,8 @@ pub struct InterfaceParam {
     /// True for a pointer or array parameter that is not a function pointer:
     /// the parameters whose pointees the boundary check guards.
     pub data_pointer: bool,
+    /// True for a function-pointer parameter (never guarded, never probed).
+    pub function_pointer: bool,
 }
 
 /// A parsed interface line.
@@ -32,6 +34,12 @@ pub struct InterfaceSig {
     pub params: Vec<InterfaceParam>,
     /// True when the declared return type is exactly `void`.
     pub returns_void: bool,
+    /// True when the function returns a pointer (a pointer declarator wraps
+    /// the function declarator).
+    pub returns_pointer: bool,
+    /// Byte range of the declarator's identifier within the line — the one
+    /// token a renaming replaces.
+    pub name_span: (usize, usize),
 }
 
 /// True iff `name` is a plain C identifier (`^[A-Za-z_][A-Za-z0-9_]*$`).
@@ -118,6 +126,10 @@ pub fn parse_interface(line: &str) -> Result<InterfaceSig, String> {
     if name_node.kind() != "identifier" || !is_c_identifier(symbol) {
         return Err("the declared function name is not a plain C identifier".into());
     }
+    let name_span = (name_node.start_byte(), name_node.end_byte());
+    if name_span.1 > line.len() || &line[name_span.0..name_span.1] != symbol {
+        return Err("the declared function name could not be located in the line".into());
+    }
     let type_text = decl
         .child_by_field_name("type")
         .map(|t| text(t, src))
@@ -150,23 +162,29 @@ pub fn parse_interface(line: &str) -> Result<InterfaceSig, String> {
             }
             return Err("every parameter must be named".into());
         };
-        let (name, data_pointer) = param_shape(pdecl, src)?;
+        let (name, data_pointer, function_pointer) = param_shape(pdecl, src)?;
         if params.iter().any(|p: &InterfaceParam| p.name == name) {
             return Err("two parameters share a name".into());
         }
-        params.push(InterfaceParam { name, data_pointer });
+        params.push(InterfaceParam {
+            name,
+            data_pointer,
+            function_pointer,
+        });
     }
     Ok(InterfaceSig {
         symbol: symbol.to_string(),
         params,
         returns_void,
+        returns_pointer: pointer_return,
+        name_span,
     })
 }
 
-/// A parameter declarator's name and whether it declares a data pointer:
-/// any pointer or array declarator on the way to the name makes it one,
-/// unless a function declarator appears (a function pointer).
-fn param_shape(node: tree_sitter::Node, src: &[u8]) -> Result<(String, bool), String> {
+/// A parameter declarator's name, whether it declares a data pointer (any
+/// pointer or array declarator on the way to the name, unless a function
+/// declarator appears) and whether it declares a function pointer.
+fn param_shape(node: tree_sitter::Node, src: &[u8]) -> Result<(String, bool, bool), String> {
     let mut node = node;
     let mut pointer = false;
     let mut function = false;
@@ -177,7 +195,7 @@ fn param_shape(node: tree_sitter::Node, src: &[u8]) -> Result<(String, bool), St
                 if !is_c_identifier(&name) {
                     return Err("a parameter name is not a plain C identifier".into());
                 }
-                return Ok((name, pointer && !function));
+                return Ok((name, pointer && !function, function));
             }
             "pointer_declarator" | "array_declarator" => {
                 pointer = true;
@@ -260,6 +278,14 @@ mod tests {
         );
         let sig = parse_interface("char *bin2hex(char *hex, size_t n)").unwrap();
         assert!(!sig.returns_void && sig.symbol == "bin2hex");
+        assert!(sig.returns_pointer);
+        assert_eq!(sig.name_span, (6, 13));
+        let sig = parse_interface("void printLine (const char * line)").unwrap();
+        assert!(!sig.returns_pointer);
+        assert_eq!(
+            &"void printLine (const char * line)"[sig.name_span.0..sig.name_span.1],
+            "printLine"
+        );
         let sig = parse_interface("int* static_alias(int *outer)").unwrap();
         assert!(!sig.returns_void);
         let sig = parse_interface("void good()").unwrap();

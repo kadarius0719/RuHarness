@@ -11,6 +11,11 @@ pub const VERDICT_SCHEMA_VERSION: u64 = 1;
 /// Value of the `schema` envelope field.
 pub const VERDICT_SCHEMA_NAME: &str = "ruharness-verdict";
 
+/// Lead-in of a failed `boundary` check's detail when the C side — the
+/// driver, the unit's C, its interface lines or the toolchain — could not be
+/// measured (docs/ORACLE-HARDENING.md §B.R-5): never candidate evidence.
+pub const BOUNDARY_C_SIDE_LEAD_IN: &str = "boundary driver invalid (C side): ";
+
 /// One oracle check's outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Check {

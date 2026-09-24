@@ -137,8 +137,6 @@ const CLASSES: &[Class] = &[
             "raise",
             "ptrace",
             "getppid",
-            "sigaction",
-            "signal",
             "pthread_kill",
             "_exit",
             "_Exit",
@@ -190,6 +188,41 @@ const CLASSES: &[Class] = &[
         std_module: None,
         libc: &["syscall"],
     },
+    // Fault interception (design B, docs/ORACLE-HARDENING.md §B.8): signal
+    // dispositions, Mach exception ports and the raw messaging/thread
+    // primitives that reach them. Split out of `process` so a boundary-checked
+    // unit's candidate can be refused this class whatever its C uses.
+    Class {
+        name: "signal",
+        std_module: None,
+        libc: &[
+            "sigaction",
+            "__sigaction",
+            "signal",
+            "bsd_signal",
+            "sigvec",
+            "sigset",
+            "sigaltstack",
+            "sigprocmask",
+            "pthread_sigmask",
+            "task_set_exception_ports",
+            "thread_set_exception_ports",
+            "task_swap_exception_ports",
+            "thread_swap_exception_ports",
+            "mach_msg",
+            "mach_msg_overwrite",
+            "mach_msg2",
+            "mach_msg_trap",
+            "mach_msg2_trap",
+            "mach_port_allocate",
+            "mach_port_insert_right",
+            "mach_port_construct",
+            "thread_create",
+            "thread_create_running",
+            "thread_set_state",
+            "thread_resume",
+        ],
+    },
     // Mapping and protecting memory (design B, docs/ORACLE-HARDENING.md
     // §B.8): the boundary check's guard pages prove nothing if the candidate
     // can re-protect them. Its own class, not `os`, which fs/process/net
@@ -228,7 +261,10 @@ const THREAD_LOCAL_MODULE: &str = "6thread5local";
 
 /// The capability classes the C unit itself uses: its files' unresolved
 /// call refs mapped through [`CLASSES`]. Using any of fs/process/net also
-/// admits `os` (the `std::os::unix::…` extension traits those need).
+/// admits `os` (the `std::os::unix::…` extension traits those need). A unit
+/// opted into the boundary check (`[unit.oracle] boundary = true`) is never
+/// granted `mem` or `signal`, whatever its C uses: the guard pages and the
+/// runtime's fault handler are the check (docs/ORACLE-HARDENING.md §B.8).
 pub(crate) fn unit_classes(facts: &Facts, unit: &Unit) -> BTreeSet<&'static str> {
     let mut out = BTreeSet::new();
     for r in facts
@@ -243,7 +279,23 @@ pub(crate) fn unit_classes(facts: &Facts, unit: &Unit) -> BTreeSet<&'static str>
     if ["fs", "process", "net"].iter().any(|c| out.contains(c)) {
         out.insert("os");
     }
+    if unit.oracle_param_bool("boundary") == Some(true) {
+        out.remove("mem");
+        out.remove("signal");
+    }
     out
+}
+
+/// The `_kernelrpc_*` Mach traps and the `*_trap` entry points reach the
+/// kernel without the named stubs: they are `signal`-class for every candidate.
+fn is_mach_trap(name: &str) -> bool {
+    name.starts_with("_kernelrpc_") || (name.starts_with("mach_") && name.ends_with("_trap"))
+}
+
+/// The boundary runtime's own entry points and the coverage callbacks
+/// (docs/ORACLE-HARDENING.md §B.8): no candidate may reference them.
+fn is_runtime_name(name: &str) -> bool {
+    name.starts_with("ruharness_") || name.starts_with("__sanitizer_cov_")
 }
 
 /// The class of a libc name (after stripping a `$…` variant suffix).
@@ -472,7 +524,13 @@ pub(crate) fn capabilities_check(
         }
         own_members.insert(member.clone());
         let name = normalize(raw, macos);
-        let class = std_class(name).or_else(|| libc_class(name));
+        if is_runtime_name(name) {
+            offending.insert(name.to_string(), "boundary-runtime");
+            continue;
+        }
+        let class = std_class(name)
+            .or_else(|| libc_class(name))
+            .or_else(|| is_mach_trap(name).then_some("signal"));
         if let Some(class) = class {
             if !allowed.contains(class) {
                 offending.insert(name.to_string(), class);
@@ -811,6 +869,57 @@ mod tests {
         let mem_ok: BTreeSet<&'static str> = ["mem"].into_iter().collect();
         let check = capabilities_check(bench.runner(), &lib, &dir, &mem_ok).expect("runs");
         assert!(check.passed, "{}", check.detail);
+    }
+
+    /// Design B §B.8: the runtime's entry points and the coverage callbacks
+    /// are never a candidate's to reference, and a boundary-checked unit's
+    /// candidate is never granted `mem` or `signal` even when its C uses them.
+    #[test]
+    fn runtime_names_are_always_red_and_boundary_units_never_get_signal() {
+        let bench = ToolBench::new("caps-rt");
+        let ffi = "extern \"C\" {\n    fn ruharness_exit();\n}\n\
+                   #[no_mangle]\npub extern \"C\" fn unit_add(a: i32, b: i32) -> i32 {\n    \
+                   unsafe { ruharness_exit() };\n    crate::logic::add(a, b)\n}\n";
+        let dir = candidate(
+            &bench,
+            "rt_rs",
+            "pub fn add(a: i32, b: i32) -> i32 {\n    a.wrapping_add(b)\n}\n",
+            ffi,
+        );
+        let lib = bench.build(&dir);
+        let all: BTreeSet<&'static str> = CLASSES.iter().map(|c| c.name).collect();
+        let check = capabilities_check(bench.runner(), &lib, &dir, &all).expect("runs");
+        assert!(!check.passed, "{}", check.detail);
+        assert!(
+            check.detail.contains("ruharness_exit (boundary-runtime)"),
+            "{}",
+            check.detail
+        );
+
+        let facts = Facts {
+            frontend: "t".into(),
+            refs: vec![harness_core::facts::RefRecord {
+                file: "u.c".into(),
+                from: "f".into(),
+                to: "sigaction".into(),
+                resolved: false,
+                refkind: "call".into(),
+            }],
+            ..Facts::default()
+        };
+        let plain: Unit = toml::from_str(
+            "id = \"u\"\nstatus = \"pending\"\nfiles = [\"u.c\"]\nsymbols = [\"f\"]\n",
+        )
+        .expect("unit");
+        assert!(unit_classes(&facts, &plain).contains("signal"));
+        let opted: Unit = toml::from_str(
+            "id = \"u\"\nstatus = \"pending\"\nfiles = [\"u.c\"]\nsymbols = [\"f\"]\n\
+             [oracle]\nkind = \"c-abi-differential\"\nboundary = true\n",
+        )
+        .expect("unit");
+        assert!(!unit_classes(&facts, &opted).contains("signal"));
+        assert!(is_mach_trap("_kernelrpc_mach_vm_protect_trap") && is_mach_trap("mach_msg2_trap"));
+        assert!(!is_mach_trap("mach_absolute_time"));
     }
 
     #[test]

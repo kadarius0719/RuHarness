@@ -321,6 +321,8 @@ corpus), `bench verify-corpus`, `bench init` (every case becomes a harness targe
 `bench status` (per-case pipeline progress), `bench score [--case …] [--write]`
 (scores oracle-verified Rust on the corpus's held-out vectors with the corpus's own
 runners, sandboxed; `--write` re-verifies everything first and records `scores.json`),
+`bench boundary [--case …]` (design B calibration: the boundary check alone on every
+verified unit, written nowhere — docs/ORACLE-HARDENING.md §B.7),
 and `bench check [--replay]` (the regression suite: re-verify, re-validate, re-score,
 compare per vector — exit 10 on a regression). `--replay` also re-judges every recorded
 model trajectory from its stored evidence (zero tokens): prompt edits do not break it —

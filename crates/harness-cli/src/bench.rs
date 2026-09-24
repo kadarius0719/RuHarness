@@ -15,6 +15,7 @@ use harness_core::driver::DriverValidation;
 use harness_core::ledger::Ledger;
 use harness_core::plan as plan_mod;
 use harness_core::traits::OracleStrategy;
+use harness_core::verdict::BOUNDARY_C_SIDE_LEAD_IN;
 use harness_core::UnitStatus;
 use harness_core::{attempts, hash, Facts, Plan, TargetContext};
 use harness_oracle::bench::{CSide, Scorer};
@@ -97,6 +98,21 @@ pub enum BenchCmd {
         #[arg(long)]
         jobs: Option<usize>,
     },
+    /// Calibration for the boundary check (design B): run ONLY that check on
+    /// every verified case (or the named ones), write nothing, print each
+    /// outcome and the totals
+    Boundary {
+        /// Suite dir (contains suite.toml)
+        #[arg(long, default_value = ".")]
+        suite: PathBuf,
+        /// Only these cases (upstream path or case dir name); repeatable
+        #[arg(long = "case")]
+        cases: Vec<String>,
+        /// Run model-written and third-party code even though no sandbox is
+        /// available
+        #[arg(long)]
+        allow_unsandboxed: bool,
+    },
 }
 
 pub fn run(cmd: BenchCmd) -> Result<ExitCode> {
@@ -127,7 +143,79 @@ pub fn run(cmd: BenchCmd) -> Result<ExitCode> {
             crate::require_sandbox(allow_unsandboxed, "harness bench check")?;
             cmd_check(&suite, replay, default_jobs(jobs))
         }
+        BenchCmd::Boundary {
+            suite,
+            cases,
+            allow_unsandboxed,
+        } => {
+            crate::require_sandbox(allow_unsandboxed, "harness bench boundary")?;
+            cmd_boundary(&suite, &cases)
+        }
     }
+}
+
+/// `bench boundary`: the calibration entry point of docs/ORACLE-HARDENING.md
+/// §B.7 — the boundary check alone, on every verified unit of the selected
+/// cases, whether or not the unit opted in; nothing is written. Outcomes:
+/// GREEN, RED (the candidate's), N/A (a C-side detail: the driver, the
+/// interface lines or the toolchain), skipped (no target or not verified).
+fn cmd_boundary(suite_dir: &Path, only: &[String]) -> Result<ExitCode> {
+    let suite = harness_core::bench::Suite::load(&suite_dir.join("suite.toml"))?;
+    let selected: Vec<&SuiteCase> = suite
+        .cases
+        .iter()
+        .filter(|case| only.is_empty() || only.iter().any(|o| *o == case.path || o == case.name()))
+        .collect();
+    let (mut green, mut red, mut not_applicable, mut skipped, mut errors) = (0usize, 0, 0, 0, 0);
+    for case in selected {
+        let tag = format!("bench boundary: {} [{}]", case.path, case.split);
+        let root = case.target_root(suite_dir).canonicalize()?;
+        if !root.join("harness.toml").exists() || !Ledger::new(&root).plan_path().exists() {
+            skipped += 1;
+            out(format!("{tag} skipped (no target)"));
+            continue;
+        }
+        let ctx = TargetContext::load(&root)?;
+        let ledger = Ledger::new(&ctx.root);
+        let plan = Plan::load(&ledger.plan_path())?;
+        let Some(unit) = plan.units.iter().find(|u| u.symbols.contains(&case.symbol)) else {
+            skipped += 1;
+            out(format!("{tag} skipped (no unit)"));
+            continue;
+        };
+        if !matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged) {
+            skipped += 1;
+            out(format!("{tag} skipped (not verified)"));
+            continue;
+        }
+        match harness_oracle::CAbiDifferential.boundary_only(&ctx, unit) {
+            Ok(check) if check.passed => {
+                green += 1;
+                out(format!("{tag} GREEN — {}", check.detail));
+            }
+            Ok(check) if check.detail.starts_with(BOUNDARY_C_SIDE_LEAD_IN) => {
+                not_applicable += 1;
+                out(format!("{tag} N/A — {}", check.detail));
+            }
+            Ok(check) => {
+                red += 1;
+                out(format!("{tag} RED — {}", check.detail));
+            }
+            Err(e) => {
+                errors += 1;
+                out(format!("{tag} ERROR — {e}"));
+            }
+        }
+    }
+    out(format!(
+        "bench boundary: {green} green, {red} red, {not_applicable} not applicable, {skipped} \
+         skipped, {errors} error(s)"
+    ));
+    Ok(if errors > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 /// `--jobs`, defaulting to half the available cores (at least 1).

@@ -68,6 +68,8 @@
 #![deny(missing_docs)]
 
 pub mod bench;
+mod boundary;
+mod boundary_run;
 mod capabilities;
 mod confine;
 mod exec;
@@ -501,14 +503,24 @@ impl CAbiDifferential {
         // freshly generated Cargo.lock is part of the rust_crate digest),
         // plus the toolchain identities, the sandbox mode, the cflags and
         // the observable streams.
+        let boundary = boundary_opt_in(unit)?;
         let mut inputs = compute_inputs(target, unit, &facts)?;
         inputs.toolchain = vec![
             rustc_version.clone(),
             cc_version,
             format!("sandbox: {}", sandbox_mode()),
             CFLAGS_TOOLCHAIN_ENTRY.to_string(),
-            OBSERVABLE_TOOLCHAIN_ENTRY.to_string(),
         ];
+        if boundary {
+            inputs.toolchain.push(format!(
+                "{}{}",
+                boundary::TOOLCHAIN_ENTRY_PREFIX,
+                boundary::runtime_digest()
+            ));
+        }
+        inputs
+            .toolchain
+            .push(OBSERVABLE_TOOLCHAIN_ENTRY.to_string());
 
         let rust_lib = match build_result {
             Ok(lib) => lib,
@@ -671,7 +683,131 @@ impl CAbiDifferential {
             }),
         }
 
+        // 8. Boundary (design B, opt-in): last, and only when everything
+        // above passed, so recorded red turns keep their evidence.
+        if boundary && checks.iter().all(|c| c.passed) {
+            let headers: Vec<PathBuf> = facts
+                .include_closure(&unit.files)
+                .into_iter()
+                .filter(|p| p.ends_with(".h"))
+                .map(|rel| {
+                    inside(
+                        &unit.id,
+                        "unit header",
+                        &root.join(rel),
+                        &prep.base.source_dir,
+                    )
+                })
+                .collect::<Result<_, _>>()?;
+            let unit_c: Vec<PathBuf> = unit
+                .files
+                .iter()
+                .filter(|f| f.ends_with(".c"))
+                .map(|rel| inside(&unit.id, "unit file", &root.join(rel), root))
+                .collect::<Result<_, _>>()?;
+            checks.push(boundary_run::run(&boundary_run::BoundaryCtx {
+                runner: &runner,
+                confined: &confined,
+                includes: &includes,
+                headers: &headers,
+                unit_c: &unit_c,
+                driver: &prep.driver,
+                rust_lib: &rust_lib,
+                build,
+                unit,
+            })?);
+        }
+
         Ok(finish(inputs, checks))
+    }
+
+    /// Run ONLY the boundary check (design B) for `unit`, without any verdict:
+    /// the calibration entry point (`harness bench boundary`, §B.7). The unit
+    /// crate is built and the check runs exactly as inside `verify`, whether
+    /// or not the unit opted in. Returns the check; `Err` for harness faults.
+    pub fn boundary_only(&self, target: &TargetContext, unit: &Unit) -> Result<Check, Error> {
+        let scrubber = Scrubber::from_env(&target.root);
+        let mut check = self
+            .run_boundary_only(target, unit)
+            .map_err(|e| scrubber.scrub_error(e))?;
+        scrubber.scrub_check(&mut check);
+        Ok(check)
+    }
+
+    fn run_boundary_only(&self, target: &TargetContext, unit: &Unit) -> Result<Check, Error> {
+        let prep = Prepared::new(target, unit)?;
+        let facts = load_facts(target)?;
+        let root = &prep.base.root;
+        let Some(crate_dir) = &prep.crate_dir else {
+            return Err(Error::Invariant(format!(
+                "unit crate directory {} does not exist",
+                prep.crate_dir_raw.display()
+            )));
+        };
+        let crate_target_dir = prepare_target_dir(crate_dir)?;
+        let host = match sandbox_mode() {
+            "sandbox-exec" => Some(HostDirs::from_env()?),
+            _ => None,
+        };
+        let tool_profile = match &host {
+            Some(host) => Some(sandbox::render_profile(&ProfileSpec {
+                host,
+                target_root: root,
+                toolchain: true,
+                write_dirs: &[prep.build.clone(), crate_target_dir.clone()],
+                write_files: &[crate_dir.join("Cargo.lock")],
+            })?),
+            None => None,
+        };
+        let runner = Runner {
+            cwd: root.clone(),
+            allowlist: prep.base.allowlist.clone(),
+            timeout: prep.base.timeout,
+            max_output: exec::DEFAULT_MAX_OUTPUT,
+            tool_profile,
+        };
+        let confined = Confinement {
+            runner: &runner,
+            host: host.as_ref(),
+            target_root: root,
+        };
+        let rust_lib = build_staticlib(
+            &runner,
+            runner.tool_profile.as_deref(),
+            crate_dir,
+            &crate_target_dir,
+        )?;
+        let includes = prep.base.includes();
+        let headers: Vec<PathBuf> = facts
+            .include_closure(&unit.files)
+            .into_iter()
+            .filter(|p| p.ends_with(".h"))
+            .map(|rel| {
+                inside(
+                    &unit.id,
+                    "unit header",
+                    &root.join(rel),
+                    &prep.base.source_dir,
+                )
+            })
+            .collect::<Result<_, _>>()?;
+        let unit_c: Vec<PathBuf> = unit
+            .files
+            .iter()
+            .filter(|f| f.ends_with(".c"))
+            .map(|rel| inside(&unit.id, "unit file", &root.join(rel), root))
+            .collect::<Result<_, _>>()?;
+        boundary_run::run(&boundary_run::BoundaryCtx {
+            runner: &runner,
+            confined: &confined,
+            includes: &includes,
+            headers: &headers,
+            unit_c: &unit_c,
+            driver: &prep.driver,
+            rust_lib: &rust_lib,
+            build: &prep.build,
+            unit,
+        })
     }
 
     /// The configured whole-program checks: build all-C and mixed, then one
@@ -799,6 +935,20 @@ fn run_failure_check(
         name: name.into(),
         passed: false,
         detail: parts.join(" | "),
+    }
+}
+
+/// The kind-owned `[unit.oracle] boundary` key (design B opt-in): absent =
+/// false; anything but a boolean is a plan error.
+fn boundary_opt_in(unit: &Unit) -> Result<bool, Error> {
+    match unit.oracle.as_ref().and_then(|t| t.get("boundary")) {
+        None => Ok(false),
+        Some(v) => v.as_bool().ok_or_else(|| {
+            Error::InvalidPlan(format!(
+                "unit `{}`: [unit.oracle] boundary must be a boolean, got {v}",
+                unit.id
+            ))
+        }),
     }
 }
 

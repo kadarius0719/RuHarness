@@ -88,6 +88,12 @@ impl Unit {
         self.oracle.as_ref()?.get(key)?.as_str()
     }
 
+    /// A kind-owned oracle parameter as a boolean (`None` when absent or not
+    /// a boolean — the kind decides whether that is an error).
+    pub fn oracle_param_bool(&self, key: &str) -> Option<bool> {
+        self.oracle.as_ref()?.get(key)?.as_bool()
+    }
+
     /// A kind-owned oracle parameter as a list of strings.
     pub fn oracle_param_list(&self, key: &str) -> Vec<String> {
         self.oracle

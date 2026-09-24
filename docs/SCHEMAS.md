@@ -613,14 +613,15 @@ passed, detail `not configured for this target` (migration note: zopfli gained
 ## Oracle checks added to every `verify` (c-abi-differential)
 
 Order: `symbol-set` → `capabilities` → `driver-shape` → `differential-driver` →
-`whole-program:*` → `sanitizers`. A red `symbol-set`, `capabilities` or `driver-shape`
-ends the run (nothing is linked or run).
+`whole-program:*` → `sanitizers` → `boundary` (opted-in units only, and only when
+everything before it passed — see "The boundary check"). A red `symbol-set`,
+`capabilities` or `driver-shape` ends the run (nothing is linked or run).
 
 - **Every C compile passes `-ffp-contract=off`** (Apple clang on arm64 fuses
   multiply-add even at -O0; the reference Linux build and Rust do not);
   `inputs.toolchain` gains `cflags: -ffp-contract=off`.
 - **`capabilities`**: undefined symbols of the candidate crate's OWN archive members
-  may not reach the classes `fs env process net os thread time dl syscall` (std paths
+  may not reach the classes `fs env process net os thread time dl syscall mem signal` (std paths
   by legacy mangling; libc names incl. process control: `kill raise ptrace sigaction
   signal getppid _exit …`) unless the C unit's own unresolved calls use that class;
   no `asm!`/`global_asm!`/`naked_asm!` anywhere in `src/`. `std::thread::local` is
@@ -655,6 +656,59 @@ wording), ` on stderr`, or ` on stdout and stderr` (lens/first diff of stdout).
 Migration note: before
 this, only stdout was compared — M4's `014_pow_subfunction` (reports on stderr)
 verified while wrong.
+
+## The boundary check (design B, post-M4; docs/ORACLE-HARDENING.md §B, §B.R)
+
+Opt-in per unit: `[unit.oracle] boundary = true` (kind-owned; a non-boolean is a plan
+error). Every `verify` of an opted-in unit runs a ninth check, **`boundary`**, LAST and
+only when every earlier check passed (recorded red turns keep their evidence). A unit that
+does not opt in gets no `boundary` entry and no toolchain entry — its verdicts stay
+byte-identical. When the unit opts in, `inputs.toolchain` gains `boundary:
+sancov+guard-pages rt=<8 hex>` (blake3 of the harness-owned runtime, its headers, the
+probe and the wrapper template), placed before `observable`, whether or not the check ran.
+
+- **What it proves (§B.2):** for every call the unit's validated `driver.c` makes, the
+  Rust touches only the driver objects the C touches during the same call, and within
+  each only the elements inside the C's window (element = `sizeof *p` of the parameter;
+  1 byte for `void *`/incomplete pointees). Objects are located by AddressSanitizer in
+  the measure build (stack, heap, global; anything else passes through unshadowed and is
+  counted); each object a call receives is copied into a fresh guarded shadow per call;
+  pointers into shadows are relocated back on exit. Windows are the C's traced
+  in-call hulls (unit compiled at `-O1` with sancov; `-O0` fallback), widened to the
+  whole object when a learned untraced access falls outside (widened objects are named).
+- **Details (closed shapes):** green — `Rust stays inside the C's footprint: <n> call(s),
+  <m> guarded object(s) (<u> untouched by the C, <p> partially touched, <w> widened), <a>
+  argument(s) unshadowed; tail and head layouts clean[; note: in call <k> the C reads the
+  driver's stack through a pointer field (unchecked)]`; red (the candidate's, class
+  `oracle`) — `in call <n> of <sym>, the Rust touched the object passed as `<param>` (<c> x
+  <e> bytes) the C does not touch it in that call | below the C's window (elements [lo,
+  hi)) | above the C's window (…)[ widened]; <tail|head> layout. …`, or `the guard was
+  tampered with (signal | handler | exception-port | canary): …`, or `the Rust changed the
+  driver's control flow (call <n> | arg <n>:<p>): …`, or a retained-pointer wording; a
+  different output — the standard `outputs differ …`; a crash elsewhere — `candidate run
+  failed: …` (class `crash-timeout`); C side — `boundary driver invalid (C side): <harness
+  reason>` (never candidate evidence: `migrate` turns it into a harness error exactly as
+  a red `driver-shape`; `verify` demotes; `bench check` reports a PROBLEM). C-side reasons
+  include an interface line that does not parse or names a type the unit's headers do not
+  declare, a unit with no data-pointer parameter, a driver that does not run clean under
+  its own measured windows, inactive tracing, and runtime limits (65 536 calls, 16 objects
+  per call, 16 MiB per object).
+- **Fail-closed integrity (§B.R-1):** after every call the runtime verifies signal
+  accounting (`ru_nsignals`), its own handler, the Mach exception ports and a canary page;
+  a candidate that alters fault delivery is red. `capabilities` gains the classes `mem`
+  (mapping/protection) and `signal` (dispositions, exception ports, raw Mach messaging,
+  thread creation, the traps); an opted-in unit's candidate is never granted either, and
+  no candidate may reference `ruharness_*` or `__sanitizer_cov_*`.
+- **Not proven (§B.9):** slice creation without access; memory reached only through a
+  pointer field of an object (the driver-stack note above is the partial detector);
+  unshadowed arguments and widened objects are object-level only. The unit's C is the
+  reference by construction (a hostile unit can weaken its own check, never cause a false
+  red). macOS + clang only until the Linux sandbox.
+- **CLI:** `harness bench boundary --suite DIR [--case NAME]… [--allow-unsandboxed]` —
+  calibration: the check alone on every verified unit, written nowhere; prints per case
+  `GREEN | RED | N/A | skipped` with the detail, then totals; exit 1 only on harness
+  errors. Nothing new is written to any ledger: the check is a function of `driver.c`,
+  the unit source, the crate and the harness (`rt=`).
 
 ## Driver generation: `harness gen-driver <UNIT>`
 

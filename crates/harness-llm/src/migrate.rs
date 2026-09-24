@@ -40,7 +40,7 @@ use harness_core::ledger::Ledger;
 use harness_core::observer::Finding;
 use harness_core::plan::{is_clean_segment, Plan, Unit};
 use harness_core::traits::OracleStrategy;
-use harness_core::verdict::{Check, Verdict};
+use harness_core::verdict::{Check, Verdict, BOUNDARY_C_SIDE_LEAD_IN};
 use std::path::{Path, PathBuf};
 
 // Names the (unchanged) M3 unit tests reach through `use super::*`.
@@ -458,6 +458,18 @@ impl Stage for MigrateStage<'_> {
                 printable(&shape.detail, 300)
             )));
         }
+        // Likewise a boundary check that could not run on the C side (the
+        // driver, the interface lines, the toolchain): never candidate
+        // evidence (docs/ORACLE-HARDENING.md §B.R-5).
+        if let Some(bnd) = verdict.checks.iter().find(|c| {
+            c.name == "boundary" && !c.passed && c.detail.starts_with(BOUNDARY_C_SIDE_LEAD_IN)
+        }) {
+            return Err(Error::Invariant(format!(
+                "the unit's boundary check could not run on the C side ({}); fix the driver or \
+                 the interface lines, or opt the unit out — this is not a candidate failure",
+                printable(&bnd.detail, 300)
+            )));
+        }
         if !ctx.verifying {
             verdict.store(&ctx.work_dir.join("attempt-verdict.json"))?;
         }
@@ -649,6 +661,19 @@ the only failed checks are on the C side of the comparison — the ORIGINAL C un
 run by the harness (its baseline run or its sanitizer build), not your Rust; this evidence \
 does not show a defect in the candidate";
 
+/// `[FAILURE CLASS]` explanation when the failed check is the boundary check
+/// (design B): the candidate touched caller memory the C never touches on
+/// that call.
+const BOUNDARY_EXPLANATION: &str = "\
+the candidate built, ran and printed what the C prints, but it touched memory the C never \
+touches on the same call: a pointer argument was dereferenced, or a slice or reference \
+built over it, on a path where the C leaves that memory alone, or beyond the elements the C \
+reads (the `boundary` check's detail, quoted under [EVIDENCE], names the call, the parameter \
+and the C's window). Real callers size buffers exactly and pass pointers the C never \
+reads; in `src/ffi.rs` convert a pointer to a reference or slice only on the path where the \
+C dereferences it, or pass `logic` an accessor closure that reads exactly the indices the C \
+reads";
+
 /// One-line explanation of a failure class.
 fn class_explanation(class: &str) -> &'static str {
     match class {
@@ -668,6 +693,7 @@ fn is_c_side(check: &Check) -> bool {
     check.name == "sanitizers"
         || (check.detail.starts_with("C-side run failed")
             && !check.detail.contains("candidate run failed"))
+        || (check.name == "boundary" && check.detail.starts_with(BOUNDARY_C_SIDE_LEAD_IN))
 }
 
 /// Failure class of a red verdict: `build`, `crash-timeout`, or `oracle`.
@@ -702,6 +728,8 @@ fn verdict_explanation(class: &'static str, verdict: &Verdict) -> &'static str {
         SYMBOL_SET_EXPLANATION
     } else if failed.iter().any(|c| c.name == "capabilities") {
         CAPABILITIES_EXPLANATION
+    } else if class == "oracle" && failed.iter().any(|c| c.name == "boundary") {
+        BOUNDARY_EXPLANATION
     } else {
         class_explanation(class)
     }
@@ -3654,6 +3682,20 @@ int add(int a, int b) { return a + b; }\n";
                     ),
                 ]),
             ),
+            (
+                "boundary",
+                verdict(&[
+                    ("symbol-set", true, "ok"),
+                    ("differential-driver", true, "1200 bytes identical"),
+                    (
+                        "boundary",
+                        false,
+                        "in call 1 of unit_add, the Rust touched the object passed as `p` (1 x 16 \
+                         bytes) the C does not touch it in that call; tail layout. Touch only what \
+                         the C touches on the same call",
+                    ),
+                ]),
+            ),
         ] {
             let fx = fixture(&format!("pf-{name}"));
             let r = requests_of(
@@ -3750,6 +3792,7 @@ int add(int a, int b) { return a + b; }\n";
             ("SYMBOL_SET_EXPLANATION", SYMBOL_SET_EXPLANATION),
             ("CAPABILITIES_EXPLANATION", CAPABILITIES_EXPLANATION),
             ("C_SIDE_EXPLANATION", C_SIDE_EXPLANATION),
+            ("BOUNDARY_EXPLANATION", BOUNDARY_EXPLANATION),
             ("build", class_explanation("build")),
             ("check", class_explanation("check")),
             ("oracle", class_explanation("oracle")),
