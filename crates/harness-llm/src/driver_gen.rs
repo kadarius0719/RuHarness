@@ -170,6 +170,7 @@ static DRIVER_TEXTS: StageTexts = StageTexts {
     spec: &DRIVER_SPEC,
     first_task: GENERATE_TASK,
     repair_task: DRIVER_REPAIR_TASK,
+    steer_task: None,
     current_section: "CURRENT DRIVER",
     no_current: "(none: no reply so far could be parsed into driver.c)\n",
     earlier: "The file under [CURRENT DRIVER] is from your last parseable reply; it had",
@@ -223,6 +224,11 @@ pub fn run_driver_generation(
     plan: &Plan,
     unit: &Unit,
 ) -> Result<DriverOutcome, Error> {
+    if params.steer.is_some() {
+        return Err(Error::Invariant(
+            "internal: a driver-generation attempt cannot be steered".to_string(),
+        ));
+    }
     preconditions(plan, unit)?;
     let root = target
         .root
@@ -247,6 +253,7 @@ pub fn run_driver_generation(
         pinned: &pinned,
         unit_source,
         driver: String::new(),
+        first_turn: &crate::trajectory::TRANSLATE_FIRST,
     }
     .run()?;
     Ok(DriverOutcome {
@@ -793,6 +800,7 @@ return 0;\n}\n";
             traces_dir: &fx.traces,
             retry,
             attempt,
+            steer: None,
         };
         let f = |path: &Path| judge.judge(path);
         run_driver_generation(&params, &f, &fx.target, &fx.facts, &fx.plan, fx.unit())
@@ -1529,6 +1537,7 @@ return 0;\n}\n";
             traces_dir: &fx.traces,
             retry: false,
             attempt: None,
+            steer: None,
         };
         let judge = FakeJudge::default();
         let f = |path: &Path| judge.judge(path);
@@ -1562,6 +1571,7 @@ return 0;\n}\n";
             traces_dir: &fx.traces,
             retry: false,
             attempt: None,
+            steer: None,
         };
         let judge = FakeJudge::default();
         let f = |path: &Path| judge.judge(path);
@@ -1623,6 +1633,7 @@ return 0;\n}\n";
             traces_dir: &fx.traces,
             retry: false,
             attempt: None,
+            steer: None,
         };
         let migrated = crate::migrate::run_migration(
             &params,

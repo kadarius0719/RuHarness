@@ -24,6 +24,31 @@ pub enum Mode {
 }
 
 static MODE: OnceLock<Mode> = OnceLock::new();
+/// The command line after the program name, without `--json`.
+static ARGS: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Remember the command line (after the program name, without `--json`).
+pub fn set_args(args: Vec<String>) {
+    let _ = ARGS.set(args);
+}
+
+/// The command line as [`set_args`] recorded it.
+pub fn args() -> &'static [String] {
+    ARGS.get().map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// `s` as one POSIX shell word: unchanged when it is made only of safe
+/// characters, else single-quoted (`'` → `'\''`).
+pub fn shell_quote(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
 /// Serialises whole-line writes across threads (`bench --jobs`).
 static STDOUT: Mutex<()> = Mutex::new(());
 
@@ -175,8 +200,13 @@ pub struct Awaiting<'a> {
     pub attempt: Option<&'a str>,
     /// The response file the next run picks up.
     pub path: String,
-    /// The exact command that resumes it.
+    /// The command that resumes it, as a human would type it (shell-quoted;
+    /// it omits global flags such as `--json`).
     pub resume: String,
+    /// This run's command line after the program name, verbatim and without
+    /// `--json` — what a client re-runs (with its own global flags) instead
+    /// of parsing `resume`.
+    pub args: &'a [String],
 }
 
 /// `check`: one oracle check of a verdict.

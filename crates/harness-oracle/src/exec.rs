@@ -992,11 +992,24 @@ mod tests {
             boxed.built_with_profile(Path::new(bin), args, Some(profile.as_str()))
         };
 
-        // Reads under the home directory are denied.
-        let home = host.home.to_str().expect("utf-8 home").to_string();
-        built(&open, "/bin/ls", &[&home]).expect("home is listable unsandboxed");
-        let failure =
-            boxed_built("/bin/ls", &[&home]).expect_err("home must be unreadable in the sandbox");
+        // Reads under the home directory are denied. The unsandboxed control
+        // lists a directory under HOME with nothing privacy-protected in it
+        // (the toolchain's), never HOME itself: `ls` stats every entry, and
+        // stat-ing ~/Music or a network share mounted in HOME makes macOS
+        // prompt for Apple Music / network-volume access on the user's
+        // machine. Without one, `ls -d` stats HOME alone.
+        let probe_dir = [host.cargo_home.as_ref(), host.rustup_home.as_ref()]
+            .into_iter()
+            .flatten()
+            .find(|dir| dir.starts_with(&host.home) && dir.is_dir())
+            .cloned();
+        let (flag, target) = match &probe_dir {
+            Some(dir) => ("-1", dir.to_str().expect("utf-8 probe dir").to_string()),
+            None => ("-d", host.home.to_str().expect("utf-8 home").to_string()),
+        };
+        built(&open, "/bin/ls", &[flag, &target]).expect("readable unsandboxed");
+        let failure = boxed_built("/bin/ls", &[flag, &target])
+            .expect_err("reads under HOME must be denied in the sandbox");
         assert!(
             failure.to_string().contains("Operation not permitted"),
             "{failure}"

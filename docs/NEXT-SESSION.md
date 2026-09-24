@@ -5,54 +5,64 @@ first, then this:
 
 ---
 
-Resume RuHarness. Everything is on `main` and pushed (last session ended at the commit
-"docs: evidence-first replay decision, gates, README"). Before doing anything else:
+Resume RuHarness — the review cockpit (`harness-tui`) session. Everything is on `main` and
+pushed (last session ended at the commit "review acts: migrate --steer/--from, harness
+override, provenance in core; harness-tui read model"). Before doing anything else:
 
-1. Read `DECISIONS.md` from "2026-09-23 — M4 complete: final scores" to the end, then
-   `docs/REPLAY-DESIGN.md` (§R and §C are authoritative), `docs/ORACLE-HARDENING.md`
-   (§A implemented; §B is a DRAFT), and `docs/SCHEMAS.md` ("Observable output",
-   "Verification is evidence-first", `superseded.jsonl`, "scores.json — unmarked-UB
-   additions").
-2. Confirm the tree is clean and green: `git status`, `cargo test --workspace` (~424
-   tests), `cargo run -q -p harness-cli -- bench status --suite targets/tractor`.
+1. Read `DECISIONS.md` from "2026-09-24 — TUI track: §15 research spike" to the end, then
+   `docs/TUI-DESIGN.md` in full (§R is authoritative; **§R2 lists the OPEN findings of the
+   code review of step 1–2 — the first thing to fix**), `docs/CLI-HARDENING.md` (the CLI
+   contract the cockpit drives), and `docs/SCHEMAS.md` sections "CLI hardening" and
+   "Review acts: steer attempts and human attempts".
+2. Confirm the tree is clean and green: `git status`, `cargo test --workspace` (~480 tests;
+   `--workspace` includes `harness-tui`, which the root's `default-members` leaves out of a
+   plain `cargo build`), `cargo run -q -p harness-cli -- bench status --suite targets/tractor`.
 3. The scorer needs the gitignored `targets/tractor/.scorer-vendor/`. If this worktree
    lacks it, copy it from another worktree with `cp -cR` (APFS copy-on-write) or re-run
-   the one-time `cargo vendor` step in `targets/tractor/README.md` (network, crates.io
-   only). Optionally copy `targets/tractor/.bench/` too, to skip the scorer rebuild.
+   the one-time `cargo vendor` step in `targets/tractor/README.md`. Optionally copy
+   `targets/tractor/.bench/` too, to skip the scorer rebuild.
 4. Baseline check (about 40 minutes, zero tokens):
    `cargo run -q -p harness-cli -- bench check --suite targets/tractor --replay --jobs 6`.
-   Expect `198 reproduce (0 conformant, 198 drifted), 1 expected divergence(s), 0
-   problem(s)` and `bench check: OK`. "Drifted" is expected: the last prompt edits changed
-   every prompt, and replay now re-judges recorded evidence instead of breaking.
+   Expect `198 reproduce (1 conformant, 197 drifted), 2 expected divergence(s), 0
+   problem(s)` and `bench check: OK — no regression`.
 
 Then, in order:
 
-* **Design B — the last known blind spot** (`read_scalefactors`, an FFI-boundary bug in
-  verified Rust). Take the DRAFT in `docs/ORACLE-HARDENING.md` §B through the usual cycle:
-  research re-check → adversarial design review → implement → adversarial code review →
-  fix pass with regression tests. Then re-migrate `read_scalefactors` through the audited
-  hand-off, and re-baseline `scores.json`. The translator hint it wants is now an ordinary
-  prompt edit: update the fixtures with `RUHARNESS_UPDATE_PROMPT_FIXTURES=1`, review the
-  diff, and land it in the same commit.
-* **Then the TUI track (user decision, 2026-09-23 — do not ask again).** Start with a
-  §15 research spike (current Rust TUI crates and their maintenance, dependency weight,
-  how comparable tools present side-by-side code review), then design → adversarial
-  design review → implementation. The design brief from the M4 roadmap notes (DECISIONS.md
-  and memory): a thin, read-mostly "review cockpit" crate (`harness-tui`) derived from the
-  ledger that spawns the `harness` CLI for every write; C beside Rust aligned by function;
-  Accept = an explicit promote of a green attempt; Modify = a steer note that becomes a
-  new oracle-judged turn (hand edits only as a labelled override); chat lives in Claude
-  Code (via a small harness-mcp), not in the TUI. **CLI hardening comes first**, as its
-  own milestone: a writer lock, `migrate --no-promote` + `harness promote`, cancellation
-  that kills sandboxed process groups, and a `--json` events mode for the TUI to consume.
-  Keep it feature-gated and lean (§10.3); vet every crate.
-* After the TUI: the feature-workflow view and the C-vs-Rust performance baselines (the
-  user's other post-M4 wishes), then the briefing's M5 (external detector plugin +
-  `EXTENDING.md`). Carry-forwards to fold in where they fit:
-  - §16 escalation automation + `harness usage`;
-  - the `crash-timeout` classifier;
-  - a Linux sandbox;
-  - the two deferred replay items.
+* **Fix pass for docs/TUI-DESIGN.md §R2** (the verified findings of the adversarial code
+  review of `migrate --steer/--from`, `harness override`, the core `provenance` rule and
+  the `promotion_interrupted` report). Each fix with a regression test that fails without
+  it (mutation-check the rule-guarding ones); update SCHEMAS.md/TUI-DESIGN.md where the
+  contract moves; mark §R2 resolved; commit and push.
+* **The terminal front end** (docs/TUI-DESIGN.md §3, §4, §6, §7; §8 step 4). The library
+  half is done and tested — `harness_tui::{model, pairs, display}`: `Snapshot::load`,
+  `UnitView` (report, ordered attempts, `ProvenanceView`, crate dir, verdict),
+  `Snapshot::pairs` (C span with the facts-freshness guard; shim + logic callee found by
+  tree-sitter-rust in any file), the display filter (tabs to 8-column stops, controls and
+  bidi characters to `?`, 4 KiB cut on a char boundary). To build, behind the existing
+  `tui` feature (dependencies already declared and vetted): `events` (typed NDJSON of the
+  `ruharness-events` stream, unknown `k` kept), `spawn` (child with `process_group(0)`,
+  stdin null, stdout + stderr reader threads, reload only after reader EOF + `wait()`,
+  `/bin/kill -INT` only while `try_wait` is `None`), `highlight`, `view` (rail, function
+  pairs with filler lines, verdict strip, run panel, overlays; narrow fallback < 110
+  columns; `--layout split|stacked`), `app` (key handling returning commands; every act
+  shows its argv and asks y/n; `R` resume re-spawns the stored argv; `e` runs
+  `sh -c '$EDITOR "$@"' --` on a temp copy and hashes before/after), the TUI's own signal
+  path (SIGINT/SIGTERM/SIGHUP → INT the child, wait ≤ 1 s, restore, die by the signal),
+  and `main` (`--target`, `--harness`, `--allow-unsandboxed`, `--layout`). API notes
+  verified last session: ratatui 0.30 with `default-features = false, features =
+  ["crossterm_0_29"]` re-exports crossterm as `ratatui::crossterm` (no direct crossterm
+  dependency); `ratatui::init()` installs a panic hook that restores the terminal;
+  `ratatui::backend::TestBackend` for the view tests; `tree_sitter_rust::HIGHLIGHTS_QUERY`,
+  `tree_sitter_c::HIGHLIGHT_QUERY`; in raw mode Ctrl-C arrives as a key event, not
+  SIGINT. Then adversarial code review → fix pass → commit and push; README section.
+* **harness-mcp** (hand-rolled JSON-RPC 2.0 over stdio, zero new crates, per the §15 spike):
+  reuse `harness_tui::model` with `default-features = false`; tools spawn `harness --json`.
+* After that: the feature-workflow view and the C-vs-Rust performance baselines, then the
+  briefing's M5 (external detector plugin + `EXTENDING.md`). Carry-forwards: §16
+  escalation automation + `harness usage`; the `crash-timeout` classifier; a Linux
+  sandbox; the two deferred replay items; and from the CLI-hardening and TUI reviews:
+  `verify` lacks the R6 gate, driver-attempt Accept, queueing on lock contention, an
+  async client for cooperative cancellation, per-function verdict dots.
 
 Environment (re-check; don't assume):
 - There are no cloud API keys, so model calls go through the `external` hand-off.

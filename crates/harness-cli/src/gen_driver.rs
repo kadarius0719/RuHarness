@@ -121,6 +121,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         traces_dir: &traces,
         retry,
         attempt: attempt.as_deref(),
+        steer: None,
     };
     let judge = |candidate: &Path| harness_oracle::validate_driver(&ctx, unit, candidate);
     let outcome =
@@ -139,9 +140,11 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
                         attempt: attempt.as_deref(),
                         path: path.display().to_string(),
                         resume: format!(
-                            "harness gen-driver {unit_id} --target {}",
-                            target.display()
+                            "harness gen-driver {} --target {}",
+                            report::shell_quote(&unit_id),
+                            report::shell_quote(&target.to_string_lossy())
                         ),
+                        args: report::args(),
                     });
                 }
                 return Err(e.into());

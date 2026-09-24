@@ -124,6 +124,7 @@ pub(crate) const CONTRACT_LINE_MAX_BYTES: usize = 512;
 const JUDGE_RECORDS: [&str; 2] = ["attempt-verdict.json", "validation.json"];
 
 /// Why the files of the most recent parseable reply were not green.
+#[derive(Clone)]
 pub(crate) struct Failure {
     /// Failure class = the turn's `result`.
     pub(crate) class: &'static str,
@@ -173,6 +174,9 @@ pub(crate) struct StageTexts {
     pub(crate) first_task: &'static str,
     /// The `[TASK]` of a repair turn.
     pub(crate) repair_task: &'static str,
+    /// The `[TASK]` of a steer attempt's first turn (`None`: the stage
+    /// cannot be steered).
+    pub(crate) steer_task: Option<&'static str>,
     /// Name of the section showing the current candidate (`CURRENT RUST`).
     pub(crate) current_section: &'static str,
     /// That section's body before any reply parsed.
@@ -220,6 +224,36 @@ pub(crate) trait Stage {
     fn candidate_digest(&self, path: &Path) -> Result<String, Error>;
 }
 
+/// How an attempt's first turn is posed (docs/TUI-DESIGN.md §5.1).
+pub(crate) enum FirstTurn {
+    /// The stage's own first turn (translate, generate).
+    Translate,
+    /// A steer attempt: a repair-shaped first turn over a finished seed's
+    /// candidate and stored verdict, plus the reviewer's note.
+    Steer(SteerSeed),
+}
+
+/// The first turn of a translate attempt (a `Job`'s default).
+pub(crate) static TRANSLATE_FIRST: FirstTurn = FirstTurn::Translate;
+
+/// A steer attempt's seed, as its first turn shows it — built from
+/// COMMITTED evidence only (the seed's `candidate/` and stored
+/// `attempt-verdict.json`), so the turn renders byte for byte on any
+/// machine and at any later time.
+pub(crate) struct SteerSeed {
+    /// The seed attempt's id.
+    pub(crate) seed_id: String,
+    /// The reviewer's note, verbatim.
+    pub(crate) note: String,
+    /// The seed's candidate files, in spec order.
+    pub(crate) files: Vec<String>,
+    /// The seed's failure as the first turn states it; `None` = the seed
+    /// was green.
+    pub(crate) failure: Option<Failure>,
+    /// `[FAILURE CLASS]` explanation of a green seed.
+    pub(crate) green_explanation: &'static str,
+}
+
 /// What one stage run produced (see [`crate::migrate::MigrationOutcome`]).
 pub(crate) struct Outcome {
     /// The final attempt record.
@@ -252,16 +286,68 @@ pub(crate) struct Job<'a> {
     pub(crate) unit_source: String,
     /// Digest of the differential driver (`""` for the driver stage).
     pub(crate) driver: String,
+    /// How the first turn is posed.
+    pub(crate) first_turn: &'a FirstTurn,
 }
 
 impl<'a> Job<'a> {
+    /// The steer seed, for a steer attempt.
+    fn steer(&self) -> Option<&SteerSeed> {
+        match self.first_turn {
+            FirstTurn::Steer(seed) => Some(seed),
+            FirstTurn::Translate => None,
+        }
+    }
+
+    /// `Turn.kind` of the first turn.
+    fn first_kind(&self) -> &'static str {
+        match self.first_turn {
+            FirstTurn::Steer(_) => harness_core::attempts::STEER_KIND,
+            FirstTurn::Translate => self.stage.texts().first_kind,
+        }
+    }
+
+    /// The first request: the stage's first task, or a steer turn.
+    fn first_request(&self) -> Result<CompletionRequest, Error> {
+        let texts = self.stage.texts();
+        let Some(seed) = self.steer() else {
+            return Ok(self.request(format!("{}\n[TASK]\n{}\n", self.pinned, texts.first_task)));
+        };
+        let task = texts.steer_task.ok_or_else(|| {
+            Error::Invariant("internal: this stage cannot be steered".to_string())
+        })?;
+        let current = emission::render_spec(texts.spec, &seed.files);
+        let (class, explanation, evidence) = match &seed.failure {
+            Some(f) => (f.class, f.explanation, f.evidence.clone()),
+            None => (
+                "none",
+                seed.green_explanation,
+                "every check passed\n".to_string(),
+            ),
+        };
+        let history = format!(
+            "(none yet: this attempt is seeded from attempt {} — the files and the verdict above \
+             are that attempt's)\n",
+            seed.seed_id
+        );
+        Ok(self.request(render_turn(
+            self.pinned,
+            texts,
+            &current,
+            (class, explanation, &evidence),
+            &history,
+            Some(&seed.note),
+            task,
+        )))
+    }
+
     /// Run the stage for the job's unit — see the module docs for what a
     /// re-run of an existing attempt does.
     pub(crate) fn run(&self) -> Result<Outcome, Error> {
         let params = self.params;
         let provider = params.provider;
         let texts = self.stage.texts();
-        let first = self.request(format!("{}\n[TASK]\n{}\n", self.pinned, texts.first_task));
+        let first = self.first_request()?;
         // Before any record exists; `checked_complete` repeats it per call.
         preflight(provider, &first)?;
         let first_key = TraceAdapter::request_key(&first)?;
@@ -340,6 +426,9 @@ impl<'a> Job<'a> {
             turns: Vec::new(),
             candidate_digest: String::new(),
             promoted: false,
+            seeded_from: self.steer().map(|seed| seed.seed_id.clone()),
+            steer_note: self.steer().map(|seed| seed.note.clone()),
+            note: None,
         };
         let work_rel = vec![texts.attempts_subdir.to_string(), id.clone()];
         let work_dir = prepare_dir(self.ledger, &self.unit.id, &work_rel)?;
@@ -1077,7 +1166,16 @@ impl Run<'_> {
         let provider = self.provider;
         let stage = self.job.stage;
         let texts = stage.texts();
-        let mut state = RepairState::default();
+        // A steer attempt starts where its seed ended: its files are the
+        // current ones and its failure (if any) the earlier one.
+        let mut state = match self.job.steer() {
+            Some(seed) => RepairState {
+                files: Some(seed.files.clone()),
+                failure: seed.failure.clone(),
+                format: None,
+            },
+            None => RepairState::default(),
+        };
         let mut wrote_candidate = false;
         let mut last_verdict: Option<harness_core::Verdict>;
         let mut request = first;
@@ -1114,16 +1212,27 @@ impl Run<'_> {
                     )));
                 }
             }
+            if index == 0 && self.job.steer().is_some() {
+                // The steer turn quotes stored evidence: the same R-3 render
+                // invariant as a repair turn.
+                if let Some(label) = evidence_leak(&request.user, &self.scrub) {
+                    return Err(Error::Invariant(format!(
+                        "harness bug: the steer evidence of turn 1 quotes a machine path \
+                         ({label}); nothing was sent"
+                    )));
+                }
+            }
             let head_key = TraceAdapter::request_key(&request)?;
+            let kind = if index == 0 {
+                self.job.first_kind()
+            } else {
+                "repair"
+            };
             crate::progress::sink().turn_start(
                 &record.unit,
                 &record.id,
                 index + 1,
-                if index == 0 {
-                    texts.first_kind
-                } else {
-                    "repair"
-                },
+                kind,
                 &head_key,
             );
             // Verifying: the RECORDED turn is judged, whatever HEAD would
@@ -1141,8 +1250,9 @@ impl Run<'_> {
                         )));
                     };
                     if turn.request_key != head_key {
-                        let evidence_only =
-                            index > 0 && same_but_evidence(&request, recorded_request);
+                        // A steer first turn carries evidence like a repair.
+                        let evidence_only = (index > 0 || self.job.steer().is_some())
+                            && same_but_evidence(&request, recorded_request);
                         self.drifted.borrow_mut().push((index, evidence_only));
                     }
                     (
@@ -1222,12 +1332,7 @@ impl Run<'_> {
 
             let usage = |n: u64| (provider.live && n > 0).then_some(n);
             record.turns.push(Turn {
-                kind: if index == 0 {
-                    texts.first_kind
-                } else {
-                    "repair"
-                }
-                .to_string(),
+                kind: kind.to_string(),
                 result: result.to_string(),
                 request_key,
                 response_hash: hash::bytes_hash(response.text.as_bytes()),
@@ -1352,16 +1457,41 @@ impl Run<'_> {
             .enumerate()
             .map(|(i, turn)| format!("{}. {} -> {}\n", i + 1, turn.kind, turn.result))
             .collect();
-        let user = format!(
-            "{}\n[{}]\n{current}\n[FAILURE CLASS]\n{class} — {explanation}\n\n\
-             [EVIDENCE]\n{evidence}\n[HISTORY]\n{}\n[TASK]\n{}\n",
+        // Every turn of a steer attempt carries the note: a stateless repair
+        // turn must not lose what the reviewer asked for.
+        self.job.request(render_turn(
             self.job.pinned,
-            texts.current_section,
-            history.concat(),
-            texts.repair_task
-        );
-        self.job.request(user)
+            texts,
+            &current,
+            (class, explanation, &evidence),
+            &history.concat(),
+            self.job.steer().map(|seed| seed.note.as_str()),
+            texts.repair_task,
+        ))
     }
+}
+
+/// The user text of a repair-shaped turn. `[GUIDANCE]` (a steer attempt's
+/// note) comes after `[HISTORY]`, outside the `[EVIDENCE]` range the
+/// render invariant and the evidence-only drift rule look at.
+fn render_turn(
+    pinned: &str,
+    texts: &StageTexts,
+    current: &str,
+    (class, explanation, evidence): (&str, &str, &str),
+    history: &str,
+    guidance: Option<&str>,
+    task: &str,
+) -> String {
+    let guidance = match guidance {
+        Some(note) => format!("[GUIDANCE]\n{note}\n\n"),
+        None => String::new(),
+    };
+    format!(
+        "{pinned}\n[{}]\n{current}\n[FAILURE CLASS]\n{class} — {explanation}\n\n\
+         [EVIDENCE]\n{evidence}\n[HISTORY]\n{history}\n{guidance}[TASK]\n{task}\n",
+        texts.current_section,
+    )
 }
 
 /// The label of the first scrub-list path (see [`scrub_list`]) that occurs

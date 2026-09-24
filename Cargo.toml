@@ -1,13 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/harness-core", "crates/harness-scan", "crates/harness-detect", "crates/harness-llm", "crates/harness-oracle", "crates/harness-cli"]
+members = ["crates/harness-core", "crates/harness-scan", "crates/harness-detect", "crates/harness-llm", "crates/harness-oracle", "crates/harness-cli", "crates/harness-tui"]
+# A plain `cargo build` at the root stays lean: the review cockpit (and its
+# terminal stack) builds only when asked for, or under --workspace (CI).
+default-members = ["crates/harness-core", "crates/harness-scan", "crates/harness-detect", "crates/harness-llm", "crates/harness-oracle", "crates/harness-cli"]
 # Migration unit crates are deliberately NOT workspace members: a half-scaffolded
 # in-progress unit must never break the harness's own tooling (docs/SCHEMAS.md).
 exclude = ["targets"]
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.89"
+rust-version = "1.90"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
@@ -27,3 +30,8 @@ tree-sitter-c = "0.24"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 signal-hook = "0.4"
+tree-sitter-rust = "0.24"
+unicode-width = "0.2"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
+similar = "3"
+tree-sitter-highlight = "0.27"

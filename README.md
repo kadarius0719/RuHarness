@@ -184,6 +184,8 @@ names, then run the same command again.
 | `--retry` | Finished attempts are never overwritten; this records a *new* sample instead. |
 | `--promote` | Replace an already-verified unit's Rust with a new green candidate. |
 | `--no-promote` | Record a green attempt without promoting it; `harness promote <unit> <attempt> [--replace]` promotes it later, explicitly (`[llm.migrate] promote_on_green = false` makes that the only path). |
+| `--steer <NOTE> --from <ATTEMPT>` | A new attempt seeded from a finished one: the model sees that attempt's code and stored verdict plus your note, on every turn. |
+| `harness override <unit> <dir>` | Record a hand edit (exactly `src/logic.rs` and `src/ffi.rs` of `dir`) as a labelled `human` attempt, judged like a model reply; `harness promote` promotes it; the benchmark never counts it as the pipeline's. |
 | `--attempt ID` | With `--provider replay`: which recorded attempt to re-check. |
 | `--allow-unsandboxed` | Only needed where no sandbox exists (e.g. Linux): accept running untrusted code unconfined. |
 

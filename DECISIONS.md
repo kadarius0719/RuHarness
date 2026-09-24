@@ -1410,3 +1410,52 @@ refuted (9 verifiers hit a session limit and were resumed from the journal). Wha
 - **Shape**: `harness-tui` is a library (the read model, for harness-mcp) plus a binary behind
   the default `tui` feature; `default-members` keeps a plain root `cargo build` lean.
 
+## 2026-09-24 — review acts implemented (steer, override, provenance in core); harness-tui read model; session split
+
+**Step 1–2 of docs/TUI-DESIGN.md §8, implemented and tested:**
+- harness-core: `attempts::{current_binding, unit_crate_digest, provenance}` — the ONE
+  implementation of R-5 (`Provenance::{None, Pipeline, Ambiguous, Human}`; a steer attempt that
+  reproduced its seed collapses into the seed); `AttemptRecord.{seeded_from, steer_note, note}`
+  (additive, omitted when absent); `UnitReport.promotion_interrupted` (reported instead of a
+  contradiction while a promotion marker waits for recovery and no live writer holds the lock).
+- harness-llm: `FirstTurn::{Translate, Steer}` on the job; the steer turn rendered from the
+  seed's committed candidate + stored verdict only (never the build-dir excerpt), with
+  `[GUIDANCE]` after `[HISTORY]` on EVERY turn of a steer attempt (a stateless repair must not
+  lose what the reviewer asked for — a small extension of the design, which only said "then
+  ordinary repair turns"); verification builds the first turn from the RECORD; the
+  evidence-only drift rule covers a steer first turn; `record_human_attempt` through the
+  migrate stage's one judge. New prompt fixtures `migrate-steer-{red,green,repair}.txt`,
+  reviewed; every translate/repair fixture unchanged.
+- harness-cli: `migrate --steer --from` (required together; the refusal lists the seeds),
+  shell-quoted `resume` + additive `awaiting.args`, `harness override` (exactly logic.rs +
+  ffi.rs; shape, symlink, size and identical-source refusals), bench on the core provenance
+  rule with a PROBLEM for a human-promoted crate and `skipped (human)` in `--replay`.
+- Tests: core provenance outcomes; steer rendering (no excerpt, byte-identical across a
+  build-dir rewrite, same id), seed refusals, conformant replay of a steer attempt from its
+  record, human attempts red/green/check/harness-error; e2e `steer_override.rs` (a note with
+  quotes, `&` and `$x` resumed through `sh -c "$resume"` finishes the SAME attempt; override
+  refusals; human label; promote).
+
+**Step 3 (harness-tui library) implemented:** `crates/harness-tui` with `model` (Snapshot,
+UnitView with ordered attempts and `ProvenanceView`, facts freshness), `pairs` (facts-guarded C
+spans; tree-sitter-rust shim/callee location in any file, through `use` aliases), `display`
+(tab stops, control and bidi characters to `?`, char-boundary cut); tested on the committed
+tractor and zopfli ledgers. The `tui` feature's dependencies are declared (ratatui 0.30 with
+`crossterm_0_29`, similar, tree-sitter-highlight, tree-sitter-c, signal-hook) but the front end
+is not written: the binary prints that and exits 2. Workspace `rust-version` 1.90;
+`default-members` leaves harness-tui out of a plain root `cargo build`.
+
+**Session split (user, 2026-09-24):** the terminal front end (§8 step 4) moves to a fresh
+session; `docs/NEXT-SESSION.md` is its kickoff. The adversarial code review of step 1–2 ran at
+the end of this session: 16 findings confirmed, 0 refuted, 9 distinct — the worst: a steer
+seeded from a human attempt would launder a hand edit into `Pipeline` provenance, and a steered
+crate is indistinguishable from unassisted pipeline output in scores.json. They are recorded,
+OPEN, in docs/TUI-DESIGN.md §R2 (full text: docs/reviews/2026-09-24-steer-override-code-review.md);
+the next session's first task is their fix pass.
+
+**Privacy prompt (user report):** the oracle test `sandbox_denies_network_home_reads_and_stray_writes`
+ran `/bin/ls $HOME` UNSANDBOXED as its control; `ls` stats every entry, so each `cargo test
+--workspace` touched `~/Music` and network shares mounted in the home folder, and macOS asked
+for Apple Music and network-volume access. The control now lists `~/.cargo` (else `~/.rustup`,
+else `ls -d ~`), which proves the same sandbox denial without touching privacy-protected folders.
+

@@ -72,6 +72,13 @@ pub struct UnitReport {
     /// dead holder's leftover line is ignored.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub write_in_flight: Option<Holder>,
+    /// A promotion of this unit was interrupted and no live writer is at
+    /// work: the attempt id of its `.promote-<id>/` marker, or `legacy` for a
+    /// bare `.<crate>.prev` (docs/TUI-DESIGN.md §2). The next writing command
+    /// (`verify`, `migrate`, `promote`, `override`) recovers it by evidence;
+    /// until then the unit is reported this way INSTEAD of `contradiction`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub promotion_interrupted: Option<String>,
     /// The unit's recorded migrate attempts.
     pub attempts: Vec<AttemptSummary>,
 }
@@ -107,10 +114,15 @@ impl UnitReport {
                 "  << write in flight (pid {}, `{}`) — re-check when it is done",
                 h.pid, h.command
             ),
-            None if self.contradiction => {
-                "  << CONTRADICTION: status and verdict evidence disagree".to_string()
-            }
-            None => String::new(),
+            None => match &self.promotion_interrupted {
+                Some(id) => format!(
+                    "  << promotion of {id} interrupted — the next writing command recovers it"
+                ),
+                None if self.contradiction => {
+                    "  << CONTRADICTION: status and verdict evidence disagree".to_string()
+                }
+                None => String::new(),
+            },
         };
         format!(
             "status: {} [{}] plan={} verdict={desc}{tail}",
@@ -168,13 +180,57 @@ pub fn unit_report(
         if report.contradiction || !report.verdict.stale.is_empty() {
             // A holder that died without cleanup (a signal death never
             // truncates the line) is diagnostics, not a writer at work.
-            if let Some(holder) = WriterLock::holder(ledger)?.filter(|h| pid_alive(h.pid)) {
+            if let Some(holder) = live_holder(ledger)? {
                 report.contradiction = false;
                 report.write_in_flight = Some(holder);
             }
         }
     }
+    // An interrupted promotion (marker left behind, nobody at work) explains
+    // whatever the unit looks like until the next writer recovers it.
+    if report.write_in_flight.is_none() {
+        if let Some(marker) = promotion_marker(ledger, unit)? {
+            if live_holder(ledger)?.is_none() {
+                report.contradiction = false;
+                report.promotion_interrupted = Some(marker);
+            }
+        }
+    }
     Ok(report)
+}
+
+/// The ledger's holder, when its process is alive.
+fn live_holder(ledger: &Ledger) -> Result<Option<Holder>, Error> {
+    Ok(WriterLock::holder(ledger)?.filter(|h| pid_alive(h.pid)))
+}
+
+/// The attempt id of the first `.promote-<id>/` marker in the unit dir, or
+/// `legacy` for a bare `.<crate>.prev` (the pre-marker protocol).
+fn promotion_marker(ledger: &Ledger, unit: &Unit) -> Result<Option<String>, Error> {
+    let dir = ledger.unit_dir(&unit.id);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::io(&dir, e)),
+    };
+    let mut markers: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|n| n.strip_prefix(".promote-"))
+                .map(str::to_string)
+        })
+        .collect();
+    markers.sort();
+    if let Some(first) = markers.into_iter().next() {
+        return Ok(Some(first));
+    }
+    let legacy = unit
+        .oracle_param_str("rust_crate")
+        .is_some_and(|name| dir.join(format!(".{name}.prev")).is_dir());
+    Ok(legacy.then(|| "legacy".to_string()))
 }
 
 /// `kill -0 <pid>`: true while the process exists — the same unsafe-free
@@ -281,6 +337,7 @@ fn compute(
         verdict,
         contradiction,
         write_in_flight: None,
+        promotion_interrupted: None,
         attempts,
     })
 }
@@ -301,6 +358,7 @@ mod tests {
             },
             contradiction: false,
             write_in_flight: None,
+            promotion_interrupted: None,
             attempts: Vec::new(),
         }
     }
@@ -332,6 +390,12 @@ mod tests {
         assert!(r
             .render_line()
             .contains("write in flight (pid 7, `verify u1`)"));
+        assert!(!r.render_line().contains("CONTRADICTION"));
+        r.write_in_flight = None;
+        r.promotion_interrupted = Some("a-0123456789ab".into());
+        assert!(r.render_line().ends_with(
+            "<< promotion of a-0123456789ab interrupted — the next writing command recovers it"
+        ));
         assert!(!r.render_line().contains("CONTRADICTION"));
         assert_eq!(
             report(VerdictState::Missing, None, &[]).render_line(),

@@ -15,13 +15,20 @@ pub const ATTEMPT_SCHEMA_NAME: &str = "ruharness-attempt";
 /// `stage` of a driver-generation attempt (M4). Migrate attempts carry no
 /// `stage` field at all, so every pre-M4 record stays byte-identical.
 pub const DRIVER_STAGE: &str = "driver";
+/// `provider_kind` (and `provider`) of a labelled human attempt recorded by
+/// `harness override` (docs/TUI-DESIGN.md §5.2): judged like any other,
+/// never counted as the pipeline's (see [`provenance`]).
+pub const HUMAN_KIND: &str = "human";
+/// `Turn.kind` of the first turn of a steer attempt (docs/TUI-DESIGN.md §5.1).
+pub const STEER_KIND: &str = "steer";
 
 /// One executor turn. Token fields are nullable: `None` = unknown (external
 /// hand-off, or a provider that reports no usage) — never `0`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Turn {
     /// OPEN, display-only (no behavior keys on it): `translate` (first migrate
-    /// turn), `generate` (first driver turn) or `repair`.
+    /// turn), `steer` (first turn of a seeded attempt), `human` (the one turn
+    /// of a hand edit), `generate` (first driver turn) or `repair`.
     pub kind: String,
     /// Closed: `green | format | check | build | oracle | crash-timeout |
     /// truncated | blocked`.
@@ -57,8 +64,10 @@ pub struct AttemptRecord {
     pub provider_kind: String,
     /// Model string sent.
     pub model: String,
-    /// blake3(system ‖ NUL ‖ user) of the translate turn — equal digests across
-    /// attempts prove the same migration was posed to different providers.
+    /// blake3(system ‖ NUL ‖ user) of the FIRST turn (translate, or the steer
+    /// turn of a seeded attempt; empty for a human attempt) — equal digests
+    /// across attempts prove the same question was posed to different
+    /// providers.
     pub prompt_digest: String,
     /// Unit source digest the attempt is bound to (file-set hash incl. includes).
     pub unit_source: String,
@@ -75,6 +84,17 @@ pub struct AttemptRecord {
     pub candidate_digest: String,
     /// Whether this attempt's candidate was promoted into the unit crate.
     pub promoted: bool,
+    /// A steer attempt's seed: the finished attempt whose candidate and stored
+    /// verdict its first turn shows (additive; omitted otherwise).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seeded_from: Option<String>,
+    /// A steer attempt's guidance note, verbatim — so its first turn renders
+    /// from the ledger alone (additive; omitted otherwise).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steer_note: Option<String>,
+    /// A human attempt's note (printable, bounded; additive, optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Content-derived attempt id: `a-` + 12 hex of blake3(unit ‖ NUL ‖ unit_source
@@ -201,6 +221,115 @@ pub fn load_pinned(ledger: &Ledger, unit: &str, id: &str) -> Result<Option<Attem
         )));
     }
     Ok(Some(record))
+}
+
+/// The `(unit_source, driver)` digests an attempt of `unit` is bound to when
+/// recorded against the CURRENT tree — derived exactly as the executor
+/// records them: the include-closure file-set hash and the driver file hash
+/// (`[unit.oracle] driver`, else the unit's default `driver.c`; `""` when
+/// the file does not exist). The binding half of R-5
+/// (docs/REPLAY-DESIGN.md §R): `bench`, `harness promote`, `harness
+/// override`, a steer seed and the review cockpit all use this one function.
+pub fn current_binding(
+    ctx: &crate::TargetContext,
+    facts: &crate::Facts,
+    unit: &crate::Unit,
+) -> Result<(String, String), Error> {
+    let ledger = Ledger::new(&ctx.root);
+    let closure = facts.include_closure(&unit.files);
+    let unit_source = crate::hash::file_set_hash_on_disk(&ctx.root, &closure)?;
+    let driver_path = match unit.oracle_param_str("driver") {
+        Some(rel) => ctx.root.join(rel),
+        None => ledger.driver_path(&unit.id),
+    };
+    let driver = if driver_path.exists() {
+        crate::hash::file_hash(&driver_path)?
+    } else {
+        String::new()
+    };
+    Ok((unit_source, driver))
+}
+
+/// The content hash of the unit's crate on disk (`units/<id>/<rust_crate>/`,
+/// crate-relative paths — what every `candidate_digest` is), `None` when the
+/// unit has no `rust_crate` or the crate has no `Cargo.toml`.
+pub fn unit_crate_digest(ledger: &Ledger, unit: &crate::Unit) -> Result<Option<String>, Error> {
+    unit.oracle_param_str("rust_crate")
+        .map(|name| ledger.unit_dir(&unit.id).join(name))
+        .filter(|dir| dir.join("Cargo.toml").is_file())
+        .map(|dir| crate::hash::crate_content_hash(&dir))
+        .transpose()
+}
+
+/// Which recorded attempt produced the unit's crate on disk (R-5,
+/// docs/REPLAY-DESIGN.md §R, as extended by docs/TUI-DESIGN.md §5.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Provenance<'a> {
+    /// No green attempt bound to the current inputs has the crate's digest
+    /// (on a verified unit: "provenance unknown").
+    None,
+    /// Exactly one MODEL attempt did — the pipeline produced the crate.
+    Pipeline(&'a AttemptRecord),
+    /// Several model attempts did (ambiguous provenance), in id order.
+    Ambiguous(Vec<&'a AttemptRecord>),
+    /// Only a labelled human attempt did — a hand edit, never counted as the
+    /// pipeline's.
+    Human(&'a AttemptRecord),
+}
+
+/// The ONE implementation of R-5: among `records`, the green attempts bound
+/// to the current `unit_source` AND `driver` whose `candidate_digest` equals
+/// `crate_digest`; a steer attempt that reproduced its seed's candidate is
+/// collapsed into its seed (the seed is the provenance); then exactly one
+/// model attempt → [`Provenance::Pipeline`], several →
+/// [`Provenance::Ambiguous`], only human attempts → [`Provenance::Human`],
+/// none → [`Provenance::None`]. Not the `promoted` flag: an older attempt
+/// keeps it after a newer one replaced its crate.
+pub fn provenance<'a>(
+    records: &'a [AttemptRecord],
+    unit_source: &str,
+    driver: &str,
+    crate_digest: Option<&str>,
+) -> Provenance<'a> {
+    let Some(digest) = crate_digest else {
+        return Provenance::None;
+    };
+    let matches: Vec<&AttemptRecord> = records
+        .iter()
+        .filter(|r| {
+            r.stage.is_none()
+                && r.outcome == "green"
+                && r.unit_source == unit_source
+                && r.driver == driver
+                && !r.candidate_digest.is_empty()
+                && r.candidate_digest == digest
+        })
+        .collect();
+    let seeded_by_a_match = |r: &AttemptRecord| {
+        r.seeded_from
+            .as_deref()
+            .is_some_and(|seed| matches.iter().any(|m| m.id == seed))
+    };
+    let mut model: Vec<&AttemptRecord> = Vec::new();
+    let mut human: Vec<&AttemptRecord> = Vec::new();
+    for r in &matches {
+        if seeded_by_a_match(r) {
+            continue;
+        }
+        if r.provider_kind == HUMAN_KIND {
+            human.push(r);
+        } else {
+            model.push(r);
+        }
+    }
+    model.sort_by(|a, b| a.id.cmp(&b.id));
+    human.sort_by(|a, b| a.id.cmp(&b.id));
+    match (model.len(), human.first()) {
+        (1, _) => Provenance::Pipeline(model[0]),
+        (0, Some(h)) => Provenance::Human(h),
+        (0, None) => Provenance::None,
+        _ => Provenance::Ambiguous(model),
+    }
 }
 
 /// `text` reduced to printable ASCII and cut to `max_bytes`.
@@ -451,6 +580,9 @@ mod tests {
             turns: vec![],
             candidate_digest: String::new(),
             promoted: false,
+            seeded_from: None,
+            steer_note: None,
+            note: None,
         };
         let json = serde_json::to_string(&rec).unwrap();
         assert!(!json.contains("stage"), "{json}");
@@ -477,5 +609,123 @@ mod tests {
         };
         let json = serde_json::to_string(&t).unwrap();
         assert!(json.contains("\"input_tokens\":null"), "{json}");
+    }
+
+    fn prov_rec(id: &str, kind: &str, outcome: &str, digest: &str) -> AttemptRecord {
+        AttemptRecord {
+            schema: ATTEMPT_SCHEMA_NAME.into(),
+            schema_version: 1,
+            id: id.into(),
+            unit: "u".into(),
+            stage: None,
+            provider: kind.into(),
+            provider_kind: kind.into(),
+            model: "m".into(),
+            prompt_digest: String::new(),
+            unit_source: "blake3:src".into(),
+            driver: "blake3:drv".into(),
+            toolchain: vec![],
+            outcome: outcome.into(),
+            turns: vec![],
+            candidate_digest: digest.into(),
+            promoted: false,
+            seeded_from: None,
+            steer_note: None,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn provenance_is_the_one_r5_rule() {
+        let p = |recs: &[AttemptRecord], crate_digest: Option<&str>| match provenance(
+            recs,
+            "blake3:src",
+            "blake3:drv",
+            crate_digest,
+        ) {
+            Provenance::None => "none".to_string(),
+            Provenance::Pipeline(r) => format!("pipeline:{}", r.id),
+            Provenance::Human(r) => format!("human:{}", r.id),
+            Provenance::Ambiguous(rs) => format!(
+                "ambiguous:{}",
+                rs.iter()
+                    .map(|r| r.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        };
+        let model = prov_rec("a-1", "external", "green", "blake3:c");
+        // One model attempt: pipeline provenance.
+        assert_eq!(
+            p(std::slice::from_ref(&model), Some("blake3:c")),
+            "pipeline:a-1"
+        );
+        // No crate, or a crate no attempt produced: none.
+        assert_eq!(p(std::slice::from_ref(&model), None), "none");
+        assert_eq!(p(std::slice::from_ref(&model), Some("blake3:x")), "none");
+        // A RED attempt whose digest equals the crate is not provenance.
+        let red = prov_rec("a-2", "external", "red", "blake3:c");
+        assert_eq!(p(std::slice::from_ref(&red), Some("blake3:c")), "none");
+        // Bound to superseded inputs: not provenance.
+        let stale = AttemptRecord {
+            driver: "blake3:old".into(),
+            ..prov_rec("a-3", "external", "green", "blake3:c")
+        };
+        assert_eq!(p(std::slice::from_ref(&stale), Some("blake3:c")), "none");
+        // A driver-stage record never is.
+        let driver = AttemptRecord {
+            stage: Some(DRIVER_STAGE.into()),
+            ..prov_rec("d-1", "external", "green", "blake3:c")
+        };
+        assert_eq!(p(std::slice::from_ref(&driver), Some("blake3:c")), "none");
+        // Two model attempts: ambiguous, in id order.
+        let other = prov_rec("a-0", "anthropic", "green", "blake3:c");
+        assert_eq!(
+            p(&[model.clone(), other.clone()], Some("blake3:c")),
+            "ambiguous:a-0,a-1"
+        );
+        // A steer attempt that reproduced its seed collapses into the seed.
+        let steer = AttemptRecord {
+            seeded_from: Some("a-1".into()),
+            ..prov_rec("a-9", "external", "green", "blake3:c")
+        };
+        assert_eq!(
+            p(&[model.clone(), steer.clone()], Some("blake3:c")),
+            "pipeline:a-1"
+        );
+        // A human attempt alone: human provenance, never the pipeline's.
+        let human = prov_rec("a-h", HUMAN_KIND, "green", "blake3:c");
+        assert_eq!(
+            p(std::slice::from_ref(&human), Some("blake3:c")),
+            "human:a-h"
+        );
+        // A model attempt with the same candidate outranks the human one.
+        assert_eq!(
+            p(&[human.clone(), model.clone()], Some("blake3:c")),
+            "pipeline:a-1"
+        );
+        // A model steer that reproduced a human seed: the human is the source.
+        let steer_on_human = AttemptRecord {
+            seeded_from: Some("a-h".into()),
+            ..prov_rec("a-8", "external", "green", "blake3:c")
+        };
+        assert_eq!(p(&[human, steer_on_human], Some("blake3:c")), "human:a-h");
+    }
+
+    #[test]
+    fn additive_fields_are_omitted_when_absent() {
+        let rec = prov_rec("a-1", "external", "green", "blake3:c");
+        let json = serde_json::to_string(&rec).unwrap();
+        for key in ["seeded_from", "steer_note", "\"note\""] {
+            assert!(!json.contains(key), "{key} in {json}");
+        }
+        let steer = AttemptRecord {
+            seeded_from: Some("a-0".into()),
+            steer_note: Some("use an iterator".into()),
+            ..rec
+        };
+        let back: AttemptRecord =
+            serde_json::from_str(&serde_json::to_string(&steer).unwrap()).unwrap();
+        assert_eq!(back, steer);
     }
 }

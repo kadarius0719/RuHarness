@@ -25,10 +25,11 @@
 use crate::emission::{self, MIGRATE_SPEC, STDIO_OUTPUT_FNS};
 use crate::providers::ResolvedProvider;
 use crate::trajectory::{
-    abi_section, c_source_section, fresh_candidate_dir, printable, quote, read_sources,
-    scrub_paths, unit_section, unit_source_hash, write_new, Failure, Job, Judged, RunCtx,
-    SourceFile, Stage, StageTexts, BUILD_EVIDENCE_MAX_BYTES, CONTRACT_LINE_MAX_BYTES,
-    DETAIL_MAX_BYTES, FORMAT_EXPLANATION, MAX_FAILED_CHECKS,
+    abi_section, c_source_section, fresh_candidate_dir, prepare_dir, printable, quote,
+    read_sources, remove_path, scrub_list, scrub_paths, unit_section, unit_source_hash, write_new,
+    Failure, FirstTurn, Job, Judged, RunCtx, SourceFile, Stage, StageTexts, SteerSeed,
+    BUILD_EVIDENCE_MAX_BYTES, CONTRACT_LINE_MAX_BYTES, DETAIL_MAX_BYTES, FORMAT_EXPLANATION,
+    IN_PROGRESS, MAX_FAILED_CHECKS, REPLAY_KIND,
 };
 use crate::triage::{is_clean_relative_path, is_kebab_token};
 use harness_core::attempts::{self, AttemptRecord};
@@ -49,9 +50,7 @@ use crate::adapters::TraceAdapter;
 #[cfg(test)]
 use crate::emission::EmissionResult;
 #[cfg(test)]
-use crate::trajectory::{
-    emission_notes, reset_unfinished, sample_number, scrub_list, source_nonce,
-};
+use crate::trajectory::{emission_notes, reset_unfinished, sample_number, source_nonce};
 #[cfg(test)]
 use harness_core::attempts::ATTEMPT_SCHEMA_NAME;
 #[cfg(test)]
@@ -66,7 +65,7 @@ const DIFF_LINE_MAX_BYTES: usize = 256;
 
 /// The harness-owned `src/lib.rs` of every candidate (docs/SCHEMAS.md "Trust
 /// boundaries"): the compiler confines `unsafe` to `ffi.rs`.
-const CANDIDATE_LIB_RS: &str = "#![deny(unsafe_code)]\n\
+pub const CANDIDATE_LIB_RS: &str = "#![deny(unsafe_code)]\n\
 #[forbid(unsafe_code)] mod logic;\n\
 #[allow(unsafe_code)] mod ffi;\n";
 
@@ -194,6 +193,25 @@ layout (or <blocked>reason</blocked>). Reminder: any inputs or outputs shown und
 are samples of a much larger hidden test set — do not special-case them; find and fix the \
 cause.";
 
+/// The `[TASK]` lines of a steer attempt's first turn (docs/TUI-DESIGN.md
+/// §5.1): the reviewer's guidance over a finished candidate.
+const STEER_TASK: &str = "\
+Revise the candidate as the [GUIDANCE] asks, while preserving the C unit's exact observable \
+behavior and every rule above; if the verdict above shows failures, fix their cause too. Reply \
+with BOTH files in full in the emission contract layout (or <blocked>reason</blocked>). \
+Reminder: any inputs or outputs shown under [EVIDENCE] are samples of a much larger hidden test \
+set — do not special-case them.";
+
+/// `[FAILURE CLASS]` explanation when a steer attempt's seed was green.
+const GREEN_SEED_EXPLANATION: &str = "\
+the candidate above passed every check of the oracle; the [GUIDANCE] asks for a change anyway, \
+and the revised candidate must still pass every check";
+
+/// Longest steer note (docs/TUI-DESIGN.md §5.1).
+pub const MAX_STEER_NOTE_BYTES: usize = 2000;
+/// Longest human-attempt note (docs/TUI-DESIGN.md §5.2).
+pub const MAX_HUMAN_NOTE_BYTES: usize = 400;
+
 /// The migrate stage's texts and names (frozen: see [`SYSTEM_PROMPT`]).
 static MIGRATE_TEXTS: StageTexts = StageTexts {
     first_kind: "translate",
@@ -203,6 +221,7 @@ static MIGRATE_TEXTS: StageTexts = StageTexts {
     spec: &MIGRATE_SPEC,
     first_task: TRANSLATE_TASK,
     repair_task: REPAIR_TASK,
+    steer_task: Some(STEER_TASK),
     current_section: "CURRENT RUST",
     no_current: "(none: no reply so far could be parsed into the two files)\n",
     earlier: "The files under [CURRENT RUST] are from your last parseable reply; they had",
@@ -238,6 +257,55 @@ pub struct MigrateParams<'a> {
     /// request key matches, preferring an exact model match, then the
     /// lowest sample.
     pub attempt: Option<&'a str>,
+    /// Pose a STEER attempt (docs/TUI-DESIGN.md §5.1): a new attempt whose
+    /// first turn shows a finished seed's candidate and stored verdict with
+    /// the reviewer's note. `None` = a translate attempt — unless a pinned
+    /// `replay` attempt is itself a steer attempt, whose first turn is then
+    /// rendered from its record.
+    pub steer: Option<SteerArgs<'a>>,
+}
+
+/// The seed and note of a steer attempt.
+#[derive(Debug, Clone, Copy)]
+pub struct SteerArgs<'a> {
+    /// The finished attempt of the unit to seed from (explicit: the ledger
+    /// defines no order over a unit's attempts).
+    pub from: &'a str,
+    /// The reviewer's note (1..=[`MAX_STEER_NOTE_BYTES`] bytes, printable;
+    /// `\n` and `\t` allowed; no line may look like a prompt section header).
+    pub note: &'a str,
+}
+
+/// Refuse a note that cannot travel into a prompt: empty or over `max`
+/// bytes, a control character other than `\n`/`\t`, or (`multiline`
+/// notes) a line that looks like a prompt section header (`[WORDS]`), which
+/// would confuse the prompt's section structure.
+pub fn validate_note(note: &str, max: usize, multiline: bool) -> Result<(), Error> {
+    let refuse = |why: &str| Err(Error::Invariant(format!("the note {why}")));
+    if note.trim().is_empty() {
+        return refuse("is empty");
+    }
+    if note.len() > max {
+        return refuse(&format!("is longer than {max} bytes"));
+    }
+    if note
+        .chars()
+        .any(|c| c.is_control() && !(multiline && (c == '\n' || c == '\t')))
+    {
+        return refuse("contains a control character");
+    }
+    if note.lines().any(|line| {
+        let t = line.trim();
+        t.len() >= 3
+            && t.starts_with('[')
+            && t.ends_with(']')
+            && t[1..t.len() - 1]
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == ' ' || c == '_')
+    }) {
+        return refuse("has a line that looks like a prompt section header ([WORDS])");
+    }
+    Ok(())
 }
 
 /// What one executor run produced.
@@ -358,6 +426,7 @@ pub fn run_migration(
     let stdio = stdio_output_calls(facts, &sources);
     let pinned = pinned_sections(unit, &unit_source, hazards, &sources, &stdio)?;
 
+    let first_turn = first_turn(params, &ledger, &root, target, unit, &unit_source, &driver)?;
     let stage = MigrateStage {
         oracle,
         target,
@@ -380,6 +449,7 @@ pub fn run_migration(
         pinned: &pinned,
         unit_source,
         driver,
+        first_turn: &first_turn,
     }
     .run()?;
     Ok(MigrationOutcome {
@@ -388,6 +458,279 @@ pub fn run_migration(
         candidate_dir: outcome.candidate,
         drifted: outcome.drifted,
         verdict: outcome.verdict,
+    })
+}
+
+/// How the attempt's first turn is posed: a pinned `replay` of a steer
+/// attempt renders it from its RECORD (`seeded_from`, `steer_note`) —
+/// evidence-first, whatever the command line says (a mismatching
+/// `--from`/`--steer` is refused); otherwise `params.steer` makes a steer
+/// attempt; otherwise a translate attempt.
+fn first_turn(
+    params: &MigrateParams,
+    ledger: &Ledger,
+    root: &Path,
+    target: &TargetContext,
+    unit: &Unit,
+    unit_source: &str,
+    driver: &str,
+) -> Result<FirstTurn, Error> {
+    let pinned = match (params.provider.kind == REPLAY_KIND, params.attempt) {
+        (true, Some(id)) => attempts::load_pinned(ledger, &unit.id, id)?,
+        _ => None,
+    };
+    let (from, note) = match (pinned, params.steer) {
+        (Some(record), cli) => match &record.seeded_from {
+            Some(seed) => {
+                let note = record.steer_note.clone().ok_or_else(|| {
+                    Error::Invariant(format!(
+                        "attempt {}: integrity: seeded from {seed} but records no steer_note",
+                        record.id
+                    ))
+                })?;
+                if let Some(cli) = cli {
+                    if cli.from != seed || cli.note != note {
+                        return Err(Error::Invariant(format!(
+                            "--from/--steer do not match the pinned attempt {} (seeded from \
+                             {seed})",
+                            record.id
+                        )));
+                    }
+                }
+                (seed.clone(), note)
+            }
+            None if cli.is_some() => {
+                return Err(Error::Invariant(format!(
+                    "the pinned attempt {} is not a steer attempt; drop --from/--steer",
+                    record.id
+                )))
+            }
+            None => return Ok(FirstTurn::Translate),
+        },
+        (None, Some(cli)) => (cli.from.to_string(), cli.note.to_string()),
+        (None, None) => return Ok(FirstTurn::Translate),
+    };
+    validate_note(&note, MAX_STEER_NOTE_BYTES, true)?;
+    let refuse = |why: String| Error::Invariant(format!("--from {}: {why}", printable(&from, 64)));
+    let seed = attempts::load_pinned(ledger, &unit.id, &from)?
+        .ok_or_else(|| refuse(format!("unit `{}` has no such attempt", unit.id)))?;
+    if seed.stage.is_some() {
+        return Err(refuse("is not a migrate attempt".into()));
+    }
+    if seed.outcome == IN_PROGRESS {
+        return Err(refuse(
+            "is still in progress; only a finished attempt can seed".into(),
+        ));
+    }
+    if seed.unit_source != unit_source || seed.driver != driver {
+        return Err(refuse(
+            "is bound to superseded inputs (its unit source or driver is not the current one)"
+                .into(),
+        ));
+    }
+    let seed_dir = attempts::attempt_dir(ledger, &unit.id, &from);
+    let candidate = seed_dir.join("candidate");
+    if seed.candidate_digest.is_empty() || !candidate.is_dir() {
+        return Err(refuse("has no candidate to revise".into()));
+    }
+    if hash::crate_content_hash(&candidate)? != seed.candidate_digest {
+        return Err(Error::Invariant(format!(
+            "attempt {}: integrity: its candidate/ does not match its candidate_digest — the \
+             attempt directory was modified after it finished",
+            seed.id
+        )));
+    }
+    let read = |rel: &str| {
+        let path = candidate.join(rel);
+        std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))
+    };
+    let files = vec![read("src/logic.rs")?, read("src/ffi.rs")?];
+    let verdict_path = seed_dir.join("attempt-verdict.json");
+    let verdict = match Verdict::load(&verdict_path) {
+        Ok(v) => v,
+        Err(e) if e.is_not_found() => {
+            return Err(refuse(
+                "has no stored verdict (attempt-verdict.json)".into(),
+            ))
+        }
+        Err(e) => return Err(e),
+    };
+    // Evidence from COMMITTED records only: never the driver-output excerpt,
+    // which reads the gitignored build dir of whatever ran last.
+    let failure = (!verdict.green).then(|| {
+        let scrub = scrub_list(
+            &candidate,
+            root,
+            &target.root,
+            &|name| std::env::var_os(name),
+            &std::env::temp_dir(),
+        );
+        let class = classify(&verdict);
+        Failure {
+            class,
+            explanation: verdict_explanation(class, &verdict),
+            evidence: oracle_evidence(&scrub, None, class, &verdict),
+        }
+    });
+    Ok(FirstTurn::Steer(SteerSeed {
+        seed_id: seed.id,
+        note,
+        files,
+        failure,
+        green_explanation: GREEN_SEED_EXPLANATION,
+    }))
+}
+
+/// A hand edit to record as a labelled human attempt (`harness override`,
+/// docs/TUI-DESIGN.md §5.2): exactly the two files a model would emit.
+#[derive(Debug, Clone, Copy)]
+pub struct HumanEdit<'a> {
+    /// `src/logic.rs`.
+    pub logic: &'a str,
+    /// `src/ffi.rs`.
+    pub ffi: &'a str,
+    /// The human's note (printable, ≤ [`MAX_HUMAN_NOTE_BYTES`] bytes).
+    pub note: Option<&'a str>,
+}
+
+/// `response_hash` (and the id's last input) of a human attempt:
+/// blake3(logic ‖ NUL ‖ ffi) — what the human authored, stable before any
+/// build.
+pub fn human_edit_hash(logic: &str, ffi: &str) -> String {
+    let mut bytes = Vec::with_capacity(logic.len() + ffi.len() + 1);
+    bytes.extend_from_slice(logic.as_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(ffi.as_bytes());
+    hash::bytes_hash(&bytes)
+}
+
+/// Record a hand edit as a labelled human attempt: the migrate stage's ONE
+/// judge (deny scan, the harness-owned manifest and `lib.rs`, the oracle)
+/// runs over the two files in a new `attempts/<id>/`, exactly as over a
+/// model's reply. The record says `provider`/`provider_kind` `human`, model
+/// `-`, one turn of kind `human`; `outcome` green or red. A judge HARNESS
+/// error (driver-shape, boundary C-side) records nothing: the attempt dir
+/// is removed again. Never promotes. The caller has taken the writer lock
+/// and checked the migrate preconditions and the identical-source refusal.
+pub fn record_human_attempt(
+    oracle: &dyn OracleStrategy,
+    target: &TargetContext,
+    facts: &Facts,
+    plan: &Plan,
+    unit: &Unit,
+    edit: &HumanEdit,
+) -> Result<MigrationOutcome, Error> {
+    let (driver_rel, crate_name) = preconditions(oracle, plan, unit)?;
+    if let Some(note) = edit.note {
+        validate_note(note, MAX_HUMAN_NOTE_BYTES, false)?;
+    }
+    let root = target
+        .root
+        .canonicalize()
+        .map_err(|e| Error::io(&target.root, e))?;
+    let ledger = Ledger::new(root.clone());
+    let sources = read_sources(&root, &target.config.target.source_dir, facts, unit)?;
+    let unit_source = unit_source_hash(&sources);
+    let driver = hash::file_hash(&root.join(driver_rel))?;
+    let stdio = stdio_output_calls(facts, &sources);
+    let stage = MigrateStage {
+        oracle,
+        target,
+        unit,
+        crate_name,
+        build_dir: ledger.build_dir().join(&unit.id),
+        ffi_externs: if stdio.is_empty() {
+            Vec::new()
+        } else {
+            STDIO_OUTPUT_FNS.to_vec()
+        },
+    };
+    let response_hash = human_edit_hash(edit.logic, edit.ffi);
+    let id = attempts::attempt_id(
+        &unit.id,
+        &unit_source,
+        &driver,
+        attempts::HUMAN_KIND,
+        "-",
+        &response_hash,
+    );
+    if attempts::attempt_dir(&ledger, &unit.id, &id).exists() {
+        return Err(Error::Invariant(format!(
+            "this edit is already recorded as attempt {id}; nothing to record"
+        )));
+    }
+    let work_rel = vec!["attempts".to_string(), id.clone()];
+    let work_dir = prepare_dir(&ledger, &unit.id, &work_rel)?;
+    let mut record = AttemptRecord {
+        schema: attempts::ATTEMPT_SCHEMA_NAME.to_string(),
+        schema_version: attempts::ATTEMPT_SCHEMA_VERSION,
+        id: id.clone(),
+        unit: unit.id.clone(),
+        stage: None,
+        provider: attempts::HUMAN_KIND.to_string(),
+        provider_kind: attempts::HUMAN_KIND.to_string(),
+        model: "-".to_string(),
+        prompt_digest: String::new(),
+        unit_source,
+        driver,
+        toolchain: Vec::new(),
+        outcome: IN_PROGRESS.to_string(),
+        turns: Vec::new(),
+        candidate_digest: String::new(),
+        promoted: false,
+        seeded_from: None,
+        steer_note: None,
+        note: edit.note.map(str::to_string),
+    };
+    if let Err(e) = record.store(&work_dir) {
+        let _ = remove_path(&work_dir);
+        return Err(e);
+    }
+    crate::progress::sink().turn_start(&unit.id, &id, 1, attempts::HUMAN_KIND, "");
+    let scrub = scrub_list(
+        &work_dir.join("candidate"),
+        &root,
+        &target.root,
+        &|name| std::env::var_os(name),
+        &std::env::temp_dir(),
+    );
+    let ctx = RunCtx {
+        work_dir: &work_dir,
+        work_rel: work_rel.join("/"),
+        verifying: false,
+        scrub: &scrub,
+    };
+    let files = [edit.logic.to_string(), edit.ffi.to_string()];
+    let judged = match stage.judge(&ctx, &files, &mut record) {
+        Ok(judged) => judged,
+        Err(e) => {
+            // Not an outcome of the edit: nothing is recorded.
+            let _ = remove_path(&work_dir);
+            return Err(e);
+        }
+    };
+    let result = judged.failure.as_ref().map_or("green", |f| f.class);
+    record.turns.push(attempts::Turn {
+        kind: attempts::HUMAN_KIND.to_string(),
+        result: result.to_string(),
+        request_key: String::new(),
+        response_hash,
+        input_tokens: None,
+        output_tokens: None,
+    });
+    record.outcome = if result == "green" { "green" } else { "red" }.to_string();
+    record.store(&work_dir)?;
+    if let Some(turn) = record.turns.last() {
+        crate::progress::sink().turn_end(&unit.id, &id, 1, turn);
+    }
+    Ok(MigrationOutcome {
+        candidate_dir: judged
+            .wrote_candidate
+            .then(|| stage.candidate_path(&work_dir)),
+        record,
+        attempt_dir: work_dir,
+        drifted: None,
+        verdict: judged.verdict,
     })
 }
 
@@ -490,7 +833,7 @@ impl Stage for MigrateStage<'_> {
             Some(Failure {
                 class,
                 explanation: verdict_explanation(class, &verdict),
-                evidence: oracle_evidence(ctx.scrub, &self.build_dir, class, &verdict),
+                evidence: oracle_evidence(ctx.scrub, Some(&self.build_dir), class, &verdict),
             })
         };
         Ok(Judged {
@@ -759,11 +1102,13 @@ dynamic loading, or inline assembly), so nothing was linked or run; translate th
 behavior without them";
 
 /// Bounded `[EVIDENCE]` for a red verdict of the given class: the failed
-/// checks' details, scrubbed and quoted, plus the differing driver output
-/// lines (from `build_dir`) for a byte-compare failure.
+/// checks' details, scrubbed and quoted, plus — when `build_dir` is given,
+/// i.e. the verdict was produced by THIS run — the differing driver output
+/// lines from it for a byte-compare failure. A steer turn passes `None`:
+/// the build dir belongs to whatever ran last, not to its seed.
 fn oracle_evidence(
     scrub: &[(String, String)],
-    build_dir: &Path,
+    build_dir: Option<&Path>,
     class: &str,
     verdict: &Verdict,
 ) -> String {
@@ -791,7 +1136,7 @@ fn oracle_evidence(
         // Only a byte-compare failure leaves fresh driver outputs; after
         // a crash the files on disk are a previous run's.
         if class == "oracle" && check.name == "differential-driver" {
-            if let Some(diff) = driver_diff(build_dir, scrub) {
+            if let Some(diff) = build_dir.and_then(|dir| driver_diff(dir, scrub)) {
                 out.push_str(&diff);
             }
         }
@@ -897,7 +1242,8 @@ fn stream_diff(
 /// `Cargo.toml` of a candidate: harness-owned — no dependencies, no build
 /// script, `panic = "abort"`, and an empty `[workspace]` so the crate can
 /// never join (or break) an enclosing workspace.
-fn candidate_manifest(crate_name: &str) -> String {
+/// The harness-owned `Cargo.toml` of every candidate crate named `crate_name`.
+pub fn candidate_manifest(crate_name: &str) -> String {
     format!(
         "# Generated by RuHarness: harness-owned, never model-written.\n\
          [package]\n\
@@ -1322,6 +1668,7 @@ int add(int a, int b) { return a + b; }\n";
             traces_dir: &fx.traces,
             retry,
             attempt,
+            steer: None,
         };
         run_migration(
             &params,
@@ -1722,7 +2069,7 @@ int add(int a, int b) { return a + b; }\n";
                 "differential-driver"
             };
             let red = verdict(&[(check, false, detail)]);
-            let evidence = oracle_evidence(&scrub, Path::new("/nonexistent"), class, &red);
+            let evidence = oracle_evidence(&scrub, Some(Path::new("/nonexistent")), class, &red);
             assert!(!evidence.contains("/Users/"), "{evidence}");
             assert!(!evidence.contains("/var/folders"), "{evidence}");
             for shown in [
@@ -3144,6 +3491,7 @@ int add(int a, int b) { return a + b; }\n";
             traces_dir: &fx.traces,
             retry: false,
             attempt,
+            steer: None,
         };
         run_migration(
             &params,
@@ -3711,6 +4059,7 @@ int add(int a, int b) { return a + b; }\n";
             traces_dir: &fx.traces,
             retry: false,
             attempt: None,
+            steer: None,
         };
         let fake = oracle(verdicts);
         let _ = run_migration(
@@ -3926,6 +4275,8 @@ int add(int a, int b) { return a + b; }\n";
             ("CAPABILITIES_EXPLANATION", CAPABILITIES_EXPLANATION),
             ("C_SIDE_EXPLANATION", C_SIDE_EXPLANATION),
             ("BOUNDARY_EXPLANATION", BOUNDARY_EXPLANATION),
+            ("STEER_TASK", STEER_TASK),
+            ("GREEN_SEED_EXPLANATION", GREEN_SEED_EXPLANATION),
             ("build", class_explanation("build")),
             ("check", class_explanation("check")),
             ("oracle", class_explanation("oracle")),
@@ -4085,6 +4436,7 @@ int add(int a, int b) { return a + b; }\n";
             traces_dir: &fx.traces,
             retry: false,
             attempt: None,
+            steer: None,
         };
         let fake = oracle(vec![green()]);
         run_migration(
@@ -4313,6 +4665,7 @@ int add(int a, int b) { return a + b; }\n";
                 traces_dir: &fx.traces,
                 retry: false,
                 attempt: None,
+                steer: None,
             };
             let err = run_migration(
                 &params,
@@ -4345,6 +4698,7 @@ int add(int a, int b) { return a + b; }\n";
             traces_dir: &fx.traces,
             retry: false,
             attempt: None,
+            steer: None,
         };
         let mut stranger = fx.unit().clone();
         stranger.id = "u999-stranger".into();
@@ -4400,6 +4754,7 @@ int add(int a, int b) { return a + b; }\n";
             traces_dir: &fx.traces,
             retry: false,
             attempt: None,
+            steer: None,
         };
         let run = |facts: &Facts| {
             run_migration(
@@ -4551,6 +4906,7 @@ int add(int a, int b) { return a + b; }\n";
             traces_dir: &fx.traces,
             retry: false,
             attempt: None,
+            steer: None,
         };
         let fake = oracle(vec![green()]);
         run_migration(&params, &fake, &fx.target, facts, &fx.plan, fx.unit(), &[]).unwrap();
@@ -4628,6 +4984,7 @@ int add(int a, int b) { return a + b; }\n";
                 traces_dir: &fx.traces,
                 retry: false,
                 attempt: None,
+                steer: None,
             };
             run_migration(
                 &params,
@@ -4710,5 +5067,375 @@ int add(int a, int b) { return a + b; }\n";
             EmissionResult::Files { .. }
         ));
         assert!(SYSTEM_PROMPT.contains(emission::END_SENTINEL));
+    }
+
+    // ---------- steer attempts and human attempts (docs/TUI-DESIGN.md §5) ----------
+
+    /// `run_opts` with a steer.
+    fn run_steer(
+        fx: &Fx,
+        provider: &ResolvedProvider,
+        oracle: &FakeOracle,
+        max_repairs: u32,
+        attempt: Option<&str>,
+        steer: Option<SteerArgs>,
+    ) -> Result<MigrationOutcome, Error> {
+        let params = MigrateParams {
+            provider,
+            model: "test-model",
+            max_tokens: 4096,
+            max_repairs,
+            traces_dir: &fx.traces,
+            retry: false,
+            attempt,
+            steer,
+        };
+        run_migration(
+            &params,
+            oracle,
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &[],
+        )
+    }
+
+    /// A finished seed attempt: one turn judged by `seed_verdict`, with the
+    /// driver outputs of a byte-compare failure left in the build dir.
+    fn seed(fx: &Fx, seed_verdict: Verdict) -> AttemptRecord {
+        let (provider, _) = handoff(fx, vec![good()]);
+        let mut fake = oracle(vec![seed_verdict]);
+        fake.driver_outputs = Some((b"case 1\nexpected\n".to_vec(), b"case 1\nactual\n".to_vec()));
+        run_with(fx, &provider, &fake, 0, &[]).unwrap().record
+    }
+
+    const NOTE: &str = "Prefer an iterator over index arithmetic; keep the wrapping add.";
+
+    #[test]
+    fn a_steer_turn_renders_from_committed_evidence_only() {
+        let fx = fixture("steer-red");
+        let seed = seed(&fx, diff_failure());
+        assert_eq!(seed.outcome, "red");
+        // The build dir holds a differing driver output — a live repair
+        // would quote it; the steer turn must not.
+        let first = |fx: &Fx| {
+            let (provider, seen) =
+                scripted("anthropic", false, vec![Err("awaiting response: x".into())]);
+            let steer = SteerArgs {
+                from: &seed.id,
+                note: NOTE,
+            };
+            let err = run_steer(fx, &provider, &oracle(vec![]), 3, None, Some(steer)).unwrap_err();
+            assert!(err.to_string().starts_with("awaiting response"), "{err}");
+            let requests = seen.borrow().clone();
+            requests[0].clone()
+        };
+        let a = first(&fx);
+        check_prompt_fixture_named("migrate-steer-red.txt", &a);
+        assert!(a.user.contains("[GUIDANCE]\n") && a.user.contains(NOTE));
+        assert!(
+            !a.user.contains("actual"),
+            "the build-dir excerpt leaked into a steer turn"
+        );
+        assert!(
+            a.user.contains("first diff at byte 17"),
+            "the stored detail is quoted"
+        );
+        // Another oracle run rewrites the build dir: the steer turn, its key
+        // and so the attempt id are unchanged.
+        let build = Ledger::new(fx.target.root.canonicalize().unwrap())
+            .build_dir()
+            .join(UNIT);
+        std::fs::write(build.join("drv_rs.out"), "case 1\nsomething else\n").unwrap();
+        let b = first(&fx);
+        assert_eq!(
+            crate::trajectory::fixture_text(&a),
+            crate::trajectory::fixture_text(&b),
+            "the steer turn depends on the build dir"
+        );
+        std::fs::remove_dir_all(&build).unwrap();
+        assert_eq!(
+            crate::trajectory::fixture_text(&first(&fx)),
+            crate::trajectory::fixture_text(&a)
+        );
+        let attempts = attempts::load_unit_attempts(
+            &Ledger::new(fx.target.root.canonicalize().unwrap()),
+            UNIT,
+        )
+        .unwrap();
+        assert_eq!(attempts.len(), 2, "the seed and ONE steer attempt");
+        let steer = attempts.iter().find(|r| r.id != seed.id).unwrap();
+        assert_eq!(steer.seeded_from.as_deref(), Some(seed.id.as_str()));
+        assert_eq!(steer.steer_note.as_deref(), Some(NOTE));
+        assert_eq!(steer.prompt_digest, crate::trajectory::prompt_digest(&a));
+    }
+
+    #[test]
+    fn a_steer_attempt_carries_the_note_on_every_turn_and_replays_conformant() {
+        let fx = fixture("steer-green");
+        let seed = seed(&fx, green());
+        assert_eq!(seed.outcome, "green");
+        // The steer's reply is red, the repair's green.
+        let broken = reply(emit(&LOGIC.replace("add(b)", "sub(b)"), FFI));
+        let (provider, seen) = handoff(&fx, vec![broken, good()]);
+        let steer = SteerArgs {
+            from: &seed.id,
+            note: NOTE,
+        };
+        // Each oracle run writes its own driver outputs, as the real one does:
+        // the REPAIR turn quotes the build dir its predecessor's judge wrote.
+        let judged = || {
+            let mut fake = oracle(vec![diff_failure(), green()]);
+            fake.driver_outputs =
+                Some((b"case 7\nexpected\n".to_vec(), b"case 7\nactual\n".to_vec()));
+            fake
+        };
+        let done = run_steer(&fx, &provider, &judged(), 3, None, Some(steer)).unwrap();
+        let requests = seen.borrow().clone();
+        check_prompt_fixture_named("migrate-steer-green.txt", &requests[0]);
+        check_prompt_fixture_named("migrate-steer-repair.txt", &requests[1]);
+        assert!(
+            requests[1].user.contains("1. steer -> oracle"),
+            "{}",
+            requests[1].user
+        );
+        assert!(
+            requests[1].user.contains("[GUIDANCE]\n"),
+            "the repair lost the note"
+        );
+        let kinds: Vec<&str> = done.record.turns.iter().map(|t| t.kind.as_str()).collect();
+        assert_eq!(kinds, ["steer", "repair"]);
+        assert_eq!(done.record.outcome, "green");
+
+        // Evidence-first replay of the pinned steer attempt: rendered from its
+        // record (no --steer on the command line), conformant, with the build
+        // dir gone.
+        let build = Ledger::new(fx.target.root.canonicalize().unwrap())
+            .build_dir()
+            .join(UNIT);
+        let _ = std::fs::remove_dir_all(&build);
+        let (provider, seen) = scripted("replay", false, vec![]);
+        let replayed =
+            run_steer(&fx, &provider, &judged(), 3, Some(&done.record.id), None).unwrap();
+        assert!(seen.borrow().is_empty(), "replay sends nothing");
+        assert_eq!(replayed.record, done.record);
+        assert_eq!(
+            replayed.drifted,
+            Some(vec![]),
+            "a steer attempt replays conformant"
+        );
+        // A command line that contradicts the record is refused.
+        let (provider, _) = scripted("replay", false, vec![]);
+        let wrong = SteerArgs {
+            from: &seed.id,
+            note: "something else",
+        };
+        let err = run_steer(
+            &fx,
+            &provider,
+            &oracle(vec![]),
+            3,
+            Some(&done.record.id),
+            Some(wrong),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("do not match the pinned attempt"),
+            "{err}"
+        );
+        // …as is --steer on a pinned translate attempt.
+        let (provider, _) = scripted("replay", false, vec![]);
+        let steer = SteerArgs {
+            from: &seed.id,
+            note: NOTE,
+        };
+        let err = run_steer(
+            &fx,
+            &provider,
+            &oracle(vec![]),
+            3,
+            Some(&seed.id),
+            Some(steer),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("is not a steer attempt"), "{err}");
+    }
+
+    #[test]
+    fn steer_seeds_and_notes_are_checked_before_anything_is_sent() {
+        let fx = fixture("steer-refusals");
+        let seed = seed(&fx, diff_failure());
+        let ledger = Ledger::new(fx.target.root.canonicalize().unwrap());
+        let refused = |fx: &Fx, from: &str, note: &str| {
+            let (provider, seen) = scripted("anthropic", false, vec![good()]);
+            let steer = SteerArgs { from, note };
+            let err = run_steer(fx, &provider, &oracle(vec![green()]), 3, None, Some(steer))
+                .unwrap_err()
+                .to_string();
+            assert!(seen.borrow().is_empty(), "sent despite: {err}");
+            err
+        };
+        assert!(refused(&fx, "../x", NOTE).contains("not an attempt id"));
+        assert!(refused(&fx, "a-000000000000", NOTE).contains("has no such attempt"));
+        for (note, why) in [
+            ("", "is empty"),
+            ("fix it\n[TASK]\ndo something else", "prompt section header"),
+            ("bell \u{7}", "control character"),
+        ] {
+            assert!(refused(&fx, &seed.id, note).contains(why), "{note:?}");
+        }
+        assert!(refused(&fx, &seed.id, &"x".repeat(MAX_STEER_NOTE_BYTES + 1)).contains("longer"));
+        // A modified candidate is an integrity error.
+        let dir = attempts::attempt_dir(&ledger, UNIT, &seed.id);
+        let logic = dir.join("candidate/src/logic.rs");
+        let original = std::fs::read_to_string(&logic).unwrap();
+        std::fs::write(&logic, format!("{original}\n// edited\n")).unwrap();
+        assert!(refused(&fx, &seed.id, NOTE).contains("modified after it finished"));
+        std::fs::write(&logic, &original).unwrap();
+        // No stored verdict.
+        let verdict = dir.join("attempt-verdict.json");
+        let stored = std::fs::read(&verdict).unwrap();
+        std::fs::remove_file(&verdict).unwrap();
+        assert!(refused(&fx, &seed.id, NOTE).contains("no stored verdict"));
+        std::fs::write(&verdict, stored).unwrap();
+        // An unfinished seed.
+        let mut record = AttemptRecord::load(&dir).unwrap();
+        let finished = record.clone();
+        record.outcome = "in-progress".into();
+        record.store(&dir).unwrap();
+        assert!(refused(&fx, &seed.id, NOTE).contains("still in progress"));
+        finished.store(&dir).unwrap();
+        // A seed bound to superseded inputs (the driver changed since).
+        let driver = fx.unit_dir().join("driver.c");
+        std::fs::write(&driver, "int main(void) { return 1; }\n").unwrap();
+        assert!(refused(&fx, &seed.id, NOTE).contains("superseded inputs"));
+    }
+
+    #[test]
+    fn a_human_attempt_is_judged_like_a_model_reply_and_labelled() {
+        let fx = fixture("human");
+        let edit = |logic: &'static str| HumanEdit {
+            logic,
+            ffi: FFI,
+            note: Some("hand-fixed the carry"),
+        };
+        let green_run = record_human_attempt(
+            &oracle(vec![green()]),
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &edit(LOGIC),
+        )
+        .unwrap();
+        let r = &green_run.record;
+        assert_eq!(
+            (
+                r.provider.as_str(),
+                r.provider_kind.as_str(),
+                r.model.as_str()
+            ),
+            ("human", "human", "-")
+        );
+        assert_eq!(r.outcome, "green");
+        assert_eq!(r.turns.len(), 1);
+        assert_eq!(r.turns[0].kind, "human");
+        assert_eq!(r.turns[0].result, "green");
+        assert_eq!(r.turns[0].request_key, "");
+        assert_eq!(r.turns[0].response_hash, human_edit_hash(LOGIC, FFI));
+        assert!(r.turns[0].input_tokens.is_none());
+        assert_eq!(r.note.as_deref(), Some("hand-fixed the carry"));
+        let candidate = green_run.candidate_dir.clone().unwrap();
+        assert_eq!(
+            r.candidate_digest,
+            hash::crate_content_hash(&candidate).unwrap()
+        );
+        // The harness owns the manifest and lib.rs, as for a model reply.
+        assert_eq!(
+            std::fs::read_to_string(candidate.join("src/lib.rs")).unwrap(),
+            CANDIDATE_LIB_RS
+        );
+        assert!(green_run.attempt_dir.join("attempt-verdict.json").is_file());
+        // The same edit again: already recorded.
+        let err = record_human_attempt(
+            &oracle(vec![green()]),
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &edit(LOGIC),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("already recorded"), "{err}");
+
+        // A red edit: recorded red with the judge's class.
+        const WRONG: &str = "pub fn add(a: i32, b: i32) -> i32 {\n    a.wrapping_sub(b)\n}\n";
+        let red = record_human_attempt(
+            &oracle(vec![diff_failure()]),
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &edit(WRONG),
+        )
+        .unwrap();
+        assert_eq!(red.record.outcome, "red");
+        assert_eq!(red.record.turns[0].result, "oracle");
+        // A deny-scan failure: class `check`, nothing built.
+        const UNSAFE: &str = "pub fn add(a: i32, b: i32) -> i32 { unsafe { a + b } }\n";
+        let denied = record_human_attempt(
+            &oracle(vec![]),
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &edit(UNSAFE),
+        )
+        .unwrap();
+        assert_eq!(denied.record.turns[0].result, "check");
+        assert!(denied.record.candidate_digest.is_empty());
+        assert!(denied.candidate_dir.is_none());
+        // A judge HARNESS error (the unit's driver fails its shape gate)
+        // records nothing.
+        const OTHER: &str = "pub fn add(a: i32, b: i32) -> i32 {\n    b.wrapping_add(a)\n}\n";
+        let before = attempts::load_unit_attempts(
+            &Ledger::new(fx.target.root.canonicalize().unwrap()),
+            UNIT,
+        )
+        .unwrap()
+        .len();
+        let err = record_human_attempt(
+            &oracle(vec![verdict(&[("driver-shape", false, "calls exit()")])]),
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &edit(OTHER),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("driver-shape"), "{err}");
+        let after = attempts::load_unit_attempts(
+            &Ledger::new(fx.target.root.canonicalize().unwrap()),
+            UNIT,
+        )
+        .unwrap()
+        .len();
+        assert_eq!(before, after, "a judge harness error must record nothing");
+        // A bad note is refused before anything is written.
+        let err = record_human_attempt(
+            &oracle(vec![green()]),
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &HumanEdit {
+                logic: OTHER,
+                ffi: FFI,
+                note: Some("two\nlines"),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("control character"), "{err}");
     }
 }

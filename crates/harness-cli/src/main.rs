@@ -7,6 +7,7 @@
 
 mod bench;
 mod gen_driver;
+mod hand_edit;
 mod promote;
 mod report;
 
@@ -126,6 +127,31 @@ enum Cmd {
         /// Pin the recorded attempt a `--provider replay` run verifies
         #[arg(long)]
         attempt: Option<String>,
+        /// Pose a STEER attempt: the reviewer's note over the finished
+        /// attempt named by --from (both are required together)
+        #[arg(long)]
+        steer: Option<String>,
+        /// The finished attempt a --steer attempt is seeded from
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// Record a hand edit (exactly src/logic.rs and src/ffi.rs of DIR) as a
+    /// labelled human attempt, judged by the oracle like a model reply; never
+    /// promotes (`harness promote` does, explicitly)
+    Override {
+        /// Unit id from plan.toml
+        unit: String,
+        /// The directory holding src/logic.rs and src/ffi.rs
+        dir: PathBuf,
+        /// A short note recorded with the attempt
+        #[arg(long)]
+        note: Option<String>,
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Run target/model-derived code even though no sandbox is available
+        #[arg(long)]
+        allow_unsandboxed: bool,
     },
     /// Promote a recorded green migrate attempt into the unit's crate and
     /// verify it in place (the explicit act a review's Accept is)
@@ -272,10 +298,11 @@ fn install_signal_handler() {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     install_signal_handler();
+    report::set_args(std::env::args().skip(1).filter(|a| a != "--json").collect());
     if cli.json {
         report::init(report::Mode::Json);
         let _ = harness_llm::progress::install(Box::new(report::Progress));
-        let argv: Vec<String> = std::env::args().skip(1).filter(|a| a != "--json").collect();
+        let argv: Vec<String> = report::args().to_vec();
         let command = argv.first().cloned().unwrap_or_default();
         report::header(&command, argv.get(1..).unwrap_or(&[]));
     }
@@ -309,6 +336,8 @@ fn main() -> ExitCode {
             allow_unsandboxed,
             retry,
             attempt,
+            steer,
+            from,
         } => cmd_migrate(MigrateArgs {
             unit,
             target,
@@ -319,7 +348,16 @@ fn main() -> ExitCode {
             allow_unsandboxed,
             retry,
             attempt,
+            steer,
+            from,
         }),
+        Cmd::Override {
+            unit,
+            dir,
+            note,
+            target,
+            allow_unsandboxed,
+        } => hand_edit::cmd_override(unit, dir, note, target, allow_unsandboxed),
         Cmd::Promote {
             unit,
             attempt,
@@ -774,7 +812,11 @@ fn cmd_observe(target: PathBuf) -> Result<u8> {
                     k: "awaiting",
                     attempt: None,
                     path: path.display().to_string(),
-                    resume: format!("harness observe --target {}", target.display()),
+                    resume: format!(
+                        "harness observe --target {}",
+                        report::shell_quote(&target.to_string_lossy())
+                    ),
+                    args: report::args(),
                 });
             }
             return Err(e.into());
@@ -961,19 +1003,24 @@ struct MigrateArgs {
     allow_unsandboxed: bool,
     retry: bool,
     attempt: Option<String>,
+    steer: Option<String>,
+    from: Option<String>,
 }
 
 impl MigrateArgs {
-    /// The exact command line that resumes this run (the `awaiting` hint
-    /// and event carry it, so a resume keeps the same promotion flags).
+    /// The command line that resumes this run, as a human would type it:
+    /// every value shell-quoted, the promotion and steer flags kept (the
+    /// `awaiting` hint and event carry it). Global flags (`--json`) are not
+    /// repeated; a client re-runs its own argv (the event's `args`).
     fn resume_command(&self) -> String {
-        let mut cmd = format!("harness migrate {}", self.unit);
-        cmd.push_str(&format!(" --target {}", self.target.display()));
+        let q = report::shell_quote;
+        let mut cmd = format!("harness migrate {}", q(&self.unit));
+        cmd.push_str(&format!(" --target {}", q(&self.target.to_string_lossy())));
         if let Some(p) = &self.provider {
-            cmd.push_str(&format!(" --provider {p}"));
+            cmd.push_str(&format!(" --provider {}", q(p)));
         }
         if let Some(m) = &self.model {
-            cmd.push_str(&format!(" --model {m}"));
+            cmd.push_str(&format!(" --model {}", q(m)));
         }
         if self.promote {
             cmd.push_str(" --promote");
@@ -988,7 +1035,13 @@ impl MigrateArgs {
             cmd.push_str(" --retry");
         }
         if let Some(a) = &self.attempt {
-            cmd.push_str(&format!(" --attempt {a}"));
+            cmd.push_str(&format!(" --attempt {}", q(a)));
+        }
+        if let Some(from) = &self.from {
+            cmd.push_str(&format!(" --from {}", q(from)));
+        }
+        if let Some(note) = &self.steer {
+            cmd.push_str(&format!(" --steer {}", q(note)));
         }
         cmd
     }
@@ -1006,6 +1059,8 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         allow_unsandboxed,
         retry,
         attempt,
+        steer,
+        from,
     } = args;
     require_sandbox(allow_unsandboxed, "harness migrate")?;
     let ctx = TargetContext::load(&target)?;
@@ -1024,6 +1079,29 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     // The plan's staleness rule and R6 (a generated driver must carry a
     // FRESH green validation) — shared with `harness promote`.
     promote::migrate_preconditions(&ctx, &ledger, &facts, unit, "migrate")?;
+    // A steer attempt names its seed explicitly: the ledger defines no order
+    // over a unit's attempts, so there is no "latest" to default to.
+    if steer.is_some() != from.is_some() {
+        let (unit_source, driver) = harness_core::attempts::current_binding(&ctx, &facts, unit)?;
+        let mut finished: Vec<String> =
+            harness_core::attempts::load_unit_attempts(&ledger, &unit_id)?
+                .into_iter()
+                .filter(|r| {
+                    r.outcome != "in-progress" && r.unit_source == unit_source && r.driver == driver
+                })
+                .map(|r| r.id)
+                .collect();
+        finished.sort();
+        bail!(
+            "--steer and --from go together: pass --from <ATTEMPT> with --steer <NOTE>; finished \
+             attempts of `{unit_id}` bound to the current inputs: {}",
+            if finished.is_empty() {
+                "none".to_string()
+            } else {
+                finished.join(", ")
+            }
+        );
+    }
 
     // Stage routing (§13.2): flag > [llm.migrate] > [llm].
     let llm = &ctx.config.llm;
@@ -1052,6 +1130,10 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         traces_dir: &traces,
         retry,
         attempt: attempt.as_deref(),
+        steer: match (&from, &steer) {
+            (Some(from), Some(note)) => Some(harness_llm::SteerArgs { from, note }),
+            _ => None,
+        },
     };
     let outcome = match harness_llm::migrate::run_migration(
         &params, &oracle, &ctx, &facts, &plan_doc, unit, &hazards,
@@ -1070,6 +1152,7 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
                     attempt: attempt.as_deref(),
                     path: path.display().to_string(),
                     resume: resume.clone(),
+                    args: report::args(),
                 });
             }
             return Err(e.into());

@@ -1,0 +1,40 @@
+[package]
+name = "harness-tui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The review cockpit: a read-mostly terminal UI over the ledger that spawns `harness` for every write"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "harness-tui"
+path = "src/main.rs"
+required-features = ["tui"]
+
+[features]
+default = ["tui"]
+# The terminal front end. Without it the crate is the read model only
+# (`harness_tui::model`), for other clients such as harness-mcp.
+tui = [
+    "dep:ratatui",
+    "dep:similar",
+    "dep:tree-sitter-highlight",
+    "dep:tree-sitter-c",
+    "dep:signal-hook",
+    "dep:serde_json",
+]
+
+[dependencies]
+harness-core.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true
+unicode-width.workspace = true
+ratatui = { workspace = true, optional = true }
+similar = { workspace = true, optional = true }
+tree-sitter-highlight = { workspace = true, optional = true }
+tree-sitter-c = { workspace = true, optional = true }
+signal-hook = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }

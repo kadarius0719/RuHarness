@@ -74,22 +74,16 @@ pub(crate) fn migrate_preconditions(
     Ok(())
 }
 
-/// The `(unit_source, driver)` digests an attempt of `unit` is bound to
-/// when recorded against the CURRENT tree — derived exactly as
-/// `run_migration` records them and as `bench` recognises provenance
-/// (R-5): the include-closure file-set hash and the driver file hash.
+/// The `(unit_source, driver)` digests of the current tree (the R-5
+/// binding; one implementation, in harness-core).
 pub(crate) fn current_binding(
     ctx: &TargetContext,
     facts: &Facts,
     unit: &Unit,
 ) -> Result<(String, String)> {
-    let closure = facts.include_closure(&unit.files);
-    let unit_source = hash::file_set_hash_on_disk(&ctx.root, &closure)?;
-    let driver_rel = unit
-        .oracle_param_str("driver")
+    unit.oracle_param_str("driver")
         .context("unit has no [unit.oracle] driver")?;
-    let driver = hash::file_hash(&ctx.root.join(driver_rel))?;
-    Ok((unit_source, driver))
+    Ok(attempts::current_binding(ctx, facts, unit)?)
 }
 
 /// Copy the closed crate file list (Cargo.toml, Cargo.lock, src/**) — never

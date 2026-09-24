@@ -56,7 +56,11 @@ pub mod triage;
 pub use adapters::{AnthropicAdapter, TraceAdapter};
 pub use driver_gen::{run_driver_generation, DriverOutcome};
 pub use emission::{deny_scan, parse_emission, EmissionResult};
-pub use migrate::{run_migration, MigrateParams, MigrationOutcome};
+pub use migrate::{
+    candidate_manifest, human_edit_hash, record_human_attempt, run_migration, validate_note,
+    HumanEdit, MigrateParams, MigrationOutcome, SteerArgs, CANDIDATE_LIB_RS, MAX_HUMAN_NOTE_BYTES,
+    MAX_STEER_NOTE_BYTES,
+};
 pub use progress::Progress;
 pub use providers::{checked_complete, ProviderProfile, ResolvedProvider};
 pub use triage::{run_triage, TriageOutcome};

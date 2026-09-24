@@ -1,7 +1,9 @@
 # harness-tui — the review cockpit
 
 Status: DESIGN, REVIEWED (2026-09-24; §R holds the resolutions of the 20 confirmed findings of
-the adversarial review — the text below is the post-review design). Sources: the §15 spike
+the adversarial review — the text below is the post-review design). Steps 1–3 of §8 are
+implemented; §R2 lists the OPEN findings of their code review; step 4 (the terminal front end)
+is next. Sources: the §15 spike
 (DECISIONS.md "TUI track: §15 research spike"), docs/CLI-HARDENING.md (the CLI this cockpit
 drives), docs/SCHEMAS.md (the ledger it reads), docs/REPLAY-DESIGN.md (the replay rules the
 two CLI additions must keep).
@@ -205,7 +207,8 @@ only —
   the R-3 leak check runs on it like on any repair request;
 - `[GUIDANCE]`: the note, verbatim;
 - `[HISTORY]` (empty for turn 1), `[TASK]` = the repair task.
-Then ordinary repair turns (`[HISTORY]` reads `1. steer -> …`).
+Then ordinary repair turns (`[HISTORY]` reads `1. steer -> …`), each carrying the same
+`[GUIDANCE]` (a stateless repair turn must not lose what the reviewer asked for).
 
 **Record** (additive, `skip_serializing_if = None`): `seeded_from: "<attempt id>"`,
 `steer_note: "<note>"` — so HEAD can render turn 1 from the ledger alone. `Turn.kind` gains
@@ -331,6 +334,24 @@ every finding attacked by an independent verifier against the code; 20 confirmed
 | PROC-H2 | a hangup kills the harness child by the default action (its SIGHUP handler is off under pipes) → orphaned sandboxed groups; the TUI's terminal not restored on signals | §4: child in its own process group; the TUI's signal path (INT the child, restore, die by the signal) |
 | PROC-M1 | reload on `result` sees the killed CLI's lock line (zombie reads alive) → false write-in-flight; an interrupted promotion then shows as a contradiction | §4: reload only after reaping; `promotion_interrupted` in `UnitReport` |
 | SCOPE-5 | the zopfli fixture cannot exercise the pair locator or provenance | §7: tractor fixtures, zopfli for the inline-`mod ffi` and `None` cases, synthetic dirs |
+
+## R2. Code review of steps 1–2 — OPEN (fix pass first, next session)
+
+Adversarial code review of the implemented steer/override/provenance step (four lenses,
+every finding verified against the code): 16 confirmed, 0 refuted, 9 distinct. Full claims,
+evidence, corrected fixes and regression tests: `docs/reviews/2026-09-24-steer-override-code-review.md`.
+
+| # | severity | finding (review ids) | direction of the fix |
+|---|---|---|---|
+| 1 | high | A steer seeded from a human attempt that changes one byte is classed as a model attempt, so `provenance` reports `Pipeline` — a hand edit laundered into pipeline output (RI-1, BENCH-H1, CLI-H1, HUMAN-H1) | in the one R-5 function, a match whose `seeded_from` chain reaches a human attempt is human-derived, never `model`; tests for one- and two-hop chains, red and green human seeds |
+| 2 | high | A steered crate is indistinguishable from unassisted pipeline output in scores.json; `migrate_turns` counts only the steer attempt's turns (BENCH-M2) | decide how the benchmark reports human-guided (steer) provenance — a PROBLEM like a hand edit, or an additive, explicitly labelled class/field; never silently strict-pass |
+| 3 | medium | A red human attempt can become the case's scored "unverified candidate" and feed `migrate_outcome` (BENCH-H2, HUMAN-M2, RI-3) | exclude human (and human-derived) attempts from every pipeline figure in `score_one` |
+| 4 | medium | An interrupted `harness override` leaves an `in-progress` human attempt that blocks recording the same edit forever (CLI-M2, HUMAN-M1, RI-4) | resume or clear an unfinished human attempt of the same id (it is a pure function of the two files), with a test that kills override mid-judge |
+| 5 | medium | Notes starting with `-` are rejected by clap (or print help and exit 0), and the resume hint's `--steer '<note>'` breaks the same way (CLI-M1) | accept hyphen values (`--steer=<note>` in the hint, `allow_hyphen_values`), test with a note starting with `-` |
+| 6 | medium | A deny-scan red human attempt records no evidence of what was submitted (HUMAN-M3) | record the two files (or the deny-scan findings) with the attempt, as for a model reply |
+| 7 | medium | `seeded_from`, `steer_note` and the seed's stored verdict are not integrity-bound to the recorded turn 1 (RI-2) | on verification, check that the request HEAD renders from the record equals the recorded turn-1 request (strict), or bind the fields into the integrity check |
+| 8 | low | The §7-required tests of bench's human-provenance PROBLEM and the replay skip are missing (BENCH-M1) | add them (a synthetic case) |
+| 9 | low | The TUI hand-edit flow is refused whenever the editor leaves a backup file in `src/` (CLI-M3) | ignore editor backup/swap files (`*~`, `.*.swp`), or copy only the two files back in the TUI |
 
 **Follow-ups, not in this milestone:** `verify` lacks the R6 gate (from CLI hardening);
 driver-attempt Accept; queueing on contention; per-function verdict dots (the boundary

@@ -603,33 +603,31 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
             // crate on disk (docs/REPLAY-DESIGN.md §R R-5) — not the
             // `promoted` flag, which an older attempt keeps after a newer one
             // replaced its crate (014: both attempts say `promoted`).
-            let crate_digest = unit
-                .oracle_param_str("rust_crate")
-                .map(|name| ledger.unit_dir(&unit.id).join(name))
-                .filter(|dir| dir.join("Cargo.toml").is_file())
-                .map(|dir| hash::crate_content_hash(&dir))
-                .transpose()?;
+            let crate_digest = attempts::unit_crate_digest(&ledger, unit)?;
             // Only attempts bound to the CURRENT inputs can have produced
             // the crate being scored (a re-run after a driver change can
-            // repeat an older attempt's candidate byte for byte).
-            let promoted: Vec<&attempts::AttemptRecord> = m_attempts
-                .iter()
-                .filter(|r| {
-                    r.outcome == "green"
-                        && r.unit_source == inputs.unit_source
-                        && r.driver == inputs.driver
-                        && crate_digest.as_deref() == Some(r.candidate_digest.as_str())
-                })
-                .collect();
-            let promoted_count = promoted.len();
-            if promoted_count > 1 {
-                problems.push(format!(
-                    "{}: {promoted_count} green attempts bound to the current inputs share the \
-                     crate's digest (ambiguous provenance)",
-                    case.path
-                ));
-            }
-            let promoted = (promoted_count == 1).then(|| promoted[0]);
+            // repeat an older attempt's candidate byte for byte); the one
+            // implementation of R-5 is harness-core's `provenance`.
+            let provenance = attempts::provenance(
+                &m_attempts,
+                &inputs.unit_source,
+                &inputs.driver,
+                crate_digest.as_deref(),
+            );
+            let promoted = match &provenance {
+                attempts::Provenance::Pipeline(r) => Some(*r),
+                attempts::Provenance::Ambiguous(rs) => {
+                    problems.push(format!(
+                        "{}: {} green attempts bound to the current inputs share the crate's \
+                         digest (ambiguous provenance)",
+                        case.path,
+                        rs.len()
+                    ));
+                    None
+                }
+                attempts::Provenance::Human(_) | attempts::Provenance::None => None,
+            };
+            let promoted_count = usize::from(promoted.is_some());
             pipeline.migrate_turns = promoted.map(|r| r.turns.len() as u32);
             let finished: std::collections::BTreeSet<&str> = m_attempts
                 .iter()
@@ -673,12 +671,25 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                 };
             }
             if verification == Verification::Verified && promoted_count == 0 {
-                // R-5: a verified crate no recorded attempt produced has no
-                // provenance the benchmark can report.
-                problems.push(format!(
-                    "{}: the verified crate matches no green migrate attempt (provenance unknown)",
-                    case.path
-                ));
+                match &provenance {
+                    // docs/TUI-DESIGN.md §5.2: the benchmark scores pipeline
+                    // output only; a hand edit is never counted as the
+                    // pipeline's.
+                    attempts::Provenance::Human(r) => problems.push(format!(
+                        "{}: the verified crate was promoted from human (override) attempt {} — \
+                         not pipeline provenance",
+                        case.path,
+                        harness_llm::printable(&r.id, 64)
+                    )),
+                    attempts::Provenance::Ambiguous(_) => {}
+                    // R-5: a verified crate no recorded attempt produced has
+                    // no provenance the benchmark can report.
+                    _ => problems.push(format!(
+                        "{}: the verified crate matches no green migrate attempt (provenance \
+                         unknown)",
+                        case.path
+                    )),
+                }
             }
             if verification == Verification::Verified {
                 let crate_name = unit.oracle_param_str("rust_crate").unwrap_or_default();
@@ -1244,6 +1255,16 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                         );
                         continue;
                     }
+                    if rec.provider_kind == attempts::HUMAN_KIND {
+                        // A hand edit has no model reply to replay.
+                        skipped += 1;
+                        out(format!(
+                            "bench replay: {} {stage} {shown} skipped (human)",
+                            case.path
+                        ));
+                        results.insert(rec.id.clone(), ReplayResult::Skipped("human".into()));
+                        continue;
+                    }
                     if let Some(newer) = superseding_sample(rec, &records) {
                         skipped += 1;
                         let why = format!(
@@ -1266,6 +1287,7 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                         traces_dir: &traces,
                         retry: false,
                         attempt: Some(&rec.id),
+                        steer: None,
                     };
                     let verified = if stage == "driver" {
                         let judge = |p: &Path| harness_oracle::validate_driver(&ctx, unit, p);
@@ -1417,6 +1439,9 @@ mod tests {
             turns: vec![],
             candidate_digest: String::new(),
             promoted: false,
+            seeded_from: None,
+            steer_note: None,
+            note: None,
         }
     }
 
