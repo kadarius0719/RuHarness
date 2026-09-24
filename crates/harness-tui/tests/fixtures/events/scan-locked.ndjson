@@ -1,0 +1,3 @@
+{"k":"header","schema":"ruharness-events","schema_version":1,"command":"scan","args":["--target","/work/zopfli"],"pid":40878,"harness":"0.1.0"}
+{"k":"error","kind":"locked","message":"ledger is locked by another harness command (pid 40686, `verify u001-katajainen`, since 2026-09-24T09:14:02Z); wait for it or stop it","holder":{"pid":40686,"command":"verify u001-katajainen","started":"2026-09-24T09:14:02Z"}}
+{"k":"result","exit":1}

@@ -184,7 +184,7 @@ names, then run the same command again.
 | `--retry` | Finished attempts are never overwritten; this records a *new* sample instead. |
 | `--promote` | Replace an already-verified unit's Rust with a new green candidate. |
 | `--no-promote` | Record a green attempt without promoting it; `harness promote <unit> <attempt> [--replace]` promotes it later, explicitly (`[llm.migrate] promote_on_green = false` makes that the only path). |
-| `--steer <NOTE> --from <ATTEMPT>` | A new attempt seeded from a finished one: the model sees that attempt's code and stored verdict plus your note, on every turn. |
+| `--steer <NOTE> --from <ATTEMPT>` | A new attempt seeded from a finished one: the model sees that attempt's code and stored verdict plus your note, on every turn. A note that starts with `-` must be attached: `--steer='- keep the loop'`. The benchmark never counts a steered crate as unassisted pipeline output. |
 | `harness override <unit> <dir>` | Record a hand edit (exactly `src/logic.rs` and `src/ffi.rs` of `dir`) as a labelled `human` attempt, judged like a model reply; `harness promote` promotes it; the benchmark never counts it as the pipeline's. |
 | `--attempt ID` | With `--provider replay`: which recorded attempt to re-check. |
 | `--allow-unsandboxed` | Only needed where no sandbox exists (e.g. Linux): accept running untrusted code unconfined. |
@@ -341,6 +341,37 @@ live sandboxed process group and the harness dies by the signal (no evidence is
 journaled for a child it killed). Writing commands hold a writer lock on
 `migration/.lock`; a second writer fails fast naming the holder.
 
+## The review cockpit (`harness-tui`)
+
+```bash
+cargo run -p harness-tui -- --target targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib
+```
+A terminal UI for reviewing migrations. Units and their attempts are on the left. In
+the middle, each C function sits beside its Rust translation — the exported shim and
+the safe logic function it calls — with filler lines keeping the two sides level. The
+oracle's verdict is underneath, and the running command at the bottom. The cockpit
+only *reads* the ledger: every write is a spawned `harness --json …` command, and the
+cockpit shows you its exact command line and asks `y/n` before running it.
+
+| Key | Act | What runs |
+|---|---|---|
+| `a` | **Accept** the shown green attempt | `harness promote <unit> <attempt>` |
+| `m` | **Modify**: type a note; a new attempt is seeded from the shown one | `harness migrate <unit> --no-promote --from=<attempt> --steer=<note>` |
+| `e` | **Hand edit** in `$VISUAL`/`$EDITOR`, recorded as a labelled human attempt; a hand edit is never lost — one that was not recorded is kept, `E` offers it again, and its path is printed on exit | `harness override <unit> <staged copy> [--note=<text>]` |
+| `r` / `R` | retry the shown attempt's run / resume a hand-off once its response file is there | the run's own command |
+| `x` | cancel the running command (the harness kills its sandboxed processes) | — |
+
+Moving around: `j`/`k` scroll, `]f`/`[f` next/previous function, `J`/`K` units, `Tab`
+then `Enter` to show an attempt, `d` to diff it against the attempt the crate came
+from, `v` for the verdict's details, `?` for every key, `q` to quit. The rail marks
+where a unit's crate came from: `*` unassisted pipeline output, `*s` a steered attempt,
+`*h` a hand edit — the benchmark scores only `*`. Below 110 columns the pairs stack
+(`--layout split|stacked` overrides that). `--harness <path>` picks the binary the acts
+run (default: `harness` on your PATH, else the one next to the cockpit);
+`--allow-unsandboxed` is passed on to the acts that run code. A closed terminal cancels
+a running command cleanly. A plain `cargo build` at the root skips the cockpit; build it
+with `cargo build -p harness-tui` (CI builds everything).
+
 ## Repository layout
 
 ```
@@ -355,6 +386,8 @@ crates/
                     #   symbol-set/capabilities/driver-shape gates, validate_driver,
                     #   held-out benchmark scorer
   harness-cli/      # the `harness` binary
+  harness-tui/      # the review cockpit: read model + events reader (a library, also
+                    #   for other clients) and the `harness-tui` terminal front end
 docs/SCHEMAS.md     # normative ledger schemas, v1
 targets/tractor/    # TRACTOR B01 library suite: suite.toml, corpus.lock, cases/ (one
                     #   harness target per case), heldout/ (vectors + corpus scorer,
@@ -382,7 +415,9 @@ pipeline test that migrates-and-verifies u001 in a temp copy), and `cargo deny`
 
 Dependency policy is tight (§11 of the project briefing): every addition is
 justified in `DECISIONS.md`. Current tree: serde/serde_json, toml/toml_edit,
-blake3, thiserror, tree-sitter (+C grammar), clap, anyhow.
+blake3, thiserror, tree-sitter (+C and Rust grammars), clap, anyhow, signal-hook, ureq
+(provider HTTP); the cockpit adds ratatui (on crossterm), similar,
+tree-sitter-highlight and unicode-width, in its own crate only.
 
 ## License
 

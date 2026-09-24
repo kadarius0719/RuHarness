@@ -1459,3 +1459,101 @@ ran `/bin/ls $HOME` UNSANDBOXED as its control; `ls` stats every entry, so each 
 for Apple Music and network-volume access. The control now lists `~/.cargo` (else `~/.rustup`,
 else `ls -d ~`), which proves the same sandbox denial without touching privacy-protected folders.
 
+
+## 2026-09-24 — §R2 fix pass (steer/override/provenance), and its own review
+
+The nine findings of the step 1–2 code review (docs/TUI-DESIGN.md §R2), each fixed with a
+regression test that fails without it (27 rule-guarding mutations run, every one killed after
+two tests were strengthened; one survivor showed a check that another check already made —
+the duplicate was removed so each rule lives in one place). What changed:
+- **Provenance is authorship, not provider kind.** `attempts::authorship` follows `seeded_from`
+  through every record of the unit (bounded, so a hand-edited cycle cannot loop): an unseeded
+  model attempt is pipeline output; a steer attempt whose chain reaches a `human` attempt IS
+  that hand edit (one hop or several, red or green seed); any other steer attempt is `Steered`.
+  **Decision (finding 2, the one design question):** a steered crate is a bench PROBLEM, like a
+  hand edit — the note is free human text that can carry the fix, or the TRACTOR vectors the
+  model must never see (M4-DESIGN §2), so scores.json holds unassisted pipeline output only. An
+  unassisted model attempt with the same candidate still outranks both. Every other pipeline
+  figure (`migrate_outcome`, the scored unverified candidate) counts unassisted attempts only.
+- **Steer fields are integrity-bound.** New additive `seed_verdict` (blake3 of the seed's
+  `attempt-verdict.json` bytes); `replay_divergences` — the one function every verification
+  path passes through — requires the record's `(seeded_from, steer_note, seed_verdict)` to equal
+  the job's first turn, and `recorded_pairs` requires the recorded turn 1 to be of kind `steer`
+  and to pose the note as `[GUIDANCE]` before `[TASK]` with `[HISTORY]` naming the seed (and a
+  non-steer record's to pose no `[GUIDANCE]`). Adding, removing or editing the fields, or the
+  seed's verdict, is an integrity error, never drift or a divergence.
+- **Human attempts.** An override killed mid-judge leaves an `in-progress` record under the
+  edit's content-derived id: the same edit now reclaims it (`reset_unfinished`); a finished one
+  stays refused; an unfinished MODEL record under a human id is refused as inconsistent. A
+  deny-scan red prints its violations and keeps the two files in `attempts/<id>/edit/src/`, so
+  every human attempt holds what its `response_hash` hashes.
+- **Hyphen-leading notes.** Every `awaiting` hint (migrate, observe, gen-driver — the last one
+  also lost its run flags before) attaches its values (`--steer='- keep it'`); clients pass
+  `--steer=<note>`/`--note=<text>` as one argv element. Round-trip tests through `sh` and clap.
+- bench's provenance, pipeline figures and replay skip are pure helpers with unit tests.
+
+**The fix pass's own review** (three lenses, 8 findings, 7 confirmed, all low, 1 refuted):
+doc comments stranded on the wrong functions, the scores.json contract docs and two design
+sentences still describing the old rule, the §4 hand-edit `--note=` that the fix had dropped,
+a pinned replay blaming the seed's verdict for an edited `seeded_from` (the recorded evidence
+is now checked first, and the message names both possibilities), the observe/gen-driver hints,
+and a reclaim test that passed without `reset_unfinished` — all fixed.
+
+**Gates.** fmt, clippy `-D warnings`, `cargo test --workspace` green. `bench check --suite
+targets/tractor --replay --jobs 6`: replay `198 reproduce (1 conformant, 197 drifted), 2
+expected divergence(s), 0 skipped, 0 problem(s)` — identical to the baseline run at the start
+of this session. One run under a load average of 33 (mutation runs, review agents and a pty
+test in parallel) reported `011_static_dag_lib: driver no longer validates`; the same
+`validate_driver` call is green 3/3 in isolation (4.9 s each) and on the quiet re-run below —
+driver validation has timing-sensitive checks, so the gate is only meaningful on a quiet
+machine.
+
+## 2026-09-24 — harness-tui: the terminal front end (TUI-DESIGN §8 step 4)
+
+Built against the reviewed design, then a four-lens adversarial code review (27 confirmed, 0
+refuted — §R3), a fix pass, a verification of that fix pass (4 partial fixes, 18 new issues
+confirmed — also in §R3) and a second fix pass. Every fix has a regression test; the
+rule-guarding ones were mutation-checked (27 mutations across the two passes, all killed
+after two tests were tightened).
+- **Library, for every client** (no terminal crates, reused by harness-mcp): `events` (the
+  typed `ruharness-events` reader; unknown `k` kept as `Other`, a non-JSON line as `NotJson`;
+  lines bounded at 1 MiB) and `spawn` (the child in its own process group, stdin null, two
+  reader threads, over only after BOTH pipes hit EOF AND it was reaped, `/bin/kill -INT` only
+  while unreaped, the signal path's interrupt-and-wait). Event fixtures were recorded from the
+  real CLI on a zopfli copy (migrate awaiting/green, promote rolled back, scan locked).
+- **Front end** (`tui` feature): `highlight` (tree-sitter-highlight over both grammars' own
+  queries; plain on failure), `app` (state; keys return commands; every act shows its exact
+  argv and needs a plain `y` to a prompt drawn whole with no input pending; notes checked
+  against the CLI's rules), `view` (grapheme-exact widths, only visible rows built, windowed
+  rail, failures-first verdict strip, overlays scrolling by wrapped rows), `handedit`, `main`.
+- **A hand edit is never lost** — the rule the two review rounds converged on: the temp dir
+  goes only when the override recorded it (its `attempt` event), it changed nothing and left
+  nothing, or on an explicit armed `D`; everything else keeps it, `E` offers it again, exits
+  print where it is, TERM/HUP while the editor runs are forwarded to it and the cockpit dies
+  only once it is gone.
+- **What the tests found that reviews did not:** the pty end-to-end (`script`, keys, a
+  spinning C driver, SIGHUP to the cockpit's group) failed on its first run —
+  `Terminal::clear` asks the terminal for the cursor position, a terminal that never answers
+  failed the hand edit after the editor exited, and the error path then deleted the edit.
+  The resume now repaints through `resize`, and staging precedes any terminal call.
+- **No new crates.** serde_json became a plain dependency of the library (already in the
+  tree via harness-core). ratatui's crossterm has bracketed paste on by default.
+- **Recorded, not done:** the editor's own crash (not a signal) while the cockpit is killed
+  -9 is out of reach (nothing runs); a hand-edit override the user quits away from may still
+  record the kept edit (said on exit).
+
+## 2026-09-24 — harness-mcp: design and adversarial design review (20 confirmed, 1 refuted)
+
+`docs/MCP-DESIGN.md` designs the stdio MCP server (hand-rolled JSON-RPC 2.0, MCP 2025-06-18,
+zero new crates, reusing `harness_tui::{model, events, spawn}`). Three lenses (protocol,
+trust, contract), every finding verified; §R holds the resolutions. The one that reshaped it
+(high, found by all three lenses): an `external` hand-off answered by the chat agent — which
+can read the repo, the held-out vectors and the conversation — would be recorded as blind,
+unassisted pipeline output and scored, bypassing the audited blind protocol (M4-DESIGN §R R2).
+So v1 poses **steer attempts only** (authorship `Steered`, a bench PROBLEM), retries only in
+the record's own run shape (never an unseeded `external` one), promotes existing attempts,
+and has no verify / fresh-migrate / hand-edit tools. The rest: provider list and targets are
+server policy (`--provider`, `--target-root`), progress notifications against the client's
+30-minute idle abort, a shutdown path that interrupts the child, one act in flight with `busy`
+refusals, untrusted values wrapped in `structuredContent`, size caps. Not implemented yet —
+the next session's task (docs/NEXT-SESSION.md).

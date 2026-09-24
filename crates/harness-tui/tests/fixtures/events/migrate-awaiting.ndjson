@@ -1,0 +1,5 @@
+{"k":"header","schema":"ruharness-events","schema_version":1,"command":"migrate","args":["--allow-unsandboxed","u001-katajainen","--target","/work/zopfli","--no-promote"],"pid":40701,"harness":"0.1.0"}
+{"k":"turn-start","unit":"u001-katajainen","attempt":"a-4078cf4eb208","index":1,"kind":"translate","request_key":"98acb7e3"}
+{"k":"awaiting","attempt":"a-4078cf4eb208","path":"/work/zopfli/migration/units/u001-katajainen/traces/98acb7e3.response.json","resume":"harness migrate u001-katajainen --target=/work/zopfli --no-promote --allow-unsandboxed","args":["migrate","--allow-unsandboxed","u001-katajainen","--target","/work/zopfli","--no-promote"]}
+{"k":"error","kind":"awaiting","message":"awaiting response: /work/zopfli/migration/units/u001-katajainen/traces/98acb7e3.response.json"}
+{"k":"result","exit":1}

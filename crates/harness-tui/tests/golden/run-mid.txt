@@ -1,0 +1,40 @@
+facts fresh (2 files)          │u-lib · unit crate · verified · * pipeline a-13c9
+units 1/1  (J/K)               │read_scalefactors (test_case/src/lib.c:17)           ⇄ read_scalefactors (src/ffi.rs:11)
+▸● u-lib verified              │17 void read_scalefactors(bs_t *bs, uint8_t *pba, ui │  11 pub unsafe extern "C" fn read_scalefactors(
+                               │18                                   int bands, floa │  12     bs: *mut BsT,
+u-lib (Tab, Enter)             │19     static const float g_deq_L12[18 * 3] = {      │  13     pba: *mut u8,
+▸ crate  * pipeline a-13c9     │20         9.53674316e-07f / 3,     7.56931807e-07f  │  14     scfcod: *mut u8,
+  a-13c9 green *               │21         6.00777173e-07f / 3,     9.53674316e-07f  │  15     bands: i32,
+  a-28d8 green superseded      │22         7.56931807e-07f / 7,     6.00777173e-07f  │  16     scf: *mut f32,
+  a-d2e5 red                   │23         9.53674316e-07f / 15,    7.56931807e-07f  │  17 ) {
+                               │24         6.00777173e-07f / 15,    9.53674316e-07f  │  18     let bands_n: usize = if bands > 0 { bands as
+                               │25         7.56931807e-07f / 31,    6.00777173e-07f  │  19
+                               │26         9.53674316e-07f / 63,    7.56931807e-07f  │  20     let pba_slice: &[u8] = if pba.is_null() || ba
+                               │27         6.00777173e-07f / 63,    9.53674316e-07f  │  21         &[]
+                               │28         7.56931807e-07f / 127,   6.00777173e-07f  │  22     } else {
+                               │29         9.53674316e-07f / 255,   7.56931807e-07f  │  23         core::slice::from_raw_parts(pba, bands_n)
+                               │30         6.00777173e-07f / 255,   9.53674316e-07f  │  24     };
+                               │31         7.56931807e-07f / 511,   6.00777173e-07f  │  25
+                               │32         9.53674316e-07f / 1023,  7.56931807e-07f  │  26     let scfcod_slice: &[u8] = if scfcod.is_null()
+                               │33         6.00777173e-07f / 1023,  9.53674316e-07f  │  27         &[]
+                               │34         7.56931807e-07f / 2047,  6.00777173e-07f  │  28     } else {
+                               │35         9.53674316e-07f / 4095,  7.56931807e-07f  │  29         core::slice::from_raw_parts(scfcod, bands
+                               │36         6.00777173e-07f / 4095,  9.53674316e-07f  │  30     };
+                               │37         7.56931807e-07f / 8191,  6.00777173e-07f  │  31
+                               │38         9.53674316e-07f / 16383, 7.56931807e-07f  │  32     let scf_len: usize = bands_n.checked_mul(3).u
+                               │39         6.00777173e-07f / 16383, 9.53674316e-07f  │  33     let scf_slice: &mut [f32] = if scf.is_null()
+                               │40         7.56931807e-07f / 32767, 6.00777173e-07f  │  34         &mut []
+                               │41         9.53674316e-07f / 65535, 7.56931807e-07f  │  35     } else {
+                               │42         6.00777173e-07f / 65535, 9.53674316e-07f  │  36         core::slice::from_raw_parts_mut(scf, scf_
+                               │[verdict] GREEN ✓ symbol-set ✓ capabilities ✓ driver-shape ✓ differential-driver ✓ whole-program
+                               │✓ sanitizers ✓ boundary
+┌ run: running — x cancels ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│$ /opt/ruharness/bin/harness --json migrate u-lib --no-promote                                                                            │
+│migrate: turn 1 translate -> green (tokens in/out: ?/?)                                                                                   │
+│migrate: u001-katajainen attempt a-4078cf4eb208 via `external` (external) model `claude-sonnet-5` -> GREEN                                │
+│[check] symbol-set ✓ 1 exported symbol(s) match the unit's symbols exactly                                                                │
+│[check] capabilities ✓ no capability beyond the C unit's (allowed: none); no asm                                                          │
+│[check] driver-shape ✓ driver object defines only main, references only the unit and allowlisted libc; source lint clean                  │
+│warning: something on stderr                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+? keys · Tab rail · ]f/[f pairs · a accept · m modify · e edit · r retry · R resume · x cancel · d diff · v verdict · g reload · q quit

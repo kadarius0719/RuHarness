@@ -1,0 +1,17 @@
+{"k":"header","schema":"ruharness-events","schema_version":1,"command":"migrate","args":["--allow-unsandboxed","u001-katajainen","--target","/work/zopfli","--no-promote"],"pid":40702,"harness":"0.1.0"}
+{"k":"turn-start","unit":"u001-katajainen","attempt":"a-4078cf4eb208","index":1,"kind":"translate","request_key":"98acb7e3"}
+{"k":"turn-end","unit":"u001-katajainen","attempt":"a-4078cf4eb208","index":1,"kind":"translate","result":"green","request_key":"98acb7e3","response_hash":"blake3:7379cc8b12340ca5bddaa228ed4e284622427988980af404447e580268f9fdc2","input_tokens":null,"output_tokens":null}
+{"k":"message","text":"migrate: turn 1 translate -> green (tokens in/out: ?/?)"}
+{"k":"message","text":"migrate: u001-katajainen attempt a-4078cf4eb208 via `external` (external) model `claude-sonnet-5` -> GREEN"}
+{"k":"check","unit":"u001-katajainen","name":"symbol-set","passed":true,"detail":"1 exported symbol(s) match the unit's symbols exactly"}
+{"k":"check","unit":"u001-katajainen","name":"capabilities","passed":true,"detail":"no capability beyond the C unit's (allowed: none); no asm"}
+{"k":"check","unit":"u001-katajainen","name":"driver-shape","passed":true,"detail":"driver object defines only main, references only the unit and allowlisted libc; source lint clean"}
+{"k":"check","unit":"u001-katajainen","name":"differential-driver","passed":true,"detail":"183832 bytes identical"}
+{"k":"check","unit":"u001-katajainen","name":"whole-program:sample_text.txt","passed":true,"detail":"205 bytes identical"}
+{"k":"check","unit":"u001-katajainen","name":"whole-program:sample_rand.bin","passed":true,"detail":"16407 bytes identical"}
+{"k":"check","unit":"u001-katajainen","name":"whole-program:sample_empty","passed":true,"detail":"20 bytes identical"}
+{"k":"check","unit":"u001-katajainen","name":"sanitizers","passed":true,"detail":"asan+ubsan clean"}
+{"k":"verdict","unit":"u001-katajainen","green":true,"path":"/work/zopfli/migration/units/u001-katajainen/attempts/a-4078cf4eb208/attempt-verdict.json"}
+{"k":"message","text":"migrate: green attempt recorded; not promoted (--no-promote)"}
+{"k":"attempt","unit":"u001-katajainen","id":"a-4078cf4eb208","outcome":"green","provider":"external","model":"claude-sonnet-5","promoted":false,"promotion":"not promoted: --no-promote"}
+{"k":"result","exit":0}

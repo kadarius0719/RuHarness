@@ -1,9 +1,9 @@
 # harness-tui — the review cockpit
 
-Status: DESIGN, REVIEWED (2026-09-24; §R holds the resolutions of the 20 confirmed findings of
-the adversarial review — the text below is the post-review design). Steps 1–3 of §8 are
-implemented; §R2 lists the OPEN findings of their code review; step 4 (the terminal front end)
-is next. Sources: the §15 spike
+Status: IMPLEMENTED (2026-09-24). §R holds the resolutions of the 20 confirmed findings of the
+design review; §R2 the 9 (16 raw) of the code review of steps 1–3; §R3 the 27 of the code
+review of step 4 (the terminal front end) — all resolved; the text below includes every
+amendment. Sources: the §15 spike
 (DECISIONS.md "TUI track: §15 research spike"), docs/CLI-HARDENING.md (the CLI this cockpit
 drives), docs/SCHEMAS.md (the ledger it reads), docs/REPLAY-DESIGN.md (the replay rules the
 two CLI additions must keep).
@@ -71,11 +71,17 @@ is outstanding (an external answerer may resume the run itself).
   the ONE implementation of R-5): among green attempts bound to the CURRENT `unit_source`
   AND `driver` whose `candidate_digest` equals the unit crate's content hash
   (`hash::crate_content_hash`), after collapsing a steer attempt that reproduced its seed's
-  candidate into the seed: exactly one model attempt → `Pipeline(id)` (`*` in the rail);
-  several → `Ambiguous(ids)` (no `*`, the unit header says "ambiguous provenance"); only a
-  `human` attempt → `Human(id)` (`*h`, "promoted from a hand edit"); none → `None` (on a
-  verified unit: "provenance unknown"). The `bound` flag of the attempts summary (unit
-  source only) is NOT the R-5 binding and is not used for this.
+  candidate into the seed, each match is classed by its **authorship**
+  (`attempts::authorship`, the `seeded_from` chain followed through every record of the
+  unit, bounded against cycles): an unseeded model attempt is pipeline output; a steer
+  attempt whose chain reaches a `human` attempt is that hand edit; any other steer attempt
+  is steered (§R2 1–2). Exactly one unassisted model attempt → `Pipeline(id)` (`*` in the
+  rail); several → `Ambiguous(ids)` (no `*`, the unit header says "ambiguous
+  provenance"); else a steered one → `Steered(id)` (`*s`, "promoted from a steer
+  attempt"); else one of human lineage → `Human(id)` with its human origin (`*h`,
+  "promoted from a hand edit"); none → `None` (on a verified unit: "provenance
+  unknown"). The `bound` flag of the attempts summary (unit source only) is NOT the R-5
+  binding and is not used for this.
 - **Verdicts** — `oracle-latest.json` and the selected attempt's `attempt-verdict.json`.
 - **Function pairs**, per plan symbol (public first, then internal `<file>::<name>`):
   - *C side*: the `facts.jsonl` symbol record's file + 1-based span, sliced from the tree
@@ -124,12 +130,13 @@ render (neither shipped corpus has a tab; a synthetic fixture pins it).
 
 - **Rail**: the facts line, units with a glyph (green fresh / red / stale / contradiction /
   write-in-flight with the holder's command / promotion interrupted / provenance state),
-  then the selected unit's attempts in the defined order (`*` pipeline provenance, `*h`
-  human, `superseded`, `human`, `steer ← a-…` tags).
+  then the selected unit's attempts in the defined order (`*` pipeline provenance, `*s`
+  steered, `*h` human, `superseded`, `human`, `steer ← a-…` tags; a steer attempt of human
+  lineage adds `(hand edit a-…)`).
 - **Pairs**: a vertically stacked list of function pairs, each two columns padded to equal
   height with filler lines; the function boundary is the unit of navigation. `d` compares the
   Rust side of the selected attempt with the provenance attempt's (`similar` line marks;
-  disabled when provenance is not `Pipeline`/`Human`).
+  disabled when provenance names no single attempt: `None`/`Ambiguous`).
 - **Verdict strip**: one chip per check; `v` expands the selected check's detail.
 - **Run panel**: the spawned argv, then its events as they arrive (turn-start/turn-end with
   the Turn's result, check lines, `awaiting` with the response path and the CLI's `resume`
@@ -139,9 +146,15 @@ render (neither shipped corpus has a tab; a synthetic fixture pins it).
   forces it, `--layout split` forbids it) the pairs collapse to C-then-Rust per pair and the
   rail to a top line.
 - **Keys**: `j/k` scroll, `]f`/`[f` pairs, `J/K` units, `Tab` rail focus, `Enter` select
-  attempt, `d` diff, `v` verdict detail, `a` Accept, `m` Modify, `e` hand edit, `r` retry,
-  `R` resume, `x` cancel, `g` reload, `?` keys, `q` quit (`Q` cancel + quit). **Every act
-  shows the exact argv and asks `y/n`** — there is no automatic spawn.
+  attempt, `d` diff, `v` verdict detail, `a` Accept, `m` Modify, `e` hand edit (`E` the
+  latest kept one), `r` retry,
+  `R` resume, `x` cancel, `g` reload, `?` keys, `q` quit (`Q` cancel + quit), `PgDn`/`PgUp`
+  page. **Every act shows the exact argv and asks `y/n`** — there is no automatic spawn — and
+  a prompt takes a plain `y` only once it was drawn whole (a long argv scrolls, `j`) with no
+  input pending: typed-ahead or pasted input (bracketed paste is on) never answers it; a
+  Ctrl/Alt key is never text. Overlays scroll by wrapped rows, the rail windows both of its
+  lists around their cursors, the verdict strip puts failed checks first and counts what it
+  cut (`+N`), and only the visible rows of the pairs are built.
 
 ## 4. Acts: every write is a spawned `harness --json …`
 
@@ -153,10 +166,10 @@ global). It passes `--no-promote` on every `migrate` and never `--promote`, and
 | key | argv after the binary | enabled when (from the snapshot; the CLI re-checks everything) |
 |---|---|---|
 | `a` Accept | `--json promote <unit> <attempt> --target <root> [--replace]` | attempt green, its last turn green, not promoted (or `--replace` offered when the unit is verified or the attempt promoted) |
-| `m` Modify | `--json migrate <unit> --target <root> --no-promote --from <attempt> --steer <note>` | the selected attempt is finished, bound (R-5 binding) and has a `candidate/`; the note (1..2000 printable bytes) is typed in a one-line input, `Esc` cancels |
-| `e` hand edit | `--json override <unit> <dir> --target <root> [--note <text>]` | the selected crate is in the executor layout; `e` copies its `src/logic.rs` + `src/ffi.rs` into a fresh temp dir, hashes them, suspends the TUI, runs `sh -c '$EDITOR "$@"' -- <dir>/src/logic.rs <dir>/src/ffi.rs` (so `EDITOR="code --wait"` works), resumes; an editor exit ≠ 0 aborts; unchanged hashes → "no change; nothing to record", no prompt; disabled while a command runs |
-| `r` retry | the argv of the attempt's own run shape (`migrate … --no-promote --retry`, plus `--from`/`--steer` for a steer attempt) | the attempt is finished |
-| `R` resume | the stored argv of the run that ended `awaiting`, unchanged | that attempt is still `in-progress` in the snapshot and its awaited response file exists (non-empty and parses as a JSON object); stays available after a failed resume |
+| `m` Modify | `--json migrate <unit> --target=<root> --no-promote --from=<attempt> --steer=<note>` | the selected attempt is finished, bound (R-5 binding) and has a `candidate/`; the note (1..2000 printable bytes) is typed in a one-line input, `Esc` cancels |
+| `e` hand edit | `--json override <unit> <tmp>/stage --target=<root> [--note=<text>]` | the selected crate is in the executor layout; `e` copies its `src/logic.rs` + `src/ffi.rs` (regular files ≤ 1 MiB) into a fresh private (0700) `<tmp>/edit/`, hashes them, suspends the TUI, runs `sh -c 'exec <editor> "$@"' sh <tmp>/edit/logic.rs <tmp>/edit/ffi.rs` where `<editor>` is `$VISUAL`, else `$EDITOR`, else `vi`, as shell text (git's rule: `EDITOR="code --wait"` and quoted paths work; SIGINT belongs to the editor meanwhile, TERM/HUP are forwarded to it and the cockpit dies by them only once it is gone), resumes; unchanged hashes → "no change; nothing to record", no prompt; an editor exit ≠ 0 aborts, but KEEPS changed files and names where; otherwise EXACTLY the two files are copied into a new `<tmp>/stage/src/` (editor artefacts — `*~`, `.*.swp`, `#*#` — never reach DIR, §R2 9), an optional note (≤ 400 bytes, empty = none, the CLI's rules checked at the prompt) is typed in a one-line input, passed attached as ONE argv element, and the argv shown is the one spawned. **a hand edit is never lost**: `<tmp>` is removed only once the override RECORDED the edit (its `attempt` event), when it changed nothing and the editor left nothing beside the files, or on an explicit `D` at its armed prompt; `n`/`Esc` keep it, a refused, interrupted or unstartable override keeps it, an editor that exits ≠ 0 after saving keeps it, and what an editor leaves on a hangup (a swap or `.save` file) is kept; `E` offers the latest kept edit again (its note, then its command); on the way out (quit, error, panic, signal) every kept edit's path is printed; keys typed into the terminal while the editor ran are dropped; disabled while a command runs |
+| `r` retry | the argv of the attempt's own run shape (`migrate … --no-promote --retry`, plus `--from=`/`--steer=` for a steer attempt) | the attempt is finished |
+| `R` resume | the stored argv of the run that ended `awaiting`, unchanged | that attempt is still `in-progress` in the snapshot and its awaited response file exists (non-empty and parses as a JSON object); stays available after a failed resume; every outstanding hand-off is tracked (one per attempt): `R` resumes the shown attempt's, else the newest whose response is present |
 | `x` cancel | — (`/bin/kill -INT <child pid>`) | the child is running (`try_wait` is `Ok(None)`, so a reused pid is never signalled) |
 
 **Resume.** The watcher never spawns: when the awaited response file exists it marks the run
@@ -211,7 +224,11 @@ Then ordinary repair turns (`[HISTORY]` reads `1. steer -> …`), each carrying 
 `[GUIDANCE]` (a stateless repair turn must not lose what the reviewer asked for).
 
 **Record** (additive, `skip_serializing_if = None`): `seeded_from: "<attempt id>"`,
-`steer_note: "<note>"` — so HEAD can render turn 1 from the ledger alone. `Turn.kind` gains
+`steer_note: "<note>"`, `seed_verdict: "blake3:…"` (the seed's `attempt-verdict.json` bytes
+turn 1 was rendered from) — so HEAD can render turn 1 from the ledger alone, and every
+verification path checks the three against the first turn it verifies AND the recorded
+turn 1 (kind `steer`, the note as `[GUIDANCE]` before `[TASK]`, `[HISTORY]` naming the
+seed) — a mismatch, or a seed verdict modified since, is an integrity error (§R2 7). `Turn.kind` gains
 `steer`. `prompt_digest` = the digest of the FIRST turn (translate, or steer). The id
 derivation is frozen and unchanged: its last input is the first turn's request key, so a
 steer attempt never collides with a translate attempt, and the same steer (seed, note,
@@ -257,12 +274,19 @@ refused as identical). A judge harness error (driver-shape, boundary C-side) rec
 and removes the attempt dir. `override` never promotes; Accept (`harness promote`) promotes a
 green human attempt like any other (its last turn is green).
 
-**The benchmark never counts a hand edit as the pipeline's.** R-5 is extended by provider
-kind (the core `provenance` function): a verified crate whose provenance is `Human` is a
-PROBLEM in `bench score`/`bench check` ("the verified crate was promoted from a human
-(override) attempt — not pipeline provenance"), so `--write` refuses it, exactly as an
-unattributed hand edit is refused today. `bench check --replay` reports human attempts
-`skipped (human)` (nothing to replay). Every surface that lists attempts shows the label.
+**Interrupted.** The id is a pure function of the edit and its inputs, so an `in-progress`
+human record under it (or a record-less dir) is an override killed mid-judge (Ctrl-C, the
+cockpit's `x`): the same edit reclaims it and is judged again (§R2 4). A deny-scan red
+prints each violation and keeps the two files in `attempts/<id>/edit/src/` (§R2 6).
+
+**The benchmark never counts a hand edit — or a steered crate — as the pipeline's.** R-5 is
+extended by authorship (the core `provenance` function, §2): a verified crate whose
+provenance is `Human` (a hand edit, or a steer attempt descending from one) or `Steered`
+(a reviewer's note guided it) is a PROBLEM in `bench score`/`bench check`, so `--write`
+refuses it, exactly as an unattributed hand edit is refused today; every other pipeline
+figure (`migrate_outcome`, the scored unverified candidate) counts unassisted attempts
+only (§R2 1–3). `bench check --replay` reports human attempts `skipped (human)` (nothing to
+replay) and replays steer attempts. Every surface that lists attempts shows the label.
 
 ## 6. Process model summary
 
@@ -283,7 +307,7 @@ and quits.
   note containing spaces, both quote types and `$x`, resumed by running the event's `resume`
   through `sh -c` → the same attempt id finishes, no second attempt dir; `override`: red and
   green human attempts, the identical-source refusal, the shape refusals, override + promote,
-  and the `provenance` function's four outcomes (unit tests in harness-core, including a
+  and the `provenance` function's outcomes (five since §R2: `Steered` joined) (unit tests in harness-core, including a
   steer attempt that reproduced its seed and a red attempt whose digest equals the crate);
   `bench`'s human-provenance PROBLEM (unit test on a synthetic case).
 - **model**: fixture ledgers — the tractor cases (executor layout, 89 promoted crates, the two
@@ -335,23 +359,66 @@ every finding attacked by an independent verifier against the code; 20 confirmed
 | PROC-M1 | reload on `result` sees the killed CLI's lock line (zombie reads alive) → false write-in-flight; an interrupted promotion then shows as a contradiction | §4: reload only after reaping; `promotion_interrupted` in `UnitReport` |
 | SCOPE-5 | the zopfli fixture cannot exercise the pair locator or provenance | §7: tractor fixtures, zopfli for the inline-`mod ffi` and `None` cases, synthetic dirs |
 
-## R2. Code review of steps 1–2 — OPEN (fix pass first, next session)
+## R2. Code review of steps 1–2 — RESOLVED (fix pass, 2026-09-24)
 
 Adversarial code review of the implemented steer/override/provenance step (four lenses,
 every finding verified against the code): 16 confirmed, 0 refuted, 9 distinct. Full claims,
 evidence, corrected fixes and regression tests: `docs/reviews/2026-09-24-steer-override-code-review.md`.
+Every fix carries a regression test that fails without it (mutation-checked).
 
-| # | severity | finding (review ids) | direction of the fix |
+| # | severity | finding (review ids) | resolution |
 |---|---|---|---|
-| 1 | high | A steer seeded from a human attempt that changes one byte is classed as a model attempt, so `provenance` reports `Pipeline` — a hand edit laundered into pipeline output (RI-1, BENCH-H1, CLI-H1, HUMAN-H1) | in the one R-5 function, a match whose `seeded_from` chain reaches a human attempt is human-derived, never `model`; tests for one- and two-hop chains, red and green human seeds |
-| 2 | high | A steered crate is indistinguishable from unassisted pipeline output in scores.json; `migrate_turns` counts only the steer attempt's turns (BENCH-M2) | decide how the benchmark reports human-guided (steer) provenance — a PROBLEM like a hand edit, or an additive, explicitly labelled class/field; never silently strict-pass |
-| 3 | medium | A red human attempt can become the case's scored "unverified candidate" and feed `migrate_outcome` (BENCH-H2, HUMAN-M2, RI-3) | exclude human (and human-derived) attempts from every pipeline figure in `score_one` |
-| 4 | medium | An interrupted `harness override` leaves an `in-progress` human attempt that blocks recording the same edit forever (CLI-M2, HUMAN-M1, RI-4) | resume or clear an unfinished human attempt of the same id (it is a pure function of the two files), with a test that kills override mid-judge |
-| 5 | medium | Notes starting with `-` are rejected by clap (or print help and exit 0), and the resume hint's `--steer '<note>'` breaks the same way (CLI-M1) | accept hyphen values (`--steer=<note>` in the hint, `allow_hyphen_values`), test with a note starting with `-` |
-| 6 | medium | A deny-scan red human attempt records no evidence of what was submitted (HUMAN-M3) | record the two files (or the deny-scan findings) with the attempt, as for a model reply |
-| 7 | medium | `seeded_from`, `steer_note` and the seed's stored verdict are not integrity-bound to the recorded turn 1 (RI-2) | on verification, check that the request HEAD renders from the record equals the recorded turn-1 request (strict), or bind the fields into the integrity check |
-| 8 | low | The §7-required tests of bench's human-provenance PROBLEM and the replay skip are missing (BENCH-M1) | add them (a synthetic case) |
-| 9 | low | The TUI hand-edit flow is refused whenever the editor leaves a backup file in `src/` (CLI-M3) | ignore editor backup/swap files (`*~`, `.*.swp`), or copy only the two files back in the TUI |
+| 1 | high | A steer seeded from a human attempt that changes one byte is classed as a model attempt, so `provenance` reports `Pipeline` — a hand edit laundered into pipeline output (RI-1, BENCH-H1, CLI-H1, HUMAN-H1) | core `attempts::authorship` follows `seeded_from` through every record (bounded); a match of human lineage is `Human` (bench names the origin); `provenance_follows_the_seed_lineage` (one and two hops, red and green human seeds, cycle, dangling seed) |
+| 2 | high | A steered crate is indistinguishable from unassisted pipeline output in scores.json (BENCH-M2) | decided: a steered crate is NOT unassisted pipeline output (the note is free human text; M4-DESIGN §2): new `Provenance::Steered`, a bench PROBLEM like a hand edit, so `--write` refuses it; an unassisted model attempt with the same candidate outranks it |
+| 3 | medium | A red human attempt can become the scored "unverified candidate" and feed `migrate_outcome` (BENCH-H2, HUMAN-M2, RI-3) | bench's pipeline figures take `pipeline_attempts` (authorship `Pipeline` only); pure `unverified_candidate`/`migrate_outcome` helpers, unit-tested |
+| 4 | medium | An interrupted `harness override` leaves an `in-progress` human attempt that blocks the same edit forever (CLI-M2, HUMAN-M1, RI-4) | `record_human_attempt` reclaims an unfinished human record (or a bare dir) under the edit's id via `reset_unfinished`; a finished one stays refused; an unfinished MODEL record under a human id is refused as inconsistent; `override`'s identical-source check skips unfinished HUMAN records only; unit test + e2e |
+| 5 | medium | Notes starting with `-` break clap, and so does the resume hint (CLI-M1) | the hint attaches every value (`--steer='-…'`, `--target=…`); clients pass `--steer=<note>`/`--note=<text>` as one argv element (§4); a unit test round-trips the hint through `sh` and clap, the e2e resumes a `-…` note |
+| 6 | medium | A deny-scan red human attempt records no evidence (HUMAN-M3) | `MigrationOutcome.failure_evidence` → `override: deny scan: …` lines (`message` events); the two files kept in `attempts/<id>/edit/src/` (so the ledger holds what `response_hash` hashes) |
+| 7 | medium | `seeded_from`, `steer_note` and the seed's verdict are not integrity-bound to turn 1 (RI-2) | additive `seed_verdict`; record ⇔ job check in `replay_divergences` (every verification path), record ⇔ recorded turn-1 request in `recorded_pairs`, seed verdict hash in `first_turn` — all integrity errors |
+| 8 | low | The §7 bench tests of the human PROBLEM and the replay skip are missing (BENCH-M1) | pure `verified_provenance_problem` and `replay_skip`, unit-tested |
+| 9 | low | The hand-edit flow is refused when the editor leaves a backup file in `src/` (CLI-M3) | TUI-side (no CLI change): §4 `e` edits in `<tmp>/edit/` and stages exactly the two files in `<tmp>/stage/src/`; tested with the front end |
+
+## R3. Code review of step 4 (the terminal front end) — RESOLVED
+
+Four lenses (process & signals, acts & the CLI contract, rendering safety, state & file
+safety), every finding verified against the code: 27 confirmed, 0 refuted (overlapping
+reports merged below). Each fix has a regression test that fails without it (mutation-checked).
+
+| finding (review ids) | resolution |
+|---|---|
+| the hand edit's temp dir was removed after ANY reaped override — a `locked`/stale refusal, an interrupt or a failed spawn lost the user's edit (PROC-1, ACTS-2, STATE-3) | removed only after the override's `attempt` event; otherwise kept, announced, re-offered by `e`; a failed spawn keeps it too |
+| an editor exit ≠ 0 deleted saved changes (macOS `vi` exits 1 after any message) (STATE-4) | changed files are kept and named |
+| the temp dir leaked on `Q`, signals, errors and a failed prepare (PROC-3) | a failed prepare removes its dir; every other exit names the kept edit instead of silently leaving it |
+| SIGTERM while the editor ran killed the cockpit under it (PROC-4) | TERM/HUP forwarded to the editor (`exec`, never a reaped pid); the cockpit dies by them once it is gone |
+| the signal path left the cursor hidden (PROC-2) | cursor shown, bracketed paste off, before dying |
+| a typed-ahead or pasted `y` confirmed an act unseen; Ctrl-Y counted (ACTS-1) | bracketed paste; prompts armed only when drawn whole with no input pending; plain keys only |
+| notes the CLI refuses reached the spawn (ACTS-2) | the CLI's note rules checked at the prompt |
+| only one outstanding hand-off was tracked (ACTS-3) | one per attempt; `R` picks the shown attempt's |
+| a long argv, a long check detail or a wrapped diff could not be scrolled to its end (VIEW-2/3/4, STATE-5, ACTS-4) | overlays scroll by wrapped rows, clamped; the prompt sits on the border; `y` needs the whole argv seen |
+| the verdict strip dropped chips silently — a RED verdict could show only ✓ (VIEW-1) | failures first, `+N` for the cut |
+| the rail never scrolled (VIEW-5, STATE-7) | both lists windowed around their cursors |
+| widths summed per char, ratatui draws per grapheme (VIEW-6) | measured with ratatui's own grapheme widths |
+| `centered()` overflowed u16 on huge terminals (VIEW-7) | u32 arithmetic |
+| every frame rebuilt every row (VIEW-8) | only the visible rows are built |
+| the narrow cursor line dropped the tags (VIEW-9) | tags kept |
+| the diff dropped a file whose name ended an earlier diff line; no size/time bound (STATE-1, STATE-9) | a file-set union; files ≤ 1 MiB; Myers with a 500 ms deadline |
+| the 2 s tick refreshed the header but not the pairs (Accept could promote unseen code) (STATE-2) | the pairs cache is keyed by the shown crate's fingerprint |
+| `g` said "re-read" after a failed reload (STATE-6) | only on success |
+| `$EDITOR` was not taken as shell text (STATE-8) | git's rule (`exec <editor> "$@"`) |
+| missing tests for reload selection, forced refresh, the editor call (STATE-10) | added |
+
+**Verification of the §R3 fixes** (three checkers over the 27 findings, every new claim
+verified): 4 findings were only partly fixed and 18 new issues were confirmed (3 medium) —
+chiefly the hand-edit lifecycle's edges (recovery files deleted after a forwarded hangup, a
+declined re-offer deleting the edit, an aborted edit untracked, windows in the signal mirror,
+`exec` breaking git-valid editor strings), a confirm argv longer than the display filter's
+4 KiB counting as "seen" while cut, and per-frame costs. Resolved by the rule stated in §4's
+`e` row (a hand edit is never lost; `n` keeps, `E` re-offers, `D` discards), git's exact editor
+form with `exec` only for a plain command, the confirm argv filtered but never cut, the prompt
+kept off the status line, cursor-following note inputs, a scrollable help, per-overlay scroll
+hints, a whole-diff time and size budget, per-pair gutters, a wrapped-diff cache, and a panic
+hook that restores bracketed paste. Two more pty tests pin the signal path: the post-hangup
+restore sequences, and a TERM forwarded to a running editor whose swap file survives.
 
 **Follow-ups, not in this milestone:** `verify` lacks the R6 gate (from CLI hardening);
 driver-attempt Accept; queueing on contention; per-function verdict dots (the boundary

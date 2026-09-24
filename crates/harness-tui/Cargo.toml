@@ -24,7 +24,6 @@ tui = [
     "dep:tree-sitter-highlight",
     "dep:tree-sitter-c",
     "dep:signal-hook",
-    "dep:serde_json",
 ]
 
 [dependencies]
@@ -37,4 +36,4 @@ similar = { workspace = true, optional = true }
 tree-sitter-highlight = { workspace = true, optional = true }
 tree-sitter-c = { workspace = true, optional = true }
 signal-hook = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
+serde_json.workspace = true
