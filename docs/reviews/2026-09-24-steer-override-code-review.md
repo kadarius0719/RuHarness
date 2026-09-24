@@ -3,8 +3,9 @@
 Adversarial review of docs/TUI-DESIGN.md §8 steps 1–2 (uncommitted tree on top of b8c87a2):
 four lenses (replay & identity, the human attempt & its trust boundary, the benchmark &
 provenance, the CLI contract & consumers); every finding attacked by an independent verifier
-against the code. **16 confirmed, 0 refuted. All OPEN** — the fix pass
-is the next session's first task (docs/NEXT-SESSION.md). Each entry: the verified claim, the
+against the code. **16 confirmed, 0 refuted. All RESOLVED** in the fix pass (2026-09-24;
+the resolutions are in docs/TUI-DESIGN.md §R2 — the one design decision, finding BENCH-M2,
+went to "a steered crate is a bench PROBLEM"). Each entry: the verified claim, the
 verifier's corrected fix, and the regression test that must fail without the fix. Line numbers
 refer to the tree as committed with this file.
 

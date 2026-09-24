@@ -5,7 +5,7 @@
 //! rule. Rebuilt on demand; never written.
 
 use crate::pairs::{self, FunctionPair};
-use harness_core::attempts::{self, AttemptRecord, Provenance, Supersession};
+use harness_core::attempts::{self, AttemptRecord, Authorship, Provenance, Supersession};
 use harness_core::error::Error;
 use harness_core::facts::Facts;
 use harness_core::hash;
@@ -30,22 +30,43 @@ pub struct FactsState {
 pub enum ProvenanceView {
     /// None (on a verified unit: "provenance unknown").
     None,
-    /// One model attempt: the pipeline's.
+    /// One unassisted model attempt: the pipeline's.
     Pipeline(String),
-    /// Several model attempts share the crate's digest.
+    /// Several unassisted model attempts share the crate's digest.
     Ambiguous(Vec<String>),
-    /// A labelled human attempt (a hand edit).
-    Human(String),
+    /// A steer attempt of model-only lineage (guided by a reviewer's note).
+    Steered(String),
+    /// A hand edit: the matched attempt, and the human attempt at the root
+    /// of its seed chain (the same id when it is the human attempt itself).
+    Human {
+        /// The attempt whose candidate is the crate.
+        attempt: String,
+        /// The human (override) attempt it descends from.
+        origin: String,
+    },
 }
 
 impl ProvenanceView {
     /// The id of the attempt the crate came from, when there is exactly one.
     pub fn attempt(&self) -> Option<&str> {
         match self {
-            ProvenanceView::Pipeline(id) | ProvenanceView::Human(id) => Some(id),
-            _ => None,
+            ProvenanceView::Pipeline(id)
+            | ProvenanceView::Steered(id)
+            | ProvenanceView::Human { attempt: id, .. } => Some(id),
+            ProvenanceView::None | ProvenanceView::Ambiguous(_) => None,
         }
     }
+}
+
+/// Who authored an attempt's candidate ([`attempts::authorship`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthorshipView {
+    /// An unseeded model attempt.
+    Pipeline,
+    /// A steer attempt of model-only lineage.
+    Steered,
+    /// A human attempt, or a steer attempt descending from the one named.
+    Human(String),
 }
 
 /// One recorded migrate attempt as the cockpit shows it.
@@ -60,8 +81,13 @@ pub struct AttemptView {
     pub verdict: Option<Verdict>,
     /// Its `candidate/` crate, when present.
     pub candidate: Option<PathBuf>,
+    /// A human attempt's kept submission (`edit/`, holding `src/logic.rs`
+    /// and `src/ffi.rs`) when the judge wrote no candidate.
+    pub edit: Option<PathBuf>,
     /// The attempt a `superseded.jsonl` entry names as its successor.
     pub superseded_by: Option<String>,
+    /// Who authored it, by its seed lineage.
+    pub authorship: AuthorshipView,
 }
 
 impl AttemptView {
@@ -73,6 +99,12 @@ impl AttemptView {
     /// The last turn's result (`""` when there is none).
     pub fn last_result(&self) -> &str {
         self.record.turns.last().map_or("", |t| t.result.as_str())
+    }
+
+    /// The Rust this attempt holds: its candidate, else a human attempt's
+    /// kept submission.
+    pub fn crate_dir(&self) -> Option<&Path> {
+        self.candidate.as_deref().or(self.edit.as_deref())
     }
 }
 
@@ -201,32 +233,51 @@ fn unit_view(
     let records = attempts::load_unit_attempts(ledger, &unit.id)?;
     let (unit_source, driver) = attempts::current_binding(ctx, facts, unit)?;
     let crate_digest = attempts::unit_crate_digest(ledger, unit)?;
+    let authorship = |r: &AttemptRecord| match attempts::authorship(&records, r) {
+        Authorship::Pipeline => AuthorshipView::Pipeline,
+        Authorship::Steered => AuthorshipView::Steered,
+        Authorship::Human(origin) => AuthorshipView::Human(origin.id.clone()),
+    };
     let provenance =
         match attempts::provenance(&records, &unit_source, &driver, crate_digest.as_deref()) {
             Provenance::None => ProvenanceView::None,
             Provenance::Pipeline(r) => ProvenanceView::Pipeline(r.id.clone()),
-            Provenance::Human(r) => ProvenanceView::Human(r.id.clone()),
+            Provenance::Steered(r) => ProvenanceView::Steered(r.id.clone()),
+            Provenance::Human(r) => ProvenanceView::Human {
+                attempt: r.id.clone(),
+                origin: match authorship(r) {
+                    AuthorshipView::Human(origin) => origin,
+                    _ => r.id.clone(),
+                },
+            },
             Provenance::Ambiguous(rs) => {
                 ProvenanceView::Ambiguous(rs.iter().map(|r| r.id.clone()).collect())
             }
         };
+    let authored: Vec<AuthorshipView> = records.iter().map(authorship).collect();
     // A malformed superseded.jsonl is shown as absent here; `bench check`
     // reports it.
     let supersessions: Vec<Supersession> =
         attempts::load_supersessions(ledger, &unit.id).unwrap_or_default();
     let mut views: Vec<AttemptView> = records
         .into_iter()
-        .map(|record| {
+        .zip(authored)
+        .map(|(record, authorship)| {
             let dir = attempts::attempt_dir(ledger, &unit.id, &record.id);
             let candidate = dir.join("candidate");
+            let edit = dir.join(attempts::HUMAN_EDIT_DIR);
             AttemptView {
                 bound: record.unit_source == unit_source && record.driver == driver,
                 verdict: Verdict::load(&dir.join("attempt-verdict.json")).ok(),
                 candidate: candidate.join("Cargo.toml").is_file().then_some(candidate),
+                edit: (record.provider_kind == attempts::HUMAN_KIND
+                    && edit.join("src/logic.rs").is_file())
+                .then_some(edit),
                 superseded_by: supersessions
                     .iter()
                     .find(|s| s.stage == "migrate" && s.attempt == record.id)
                     .map(|s| s.superseded_by.clone()),
+                authorship,
                 record,
             }
         })

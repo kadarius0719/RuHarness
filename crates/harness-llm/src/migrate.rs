@@ -26,10 +26,10 @@ use crate::emission::{self, MIGRATE_SPEC, STDIO_OUTPUT_FNS};
 use crate::providers::ResolvedProvider;
 use crate::trajectory::{
     abi_section, c_source_section, fresh_candidate_dir, prepare_dir, printable, quote,
-    read_sources, remove_path, scrub_list, scrub_paths, unit_section, unit_source_hash, write_new,
-    Failure, FirstTurn, Job, Judged, RunCtx, SourceFile, Stage, StageTexts, SteerSeed,
-    BUILD_EVIDENCE_MAX_BYTES, CONTRACT_LINE_MAX_BYTES, DETAIL_MAX_BYTES, FORMAT_EXPLANATION,
-    IN_PROGRESS, MAX_FAILED_CHECKS, REPLAY_KIND,
+    read_sources, remove_path, reset_unfinished, scrub_list, scrub_paths, unit_section,
+    unit_source_hash, write_new, Failure, FirstTurn, Job, Judged, RunCtx, SourceFile, Stage,
+    StageTexts, SteerSeed, BUILD_EVIDENCE_MAX_BYTES, CONTRACT_LINE_MAX_BYTES, DETAIL_MAX_BYTES,
+    FORMAT_EXPLANATION, IN_PROGRESS, MAX_FAILED_CHECKS, REPLAY_KIND,
 };
 use crate::triage::{is_clean_relative_path, is_kebab_token};
 use harness_core::attempts::{self, AttemptRecord};
@@ -50,7 +50,7 @@ use crate::adapters::TraceAdapter;
 #[cfg(test)]
 use crate::emission::EmissionResult;
 #[cfg(test)]
-use crate::trajectory::{emission_notes, reset_unfinished, sample_number, source_nonce};
+use crate::trajectory::{emission_notes, sample_number, source_nonce};
 #[cfg(test)]
 use harness_core::attempts::ATTEMPT_SCHEMA_NAME;
 #[cfg(test)]
@@ -331,6 +331,10 @@ pub struct MigrationOutcome {
     /// attempt-verdict.json`) when the final turn was judged by the oracle
     /// in this run; `None` otherwise, and after a verification.
     pub verdict: Option<harness_core::Verdict>,
+    /// A human attempt's failure evidence when its judge stored no verdict
+    /// (the deny scan): the violations, one `- …` line each, so the author
+    /// learns why. `None` otherwise (a model's reaches its next repair turn).
+    pub failure_evidence: Option<String>,
 }
 
 /// Run one migration attempt for `unit`: a translate turn, then repair turns
@@ -458,6 +462,7 @@ pub fn run_migration(
         candidate_dir: outcome.candidate,
         drifted: outcome.drifted,
         verdict: outcome.verdict,
+        failure_evidence: None,
     })
 }
 
@@ -555,6 +560,11 @@ fn first_turn(
         }
         Err(e) => return Err(e),
     };
+    // Bound into the steer record (`seed_verdict`); every verification path
+    // compares the two (`replay_divergences`), so a seed verdict modified
+    // after the steer attempt was recorded is an integrity error, never a
+    // divergence (§5.1 "a modified seed").
+    let verdict_hash = hash::file_hash(&verdict_path)?;
     // Evidence from COMMITTED records only: never the driver-output excerpt,
     // which reads the gitignored build dir of whatever ran last.
     let failure = (!verdict.green).then(|| {
@@ -578,6 +588,7 @@ fn first_turn(
         files,
         failure,
         green_explanation: GREEN_SEED_EXPLANATION,
+        verdict_hash,
     }))
 }
 
@@ -608,10 +619,19 @@ pub fn human_edit_hash(logic: &str, ffi: &str) -> String {
 /// judge (deny scan, the harness-owned manifest and `lib.rs`, the oracle)
 /// runs over the two files in a new `attempts/<id>/`, exactly as over a
 /// model's reply. The record says `provider`/`provider_kind` `human`, model
-/// `-`, one turn of kind `human`; `outcome` green or red. A judge HARNESS
-/// error (driver-shape, boundary C-side) records nothing: the attempt dir
-/// is removed again. Never promotes. The caller has taken the writer lock
-/// and checked the migrate preconditions and the identical-source refusal.
+/// `-`, one turn of kind `human`; `outcome` green or red. When the judge
+/// wrote no candidate (a deny-scan red), the two files are kept verbatim in
+/// `edit/src/` — the ledger always holds what `response_hash` hashes. A
+/// judge HARNESS error (driver-shape, boundary C-side) records nothing: the
+/// attempt dir is removed again. Never promotes. The caller has taken the
+/// writer lock and checked the migrate preconditions and the
+/// identical-source refusal.
+///
+/// The id is a pure function of the edit and its inputs, so an
+/// `in-progress` human record under it (or a record-less dir) is this same
+/// edit, left by an override that was killed mid-judge — no live writer
+/// owns it under the lock: it is reclaimed and judged again. A FINISHED one
+/// is refused ("already recorded").
 pub fn record_human_attempt(
     oracle: &dyn OracleStrategy,
     target: &TargetContext,
@@ -654,13 +674,27 @@ pub fn record_human_attempt(
         "-",
         &response_hash,
     );
-    if attempts::attempt_dir(&ledger, &unit.id, &id).exists() {
-        return Err(Error::Invariant(format!(
-            "this edit is already recorded as attempt {id}; nothing to record"
-        )));
+    match attempts::load_pinned(&ledger, &unit.id, &id)? {
+        Some(rec) if rec.outcome != IN_PROGRESS => {
+            return Err(Error::Invariant(format!(
+                "this edit is already recorded as attempt {id} ({}); nothing to record",
+                printable(&rec.outcome, 32)
+            )))
+        }
+        Some(rec) if rec.provider_kind != attempts::HUMAN_KIND => {
+            return Err(Error::Invariant(format!(
+                "attempt {id} holds an unfinished {} record under a human attempt's id — the \
+                 attempts ledger is inconsistent; refusing to touch it",
+                printable(&rec.provider_kind, 32)
+            )))
+        }
+        _ => {}
     }
     let work_rel = vec!["attempts".to_string(), id.clone()];
     let work_dir = prepare_dir(&ledger, &unit.id, &work_rel)?;
+    // An override killed mid-judge (see above): start it over.
+    reset_unfinished(&work_dir, &id)?;
+    remove_path(&work_dir.join(attempts::HUMAN_EDIT_DIR))?;
     let mut record = AttemptRecord {
         schema: attempts::ATTEMPT_SCHEMA_NAME.to_string(),
         schema_version: attempts::ATTEMPT_SCHEMA_VERSION,
@@ -680,6 +714,7 @@ pub fn record_human_attempt(
         promoted: false,
         seeded_from: None,
         steer_note: None,
+        seed_verdict: None,
         note: edit.note.map(str::to_string),
     };
     if let Err(e) = record.store(&work_dir) {
@@ -709,6 +744,9 @@ pub fn record_human_attempt(
             return Err(e);
         }
     };
+    if !judged.wrote_candidate {
+        write_edit(&work_dir, edit)?;
+    }
     let result = judged.failure.as_ref().map_or("green", |f| f.class);
     record.turns.push(attempts::Turn {
         kind: attempts::HUMAN_KIND.to_string(),
@@ -727,11 +765,28 @@ pub fn record_human_attempt(
         candidate_dir: judged
             .wrote_candidate
             .then(|| stage.candidate_path(&work_dir)),
+        failure_evidence: judged
+            .verdict
+            .is_none()
+            .then(|| judged.failure.as_ref().map(|f| f.evidence.clone()))
+            .flatten(),
         record,
         attempt_dir: work_dir,
         drifted: None,
         verdict: judged.verdict,
     })
+}
+
+/// Keep a hand edit's two files verbatim in `<work_dir>/edit/src/`
+/// (`create_new`: nothing is written through a pre-existing path).
+fn write_edit(work_dir: &Path, edit: &HumanEdit) -> Result<(), Error> {
+    let dir = work_dir.join(attempts::HUMAN_EDIT_DIR);
+    let src = dir.join("src");
+    for d in [&dir, &src] {
+        std::fs::create_dir(d).map_err(|e| Error::io(d, e))?;
+    }
+    write_new(&src.join("logic.rs"), edit.logic)?;
+    write_new(&src.join("ffi.rs"), edit.ffi)
 }
 
 /// The migrate stage: the unit's oracle judges a harness-owned crate.
@@ -5357,6 +5412,11 @@ int add(int a, int b) { return a + b; }\n";
             CANDIDATE_LIB_RS
         );
         assert!(green_run.attempt_dir.join("attempt-verdict.json").is_file());
+        assert!(green_run.failure_evidence.is_none());
+        assert!(!green_run
+            .attempt_dir
+            .join(attempts::HUMAN_EDIT_DIR)
+            .exists());
         // The same edit again: already recorded.
         let err = record_human_attempt(
             &oracle(vec![green()]),
@@ -5382,6 +5442,7 @@ int add(int a, int b) { return a + b; }\n";
         .unwrap();
         assert_eq!(red.record.outcome, "red");
         assert_eq!(red.record.turns[0].result, "oracle");
+        assert!(red.failure_evidence.is_none(), "its verdict says why");
         // A deny-scan failure: class `check`, nothing built.
         const UNSAFE: &str = "pub fn add(a: i32, b: i32) -> i32 { unsafe { a + b } }\n";
         let denied = record_human_attempt(
@@ -5396,6 +5457,26 @@ int add(int a, int b) { return a + b; }\n";
         assert_eq!(denied.record.turns[0].result, "check");
         assert!(denied.record.candidate_digest.is_empty());
         assert!(denied.candidate_dir.is_none());
+        // §R2 6: the author learns why, and the ledger keeps what was
+        // submitted — exactly what `response_hash` hashes.
+        let why = denied.failure_evidence.as_deref().unwrap_or_default();
+        assert!(why.contains("unsafe"), "{why:?}");
+        let kept = |name: &str| {
+            std::fs::read_to_string(
+                denied
+                    .attempt_dir
+                    .join(attempts::HUMAN_EDIT_DIR)
+                    .join("src")
+                    .join(name),
+            )
+            .unwrap()
+        };
+        assert_eq!(kept("logic.rs"), UNSAFE);
+        assert_eq!(kept("ffi.rs"), FFI);
+        assert_eq!(
+            human_edit_hash(&kept("logic.rs"), &kept("ffi.rs")),
+            denied.record.turns[0].response_hash
+        );
         // A judge HARNESS error (the unit's driver fails its shape gate)
         // records nothing.
         const OTHER: &str = "pub fn add(a: i32, b: i32) -> i32 {\n    b.wrapping_add(a)\n}\n";
@@ -5437,5 +5518,229 @@ int add(int a, int b) { return a + b; }\n";
         )
         .unwrap_err();
         assert!(err.to_string().contains("control character"), "{err}");
+    }
+
+    /// §R2 4: an override killed mid-judge leaves an `in-progress` human
+    /// record (or a bare dir) under the edit's content-derived id; the same
+    /// edit is then reclaimed and judged again, never refused for good. A
+    /// FINISHED one stays refused.
+    #[test]
+    fn an_interrupted_override_is_reclaimed() {
+        let fx = fixture("human-reclaim");
+        let ledger = Ledger::new(fx.target.root.canonicalize().unwrap());
+        let edit = |logic: &'static str| HumanEdit {
+            logic,
+            ffi: FFI,
+            note: None,
+        };
+        let record = |logic: &'static str, verdicts: Vec<Verdict>| {
+            record_human_attempt(
+                &oracle(verdicts),
+                &fx.target,
+                &fx.facts,
+                &fx.plan,
+                fx.unit(),
+                &edit(logic),
+            )
+        };
+        // What a kill during the oracle build leaves: the record says
+        // in-progress with no turns; candidate/ and a verdict may exist.
+        let interrupt = |dir: &Path| {
+            let mut rec = AttemptRecord::load(dir).unwrap();
+            rec.outcome = IN_PROGRESS.into();
+            rec.turns.clear();
+            rec.candidate_digest.clear();
+            rec.store(dir).unwrap();
+        };
+        let first = record(LOGIC, vec![green()]).unwrap();
+        interrupt(&first.attempt_dir);
+        let again = record(LOGIC, vec![green()]).unwrap();
+        assert_eq!(again.record.id, first.record.id);
+        assert_eq!(again.record.outcome, "green");
+        assert_eq!(again.record.turns.len(), 1);
+        assert_eq!(
+            again.record.candidate_digest,
+            hash::crate_content_hash(&again.candidate_dir.clone().unwrap()).unwrap()
+        );
+        assert_eq!(
+            attempts::load_unit_attempts(&ledger, UNIT).unwrap().len(),
+            1
+        );
+        // Finished: refused, as before.
+        let err = record(LOGIC, vec![green()]).unwrap_err();
+        assert!(err.to_string().contains("already recorded"), "{err}");
+
+        // Killed between creating the dir and the first store: a bare dir.
+        const OTHER: &str = "pub fn add(a: i32, b: i32) -> i32 {\n    b.wrapping_add(a)\n}\n";
+        let id = attempts::attempt_id(
+            UNIT,
+            &again.record.unit_source,
+            &again.record.driver,
+            attempts::HUMAN_KIND,
+            "-",
+            &human_edit_hash(OTHER, FFI),
+        );
+        std::fs::create_dir_all(attempts::attempt_dir(&ledger, UNIT, &id)).unwrap();
+        let bare = record(OTHER, vec![green()]).unwrap();
+        assert_eq!(
+            (bare.record.id.as_str(), bare.record.outcome.as_str()),
+            (id.as_str(), "green")
+        );
+
+        // A deny-scan red interrupted after its edit/ copy was written.
+        const UNSAFE: &str = "pub fn add(a: i32, b: i32) -> i32 { unsafe { a + b } }\n";
+        let denied = record(UNSAFE, vec![]).unwrap();
+        interrupt(&denied.attempt_dir);
+        // What a kill mid-oracle leaves beside it when the scan passed
+        // then: a candidate and its verdict — judged red at the deny scan
+        // now, the reclaim must drop both, never keep stale evidence.
+        let stale = denied.attempt_dir.join("candidate/src");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("logic.rs"), "stale").unwrap();
+        green()
+            .store(&denied.attempt_dir.join("attempt-verdict.json"))
+            .unwrap();
+        let denied_again = record(UNSAFE, vec![]).unwrap();
+        assert_eq!(denied_again.record.turns[0].result, "check");
+        assert!(!denied_again.attempt_dir.join("candidate").exists());
+        assert!(!denied_again
+            .attempt_dir
+            .join("attempt-verdict.json")
+            .exists());
+        assert!(denied_again
+            .attempt_dir
+            .join(attempts::HUMAN_EDIT_DIR)
+            .join("src/logic.rs")
+            .is_file());
+
+        // An unfinished MODEL record posing under a human id is not ours.
+        let mut posing = AttemptRecord::load(&bare.attempt_dir).unwrap();
+        posing.outcome = IN_PROGRESS.into();
+        posing.provider_kind = "external".into();
+        posing.store(&bare.attempt_dir).unwrap();
+        let err = record(OTHER, vec![green()]).unwrap_err();
+        assert!(err.to_string().contains("inconsistent"), "{err}");
+    }
+
+    /// §R2 7 (RI-2): a steer record's `seeded_from`, `steer_note` and
+    /// `seed_verdict` are bound to the first turn it recorded and to the
+    /// seed's stored verdict — adding, removing or editing them, or the
+    /// seed's verdict, is an INTEGRITY error on every verification path,
+    /// never drift and never a divergence.
+    #[test]
+    fn a_steer_records_fields_are_bound_to_its_first_turn() {
+        let fx = fixture("steer-integrity");
+        let seed = seed(&fx, green());
+        let ledger = Ledger::new(fx.target.root.canonicalize().unwrap());
+        let steer = SteerArgs {
+            from: &seed.id,
+            note: NOTE,
+        };
+        let (provider, _) = handoff(&fx, vec![good()]);
+        let done = run_steer(&fx, &provider, &oracle(vec![green()]), 3, None, Some(steer)).unwrap();
+        assert_eq!(done.record.outcome, "green");
+        let verdict_path =
+            attempts::attempt_dir(&ledger, UNIT, &seed.id).join("attempt-verdict.json");
+        assert_eq!(
+            done.record.seed_verdict.as_deref(),
+            Some(hash::file_hash(&verdict_path).unwrap().as_str())
+        );
+        let pinned = |id: &str| {
+            let (provider, _) = scripted("replay", false, vec![]);
+            run_steer(&fx, &provider, &oracle(vec![green()]), 3, Some(id), None)
+        };
+        let rerun = || {
+            let (provider, seen) = handoff(&fx, vec![]);
+            let out = run_steer(&fx, &provider, &oracle(vec![green()]), 3, None, Some(steer));
+            assert!(
+                seen.borrow().is_empty(),
+                "a re-run of a finished attempt sends nothing"
+            );
+            out
+        };
+        assert!(pinned(&done.record.id).is_ok());
+        assert!(rerun().is_ok());
+        let integrity = |r: Result<MigrationOutcome, Error>, what: &str| {
+            let err = r.map(|o| o.drifted).unwrap_err().to_string();
+            assert!(err.contains("integrity"), "{what}: {err}");
+        };
+        let steer_dir = done.attempt_dir.clone();
+        let rewrite = |dir: &Path, f: &dyn Fn(&mut AttemptRecord)| {
+            let mut rec = AttemptRecord::load(dir).unwrap();
+            f(&mut rec);
+            rec.store(dir).unwrap();
+        };
+        // (a) The steer fields stripped: the record claims a translate turn.
+        rewrite(&steer_dir, &|r| {
+            r.seeded_from = None;
+            r.steer_note = None;
+            r.seed_verdict = None;
+        });
+        integrity(pinned(&done.record.id), "stripped, pinned replay");
+        integrity(rerun(), "stripped, trace-backed re-run");
+        // A note edited: not the guidance turn 1 posed.
+        rewrite(&steer_dir, &|r| *r = done.record.clone());
+        rewrite(&steer_dir, &|r| {
+            r.steer_note = Some("something else".into())
+        });
+        integrity(pinned(&done.record.id), "edited note, pinned replay");
+        integrity(rerun(), "edited note, trace-backed re-run");
+        // Only part of the fields.
+        rewrite(&steer_dir, &|r| *r = done.record.clone());
+        rewrite(&steer_dir, &|r| r.seed_verdict = None);
+        integrity(pinned(&done.record.id), "no seed_verdict, pinned replay");
+        integrity(rerun(), "no seed_verdict, trace-backed re-run");
+        rewrite(&steer_dir, &|r| *r = done.record.clone());
+        assert!(pinned(&done.record.id).is_ok());
+        // (b) Steer fields added to a translate record: its turn 1 posed none.
+        let seed_dir = attempts::attempt_dir(&ledger, UNIT, &seed.id);
+        let steer_verdict = hash::file_hash(&steer_dir.join("attempt-verdict.json")).unwrap();
+        rewrite(&seed_dir, &|r| {
+            r.seeded_from = Some(done.record.id.clone());
+            r.steer_note = Some(NOTE.into());
+            r.seed_verdict = Some(steer_verdict.clone());
+        });
+        integrity(pinned(&seed.id), "added fields, pinned replay");
+        rewrite(&seed_dir, &|r| *r = seed.clone());
+        // (c) The seed's stored verdict modified after the steer recorded.
+        let stored = std::fs::read(&verdict_path).unwrap();
+        let mut edited = stored.clone();
+        edited.extend_from_slice(b"\n");
+        std::fs::write(&verdict_path, &edited).unwrap();
+        integrity(
+            pinned(&done.record.id),
+            "modified seed verdict, pinned replay",
+        );
+        integrity(rerun(), "modified seed verdict, trace-backed re-run");
+        std::fs::write(&verdict_path, &stored).unwrap();
+        assert!(pinned(&done.record.id).is_ok());
+        // (d) seeded_from redirected to another finished attempt (a steer of
+        // the same seed, with its own candidate and a different verdict): the
+        // record's field is named — not the other attempt's verdict.
+        let (provider, _) = handoff(&fx, vec![good()]);
+        let other_steer = SteerArgs {
+            from: &seed.id,
+            note: "another note",
+        };
+        // Red, so its stored verdict differs from the true seed's.
+        let other = run_steer(
+            &fx,
+            &provider,
+            &oracle(vec![diff_failure()]),
+            0,
+            None,
+            Some(other_steer),
+        )
+        .unwrap()
+        .record;
+        assert_eq!(other.outcome, "red");
+        rewrite(&steer_dir, &|r| r.seeded_from = Some(other.id.clone()));
+        let err = pinned(&done.record.id)
+            .map(|o| o.drifted)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("its seeded_from is not the seed"), "{err}");
+        rewrite(&steer_dir, &|r| *r = done.record.clone());
+        assert!(pinned(&done.record.id).is_ok());
     }
 }

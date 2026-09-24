@@ -28,6 +28,37 @@ pub struct GenDriverArgs {
     pub attempt: Option<String>,
 }
 
+impl GenDriverArgs {
+    /// The command line that resumes this run, as a human would type it:
+    /// every value shell-quoted and attached (clap reads a separate `-…`
+    /// word as a flag), every run flag kept; global flags (`--json`) are not
+    /// repeated (a client re-runs the event's `args`).
+    pub fn resume_command(&self) -> String {
+        let q = report::shell_quote;
+        let mut cmd = format!("harness gen-driver {}", q(&self.unit));
+        cmd.push_str(&format!(" --target={}", q(&self.target.to_string_lossy())));
+        if let Some(p) = &self.provider {
+            cmd.push_str(&format!(" --provider={}", q(p)));
+        }
+        if let Some(m) = &self.model {
+            cmd.push_str(&format!(" --model={}", q(m)));
+        }
+        if self.promote {
+            cmd.push_str(" --promote");
+        }
+        if self.allow_unsandboxed {
+            cmd.push_str(" --allow-unsandboxed");
+        }
+        if self.retry {
+            cmd.push_str(" --retry");
+        }
+        if let Some(a) = &self.attempt {
+            cmd.push_str(&format!(" --attempt={}", q(a)));
+        }
+        cmd
+    }
+}
+
 /// The default `[unit.oracle]` table for a unit (shared with `bench init`):
 /// the generated driver lives at `migration/units/<id>/driver.c`.
 pub fn default_oracle_entries(unit_id: &str, files: &[String]) -> Vec<(&'static str, OracleValue)> {
@@ -46,6 +77,7 @@ pub fn default_oracle_entries(unit_id: &str, files: &[String]) -> Vec<(&'static 
 }
 
 pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
+    let resume = args.resume_command();
     let GenDriverArgs {
         unit: unit_id,
         target,
@@ -139,11 +171,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
                         k: "awaiting",
                         attempt: attempt.as_deref(),
                         path: path.display().to_string(),
-                        resume: format!(
-                            "harness gen-driver {} --target {}",
-                            report::shell_quote(&unit_id),
-                            report::shell_quote(&target.to_string_lossy())
-                        ),
+                        resume: resume.clone(),
                         args: report::args(),
                     });
                 }

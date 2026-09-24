@@ -21,6 +21,11 @@ pub const DRIVER_STAGE: &str = "driver";
 pub const HUMAN_KIND: &str = "human";
 /// `Turn.kind` of the first turn of a steer attempt (docs/TUI-DESIGN.md §5.1).
 pub const STEER_KIND: &str = "steer";
+/// `attempts/<id>/edit/`: where a human attempt the judge wrote no
+/// candidate for (a deny-scan red) keeps its two files verbatim, as
+/// `src/logic.rs` and `src/ffi.rs` — so the ledger always holds what its
+/// `response_hash` hashes.
+pub const HUMAN_EDIT_DIR: &str = "edit";
 
 /// One executor turn. Token fields are nullable: `None` = unknown (external
 /// hand-off, or a provider that reports no usage) — never `0`.
@@ -92,6 +97,12 @@ pub struct AttemptRecord {
     /// from the ledger alone (additive; omitted otherwise).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steer_note: Option<String>,
+    /// A steer attempt's binding to its seed's stored verdict: blake3 of the
+    /// seed's `attempt-verdict.json` bytes as its first turn read them
+    /// (additive; omitted otherwise). A seed verdict modified afterwards is
+    /// an integrity error on verification, never a divergence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_verdict: Option<String>,
     /// A human attempt's note (printable, bounded; additive, optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -261,30 +272,85 @@ pub fn unit_crate_digest(ledger: &Ledger, unit: &crate::Unit) -> Result<Option<S
         .transpose()
 }
 
+/// Who authored an attempt's candidate, judged by its `seeded_from` lineage
+/// (docs/TUI-DESIGN.md §2, §R2 1–3). A steer attempt is model output under
+/// a reviewer's note: the note is free human text (it may carry the fix, or
+/// benchmark vectors the model must never see — docs/M4-DESIGN.md §2), and
+/// a seed's whole candidate is shown to the model as its current code — so
+/// only an UNSEEDED model attempt is unassisted pipeline output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Authorship<'a> {
+    /// A model attempt with no seed: unassisted pipeline output.
+    Pipeline,
+    /// A model attempt seeded — directly or through other steer attempts —
+    /// from model attempts only (or from a seed missing from the ledger,
+    /// whose lineage cannot be proved): guided by a reviewer's note.
+    Steered,
+    /// A human (override) attempt, or a steer attempt whose seed chain
+    /// reaches one: carries that human attempt (a hand edit revised by the
+    /// model is still a hand edit).
+    Human(&'a AttemptRecord),
+}
+
+/// The [`Authorship`] of `record` among the unit's `records`: follows
+/// `seeded_from` through `records` (never only through the green ones — a
+/// red hand edit a steer attempt fixed is still its origin), bounded by the
+/// number of records, so a hand-edited cycle cannot loop.
+pub fn authorship<'a>(records: &'a [AttemptRecord], record: &'a AttemptRecord) -> Authorship<'a> {
+    let mut current = record;
+    for _ in 0..=records.len() {
+        if current.provider_kind == HUMAN_KIND {
+            return Authorship::Human(current);
+        }
+        let Some(seed) = current.seeded_from.as_deref() else {
+            break;
+        };
+        match records.iter().find(|r| r.id == seed && r.stage.is_none()) {
+            Some(next) => current = next,
+            None => break,
+        }
+    }
+    if record.seeded_from.is_some() {
+        Authorship::Steered
+    } else {
+        Authorship::Pipeline
+    }
+}
+
 /// Which recorded attempt produced the unit's crate on disk (R-5,
-/// docs/REPLAY-DESIGN.md §R, as extended by docs/TUI-DESIGN.md §5.2).
+/// docs/REPLAY-DESIGN.md §R, as extended by docs/TUI-DESIGN.md §5.2 and
+/// §R2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provenance<'a> {
     /// No green attempt bound to the current inputs has the crate's digest
     /// (on a verified unit: "provenance unknown").
     None,
-    /// Exactly one MODEL attempt did — the pipeline produced the crate.
+    /// Exactly one unassisted MODEL attempt did — the pipeline produced the
+    /// crate.
     Pipeline(&'a AttemptRecord),
-    /// Several model attempts did (ambiguous provenance), in id order.
+    /// Several unassisted model attempts did (ambiguous provenance), in id
+    /// order.
     Ambiguous(Vec<&'a AttemptRecord>),
-    /// Only a labelled human attempt did — a hand edit, never counted as the
-    /// pipeline's.
+    /// No unassisted model attempt did, but a steer attempt of model-only
+    /// lineage did ([`Authorship::Steered`]; the lowest id when several):
+    /// pipeline output guided by a reviewer's note — never counted as
+    /// unassisted pipeline output.
+    Steered(&'a AttemptRecord),
+    /// Only attempts of human lineage did ([`Authorship::Human`]; the
+    /// matched attempt, lowest id — [`authorship`] names its human origin):
+    /// a hand edit, never counted as the pipeline's.
     Human(&'a AttemptRecord),
 }
 
 /// The ONE implementation of R-5: among `records`, the green attempts bound
 /// to the current `unit_source` AND `driver` whose `candidate_digest` equals
 /// `crate_digest`; a steer attempt that reproduced its seed's candidate is
-/// collapsed into its seed (the seed is the provenance); then exactly one
-/// model attempt → [`Provenance::Pipeline`], several →
-/// [`Provenance::Ambiguous`], only human attempts → [`Provenance::Human`],
-/// none → [`Provenance::None`]. Not the `promoted` flag: an older attempt
-/// keeps it after a newer one replaced its crate.
+/// collapsed into its seed (the seed is the provenance); then, by
+/// [`authorship`]: exactly one unassisted model attempt →
+/// [`Provenance::Pipeline`], several → [`Provenance::Ambiguous`]; else a
+/// steered one → [`Provenance::Steered`]; else one of human lineage →
+/// [`Provenance::Human`]; none → [`Provenance::None`]. Not the `promoted`
+/// flag: an older attempt keeps it after a newer one replaced its crate.
 pub fn provenance<'a>(
     records: &'a [AttemptRecord],
     unit_source: &str,
@@ -311,23 +377,26 @@ pub fn provenance<'a>(
             .is_some_and(|seed| matches.iter().any(|m| m.id == seed))
     };
     let mut model: Vec<&AttemptRecord> = Vec::new();
+    let mut steered: Vec<&AttemptRecord> = Vec::new();
     let mut human: Vec<&AttemptRecord> = Vec::new();
     for r in &matches {
         if seeded_by_a_match(r) {
             continue;
         }
-        if r.provider_kind == HUMAN_KIND {
-            human.push(r);
-        } else {
-            model.push(r);
+        match authorship(records, r) {
+            Authorship::Pipeline => model.push(r),
+            Authorship::Steered => steered.push(r),
+            Authorship::Human(_) => human.push(r),
         }
     }
-    model.sort_by(|a, b| a.id.cmp(&b.id));
-    human.sort_by(|a, b| a.id.cmp(&b.id));
-    match (model.len(), human.first()) {
-        (1, _) => Provenance::Pipeline(model[0]),
-        (0, Some(h)) => Provenance::Human(h),
-        (0, None) => Provenance::None,
+    for bucket in [&mut model, &mut steered, &mut human] {
+        bucket.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    match (model.len(), steered.first(), human.first()) {
+        (1, _, _) => Provenance::Pipeline(model[0]),
+        (0, Some(s), _) => Provenance::Steered(s),
+        (0, None, Some(h)) => Provenance::Human(h),
+        (0, None, None) => Provenance::None,
         _ => Provenance::Ambiguous(model),
     }
 }
@@ -582,6 +651,7 @@ mod tests {
             promoted: false,
             seeded_from: None,
             steer_note: None,
+            seed_verdict: None,
             note: None,
         };
         let json = serde_json::to_string(&rec).unwrap();
@@ -631,6 +701,7 @@ mod tests {
             promoted: false,
             seeded_from: None,
             steer_note: None,
+            seed_verdict: None,
             note: None,
         }
     }
@@ -645,7 +716,12 @@ mod tests {
         ) {
             Provenance::None => "none".to_string(),
             Provenance::Pipeline(r) => format!("pipeline:{}", r.id),
-            Provenance::Human(r) => format!("human:{}", r.id),
+            Provenance::Steered(r) => format!("steered:{}", r.id),
+            // The matched attempt, then its human origin.
+            Provenance::Human(r) => match authorship(recs, r) {
+                Authorship::Human(origin) => format!("human:{}@{}", r.id, origin.id),
+                other => panic!("Human provenance of {other:?} authorship"),
+            },
             Provenance::Ambiguous(rs) => format!(
                 "ambiguous:{}",
                 rs.iter()
@@ -697,7 +773,7 @@ mod tests {
         let human = prov_rec("a-h", HUMAN_KIND, "green", "blake3:c");
         assert_eq!(
             p(std::slice::from_ref(&human), Some("blake3:c")),
-            "human:a-h"
+            "human:a-h@a-h"
         );
         // A model attempt with the same candidate outranks the human one.
         assert_eq!(
@@ -709,7 +785,108 @@ mod tests {
             seeded_from: Some("a-h".into()),
             ..prov_rec("a-8", "external", "green", "blake3:c")
         };
-        assert_eq!(p(&[human, steer_on_human], Some("blake3:c")), "human:a-h");
+        assert_eq!(
+            p(&[human, steer_on_human], Some("blake3:c")),
+            "human:a-h@a-h"
+        );
+    }
+
+    /// docs/TUI-DESIGN.md §R2 1–2: a hand edit revised by the model is still
+    /// a hand edit, and a steered crate is never unassisted pipeline output —
+    /// whatever the steer attempt changed, however many hops away.
+    #[test]
+    fn provenance_follows_the_seed_lineage() {
+        let p = |recs: &[AttemptRecord], crate_digest: &str| match provenance(
+            recs,
+            "blake3:src",
+            "blake3:drv",
+            Some(crate_digest),
+        ) {
+            Provenance::None => "none".to_string(),
+            Provenance::Pipeline(r) => format!("pipeline:{}", r.id),
+            Provenance::Steered(r) => format!("steered:{}", r.id),
+            Provenance::Human(r) => match authorship(recs, r) {
+                Authorship::Human(origin) => format!("human:{}@{}", r.id, origin.id),
+                other => panic!("Human provenance of {other:?} authorship"),
+            },
+            Provenance::Ambiguous(rs) => format!(
+                "ambiguous:{}",
+                rs.iter()
+                    .map(|r| r.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        };
+        let seeded = |id: &str, seed: &str, outcome: &str, digest: &str| AttemptRecord {
+            seeded_from: Some(seed.into()),
+            ..prov_rec(id, "external", outcome, digest)
+        };
+        for h_outcome in ["green", "red"] {
+            let h = prov_rec("a-h", HUMAN_KIND, h_outcome, "blake3:h");
+            // One hop: the model changed the hand edit (a new digest).
+            let s = seeded("a-s", "a-h", "green", "blake3:s");
+            assert_eq!(
+                p(&[h.clone(), s.clone()], "blake3:s"),
+                "human:a-s@a-h",
+                "{h_outcome} human seed"
+            );
+            // Two hops, each changing the candidate.
+            let t = seeded("a-t", "a-s", "green", "blake3:t");
+            assert_eq!(
+                p(&[h.clone(), s.clone(), t.clone()], "blake3:t"),
+                "human:a-t@a-h",
+                "{h_outcome} human seed, two hops"
+            );
+            // An unassisted model attempt with the same candidate outranks it.
+            let m = prov_rec("a-m", "external", "green", "blake3:s");
+            assert_eq!(p(&[h, s, m], "blake3:s"), "pipeline:a-m");
+        }
+        // Two hops back to the hand edit's own bytes: human either way.
+        let h = prov_rec("a-h", HUMAN_KIND, "green", "blake3:h");
+        let s = seeded("a-s", "a-h", "green", "blake3:s");
+        let back = seeded("a-b", "a-s", "green", "blake3:h");
+        assert!(p(&[h, s, back], "blake3:h").starts_with("human:"));
+        // A model seed: steered, never pipeline — red seed or green.
+        for m_outcome in ["green", "red"] {
+            let m = prov_rec("a-m", "external", m_outcome, "blake3:m");
+            let s = seeded("a-s", "a-m", "green", "blake3:s");
+            assert_eq!(p(&[m.clone(), s.clone()], "blake3:s"), "steered:a-s");
+            // A steer of the steer that reproduced it collapses into it.
+            let again = seeded("a-t", "a-s", "green", "blake3:s");
+            assert_eq!(p(&[m, s, again], "blake3:s"), "steered:a-s");
+        }
+        // A steered and a human match, no unassisted one: steered.
+        let m = prov_rec("a-m", "external", "red", "blake3:m");
+        let s = seeded("a-s", "a-m", "green", "blake3:c");
+        let h = prov_rec("a-h", HUMAN_KIND, "green", "blake3:c");
+        assert_eq!(p(&[m, s, h], "blake3:c"), "steered:a-s");
+        // A seed missing from the ledger cannot be proved model: steered.
+        let dangling = seeded("a-d", "a-gone", "green", "blake3:c");
+        assert_eq!(p(&[dangling], "blake3:c"), "steered:a-d");
+        // A hand-edited cycle terminates.
+        let x = seeded("a-x", "a-y", "green", "blake3:c");
+        let y = seeded("a-y", "a-x", "red", "blake3:y");
+        assert_eq!(p(&[x, y], "blake3:c"), "steered:a-x");
+    }
+
+    #[test]
+    fn authorship_walks_every_record_not_only_the_green_ones() {
+        let h = prov_rec("a-h", HUMAN_KIND, "red", "");
+        let s = AttemptRecord {
+            seeded_from: Some("a-h".into()),
+            ..prov_rec("a-s", "external", "red", "blake3:s")
+        };
+        let m = prov_rec("a-m", "external", "red", "");
+        let records = [h.clone(), s.clone(), m.clone()];
+        assert_eq!(authorship(&records, &h), Authorship::Human(&records[0]));
+        assert_eq!(authorship(&records, &s), Authorship::Human(&records[0]));
+        assert_eq!(authorship(&records, &m), Authorship::Pipeline);
+        // A driver record of the same id is not a migrate seed.
+        let driver = AttemptRecord {
+            stage: Some(DRIVER_STAGE.into()),
+            ..prov_rec("a-h", HUMAN_KIND, "green", "")
+        };
+        assert_eq!(authorship(&[driver, s.clone()], &s), Authorship::Steered);
     }
 
     #[test]

@@ -831,17 +831,21 @@ pub struct CasePipeline {
     pub mutation: Option<(u32, u32)>,
     /// Turns the green driver attempt took.
     pub driver_turns: Option<u32>,
-    /// Turns the promoted migrate attempt took — the unique green attempt
-    /// bound to the current inputs whose candidate IS the unit crate
-    /// (docs/REPLAY-DESIGN.md §R R-5).
+    /// Turns the promoted migrate attempt took — the unique UNASSISTED
+    /// model attempt (authorship `Pipeline`: unseeded, not human) green,
+    /// bound to the current inputs, whose candidate IS the unit crate
+    /// (docs/REPLAY-DESIGN.md §R R-5, docs/TUI-DESIGN.md §R2). `None` when
+    /// the crate's provenance is steered, human, ambiguous or unknown.
     pub migrate_turns: Option<u32>,
-    /// The promoted attempt's outcome; without one, the common outcome of
-    /// the finished attempts, `mixed` when they differ, the only record's
-    /// outcome when none finished, `""` when there is no attempt.
+    /// That attempt's outcome; without one, the common outcome of the
+    /// finished UNASSISTED attempts (a hand edit or a steer attempt is never
+    /// counted), `mixed` when they differ, an unfinished one's outcome when
+    /// none finished, `""` when the unit has no unassisted attempt.
     pub migrate_outcome: String,
     /// The unverified candidate scored for this case (`""` when none): only a
-    /// FINISHED red attempt whose last turn failed on behavior (`oracle`) —
-    /// a candidate that built, ran, and differed from the C on the driver.
+    /// FINISHED red UNASSISTED attempt whose last turn failed on behavior
+    /// (`oracle`) — a candidate that built, ran, and differed from the C on
+    /// the driver; never a hand edit or a steer attempt.
     #[serde(default)]
     pub candidate_attempt: String,
 }

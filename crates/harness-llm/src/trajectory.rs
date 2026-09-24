@@ -252,6 +252,9 @@ pub(crate) struct SteerSeed {
     pub(crate) failure: Option<Failure>,
     /// `[FAILURE CLASS]` explanation of a green seed.
     pub(crate) green_explanation: &'static str,
+    /// blake3 of the seed's `attempt-verdict.json` bytes the turn was
+    /// rendered from (the record's `seed_verdict`).
+    pub(crate) verdict_hash: String,
 }
 
 /// What one stage run produced (see [`crate::migrate::MigrationOutcome`]).
@@ -428,6 +431,7 @@ impl<'a> Job<'a> {
             promoted: false,
             seeded_from: self.steer().map(|seed| seed.seed_id.clone()),
             steer_note: self.steer().map(|seed| seed.note.clone()),
+            seed_verdict: self.steer().map(|seed| seed.verdict_hash.clone()),
             note: None,
         };
         let work_rel = vec![texts.attempts_subdir.to_string(), id.clone()];
@@ -677,6 +681,9 @@ impl<'a> Job<'a> {
                     "turn 1: the recorded request does not match prompt_digest".into(),
                 ));
             }
+            if index == 0 {
+                steer_fields_posed(recorded, &request.user).map_err(integrity)?;
+            }
             pairs.push((request, response));
         }
         Ok(pairs)
@@ -700,6 +707,53 @@ impl<'a> Job<'a> {
                 printable(&recorded.provider, 64)
             )));
         }
+        // Every recorded turn is loaded and checked first — including the
+        // record's steer fields against the recorded turn 1 (RI-2), so an
+        // edited `seeded_from`/`steer_note` is named as such.
+        let pairs = self.recorded_pairs(recorded)?;
+        // Then the record's steer fields must be the first turn being
+        // verified: equal by construction when it was built from the record
+        // (a pinned replay); otherwise the id binds the recorded first
+        // request to the command line's, so a mismatch means an edited
+        // record — or, for `seed_verdict`, the record or the seed's verdict
+        // modified since (the two cannot be told apart).
+        let job = self
+            .steer()
+            .map(|s| (s.seed_id.as_str(), s.note.as_str(), s.verdict_hash.as_str()));
+        let rec = match (
+            recorded.seeded_from.as_deref(),
+            recorded.steer_note.as_deref(),
+            recorded.seed_verdict.as_deref(),
+        ) {
+            (Some(seed), Some(note), Some(verdict)) => Some((seed, note, verdict)),
+            (None, None, None) => None,
+            _ => {
+                return Err(Error::Invariant(format!(
+                    "attempt {}: integrity: seeded_from, steer_note and seed_verdict must be \
+                     recorded together",
+                    recorded.id
+                )))
+            }
+        };
+        if rec != job {
+            let what = match (rec, job) {
+                (Some((rs, rn, rv)), Some((js, jn, jv))) if rs == js && rn == jn && rv != jv => {
+                    format!(
+                        "its seed_verdict does not match the stored verdict of its seed {} (the \
+                         record or the seed's attempt-verdict.json was modified after it was \
+                         recorded)",
+                        printable(rs, 64)
+                    )
+                }
+                _ => "its steer fields (seeded_from, steer_note) do not match the first turn \
+                      being verified"
+                    .to_string(),
+            };
+            return Err(Error::Invariant(format!(
+                "attempt {}: integrity: {what}",
+                recorded.id
+            )));
+        }
         // The scratch name is exactly as long as `<attempts subdir>/<id>`:
         // the oracle cuts raw tool output to a byte budget BEFORE any scrub
         // or alias can run (stderr excerpts), so a path of a different
@@ -712,7 +766,6 @@ impl<'a> Job<'a> {
         // A crashed verification may have left its scratch behind. The unit
         // dir is verified first, so not even this removal goes through a
         // symlink.
-        let pairs = self.recorded_pairs(recorded)?;
         let unit_dir = prepare_dir(self.ledger, &self.unit.id, &[])?;
         remove_path(&unit_dir.join(&scratch_rel[0]))?;
         let scratch = prepare_dir(self.ledger, &self.unit.id, &scratch_rel)?;
@@ -906,6 +959,42 @@ impl<'a> Job<'a> {
                 attempts_dir.display()
             ))
         })
+    }
+}
+
+/// The record's steer fields against its RECORDED first request (RI-2), so
+/// neither adding, removing nor editing them passes as mere drift: a steer
+/// record's turn 1 is of kind `steer`, its request ends with the note as
+/// `[GUIDANCE]` right before `[TASK]`, and its `[HISTORY]` names `attempt
+/// <seed> ` (a template change must keep both shapes); any other record's
+/// turn 1 is not a steer turn and poses no `[GUIDANCE]`. Sources enter a
+/// prompt JSON-encoded and a note may hold no section-header line, so
+/// neither can imitate these headers.
+fn steer_fields_posed(recorded: &AttemptRecord, user: &str) -> Result<(), String> {
+    let kind = recorded.turns.first().map(|t| t.kind.as_str());
+    let steer = harness_core::attempts::STEER_KIND;
+    match (&recorded.seeded_from, &recorded.steer_note) {
+        (Some(seed), Some(note)) => {
+            let guidance = user
+                .rfind("\n[GUIDANCE]\n")
+                .ok_or("turn 1 of a steer record poses no [GUIDANCE]")?;
+            let tail = &user[guidance + "\n[GUIDANCE]\n".len()..];
+            if kind != Some(steer) || !tail.starts_with(&format!("{note}\n\n[TASK]\n")) {
+                return Err("its steer_note is not the guidance its first turn posed".into());
+            }
+            let history = user[..guidance]
+                .rfind("\n[HISTORY]\n")
+                .map_or("", |start| &user[start..guidance]);
+            if !history.contains(&format!("attempt {seed} ")) {
+                return Err("its seeded_from is not the seed its first turn names".into());
+            }
+            Ok(())
+        }
+        (None, None) if kind == Some(steer) || user.contains("\n[GUIDANCE]\n") => {
+            Err("turn 1 was posed as a steer turn, but the record carries no steer fields".into())
+        }
+        (None, None) => Ok(()),
+        _ => Err("seeded_from and steer_note must be recorded together".into()),
     }
 }
 

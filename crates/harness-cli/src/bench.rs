@@ -625,28 +625,16 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                     ));
                     None
                 }
-                attempts::Provenance::Human(_) | attempts::Provenance::None => None,
+                attempts::Provenance::Steered(_)
+                | attempts::Provenance::Human(_)
+                | attempts::Provenance::None => None,
             };
-            let promoted_count = usize::from(promoted.is_some());
             pipeline.migrate_turns = promoted.map(|r| r.turns.len() as u32);
-            let finished: std::collections::BTreeSet<&str> = m_attempts
-                .iter()
-                .filter(|r| r.outcome != "in-progress")
-                .map(|r| r.outcome.as_str())
-                .collect();
-            pipeline.migrate_outcome = match (promoted, finished.len()) {
-                (Some(r), _) => r.outcome.clone(),
-                (None, 0) => m_attempts
-                    .first()
-                    .map(|r| r.outcome.clone())
-                    .unwrap_or_default(),
-                (None, 1) => finished
-                    .iter()
-                    .next()
-                    .map(|o| (*o).to_string())
-                    .unwrap_or_default(),
-                (None, _) => "mixed".to_string(),
-            };
+            // Every other pipeline figure counts unassisted model attempts
+            // only: never a hand edit, nor anything a reviewer's note
+            // guided (docs/TUI-DESIGN.md §R2 3).
+            let unassisted = pipeline_attempts(&m_attempts);
+            pipeline.migrate_outcome = migrate_outcome(promoted, &unassisted);
             // "Verified" for scoring = plan status AND the latest verdict is
             // green over the CURRENT digests AND the driver is freshly
             // validated (R6). Anything less is `stale-verified`, never scored
@@ -670,27 +658,12 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                     Verification::Stale
                 };
             }
-            if verification == Verification::Verified && promoted_count == 0 {
-                match &provenance {
-                    // docs/TUI-DESIGN.md §5.2: the benchmark scores pipeline
-                    // output only; a hand edit is never counted as the
-                    // pipeline's.
-                    attempts::Provenance::Human(r) => problems.push(format!(
-                        "{}: the verified crate was promoted from human (override) attempt {} — \
-                         not pipeline provenance",
-                        case.path,
-                        harness_llm::printable(&r.id, 64)
-                    )),
-                    attempts::Provenance::Ambiguous(_) => {}
-                    // R-5: a verified crate no recorded attempt produced has
-                    // no provenance the benchmark can report.
-                    _ => problems.push(format!(
-                        "{}: the verified crate matches no green migrate attempt (provenance \
-                         unknown)",
-                        case.path
-                    )),
-                }
-            }
+            problems.extend(verified_provenance_problem(
+                &case.path,
+                verification,
+                &m_attempts,
+                &provenance,
+            ));
             if verification == Verification::Verified {
                 let crate_name = unit.oracle_param_str("rust_crate").unwrap_or_default();
                 let crate_dir = ledger.unit_dir(&unit.id).join(crate_name);
@@ -702,17 +675,7 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                     }
                 }
                 rust_lib = harness_oracle::build_crate_staticlib(&ctx, &crate_dir).ok();
-            } else if let Some(cand) = m_attempts
-                .iter()
-                .filter(|r| {
-                    // A FINISHED attempt the oracle rejected on BEHAVIOR:
-                    // its last candidate built, ran, and differed from the C.
-                    r.outcome == "red"
-                        && r.turns.last().is_some_and(|t| t.result == "oracle")
-                        && !r.candidate_digest.is_empty()
-                })
-                .min_by(|a, b| a.id.cmp(&b.id))
-            {
+            } else if let Some(cand) = unverified_candidate(&unassisted) {
                 let dir = attempts::attempt_dir(&ledger, &unit.id, &cand.id).join("candidate");
                 if dir.is_dir() {
                     inputs.candidate = cand.candidate_digest.clone();
@@ -1181,6 +1144,128 @@ fn check_supersession(
     EntryCheck::Holds
 }
 
+/// The unit's unassisted pipeline attempts ([`attempts::Authorship::Pipeline`]):
+/// the only ones any pipeline figure of a case counts.
+fn pipeline_attempts(records: &[attempts::AttemptRecord]) -> Vec<&attempts::AttemptRecord> {
+    records
+        .iter()
+        .filter(|r| attempts::authorship(records, r) == attempts::Authorship::Pipeline)
+        .collect()
+}
+
+/// `pipeline.migrate_outcome`: the provenance attempt's outcome, else the
+/// one outcome the finished unassisted attempts share (`mixed` when they
+/// differ), else an unfinished one's.
+fn migrate_outcome(
+    promoted: Option<&attempts::AttemptRecord>,
+    unassisted: &[&attempts::AttemptRecord],
+) -> String {
+    let finished: std::collections::BTreeSet<&str> = unassisted
+        .iter()
+        .filter(|r| r.outcome != "in-progress")
+        .map(|r| r.outcome.as_str())
+        .collect();
+    match (promoted, finished.len()) {
+        (Some(r), _) => r.outcome.clone(),
+        (None, 0) => unassisted
+            .first()
+            .map(|r| r.outcome.clone())
+            .unwrap_or_default(),
+        (None, 1) => finished
+            .iter()
+            .next()
+            .map(|o| (*o).to_string())
+            .unwrap_or_default(),
+        (None, _) => "mixed".to_string(),
+    }
+}
+
+/// The unverified candidate a case scores: among `unassisted` attempts, a
+/// FINISHED one the oracle rejected on BEHAVIOR (its last candidate built,
+/// ran, and differed from the C), lowest id.
+fn unverified_candidate<'a>(
+    unassisted: &[&'a attempts::AttemptRecord],
+) -> Option<&'a attempts::AttemptRecord> {
+    unassisted
+        .iter()
+        .copied()
+        .filter(|r| {
+            r.outcome == "red"
+                && r.turns.last().is_some_and(|t| t.result == "oracle")
+                && !r.candidate_digest.is_empty()
+        })
+        .min_by(|a, b| a.id.cmp(&b.id))
+}
+
+/// The problem a VERIFIED case's provenance raises, if any
+/// (docs/TUI-DESIGN.md §5.2, §R2): the benchmark scores unassisted pipeline
+/// output only — a crate promoted from a hand edit (or from a steer attempt
+/// of one), or from a steer attempt, is never counted as the pipeline's; a
+/// crate no recorded attempt produced has no provenance to report (R-5).
+/// Ambiguous provenance is reported where it is found, whatever the
+/// verification state.
+fn verified_provenance_problem(
+    case_path: &str,
+    verification: Verification,
+    records: &[attempts::AttemptRecord],
+    provenance: &attempts::Provenance,
+) -> Option<String> {
+    if verification != Verification::Verified {
+        return None;
+    }
+    let shown = |id: &str| harness_llm::printable(id, 64);
+    match provenance {
+        attempts::Provenance::Pipeline(_) | attempts::Provenance::Ambiguous(_) => None,
+        attempts::Provenance::Human(r) => Some(match attempts::authorship(records, r) {
+            attempts::Authorship::Human(origin) if origin.id != r.id => format!(
+                "{case_path}: the verified crate was promoted from steer attempt {}, seeded from \
+                 human (override) attempt {} — not pipeline provenance",
+                shown(&r.id),
+                shown(&origin.id)
+            ),
+            _ => format!(
+                "{case_path}: the verified crate was promoted from human (override) attempt {} \
+                 — not pipeline provenance",
+                shown(&r.id)
+            ),
+        }),
+        attempts::Provenance::Steered(r) => Some(format!(
+            "{case_path}: the verified crate was promoted from steer attempt {} (seeded from {}; \
+             a reviewer's note guided it) — not unassisted pipeline provenance",
+            shown(&r.id),
+            shown(r.seeded_from.as_deref().unwrap_or("?"))
+        )),
+        attempts::Provenance::None => Some(format!(
+            "{case_path}: the verified crate matches no green migrate attempt (provenance unknown)"
+        )),
+    }
+}
+
+/// Why `bench check --replay` skips a FINISHED record instead of replaying
+/// it, checked in this order: bound to superseded inputs (stale evidence,
+/// never a replay failure — M4 review); a human attempt (a hand edit has no
+/// model reply to replay); superseded by a later external sample.
+fn replay_skip(
+    rec: &attempts::AttemptRecord,
+    records: &[attempts::AttemptRecord],
+    stage: &str,
+    unit_source: &str,
+    driver_now: &str,
+) -> Option<String> {
+    if rec.unit_source != unit_source || (stage == "migrate" && rec.driver != driver_now) {
+        return Some("bound to superseded inputs".into());
+    }
+    if rec.provider_kind == attempts::HUMAN_KIND {
+        return Some("human".into());
+    }
+    superseding_sample(rec, records).map(|newer| {
+        format!(
+            "superseded by sample {}",
+            harness_llm::printable(&newer, 64)
+        )
+    })
+}
+
 /// `bench check --replay` (docs/REPLAY-DESIGN.md §R): every finished attempt
 /// bound to the current inputs is verified from its RECORDED evidence
 /// (strict tier) and reported `prompt: conformant | drifted`; supersession
@@ -1240,37 +1325,10 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                 let mut results: std::collections::BTreeMap<String, ReplayResult> =
                     std::collections::BTreeMap::new();
                 for rec in records.iter().filter(|r| r.outcome != "in-progress") {
-                    let stale = rec.unit_source != unit_source
-                        || (stage == "migrate" && rec.driver != driver_now);
                     let shown = harness_llm::printable(&rec.id, 64);
-                    if stale {
+                    if let Some(why) = replay_skip(rec, &records, stage, &unit_source, &driver_now)
+                    {
                         skipped += 1;
-                        out(format!(
-                            "bench replay: {} {stage} {shown} skipped (bound to superseded inputs)",
-                            case.path
-                        ));
-                        results.insert(
-                            rec.id.clone(),
-                            ReplayResult::Skipped("bound to superseded inputs".into()),
-                        );
-                        continue;
-                    }
-                    if rec.provider_kind == attempts::HUMAN_KIND {
-                        // A hand edit has no model reply to replay.
-                        skipped += 1;
-                        out(format!(
-                            "bench replay: {} {stage} {shown} skipped (human)",
-                            case.path
-                        ));
-                        results.insert(rec.id.clone(), ReplayResult::Skipped("human".into()));
-                        continue;
-                    }
-                    if let Some(newer) = superseding_sample(rec, &records) {
-                        skipped += 1;
-                        let why = format!(
-                            "superseded by sample {}",
-                            harness_llm::printable(&newer, 64)
-                        );
                         out(format!(
                             "bench replay: {} {stage} {shown} skipped ({why})",
                             case.path
@@ -1441,6 +1499,7 @@ mod tests {
             promoted: false,
             seeded_from: None,
             steer_note: None,
+            seed_verdict: None,
             note: None,
         }
     }
@@ -1584,5 +1643,139 @@ mod tests {
         assert_eq!(sup(3), None);
         assert_eq!(sup(4), None, "live samples all replay");
         assert_eq!(sup(5), None);
+    }
+
+    /// A finished record with one turn ending `result`, bound to the inputs
+    /// the tests below call current.
+    fn judged(id: &str, kind: &str, outcome: &str, result: &str, digest: &str) -> AttemptRecord {
+        AttemptRecord {
+            outcome: outcome.into(),
+            turns: vec![attempts::Turn {
+                kind: "translate".into(),
+                result: result.into(),
+                request_key: String::new(),
+                response_hash: String::new(),
+                input_tokens: None,
+                output_tokens: None,
+            }],
+            unit_source: "blake3:src".into(),
+            driver: "blake3:drv".into(),
+            candidate_digest: digest.into(),
+            ..rec(id, kind)
+        }
+    }
+
+    fn seeded(mut r: AttemptRecord, seed: &str) -> AttemptRecord {
+        r.seeded_from = Some(seed.into());
+        r
+    }
+
+    /// docs/TUI-DESIGN.md §5.2, §R2 1–2, 8: a verified crate the pipeline
+    /// did not produce unassisted is a PROBLEM (so `--write` refuses it),
+    /// naming what produced it; nothing else is.
+    #[test]
+    fn a_verified_crate_of_other_provenance_is_a_problem() {
+        let problem = |records: &[AttemptRecord], verification: Verification| {
+            let provenance =
+                attempts::provenance(records, "blake3:src", "blake3:drv", Some("blake3:c"));
+            verified_provenance_problem("case/x", verification, records, &provenance)
+        };
+        let human = judged("a-h", attempts::HUMAN_KIND, "green", "green", "blake3:c");
+        let text = problem(std::slice::from_ref(&human), Verification::Verified).unwrap();
+        assert!(
+            text.contains("human (override) attempt a-h") && text.contains("not pipeline"),
+            "{text}"
+        );
+        for other in [Verification::Stale, Verification::No] {
+            assert_eq!(problem(std::slice::from_ref(&human), other), None);
+        }
+        // A steer attempt of a hand edit: named with its human origin.
+        let over = judged("a-s", "external", "green", "green", "blake3:c");
+        let revised = [
+            judged("a-h", attempts::HUMAN_KIND, "red", "oracle", "blake3:h"),
+            seeded(over.clone(), "a-h"),
+        ];
+        let text = problem(&revised, Verification::Verified).unwrap();
+        assert!(
+            text.contains("steer attempt a-s, seeded from human (override) attempt a-h"),
+            "{text}"
+        );
+        // A steer attempt of a model attempt: guided, not unassisted.
+        let steered = [
+            judged("a-m", "external", "red", "oracle", "blake3:m"),
+            seeded(over.clone(), "a-m"),
+        ];
+        let text = problem(&steered, Verification::Verified).unwrap();
+        assert!(
+            text.contains("steer attempt a-s (seeded from a-m") && text.contains("unassisted"),
+            "{text}"
+        );
+        // No attempt produced it: provenance unknown.
+        let text = problem(&[], Verification::Verified).unwrap();
+        assert!(text.contains("provenance unknown"), "{text}");
+        // Unassisted pipeline output (outranking the hand edit): no problem.
+        let model = judged("a-m", "external", "green", "green", "blake3:c");
+        assert_eq!(problem(&[human, model], Verification::Verified), None);
+    }
+
+    /// §R2 3: no pipeline figure of a case counts a hand edit or a steered
+    /// attempt — not the scored unverified candidate, not `migrate_outcome`.
+    #[test]
+    fn pipeline_figures_count_unassisted_attempts_only() {
+        let human_red = judged("a-0", attempts::HUMAN_KIND, "red", "oracle", "blake3:h");
+        let steer_red = seeded(
+            judged("a-1", "external", "red", "oracle", "blake3:s"),
+            "a-3",
+        );
+        let model_red = judged("a-2", "external", "red", "oracle", "blake3:m");
+        let model_build = judged("a-3", "external", "red", "build", "");
+        let pick = |records: &[AttemptRecord]| {
+            unverified_candidate(&pipeline_attempts(records)).map(|r| r.id.clone())
+        };
+        assert_eq!(
+            pick(&[
+                human_red.clone(),
+                steer_red.clone(),
+                model_red.clone(),
+                model_build.clone()
+            ])
+            .as_deref(),
+            Some("a-2")
+        );
+        assert_eq!(
+            pick(&[human_red.clone(), steer_red.clone(), model_build.clone()]),
+            None
+        );
+        let human_green = judged("a-9", attempts::HUMAN_KIND, "green", "green", "blake3:g");
+        let outcome =
+            |records: &[AttemptRecord]| migrate_outcome(None, &pipeline_attempts(records));
+        assert_eq!(outcome(&[model_build.clone(), human_green.clone()]), "red");
+        assert_eq!(outcome(std::slice::from_ref(&human_green)), "");
+        assert_eq!(
+            outcome(&[model_build, seeded(human_green, "a-3")]),
+            "red",
+            "a steered green does not make it mixed"
+        );
+    }
+
+    /// §R2 8: `--replay` skips a hand edit (nothing to replay) and stale
+    /// evidence, and replays everything else — steer attempts included.
+    #[test]
+    fn replay_skips_human_and_stale_records_only() {
+        let human = judged("a-h", attempts::HUMAN_KIND, "green", "green", "blake3:c");
+        let steer = seeded(
+            judged("a-s", "external", "green", "green", "blake3:s"),
+            "a-h",
+        );
+        let records = [human.clone(), steer.clone()];
+        let skip = |r: &AttemptRecord, driver: &str| {
+            replay_skip(r, &records, "migrate", "blake3:src", driver)
+        };
+        assert_eq!(skip(&human, "blake3:drv").as_deref(), Some("human"));
+        assert_eq!(skip(&steer, "blake3:drv"), None);
+        assert_eq!(
+            skip(&human, "blake3:new").as_deref(),
+            Some("bound to superseded inputs")
+        );
     }
 }

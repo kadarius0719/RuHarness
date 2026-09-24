@@ -481,12 +481,17 @@ Committed evidence per attempt (source only; `attempts/**/target/` is gitignored
 - `prompt_digest` = blake3(system ‖ NUL ‖ user) of the FIRST turn — the translate turn,
   or the steer turn of a seeded attempt (empty for a human attempt). Equal digests
   across attempts prove the same question was posed to different providers.
-- Additive, optional (omitted when absent): `seeded_from` + `steer_note` (a steer
-  attempt: its seed and the reviewer's note, so its first turn renders from the ledger
-  alone), `note` (a human attempt's note). `Turn.kind` gains `steer` (the first turn of
-  a seeded attempt) and `human` (the one turn of a hand edit). **The ledger defines no
-  order over a unit's attempts** (content ids, no timestamps): every seed is named
-  explicitly.
+- Additive, optional (omitted when absent): `seeded_from` + `steer_note` +
+  `seed_verdict` (a steer attempt: its seed, the reviewer's note, and blake3 of the
+  seed's `attempt-verdict.json` bytes its first turn was rendered from — so the turn
+  renders from the ledger alone, and a seed verdict modified afterwards is an
+  integrity error; the three are recorded together or not at all), `note` (a human
+  attempt's note). `Turn.kind` gains `steer` (the first turn of a seeded attempt) and
+  `human` (the one turn of a hand edit). **The ledger defines no order over a unit's
+  attempts** (content ids, no timestamps): every seed is named explicitly.
+- A human attempt whose judge wrote no `candidate/` (a deny-scan red) keeps its two
+  files verbatim in `attempts/<id>/edit/src/{logic.rs,ffi.rs}` — so every human
+  attempt holds what its `response_hash` hashes (in `candidate/src/` otherwise).
 - `attempt.json` is rewritten atomically after EVERY turn (`outcome: "in-progress"`
   until the trajectory ends), so a crash leaves an accurate record.
 - `outcome` (closed): `in-progress | green | red | blocked | truncated | format`;
@@ -877,15 +882,24 @@ runner}` + `heldout/tools/…` (never inside a target root), `scores.json`.
   `N reproduce (C conformant, D drifted), E expected divergence(s), S skipped, P
   problem(s)`. The benchmark's "promoted attempt" is the unique green attempt whose
   `candidate_digest` equals the unit crate on disk (not the `promoted` flag); none
-  for a verified unit, or several, is a problem. One implementation
+  for a verified unit, or several UNASSISTED ones, is a problem. One implementation
   (`harness_core::attempts::provenance`): green, bound to the current `unit_source`
   AND `driver`, digest equal to the crate's; a steer attempt that reproduced its seed's
-  candidate collapses into the seed; a crate whose only such attempt is a `human` one
-  is a PROBLEM ("promoted from human (override) attempt … — not pipeline
-  provenance"), so `--write` refuses it — the benchmark scores pipeline output only.
-  `--replay` reports human attempts `skipped (human)` (nothing to replay) and verifies
-  a steer attempt from its record (`seeded_from`, `steer_note`), its seed checked
-  intact.
+  candidate collapses into the seed; then by AUTHORSHIP (`attempts::authorship`, the
+  `seeded_from` chain followed through every record of the unit): an unseeded model
+  attempt is pipeline output; a steer attempt whose chain reaches a `human` attempt is
+  that hand edit (`human`); any other steer attempt is `steered`. The benchmark scores
+  UNASSISTED pipeline output only: a verified crate whose provenance is human (a hand
+  edit, or a steer attempt of one) or steered (a reviewer's note guided it — free
+  human text, which could carry the fix or the vectors, docs/M4-DESIGN.md §2) is a
+  PROBLEM ("promoted from human (override) attempt … — not pipeline provenance", "…
+  from steer attempt … (seeded from …; a reviewer's note guided it) — not unassisted
+  pipeline provenance"), so `--write` refuses it; an unassisted model attempt with the
+  same candidate outranks both. Every other pipeline figure of a case
+  (`migrate_outcome`, the scored unverified `candidate_attempt`) counts unassisted
+  attempts only. `--replay` reports human attempts `skipped (human)` (nothing to
+  replay) and verifies a steer attempt from its record (`seeded_from`, `steer_note`,
+  `seed_verdict`), its seed checked intact.
 
 ## Writer table additions
 
@@ -1024,7 +1038,17 @@ The kinds come from typed `harness_core::Error` variants (`Locked`, `Stale`,
   the note, verbatim (after `[HISTORY]`, outside the `[EVIDENCE]` range the render and
   drift rules look at); `[TASK]` = the steer task. Every later (repair) turn of a steer
   attempt carries the same `[GUIDANCE]`. Prompt fixtures: `migrate-steer-red.txt`,
-  `migrate-steer-green.txt`, `migrate-steer-repair.txt`.
+  `migrate-steer-green.txt`, `migrate-steer-repair.txt`. A note that starts with `-`
+  must be passed attached (`--steer=<note>`): clap reads a separate `-…` word as a
+  flag (clients always pass `--steer=<note>` and `--note=<text>` as one argv
+  element). **Integrity on every verification path** (a pinned replay, the re-run of
+  a finished trace-backed attempt, `--retry`'s re-verification, `bench check
+  --replay`): the record's `seeded_from`/`steer_note`/`seed_verdict` must equal the
+  first turn being verified, the recorded turn 1 must be of kind `steer` and pose the
+  note as `[GUIDANCE]` right before `[TASK]` with its `[HISTORY]` naming `attempt
+  <seed> ` (a non-steer record's turn 1 poses no `[GUIDANCE]`), and the seed's
+  `attempt-verdict.json` must still hash to `seed_verdict` — any mismatch is an
+  integrity error, never drift and never a divergence.
 - `harness override <UNIT> <DIR> [--note <TEXT>] [--target DIR] [--allow-unsandboxed]` —
   a hand edit's only way into the ledger. Reads exactly `DIR/src/logic.rs` and
   `DIR/src/ffi.rs`; refused (exit 1): DIR inside the target's `migration/`; any other
@@ -1040,12 +1064,18 @@ The kinds come from typed `harness_core::Error` variants (`Locked`, `Stale`,
   result: green | the judge's class, request_key: "", response_hash: blake3(logic ‖ NUL
   ‖ ffi), tokens null}`, `outcome` green/red, `note`. Id = the frozen derivation over
   `(unit, unit_source, driver, "human", "-", response_hash)`. A judge harness error
-  records nothing. Exit 0 green · 10 red · 1 refused. Never promotes; `harness promote`
+  records nothing. A deny-scan red prints each violation (`override: deny scan: …`,
+  a `message` event under `--json`) and keeps the two files in `edit/src/`. An
+  `in-progress` human record under the edit's id (or a record-less dir) is an override
+  killed mid-judge: the same edit reclaims it and is judged again (the identical-
+  source refusal skips unfinished HUMAN records; an unfinished MODEL attempt still
+  counts). Exit 0 green · 10 red · 1 refused. Never promotes; `harness promote`
   promotes a green human attempt like any other.
 - `awaiting` event: additive `args` — the command line after the program name,
   verbatim, without `--json`, for a client that re-runs instead of parsing `resume`.
-  `resume` is the human hint: every value POSIX single-quoted, `--from`/`--steer` kept,
-  global flags (`--json`) omitted.
+  `resume` is the human hint: every value POSIX single-quoted and attached
+  (`--steer='- keep it'`, `--target=…`), `--from`/`--steer` kept, global flags
+  (`--json`) omitted.
 - `state status` / the `unit` event: additive `promotion_interrupted` — the attempt id of
   a `.promote-<id>/` marker, or `legacy` for a bare `.<crate>.prev`, reported only when no
   live writer holds the ledger, INSTEAD of `contradiction`; human line `<< promotion of
@@ -1055,5 +1085,5 @@ The kinds come from typed `harness_core::Error` variants (`Locked`, `Stale`,
 
 | File | Writer |
 |---|---|
-| `units/<id>/attempts/<human id>/**` | `override` |
+| `units/<id>/attempts/<human id>/**` (incl. `edit/`) | `override` |
 

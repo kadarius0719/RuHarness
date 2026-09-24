@@ -18,7 +18,7 @@ use harness_core::ledger::WriterLock;
 use harness_core::traits::{LanguageFrontend, OracleStrategy};
 use harness_core::{hash, plan, planner, Error, Facts, Plan, TargetContext, UnitStatus};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// Exit code for a red oracle verdict (distinct from clap's usage code 2).
@@ -780,6 +780,15 @@ fn observer_inputs(ctx: &TargetContext, ledger: &Ledger) -> Result<ObserverInput
     Ok((facts, plan_doc, findings, annotations, triage, reviews))
 }
 
+/// `observe`'s `awaiting` hint: the target attached (a relative target
+/// named `-x` must not become a flag).
+fn observe_resume(target: &Path) -> String {
+    format!(
+        "harness observe --target={}",
+        report::shell_quote(&target.to_string_lossy())
+    )
+}
+
 fn cmd_observe(target: PathBuf) -> Result<u8> {
     use harness_core::observer::{self, ObserverPaths};
     let ctx = TargetContext::load(&target)?;
@@ -812,10 +821,7 @@ fn cmd_observe(target: PathBuf) -> Result<u8> {
                     k: "awaiting",
                     attempt: None,
                     path: path.display().to_string(),
-                    resume: format!(
-                        "harness observe --target {}",
-                        report::shell_quote(&target.to_string_lossy())
-                    ),
+                    resume: observe_resume(&target),
                     args: report::args(),
                 });
             }
@@ -1009,18 +1015,21 @@ struct MigrateArgs {
 
 impl MigrateArgs {
     /// The command line that resumes this run, as a human would type it:
-    /// every value shell-quoted, the promotion and steer flags kept (the
-    /// `awaiting` hint and event carry it). Global flags (`--json`) are not
-    /// repeated; a client re-runs its own argv (the event's `args`).
+    /// every value shell-quoted and ATTACHED (`--steer='- keep it'`: clap
+    /// reads a separate word that starts with `-` as a flag, so a note like
+    /// `- use iter()` would not survive the round trip), the promotion and
+    /// steer flags kept (the `awaiting` hint and event carry it). Global
+    /// flags (`--json`) are not repeated; a client re-runs its own argv
+    /// (the event's `args`).
     fn resume_command(&self) -> String {
         let q = report::shell_quote;
         let mut cmd = format!("harness migrate {}", q(&self.unit));
-        cmd.push_str(&format!(" --target {}", q(&self.target.to_string_lossy())));
+        cmd.push_str(&format!(" --target={}", q(&self.target.to_string_lossy())));
         if let Some(p) = &self.provider {
-            cmd.push_str(&format!(" --provider {}", q(p)));
+            cmd.push_str(&format!(" --provider={}", q(p)));
         }
         if let Some(m) = &self.model {
-            cmd.push_str(&format!(" --model {}", q(m)));
+            cmd.push_str(&format!(" --model={}", q(m)));
         }
         if self.promote {
             cmd.push_str(" --promote");
@@ -1035,13 +1044,13 @@ impl MigrateArgs {
             cmd.push_str(" --retry");
         }
         if let Some(a) = &self.attempt {
-            cmd.push_str(&format!(" --attempt {}", q(a)));
+            cmd.push_str(&format!(" --attempt={}", q(a)));
         }
         if let Some(from) = &self.from {
-            cmd.push_str(&format!(" --from {}", q(from)));
+            cmd.push_str(&format!(" --from={}", q(from)));
         }
         if let Some(note) = &self.steer {
-            cmd.push_str(&format!(" --steer {}", q(note)));
+            cmd.push_str(&format!(" --steer={}", q(note)));
         }
         cmd
     }
@@ -1254,5 +1263,118 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
             attempt_event(false, "not promoted: red in place — rolled back");
             Ok(EXIT_ORACLE_RED)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The words `sh` makes of `line` (quote removal included).
+    fn sh_words(line: &str) -> Vec<String> {
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!(
+                "set -- {line}; for a; do printf '%s\\0' \"$a\"; done"
+            ))
+            .output()
+            .expect("run /bin/sh");
+        String::from_utf8(out.stdout)
+            .expect("utf-8 words")
+            .split_terminator('\0')
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// docs/TUI-DESIGN.md §R2 5: the `awaiting` hint, run through a shell,
+    /// parses back to the same steer attempt — whatever the note starts
+    /// with (a separate `-…` word would be read as a flag, or print help).
+    #[test]
+    fn the_resume_hint_round_trips_any_note() {
+        for note in [
+            "- prefer iter() over indexing",
+            "-h: keep the wrapping add",
+            "--json",
+            "Don't index twice; use \"iter()\" & keep $x.",
+        ] {
+            let args = MigrateArgs {
+                unit: "u-lib".into(),
+                target: PathBuf::from("/tmp/a target"),
+                provider: Some("external".into()),
+                model: Some("-m".into()),
+                promote: false,
+                no_promote: true,
+                allow_unsandboxed: false,
+                retry: false,
+                attempt: None,
+                steer: Some(note.into()),
+                from: Some("a-0123456789ab".into()),
+            };
+            let hint = args.resume_command();
+            let cli =
+                Cli::try_parse_from(sh_words(&hint)).unwrap_or_else(|e| panic!("{hint}\n{e}"));
+            let Cmd::Migrate {
+                unit,
+                target,
+                model,
+                no_promote,
+                steer,
+                from,
+                ..
+            } = cli.cmd
+            else {
+                panic!("{hint}: not a migrate command");
+            };
+            assert_eq!(unit, "u-lib");
+            assert_eq!(target, PathBuf::from("/tmp/a target"));
+            assert_eq!(model.as_deref(), Some("-m"));
+            assert!(no_promote, "{hint}");
+            assert_eq!(steer.as_deref(), Some(note), "{hint}");
+            assert_eq!(from.as_deref(), Some("a-0123456789ab"), "{hint}");
+            assert!(!cli.json);
+        }
+    }
+
+    /// The other `awaiting` hints (observe, gen-driver) round-trip the same
+    /// way, every run flag kept (§R2 5, fix-pass review).
+    #[test]
+    fn the_observe_and_gen_driver_hints_round_trip() {
+        let hint = observe_resume(Path::new("-scratch dir"));
+        let cli = Cli::try_parse_from(sh_words(&hint)).unwrap_or_else(|e| panic!("{hint}\n{e}"));
+        let Cmd::Observe { target } = cli.cmd else {
+            panic!("{hint}: not observe");
+        };
+        assert_eq!(target, PathBuf::from("-scratch dir"));
+        let args = gen_driver::GenDriverArgs {
+            unit: "u-lib".into(),
+            target: PathBuf::from("-t"),
+            provider: Some("external".into()),
+            model: Some("-m".into()),
+            promote: true,
+            allow_unsandboxed: true,
+            retry: true,
+            attempt: Some("d-0123456789ab".into()),
+        };
+        let hint = args.resume_command();
+        let cli = Cli::try_parse_from(sh_words(&hint)).unwrap_or_else(|e| panic!("{hint}\n{e}"));
+        let Cmd::GenDriver {
+            unit,
+            target,
+            provider,
+            model,
+            promote,
+            allow_unsandboxed,
+            retry,
+            attempt,
+        } = cli.cmd
+        else {
+            panic!("{hint}: not gen-driver");
+        };
+        assert_eq!(
+            (unit.as_str(), target, provider.as_deref(), model.as_deref()),
+            ("u-lib", PathBuf::from("-t"), Some("external"), Some("-m"))
+        );
+        assert!(promote && allow_unsandboxed && retry, "{hint}");
+        assert_eq!(attempt.as_deref(), Some("d-0123456789ab"));
     }
 }

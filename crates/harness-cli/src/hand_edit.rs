@@ -43,6 +43,13 @@ pub(crate) fn cmd_override(
         if rec.unit_source != unit_source || rec.driver != driver {
             continue;
         }
+        // An unfinished HUMAN record is an override killed mid-judge (this
+        // command holds the writer lock): `record_human_attempt` reclaims it
+        // when it is this edit. An unfinished MODEL attempt still counts —
+        // resumed, it would finish with this digest.
+        if rec.provider_kind == attempts::HUMAN_KIND && rec.outcome == "in-progress" {
+            continue;
+        }
         let candidate = attempts::attempt_dir(&ledger, &unit_id, &rec.id).join("candidate");
         let same = |rel: &str, text: &str| {
             std::fs::read_to_string(candidate.join(rel)).is_ok_and(|on_disk| on_disk == text)
@@ -70,6 +77,13 @@ pub(crate) fn cmd_override(
             v,
             &outcome.attempt_dir.join("attempt-verdict.json"),
         );
+    }
+    // A red the judge stored no verdict for (the deny scan): say why.
+    for line in outcome.failure_evidence.as_deref().unwrap_or("").lines() {
+        out(format!(
+            "override: deny scan: {}",
+            harness_llm::printable(line.trim_start_matches("- "), 300)
+        ));
     }
     let turn = record.turns.last().map_or("", |t| t.result.as_str());
     out(format!(

@@ -205,7 +205,7 @@ fn steer_and_override_on_zopfli() {
     );
     let out = Command::new("/bin/sh")
         .args(["-c", &resume])
-        .env("PATH", path)
+        .env("PATH", &path)
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -245,6 +245,47 @@ fn steer_and_override_on_zopfli() {
     ]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     assert!(r.stdout.contains("prompt: conformant"), "{}", r.stdout);
+
+    // ---- §R2 5: a note that starts with `-` travels attached
+    //      (`--steer=<note>`, what the cockpit spawns), and the resume hint
+    //      keeps it attached so the shell hands clap one word.
+    let dash_note = "-keep the wrapping add";
+    let steer_arg = format!("--steer={dash_note}");
+    let r = migrate(&["--from", &seed, &steer_arg]);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    let evs = events(&r);
+    let awaiting = find(&evs, "awaiting").expect("awaiting event");
+    let dash_id = awaiting["attempt"].as_str().unwrap().to_string();
+    let resume = awaiting["resume"].as_str().unwrap().to_string();
+    assert!(
+        resume.contains(&format!("--steer='{dash_note}'")),
+        "{resume}"
+    );
+    let request_path = pending_request(&traces).expect("the dash steer request");
+    write_response(
+        &request_path,
+        &emission(&logic.replacen("\n", "\n\n\n", 1), ffi),
+    );
+    let out = Command::new("/bin/sh")
+        .args(["-c", &resume])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dash = record(&unit_dir, &dash_id);
+    assert_eq!(dash["steer_note"], dash_note);
+    assert_eq!(dash["outcome"], "green");
+    assert_eq!(
+        attempt_dirs(&unit_dir).len(),
+        3,
+        "the resume finished the SAME attempt"
+    );
 
     // ---- override: a hand edit of the steer candidate.
     let edit = std::env::temp_dir().join(format!("ruharness-edit-{}", std::process::id()));
@@ -314,6 +355,56 @@ fn steer_and_override_on_zopfli() {
     assert_eq!(human["model"], "-");
     assert_eq!(human["turns"][0]["kind"], "human");
     assert_eq!(human["note"], "a comment for the reviewer");
+    // §R2 4: an override killed mid-judge leaves its record in-progress;
+    // the same edit then reclaims it instead of being refused for good.
+    let attempt_json = unit_dir
+        .join("attempts")
+        .join(&human_id)
+        .join("attempt.json");
+    let finished = std::fs::read_to_string(&attempt_json).unwrap();
+    let mut interrupted: serde_json::Value = serde_json::from_str(&finished).unwrap();
+    interrupted["outcome"] = "in-progress".into();
+    interrupted["turns"] = serde_json::json!([]);
+    interrupted["candidate_digest"] = "".into();
+    std::fs::write(
+        &attempt_json,
+        serde_json::to_string_pretty(&interrupted).unwrap(),
+    )
+    .unwrap();
+    let r = override_(&["--note", "a comment for the reviewer"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert_eq!(record(&unit_dir, &human_id)["outcome"], "green");
+    assert_eq!(std::fs::read_to_string(&attempt_json).unwrap(), finished);
+    // §R2 6: a deny-scan red says why, and keeps what was submitted.
+    let good_logic = hand.clone();
+    std::fs::write(
+        edit.join("src/logic.rs"),
+        format!("{hand}\npub fn sneaky() {{ unsafe {{}} }}\n"),
+    )
+    .unwrap();
+    let r = override_(&[]);
+    assert_eq!(r.code, 10, "{}\n{}", r.stdout, r.stderr);
+    let evs = events(&r);
+    assert!(
+        evs.iter().any(|e| e["k"] == "message"
+            && e["text"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("override: deny scan: ")
+            && e["text"].as_str().unwrap_or("").contains("unsafe")),
+        "{}",
+        r.stdout
+    );
+    let denied_id = find(&evs, "attempt").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(unit_dir
+        .join("attempts")
+        .join(&denied_id)
+        .join("edit/src/logic.rs")
+        .is_file());
+    std::fs::write(edit.join("src/logic.rs"), &good_logic).unwrap();
     // Accept it: a human attempt promotes like any green attempt.
     let r = harness(&[
         "promote",
