@@ -926,3 +926,77 @@ unchanged (commit A), then on the edited prompts (commit C).
 The last row is the point of the change: both prompt edits touched every prompt, and
 every recorded attempt still re-judges to its record. Under the old engine the same
 edits would have left zero replayable attempts.
+
+## 2026-09-23 — Design B: research re-check, design, adversarial review; DECISION PENDING (user)
+
+**Baseline at session start (zero tokens):** tree clean and green (424 tests); `bench check
+--replay --jobs 6` → `198 reproduce (0 conformant, 198 drifted), 1 expected divergence(s), 0
+skipped, 0 problem(s)`, `bench check: OK`, exactly as the previous handoff predicted.
+
+**Research re-check (§15, three subagents, verified end to end on this machine).** No published
+C→Rust system measures what the source touches and holds the translation to it (RustAssure fills
+100-element symbolic buffers; Syzygy records allocation bounds, not accesses; SACTOR/ENCRUST
+adopt "length from a sibling field or a conservative fixed bound" — our blind spot, published as
+the method; TRACTOR's official harness has no footprint oracle; &inator "does not determine the
+sizes of arrays"). Toolchain facts: `-fsanitize-coverage=edge,trace-loads,trace-stores` traces
+every scalar access with no runtime library (`edge` required, else it silently instruments
+nothing); aggregate copies, `mem*`/`str*` (fortified to `__*_chk` even at -O0), RMW atomics and
+>16-byte vectors are untraced; a `PROT_NONE` access raises SIGBUS on this platform with an exact
+`si_addr`; mmap/mprotect/sigaction/sigaltstack all work under the run profile; stable rustc can
+trace loads but misses `memcpy` and relies on LLVM-internal flags (not used); no Miri/ASan/libFuzzer
+on stable. `__asan_locate_address` gives exact object extents for stack, heap and globals and
+reports uninstrumented memory as unknown, also under `sandbox-exec`.
+
+**Prototype (the premise, run before designing).** The validated `read_scalefactors` driver with
+every unit argument allocated through a guard API: the harness measured the C's per-allocation
+windows, re-ran with each allocation shrunk to its window — the C stayed byte-identical in both
+layouts (window flush against the following page, then the preceding one), the VERIFIED Rust
+faulted (`scfcod`, call 1: the C touches none of it), a fully lazy Rust passed. Per-call windows
+(not whole-run) are required: the driver's own read-back of `bs->pos` masks the eager `&mut *bs`.
+A unit with an untraced struct copy was learned and widened correctly (phase L converged in one
+round).
+
+**Design.** docs/ORACLE-HARDENING.md §B.0–B.13 (measured-footprint boundary check: sancov
+measurement → guard-page enforcement, per call, two layouts, learn/confirm ground truth, a wrapper
+generated from the plan's interface lines, a model-written boundary driver as a new stage).
+
+**Adversarial design review** (workflow: 4 lenses → 46 findings → 20 blocker/serious ones each
+handed to an independent verifier; the verdicts are in §B.R, authoritative). Two findings change
+the shape of the work:
+1. **Fail closed, or it is not an oracle (SEC-1/2, reproduced under the real sandbox profile).** A
+   candidate can intercept the guard fault before it becomes a signal or replace the handler
+   through an unlisted installer; the `capabilities` denylist is "a policy, not an enforcement
+   boundary". The runtime must verify its own handler, the exception ports and a canary page after
+   every call (§B.R-1).
+2. **Mechanical, not model-written (S1, rebuilt independently by two lenses).** The check can run
+   the already-validated, mutation-gated `driver.c` unmodified through the generated wrapper, with
+   ASan locating each argument's object and per-call copy-in shadows giving exact per-call windows
+   — zero tokens, no new stage, record, bench or replay surface, and it subsumes seven other
+   findings. Cost: memory reached only through pointer fields stays unchecked (disclosed; a
+   partial detector is specified). §B.R-2 recommends it; it reverses the written design's
+   direction, so it is the user's call.
+Other confirmed serious findings and their resolutions: measure at -O1 (widening was the norm at
+-O0); C-side failures are red checks, never harness `Err`s (an `Err` would abort the whole suite);
+`mem` and `signal` capability classes (no recorded verdict changes — all 189 recorded crates were
+rebuilt to prove it); gates that can actually observe the byte-identity claims (step 0: re-record
+`scores.json` at HEAD, which already drifts by six `pipeline.migrate_outcome` values from the R-5
+rule); positive controls (the four `read_scalefactors` variants) and a stratified calibration set.
+Refuted: binding attempts to the boundary driver, a tightness gate, an env-var table channel, an
+overflow finding.
+
+**Landed this session (committed, green): ** `harness_scan::parse_interface` (the plan's
+interface lines → wrapper shape; hostile-line refusals; every corpus line parses except zopfli's
+unnamed-parameter unit and the two `driver(...)` symbols the plan names differently); the
+`capabilities` `mem` class with its regression test (a candidate declaring `mprotect` is red).
+Kept in the worktree, uncommitted (the runtime is being reworked to §B.R-2's copy-in shadows and
+§B.R-1's integrity checks; the confinement extras are dead code until the orchestrator uses them):
+`crates/harness-oracle/src/boundary.rs` + `boundary/` (rh_in runtime v2, parsers, wrapper
+renderer, 6 tests), `confine.rs` `Extras` (RUHARNESS_* env + strict read-back of one temp-dir
+file, 1 test). Prototypes and every review experiment are under the session scratchpad.
+
+**Next, in order (after the user's B.R-2 decision):** step-0 `bench score --write` gate; revise
+§B's body to the decided mechanism; implement the runtime (integrity checks first, mutation-
+checked), the wrapper + compiler classifier probe, verify integration (check last, red on C-side
+failure, omitted when not configured), the four fixtures; adversarial code review; calibration
+run over the stratified set (zero tokens under B.R-2); re-migrate `read_scalefactors` on the
+unhinted prompt through the audited hand-off; supersede its old green attempt; re-baseline.

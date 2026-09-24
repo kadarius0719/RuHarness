@@ -18,13 +18,20 @@
 //!   `source_dir` (docs/M4-DESIGN.md R2);
 //! - [`mutants`]: the mutation sites of one `.c` file (R5);
 //! - [`lint_driver`]: the driver source lint of the `driver-shape` gate (R1).
+//!
+//! Post-M4 (design B, docs/ORACLE-HARDENING.md §B.6): [`parse_interface`]
+//! reads a plan `interface` line into the boundary check's call-wrapper shape.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod interface;
 mod lint;
 mod mutate;
 
+pub use interface::{
+    is_c_identifier, parse_interface, InterfaceParam, InterfaceSig, MAX_INTERFACE_LINE,
+};
 pub use lint::{lint_driver, DRIVER_SYSTEM_INCLUDES};
 pub use mutate::mutants;
 

@@ -190,6 +190,37 @@ const CLASSES: &[Class] = &[
         std_module: None,
         libc: &["syscall"],
     },
+    // Mapping and protecting memory (design B, docs/ORACLE-HARDENING.md
+    // §B.8): the boundary check's guard pages prove nothing if the candidate
+    // can re-protect them. Its own class, not `os`, which fs/process/net
+    // admit implicitly.
+    Class {
+        name: "mem",
+        std_module: None,
+        libc: &[
+            "mmap",
+            "munmap",
+            "mprotect",
+            "madvise",
+            "minherit",
+            "mremap",
+            "mlock",
+            "munlock",
+            "mach_vm_protect",
+            "mach_vm_allocate",
+            "mach_vm_deallocate",
+            "mach_vm_map",
+            "mach_vm_remap",
+            "vm_protect",
+            "vm_allocate",
+            "vm_deallocate",
+            "vm_map",
+            "vm_remap",
+            "mach_task_self",
+            "mach_task_self_",
+            "task_for_pid",
+        ],
+    },
 ];
 
 /// `std::thread` sub-module that is storage, not a capability.
@@ -753,6 +784,33 @@ mod tests {
         let check = capabilities_check(bench.runner(), &lib, &clock, &fs_ok).expect("runs");
         assert!(!check.passed, "{}", check.detail);
         assert!(check.detail.contains("(time)"), "{}", check.detail);
+    }
+
+    /// Design B §B.8: a candidate that re-protects memory (here `mprotect`
+    /// declared in its own shim) could unguard the boundary check's pages, so
+    /// it is red unless the C unit itself maps or protects memory.
+    #[test]
+    fn a_candidate_that_reprotects_memory_is_red() {
+        let bench = ToolBench::new("caps-mem");
+        let ffi =
+            "extern \"C\" {\n    fn mprotect(addr: *mut u8, len: usize, prot: i32) -> i32;\n}\n\
+                   #[no_mangle]\npub extern \"C\" fn unit_add(a: i32, b: i32) -> i32 {\n    \
+                   let r = unsafe { mprotect(std::ptr::null_mut(), 0, 3) };\n    \
+                   crate::logic::add(a, b).wrapping_add(r & 0)\n}\n";
+        let dir = candidate(
+            &bench,
+            "unguard_rs",
+            "pub fn add(a: i32, b: i32) -> i32 {\n    a.wrapping_add(b)\n}\n",
+            ffi,
+        );
+        let lib = bench.build(&dir);
+        let none = BTreeSet::new();
+        let check = capabilities_check(bench.runner(), &lib, &dir, &none).expect("runs");
+        assert!(!check.passed, "{}", check.detail);
+        assert!(check.detail.contains("mprotect (mem)"), "{}", check.detail);
+        let mem_ok: BTreeSet<&'static str> = ["mem"].into_iter().collect();
+        let check = capabilities_check(bench.runner(), &lib, &dir, &mem_ok).expect("runs");
+        assert!(check.passed, "{}", check.detail);
     }
 
     #[test]
