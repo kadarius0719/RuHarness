@@ -1374,3 +1374,39 @@ conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)`, OK — no reg
 Follow-ups (from both reviews): `verify` lacks the R6 gate; driver-attempt Accept; queueing on
 contention; an async client for cooperative cancellation. Next: the `harness-tui` design.
 
+## 2026-09-24 — harness-tui: design and adversarial design review (20 confirmed, 0 refuted)
+
+`docs/TUI-DESIGN.md` designs the review cockpit and the two CLI additions its acts need
+(`migrate --steer --from`, `harness override`). Four review lenses (ledger & replay, read model
+& pairing, process & acts, scope), every finding verified against the code: 20 confirmed, 0
+refuted (9 verifiers hit a session limit and were resumed from the journal). What changed:
+- **A steer attempt's evidence must come from committed evidence only.** The existing repair
+  rendering appends a driver-output excerpt read from gitignored `migration/build/<unit>/`,
+  which belongs to whatever ran last; a steer turn rendered from it would show the model
+  someone else's output and give the attempt an id that depends on scratch. The steer turn
+  renders from the seed's stored `attempt-verdict.json` without the excerpt — deterministic,
+  because stored verdicts carry no machine paths (checked: 0 of 103 committed).
+- **The first turn is a job property** (`FirstTurn::{Translate, Steer}`), the record carries
+  `seeded_from` + `steer_note`, and every verification path loads the record first — the old
+  engine hard-codes turn 1 as `translate` and renders HEAD's translate request.
+- **`--from` is required**: the ledger defines no order over a unit's attempts (content ids, no
+  timestamps), so "the latest attempt" does not exist.
+- **A hand edit must never score as the pipeline's.** scores.json carries no provider, so a
+  human attempt that satisfied R-5 would count as strict-pass; R-5 moves into harness-core as
+  `attempts::provenance` with a `Human` outcome that `bench` reports as a PROBLEM. `override`
+  judges exactly `logic.rs` + `ffi.rs` through the one migrate judge (a verbatim crate copy
+  would bypass the harness-owned manifest and lint structure) and refuses a byte-identical
+  edit (which would make provenance ambiguous).
+- **No automatic spawn**: the resume watcher only marks "response present"; `R` asks and
+  re-spawns the TUI's own argv (the event's `resume` string is a human hint without `--json`).
+- **The cockpit's child runs in its own process group** (a terminal hangup would otherwise
+  kill the harness by the default action — its SIGHUP handler is off under pipes — orphaning
+  sandboxed groups; reproduced), the TUI has its own signal path, and it reloads only after
+  reaping (on a signal the CLI emits `result` before dying with the lock line; `kill -0` reads
+  a zombie as alive).
+- **Pairing**: shims found in every source file (the M0 crate has an inline `mod ffi`), callees
+  resolved through `use` imports and aliases; C spans sliced only when the file still matches
+  the scan; tabs expanded at render (both corpora are tab-free, so a synthetic fixture pins it).
+- **Shape**: `harness-tui` is a library (the read model, for harness-mcp) plus a binary behind
+  the default `tui` feature; `default-members` keeps a plain root `cargo build` lean.
+
