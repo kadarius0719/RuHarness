@@ -1160,3 +1160,17 @@ found beyond them, all fixed with regression tests:
 **Calibration bugs closed** (wrapper prototypes, symbol shadowing, the tracing rule): the
 re-run after the fix pass is recorded in the next entry.
 
+## 2026-09-23 — Design B calibration, re-run after the fix pass (zero tokens)
+
+**Totals (100 cases):** 37 green, 5 red, 10 vacuous, 37 not applicable, 11 skipped, 0 harness
+errors. The 17 not-applicable outcomes that were harness bugs are gone: 7 became green and 10
+VACUOUS — a passing check that guarded nothing because every object the unit receives is read
+only through libc (`strtok`, `strchr`, `strcspn`, `printLine`-style units: their windows are
+learned and widened to the whole object), reported as such and kept out of the green tally
+(030_integer_underflow_char_min_multiply_lib, 045_strtok_lib, 009_stack_buffer_overflow_lib, 013_poor_quality_addition_lib, 014_dead_code_lib, 016_divide_by_zero_float_lib, 019_integer_overflow_char_max_multiply_lib, 025_struct_and_errno_and_static_lib, 028_strchr_lib, 029_strcspn_lib). The 37 remaining not-applicable are 33 units with no data-pointer parameter and 4 whose
+interface types live only in `lib.c`. The 5 reds are the same five, each diagnosed real
+(previous entry). 50 (symbol, parameter) pairs are flagged "no power" — the C never leaves
+their object untouched or partly touched in any driver call, so the check can only catch an
+over-run past the object's extent there; disclosed per case by `bench boundary`. This is the
+calibration the design gates opt-in on: 0 false reds in 42 non-vacuous outcomes.
+
