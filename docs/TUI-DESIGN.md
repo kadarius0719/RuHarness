@@ -1,6 +1,8 @@
 # harness-tui — the review cockpit
 
-Status: IMPLEMENTED (2026-09-24). §R holds the resolutions of the 20 confirmed findings of the
+Status: IMPLEMENTED (2026-09-24); **§9 records the new direction** (a user-friendly wrapper
+with an arrow-key file tree, deterministic actions on Enter and a chat pane inside) for the
+next designs. §R holds the resolutions of the 20 confirmed findings of the
 design review; §R2 the 9 (16 raw) of the code review of steps 1–3; §R3 the 27 of the code
 review of step 4 (the terminal front end) — all resolved; the text below includes every
 amendment. Sources: the §15 spike
@@ -335,6 +337,74 @@ and quits.
 3. `harness-tui`: model (lib) + tests; MSRV 1.90; `default-members`.
 4. Views, acts, process model, signals; tests; README; DECISIONS.md. Adversarial code
    review + fix pass; commit.
+
+## 9. Direction (2026-09-24, from the user): a user-friendly wrapper, with chat inside
+
+Not built — recorded to steer the next designs. It supersedes parts of §0 and §3: what is
+built (steps 1–4) stays, and becomes the engine room of a friendlier front end.
+
+**Who it is for.** People who do not navigate with vim-style keys. If the cockpit only suits
+keyboard power users, the CLI already serves them; the TUI earns its place by being a
+**discoverable wrapper**: everything visible on screen, nothing to memorise.
+
+**What the user wants to be able to do.**
+1. **Navigate freely with the arrow keys** (and the mouse) over the target's FILES — a file
+   tree as the main navigator, not units → attempts → pairs. `↑/↓` move, `←/→` move between
+   panes or collapse/expand, `Enter` opens or acts, `Esc` goes back, `Tab` cycles panes.
+   Vim keys may stay as optional aliases; nothing may REQUIRE them.
+2. **Deterministic actions on Enter.** `Enter` on a file (or a function, a unit) offers the
+   operations that need no model — scan/parse, show the units and functions it belongs to,
+   run the detectors, plan, verify, promote a green attempt, state status — and runs them
+   behind the scenes, showing progress and the result in plain language. The exact command
+   stays available (a "details" line), but the primary text is what is happening, not argv.
+3. **See the changes** — the C beside the Rust, the diff of what changed, the verdict — as
+   today, reached from the file the user is on.
+4. **A chat pane on the side, like Copilot**, inside the cockpit. Model-driven work — above
+   all "migrate this" — is asked for in chat; the chat kicks it off behind the scenes by
+   calling the harness's tools (harness-mcp) and, where it fits, a project skill that knows
+   the workflow. Results appear in the same panes as the deterministic actions.
+
+**The split:** deterministic work through menus and `Enter`; model work through the chat. Both
+end in the same place — a spawned `harness --json …` whose events the run panel shows, the
+ledger re-read afterwards.
+
+**What stays true** (every earlier decision still holds): the ledger is the truth and the
+cockpit never writes it itself; every write is a spawned CLI command; no act happens without
+the user's confirmation (worded for a person, the command one keypress away); provenance
+labels stay honest — anything the chat contributes to a migration is recorded as assisted
+(steered, or a new "chat-requested" label), never as unassisted pipeline output; no new
+agent runtime (the chat embeds an existing one); no new crates without the usual vetting.
+
+**Consequences for the plan.**
+- **Chat moves into the cockpit.** DECISIONS "TUI track: §15 research spike" and §0 above put
+  chat in a separate Claude Code window through harness-mcp. The new direction embeds it: the
+  chat pane runs an existing agent runtime headless (Claude Code's streaming mode is the
+  first candidate — it uses the user's existing access, no API key) with harness-mcp attached
+  as its tool server. Needs a §15 spike: the current headless/streaming flags, auth,
+  permission prompts inside a pane, session resume, and how its output renders.
+- **harness-mcp gains a purpose and a change**: it is the chat pane's hands. docs/MCP-DESIGN.md
+  v1 poses steer attempts only, because a hand-off answered in chat must not score as blind
+  pipeline output. "Migrate this" from chat needs the planned ledger label that records the
+  requester (MCP-DESIGN §7), so a chat-requested translation is labelled — and still never
+  counted by the benchmark. Revisit MCP-DESIGN before implementing it.
+- **A "migrate this" skill**: a project skill (with the MCP tools) that walks the chat through
+  the workflow — scan fresh? plan current? driver validated? then migrate, verify, show the
+  diff, offer Accept — so the chat's behaviour is repeatable, not improvised.
+- **§3's keys are superseded** by the discoverable design: arrows, Enter/Esc, Tab, mouse,
+  on-screen hints and menus, `?` help, quit always visible. The acts table (§4) keeps its
+  argv and safety rules; only how the user reaches them changes.
+
+**Suggested order** (each: design → adversarial review → build → review → verify the fixes):
+1. The wrapper UX design: file tree, panes, menus / action list on `Enter`, mouse, wording,
+   plain-language progress and results; then build it on today's engine.
+2. harness-mcp, with the requester label for chat-requested migrations.
+3. The chat pane (after its spike), plus the "migrate this" skill.
+
+**Open questions for the UX design review:** mouse support (crossterm already carries it —
+no new crate); how a first-time user discovers the chat vs the menus; how long-running work
+(a migration can take many minutes) is shown and cancelled; what the file tree shows for
+files outside any unit; how the deterministic menu differs by file state (not scanned, not
+planned, planned, migrated, stale).
 
 ## R. Design review — 20 confirmed findings and their resolutions
 

@@ -1557,3 +1557,27 @@ server policy (`--provider`, `--target-root`), progress notifications against th
 30-minute idle abort, a shutdown path that interrupts the child, one act in flight with `busy`
 refusals, untrusted values wrapped in `structuredContent`, size caps. Not implemented yet —
 the next session's task (docs/NEXT-SESSION.md).
+
+## 2026-09-24 — Direction change (user): the cockpit becomes a user-friendly wrapper with chat inside
+
+After trying the cockpit, the user set its direction (recorded in full in docs/TUI-DESIGN.md
+§9; nothing built yet):
+- **Audience:** people who do not navigate with vim-style keys — "if we wanted that, we could
+  just stay in the CLI". The TUI is a discoverable wrapper: arrow keys and the mouse, `Enter`
+  / `Esc` / `Tab`, menus and on-screen hints; vim keys at most optional aliases.
+- **Navigation by file:** a file tree of the target as the main navigator.
+- **Deterministic actions on `Enter`** (scan/parse, units, detectors, plan, verify, promote,
+  status) run behind the scenes and report in plain language; the exact command stays one
+  keypress away.
+- **Chat inside the cockpit, like Copilot**, for model-driven work: "migrate this" is asked in
+  chat, which kicks it off through harness-mcp and a project skill that knows the workflow.
+- **This reverses** the §15 spike's "chat lives in Claude Code through harness-mcp, not in the
+  TUI": the chat pane will embed an existing agent runtime headless (Claude Code's streaming
+  mode first — the user's existing access, no API key; a spike must confirm its current
+  flags, auth and permission prompts), with harness-mcp as its tools. Everything else holds:
+  the ledger is the truth, every write is a spawned CLI command, nothing runs without the
+  user's confirmation, provenance stays honest (a chat-requested migration is labelled and
+  never scored as unassisted), no second agent runtime, no unvetted crates.
+- **Order proposed:** (1) the wrapper UX design → review → build on today's engine;
+  (2) harness-mcp, adding the requester label for chat-requested migrations (MCP-DESIGN §7);
+  (3) the chat pane after its spike, plus the "migrate this" skill.

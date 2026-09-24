@@ -5,14 +5,13 @@ first, then this:
 
 ---
 
-Resume RuHarness — the **harness-mcp** session. Everything is on `main` and pushed (this
+Resume RuHarness — the **cockpit-as-a-friendly-wrapper** session (then harness-mcp). Everything is on `main` and pushed (this
 session ended at the commits "§R2 fix pass …" and "harness-tui: the terminal front end …").
 Before doing anything else:
 
-1. Read `DECISIONS.md` from "2026-09-24 — §R2 fix pass" to the end, then `docs/MCP-DESIGN.md`
-   in full (DESIGN, REVIEWED — §R holds the 20 confirmed findings of its design review, and the
-   text above it is the post-review design to implement), then `docs/TUI-DESIGN.md` §4 and §R3
-   (the cockpit whose library the server reuses) and `docs/CLI-HARDENING.md`.
+1. Read `DECISIONS.md` from "2026-09-24 — §R2 fix pass" to the end, then `docs/TUI-DESIGN.md`
+   §9 (the new direction), §3–§4 and §R3, then `docs/MCP-DESIGN.md` in full (DESIGN, REVIEWED —
+   §R holds its 20 resolved findings) and `docs/CLI-HARDENING.md`.
 2. Confirm the tree is clean and green: `git status`, `cargo test --workspace` (~544 tests),
    `cargo run -q -p harness-cli -- bench status --suite targets/tractor`.
 3. The scorer needs the gitignored `targets/tractor/.scorer-vendor/` (copy with `cp -cR` from
@@ -24,21 +23,22 @@ Before doing anything else:
    Expect `198 reproduce (1 conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)`
    and `bench check: OK — no regression`.
 
-Then, in order:
+Then, in order — **the direction changed at the end of the last session** (DECISIONS.md
+"Direction change (user)"; docs/TUI-DESIGN.md §9): the cockpit becomes a user-friendly
+wrapper — arrow-key/mouse file tree, deterministic actions on `Enter`, and a Copilot-style
+chat pane inside it for model work.
 
-* **harness-mcp** per `docs/MCP-DESIGN.md` (reviewed): new crate `crates/harness-mcp`
-  (harness-core, harness-tui `default-features = false`, serde_json, signal-hook — zero new
-  crates), hand-rolled JSON-RPC 2.0 over stdio, MCP 2025-06-18; tools `harness_status`,
-  `harness_unit`, `harness_steer` (steer attempts only), `harness_retry` (the record's run
-  shape; refuses unseeded `external`), `harness_promote`; server flags `--target`,
-  `--target-root`, `--harness`, `--provider`, `--allow-unsandboxed`; progress notifications,
-  shutdown path, `busy` refusals, untrusted values wrapped in `structuredContent`, size caps.
-  Reuse `harness_tui::{model, events, spawn}` (`spawn::interrupt_and_wait` is the shutdown
-  path). The tests of §5 (a scripted stdin session; the zopfli end-to-end through the
-  `external` hand-off; cancellation during the spinning-driver promote — see
-  `crates/harness-tui/tests/signals.rs` for the pgrep/`drv_c` pattern). Then an adversarial
-  code review → fix pass (+ a verification of the fix pass: last session every fix pass
-  produced new findings) → README `.mcp.json` section → commit and push.
+* **The wrapper UX design** (TUI-DESIGN §9, "Suggested order" 1): a §15 check of how
+  approachable TUIs do it (file trees, menus, mouse, on-screen hints — e.g. ratatui apps such
+  as chess-tui for arrow/Enter/Esc/`?` navigation), then a design doc, an adversarial design
+  review, the build on today's engine (`harness_tui::{model, events, spawn}`, the acts and
+  their safety rules stay), a code review, a verification of the fixes.
+* **harness-mcp** per `docs/MCP-DESIGN.md` (reviewed) — revisit it first: the chat pane is
+  now its main client, and "migrate this" from chat needs the requester label (§7) so a
+  chat-requested migration is recorded as such and never scored as unassisted.
+* **The chat pane** after a spike on embedding an existing agent runtime headless (Claude
+  Code's streaming mode first: flags, auth, permission prompts inside a pane, resume), plus a
+  "migrate this" project skill.
 * After that: the feature-workflow view and the C-vs-Rust performance baselines, then the
   briefing's M5 (external detector plugin + `EXTENDING.md`). Carry-forwards: §16 escalation
   automation + `harness usage`; the `crash-timeout` classifier; a Linux sandbox; the two deferred
