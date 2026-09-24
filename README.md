@@ -322,7 +322,10 @@ corpus), `bench verify-corpus`, `bench init` (every case becomes a harness targe
 (scores oracle-verified Rust on the corpus's held-out vectors with the corpus's own
 runners, sandboxed; `--write` re-verifies everything first and records `scores.json`),
 and `bench check [--replay]` (the regression suite: re-verify, re-validate, re-score,
-compare per vector — exit 10 on a regression). See `targets/tractor/README.md`.
+compare per vector — exit 10 on a regression). `--replay` also re-judges every recorded
+model trajectory from its stored evidence (zero tokens): prompt edits do not break it —
+they show up as `prompt: drifted`, while any change in how the harness judges the recorded
+replies fails the check (docs/REPLAY-DESIGN.md). See `targets/tractor/README.md`.
 
 Exit codes (stable contract): `0` ok/green · `1` harness error · `2` usage ·
 `10` oracle red (for `migrate`: red, blocked, truncated, or format). Machine consumers read the ledger files, not stdout.

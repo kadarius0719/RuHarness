@@ -877,3 +877,52 @@ adversarially refuted; synthesis). No design had a fatal flaw. Ranking:
 Verified: replaying it errors ("recorded for a different translate prompt"); the new
 attempt `a-bf33266e0112` replays GREEN. Both designs fix it with an explicit
 supersession record. Not patched pending the decision.
+
+## 2026-09-23 — DECIDED (user): evidence-first replay; the prompt edits it unblocked
+
+The user approved the review's recommendation. Implemented per docs/REPLAY-DESIGN.md
+(spec → 4-lens design review → implementation → 3-lens code review, 17 confirmed
+findings fixed with regression tests, the rule-guarding ones mutation-checked).
+
+**What replay proves now.** Each finished attempt bound to the current inputs is verified
+from its RECORDED requests and replies (read-only; nothing is ever sent or filed):
+integrity (keys, hashes, prompt digest, model, id re-derivation), then HEAD's parser and
+judge re-judge the recorded replies — results, candidate and outcome must reproduce
+(strict). A repair turn whose HEAD render differs ONLY in `[EVIDENCE]` is strict too (the
+evidence-determinism net that found three M4 bugs; its tests are mutation-checked).
+Conformance reports whether HEAD would pose the same requests. Lost, deliberately: for a
+drifted turn, the proof that HEAD would have asked the same question.
+
+**Deferred from the approved proposal, with reasons (design review):** default-run reuse
+of existing evidence and `--new-trial` — unsafe as specified, since the fallback ignored
+prompt inputs other than the C source (a newly confirmed hazard would have been silently
+skipped); per-prompt score labels — after the first prompt edit every case reads
+"drifted", which carries no information. A changed prompt is simply a new trial when a
+stage is run explicitly.
+
+**Also shipped:** typed `Error::Diverged`; `superseded.jsonl` (hand-written, strictly
+checked: intact, a tightening unless flagged, green successor for a green record, never
+the scored artifact; 014's M4 attempt is the first entry); the promoted attempt is the
+one whose candidate IS the crate (fixes 014's two `promoted:true` records); prompt
+fixtures for every prompt branch plus guard tests (a prompt edit is a reviewed diff);
+driver-diff evidence path-scrubbed plus a guard that refuses to send a machine path.
+
+**Prompt edits landed (each with its fixture diff):** every printing unit is told
+stderr is compared (the unit-conditional workaround deleted); the `[ABI CONTRACT]` lines
+are fenced as JSON literals in `<abi_NONCE>` blocks (M4 review carry-forward closed). The
+u001 render-equality golden was retired as planned; its id/binding half is permanent.
+
+**Gates** (see the entry below for the numbers): `bench check --replay` on the renderer
+unchanged (commit A), then on the edited prompts (commit C).
+
+**Gate results** (`bench check --replay`, full TRACTOR ledger, zero tokens):
+
+| Run | Reproduce (strict) | Conformant / drifted | Expected divergence | Problems | `bench check` |
+|---|---|---|---|---|---|
+| before (old engine) | 198 | n/a | — | 1 (014's M4 attempt) | FAILED |
+| commit A (engine, renderer unchanged) | 198 | 198 / 0 | 1 (014, superseded) | 0 | OK |
+| commit C (stderr sentence + ABI fence) | 198 | 0 / 198 | 1 (014, superseded) | 0 | OK |
+
+The last row is the point of the change: both prompt edits touched every prompt, and
+every recorded attempt still re-judges to its record. Under the old engine the same
+edits would have left zero replayable attempts.
