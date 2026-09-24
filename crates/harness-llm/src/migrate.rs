@@ -674,6 +674,16 @@ reads; in `src/ffi.rs` convert a pointer to a reference or slice only on the pat
 C dereferences it, or pass `logic` an accessor closure that reads exactly the indices the C \
 reads";
 
+/// A failed `boundary` check that indicts the candidate's FOOTPRINT (the
+/// harness's fault or retained-pointer wording) — not a tampered guard, a
+/// changed control flow or an output difference under the guard, which the
+/// class's own explanation describes better.
+fn is_boundary_footprint(check: &Check) -> bool {
+    check.name == "boundary"
+        && !check.passed
+        && (check.detail.starts_with("in call ") || check.detail.contains("retained across calls"))
+}
+
 /// One-line explanation of a failure class.
 fn class_explanation(class: &str) -> &'static str {
     match class {
@@ -728,7 +738,7 @@ fn verdict_explanation(class: &'static str, verdict: &Verdict) -> &'static str {
         SYMBOL_SET_EXPLANATION
     } else if failed.iter().any(|c| c.name == "capabilities") {
         CAPABILITIES_EXPLANATION
-    } else if class == "oracle" && failed.iter().any(|c| c.name == "boundary") {
+    } else if class == "oracle" && failed.iter().any(|c| is_boundary_footprint(c)) {
         BOUNDARY_EXPLANATION
     } else {
         class_explanation(class)
@@ -1809,6 +1819,115 @@ int add(int a, int b) { return a + b; }\n";
             attempts::load_unit_attempts(&Ledger::new(fx.target.root.clone()), UNIT).unwrap();
         assert_eq!(attempts[0].outcome, "in-progress");
         assert!(attempts[0].turns.is_empty());
+    }
+
+    /// Design B (§B.R-5): a `boundary` check that could not run on the C
+    /// side indicts the driver, the interface lines or the toolchain — never
+    /// the candidate. Like a red driver-shape it is a harness error, poses no
+    /// repair turn and closes nothing.
+    #[test]
+    fn a_c_side_boundary_failure_is_a_harness_error_not_a_turn() {
+        let fx = fixture("boundary-c-side");
+        let (provider, seen) = scripted("anthropic", false, vec![good()]);
+        let fake = oracle(vec![verdict(&[
+            ("symbol-set", true, "ok"),
+            ("capabilities", true, "ok"),
+            ("driver-shape", true, "ok"),
+            ("differential-driver", true, "1200 bytes identical"),
+            (
+                "boundary",
+                false,
+                &format!(
+                    "{BOUNDARY_C_SIDE_LEAD_IN}the driver's plain run failed: terminated by signal 11"
+                ),
+            ),
+        ])]);
+        let err = run_with(&fx, &provider, &fake, 3, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("boundary check could not run on the C side"),
+            "{err}"
+        );
+        assert!(err.contains("not a candidate failure"), "{err}");
+        assert_eq!(seen.borrow().len(), 1, "no repair turn may be posed");
+        let attempts =
+            attempts::load_unit_attempts(&Ledger::new(fx.target.root.clone()), UNIT).unwrap();
+        assert_eq!(attempts[0].outcome, "in-progress");
+        assert!(attempts[0].turns.is_empty());
+    }
+
+    /// The `boundary` check's detail shapes and their classes (§B.R-6): a
+    /// C-side lead-in is C-side whatever it quotes; the footprint wording is
+    /// `oracle` with the boundary explanation; a tampered guard or a changed
+    /// control flow is `oracle` with the class's own explanation; a crash
+    /// form is `crash-timeout`.
+    #[test]
+    fn boundary_details_classify_by_their_shape() {
+        let c_side = verdict(&[
+            ("symbol-set", true, "ok"),
+            (
+                "boundary",
+                false,
+                &format!(
+                    "{BOUNDARY_C_SIDE_LEAD_IN}the C failed under tail guarding (learn): run failed"
+                ),
+            ),
+        ]);
+        assert!(is_c_side(&c_side.checks[1]));
+        assert_eq!(classify(&c_side), "oracle");
+        assert_eq!(verdict_explanation("oracle", &c_side), C_SIDE_EXPLANATION);
+
+        let footprint = verdict(&[
+            ("symbol-set", true, "ok"),
+            (
+                "boundary",
+                false,
+                "in call 1 of scan, the Rust touched the object passed as `h` (1 x 16 bytes) the C \
+                 does not touch it in that call; tail layout. Touch only what the C touches",
+            ),
+        ]);
+        assert!(!is_c_side(&footprint.checks[1]));
+        assert_eq!(classify(&footprint), "oracle");
+        assert_eq!(
+            verdict_explanation("oracle", &footprint),
+            BOUNDARY_EXPLANATION
+        );
+
+        let retained = verdict(&[(
+            "boundary",
+            false,
+            "in call 4, the Rust touched the object passed as `h` to call 3 of scan, which no \
+             longer exists: a pointer retained across calls (tail layout)",
+        )]);
+        assert_eq!(
+            verdict_explanation("oracle", &retained),
+            BOUNDARY_EXPLANATION
+        );
+
+        let tamper = verdict(&[(
+            "boundary",
+            false,
+            "the guard was tampered with (signal): the candidate altered how memory faults are \
+             delivered instead of staying inside the C's footprint (tail layout)",
+        )]);
+        assert_eq!(classify(&tamper), "oracle");
+        assert_eq!(
+            verdict_explanation("oracle", &tamper),
+            class_explanation("oracle")
+        );
+
+        let crashed = verdict(&[(
+            "boundary",
+            false,
+            "candidate run failed: the Rust ended the process inside call 40 of show, which the C \
+             never does (tail layout)",
+        )]);
+        assert_eq!(classify(&crashed), "crash-timeout");
+        assert_eq!(
+            verdict_explanation("crash-timeout", &crashed),
+            class_explanation("crash-timeout")
+        );
     }
 
     /// A red `capabilities` check is the candidate's doing: class `check`,

@@ -682,20 +682,31 @@ probe and the wrapper template), placed before `observable`, whether or not the 
   driver's stack through a pointer field (unchecked)]`; red (the candidate's, class
   `oracle`) — `in call <n> of <sym>, the Rust touched the object passed as `<param>` (<c> x
   <e> bytes) the C does not touch it in that call | below the C's window (elements [lo,
-  hi)) | above the C's window (…)[ widened]; <tail|head> layout. …`, or `the guard was
-  tampered with (signal | handler | exception-port | canary): …`, or `the Rust changed the
-  driver's control flow (call <n> | arg <n>:<p>): …`, or a retained-pointer wording; a
-  different output — the standard `outputs differ …`; a crash elsewhere — `candidate run
-  failed: …` (class `crash-timeout`); C side — `boundary driver invalid (C side): <harness
-  reason>` (never candidate evidence: `migrate` turns it into a harness error exactly as
-  a red `driver-shape`; `verify` demotes; `bench check` reports a PROBLEM). C-side reasons
-  include an interface line that does not parse or names a type the unit's headers do not
-  declare, a unit with no data-pointer parameter, a driver that does not run clean under
-  its own measured windows, inactive tracing, and runtime limits (65 536 calls, 16 objects
-  per call, 16 MiB per object).
+  hi)) | above the C's window (…)[ widened]; <tail|head> layout. …` (a widened window reads
+  `[window widened to the whole object by an access the measurement did not trace]`), or
+  `in call <n>, the Rust touched the object passed as `<param>` to call <m> of <sym>, which
+  no longer exists: a pointer retained across calls (<layout> layout)`, or `the guard was
+  tampered with (signal | handler | exception-port | canary | protection): …`, or `the Rust
+  changed the driver's control flow (call <n> | arg <n>:<p>): …`, or `the guard record was
+  altered (…)`; a different output — the standard `outputs differ …`; a crash elsewhere —
+  `candidate run failed: …` (class `crash-timeout`), including `candidate run failed: the
+  Rust ended the process inside call <n> of <sym>, which the C never does (…)` and
+  `candidate run failed: the guard runtime stopped the run (<reason>; …)`; C side —
+  `boundary driver invalid (C side): <harness reason>` (never candidate evidence: `migrate`
+  turns it into a harness error exactly as a red `driver-shape`; `verify` demotes; `bench
+  check` reports a PROBLEM). C-side reasons include an interface line that does not parse
+  or names a type the unit's headers do not declare, a unit with no data-pointer
+  parameter, a driver that does not run clean under its own measured windows, unit sources
+  that disable instrumentation, and runtime limits (65 536 calls, 16 objects per call, 16
+  MiB per object). A green detail names every widened object (`; widened (object-level
+  only): call <n>: <sym>.<param>, …`, at most 6). The migrate judge applies the boundary
+  explanation only to the fault and retained-pointer shapes; every other red keeps its
+  class's explanation.
 - **Fail-closed integrity (§B.R-1):** after every call the runtime verifies signal
-  accounting (`ru_nsignals`), its own handler, the Mach exception ports and a canary page;
-  a candidate that alters fault delivery is red. `capabilities` gains the classes `mem`
+  accounting (`ru_nsignals`), its own handler, the Mach exception ports, a canary page, and
+  that every reservation's closed pages are still `PROT_NONE` and unaliased; a candidate
+  that alters fault delivery or the guarded pages is red. A process that ends inside a unit
+  call, or a run that makes fewer calls than the C, is red (the candidate's). `capabilities` gains the classes `mem`
   (mapping/protection) and `signal` (dispositions, exception ports, raw Mach messaging,
   thread creation, the traps); an opted-in unit's candidate is never granted either, and
   no candidate may reference `ruharness_*` or `__sanitizer_cov_*`.
@@ -706,7 +717,11 @@ probe and the wrapper template), placed before `observable`, whether or not the 
   red). macOS + clang only until the Linux sandbox.
 - **CLI:** `harness bench boundary --suite DIR [--case NAME]… [--allow-unsandboxed]` —
   calibration: the check alone on every verified unit, written nowhere; prints per case
-  `GREEN | RED | N/A | skipped` with the detail, then totals; exit 1 only on harness
+  `GREEN | RED | VACUOUS | N/A | skipped` with the detail — VACUOUS is a passing check
+  that guarded nothing (every data-pointer argument NULL, unshadowed or widened; not
+  counted as green) — then one line per (symbol, parameter) with calls / untouched /
+  partial / full / widened / unshadowed / null and a "no power" flag when the C never
+  leaves the object untouched or partly touched, then totals; exit 1 only on harness
   errors. Nothing new is written to any ledger: the check is a function of `driver.c`,
   the unit source, the crate and the harness (`rt=`).
 

@@ -166,15 +166,17 @@ fn cmd_boundary(suite_dir: &Path, only: &[String]) -> Result<ExitCode> {
         .iter()
         .filter(|case| only.is_empty() || only.iter().any(|o| *o == case.path || o == case.name()))
         .collect();
-    let (mut green, mut red, mut not_applicable, mut skipped, mut errors) = (0usize, 0, 0, 0, 0);
+    let (mut green, mut red, mut not_applicable, mut vacuous, mut skipped, mut errors) =
+        (0usize, 0, 0, 0, 0, 0);
     for case in selected {
         let tag = format!("bench boundary: {} [{}]", case.path, case.split);
-        let root = case.target_root(suite_dir).canonicalize()?;
-        if !root.join("harness.toml").exists() || !Ledger::new(&root).plan_path().exists() {
+        let root_raw = case.target_root(suite_dir);
+        if !root_raw.join("harness.toml").exists() || !Ledger::new(&root_raw).plan_path().exists() {
             skipped += 1;
             out(format!("{tag} skipped (no target)"));
             continue;
         }
+        let root = root_raw.canonicalize()?;
         let ctx = TargetContext::load(&root)?;
         let ledger = Ledger::new(&ctx.root);
         let plan = Plan::load(&ledger.plan_path())?;
@@ -189,17 +191,46 @@ fn cmd_boundary(suite_dir: &Path, only: &[String]) -> Result<ExitCode> {
             continue;
         }
         match harness_oracle::CAbiDifferential.boundary_only(&ctx, unit) {
-            Ok(check) if check.passed => {
-                green += 1;
-                out(format!("{tag} GREEN — {}", check.detail));
-            }
-            Ok(check) if check.detail.starts_with(BOUNDARY_C_SIDE_LEAD_IN) => {
-                not_applicable += 1;
-                out(format!("{tag} N/A — {}", check.detail));
-            }
-            Ok(check) => {
-                red += 1;
-                out(format!("{tag} RED — {}", check.detail));
+            Ok((check, report)) => {
+                // A green that guarded nothing proves nothing (§B.7): reported
+                // VACUOUS and kept out of the green tally.
+                let vac = check.passed && report.as_ref().is_some_and(|r| r.is_vacuous());
+                let outcome = if vac {
+                    vacuous += 1;
+                    "VACUOUS"
+                } else if check.passed {
+                    green += 1;
+                    "GREEN"
+                } else if check.detail.starts_with(BOUNDARY_C_SIDE_LEAD_IN) {
+                    not_applicable += 1;
+                    "N/A"
+                } else {
+                    red += 1;
+                    "RED"
+                };
+                out(format!("{tag} {outcome} — {}", check.detail));
+                if let Some(rep) = report {
+                    for p in &rep.params {
+                        out(format!(
+                            "{tag}   {}.{}: calls {}, untouched {}, partial {}, full {}, widened {}, \
+                             unshadowed {}, null {}{}",
+                            p.symbol,
+                            p.param,
+                            p.calls,
+                            p.untouched,
+                            p.partial,
+                            p.full,
+                            p.widened,
+                            p.unshadowed,
+                            p.null,
+                            if p.calls > 0 && p.power() == 0 {
+                                " — no power (never untouched or partly touched)"
+                            } else {
+                                ""
+                            }
+                        ));
+                    }
+                }
             }
             Err(e) => {
                 errors += 1;
@@ -208,8 +239,8 @@ fn cmd_boundary(suite_dir: &Path, only: &[String]) -> Result<ExitCode> {
         }
     }
     out(format!(
-        "bench boundary: {green} green, {red} red, {not_applicable} not applicable, {skipped} \
-         skipped, {errors} error(s)"
+        "bench boundary: {green} green, {red} red, {vacuous} vacuous, {not_applicable} not \
+         applicable, {skipped} skipped, {errors} error(s)"
     ));
     Ok(if errors > 0 {
         ExitCode::FAILURE

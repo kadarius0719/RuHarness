@@ -22,9 +22,14 @@
  *                         exit status 97
  *
  * Fail-closed integrity (§B.R-1): after every call and at normal end the
- * runtime verifies that its own fault handler is still installed, that no
- * exception port for bad accesses was added, and that a private guarded page
- * still faults into the handler. Any deviation is RH-TAMPER, exit 97.
+ * runtime verifies signal accounting, that its own fault handler is still
+ * installed, that no exception port for bad accesses was added, that a
+ * private guarded page still faults into the handler, and that every
+ * reservation's closed pages are still PROT_NONE and unaliased. Any
+ * deviation is RH-TAMPER, exit 97. A process that ends inside a unit call
+ * (the candidate calling exit) is RH-EXITED, exit 97, and a run that makes
+ * fewer calls than the table is RH-DIVERGED — the candidate's doing, never
+ * a harness fault.
  *
  * Single-threaded by contract. Never prints an address. */
 #include <stddef.h>
@@ -41,6 +46,7 @@
 #include <stdio.h>
 #ifdef __APPLE__
 #include <mach/mach.h>
+#include <mach/mach_vm.h>
 #endif
 #ifdef RUHARNESS_MEASURE
 #include <sanitizer/asan_interface.h>
@@ -52,8 +58,7 @@
 #define RH_MAX_ARGS 64
 #define RH_MAX_BYTES ((size_t)16 << 20)
 #define RH_MAX_RES 65536
-#define RH_GAP_MIN ((size_t)64 << 10)
-#define RH_GAP_MAX ((size_t)1 << 20)
+#define RH_GAP_MIN ((size_t)1 << 20) /* §B.R-12: a gap of at least max(1 MiB, size) on each side */
 
 enum { M_MEASURE, M_LEARN_TAIL, M_LEARN_HEAD, M_TAIL, M_HEAD };
 static const char *const MODE_NAME[] = {"measure", "learn-tail", "learn-head", "tail", "head"};
@@ -67,6 +72,7 @@ typedef struct {
     long mlo, mhi;                  /* measure: byte hull of traced in-call accesses */
     uintptr_t res, res_end, shadow; /* tight/learn: reservation and the copy (0 = none yet) */
     unsigned char *snap;            /* tight/learn: the bytes as copied in */
+    unsigned char opened;           /* learn: the whole object was opened after a fault */
 } rh_obj;
 
 /* every reservation ever made this run (never unmapped, never reused) */
@@ -75,6 +81,8 @@ typedef struct {
     size_t size;
     unsigned call;
     int obj;
+    uintptr_t open_lo, open_hi; /* the pages left open (0,0 = none) */
+    unsigned share_mode, ref_count; /* mach top-info as observed at creation */
 } rh_res;
 
 static rh_obj O[RH_MAX_OBJS];
@@ -256,10 +264,13 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
         _exit(97);
     }
     long e[3] = {(long)call_n, R[i].obj, byte};
-    if (learning()) {
+    /* An access outside the object cannot be satisfied by opening it: terminal
+     * in every mode (RT-3: re-opening would re-fault forever). */
+    if (learning() && byte >= 0 && (size_t)byte < R[i].size && !O[R[i].obj].opened) {
         our_deliveries++;
         rec("learn", e, 3);
         rh_obj *o = &O[R[i].obj];
+        o->opened = 1;
         protect(pfloor(o->shadow), pceil(o->shadow + o->size), PROT_READ | PROT_WRITE);
         return;
     }
@@ -410,8 +421,25 @@ static void load_table(void) {
 /* ---- lifecycle ---- */
 
 static void finish(void) {
-    if (depth) die("the run ended inside a unit call");
-    if (tight()) integrity();
+    if (depth) {
+        if (tight()) { /* the candidate's doing: evidence, never a harness fault */
+            long v[1] = {(long)call_n};
+            put(2, "\nRH-EXITED\n");
+            rec("exited", v, 1);
+            _exit(97);
+        }
+        die("the run ended inside a unit call");
+    }
+    if (tight()) {
+        if (call_n != t_calls) {
+            char what[32];
+            size_t n = 0;
+            fmt_str(what, &n, sizeof what, "call ");
+            fmt_num(what, &n, sizeof what, (long)call_n + 1);
+            red("RH-DIVERGED", "diverged", what);
+        }
+        integrity();
+    }
     if (out_fd >= 0) {
         put(out_fd, "end\n");
         close(out_fd);
@@ -482,13 +510,14 @@ static void init(void) {
 
 /* ---- tight/learn: shadows ---- */
 
+static void top_info(uintptr_t addr, unsigned *share, unsigned *refs);
+
 static void make_shadow(int j) {
     rh_obj *o = &O[j];
     size_t size = o->size, lo = o->lo * o->elem, hi = o->hi * o->elem;
     if (hi > size) hi = size;
     if (lo > hi) lo = hi;
-    size_t gap = size < RH_GAP_MIN ? RH_GAP_MIN : size > RH_GAP_MAX ? RH_GAP_MAX : size;
-    gap = rup(gap);
+    size_t gap = rup(size < RH_GAP_MIN ? RH_GAP_MIN : size);
     size_t below = head_layout() ? lo : hi, above = size - below;
     size_t total = gap + rup(below) + rup(above) + gap;
     if (n_res >= RH_MAX_RES) die("more than 65536 guarded objects in one run");
@@ -511,6 +540,67 @@ static void make_shadow(int j) {
     r->size = size;
     r->call = call_n;
     r->obj = j;
+    r->open_lo = hi > lo ? pfloor(o->shadow + lo) : 0;
+    r->open_hi = hi > lo ? pceil(o->shadow + hi) : 0;
+    top_info(r->res, &r->share_mode, &r->ref_count);
+}
+
+/* Mach top-level info of the region at `addr` (share mode, reference count):
+ * an alias created by vm_remap changes both. Zero where unavailable. */
+static void top_info(uintptr_t addr, unsigned *share, unsigned *refs) {
+    *share = 0;
+    *refs = 0;
+#ifdef __APPLE__
+    mach_vm_address_t a = addr;
+    mach_vm_size_t sz = 0;
+    vm_region_top_info_data_t info;
+    mach_msg_type_number_t cnt = VM_REGION_TOP_INFO_COUNT;
+    mach_port_t name;
+    if (mach_vm_region(mach_task_self(), &a, &sz, VM_REGION_TOP_INFO, (vm_region_info_t)&info, &cnt, &name)
+        == KERN_SUCCESS) {
+        *share = (unsigned)info.share_mode;
+        *refs = (unsigned)info.ref_count;
+    }
+#endif
+}
+
+/* §B.R-1 (RT-1): the reservations themselves. Every page outside the open
+ * window must still be PROT_NONE, and the region must still be the private
+ * anonymous mapping it was created as (an alias made with vm_remap shows up
+ * as a changed share mode or reference count). Tight modes only: learn mode
+ * opens whole objects on purpose. */
+static void verify_reservations(void) {
+#ifdef __APPLE__
+    if (learning()) return;
+    for (int j = 0; j < n_obj; j++) {
+        const rh_obj *o = &O[j];
+        if (!o->res) continue;
+        const rh_res *r = NULL;
+        for (int i = n_res - 1; i >= 0; i--)
+            if (R[i].res == o->res) { r = &R[i]; break; }
+        if (!r) continue;
+        unsigned share, refs;
+        top_info(r->res, &share, &refs);
+        if (share != r->share_mode || refs != r->ref_count) red("RH-TAMPER", "tamper", "protection");
+        mach_vm_address_t a = r->res;
+        while (a < r->res_end) {
+            mach_vm_size_t sz = 0;
+            vm_region_basic_info_data_64_t info;
+            mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+            mach_port_t name;
+            mach_vm_address_t q = a;
+            if (mach_vm_region(mach_task_self(), &q, &sz, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &cnt, &name)
+                != KERN_SUCCESS || q >= r->res_end)
+                break;
+            uintptr_t s = q > a ? (uintptr_t)q : (uintptr_t)a, e = (uintptr_t)(q + sz);
+            if (e > r->res_end) e = r->res_end;
+            /* the closed part of this region: anything outside the open window */
+            int closed_bytes = s < r->open_lo || e > r->open_hi || r->open_hi == 0;
+            if (closed_bytes && info.protection != VM_PROT_NONE) red("RH-TAMPER", "tamper", "protection");
+            a = q + sz;
+        }
+    }
+#endif
 }
 
 /* `v` translated out of any shadow of this call, or unchanged. */
@@ -528,12 +618,22 @@ static void close_call(void) {
         if (!o->res) continue;
         protect(pfloor(o->shadow), pceil(o->shadow + o->size), PROT_READ | PROT_WRITE);
     }
-    /* relocation: pointers the C left in an object that point into a shadow */
+    /* relocation: pointers the C stored into an object that point into a
+     * shadow — at every 8-byte offset from the OBJECT start, whatever the
+     * shadow's alignment (byte-element objects are rarely 8-aligned), and
+     * only where the call changed the bytes (a datum the C left alone is
+     * never a pointer it stored). */
     for (int j = 0; j < n_obj; j++) {
         rh_obj *o = &O[j];
-        if (!o->res || o->shadow % sizeof(uintptr_t)) continue;
-        uintptr_t *w = (uintptr_t *)o->shadow;
-        for (size_t i = 0; i < o->size / sizeof(uintptr_t); i++) w[i] = relocate_word(w[i]);
+        if (!o->res) continue;
+        for (size_t i = 0; i + sizeof(uintptr_t) <= o->size; i += sizeof(uintptr_t)) {
+            unsigned char *at = (unsigned char *)o->shadow + i;
+            if (memcmp(at, o->snap + i, sizeof(uintptr_t)) == 0) continue;
+            uintptr_t w;
+            memcpy(&w, at, sizeof w);
+            uintptr_t w2 = relocate_word(w);
+            if (w2 != w) memcpy(at, &w2, sizeof w2);
+        }
     }
     /* copy-back: only bytes the call changed (writes through an unshadowed
      * path to the original, and const objects, stay as they are) */
@@ -681,6 +781,7 @@ void ruharness_exit(void) {
     } else {
         account_signals();
         integrity();
+        verify_reservations();
         close_call();
     }
     n_obj = 0;

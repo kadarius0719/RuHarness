@@ -20,8 +20,8 @@
 
 use crate::boundary::{
     self, apply_learn, categorize, derive_windows, parse_learn, parse_measurement, parse_tight,
-    render_probe, render_table, render_wrapper, ArgKind, ElemSize, FaultCategory, Layout,
-    Measurement, Probe, TightEnd, Windows, WrapperParam, WrapperSym,
+    render_probe, render_table, render_wrapper, ArgKind, BoundaryReport, ElemSize, FaultCategory,
+    Layout, Measurement, Probe, TightEnd, Windows, WrapperParam, WrapperSym,
 };
 use crate::confine::{Collected, Confinement, Extras};
 use crate::exec::{RunFailure, RunOutput, Runner};
@@ -40,6 +40,15 @@ pub(crate) const C_SIDE_LEAD_IN: &str = harness_core::verdict::BOUNDARY_C_SIDE_L
 
 /// Most bytes of a compiler's stderr quoted in a detail.
 const STDERR_CAP: usize = 600;
+
+/// Source text that switches sanitizer instrumentation off for a function
+/// or a file: refused in an opted-in unit (§B.R-12, M12).
+const INSTRUMENTATION_OPT_OUTS: [&str; 4] = [
+    "no_sanitize",
+    "disable_sanitizer_instrumentation",
+    "#pragma clang attribute",
+    "no_instrument_function",
+];
 
 /// What the check needs from the verification in progress (canonical paths;
 /// the caller validated containment).
@@ -82,23 +91,33 @@ fn red(detail: String) -> Check {
     }
 }
 
-/// Compiler stderr, capped, for a detail.
+/// Compiler stderr, capped, for a detail: the cut lands on a line or word
+/// boundary so that no partial machine path survives the scrubber.
 fn cap(stderr: &str) -> String {
-    let mut s: String = stderr
-        .chars()
-        .filter(|c| *c != '\r')
-        .take(STDERR_CAP)
-        .collect();
-    if stderr.len() > STDERR_CAP {
-        s.push_str(" [truncated]");
+    let clean: String = stderr.chars().filter(|c| *c != '\r').collect();
+    if clean.len() <= STDERR_CAP {
+        return clean;
     }
-    s
+    let mut cut = STDERR_CAP;
+    while !clean.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let head = &clean[..cut];
+    let boundary = head.rfind('\n').max(head.rfind(' ')).unwrap_or(0);
+    format!("{} [truncated]", head[..boundary].trim_end())
 }
 
 /// Run the check. `Err` is reserved for harness faults (a path that cannot
 /// be written, a tool that cannot run); every outcome about the unit, the
-/// driver or the candidate is a [`Check`].
-pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
+/// driver or the candidate is a [`Check`]. The report (per-parameter figures)
+/// exists once the windows do — after phase L — whatever the outcome.
+pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<(Check, Option<BoundaryReport>), Error> {
+    let mut report = None;
+    let check = run_inner(ctx, &mut report)?;
+    Ok((check, report))
+}
+
+fn run_inner(ctx: &BoundaryCtx<'_>, report: &mut Option<BoundaryReport>) -> Result<Check, Error> {
     // 1. Interfaces: every plan symbol exactly once, every line parseable.
     let mut sigs: Vec<(InterfaceSig, &str)> = Vec::new();
     for line in &ctx.unit.interface {
@@ -153,11 +172,16 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
     let probe_c = write(boundary::PROBE_C_NAME, boundary::PROBE_C)?;
     let mut includes: Vec<PathBuf> = vec![bd.clone()];
     includes.extend(ctx.includes.iter().cloned());
-    let header_includes: Vec<String> = ctx
-        .headers
-        .iter()
-        .map(|h| format!("{:?}", h.display().to_string()))
-        .collect();
+    let mut header_includes: Vec<String> = Vec::new();
+    for h in ctx.headers {
+        let text = h.display().to_string();
+        if text.contains(['"', '\\']) || !text.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+            return Ok(c_side(
+                "a unit header's path contains a character an #include cannot carry".into(),
+            ));
+        }
+        header_includes.push(format!("\"{text}\""));
+    }
 
     let cc =
         |out: &Path, inputs: &[PathBuf], cflags: &[&str]| -> Result<Result<(), String>, Error> {
@@ -253,6 +277,21 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
     let renames = boundary::rename_flags(&sig_refs);
     let rename_refs: Vec<&str> = renames.iter().map(String::as_str).collect();
 
+    // The unit may not switch its own instrumentation off (M12): the probe
+    // proves the toolchain traces; a unit without a load of its own (its
+    // pointer goes straight to libc) is legitimate and simply widens.
+    for src in ctx.unit_c.iter().chain(ctx.headers.iter()) {
+        let text = std::fs::read(src).map_err(|e| Error::io(src, e))?;
+        for needle in INSTRUMENTATION_OPT_OUTS {
+            if text.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+                return Ok(c_side(format!(
+                    "the unit's sources disable instrumentation (`{needle}`): its footprint cannot \
+                     be measured"
+                )));
+            }
+        }
+    }
+
     // 4. Builds (every failure is the C side's).
     macro_rules! build {
         ($what:expr, $out:expr, $inputs:expr, $flags:expr) => {{
@@ -334,20 +373,6 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
             one,
             &["-O0", "-c"]
         ));
-    }
-    // Every instrumented unit object must actually reference the callbacks
-    // (M12: a build slip or a `no_sanitize` attribute would trace nothing).
-    for obj in unit_o1.iter().chain(unit_o0.iter()) {
-        let nm = ctx
-            .runner
-            .tool(&["nm".into(), "-u".into(), path_str(obj)?.to_string()])?;
-        if !String::from_utf8_lossy(&nm).contains("sanitizer_cov_") {
-            return Ok(c_side(
-                "an instrumented unit object references no coverage callback: load/store tracing \
-                 is inactive for this unit (a `no_sanitize` attribute, or an unsupported toolchain)"
-                    .into(),
-            ));
-        }
     }
     let link = |what: &str,
                 out: &str,
@@ -510,6 +535,7 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
         };
         widened += apply_learn(&mut windows, &events);
     }
+    *report = Some(boundary::report(&windows, &sigs, m.foreign_stack));
 
     // 8. Phase C: the C, strictly, in both layouts.
     for layout in Layout::BOTH {
@@ -518,7 +544,7 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
         let (run, rec) = guarded(&bd_c, layout.name(), Some(&table))?;
         let ok = matches!(&run, Ok(out) if *out == plain_out);
         let ended = matches!(
-            bytes_of(rec).and_then(|b| parse_tight(&b, layout)),
+            bytes_of(rec).and_then(|b| parse_tight(&b, layout, &windows)),
             Ok(TightEnd::Ended)
         );
         if !ok || !ended {
@@ -534,11 +560,20 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
     }
 
     // 9. Phase R: the Rust, strictly, tail then head; the first failing
-    //    layout is reported.
+    //    layout is reported. Nothing here is a harness error: the C ran clean
+    //    under the identical runtime, mode and table in phase C, so whatever
+    //    the Rust run leaves behind is the candidate's doing.
     for layout in Layout::BOTH {
         let table = table_path(layout);
         let (run, rec) = guarded(&bd_rs, layout.name(), Some(&table))?;
-        let end = bytes_of(rec).and_then(|b| parse_tight(&b, layout));
+        let end = bytes_of(rec).and_then(|b| parse_tight(&b, layout, &windows));
+        let sym_of = |call: u32| {
+            windows
+                .calls
+                .get(call as usize - 1)
+                .and_then(|c| sigs.get(c.sym as usize))
+                .map_or("?", |(s, _)| s.symbol.as_str())
+        };
         match (&run, &end) {
             (Ok(out), Ok(TightEnd::Ended)) if *out == plain_out => continue,
             (Ok(out), Ok(TightEnd::Ended)) => {
@@ -549,18 +584,24 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
                     &windows, &sigs, *call, *obj, *byte, layout,
                 )));
             }
-            (_, Ok(TightEnd::Stale(call, from, obj, byte))) => {
+            (_, Ok(TightEnd::Stale(call, from, obj, _))) => {
+                return Ok(red(describe_stale(
+                    &windows, &sigs, *call, *from, *obj, layout,
+                )));
+            }
+            (_, Ok(TightEnd::Exited(call))) => {
                 return Ok(red(format!(
-                    "in call {call}, the Rust touched byte {byte} of an object that was passed to \
-                     call {from} (object {obj}) and no longer exists: a pointer retained across \
-                     calls ({} layout)",
+                    "candidate run failed: the Rust ended the process inside call {call} of {}, \
+                     which the C never does ({} layout)",
+                    sym_of(*call),
                     layout.name()
                 )));
             }
             (_, Ok(TightEnd::Tamper(what))) => {
                 return Ok(red(format!(
                     "the guard was tampered with ({what}): the candidate altered how memory faults \
-                     are delivered instead of staying inside the C's footprint ({} layout)",
+                     are delivered or which pages are guarded instead of staying inside the C's \
+                     footprint ({} layout)",
                     layout.name()
                 )));
             }
@@ -572,8 +613,9 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
                 )));
             }
             (_, Ok(TightEnd::Error(reason))) => {
-                return Err(Error::Invariant(format!(
-                    "boundary runtime error in the Rust run that did not occur in the C run: {reason}"
+                return Ok(red(format!(
+                    "candidate run failed: the guard runtime stopped the run ({reason}; {} layout)",
+                    layout.name()
                 )));
             }
             (Err(e), _) => {
@@ -581,14 +623,15 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
             }
             (Ok(_), Err(why)) => {
                 return Ok(red(format!(
-                    "the candidate run ended without a clean guard record ({why}; {} layout)",
+                    "the guard record was altered ({why}; {} layout)",
                     layout.name()
                 )));
             }
         }
     }
 
-    // 10. Green: what was proven, in numbers.
+    // 10. Green: what was proven, in numbers, and every widened object by
+    //     name (§B.R-4).
     let calls = windows.calls.len();
     let objects: usize = windows.calls.iter().map(|c| c.objs.len()).sum();
     let untouched = windows
@@ -614,6 +657,26 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
          ({untouched} untouched by the C, {partial} partially touched, {widened} widened), \
          {unshadowed} argument(s) unshadowed; tail and head layouts clean"
     );
+    if let Some(rep) = report.as_ref() {
+        if !rep.widened_objects.is_empty() {
+            let shown: Vec<&str> = rep
+                .widened_objects
+                .iter()
+                .take(MAX_WIDENED_NAMED)
+                .map(String::as_str)
+                .collect();
+            detail.push_str(&format!(
+                "; widened (object-level only): {}",
+                shown.join(", ")
+            ));
+            if rep.widened_objects.len() > MAX_WIDENED_NAMED {
+                detail.push_str(&format!(
+                    " +{} more",
+                    rep.widened_objects.len() - MAX_WIDENED_NAMED
+                ));
+            }
+        }
+    }
     if let Some(n) = m.foreign_stack {
         detail.push_str(&format!(
             "; note: in call {n} the C reads the driver's stack through a pointer field (unchecked)"
@@ -626,6 +689,40 @@ pub(crate) fn run(ctx: &BoundaryCtx<'_>) -> Result<Check, Error> {
     })
 }
 
+/// Most widened objects named in a green detail.
+const MAX_WIDENED_NAMED: usize = 6;
+
+/// The harness's own description of a retained pointer (§B.R-6): the earlier
+/// call's symbol and parameter, never a byte.
+fn describe_stale(
+    w: &Windows,
+    sigs: &[(InterfaceSig, &str)],
+    call: u32,
+    from: u32,
+    obj: u32,
+    layout: Layout,
+) -> String {
+    let (sym, param) = w
+        .calls
+        .get(from as usize - 1)
+        .and_then(|c| {
+            let (s, _) = sigs.get(c.sym as usize)?;
+            let param = c
+                .args
+                .iter()
+                .find(|a| matches!(a.kind, ArgKind::Obj { obj: j, .. } if j == obj))
+                .and_then(|a| s.params.get(a.param as usize))
+                .map_or_else(|| format!("object {obj}"), |p| format!("`{}`", p.name));
+            Some((s.symbol.clone(), param))
+        })
+        .unwrap_or_else(|| ("?".into(), format!("object {obj}")));
+    format!(
+        "in call {call}, the Rust touched the object passed as {param} to call {from} of {sym}, \
+         which no longer exists: a pointer retained across calls ({} layout)",
+        layout.name()
+    )
+}
+
 /// The harness's own description of a fault (§B.R-6): category, window,
 /// call, symbol and parameter — never an address, never the raw element.
 fn describe_fault(
@@ -636,7 +733,7 @@ fn describe_fault(
     byte: i64,
     layout: Layout,
 ) -> String {
-    let Some(c) = w.calls.get(call as usize - 1) else {
+    let Some(c) = (call as usize).checked_sub(1).and_then(|i| w.calls.get(i)) else {
         return format!("the Rust touched memory outside the C's footprint (call {call})");
     };
     let sym = sigs
@@ -660,7 +757,7 @@ fn describe_fault(
         FaultCategory::Above => format!("above the C's window (elements [{}, {}))", win.lo, win.hi),
     };
     let widened = if win.widened {
-        " [window widened to the whole object by an untraced C access]"
+        " [window widened to the whole object by an access the measurement did not trace]"
     } else {
         ""
     };
@@ -673,9 +770,4 @@ fn describe_fault(
         win.elem,
         layout.name()
     )
-}
-
-fn path_str(p: &Path) -> Result<&str, Error> {
-    p.to_str()
-        .ok_or_else(|| Error::Invariant(format!("non-UTF-8 path: {}", p.display())))
 }

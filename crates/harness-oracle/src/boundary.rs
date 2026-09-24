@@ -57,17 +57,51 @@ pub(crate) const MAX_OBJ_BYTES: u64 = 16 << 20;
 
 /// The version of the wrapper's shape, part of the runtime digest: bump when
 /// [`render_wrapper`]'s output changes meaning.
-const WRAPPER_TEMPLATE: &str =
-    "ruharness-wrapper 1: enter(sym, frame); arg(param, p, elem) per data pointer; ret; exit";
+const WRAPPER_TEMPLATE: &str = "ruharness-wrapper 3: interface-line prototypes and file-scope \
+    bindings per symbol; locals named by parameter index; enter(sym, frame); arg(param, p, \
+    elem) per data pointer; ret; exit";
+
+/// The harness-side measurement policy, part of the runtime digest: bump
+/// with any change to what is measured or how windows are derived.
+const MEASURE_POLICY: &str = "ruharness-boundary policy 1: measure the unit at -O1 with sancov, \
+    fall back to -O0 when the streams differ from the plain run; windows = element-rounded \
+    traced hulls, widened to the whole object by one learn run per layout; gap >= max(1 MiB, \
+    size); probes baseline / is-pointer / pointee-complete; elem = sizeof *p or 1";
 
 /// Prefix of the `inputs.toolchain` entry recording that the check ran.
 pub(crate) const TOOLCHAIN_ENTRY_PREFIX: &str = "boundary: sancov+guard-pages rt=";
 
-/// 8 hex of blake3 over the harness-owned runtime sources and the wrapper
-/// template: a change to any of them is a judge change.
+/// 8 hex of blake3 over everything that defines the judge: the harness-owned
+/// runtime sources, the coverage flags, the measurement policy, and the
+/// wrapper as rendered for a fixed signature. A change to any of them is a
+/// judge change; the golden test pins the value so the change is deliberate.
 pub(crate) fn runtime_digest() -> String {
     let mut bytes = Vec::new();
-    for part in [GUARD_C, GUARD_INTERNAL_H, PROBE_C, WRAPPER_TEMPLATE] {
+    let fixed_line = "int ruharness_fixed(char *p, int n, void (*cb)(int))";
+    let rendered = match harness_scan::parse_interface(fixed_line) {
+        Ok(sig) => render_wrapper(
+            &["\"fixed.h\"".into()],
+            &[WrapperSym {
+                sig: &sig,
+                line: fixed_line,
+                params: vec![WrapperParam {
+                    index: 0,
+                    elem: ElemSize::SizeofPointee,
+                }],
+            }],
+        ),
+        Err(_) => String::from("unrenderable"),
+    };
+    for part in [
+        GUARD_C,
+        GUARD_INTERNAL_H,
+        PROBE_C,
+        COVERAGE_FLAG,
+        MEASURE_DEFINE,
+        MEASURE_POLICY,
+        WRAPPER_TEMPLATE,
+        rendered.as_str(),
+    ] {
         bytes.extend_from_slice(part.as_bytes());
         bytes.push(0);
     }
@@ -471,22 +505,29 @@ pub(crate) enum TightEnd {
     /// An in-call access to a shadow of an EARLIER call (a retained pointer):
     /// `(call, earlier call, object, byte)`.
     Stale(u32, u32, u32, i64),
-    /// The guard was tampered with (`signal | handler | exception-port | canary`).
+    /// The process ended (the candidate called `exit`) inside call `n`.
+    Exited(u32),
+    /// The guard was tampered with (`signal | handler | exception-port |
+    /// canary | protection`).
     Tamper(String),
     /// The candidate changed the driver's control flow (`call n` / `arg n:p`).
     Diverged(String),
-    /// A runtime limit or setup failure (`RH-ERROR`): the check is not applicable.
+    /// A runtime limit or setup failure (`RH-ERROR`).
     Error(String),
 }
 
-/// Parse a tight run's out file: the header and exactly one terminal record.
-/// An empty body (the process died without writing one) is `Err`.
-pub(crate) fn parse_tight(bytes: &[u8], layout: Layout) -> Result<TightEnd, String> {
+/// Parse a tight run's out file: the header and exactly one terminal record,
+/// every call and object number checked against `w`. An empty body (the
+/// process died without writing one) is `Err`.
+pub(crate) fn parse_tight(bytes: &[u8], layout: Layout, w: &Windows) -> Result<TightEnd, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "not UTF-8".to_string())?;
     let mut lines = text.lines();
     if lines.next() != Some(&format!("ruharness-guard 1 {}", layout.name())[..]) {
         return Err("bad header".into());
     }
+    let calls = w.calls.len() as u64;
+    let call_ok = |n: u64| n >= 1 && n <= calls;
+    let obj_ok = |n: u64, j: u64| call_ok(n) && (j as usize) < w.calls[n as usize - 1].objs.len();
     let mut end: Option<TightEnd> = None;
     for line in lines {
         if end.is_some() {
@@ -495,11 +536,28 @@ pub(crate) fn parse_tight(bytes: &[u8], layout: Layout) -> Result<TightEnd, Stri
         let f: Vec<&str> = line.split(' ').collect();
         end = Some(match f.as_slice() {
             ["end"] => TightEnd::Ended,
-            ["fault", n, j, b] => TightEnd::Fault(num(n)? as u32, num(j)? as u32, signed(b)?),
-            ["stale", n, m, j, b] => {
-                TightEnd::Stale(num(n)? as u32, num(m)? as u32, num(j)? as u32, signed(b)?)
+            ["fault", n, j, b] => {
+                let (n, j) = (num(n)?, num(j)?);
+                if !obj_ok(n, j) {
+                    return Err("`fault` names an unknown call or object".into());
+                }
+                TightEnd::Fault(n as u32, j as u32, signed(b)?)
             }
-            ["tamper", what @ ("signal" | "handler" | "exception-port" | "canary")] => {
+            ["stale", n, m, j, b] => {
+                let (n, m, j) = (num(n)?, num(m)?, num(j)?);
+                if !call_ok(n) || m >= n || !obj_ok(m, j) {
+                    return Err("`stale` names an unknown call or object".into());
+                }
+                TightEnd::Stale(n as u32, m as u32, j as u32, signed(b)?)
+            }
+            ["exited", n] => {
+                let n = num(n)?;
+                if !call_ok(n) {
+                    return Err("`exited` names an unknown call".into());
+                }
+                TightEnd::Exited(n as u32)
+            }
+            ["tamper", what @ ("signal" | "handler" | "exception-port" | "canary" | "protection")] => {
                 TightEnd::Tamper((*what).to_string())
             }
             ["diverged", what @ ("call" | "arg"), n] => {
@@ -522,6 +580,127 @@ pub(crate) fn parse_tight(bytes: &[u8], layout: Layout) -> Result<TightEnd, Stri
         });
     }
     end.ok_or_else(|| "no record (the run died before writing one)".to_string())
+}
+
+/// Per-parameter figures of one boundary run (§B.7, §B.R-10): what the
+/// check could and could not see. Carried next to the check, never in it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ParamFigures {
+    /// The unit symbol.
+    pub symbol: String,
+    /// The data-pointer parameter's name.
+    pub param: String,
+    /// Calls in which the parameter was recorded.
+    pub calls: u32,
+    /// Calls where it was NULL.
+    pub null: u32,
+    /// Calls where its memory could not be shadowed (passed through).
+    pub unshadowed: u32,
+    /// Calls where the C touched none of its object.
+    pub untouched: u32,
+    /// Calls where the C touched part of its object.
+    pub partial: u32,
+    /// Calls where the C touched all of its object.
+    pub full: u32,
+    /// Calls where its object's window was widened to the whole object.
+    pub widened: u32,
+}
+
+impl ParamFigures {
+    /// Calls in which the check could catch an eager read (the C left the
+    /// object untouched or partly touched): the parameter's power.
+    pub fn power(&self) -> u32 {
+        self.untouched + self.partial
+    }
+}
+
+/// What one boundary run measured, per parameter, plus the objects whose
+/// windows phase L widened (named by call and parameter).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BoundaryReport {
+    /// One entry per (symbol, data-pointer parameter), in interface order.
+    pub params: Vec<ParamFigures>,
+    /// `call <n>: <symbol>.<param>` for every widened object.
+    pub widened_objects: Vec<String>,
+    /// The first call in which the C read the driver's stack through a
+    /// pointer field (unchecked), if any.
+    pub foreign_stack: Option<u32>,
+}
+
+impl BoundaryReport {
+    /// True when no data-pointer object was shadowed with a real window:
+    /// every argument was NULL, unshadowed, or widened — the check proved
+    /// nothing about this unit (§B.7: not counted as boundary-checked).
+    pub fn is_vacuous(&self) -> bool {
+        self.params
+            .iter()
+            .all(|p| p.untouched + p.partial + p.full == 0)
+    }
+
+    /// Parameters the check has no power over (never untouched or partly
+    /// touched in any call).
+    pub fn zero_power(&self) -> Vec<&ParamFigures> {
+        self.params
+            .iter()
+            .filter(|p| p.calls > 0 && p.power() == 0)
+            .collect()
+    }
+}
+
+/// The report of a run: `sigs` in symbol-index order, `foreign_stack` from
+/// the measurement.
+pub(crate) fn report(
+    w: &Windows,
+    sigs: &[(InterfaceSig, &str)],
+    foreign_stack: Option<u32>,
+) -> BoundaryReport {
+    let mut params: Vec<ParamFigures> = Vec::new();
+    let mut widened_objects = Vec::new();
+    for (i, c) in w.calls.iter().enumerate() {
+        let Some((sig, _)) = sigs.get(c.sym as usize) else {
+            continue;
+        };
+        for a in &c.args {
+            let Some(pname) = sig.params.get(a.param as usize).map(|p| p.name.as_str()) else {
+                continue;
+            };
+            let pos = match params
+                .iter()
+                .position(|p| p.symbol == sig.symbol && p.param == pname)
+            {
+                Some(pos) => pos,
+                None => {
+                    params.push(ParamFigures {
+                        symbol: sig.symbol.clone(),
+                        param: pname.to_string(),
+                        ..ParamFigures::default()
+                    });
+                    params.len() - 1
+                }
+            };
+            let f = &mut params[pos];
+            f.calls += 1;
+            match a.kind {
+                ArgKind::Null => f.null += 1,
+                ArgKind::Pass => f.unshadowed += 1,
+                ArgKind::Obj { obj, .. } => match c.objs.get(obj as usize) {
+                    Some(win) if win.widened => {
+                        f.widened += 1;
+                        widened_objects.push(format!("call {}: {}.{}", i + 1, sig.symbol, pname));
+                    }
+                    Some(win) if win.lo == win.hi => f.untouched += 1,
+                    Some(win) if win.hi - win.lo < win.count() => f.partial += 1,
+                    Some(_) => f.full += 1,
+                    None => {}
+                },
+            }
+        }
+    }
+    BoundaryReport {
+        params,
+        widened_objects,
+        foreign_stack,
+    }
 }
 
 /// The element size a data-pointer parameter's objects are measured in.
@@ -564,8 +743,11 @@ fn renamed_line(sym: &WrapperSym<'_>) -> String {
     )
 }
 
-/// The generated call wrapper (§B.6). `includes` are the unit's own
-/// `#include` spellings; symbol index = position in `syms`.
+/// The generated call wrapper (§B.6). `includes` are the unit's headers as
+/// `#include` operands; symbol index = position in `syms`. Every symbol is
+/// declared from its interface line and bound to a file-scope pointer before
+/// any parameter can shadow it; locals are named by parameter INDEX, so no
+/// parameter name can collide with them.
 pub(crate) fn render_wrapper(includes: &[String], syms: &[WrapperSym<'_>]) -> String {
     let mut out = String::from(
         "/* Generated by RuHarness (design B call wrapper) -- harness-owned, never edited. */\n",
@@ -574,36 +756,44 @@ pub(crate) fn render_wrapper(includes: &[String], syms: &[WrapperSym<'_>]) -> St
         let _ = writeln!(out, "#include {inc}");
     }
     let _ = writeln!(out, "#include \"{GUARD_INTERNAL_H_NAME}\"");
+    for sym in syms {
+        let _ = writeln!(out, "{};", sym.line);
+        let _ = writeln!(
+            out,
+            "static __typeof__({0}) *const ruharness_real_{0} = {0};",
+            sym.sig.symbol
+        );
+    }
     for (i, sym) in syms.iter().enumerate() {
         let sig = sym.sig;
         let _ = writeln!(out, "\n{}\n{{", renamed_line(sym));
         let _ = writeln!(out, "    ruharness_enter({i}, __builtin_frame_address(0));");
         let mut args: Vec<String> = sig.params.iter().map(|p| p.name.clone()).collect();
         for wp in &sym.params {
-            let name = &sig.params[wp.index as usize].name;
+            let k = wp.index as usize;
+            let name = &sig.params[k].name;
             let elem = match wp.elem {
                 ElemSize::SizeofPointee => format!("sizeof *{name}"),
                 ElemSize::One => "1".to_string(),
             };
             let _ = writeln!(
                 out,
-                "    __typeof__({name}) rh_{name} = (__typeof__({name}))ruharness_arg({}, (const void *){name}, {elem});",
-                wp.index
+                "    __typeof__({name}) rh_a{k} = (__typeof__({name}))ruharness_arg({k}, (const void *){name}, {elem});"
             );
-            args[wp.index as usize] = format!("rh_{name}");
+            args[k] = format!("rh_a{k}");
         }
-        let call = format!("{}({})", sig.symbol, args.join(", "));
+        let call = format!("ruharness_real_{}({})", sig.symbol, args.join(", "));
         if sig.returns_void {
             let _ = writeln!(out, "    {call};\n    ruharness_exit();\n}}");
         } else if sig.returns_pointer {
             let _ = writeln!(
                 out,
-                "    __typeof__({call}) rh_ret = {call};\n    rh_ret = (__typeof__(rh_ret))ruharness_ret((void *)rh_ret);\n    ruharness_exit();\n    return rh_ret;\n}}"
+                "    __typeof__({call}) rh_ret_ = {call};\n    rh_ret_ = (__typeof__(rh_ret_))ruharness_ret((void *)rh_ret_);\n    ruharness_exit();\n    return rh_ret_;\n}}"
             );
         } else {
             let _ = writeln!(
                 out,
-                "    __typeof__({call}) rh_ret = {call};\n    ruharness_exit();\n    return rh_ret;\n}}"
+                "    __typeof__({call}) rh_ret_ = {call};\n    ruharness_exit();\n    return rh_ret_;\n}}"
             );
         }
     }
@@ -711,6 +901,7 @@ mod tests {
 
     const LINE: &str =
         "void read_scalefactors(bs_t *bs, uint8_t *pba, uint8_t *scfcod, int bands, float *scf)";
+    const RUNTIME_DIGEST_GOLDEN: &str = "fe651697";
 
     fn params() -> Vec<Vec<u32>> {
         vec![vec![0, 1, 2, 4]]
@@ -837,22 +1028,28 @@ mod tests {
 
     #[test]
     fn tight_records_parse_strictly() {
-        let ok = |s: &str, l| parse_tight(s.as_bytes(), l).expect("parses");
+        let m = parse_measurement(MEASURED.as_bytes(), &params()).expect("parses");
+        let w = derive_windows(&m);
+        let ok = |s: &str, l| parse_tight(s.as_bytes(), l, &w).expect("parses");
         assert_eq!(
             ok("ruharness-guard 1 tail\nend\n", Layout::Tail),
             TightEnd::Ended
         );
         assert_eq!(
-            ok("ruharness-guard 1 tail\nfault 3 1 -2\n", Layout::Tail),
-            TightEnd::Fault(3, 1, -2)
+            ok("ruharness-guard 1 tail\nfault 2 1 -2\n", Layout::Tail),
+            TightEnd::Fault(2, 1, -2)
         );
         assert_eq!(
-            ok("ruharness-guard 1 head\nstale 4 2 0 9\n", Layout::Head),
-            TightEnd::Stale(4, 2, 0, 9)
+            ok("ruharness-guard 1 head\nstale 2 1 0 9\n", Layout::Head),
+            TightEnd::Stale(2, 1, 0, 9)
         );
         assert_eq!(
-            ok("ruharness-guard 1 head\ntamper signal\n", Layout::Head),
-            TightEnd::Tamper("signal".into())
+            ok("ruharness-guard 1 head\nexited 2\n", Layout::Head),
+            TightEnd::Exited(2)
+        );
+        assert_eq!(
+            ok("ruharness-guard 1 head\ntamper protection\n", Layout::Head),
+            TightEnd::Tamper("protection".into())
         );
         assert_eq!(
             ok("ruharness-guard 1 tail\ndiverged arg 3:2\n", Layout::Tail),
@@ -868,13 +1065,70 @@ mod tests {
             "ruharness-guard 1 tail\nfault 1 1 1\nend\n",
             "ruharness-guard 1 tail\ntamper root\n",
             "ruharness-guard 1 tail\nfault x 1 1\n",
+            "ruharness-guard 1 tail\nfault 0 0 0\n",
+            "ruharness-guard 1 tail\nfault 9 0 0\n",
+            "ruharness-guard 1 tail\nfault 1 5 0\n",
+            "ruharness-guard 1 tail\nstale 1 1 0 0\n",
+            "ruharness-guard 1 tail\nstale 2 1 7 0\n",
+            "ruharness-guard 1 tail\nexited 0\n",
+            "ruharness-guard 1 tail\nexited 3\n",
             "ruharness-guard 1 tail\ndiverged call 1; rm -rf\n",
         ] {
             assert!(
-                parse_tight(bad.as_bytes(), Layout::Tail).is_err(),
+                parse_tight(bad.as_bytes(), Layout::Tail, &w).is_err(),
                 "accepted: {bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_report_counts_per_parameter_and_names_widened_objects() {
+        let m = parse_measurement(MEASURED.as_bytes(), &params()).expect("parses");
+        let mut w = derive_windows(&m);
+        w.calls[1].objs[1].widened = true;
+        w.calls[1].objs[1].lo = 0;
+        w.calls[1].objs[1].hi = 20;
+        let sig = parse_interface(LINE).expect("parses");
+        let r = report(&w, &[(sig, LINE)], m.foreign_stack);
+        assert_eq!(r.foreign_stack, Some(2));
+        // `bs` is one 16-byte element: untouched in call 1, and in call 2
+        // bytes [8,12) of it are read — the whole (only) element counts as
+        // fully touched.
+        let bs = r.params.iter().find(|p| p.param == "bs").expect("bs");
+        assert_eq!((bs.calls, bs.untouched, bs.partial, bs.full), (2, 1, 0, 1));
+        let pba = r.params.iter().find(|p| p.param == "pba").expect("pba");
+        assert_eq!((pba.calls, pba.partial, pba.widened), (2, 1, 1));
+        let scfcod = r
+            .params
+            .iter()
+            .find(|p| p.param == "scfcod")
+            .expect("scfcod");
+        assert_eq!((scfcod.unshadowed, scfcod.widened), (1, 1));
+        let scf = r.params.iter().find(|p| p.param == "scf").expect("scf");
+        assert_eq!((scf.null, scf.partial), (1, 1));
+        assert_eq!(
+            r.widened_objects,
+            vec![
+                "call 2: read_scalefactors.pba",
+                "call 2: read_scalefactors.scfcod"
+            ]
+        );
+        assert!(!r.is_vacuous());
+        // `scfcod`'s only shadowed call is the widened one: no power.
+        let zero: Vec<&str> = r.zero_power().iter().map(|p| p.param.as_str()).collect();
+        assert_eq!(zero, vec!["scfcod"]);
+        let mut all_null = r.clone();
+        for p in &mut all_null.params {
+            *p = ParamFigures {
+                symbol: p.symbol.clone(),
+                param: p.param.clone(),
+                calls: 2,
+                null: 2,
+                ..Default::default()
+            };
+        }
+        assert!(all_null.is_vacuous());
+        assert_eq!(all_null.zero_power().len(), 4);
     }
 
     #[test]
@@ -882,6 +1136,9 @@ mod tests {
         let sig = parse_interface(LINE).expect("parses");
         let ret = "int* static_alias(int *outer)";
         let rsig = parse_interface(ret).expect("parses");
+        // A parameter named like its own function, and one named like a local.
+        let shadow = "int crc(const uint8_t *d, int rh_a0, int crc)";
+        let ssig = parse_interface(shadow).expect("parses");
         let syms = vec![
             WrapperSym {
                 sig: &sig,
@@ -902,15 +1159,29 @@ mod tests {
                     elem: ElemSize::One,
                 }],
             },
+            WrapperSym {
+                sig: &ssig,
+                line: shadow,
+                params: vec![WrapperParam {
+                    index: 0,
+                    elem: ElemSize::SizeofPointee,
+                }],
+            },
         ];
         let w = render_wrapper(&["\"lib.h\"".into()], &syms);
         assert!(
             w.contains("#include \"lib.h\"\n#include \"ruharness_guard_internal.h\"\n"),
             "{w}"
         );
+        assert!(w.contains(&format!("{LINE};\nstatic __typeof__(read_scalefactors) *const ruharness_real_read_scalefactors = read_scalefactors;\n{ret};\nstatic __typeof__(static_alias) *const ruharness_real_static_alias = static_alias;\n{shadow};\nstatic __typeof__(crc) *const ruharness_real_crc = crc;\n")), "{w}");
         assert!(w.contains("\nvoid ruharness_call_read_scalefactors(bs_t *bs, uint8_t *pba, uint8_t *scfcod, int bands, float *scf)\n{\n    ruharness_enter(0, __builtin_frame_address(0));\n"), "{w}");
-        assert!(w.contains("    __typeof__(scf) rh_scf = (__typeof__(scf))ruharness_arg(4, (const void *)scf, sizeof *scf);\n    read_scalefactors(rh_bs, rh_pba, rh_scfcod, bands, rh_scf);\n    ruharness_exit();\n}\n"), "{w}");
-        assert!(w.contains("\nint* ruharness_call_static_alias(int *outer)\n{\n    ruharness_enter(1, __builtin_frame_address(0));\n    __typeof__(outer) rh_outer = (__typeof__(outer))ruharness_arg(0, (const void *)outer, 1);\n    __typeof__(static_alias(rh_outer)) rh_ret = static_alias(rh_outer);\n    rh_ret = (__typeof__(rh_ret))ruharness_ret((void *)rh_ret);\n    ruharness_exit();\n    return rh_ret;\n}\n"), "{w}");
+        assert!(w.contains("    __typeof__(scf) rh_a4 = (__typeof__(scf))ruharness_arg(4, (const void *)scf, sizeof *scf);\n    ruharness_real_read_scalefactors(rh_a0, rh_a1, rh_a2, bands, rh_a4);\n    ruharness_exit();\n}\n"), "{w}");
+        assert!(w.contains("\nint* ruharness_call_static_alias(int *outer)\n{\n    ruharness_enter(1, __builtin_frame_address(0));\n    __typeof__(outer) rh_a0 = (__typeof__(outer))ruharness_arg(0, (const void *)outer, 1);\n    __typeof__(ruharness_real_static_alias(rh_a0)) rh_ret_ = ruharness_real_static_alias(rh_a0);\n    rh_ret_ = (__typeof__(rh_ret_))ruharness_ret((void *)rh_ret_);\n    ruharness_exit();\n    return rh_ret_;\n}\n"), "{w}");
+        // The shadowing parameter never names the function in the body, and
+        // the local for `d` is `rh_a0` even though a parameter is named so
+        // too — the wrapper's own local shadows that parameter, which the
+        // call passes by its (unchanged) value.
+        assert!(w.contains("    __typeof__(ruharness_real_crc(rh_a0, rh_a0, crc)) rh_ret_ = ruharness_real_crc(rh_a0, rh_a0, crc);"), "{w}");
         assert_eq!(
             rename_flags(&[&sig, &rsig]),
             vec![
@@ -950,5 +1221,11 @@ mod tests {
         let d = runtime_digest();
         assert_eq!(d.len(), 8);
         assert!(d.bytes().all(|b| b.is_ascii_hexdigit()));
+        // Pinned: a change to the runtime, the flags, the policy or the
+        // wrapper's shape is a judge change and moves this deliberately.
+        assert_eq!(
+            d, RUNTIME_DIGEST_GOLDEN,
+            "the boundary judge changed: update the golden"
+        );
     }
 }

@@ -81,6 +81,7 @@ mod symbols;
 mod testutil;
 mod validate;
 
+pub use boundary::{BoundaryReport, ParamFigures};
 pub use sandbox::sandbox_mode;
 pub use validate::validate_driver;
 
@@ -686,36 +687,21 @@ impl CAbiDifferential {
         // 8. Boundary (design B, opt-in): last, and only when everything
         // above passed, so recorded red turns keep their evidence.
         if boundary && checks.iter().all(|c| c.passed) {
-            let headers: Vec<PathBuf> = facts
-                .include_closure(&unit.files)
-                .into_iter()
-                .filter(|p| p.ends_with(".h"))
-                .map(|rel| {
-                    inside(
-                        &unit.id,
-                        "unit header",
-                        &root.join(rel),
-                        &prep.base.source_dir,
-                    )
-                })
-                .collect::<Result<_, _>>()?;
-            let unit_c: Vec<PathBuf> = unit
-                .files
-                .iter()
-                .filter(|f| f.ends_with(".c"))
-                .map(|rel| inside(&unit.id, "unit file", &root.join(rel), root))
-                .collect::<Result<_, _>>()?;
-            checks.push(boundary_run::run(&boundary_run::BoundaryCtx {
-                runner: &runner,
-                confined: &confined,
-                includes: &includes,
-                headers: &headers,
-                unit_c: &unit_c,
-                driver: &prep.driver,
-                rust_lib: &rust_lib,
-                build,
-                unit,
-            })?);
+            let (headers, unit_c) = boundary_inputs(&prep, &facts, unit)?;
+            checks.push(
+                boundary_run::run(&boundary_run::BoundaryCtx {
+                    runner: &runner,
+                    confined: &confined,
+                    includes: &includes,
+                    headers: &headers,
+                    unit_c: &unit_c,
+                    driver: &prep.driver,
+                    rust_lib: &rust_lib,
+                    build,
+                    unit,
+                })?
+                .0,
+            );
         }
 
         Ok(finish(inputs, checks))
@@ -725,16 +711,24 @@ impl CAbiDifferential {
     /// the calibration entry point (`harness bench boundary`, §B.7). The unit
     /// crate is built and the check runs exactly as inside `verify`, whether
     /// or not the unit opted in. Returns the check; `Err` for harness faults.
-    pub fn boundary_only(&self, target: &TargetContext, unit: &Unit) -> Result<Check, Error> {
+    pub fn boundary_only(
+        &self,
+        target: &TargetContext,
+        unit: &Unit,
+    ) -> Result<(Check, Option<BoundaryReport>), Error> {
         let scrubber = Scrubber::from_env(&target.root);
-        let mut check = self
+        let (mut check, report) = self
             .run_boundary_only(target, unit)
             .map_err(|e| scrubber.scrub_error(e))?;
         scrubber.scrub_check(&mut check);
-        Ok(check)
+        Ok((check, report))
     }
 
-    fn run_boundary_only(&self, target: &TargetContext, unit: &Unit) -> Result<Check, Error> {
+    fn run_boundary_only(
+        &self,
+        target: &TargetContext,
+        unit: &Unit,
+    ) -> Result<(Check, Option<BoundaryReport>), Error> {
         let prep = Prepared::new(target, unit)?;
         let facts = load_facts(target)?;
         let root = &prep.base.root;
@@ -936,6 +930,37 @@ fn run_failure_check(
         passed: false,
         detail: parts.join(" | "),
     }
+}
+
+/// The boundary check's unit inputs (shared by `verify` and the calibration
+/// entry point so both see the same files): the unit's headers (its include
+/// closure, inside the source dir) and its `.c` files (inside the root).
+fn boundary_inputs(
+    prep: &Prepared,
+    facts: &Facts,
+    unit: &Unit,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Error> {
+    let root = &prep.base.root;
+    let headers = facts
+        .include_closure(&unit.files)
+        .into_iter()
+        .filter(|p| p.ends_with(".h"))
+        .map(|rel| {
+            inside(
+                &unit.id,
+                "unit header",
+                &root.join(rel),
+                &prep.base.source_dir,
+            )
+        })
+        .collect::<Result<_, _>>()?;
+    let unit_c = unit
+        .files
+        .iter()
+        .filter(|f| f.ends_with(".c"))
+        .map(|rel| inside(&unit.id, "unit file", &root.join(rel), root))
+        .collect::<Result<_, _>>()?;
+    Ok((headers, unit_c))
 }
 
 /// The kind-owned `[unit.oracle] boundary` key (design B opt-in): absent =

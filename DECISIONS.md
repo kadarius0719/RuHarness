@@ -1070,3 +1070,93 @@ wrapper for a by-value struct.
 adversarial code review → fix pass → opt in `read_scalefactors`, re-migrate it on the
 unhinted prompt through the audited hand-off, supersede its old green attempt, re-baseline.
 
+## 2026-09-23 — Design B calibration (§B.R-10): `bench boundary` over the whole suite, zero tokens
+
+**Totals (100 cases):** 30 green, 5 red, 54 not applicable, 11 skipped (not verified / no
+unit), 0 harness errors. No green is vacuous (every green has at least one object the C
+touches partially or fully). One green carries the pointer-field note (the C reads the
+driver's stack through a pointer field: unchecked, disclosed).
+
+**Every red diagnosed by hand — 5 of 5 are real under the rule, 0 false reds:**
+- `read_scalefactors` (hidden organic): `bs` dereferenced at entry; the C never touches it
+  in call 1. The known blind spot, caught.
+- `dequantize_granule` (public organic): `let bs_ref = &mut *bs; … bs_ref.limit` at entry;
+  the C never touches `bs` in call 2. Same class, verified green since M4.
+- `002_echo` (hidden synthetic): the shim loops `for i in 0..argc` and reads `argv[0]`;
+  the C loops from 1 and never touches `argv` when `argc == 1`.
+- `wcscat` (public organic): the shim scans `src` to the NUL before knowing the room in
+  `dst`; the C reads `src` only while `ptr < dst + numElem` and stops at 5 elements in call
+  9 — the classic eager `strlen` over-read of a source that need not be terminated within
+  the room.
+- `hdr_compare` (public organic): the shim builds a 3-byte slice and the logic reads
+  `h1[2]`; the C's `&&` chain short-circuits after `h1[1]` in call 3. **Stance recorded
+  (B.R-10 asked for it):** the per-call footprint stands, with no "size fixed by contract"
+  exception — that contract is exactly what nobody wrote down, `read_scalefactors` is the
+  same shape, and the fix in `ffi.rs` is one lazy read. Practical severity is low
+  (every real MP3 header is 4 bytes); the check reports it, the re-migration decides.
+
+**Not applicable (54), classified:** 33 "no data-pointer parameter" (honest: nothing to
+guard, mostly synthetic units); 15 "the generated call wrapper does not compile" — a
+harness bug, one cause in 14 (a helper symbol defined in `lib.c` but declared in no header:
+the wrapper must declare each symbol from its interface line, which is what the line is
+for) and one more in `crc16` (a PARAMETER named `crc16` shadows the function inside the
+wrapper: bind the real symbol at file scope before parameters come into scope); 4 "the
+prototype of `X` does not compile against the unit's headers" (honest: types that live
+only in `lib.c`, e.g. `collided`'s helpers — the driver redeclares them, the harness
+cannot know); 2 "tracing inactive" — a harness bug: `045_strtok` and `029_strcspn` hand
+their pointer straight to libc and make no load of their own, so their objects have no
+coverage callback to reference; the probe is the canary, the per-object `nm` check is
+wrong (replace it with a refusal of `no_sanitize`/`disable_sanitizer_instrumentation`
+attributes and `#pragma clang attribute` in the unit's sources, M12's actual concern).
+
+The three harness bugs go into the fix pass with the code review's findings, each with a
+regression test; the calibration is re-run afterwards.
+
+## 2026-09-23 — Design B code review (4 lenses, 20 verified findings) and the fix pass
+
+**Review** (workflow: runtime C soundness, Rust orchestration, contracts/replay, tests &
+measurement; every blocker/serious finding handed to an independent verifier). Verdicts:
+all four lenses sound-with-fixes; 19 of 20 verified findings CONFIRMED serious, 1 refuted
+to minor. Every lens independently rediscovered the three calibration bugs. What the review
+found beyond them, all fixed with regression tests:
+- **Runtime.** Relocation skipped every object whose shadow was not 8-aligned — all
+  byte-element parameters — leaving pointers the C stored dangling (RT-2): now at every
+  8-byte offset from the OBJECT start, via `memcpy`, and only where the call changed the
+  bytes (which also removes the false relocation of untouched data, RT-8). A learn-mode
+  fault in a reservation's gap re-faulted until the 120 s timeout writing an unparseable
+  record (RT-3): terminal now, and a second fault on an already-opened object too. A
+  process ending inside a unit call (a candidate calling `exit`) produced `RH-ERROR`, which
+  phase R turned into a harness `Err` — aborting `bench score/check` for every case and
+  leaving the old green on disk (RT-4/R2/C-1): now `RH-EXITED` and a `candidate run failed:
+  …` red; no `TightEnd` maps to `Err` any more. A run making fewer calls than the table ended
+  with a clean `end` (RT-9): now `RH-DIVERGED`. Gap sizing follows B.R-12 (≥ max(1 MiB,
+  size)). RT-1 (re-verify the guard pages) was refuted to minor — the capabilities gate
+  denies every page-reprotecting route before phase R — and implemented anyway as cheap
+  defense in depth (`mach_vm_region` after each call: `RH-TAMPER protection`; the
+  restore-before-return variant is the disclosed residual, like the exception-port one).
+- **Wrapper.** Prototypes from the interface lines (14 corpus units), file-scope binding of
+  the real symbol (`crc16`'s parameter named `crc16`), locals named by parameter index (R6),
+  header paths with `"` or `\` refused (R8), the per-object `nm` rule replaced by a refusal
+  of instrumentation-disabling source (`no_sanitize`, `#pragma clang attribute`, …).
+- **Harness side.** `parse_tight` range-checks every call/object and accepts `exited`
+  (R7); the stale detail names the earlier call's symbol and parameter, never a byte (C-6);
+  compiler stderr is capped on a line/word boundary so no partial path escapes the
+  scrubber (C-10); the migrate judge's `BOUNDARY_EXPLANATION` applies only to the fault and
+  retained-pointer shapes (C-8); a C-side `boundary` failure is a harness error like a red
+  `driver-shape`, with the regression test that would pass without it (C-4/TM-4); the `rt=`
+  digest covers the coverage flags, the measurement policy and the wrapper as rendered for a
+  fixed signature, pinned by a golden (C-9/TM-11); `bench boundary` reports VACUOUS (a green
+  that guarded nothing, kept out of the tally), per-parameter figures with a "no power"
+  flag, and names every widened object (R4/TM-6); a missing case dir is skipped (R9);
+  `verify` and the calibration entry point share one input derivation (R11).
+- **Tests (TM-1/2/3/7, TM-9, RT-5).** The synthetic unit now has a below-window read that
+  only the head layout can catch, a retained pointer, a process exit inside the last call, a
+  run with fewer calls, out-param pointer relocation (the driver dereferences what the C
+  stored), a libc-only object (widened, named), a late red (`differential-driver`) proving
+  the gate where it matters, and one candidate per fail-closed check — signal accounting
+  (a handler installed, used and RESTORED before returning), a Mach exception port, an
+  opened page. 13 integration tests; 8 boundary unit tests; 3 migrate tests.
+
+**Calibration bugs closed** (wrapper prototypes, symbol shadowing, the tracing rule): the
+re-run after the fix pass is recorded in the next entry.
+

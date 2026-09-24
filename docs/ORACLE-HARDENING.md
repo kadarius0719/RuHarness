@@ -293,17 +293,20 @@ B.9).
   dedupes objects within the call by base address, records `arg n param obj:j:off_bytes` (or
   `null` / `pass`), returns `p`. Tight/learn: the table's classification (null / pass / obj) must
   match, else `RH-DIVERGED arg=n:param`; for an object, a fresh reservation `[gap][pages][gap]`
-  (`PROT_NONE`; `gap = clamp(size, 64 KiB, 1 MiB)`, page-rounded) is mapped, the object's bytes
+  (`PROT_NONE`; `gap = max(1 MiB, size)`, page-rounded — B.R-12) is mapped, the object's bytes
   copied in with the window's anchor (its end in tail layouts, its start in head layouts)
   exactly on a page boundary — a page-aligned address ± a multiple of `elem` keeps alignment —
   and only the window's pages opened; the shadow pointer `base' + off` is returned.
 - **`ruharness_ret(p)`** relocates a pointer-typed return value that points into a shadow
   (`[base', base'+size]`) back to the original object.
 - **`ruharness_exit()`** ends the call: (1) integrity (below); (2) relocation — every
-  pointer-sized aligned word in every shadow that points into any shadow of this call is rewritten
-  to the original object (out-params such as `hex2bin`'s `hex_end_p`); (3) copy-back of every
-  shadow whose bytes changed (`memcmp`, so string literals and `const` globals work); (4) the
-  reservations stay mapped `PROT_NONE` for the rest of the run — no address is ever reused.
+  pointer-sized word at an 8-byte offset from the OBJECT start (whatever the shadow's
+  alignment) whose bytes the call changed and whose value points into any shadow of this call
+  is rewritten to the original object (out-params such as `hex2bin`'s `hex_end_p`; relocation
+  is by value — disclosed in B.9); (3) copy-back of every byte the call changed (against a
+  snapshot taken at copy-in, so string literals, `const` globals and writes through an
+  unshadowed alias are left alone); (4) the reservations stay mapped `PROT_NONE` for the rest
+  of the run — no address is ever reused.
 - **Integrity (B.R-1), on every `exit` and once at normal end:** (1) **signal accounting** —
   `getrusage(RUSAGE_SELF).ru_nsignals` is read at `enter`; every signal delivered during the
   call must have been serviced by the runtime's own handler (a candidate that installs its own
@@ -313,23 +316,37 @@ B.9).
   runtime's handler with its flags; (3) `task_get_exception_ports` and
   `thread_get_exception_ports(EXC_MASK_BAD_ACCESS)` must equal what `init` recorded; (4) a
   private `PROT_NONE` canary page, read under `sigsetjmp`, must reach the handler. Any
-  deviation: `RH-TAMPER <signal|handler|exception-port|canary>` and `_exit(97)`. What (1)–(4)
-  cannot see: a Mach exception port (no signal is generated) installed AND removed inside the
-  call — that route exists only through the `mach_msg` family, which the `signal` class
-  denies (B.8); the residual is disclosed in B.9.
+  deviation: `RH-TAMPER <signal|handler|exception-port|canary>` and `_exit(97)`; (5) every
+  reservation of the call is walked with `mach_vm_region`: its closed pages must still be
+  `PROT_NONE` and the mapping must still be the private anonymous one it was created as (an
+  alias made with `vm_remap` changes the share mode or reference count) — `RH-TAMPER
+  protection`. This one is defense in depth, not the soundness claim (RT-1, refuted to
+  minor by its verifier): every page-reprotecting route is already denied to an opted-in
+  unit's candidate by the `mem`/`signal` classes before phase R runs; reproduced anyway — a
+  candidate that opens a closed page and leaves it open is red. What (1)–(5) cannot see: a Mach exception port (no signal is generated) or a page
+  re-protection that is installed AND undone inside the call — those routes exist only
+  through the `mach_msg` family and `mprotect`/`vm_protect`, which the `signal` and `mem`
+  classes deny (B.8); the residual is disclosed in B.9. A process that ends inside a unit
+  call is `RH-EXITED` (exit 97) and a run that makes fewer calls than the table is
+  `RH-DIVERGED` — the candidate's doing, never a harness fault.
 - **Fault handler** (`SA_SIGINFO | SA_ONSTACK`, static alternate stack): a fault inside a
   reservation's range plus gap during a call → tight: `RH-FAULT call=n object=j byte=b` on stderr
   (after a leading newline), `fault n j b` in the out file, `_exit(97)`; learn: `learn n j b`,
-  open the whole object, return. Outside every reservation, or outside a call: restore the default
+  open the whole object, return — unless the byte lies outside the object, which opening
+  cannot satisfy: terminal in every mode (RT-3). A fault in a reservation of an EARLIER call
+  is `stale n m j b` (a retained pointer). Outside every reservation, or outside a call: restore the default
   disposition and return — the process dies by its own signal, exactly as without the runtime.
   Never prints an address.
 - **Measure-mode tracing (`__sanitizer_cov_{load,store}{1,2,4,8,16}`):** inside a call, an
   access inside a located object updates its (call, object) hull; an access in
   `[frame, stack top)` outside every object is recorded once as `foreign n stack` (B.R-11); the
   probe's store outside calls counts the canary (`probe 1`).
-- **Limits:** 65 536 calls, 16 objects per call, 16 MiB per object, 65 536 reservations per run
-  (they are never unmapped); a limit is `RH-ERROR <reason>` and `_exit(96)` — a red C-side
-  check ("not applicable"), never candidate evidence. A reentrant unit call is `RH-ERROR`.
+- **Limits:** 65 536 calls, 16 objects per call, 64 recorded arguments per call, 16 MiB per
+  object, 65 536 reservations per run (they are never unmapped); a limit is `RH-ERROR
+  <reason>` and `_exit(96)` — in a C-side run a red C-side check ("not applicable"); in the
+  Rust run (where the C ran clean under the same table) `candidate run failed: the guard
+  runtime stopped the run (…)`, never a harness error (RT-4). A reentrant unit call is
+  `RH-ERROR`.
 
 ### B.4 The check, phase by phase
 
@@ -383,10 +400,13 @@ accessor closure into `logic` (B.R-13).
 regular file, no symlink, ≤ 16 MiB). Measure:
 `ruharness-guard 1 measure` · `probe <0|1>` · `call <n> <sym>` · `arg <n> <param>
 null|pass|obj:<j>:<off>` · `obj <n> <j> <size> <elem> <lo> <hi>` (byte hull; `0 0` = untouched)
-· `foreign <n> stack` · `end`. Learn: header, `learn <n> <j> <byte>`…, `end`. Tight: header,
-optional `diverged call|arg …`, `fault <n> <j> <byte>` or `tamper <what>`, or `end`. The window
-table the harness writes: `ruharness-windows 1 <calls> <layout>` · `call <n> <sym>` · `arg …` ·
-`obj <n> <j> <size> <elem> <lo> <hi>` (elements) · `end`. Ids dense and in order; every bound
+· `foreign <n>` · `end`. Learn: header, `learn <n> <j> <byte>`…, `end`. Tight: header, then
+exactly one of `end` · `fault <n> <j> <byte>` · `stale <n> <m> <j> <byte>` · `exited <n>` ·
+`tamper <signal|handler|exception-port|canary|protection>` · `diverged call|arg <…>` ·
+`error <reason>`. The window table the harness writes is strictly sequential: `ruharness-windows
+1 <calls> <layout>` · per call `call <n> <sym> <nobj> <nargs>` · `obj <j> <size> <elem> <lo>
+<hi>` × nobj (elements) · `arg <param> <kind> <j> <off>` × nargs (kind 0 null, 1 pass, 2 object;
+`off` in bytes) · `end`. Ids dense and in order; every bound
 checked; names resolved from the harness's own interface parse. A malformed file is a red C-side
 check. (A hostile unit can weaken its own check, never cause a false red — B.9.)
 
@@ -402,23 +422,32 @@ failing ⇒ a typedef'd data pointer; then `(void)sizeof(char[sizeof *p])` compi
 `-Werror=pointer-arith`) ⇒ `elem = sizeof *p`, else 1 ("granularity unchecked").
 
 ```c
-#include <the unit's own headers, as its .c files spell them>
+#include "<every header of the unit's include closure, absolute path>"
 #include "ruharness_guard_internal.h"
+<interface line>;                                            /* per symbol: its prototype */
+static __typeof__(<sym>) *const ruharness_real_<sym> = <sym>; /* bound where no parameter can shadow it */
 <interface line, function renamed ruharness_call_<sym>>
 {
     ruharness_enter(<i>, __builtin_frame_address(0));
-    __typeof__(<p>) rh_<p> = (__typeof__(<p>))ruharness_arg(<k>, (const void *)<p>, sizeof *<p> /* or 1 */);
+    __typeof__(<p>) rh_a<k> = (__typeof__(<p>))ruharness_arg(<k>, (const void *)<p>, sizeof *<p> /* or 1 */);
     …
-    <R> rh_ret = <sym>(<rh_ or plain args>);      /* void: no rh_ret */
-    rh_ret = (<R>)ruharness_ret((void *)rh_ret);    /* pointer returns only */
+    __typeof__(<call>) rh_ret_ = ruharness_real_<sym>(<rh_a<k> or plain args>);   /* void: no rh_ret_ */
+    rh_ret_ = (__typeof__(rh_ret_))ruharness_ret((void *)rh_ret_);             /* pointer returns only */
     ruharness_exit();
-    return rh_ret;
+    return rh_ret_;
 }
 ```
 
 Symbol and parameter names are plain C identifiers by construction (the parse refuses others),
-so nothing else reaches a `-D` argument or the file. The renamed line is the interface line with
-its declarator identifier replaced (byte range from the parse), never re-emitted from parts.
+so nothing else reaches a `-D` argument or the file; a header path with `"` or `\` is refused.
+The prototype comes from the interface line because the corpus's helper symbols are often
+declared in no header (the driver declares them itself — 14 of 100 cases); the file-scope
+binding exists because a parameter may be named like its function (`crc16`'s last one is).
+Locals are named by parameter index so no parameter name can collide with them. The renamed
+line is the interface line with its declarator identifier replaced (byte range from the parse),
+never re-emitted from parts. The compiler classifies what the parse cannot: a baseline probe
+(the prototype with an empty body) must compile, else the headers do not declare the line's
+types and the unit is not applicable.
 
 ### B.7 Ledger, bench, replay
 
@@ -471,10 +500,18 @@ These are policy and defense in depth; the soundness claim is B.R-1's integrity 
   process and can weaken its own check (touch everything, forge the record, fork a writer)
   exactly as it can fail its own vectors under §A; no transport change closes that. Against a
   test-aware candidate the guarantee is B.R-1's tamper detection (signal accounting, handler,
-  exception ports, canary), not the capability classes; windows are not secret. Residual: a
-  candidate that reaches an exception-port setter through a route no class lists, and removes
-  the port before returning, is not detected — the known routes (`mach_msg` and the traps) are
-  denied lexically, and inline assembly is banned. Syscalls on closed pages return `EFAULT` rather than faulting: units
+  exception ports, canary, page protections), not the capability classes; windows are not
+  secret. Residual: a candidate that reaches an exception-port setter or `mprotect` through a
+  route no class lists, and undoes it before returning, is not detected (reproduced for
+  `mprotect`: leave-open is `RH-TAMPER protection`, restore-before-return is green) — the
+  known routes (`mach_msg`, the traps, `mprotect`/`vm_protect`) are denied lexically, and
+  inline assembly is banned.
+- **Relocation is by value:** a pointer-sized datum the call wrote that happens to equal a
+  shadow address is relocated (mmap addresses under ASLR make this negligible for organic
+  code; a test-aware candidate gains nothing it could not get by storing a real pointer).
+- **ASan's object attribution:** a pointer within 64 bytes before a global may be attributed
+  to that neighbouring global; such an argument is passed through unshadowed (counted, never a
+  false red). Syscalls on closed pages return `EFAULT` rather than faulting: units
   whose C passes caller buffers to `read`/`write`/`recv`-family calls are not applicable.
 - **Unsupported:** threads, a unit installing its own SIGSEGV/SIGBUS handler, reentrant unit
   calls (callbacks into unit symbols), variadic or unnamed-parameter interfaces, non-macOS
@@ -624,9 +661,14 @@ with `elem` from `sizeof *p` where the pointee is complete, else 1 and "granular
 
 **B.R-10 Positive controls and calibration (M6, M7 serious; S4 minor).** B.1-4's "one-change fix
 passed" came from the whole-run prototype; under the per-call rule that fix is RED at `bs` (M7,
-reproduced): it still reads `bs->pos`/`limit` in calls where the C never touches `bs`. The four
-`read_scalefactors` variants become committed oracle regression fixtures: verified (red at
-`scfcod`), scfcod-lazy (red at `bs`), fully lazy (green in both layouts), over-read of `buf` (red).
+reproduced): it still reads `bs->pos`/`limit` in calls where the C never touches `bs`. The
+`read_scalefactors` variants' outcomes under the decided mechanism (calibration, 2026-09-23):
+verified → red at `bs` in call 1 (it dereferences `bs` before touching `scfcod`), scfcod-lazy →
+red at `bs`, fully lazy → green in both layouts, the `buf` over-read → green with the
+pointer-field note (the disclosed limit). The committed positive controls are the synthetic
+unit of `crates/harness-oracle/tests/boundary.rs`, which reproduces each outcome class; the
+eager-read stance was recorded in DECISIONS.md ("Design B calibration") after the first run,
+not before — the reds it governs (`hdr_compare`, `wcscat`) stand as the rule says.
 Calibration is stratified, not hidden-only: the 14 released-hidden pointer units plus every
 public organic unit whose verified `ffi.rs` builds a fixed-length or field-derived slice
 (`hdr_compare`, `hdr_bitrate`, `read_side_info`, `dequantize_granule`, `bin2hex`, `hex2bin`,
