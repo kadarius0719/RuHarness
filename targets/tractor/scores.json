@@ -995,7 +995,7 @@
         ],
         "driver_turns": 1,
         "migrate_turns": 1,
-        "migrate_outcome": "red",
+        "migrate_outcome": "green",
         "candidate_attempt": ""
       },
       "inputs": {
@@ -1367,7 +1367,7 @@
         ],
         "driver_turns": 1,
         "migrate_turns": null,
-        "migrate_outcome": "red",
+        "migrate_outcome": "mixed",
         "candidate_attempt": ""
       },
       "inputs": {
@@ -1979,7 +1979,7 @@
         ],
         "driver_turns": 1,
         "migrate_turns": 1,
-        "migrate_outcome": "red",
+        "migrate_outcome": "green",
         "candidate_attempt": ""
       },
       "inputs": {
@@ -2736,7 +2736,7 @@
         ],
         "driver_turns": 1,
         "migrate_turns": 1,
-        "migrate_outcome": "red",
+        "migrate_outcome": "green",
         "candidate_attempt": ""
       },
       "inputs": {
@@ -4549,7 +4549,7 @@
         ],
         "driver_turns": 1,
         "migrate_turns": 1,
-        "migrate_outcome": "red",
+        "migrate_outcome": "green",
         "candidate_attempt": ""
       },
       "inputs": {
@@ -7451,7 +7451,7 @@
         ],
         "driver_turns": 1,
         "migrate_turns": 1,
-        "migrate_outcome": "red",
+        "migrate_outcome": "green",
         "candidate_attempt": ""
       },
       "inputs": {
