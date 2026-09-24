@@ -172,7 +172,7 @@ global). It passes `--no-promote` on every `migrate` and never `--promote`, and
 | `e` hand edit | `--json override <unit> <tmp>/stage --target=<root> [--note=<text>]` | the selected crate is in the executor layout; `e` copies its `src/logic.rs` + `src/ffi.rs` (regular files ≤ 1 MiB) into a fresh private (0700) `<tmp>/edit/`, hashes them, suspends the TUI, runs `sh -c 'exec <editor> "$@"' sh <tmp>/edit/logic.rs <tmp>/edit/ffi.rs` where `<editor>` is `$VISUAL`, else `$EDITOR`, else `vi`, as shell text (git's rule: `EDITOR="code --wait"` and quoted paths work; SIGINT belongs to the editor meanwhile, TERM/HUP are forwarded to it and the cockpit dies by them only once it is gone), resumes; unchanged hashes → "no change; nothing to record", no prompt; an editor exit ≠ 0 aborts, but KEEPS changed files and names where; otherwise EXACTLY the two files are copied into a new `<tmp>/stage/src/` (editor artefacts — `*~`, `.*.swp`, `#*#` — never reach DIR, §R2 9), an optional note (≤ 400 bytes, empty = none, the CLI's rules checked at the prompt) is typed in a one-line input, passed attached as ONE argv element, and the argv shown is the one spawned. **a hand edit is never lost**: `<tmp>` is removed only once the override RECORDED the edit (its `attempt` event), when it changed nothing and the editor left nothing beside the files, or on an explicit `D` at its armed prompt; `n`/`Esc` keep it, a refused, interrupted or unstartable override keeps it, an editor that exits ≠ 0 after saving keeps it, and what an editor leaves on a hangup (a swap or `.save` file) is kept; `E` offers the latest kept edit again (its note, then its command); on the way out (quit, error, panic, signal) every kept edit's path is printed; keys typed into the terminal while the editor ran are dropped; disabled while a command runs |
 | `r` retry | the argv of the attempt's own run shape (`migrate … --no-promote --retry`, plus `--from=`/`--steer=` for a steer attempt) | the attempt is finished |
 | `R` resume | the stored argv of the run that ended `awaiting`, unchanged | that attempt is still `in-progress` in the snapshot and its awaited response file exists (non-empty and parses as a JSON object); stays available after a failed resume; every outstanding hand-off is tracked (one per attempt): `R` resumes the shown attempt's, else the newest whose response is present |
-| `x` cancel | — (`/bin/kill -INT <child pid>`) | the child is running (`try_wait` is `Ok(None)`, so a reused pid is never signalled) |
+| `x` cancel | — (`/bin/kill -INT -- -<child pgid>`: the child leads its group) | the child is running (`try_wait` is `Ok(None)`, so a reused pid is never signalled) |
 
 **Resume.** The watcher never spawns: when the awaited response file exists it marks the run
 panel "response present for a-…"; `R` asks and re-spawns the stored argv (never the event's
@@ -190,7 +190,7 @@ dies holding the lock line, and `kill -0` reads an unreaped zombie as alive). "I
 comes from `ExitStatus::signal()`, not from the event.
 
 **The TUI's own signals.** It registers SIGINT, SIGTERM and SIGHUP (signal-hook): if the
-child is running, `/bin/kill -INT <child>` and wait ≤ 1 s (the CLI's 250 ms courtesy budget
+child is running, `/bin/kill -INT -- -<child pgid>` (its group) and wait ≤ 1 s (the CLI's 250 ms courtesy budget
 plus the group kill); restore the terminal best-effort (leave the alternate screen, disable
 raw mode); die by the signal. A panic hook restores the terminal before printing. A
 SIGKILLed TUI leaves the harness running to completion (timeouts enforced, ledger

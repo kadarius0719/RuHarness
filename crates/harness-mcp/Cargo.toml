@@ -1,0 +1,18 @@
+[package]
+name = "harness-mcp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A stdio MCP server: the ledger as structured data and the labelled review acts, for an agent runtime"
+
+[[bin]]
+name = "harness-mcp"
+path = "src/main.rs"
+
+[dependencies]
+harness-core.workspace = true
+# The read model, the events reader and the child process — no terminal crates.
+harness-tui = { path = "../harness-tui", default-features = false }
+serde_json.workspace = true
+signal-hook.workspace = true

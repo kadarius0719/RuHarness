@@ -26,6 +26,43 @@ pub const STEER_KIND: &str = "steer";
 /// `src/logic.rs` and `src/ffi.rs` — so the ledger always holds what its
 /// `response_hash` hashes.
 pub const HUMAN_EDIT_DIR: &str = "edit";
+/// Longest steer note (docs/TUI-DESIGN.md §5.1).
+pub const MAX_STEER_NOTE_BYTES: usize = 2000;
+/// Longest human-attempt note (docs/TUI-DESIGN.md §5.2).
+pub const MAX_HUMAN_NOTE_BYTES: usize = 400;
+
+/// Why a note cannot travel into a prompt or a record, or `None`: empty
+/// (or only whitespace), over `max` bytes, a control character other than
+/// `\n`/`\t` (those only in a `multiline` note), or a line that looks like
+/// a prompt section header (`[WORDS]`), which would confuse the prompt's
+/// section structure. The ONE rule: `harness_llm::validate_note` and every
+/// client (harness-mcp) check notes with it.
+pub fn note_problem(note: &str, max: usize, multiline: bool) -> Option<String> {
+    if note.trim().is_empty() {
+        return Some("is empty".into());
+    }
+    if note.len() > max {
+        return Some(format!("is longer than {max} bytes"));
+    }
+    if note
+        .chars()
+        .any(|c| c.is_control() && !(multiline && (c == '\n' || c == '\t')))
+    {
+        return Some("contains a control character".into());
+    }
+    if note.lines().any(|line| {
+        let t = line.trim();
+        t.len() >= 3
+            && t.starts_with('[')
+            && t.ends_with(']')
+            && t[1..t.len() - 1]
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == ' ' || c == '_')
+    }) {
+        return Some("has a line that looks like a prompt section header ([WORDS])".into());
+    }
+    None
+}
 
 /// One executor turn. Token fields are nullable: `None` = unknown (external
 /// hand-off, or a provider that reports no usage) — never `0`.

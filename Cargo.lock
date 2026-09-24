@@ -443,6 +443,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-mcp"
+version = "0.1.0"
+dependencies = [
+ "harness-core",
+ "harness-tui",
+ "serde_json",
+ "signal-hook 0.4.4",
+]
+
+[[package]]
 name = "harness-oracle"
 version = "0.1.0"
 dependencies = [

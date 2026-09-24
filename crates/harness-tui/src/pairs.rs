@@ -105,6 +105,9 @@ pub fn pairs(
         .collect();
     let mut ordered: Vec<&String> = unit.symbols.iter().filter(|s| !s.contains("::")).collect();
     ordered.extend(unit.symbols.iter().filter(|s| s.contains("::")));
+    // Each C file is hash-checked and read once per call, not once per
+    // symbol (a unit of many functions in one big file).
+    let mut texts: BTreeMap<String, Option<String>> = BTreeMap::new();
     ordered
         .into_iter()
         .map(|symbol| {
@@ -120,7 +123,7 @@ pub fn pairs(
             FunctionPair {
                 symbol: symbol.clone(),
                 public,
-                c: c_side(root, facts, symbol),
+                c: c_side(root, facts, symbol, &mut texts),
                 rust,
             }
         })
@@ -135,22 +138,29 @@ fn read_bounded(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-fn c_side(root: &Path, facts: &Facts, symbol: &str) -> CSide {
+/// `texts` caches each file's text — `None` when the file no longer has
+/// the hash the scan recorded, or cannot be read.
+fn c_side(
+    root: &Path,
+    facts: &Facts,
+    symbol: &str,
+    texts: &mut BTreeMap<String, Option<String>>,
+) -> CSide {
     let Some(sym) = facts.symbols.iter().find(|s| s.name == symbol) else {
         return CSide::NotInFacts;
     };
     let stale = || CSide::StaleFacts {
         file: sym.file.clone(),
     };
-    let Some(record) = facts.files.iter().find(|f| f.path == sym.file) else {
-        return stale();
-    };
-    let path = root.join(&sym.file);
-    match hash::file_hash(&path) {
-        Ok(now) if now == record.hash => {}
-        _ => return stale(),
-    }
-    let Some(text) = read_bounded(&path) else {
+    let text = texts.entry(sym.file.clone()).or_insert_with(|| {
+        let record = facts.files.iter().find(|f| f.path == sym.file)?;
+        let path = root.join(&sym.file);
+        match hash::file_hash(&path) {
+            Ok(now) if now == record.hash => read_bounded(&path),
+            _ => None,
+        }
+    });
+    let Some(text) = text.as_deref() else {
         return stale();
     };
     let lines: Vec<&str> = text.lines().collect();

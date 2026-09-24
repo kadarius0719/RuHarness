@@ -1581,3 +1581,86 @@ After trying the cockpit, the user set its direction (recorded in full in docs/T
 - **Order proposed:** (1) the wrapper UX design → review → build on today's engine;
   (2) harness-mcp, adding the requester label for chat-requested migrations (MCP-DESIGN §7);
   (3) the chat pane after its spike, plus the "migrate this" skill.
+## 2026-09-24 — harness-mcp: the stdio MCP server (MCP-DESIGN, built, reviewed three times)
+
+`crates/harness-mcp` (one binary; harness-core, harness-tui without its terminal front end,
+serde_json, signal-hook — **zero new crates**, 51 packages in its tree, all already locked; a
+default workspace member), built against the reviewed design; then a four-lens adversarial code
+review (protocol & process, trust, contract, tests: 33 confirmed, 0 refuted — docs/MCP-DESIGN.md
+§R2), a fix pass, a verification of that fix pass by three checkers (20 more confirmed: 3
+partial fixes, 5 test gaps, 12 new — §R3), a second fix pass, a check of the second pass (8
+more, 2 medium — §R4) and a third, short pass. Every rule-guarding fix of the three passes was
+mutation-checked. The findings shrank each round (33 → 20 → 8), and none after the first
+touched the central rule.
+- **Protocol**: hand-rolled newline-delimited JSON-RPC 2.0, MCP 2025-06-18 always; 1 MiB lines
+  read without buffering past the cap; batches `-32600`; unknown tool / bad arguments `-32602`
+  from ONE schema definition that is both `inputSchema` and validator; loose `outputSchema`s (a
+  client validates `structuredContent`, refusals included). One act in flight, `busy` refusals,
+  reads answered meanwhile, `notifications/cancelled` → the act's process group interrupted and
+  no response, progress only with a token (closed values only; a 30 s heartbeat), shutdown on
+  EOF / stdout failure / SIGINT-TERM-HUP (dies by the signal) / a panic (non-blocking hook, exit).
+- **Tools**: `harness_status`, `harness_unit` (+ `symbol`, every attempt id), `harness_steer`,
+  `harness_answer` (new in the fix pass), `harness_retry` (steer attempts only; an `external` one
+  names its model), `harness_promote`; `harness_status` pages its units with `after`.
+- **Decision (the fix pass's one design change): `harness_answer`.** The review showed the
+  design's file-based answering needed `traces/` writable, so a chat agent could answer a pending
+  BLIND hand-off by file and the CLI would record it as unassisted pipeline output (TRUST-1,
+  CONTRACT-1) — and a retry refusal even invited it. Now the server answers only the hand-offs
+  its own acts posed (remembered per target and attempt: response file, argv, answering model),
+  only when the caller names the attempt's model (a name check, stated as such), writing the
+  response atomically (temp + hard link, never over one) with token counts 0 (a guessed count
+  below the prompt size voids the turn). The recommended deny list closes all of `migration/**`
+  to the runtime's file tools; pending blind hand-offs (migrate AND driver) are counted in the
+  status head, flagged on their unit and refused by every tool; `harness_retry` refuses every
+  unseeded attempt, of any provider (TRUST-7: a live retry would record fresh pipeline output
+  the chat selected). A shell can still write any file — the remaining, stated edge; the README
+  also says not to serve the benchmark's case trees to chat (one holds a pending blind hand-off).
+- **Other decisions**: a JSON value is plain only in its closed set or the harness's exact
+  attempt-id shape (unit ids, profile names, check names wrapped — TRUST-4), except the values
+  `answer_with` hands back (a model name, an attempt id), plain in their shape (VC-2); a preflight
+  before every read AND act of every file the read model reads or hashes (no symlinked ledger
+  files — a TOML parse error quoted a linked `~/.env` line —, paths that stay inside the target,
+  regular files — a FIFO facts path hung the server —, caps: records and verdicts 1 MiB,
+  facts/plan/drivers/sources 64 MiB (a deliberate deviation from the reviewed 1 MiB: they grow
+  with the project), crate trees 32 MiB, 256 MiB held, 4 GiB hashed per read); a 48 KiB result
+  budget written outcome first (Claude Code passes 100 000 characters / 25k tokens of text to the
+  model and ignores `structuredContent`), oversized items skipped, failed checks before passes,
+  attempt ids last; read WORK bounded as well as bytes (≤ 50 000 facts files, units × facts ≤ 50
+  million, plan bytes × units ≤ 4 GiB, 4 GiB hashed — checked after the facts pass too), with
+  `Facts::include_closure` indexed in harness-core (linear, the same result) and `pairs` reading
+  each C file once per call in harness-tui;
+  `spawn::interrupt` signals the child's process GROUP (harness-tui's library, so the cockpit
+  too), reader threads via `Builder` (never a panic under the slot lock); the note rule moved into
+  `harness_core::attempts::note_problem` (harness-llm's `validate_note` delegates, byte-identical)
+  so the server checks notes with the CLI's own function.
+- **Relation to the direction change recorded in parallel this session** (the entry above):
+  this session ran the kickoff it was given — harness-mcp before the wrapper UX. The server is
+  the chat pane's future tool surface as built; its rule (what chat contributes is labelled
+  Steered, never scored) is the direction's "provenance stays honest". Still to add for "migrate
+  this" from chat: the requester label (MCP-DESIGN §7) — this server poses no fresh translation
+  until a ledger label records who asked.
+- **Revisit when**: a real target's read needs more than 4 GiB of hashing or blocks the loop
+  noticeably → reads on a worker thread; a client sends no progress token for long acts → an
+  async run-id shape (§7); a ledger label records the requester → a fresh-translate tool for
+  live providers (§7).
+- **What the tests found**: the e2e's first spinning-driver plan failed on the oracle's
+  driver-shape gate (a driver may not call `access`), so the spin moved to zopfli's own `main`,
+  which the whole-program check runs (`whole_c`/`whole_mixed`) outside u001's binding; the first
+  e2e promote was refused because zopfli's u001 is already verified (`replace`); a shutdown test
+  raced the fake's `trap` under parallel load (it now waits for the fake's first event). A failed
+  mutation run left a fake spinner running — found by a checker, killed, and the in-process tests
+  now kill their fakes' groups (and remove their temp dirs) on drop; a test the second pass
+  added waited for "any progress" while a 100 ms heartbeat could come first, so under the
+  replay's load its fake was interrupted before its `trap` existed — it now waits for the fake's
+  own event.
+- **Mutation checks**: first pass 38 reverts — 34 killed, the 4 survivors showed tests that
+  could not see their rule (a colliding file name, a fake silent after SIGINT, spoils the loaders
+  reject anyway), strengthened → 38/38. Second pass 18/18, third pass 7/7. Not mutation-covered
+  (stated): the atomicity of the response write, `Builder`'s error path and the non-blocking
+  panic hook (no way to induce them in a test), and the retry's answering model taken from the
+  caller (equal to the record's by the check before it).
+- **Gates**: fmt, clippy `-D warnings` (workspace, all targets), `cargo test --workspace` 611
+  passed (harness-mcp: 61 unit, 4 protocol, 1 end to end). `bench check --suite targets/tractor
+  --replay --jobs 6` at the start of the session and again on the final code: replay `198
+  reproduce (1 conformant, 197 drifted), 2 expected divergence(s), 0 skipped, 0 problem(s)`,
+  `bench check: OK — no regression` — identical.

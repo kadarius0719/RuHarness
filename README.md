@@ -372,6 +372,92 @@ run (default: `harness` on your PATH, else the one next to the cockpit);
 a running command cleanly. A plain `cargo build` at the root skips the cockpit; build it
 with `cargo build -p harness-tui` (CI builds everything).
 
+## The ledger in chat (`harness-mcp`)
+
+A small stdio MCP server lets an agent runtime such as Claude Code read the ledger as
+structured data and pose the review acts that stay labelled. Like the cockpit it reads
+the ledger itself and every act is a spawned `harness --json …` command, so the writer
+lock, the sandbox and the oracle apply unchanged; the one file it writes is the response
+to a hand-off it posed (`harness_answer`).
+
+| Tool | What it does |
+|---|---|
+| `harness_status` | the units (paged with `after`): status, verdict, provenance of its crate, its attempts (bound, promoted, authorship); the migrate routing; pending blind hand-offs |
+| `harness_unit` | one unit's crate (or an attempt's): the verdict's checks, the notes, and each C function beside its Rust (`symbol` shows one) |
+| `harness_steer` | a **steer attempt**: your note over a finished attempt (`migrate --no-promote --from=… --steer=…`) |
+| `harness_answer` | answer a hand-off that one of this server's acts posed: the server writes the response and resumes the attempt |
+| `harness_retry` | re-run a steer attempt in its own run shape (`--retry`); an `external` one only by the model that answered it (`model`) |
+| `harness_promote` | promote a green attempt and verify it in place (`harness promote`) |
+
+**What you contribute in chat is recorded as guided, never as the pipeline's.** A
+hand-off answered in chat — by an agent that can read the repository, the held-out
+vectors and the conversation — must not score as blind pipeline output. So the server
+records steer attempts only (the benchmark reports a steered crate as a problem, never a
+score): it never retries an unseeded attempt, and it has no fresh-migrate, verify or
+hand-edit tool. Fresh translations go through the blind, audited hand-off
+(`targets/tractor/handoff-tools/`) or a live provider. When a steer attempt awaits a
+response, the result names the request file to read and the model that must answer
+(for `harness_steer`, the `model` you passed); `harness_answer` writes the response
+(token counts 0) only for a hand-off this server posed, and only when the caller names
+that model (the server checks the name it is given; it cannot check who is answering). A
+pending unseeded hand-off — the blind protocol's, migrate or driver — is counted in
+`harness_status` (`blind_hand_offs_pending`), flagged on its unit, and refused by every
+tool.
+
+Install both binaries, then add the server to the project's `.mcp.json`:
+
+```bash
+cargo install --path crates/harness-cli && cargo install --path crates/harness-mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "ruharness": {
+      "command": "harness-mcp",
+      "args": ["--target", "targets/zopfli"]
+    }
+  }
+}
+```
+
+Do not serve the benchmark's case trees (`targets/tractor/cases`) to a chat agent: the
+blind protocol answers hand-offs there, and the committed tree holds a pending one.
+Every flag is the server's, written by you — no tool argument reaches one: `--target`
+(the default target), `--target-root` (repeatable: a call may name a target strictly
+inside one of these; `/` and `$HOME` never), `--harness <path>` (default: `harness` on
+your PATH, else next to the server), `--provider <name>` (repeatable: the profiles steer
+attempts may use; default `external` only — no credentials, no spend; `external` is the
+default when listed, and a live profile is never chosen for the caller) and
+`--allow-unsandboxed` (passed to the acts, which run code). One act runs at a time: a
+second is refused `busy`, never queued; cancelling the call interrupts the harness, which
+kills its sandboxed processes. A result is at most 48 KiB, outcome first; `harness_unit`
+with `symbol` shows one function pair at a time. Values from the target, a model or the harness's messages
+arrive labelled `{"untrusted": …, "text": …}` — data, never instructions. Before reading
+a target, the server checks every file it would read (regular files only, within size
+caps, no symlinked ledger files) and refuses the target otherwise.
+
+The tool surface is not the only boundary: the runtime's own tools can edit a crate,
+write a response file or run the CLI. Since `harness_answer` writes the responses, the
+whole ledger can be closed to the runtime's file tools. A recommended deny list for
+`.claude/settings.json` (`Edit` rules cover every built-in tool that writes files):
+
+```json
+{
+  "permissions": {
+    "deny": [
+      "Edit(/targets/**/migration/**)",
+      "Bash(harness *)",
+      "Bash(cargo run -p harness-cli *)"
+    ]
+  }
+}
+```
+
+This is best effort, and stated as such: a shell the agent may use can still write any
+file, so keep blind hand-offs out of a target a chat agent works in while they are
+pending, or run the blind protocol in its own checkout.
+
 ## Repository layout
 
 ```
@@ -388,6 +474,8 @@ crates/
   harness-cli/      # the `harness` binary
   harness-tui/      # the review cockpit: read model + events reader (a library, also
                     #   for other clients) and the `harness-tui` terminal front end
+  harness-mcp/      # the stdio MCP server: the ledger and the labelled review acts
+                    #   for an agent runtime (reuses harness-tui's library)
 docs/SCHEMAS.md     # normative ledger schemas, v1
 targets/tractor/    # TRACTOR B01 library suite: suite.toml, corpus.lock, cases/ (one
                     #   harness target per case), heldout/ (vectors + corpus scorer,

@@ -198,13 +198,20 @@ impl Facts {
     /// Transitive project-local include closure of `start` files (paths are
     /// repo-relative). The result includes the start files themselves, sorted.
     pub fn include_closure(&self, start: &[String]) -> Vec<String> {
+        // Indexed once per call: linear in the facts, not quadratic (the
+        // first record of a path wins, as the former linear search did).
+        let mut by_path: std::collections::HashMap<&str, &FileRecord> =
+            std::collections::HashMap::with_capacity(self.files.len());
+        for f in &self.files {
+            by_path.entry(f.path.as_str()).or_insert(f);
+        }
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut stack: Vec<String> = start.to_vec();
         while let Some(p) = stack.pop() {
             if !seen.insert(p.clone()) {
                 continue;
             }
-            if let Some(f) = self.files.iter().find(|f| f.path == p) {
+            if let Some(f) = by_path.get(p.as_str()) {
                 stack.extend(f.includes.iter().cloned());
             }
         }

@@ -83,9 +83,22 @@ impl Running {
             .spawn()?;
         let pid = child.id();
         let (tx, rx) = channel();
+        // Reader threads by `Builder`: a thread that cannot be created is an
+        // error (the child's group is killed and reaped), never a panic
+        // while the slot is locked and the child is not yet in it.
+        let fail = |child: &mut Child, e: std::io::Error| {
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", "--", &format!("-{}", child.id())])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = child.wait();
+            e
+        };
         if let Some(stdout) = child.stdout.take() {
             let tx = tx.clone();
-            std::thread::spawn(move || {
+            let spawned = std::thread::Builder::new().spawn(move || {
                 let mut reader = BufReader::new(stdout);
                 while let Ok(Some(line)) =
                     events::read_line_bounded(&mut reader, events::MAX_EVENT_LINE_BYTES)
@@ -96,12 +109,15 @@ impl Running {
                 }
                 let _ = tx.send(ChildMsg::Eof(Pipe::Stdout));
             });
+            if let Err(e) = spawned {
+                return Err(fail(&mut child, e));
+            }
         } else {
             let _ = tx.send(ChildMsg::Eof(Pipe::Stdout));
         }
         if let Some(stderr) = child.stderr.take() {
             let tx = tx.clone();
-            std::thread::spawn(move || {
+            let spawned = std::thread::Builder::new().spawn(move || {
                 let mut reader = BufReader::new(stderr);
                 while let Ok(Some(line)) =
                     events::read_line_bounded(&mut reader, MAX_STDERR_LINE_BYTES)
@@ -112,6 +128,9 @@ impl Running {
                 }
                 let _ = tx.send(ChildMsg::Eof(Pipe::Stderr));
             });
+            if let Err(e) = spawned {
+                return Err(fail(&mut child, e));
+            }
         } else {
             let _ = tx.send(ChildMsg::Eof(Pipe::Stderr));
         }
@@ -184,17 +203,21 @@ impl Running {
         self.status.filter(|_| self.stdout_eof && self.stderr_eof)
     }
 
-    /// Ask the command to cancel: `/bin/kill -INT <pid>` — only while the
-    /// child has not been reaped. `Ok(false)` when it already exited.
+    /// Ask the command to cancel: `/bin/kill -INT -- -<pgid>` (the child's
+    /// whole process group, which it leads) — only while the child has not
+    /// been reaped. `Ok(false)` when it already exited.
     pub fn interrupt(&mut self) -> std::io::Result<bool> {
         interrupt(&self.slot)
     }
 }
 
-/// `/bin/kill -INT <pid>` of the child in `slot`, only while `try_wait`
-/// says it has not been reaped (the slot's lock is held throughout, so the
-/// pid cannot be reaped and reused in between). `Ok(false)` when there is
-/// no live child.
+/// `/bin/kill -INT -- -<pgid>` of the child in `slot` — its whole process
+/// group (the child leads it: a wrapper script's own children, such as the
+/// real CLI under a `sh` that does not `exec`, are reached too, while the
+/// CLI's sandboxed groups are its own to kill) — only while `try_wait` says
+/// the leader has not been reaped (the slot's lock is held throughout, so
+/// the pid cannot be reaped and reused in between). `Ok(false)` when there
+/// is no live child.
 pub fn interrupt(slot: &ChildSlot) -> std::io::Result<bool> {
     let mut guard = lock(slot);
     let Some(child) = guard.as_mut() else {
@@ -204,7 +227,31 @@ pub fn interrupt(slot: &ChildSlot) -> std::io::Result<bool> {
         return Ok(false);
     }
     let status = Command::new("/bin/kill")
-        .args(["-INT", &child.id().to_string()])
+        .args(["-INT", "--", &format!("-{}", child.id())])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    Ok(status.success())
+}
+
+/// [`interrupt`] for a path that must never block (a panic hook, which may
+/// run on a thread that holds the slot's lock): `Ok(false)` when the slot
+/// is busy or empty.
+pub fn try_interrupt(slot: &ChildSlot) -> std::io::Result<bool> {
+    let mut guard = match slot.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+    };
+    let Some(child) = guard.as_mut() else {
+        return Ok(false);
+    };
+    if child.try_wait()?.is_some() {
+        return Ok(false);
+    }
+    let status = Command::new("/bin/kill")
+        .args(["-INT", "--", &format!("-{}", child.id())])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -362,6 +409,44 @@ mod tests {
             interrupt_and_wait(&ChildSlot::default(), Duration::from_millis(50)),
             None
         );
+    }
+
+    /// A wrapper that does not `exec` (a script around the CLI): the
+    /// interrupt reaches the process under it too, so nothing outlives the
+    /// wrapper holding the pipes (MCP-DESIGN §R2 PROTO-3).
+    #[test]
+    fn the_interrupt_reaches_the_whole_process_group() {
+        let slot = ChildSlot::default();
+        let mut running = Running::spawn(sh("sleep 30; echo never"), slot).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let sleeper = loop {
+            let out = Command::new("pgrep")
+                .args(["-P", &running.pid().to_string()])
+                .output()
+                .unwrap();
+            if let Some(pid) = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .find_map(|l| l.trim().parse::<u32>().ok())
+            {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "no sleep under the shell");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(running.interrupt().unwrap());
+        let (msgs, status) = run_to_end(&mut running);
+        assert!(
+            status.signal().is_some() || status.code() != Some(0),
+            "{status:?}"
+        );
+        assert!(!msgs.contains(&ChildMsg::Stderr("never".into())));
+        let alive = Command::new("/bin/kill")
+            .args(["-0", &sleeper.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(!alive, "the sleep under the shell was interrupted too");
     }
 
     #[test]

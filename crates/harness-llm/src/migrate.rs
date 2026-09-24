@@ -207,10 +207,7 @@ const GREEN_SEED_EXPLANATION: &str = "\
 the candidate above passed every check of the oracle; the [GUIDANCE] asks for a change anyway, \
 and the revised candidate must still pass every check";
 
-/// Longest steer note (docs/TUI-DESIGN.md §5.1).
-pub const MAX_STEER_NOTE_BYTES: usize = 2000;
-/// Longest human-attempt note (docs/TUI-DESIGN.md §5.2).
-pub const MAX_HUMAN_NOTE_BYTES: usize = 400;
+pub use harness_core::attempts::{MAX_HUMAN_NOTE_BYTES, MAX_STEER_NOTE_BYTES};
 
 /// The migrate stage's texts and names (frozen: see [`SYSTEM_PROMPT`]).
 static MIGRATE_TEXTS: StageTexts = StageTexts {
@@ -276,36 +273,15 @@ pub struct SteerArgs<'a> {
     pub note: &'a str,
 }
 
-/// Refuse a note that cannot travel into a prompt: empty or over `max`
-/// bytes, a control character other than `\n`/`\t`, or (`multiline`
-/// notes) a line that looks like a prompt section header (`[WORDS]`), which
-/// would confuse the prompt's section structure.
+/// Refuse a note that cannot travel into a prompt
+/// ([`harness_core::attempts::note_problem`]: empty or over `max` bytes, a
+/// control character other than `\n`/`\t` in a `multiline` note, or a line
+/// that looks like a prompt section header).
 pub fn validate_note(note: &str, max: usize, multiline: bool) -> Result<(), Error> {
-    let refuse = |why: &str| Err(Error::Invariant(format!("the note {why}")));
-    if note.trim().is_empty() {
-        return refuse("is empty");
+    match harness_core::attempts::note_problem(note, max, multiline) {
+        Some(why) => Err(Error::Invariant(format!("the note {why}"))),
+        None => Ok(()),
     }
-    if note.len() > max {
-        return refuse(&format!("is longer than {max} bytes"));
-    }
-    if note
-        .chars()
-        .any(|c| c.is_control() && !(multiline && (c == '\n' || c == '\t')))
-    {
-        return refuse("contains a control character");
-    }
-    if note.lines().any(|line| {
-        let t = line.trim();
-        t.len() >= 3
-            && t.starts_with('[')
-            && t.ends_with(']')
-            && t[1..t.len() - 1]
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c == ' ' || c == '_')
-    }) {
-        return refuse("has a line that looks like a prompt section header ([WORDS])");
-    }
-    Ok(())
 }
 
 /// What one executor run produced.
