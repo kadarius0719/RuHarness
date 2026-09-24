@@ -130,7 +130,7 @@ impl Confinement<'_> {
         env.extend(extras.env.iter().copied());
         let out = self
             .runner
-            .built_with_env(bin, args, profile.as_deref(), &env);
+            .built_with_env(bin, args, profile.as_deref(), &env)?;
         let collected = extras
             .collect
             .map(|(name, cap)| collect(&tmp.path().join(name), cap));
@@ -392,6 +392,7 @@ int main(int argc, char **argv) {
         let r = runner(root);
         let open = r
             .built_with_env(&bin, &args, None, &[])
+            .expect("not interrupted")
             .expect("unconfined probe runs");
         let open = String::from_utf8_lossy(&open.stdout);
         assert!(

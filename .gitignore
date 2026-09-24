@@ -1,5 +1,6 @@
 target/
 /targets/zopfli/migration/build/
+/targets/zopfli/migration/.lock
 /targets/zopfli/migration/observer/traces/
 /targets/zopfli/migration/units/*/traces/
 /targets/zopfli/migration/units/*/attempts/*/candidate/target/
@@ -16,6 +17,7 @@ targets/tractor/.bench/
 # public (MIT), and committed traces make `bench check --replay` reproducible
 # from a cold checkout (DECISIONS.md, M4).
 /targets/tractor/cases/**/migration/build/
+/targets/tractor/cases/**/migration/.lock
 /targets/tractor/cases/**/migration/units/*/.promote-*/
 /targets/tractor/cases/**/migration/units/*/.*.prev/
 /targets/tractor/cases/**/migration/units/*/.replay-*/

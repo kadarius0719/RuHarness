@@ -53,6 +53,57 @@ const POLL: Duration = Duration::from_millis(50);
 /// matters when an orphaned grandchild still holds the pipe open.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
+/// Set once the harness is being cancelled (docs/CLI-HARDENING.md §3).
+/// Observed at the spawn choke point: no child is spawned after it, and a
+/// child that ends after it is reported as [`Error::Interrupted`], never as
+/// a [`ChildEnd`] — a SIGKILL the harness sent itself is not evidence.
+static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// The process groups of every live child (each child leads its own group,
+/// so its pid is its pgid). Spawning happens under this lock, so
+/// [`kill_live_process_groups`] — which keeps the lock until the process is
+/// gone — can never miss a child that is about to be spawned.
+static LIVE: Mutex<std::collections::BTreeSet<u32>> = Mutex::new(std::collections::BTreeSet::new());
+
+/// Cancel the harness's children: mark the harness cancelled, then SIGKILL
+/// every live process group, returning how many were signalled. The
+/// registry lock is deliberately NOT released (the caller terminates the
+/// process next), so a spawner arriving later blocks and dies with the
+/// process instead of starting a child that would outlive it.
+pub fn kill_live_process_groups() -> usize {
+    CANCELLED.store(true, Ordering::SeqCst);
+    let live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+    #[cfg(unix)]
+    for pgid in live.iter() {
+        kill_process_group(*pgid);
+    }
+    let n = live.len();
+    std::mem::forget(live);
+    n
+}
+
+/// Whether [`kill_live_process_groups`] has run in this process.
+pub fn cancelled() -> bool {
+    CANCELLED.load(Ordering::SeqCst)
+}
+
+/// A live child's registry entry, removed on drop.
+struct Registered(u32);
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        // After a cancellation the registry stays locked for good (see
+        // `kill_live_process_groups`) and the process is on its way out:
+        // nothing to unregister.
+        if cancelled() {
+            return;
+        }
+        LIVE.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+    }
+}
+
 /// How a child ended.
 #[derive(Debug)]
 pub(crate) enum ChildEnd {
@@ -222,30 +273,41 @@ impl Runner {
         args: &[&str],
         profile: Option<&str>,
     ) -> Result<Vec<u8>, RunFailure> {
-        self.built_with_env(bin, args, profile, &[])
-            .map(|out| out.stdout)
+        match self.built_with_env(bin, args, profile, &[]) {
+            Ok(Ok(out)) => Ok(out.stdout),
+            Ok(Err(failure)) => Err(failure),
+            Err(e) => Err(RunFailure::Failed(e.to_string())),
+        }
     }
 
     /// [`Runner::built_with_profile`] plus `extra_env` set explicitly on top
     /// of [`BUILT_ENV`] (the confinement's per-run `TMPDIR`), returning
-    /// both captured streams.
+    /// both captured streams. `Ok(Err(_))` is evidence — the run failed,
+    /// timed out, overflowed, or could not be spawned; the outer `Err` is
+    /// only [`Error::Interrupted`]: the harness was cancelled, and what the
+    /// killed child did is not evidence of anything.
     pub(crate) fn built_with_env(
         &self,
         bin: &Path,
         args: &[&str],
         profile: Option<&str>,
         extra_env: &[(&str, &std::ffi::OsStr)],
-    ) -> Result<RunOutput, RunFailure> {
-        let bin_str = bin
-            .to_str()
-            .ok_or_else(|| RunFailure::Failed(format!("non-UTF-8 path: {}", bin.display())))?;
+    ) -> Result<Result<RunOutput, RunFailure>, Error> {
+        let Some(bin_str) = bin.to_str() else {
+            return Ok(Err(RunFailure::Failed(format!(
+                "non-UTF-8 path: {}",
+                bin.display()
+            ))));
+        };
         let mut argv: Vec<String> = vec![bin_str.to_string()];
         argv.extend(args.iter().map(|a| (*a).to_string()));
         let shown = argv.join(" ");
-        let out = self
-            .spawn(&argv, profile, BUILT_ENV, extra_env, &shown)
-            .map_err(|e| RunFailure::Failed(e.to_string()))?;
-        match out.end {
+        let out = match self.spawn(&argv, profile, BUILT_ENV, extra_env, &shown) {
+            Ok(out) => out,
+            Err(Error::Interrupted) => return Err(Error::Interrupted),
+            Err(e) => return Ok(Err(RunFailure::Failed(e.to_string()))),
+        };
+        Ok(match out.end {
             ChildEnd::Exited(status) if status.success() => Ok(RunOutput {
                 stdout: out.stdout,
                 stderr: out.stderr,
@@ -261,7 +323,7 @@ impl Runner {
                 "`{shown}` produced more than {} bytes of output",
                 self.max_output
             ))),
-        }
+        })
     }
 
     /// Run a built binary like [`Runner::built_with_env`], but report HOW it
@@ -382,9 +444,20 @@ pub(crate) fn run_with_timeout(
     max_output: usize,
 ) -> Result<ChildOutput, Error> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| Error::Invariant(format!("spawning `{shown}`: {e}")))?;
+    // Spawn under the registry lock: a cancellation either happened before
+    // (nothing is spawned) or will find this child registered.
+    let (mut child, registered) = {
+        let mut live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+        if cancelled() {
+            return Err(Error::Interrupted);
+        }
+        let child = cmd
+            .spawn()
+            .map_err(|e| Error::Invariant(format!("spawning `{shown}`: {e}")))?;
+        let id = child.id();
+        live.insert(id);
+        (child, Registered(id))
+    };
     // The child leads its own group (see `scrubbed_command`), so its pid is
     // also its pgid — the group to kill on timeout/overflow.
     #[cfg(unix)]
@@ -433,6 +506,17 @@ pub(crate) fn run_with_timeout(
         }
         std::thread::sleep(POLL);
     };
+    // A child that ended after the cancellation may have been killed by it:
+    // its end is not evidence. Reap anything left and report the interrupt.
+    if cancelled() {
+        let _ = child.kill();
+        #[cfg(unix)]
+        kill_process_group(pgid);
+        let _ = child.wait();
+        drop(registered);
+        return Err(Error::Interrupted);
+    }
+    drop(registered);
 
     // The readers hit EOF as soon as every write end of the pipes is closed —
     // immediately, unless an orphaned grandchild inherited them. Bound the
@@ -744,6 +828,75 @@ mod tests {
     /// `kill -0 <pid>` succeeds only while the process exists (and is not yet
     /// reaped); poll briefly so a just-signalled grandchild has time to go.
     #[cfg(unix)]
+    /// The body of the cancellation scenario. The cancellation state is
+    /// process-global, so this runs in a CHILD test process (re-exec'd by
+    /// the test below with `RUHARNESS_CANCEL_TEST` set) and is a no-op
+    /// otherwise.
+    #[test]
+    fn cancel_scenario_child_body() {
+        if std::env::var_os("RUHARNESS_CANCEL_TEST").is_none() {
+            return;
+        }
+        let worker = std::thread::spawn(|| {
+            runner(Duration::from_secs(60)).tool(&sv(&["sh", "-c", "sleep 30"]))
+        });
+        let pgid = loop {
+            if let Some(p) = LIVE.lock().unwrap().iter().next().copied() {
+                break p;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        println!("pgid={pgid}");
+        assert_eq!(kill_live_process_groups(), 1);
+        assert!(cancelled());
+        // The run reports the interrupt — never a ChildEnd of a child the
+        // harness itself killed.
+        let result = worker.join().unwrap();
+        assert!(matches!(result, Err(Error::Interrupted)), "{result:?}");
+        // A spawner arriving after the cancellation never spawns: it blocks
+        // on the registry, which stays locked until the process dies.
+        let late = std::thread::spawn(|| {
+            runner(Duration::from_secs(60)).tool(&sv(&["sh", "-c", "sleep 30"]))
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!late.is_finished(), "a late spawner must block, not run");
+        println!("cancel-ok");
+        std::process::exit(0);
+    }
+
+    #[test]
+    fn a_cancellation_interrupts_the_run_kills_the_group_and_blocks_later_spawns() {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "exec::tests::cancel_scenario_child_body",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("RUHARNESS_CANCEL_TEST", "1")
+            .output()
+            .expect("re-exec the test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "child test process failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(stdout.contains("cancel-ok"), "{stdout}");
+        // libtest prints its own "test … ..." prefix on the same line.
+        let at = stdout.find("pgid=").expect("the child printed its pgid");
+        let pgid: i32 = stdout[at + 5..]
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            wait_until_gone(pgid),
+            "the cancelled child's group survived"
+        );
+    }
+
     fn wait_until_gone(pid: i32) -> bool {
         for _ in 0..100 {
             let alive = Command::new("/bin/kill")

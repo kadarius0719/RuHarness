@@ -82,6 +82,7 @@ mod testutil;
 mod validate;
 
 pub use boundary::{BoundaryReport, ParamFigures};
+pub use exec::{cancelled, kill_live_process_groups};
 pub use sandbox::sandbox_mode;
 pub use validate::validate_driver;
 

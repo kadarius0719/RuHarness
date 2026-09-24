@@ -106,6 +106,13 @@ pub struct MigrateSection {
     /// Stateless repair turns after the translate turn (default 3).
     #[serde(default)]
     pub max_repairs: Option<u32>,
+    /// Whether a green `migrate` attempt is promoted at once (default true).
+    /// `false` makes `harness promote` (or an explicit `--promote`) the only
+    /// promotion path — "Accept = an explicit act", sticky across the
+    /// several invocations one `external` attempt takes
+    /// (docs/CLI-HARDENING.md §2). Set by the user; clients never write it.
+    #[serde(default)]
+    pub promote_on_green: Option<bool>,
 }
 
 impl Default for LlmSection {

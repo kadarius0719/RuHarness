@@ -1,7 +1,7 @@
 # CLI hardening — the milestone before the review cockpit
 
-Status: DESIGN, REVIEWED (2026-09-24; §R holds the resolutions of the 15 confirmed findings of
-the adversarial review — the text below is the post-review design). Sources and rejected
+Status: IMPLEMENTED (2026-09-24; §R holds the resolutions of the 15 confirmed design-review
+findings and the 11 confirmed code-review findings — the text below is the design as built). Sources and rejected
 alternatives: DECISIONS.md "TUI track: §15 research spike" and "CLI hardening: design review".
 
 The review cockpit (`harness-tui`, next milestone) and the Claude Code bridge (`harness-mcp`)
@@ -64,9 +64,11 @@ to decide staleness.
 **Readers never lock (CONC-M1).** `WriterLock::holder(&Ledger) -> Result<Option<Holder>, Error>`
 READS the line (≤ 4 KiB, first line, `command` rendered printable and ≤ 80 bytes): empty or
 absent → `None`; a parsed line → `Some` — a live holder, or one that died without cleanup
-(the pid is reported; the cockpit may check liveness). flock has no query operation, so a
-try-lock "probe" would itself take the exclusive lock for microseconds and knock over a real
-writer's fail-fast acquisition; the design has no probe.
+(every signal death leaves one). `unit_report` checks liveness itself (`kill -0`, the same
+unsafe-free probe exec.rs uses; a failed probe reads as alive) so a dead holder's line is
+never mistaken for a writer at work, and every client gets that through the one function.
+flock has no query operation, so a try-lock "probe" would itself take the exclusive lock for
+microseconds and knock over a real writer's fail-fast acquisition; the design has no probe.
 
 **Who takes it.** Every subcommand that writes under `migration/` or the target tree:
 `scan`, `plan`, `verify`, `detect`, `observe`, `review`, `migrate`, `gen-driver`,
@@ -225,10 +227,16 @@ process — both the spawn-to-insert window and the spawn-after-the-loop window 
 not narrowed), SIGKILLs each group via the existing `kill_process_group`, returns the count.
 
 **The handler (sig-2).** `harness-cli` installs, first thing in `main`,
-`signal_hook::iterator::Signals` for `SIGINT`, `SIGTERM` and `SIGHUP` (a closed terminal or
-tmux pane) on a background thread. On the first signal: `kill_live_process_groups()`, a
-best-effort events-mode `result` line, then `signal_hook::low_level::emulate_default_handler
-(sig)` — reset to `SIG_DFL` and re-raise — so the process dies BY the signal: bash/zsh abort
+`signal_hook::iterator::Signals` for `SIGINT`, `SIGTERM`, and — only when stdout or stderr
+is a terminal — `SIGHUP` (a closed terminal or tmux pane; `nohup` sets SIGHUP to `SIG_IGN`
+and redirects the output, and installing a handler would silently override that inherited
+disposition, which std cannot read without `unsafe`; a detached run keeps its own). On the
+first signal: `kill_live_process_groups()`, then the courtesy output — the stderr line and
+the events-mode `result` — from a helper thread with a 250 ms budget (the main thread may be
+parked in a write on a full stdout pipe holding the stdout mutex, and a closed stderr would
+make `eprintln!` panic; neither may delay dying), then
+`signal_hook::low_level::emulate_default_handler(sig)` — reset to `SIG_DFL` and re-raise — so
+the process dies BY the signal: bash/zsh abort
 a `for u in …; do harness migrate $u; done` loop exactly as they do today (a normal exit 130
 would make an interactive shell continue to the next unit and spend a model call — verified
 on this machine's bash 3.2 and zsh 5.9), and a parent sees `ExitStatus::signal() == Some(N)`.
@@ -277,7 +285,7 @@ No timestamps. Additive changes never bump the version.
 | `turn-end` | `unit`, `attempt`, `index`, the Turn verbatim: `kind`, `result` (the ledger's closed set `green \| format \| check \| build \| oracle \| crash-timeout \| truncated \| blocked`, treated as open), `request_key`, `response_hash`, `input_tokens`, `output_tokens` | right after the Turn is pushed |
 | `attempt` | `unit`, `id`, `outcome`, `provider`, `model`, `promoted`, `promotion` (reason) | end of a run, verified recorded attempts |
 | `check` | `unit`, `name`, `passed`, `detail` | verify, promote, migrate's final verdict — one per check |
-| `verdict` | `unit`, `green`, `path` | after a verdict is stored |
+| `verdict` | `unit`, `green`, `path` | only after a verdict is stored at `path` (verify; migrate's final judged turn, `attempt-verdict.json`; a green promotion) — never for a rolled-back promotion, whose verdict is not stored (its `check` lines are) |
 | `promote` | `unit`, `attempt`, `result` (`verified` / `rolled-back`) | migrate, promote |
 | `awaiting` | `attempt` (null for triage), `path`, `resume` (the exact re-run command) | the `external` hand-off |
 | `error` | `message`, `kind` (`locked` / `stale` / `awaiting` / `interrupted` / `harness`) | any command, before `result` |
@@ -350,6 +358,24 @@ security), each finding attacked by an independent verifier against the code; 15
 | DEP-1 | fd-lock superseded by std `File::try_lock` (1.89); its guard borrows the lock so the owned RAII type is unbuildable; lockfile cost understated (+5) | §0/§1: std lock, MSRV 1.89, fd-lock dropped; signal-hook stands (std has no signal API) |
 | SEC-1 | the holder write follows symlinks into target-owned space (`migration/.lock -> plan.toml`) | §1 "Open protocol"; parent must be a real dir; bounded printable holder echo |
 | SEC-2 | (as CONTRACT-1/2) plus: promote's guarantee is "verified in place", provenance beyond the digest is replay's | §2 refusal list and the stated guarantee |
+
+**Code review (2026-09-24, four lenses, 11 confirmed / 0 refuted), resolved in the fix pass:**
+SIG-H1/SIG-1 — the handler's courtesy output could panic (closed stderr) or block (full
+`--json` stdout pipe) before the re-raise, leaving an unkillable process: helper thread +
+250 ms budget, `writeln!` never `eprintln!`. SIG-M1 — `Signals::new` overrides an inherited
+`SIG_IGN`, so `nohup harness … &` died on hangup: SIGHUP registered only when the output is a
+terminal. EVT-H1 — `run_triage` re-stringified the typed `Awaiting`, so `observe` lost its
+`awaiting` event and hint: the variant is carried through the fold. LOCK-READ-1/STAT-1 — a
+dead holder's line (every signal death) turned real contradictions into `write in flight`:
+liveness probe in `unit_report`. PROMO-M1/CONS-2 — a rolled-back promotion emitted a
+`verdict` line naming a file it never wrote: `check` lines only. CONS-1 — `migrate` emitted
+no `check`/`verdict` for its final judged turn (the cockpit's `--no-promote` mode): the
+judge's stored verdict is carried out of the trajectory and reported with its
+`attempt-verdict.json` path. SIG-M2 — the cancellation e2e observed nothing (a warm verify's
+children exit on their own): a spinning driver, the `drv_c` child identified by name, alive
+asserted before the kill. LOCK-TEST-1 — the promised status golden and the hard-link refusal
+were untested: contradiction, write-in-flight (lock held in-process), stale list, hard link,
+stalled stdout, ignored SIGHUP and the typed `observe` hand-off are pinned.
 
 **Follow-ups recorded, not in this milestone:** `verify` lacks the R6 gate (contract-visible;
 decide separately); a cockpit Accept on a driver attempt (drivers' own promotion path);

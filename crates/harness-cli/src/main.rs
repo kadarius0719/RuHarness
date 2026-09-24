@@ -7,12 +7,15 @@
 
 mod bench;
 mod gen_driver;
+mod promote;
+mod report;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use harness_core::ledger::Ledger;
+use harness_core::ledger::WriterLock;
 use harness_core::traits::{LanguageFrontend, OracleStrategy};
-use harness_core::{hash, plan, planner, Facts, Plan, TargetContext, UnitStatus, Verdict};
+use harness_core::{hash, plan, planner, Error, Facts, Plan, TargetContext, UnitStatus};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -27,6 +30,10 @@ pub(crate) const EXIT_ORACLE_RED: u8 = 10;
     about = "Incremental, verifiable migration to Rust"
 )]
 struct Cli {
+    /// Machine-readable events on stdout (newline-delimited JSON,
+    /// `ruharness-events`); human logs stay on stderr
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -104,8 +111,12 @@ enum Cmd {
         #[arg(long)]
         model: Option<String>,
         /// Promote a green candidate even when the unit is already verified
-        #[arg(long)]
+        #[arg(long, conflicts_with = "no_promote")]
         promote: bool,
+        /// Record a green attempt without promoting it (`harness promote`
+        /// does that later, explicitly)
+        #[arg(long)]
+        no_promote: bool,
         /// Run target/model-derived code even though no sandbox is available
         #[arg(long)]
         allow_unsandboxed: bool,
@@ -115,6 +126,24 @@ enum Cmd {
         /// Pin the recorded attempt a `--provider replay` run verifies
         #[arg(long)]
         attempt: Option<String>,
+    },
+    /// Promote a recorded green migrate attempt into the unit's crate and
+    /// verify it in place (the explicit act a review's Accept is)
+    Promote {
+        /// Unit id from plan.toml
+        unit: String,
+        /// The attempt id (`a-…`, or `a-….r2` for a later sample)
+        attempt: String,
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Replace the crate of an already verified unit, or re-promote an
+        /// attempt that is already promoted
+        #[arg(long)]
+        replace: bool,
+        /// Run target/model-derived code even though no sandbox is available
+        #[arg(long)]
+        allow_unsandboxed: bool,
     },
     /// Benchmark suites: vendor, verify, score, regression-check
     Bench {
@@ -169,14 +198,87 @@ enum StateCmd {
     },
 }
 
-/// Print a line to stdout, ignoring EPIPE (`harness ... | head` must exit
-/// with a documented code, not a broken-pipe panic).
+/// Print a line to stdout (or, under `--json`, a `message` event), ignoring
+/// EPIPE (`harness ... | head` must exit with a documented code, not a
+/// broken-pipe panic).
 pub(crate) fn out(line: String) {
-    let _ = writeln!(std::io::stdout(), "{line}");
+    report::line(line);
+}
+
+/// Take the ledger's writer lock for a writing command
+/// (docs/CLI-HARDENING.md §1); another holder is a `locked` error.
+pub(crate) fn lock_ledger(ledger: &Ledger, command: &str) -> Result<WriterLock> {
+    Ok(WriterLock::acquire(ledger, command)?)
+}
+
+/// On SIGINT/SIGTERM/SIGHUP: kill every live sandboxed process group, emit
+/// the events-mode `result`, then die BY the signal (a normal exit 130
+/// would make an interactive shell continue a loop over units). A failure
+/// to install the handler leaves today's behaviour (the harness dies, the
+/// children run to their own timeout) and is reported on stderr.
+fn install_signal_handler() {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    use std::io::IsTerminal;
+    // SIGHUP only for the case it is registered for — a terminal (or tmux
+    // pane) still attached to our output. `nohup` sets SIGHUP to SIG_IGN and
+    // redirects stdout/stderr away from the terminal, and installing a
+    // handler would silently override that inherited disposition (std cannot
+    // read it without `unsafe`); a detached run keeps its own.
+    let mut sigs = vec![SIGINT, SIGTERM];
+    if std::io::stdout().is_terminal() || std::io::stderr().is_terminal() {
+        sigs.push(SIGHUP);
+    }
+    let mut signals = match signal_hook::iterator::Signals::new(&sigs) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "harness: cannot install the signal handler: {e}"
+            );
+            return;
+        }
+    };
+    std::thread::spawn(move || {
+        if let Some(sig) = signals.forever().next() {
+            let name = match sig {
+                SIGINT => "SIGINT",
+                SIGTERM => "SIGTERM",
+                _ => "SIGHUP",
+            };
+            let killed = harness_oracle::kill_live_process_groups();
+            // Courtesy output only (docs/CLI-HARDENING.md §3 "best-effort"):
+            // the main thread may be parked in a write on a full stdout pipe
+            // holding the stdout mutex, and a closed stderr would make
+            // `eprintln!` panic — neither may delay or prevent dying BY the
+            // signal. Write from a helper, wait a bounded time, re-raise.
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            let helper = std::thread::Builder::new().spawn(move || {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "harness: {name} — killed {killed} live process group(s); terminating"
+                );
+                report::result(128 + sig, Some(name));
+                let _ = tx.send(());
+            });
+            if helper.is_ok() {
+                let _ = rx.recv_timeout(std::time::Duration::from_millis(250));
+            }
+            let _ = signal_hook::low_level::emulate_default_handler(sig);
+            std::process::exit(128 + sig);
+        }
+    });
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    install_signal_handler();
+    if cli.json {
+        report::init(report::Mode::Json);
+        let _ = harness_llm::progress::install(Box::new(report::Progress));
+        let argv: Vec<String> = std::env::args().skip(1).filter(|a| a != "--json").collect();
+        let command = argv.first().cloned().unwrap_or_default();
+        report::header(&command, argv.get(1..).unwrap_or(&[]));
+    }
     let result = match cli.cmd {
         Cmd::Scan { target } => cmd_scan(target),
         Cmd::Plan { target } => cmd_plan(target),
@@ -203,6 +305,7 @@ fn main() -> ExitCode {
             provider,
             model,
             promote,
+            no_promote,
             allow_unsandboxed,
             retry,
             attempt,
@@ -212,10 +315,18 @@ fn main() -> ExitCode {
             provider,
             model,
             promote,
+            no_promote,
             allow_unsandboxed,
             retry,
             attempt,
         }),
+        Cmd::Promote {
+            unit,
+            attempt,
+            target,
+            replace,
+            allow_unsandboxed,
+        } => promote::cmd_promote(unit, attempt, target, replace, allow_unsandboxed),
         Cmd::SyncRuntime { target, check } => cmd_sync_runtime(target, check),
         Cmd::Bench { cmd } => bench::run(cmd),
         Cmd::GenDriver {
@@ -238,18 +349,23 @@ fn main() -> ExitCode {
             attempt,
         }),
     };
-    match result {
+    let code = match result {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("error: {e:#}");
-            ExitCode::FAILURE
+            // A closed stderr must not turn exit 1 into a panic (101).
+            let _ = writeln!(std::io::stderr(), "error: {e:#}");
+            report::error(&e);
+            1
         }
-    }
+    };
+    report::result(i32::from(code), None);
+    ExitCode::from(code)
 }
 
-fn cmd_scan(target: PathBuf) -> Result<ExitCode> {
+fn cmd_scan(target: PathBuf) -> Result<u8> {
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
+    let _lock = lock_ledger(&ledger, "scan")?;
     let facts = scan_target(&ctx)?;
     out(format!(
         "scan: {} files, {} symbols, {} refs -> {}",
@@ -258,7 +374,7 @@ fn cmd_scan(target: PathBuf) -> Result<ExitCode> {
         facts.refs.len(),
         ledger.facts_path().display()
     ));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// Scan `ctx` and write `facts.jsonl` (the body of `harness scan`).
@@ -268,6 +384,14 @@ pub(crate) fn scan_target(ctx: &TargetContext) -> Result<Facts> {
     std::fs::create_dir_all(ledger.dir()).context("creating migration dir")?;
     facts.store(&ledger.facts_path())?;
     Ok(facts)
+}
+
+/// The typed refusal for stale facts (`error.kind = "stale"`).
+fn facts_stale(stale: usize) -> Error {
+    Error::Stale {
+        subject: "facts.jsonl".into(),
+        hint: format!("{stale} file(s) changed on disk; run `harness scan` first"),
+    }
 }
 
 /// Count facts file records whose hash no longer matches the working tree.
@@ -283,8 +407,9 @@ fn stale_fact_files(ctx: &TargetContext, facts: &Facts) -> usize {
         .count()
 }
 
-fn cmd_plan(target: PathBuf) -> Result<ExitCode> {
+fn cmd_plan(target: PathBuf) -> Result<u8> {
     let ctx = TargetContext::load(&target)?;
+    let _lock = lock_ledger(&Ledger::new(&ctx.root), "plan")?;
     let (changes, order_line, units) = plan_target(&ctx)?;
     if changes.is_empty() {
         out(format!("plan: no changes ({units} units)"));
@@ -294,7 +419,7 @@ fn cmd_plan(target: PathBuf) -> Result<ExitCode> {
         }
     }
     out(format!("plan: execution order: {order_line}"));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// Reconcile and write `plan.toml` (the body of `harness plan`): returns the
@@ -307,7 +432,7 @@ pub(crate) fn plan_target(ctx: &TargetContext) -> Result<(Vec<String>, String, u
     // in a refusal loop — refuse up front instead.
     let stale = stale_fact_files(ctx, &facts);
     if stale > 0 {
-        bail!("facts.jsonl is stale ({stale} file(s) changed on disk); run `harness scan` first");
+        return Err(facts_stale(stale).into());
     }
     let mut computed = planner::compute_units(&facts)?;
     let plan_path = ledger.plan_path();
@@ -378,10 +503,11 @@ pub(crate) fn safe_ledger_dir(root: &std::path::Path, components: &[&str]) -> Re
     Ok(cur)
 }
 
-fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Result<ExitCode> {
+fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
     require_sandbox(allow_unsandboxed, "harness verify")?;
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
+    let _lock = lock_ledger(&ledger, &format!("verify {unit_id}"))?;
     let plan_path = ledger.plan_path();
     let plan_doc = Plan::load(&plan_path)?;
     // Structural validation on every load (docs/SCHEMAS.md): never run the
@@ -390,7 +516,7 @@ fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Resu
         .execution_order()
         .context("plan.toml is structurally invalid; fix it before verifying")?;
     let unit = plan_doc.unit(&unit_id)?;
-    recover_interrupted_promotion(&ctx, &ledger, unit)?;
+    promote::recover_promotion(&ctx, &ledger, unit)?;
     let facts =
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
 
@@ -398,13 +524,15 @@ fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Resu
     let closure = facts.include_closure(&unit.files);
     let current = hash::file_set_hash_on_disk(&ctx.root, &closure)?;
     if current != unit.source_hash {
-        bail!(
-            "unit `{unit_id}` is stale: source changed since planning \
-             (plan {} vs tree {}); run `harness scan`, then `harness plan`, \
-             review the diff, then re-verify",
-            unit.source_hash,
-            current
-        );
+        return Err(Error::Stale {
+            subject: format!("unit `{unit_id}`"),
+            hint: format!(
+                "source changed since planning (plan {} vs tree {current}); run `harness scan`, \
+                 then `harness plan`, review the diff, then re-verify",
+                unit.source_hash
+            ),
+        }
+        .into());
     }
 
     let verdict = match unit.oracle_kind() {
@@ -421,6 +549,7 @@ fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Resu
         &ledger.verdict_md_path(&unit_id),
         verdict.render_md().as_bytes(),
     )?;
+    report::verdict(&unit_id, &verdict, &ledger.verdict_latest_path(&unit_id));
     for c in &verdict.checks {
         out(format!(
             "verify: [{}] {} — {}",
@@ -433,7 +562,7 @@ fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Resu
         verdict.store(&ledger.verdict_last_green_path(&unit_id))?;
         plan::set_status(&plan_path, &unit_id, UnitStatus::Verified)?;
         out(format!("verify: {unit_id} GREEN — status set to verified"));
-        Ok(ExitCode::SUCCESS)
+        Ok(0)
     } else {
         match unit.status {
             UnitStatus::Verified => {
@@ -451,11 +580,11 @@ fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Resu
             }
             _ => out(format!("verify: {unit_id} RED")),
         }
-        Ok(ExitCode::from(EXIT_ORACLE_RED))
+        Ok(EXIT_ORACLE_RED)
     }
 }
 
-fn cmd_status(target: PathBuf) -> Result<ExitCode> {
+fn cmd_status(target: PathBuf) -> Result<u8> {
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
 
@@ -463,7 +592,7 @@ fn cmd_status(target: PathBuf) -> Result<ExitCode> {
         Ok(f) => f,
         Err(e) if e.is_not_found() => {
             out("status: no facts — run `harness scan`".into());
-            return Ok(ExitCode::SUCCESS);
+            return Ok(0);
         }
         // Parse errors and newer-schema refusals must surface, not read as
         // "no facts" (docs/SCHEMAS.md versioning rules).
@@ -480,116 +609,46 @@ fn cmd_status(target: PathBuf) -> Result<ExitCode> {
         facts.files.len(),
         stale_files
     ));
+    #[derive(serde::Serialize)]
+    struct FactsEvent {
+        k: &'static str,
+        files: usize,
+        stale: usize,
+    }
+    report::event(&FactsEvent {
+        k: "facts",
+        files: facts.files.len(),
+        stale: stale_files,
+    });
 
     let plan_path = ledger.plan_path();
     if !plan_path.exists() {
         out("status: no plan — run `harness plan`".into());
-        return Ok(ExitCode::SUCCESS);
+        return Ok(0);
     }
     let plan_doc = Plan::load(&plan_path)?;
     plan_doc
         .execution_order()
         .context("plan.toml is structurally invalid")?;
-    for unit in &plan_doc.units {
-        let closure = facts.include_closure(&unit.files);
-        let source_now = hash::file_set_hash_on_disk(&ctx.root, &closure)
-            .unwrap_or_else(|_| "blake3:unreadable".into());
-        let plan_fresh = source_now == unit.source_hash;
-
-        let latest_path = ledger.verdict_latest_path(&unit.id);
-        let (latest, verdict_desc) = match Verdict::load(&latest_path) {
-            Ok(v) => {
-                let mut stale: Vec<&str> = Vec::new();
-                if v.inputs.unit_source != source_now {
-                    stale.push("source");
-                }
-                if !v.inputs.rust_crate.is_empty() {
-                    if let Some(crate_dir) = unit.oracle_param_str("rust_crate") {
-                        let dir = ledger.unit_dir(&unit.id).join(crate_dir);
-                        let now = hash::unit_crate_file_set_hash(&ctx.root, &dir)
-                            .unwrap_or_else(|_| "blake3:unreadable".into());
-                        if now != v.inputs.rust_crate {
-                            stale.push("rust-crate");
-                        }
-                    }
-                }
-                if !v.inputs.driver.is_empty() {
-                    if let Some(driver) = unit.oracle_param_str("driver") {
-                        let now = hash::file_hash(&ctx.root.join(driver))
-                            .unwrap_or_else(|_| "blake3:unreadable".into());
-                        if now != v.inputs.driver {
-                            stale.push("driver");
-                        }
-                    }
-                }
-                let color = if v.green { "green" } else { "red" };
-                let desc = if stale.is_empty() {
-                    format!("{color} (fresh)")
-                } else {
-                    format!("{color} (STALE: {})", stale.join(", "))
-                };
-                (VerdictState::Present { green: v.green }, desc)
-            }
-            Err(e) if e.is_not_found() => (VerdictState::Missing, "no verdict".to_string()),
-            Err(e @ harness_core::Error::SchemaTooNew { .. }) => return Err(e.into()),
-            Err(_) => (
-                VerdictState::Unreadable,
-                "verdict UNREADABLE (corrupt?)".to_string(),
-            ),
-        };
-
-        // Verdicts are authoritative over plan status; flag both directions
-        // (docs/SCHEMAS.md): a done-claiming status without green evidence,
-        // and green evidence the status never absorbed.
-        let done_claimed = matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged);
-        let contradiction = match latest {
-            VerdictState::Present { green } => {
-                let fresh = verdict_desc.ends_with("(fresh)");
-                // Done-claiming status needs FRESH green evidence: a red verdict
-                // or a stale one (crate/source/driver changed since) both
-                // contradict it; so does fresh green the status never absorbed.
-                (done_claimed && (!green || !fresh)) || (green && fresh && !done_claimed)
-            }
-            VerdictState::Missing => done_claimed,
-            VerdictState::Unreadable => done_claimed,
-        };
-        out(format!(
-            "status: {} [{}] plan={} verdict={}{}",
-            unit.id,
-            unit.status.as_str(),
-            if plan_fresh { "fresh" } else { "SOURCE-STALE" },
-            verdict_desc,
-            if contradiction {
-                "  << CONTRADICTION: status and verdict evidence disagree"
-            } else {
-                ""
-            }
-        ));
-        let attempts = harness_core::attempts::load_unit_attempts(&ledger, &unit.id)?;
-        if !attempts.is_empty() {
-            let bound = attempts
-                .iter()
-                .filter(|a| a.unit_source == source_now)
-                .count();
-            let summary: Vec<String> = attempts
-                .iter()
-                .map(|a| format!("{}:{}:{}", a.id, a.provider_kind, a.outcome))
-                .collect();
-            out(format!(
-                "status:   attempts: {} ({} bound to current source) [{}]",
-                attempts.len(),
-                bound,
-                summary.join(", ")
-            ));
-        }
+    #[derive(serde::Serialize)]
+    struct UnitEvent<'a> {
+        k: &'static str,
+        #[serde(flatten)]
+        report: &'a harness_core::status::UnitReport,
     }
-    Ok(ExitCode::SUCCESS)
-}
-
-enum VerdictState {
-    Present { green: bool },
-    Missing,
-    Unreadable,
+    for unit in &plan_doc.units {
+        // One computation renders both surfaces (docs/CLI-HARDENING.md §4).
+        let r = harness_core::status::unit_report(&ctx, &ledger, &facts, unit)?;
+        out(r.render_line());
+        if let Some(line) = r.render_attempts_line() {
+            out(line);
+        }
+        report::event(&UnitEvent {
+            k: "unit",
+            report: &r,
+        });
+    }
+    Ok(0)
 }
 
 // ---------- M2: observer commands ----------
@@ -603,16 +662,17 @@ fn facts_records_hash(facts: &Facts) -> String {
     hash::file_set_hash(&pairs)
 }
 
-fn cmd_detect(target: PathBuf) -> Result<ExitCode> {
+fn cmd_detect(target: PathBuf) -> Result<u8> {
     use harness_core::observer::{FindingsFile, ObserverPaths};
     use harness_core::traits::Detector;
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
+    let _lock = lock_ledger(&ledger, "detect")?;
     let facts =
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
     let stale = stale_fact_files(&ctx, &facts);
     if stale > 0 {
-        bail!("facts.jsonl is stale ({stale} file(s) changed on disk); run `harness scan` first");
+        return Err(facts_stale(stale).into());
     }
     let suite = harness_detect::CTreeSitterSuite;
     let findings = suite.detect(&ctx, &facts)?;
@@ -635,7 +695,7 @@ fn cmd_detect(target: PathBuf) -> Result<ExitCode> {
     for (cat, n) in by_category {
         out(format!("detect:   {cat}: {n}"));
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// Everything `observe` needs, loaded and freshness-checked.
@@ -659,17 +719,21 @@ fn observer_inputs(ctx: &TargetContext, ledger: &Ledger) -> Result<ObserverInput
     let findings = harness_core::observer::FindingsFile::load(&ObserverPaths::findings(ledger))
         .context("loading findings (run `harness detect` first)")?;
     if findings.facts_hash != facts_records_hash(&facts) {
-        bail!("findings.jsonl is bound to different facts; run `harness detect`");
+        return Err(Error::Stale {
+            subject: "findings.jsonl".into(),
+            hint: "it is bound to different facts; run `harness detect`".into(),
+        }
+        .into());
     }
     for f in &findings.findings {
         let now = hash::file_hash(&ctx.root.join(&f.file))
             .with_context(|| format!("hashing {}", f.file))?;
         if now != f.file_hash {
-            bail!(
-                "finding {} is stale ({} changed since detect); run `harness detect`",
-                f.id,
-                f.file
-            );
+            return Err(Error::Stale {
+                subject: format!("finding {}", f.id),
+                hint: format!("{} changed since detect; run `harness detect`", f.file),
+            }
+            .into());
         }
     }
     let annotations = observer::load_annotations(&ObserverPaths::annotations(ledger))?;
@@ -678,10 +742,11 @@ fn observer_inputs(ctx: &TargetContext, ledger: &Ledger) -> Result<ObserverInput
     Ok((facts, plan_doc, findings, annotations, triage, reviews))
 }
 
-fn cmd_observe(target: PathBuf) -> Result<ExitCode> {
+fn cmd_observe(target: PathBuf) -> Result<u8> {
     use harness_core::observer::{self, ObserverPaths};
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
+    let _lock = lock_ledger(&ledger, "observe")?;
     let (facts, plan_doc, findings, annotations, _, reviews) = observer_inputs(&ctx, &ledger)?;
 
     let traces = safe_ledger_dir(&ctx.root, &["migration", "observer", "traces"])?;
@@ -698,13 +763,21 @@ fn cmd_observe(target: PathBuf) -> Result<ExitCode> {
         &traces,
     ) {
         Ok(o) => o,
-        Err(e) if e.to_string().contains("awaiting response") => {
+        Err(e @ Error::Awaiting { .. }) => {
             eprintln!("{e:#}");
             eprintln!(
                 "observe: external provider mode — supply the response file(s) under {} and re-run",
                 traces.display()
             );
-            return Ok(ExitCode::FAILURE);
+            if let Error::Awaiting { path, .. } = &e {
+                report::event(&report::Awaiting {
+                    k: "awaiting",
+                    attempt: None,
+                    path: path.display().to_string(),
+                    resume: format!("harness observe --target {}", target.display()),
+                });
+            }
+            return Err(e.into());
         }
         Err(e) => return Err(e.into()),
     };
@@ -742,7 +815,7 @@ fn cmd_observe(target: PathBuf) -> Result<ExitCode> {
     for r in risk.iter().take(5) {
         out(format!("observe: risk {} {}", r.score, r.unit));
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 fn cmd_review(
@@ -751,13 +824,14 @@ fn cmd_review(
     reinstate: bool,
     note: String,
     target: PathBuf,
-) -> Result<ExitCode> {
+) -> Result<u8> {
     use harness_core::observer::{self, ObserverPaths};
     if uphold_dismiss == reinstate {
         bail!("pass exactly one of --uphold-dismiss or --reinstate");
     }
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
+    let _lock = lock_ledger(&ledger, &format!("review {finding}"))?;
     let findings = harness_core::observer::FindingsFile::load(&ObserverPaths::findings(&ledger))
         .context("loading findings (run `harness detect` first)")?;
     let annotations = observer::load_annotations(&ObserverPaths::annotations(&ledger))?;
@@ -782,13 +856,18 @@ fn cmd_review(
     out(format!(
         "review: {finding} {action} recorded — re-run `harness observe` to re-render"
     ));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
-fn cmd_sync_runtime(target: PathBuf, check: bool) -> Result<ExitCode> {
+fn cmd_sync_runtime(target: PathBuf, check: bool) -> Result<u8> {
     use harness_core::observer::{self, ObserverPaths};
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
+    let _lock = if check {
+        None
+    } else {
+        Some(lock_ledger(&ledger, "sync-runtime")?)
+    };
     let facts =
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
     let plan_doc = Plan::load(&ledger.plan_path())?;
@@ -817,12 +896,12 @@ fn cmd_sync_runtime(target: PathBuf, check: bool) -> Result<ExitCode> {
     if check {
         if existing.as_deref() == Some(updated.as_str()) {
             out("sync-runtime: up to date".into());
-            return Ok(ExitCode::SUCCESS);
+            return Ok(0);
         }
         eprintln!(
             "sync-runtime: AGENTS.md managed block is out of date; run `harness sync-runtime`"
         );
-        return Ok(ExitCode::FAILURE);
+        return Ok(1);
     }
     harness_core::ledger::write_atomic(&agents_path, updated.as_bytes())?;
     // Claude Code bridge: CLAUDE.md imports AGENTS.md (per §14.3 spike evidence).
@@ -837,90 +916,10 @@ fn cmd_sync_runtime(target: PathBuf, check: bool) -> Result<ExitCode> {
         harness_core::ledger::write_atomic(&claude_path, updated_claude.as_bytes())?;
     }
     out(format!("sync-runtime: {} updated", agents_path.display()));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 // ---------- M3: executor command ----------
-
-/// Resolve a promotion that was interrupted (docs/SCHEMAS.md "Promotion
-/// protocol"). A leftover `.<crate>.prev` has two possible meanings, told
-/// apart by EVIDENCE, never by guesswork:
-/// - the committed green verdict is bound to the crate now on disk → the
-///   promotion completed and only the cleanup was lost: finish it;
-/// - otherwise the swapped-in candidate was never verified: restore `.prev`.
-fn recover_interrupted_promotion(
-    ctx: &TargetContext,
-    ledger: &Ledger,
-    unit: &harness_core::Unit,
-) -> Result<()> {
-    let Some(crate_name) = unit.oracle_param_str("rust_crate") else {
-        return Ok(());
-    };
-    let unit_dir = ledger.unit_dir(&unit.id);
-    let crate_dir = unit_dir.join(crate_name);
-    let prev = unit_dir.join(format!(".{crate_name}.prev"));
-    if !prev.exists() {
-        return Ok(());
-    }
-    let completed = crate_dir.exists()
-        && Verdict::load(&ledger.verdict_latest_path(&unit.id))
-            .ok()
-            .filter(|v| v.green)
-            .and_then(|v| {
-                hash::unit_crate_file_set_hash(&ctx.root, &crate_dir)
-                    .ok()
-                    .map(|now| now == v.inputs.rust_crate)
-            })
-            .unwrap_or(false);
-    if completed {
-        std::fs::remove_dir_all(&prev).context("finishing promotion cleanup")?;
-        out(format!(
-            "recover: promotion of `{}` had completed (verdict bound to the crate on disk); \
-             removed the leftover backup",
-            unit.id
-        ));
-    } else {
-        if crate_dir.exists() {
-            std::fs::remove_dir_all(&crate_dir).context("removing unverified promoted crate")?;
-        }
-        std::fs::rename(&prev, &crate_dir).context("restoring previous crate")?;
-        out(format!(
-            "recover: rolled back an interrupted, unverified promotion of `{}`",
-            unit.id
-        ));
-    }
-    Ok(())
-}
-
-/// Copy the closed crate file list (Cargo.toml, Cargo.lock, src/**) — never
-/// `target/` — from `from` to a fresh `to`.
-fn copy_crate_sources(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
-    std::fs::create_dir_all(to.join("src")).context("creating staged crate")?;
-    for name in ["Cargo.toml", "Cargo.lock"] {
-        let src = from.join(name);
-        if src.exists() {
-            std::fs::copy(&src, to.join(name)).with_context(|| format!("copying {name}"))?;
-        }
-    }
-    fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
-        for entry in std::fs::read_dir(from).context("reading candidate src")? {
-            let entry = entry?;
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let (src, dst) = (entry.path(), to.join(&name));
-            if src.is_dir() {
-                std::fs::create_dir_all(&dst)?;
-                copy_tree(&src, &dst)?;
-            } else {
-                std::fs::copy(&src, &dst)?;
-            }
-        }
-        Ok(())
-    }
-    copy_tree(&from.join("src"), &to.join("src"))
-}
 
 /// The unit's confirmed hazards as `harness migrate` puts them in the
 /// translate prompt (annotations are implicitly confirmed). Shared with
@@ -958,18 +957,52 @@ struct MigrateArgs {
     provider: Option<String>,
     model: Option<String>,
     promote: bool,
+    no_promote: bool,
     allow_unsandboxed: bool,
     retry: bool,
     attempt: Option<String>,
 }
 
-fn cmd_migrate(args: MigrateArgs) -> Result<ExitCode> {
+impl MigrateArgs {
+    /// The exact command line that resumes this run (the `awaiting` hint
+    /// and event carry it, so a resume keeps the same promotion flags).
+    fn resume_command(&self) -> String {
+        let mut cmd = format!("harness migrate {}", self.unit);
+        cmd.push_str(&format!(" --target {}", self.target.display()));
+        if let Some(p) = &self.provider {
+            cmd.push_str(&format!(" --provider {p}"));
+        }
+        if let Some(m) = &self.model {
+            cmd.push_str(&format!(" --model {m}"));
+        }
+        if self.promote {
+            cmd.push_str(" --promote");
+        }
+        if self.no_promote {
+            cmd.push_str(" --no-promote");
+        }
+        if self.allow_unsandboxed {
+            cmd.push_str(" --allow-unsandboxed");
+        }
+        if self.retry {
+            cmd.push_str(" --retry");
+        }
+        if let Some(a) = &self.attempt {
+            cmd.push_str(&format!(" --attempt {a}"));
+        }
+        cmd
+    }
+}
+
+fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
+    let resume = args.resume_command();
     let MigrateArgs {
         unit: unit_id,
         target,
         provider: provider_flag,
         model: model_flag,
         promote: promote_flag,
+        no_promote,
         allow_unsandboxed,
         retry,
         attempt,
@@ -977,38 +1010,20 @@ fn cmd_migrate(args: MigrateArgs) -> Result<ExitCode> {
     require_sandbox(allow_unsandboxed, "harness migrate")?;
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
+    let _lock = lock_ledger(&ledger, &format!("migrate {unit_id}"))?;
     let plan_path = ledger.plan_path();
     let plan_doc = Plan::load(&plan_path)?;
     plan_doc
         .execution_order()
         .context("plan.toml is structurally invalid; fix it before migrating")?;
     let unit = plan_doc.unit(&unit_id)?;
-    recover_interrupted_promotion(&ctx, &ledger, unit)?;
+    promote::recover_promotion(&ctx, &ledger, unit)?;
 
     let facts =
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
-    let closure = facts.include_closure(&unit.files);
-    let current = hash::file_set_hash_on_disk(&ctx.root, &closure)?;
-    if current != unit.source_hash {
-        bail!(
-            "unit `{unit_id}` is stale: source changed since planning; run `harness scan`, \
-             then `harness plan`, review the diff, then migrate"
-        );
-    }
-    // R6: once a unit has driver-generation history, its driver must carry a
-    // FRESH green validation — deleting driver-validation.json cannot relabel
-    // a generated driver as human-written.
-    if ledger.unit_dir(&unit_id).join("driver-attempts").exists()
-        || ledger.driver_validation_path(&unit_id).exists()
-    {
-        let state = bench::driver_state(&ctx, &facts, unit)?;
-        if state != "validated" {
-            bail!(
-                "unit `{unit_id}` has a generated driver whose validation is `{state}`; run \
-                 `harness gen-driver {unit_id}` (or re-validate) before migrating"
-            );
-        }
-    }
+    // The plan's staleness rule and R6 (a generated driver must carry a
+    // FRESH green validation) — shared with `harness promote`.
+    promote::migrate_preconditions(&ctx, &ledger, &facts, unit, "migrate")?;
 
     // Stage routing (§13.2): flag > [llm.migrate] > [llm].
     let llm = &ctx.config.llm;
@@ -1021,6 +1036,7 @@ fn cmd_migrate(args: MigrateArgs) -> Result<ExitCode> {
         .unwrap_or_else(|| llm.model.clone());
     let max_tokens = stage.and_then(|m| m.max_tokens).unwrap_or(llm.max_tokens);
     let max_repairs = stage.and_then(|m| m.max_repairs).unwrap_or(3);
+    let promote_on_green = stage.and_then(|m| m.promote_on_green).unwrap_or(true);
 
     let traces = safe_ledger_dir(&ctx.root, &["migration", "units", &unit_id, "traces"])?;
     let resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
@@ -1041,13 +1057,22 @@ fn cmd_migrate(args: MigrateArgs) -> Result<ExitCode> {
         &params, &oracle, &ctx, &facts, &plan_doc, unit, &hazards,
     ) {
         Ok(o) => o,
-        Err(e) if e.to_string().contains("awaiting response") => {
+        Err(e @ Error::Awaiting { .. }) => {
             eprintln!("{e:#}");
             eprintln!(
-                "migrate: external provider mode — supply the response file under {} and re-run",
+                "migrate: external provider mode — supply the response file under {} and re-run: \
+                 {resume}",
                 traces.display()
             );
-            return Ok(ExitCode::FAILURE);
+            if let Error::Awaiting { path, attempt } = &e {
+                report::event(&report::Awaiting {
+                    k: "awaiting",
+                    attempt: attempt.as_deref(),
+                    path: path.display().to_string(),
+                    resume: resume.clone(),
+                });
+            }
+            return Err(e.into());
         }
         Err(e) => return Err(e.into()),
     };
@@ -1081,78 +1106,70 @@ fn cmd_migrate(args: MigrateArgs) -> Result<ExitCode> {
             harness_llm::conformance(drifted)
         ));
     }
+    // docs/CLI-HARDENING.md §4: migrate's final verdict — one `check` per
+    // check and the `verdict` line — when the last turn was judged by the
+    // oracle in this run (a format/truncated/blocked/deny-scan tail stored
+    // none; a verification stores nothing).
+    if let Some(v) = &outcome.verdict {
+        report::verdict(
+            &unit_id,
+            v,
+            &outcome.attempt_dir.join("attempt-verdict.json"),
+        );
+    }
+    let attempt_event = |promoted: bool, promotion: &str| {
+        report::event(&report::AttemptEvent {
+            k: "attempt",
+            unit: &unit_id,
+            id: &record.id,
+            outcome: &record.outcome,
+            provider: &record.provider,
+            model: &record.model,
+            promoted,
+            promotion,
+        });
+    };
     if record.outcome != "green" {
-        return Ok(ExitCode::from(EXIT_ORACLE_RED));
+        attempt_event(record.promoted, "not promoted: not green");
+        return Ok(EXIT_ORACLE_RED);
     }
 
-    // Promotion (docs/SCHEMAS.md): only for units not already done, unless forced;
+    // Promotion (docs/SCHEMAS.md; docs/CLI-HARDENING.md §2). Precedence:
+    // --promote > --no-promote > [llm.migrate] promote_on_green > default;
     // never from a replay run (which writes nothing to the ledger).
     let already_done = matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged);
-    let (Some(candidate), true) = (
-        outcome.candidate_dir.as_ref(),
-        resolved.kind != "replay" && (!already_done || promote_flag),
-    ) else {
-        out(format!(
-            "migrate: green attempt recorded; not promoted ({})",
-            if already_done {
-                "unit already verified — pass --promote to replace"
-            } else {
-                "replay run"
-            }
-        ));
-        return Ok(ExitCode::SUCCESS);
+    let (do_promote, reason) = if resolved.kind == "replay" {
+        (false, "replay run")
+    } else if promote_flag {
+        (true, "--promote")
+    } else if no_promote {
+        (false, "--no-promote")
+    } else if already_done {
+        (false, "unit already verified — pass --promote to replace")
+    } else if !promote_on_green {
+        (false, "promote_on_green = false — run `harness promote`")
+    } else {
+        (true, "default")
     };
-    let crate_name = unit
-        .oracle_param_str("rust_crate")
-        .context("unit has no rust_crate oracle param")?;
-    let unit_dir = ledger.unit_dir(&unit_id);
-    let crate_dir = unit_dir.join(crate_name);
-    let staged_root = unit_dir.join(format!(".promote-{}", record.id));
-    let staged = staged_root.join(crate_name);
-    let prev = unit_dir.join(format!(".{crate_name}.prev"));
-    if staged_root.exists() {
-        std::fs::remove_dir_all(&staged_root).context("clearing stale staging dir")?;
-    }
-    copy_crate_sources(candidate, &staged)?;
-    if hash::crate_content_hash(&staged)? != record.candidate_digest {
-        std::fs::remove_dir_all(&staged_root).ok();
-        bail!("staged candidate digest does not match the attempt record; not promoting");
-    }
-    // Two renames; a crash between them is rolled back by
-    // recover_interrupted_promotion on the next run.
-    if crate_dir.exists() {
-        std::fs::rename(&crate_dir, &prev).context("moving current crate aside")?;
-    }
-    std::fs::rename(&staged, &crate_dir).context("swapping candidate in")?;
-    std::fs::remove_dir_all(&staged_root).ok();
-
-    // Verify the PROMOTED location; nothing is persisted unless it is green.
-    let in_place = oracle.verify(&ctx, unit);
-    if !matches!(&in_place, Ok(v) if v.green) {
-        std::fs::remove_dir_all(&crate_dir).context("removing unverified promoted crate")?;
-        if prev.exists() {
-            std::fs::rename(&prev, &crate_dir).context("restoring previous crate")?;
+    let (Some(candidate), true) = (outcome.candidate_dir.as_ref(), do_promote) else {
+        out(format!(
+            "migrate: green attempt recorded; not promoted ({reason})"
+        ));
+        attempt_event(record.promoted, &format!("not promoted: {reason}"));
+        return Ok(0);
+    };
+    match promote::promote_attempt(&ctx, &ledger, &oracle, unit, record, candidate)? {
+        promote::Promotion::Verified => {
+            out(format!(
+                "migrate: {unit_id} promoted and verified — status set to verified"
+            ));
+            attempt_event(true, &format!("promoted: {reason}"));
+            Ok(0)
         }
-        out("migrate: promoted candidate did not verify in place — rolled back".into());
-        in_place?; // surface a harness error as such; a red verdict falls through
-        return Ok(ExitCode::from(EXIT_ORACLE_RED));
+        promote::Promotion::RolledBack => {
+            out("migrate: promoted candidate did not verify in place — rolled back".into());
+            attempt_event(false, "not promoted: red in place — rolled back");
+            Ok(EXIT_ORACLE_RED)
+        }
     }
-    let verdict = in_place?;
-    verdict.store(&ledger.verdict_latest_path(&unit_id))?;
-    verdict.store(&ledger.verdict_last_green_path(&unit_id))?;
-    harness_core::ledger::write_atomic(
-        &ledger.verdict_md_path(&unit_id),
-        verdict.render_md().as_bytes(),
-    )?;
-    plan::set_status(&plan_path, &unit_id, UnitStatus::Verified)?;
-    if prev.exists() {
-        std::fs::remove_dir_all(&prev).context("removing previous crate backup")?;
-    }
-    let mut promoted = record.clone();
-    promoted.promoted = true;
-    promoted.store(&outcome.attempt_dir)?;
-    out(format!(
-        "migrate: {unit_id} promoted and verified — status set to verified"
-    ));
-    Ok(ExitCode::SUCCESS)
 }

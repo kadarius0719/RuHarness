@@ -183,6 +183,7 @@ names, then run the same command again.
 | `--model NAME` | The model name sent to that backend. |
 | `--retry` | Finished attempts are never overwritten; this records a *new* sample instead. |
 | `--promote` | Replace an already-verified unit's Rust with a new green candidate. |
+| `--no-promote` | Record a green attempt without promoting it; `harness promote <unit> <attempt> [--replace]` promotes it later, explicitly (`[llm.migrate] promote_on_green = false` makes that the only path). |
 | `--attempt ID` | With `--provider replay`: which recorded attempt to re-check. |
 | `--allow-unsandboxed` | Only needed where no sandbox exists (e.g. Linux): accept running untrusted code unconfined. |
 
@@ -331,6 +332,12 @@ replies fails the check (docs/REPLAY-DESIGN.md). See `targets/tractor/README.md`
 
 Exit codes (stable contract): `0` ok/green · `1` harness error · `2` usage ·
 `10` oracle red (for `migrate`: red, blocked, truncated, or format). Machine consumers read the ledger files, not stdout.
+With the global `--json` flag (`harness --json migrate …`) stdout is instead a
+newline-delimited stream of `ruharness-events` (docs/SCHEMAS.md "CLI hardening") for
+a consumer such as the review cockpit; human logs stay on stderr. Ctrl-C kills every
+live sandboxed process group and the harness dies by the signal (no evidence is
+journaled for a child it killed). Writing commands hold a writer lock on
+`migration/.lock`; a second writer fails fast naming the holder.
 
 ## Repository layout
 

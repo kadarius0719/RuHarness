@@ -566,10 +566,6 @@ fn check_stop(adapter: &dyn ProviderAdapter, response: &CompletionResponse) -> R
 
 /// True when `e` is a [`TraceAdapter`] external-mode hand-off (request
 /// written, response pending) rather than a real failure.
-fn is_awaiting(e: &Error) -> bool {
-    matches!(e, Error::Invariant(m) if m.starts_with("awaiting response: "))
-}
-
 /// Run the triage pass: batch `findings` per owning plan unit, call the
 /// provider once per batch, validate, and return verdicts bound by
 /// harness-computed content hashes (docs/SCHEMAS.md "Triage call contract").
@@ -627,7 +623,7 @@ pub fn run_triage(
     let batches = build_batches(&target.root, plan, &findings.findings)?;
     let mut verdicts: Vec<VerdictRecord> = Vec::new();
     let mut usage: Vec<(String, u64, u64)> = Vec::new();
-    let mut awaiting: Vec<String> = Vec::new();
+    let mut awaiting: Vec<std::path::PathBuf> = Vec::new();
 
     for batch in &batches {
         let (request, hashes) = build_request(batch, model, max_tokens)?;
@@ -638,8 +634,10 @@ pub fn run_triage(
 
         let response = match checked_complete(provider, &request) {
             Ok(r) => r,
-            Err(e) if is_awaiting(&e) => {
-                awaiting.push(e.to_string());
+            // External hand-off: the request file is written; remember the
+            // response path and keep going so every batch's request lands.
+            Err(Error::Awaiting { path, .. }) => {
+                awaiting.push(path);
                 continue;
             }
             Err(e) => return Err(e),
@@ -687,15 +685,14 @@ pub fn run_triage(
         usage.push((usage_key, in_tokens, out_tokens));
     }
 
-    if !awaiting.is_empty() {
-        if awaiting.len() == 1 {
-            return Err(Error::Invariant(awaiting.remove(0)));
-        }
-        return Err(Error::Invariant(format!(
-            "awaiting {} response(s):\n{}",
-            awaiting.len(),
-            awaiting.join("\n")
-        )));
+    if let Some(path) = awaiting.into_iter().next() {
+        // Typed (docs/CLI-HARDENING.md §4, EVENTS-2): triage has no attempt.
+        // Every pending batch's request file is on disk; the re-run picks up
+        // the next pending response.
+        return Err(Error::Awaiting {
+            path,
+            attempt: None,
+        });
     }
 
     Ok(TriageOutcome {
@@ -871,8 +868,12 @@ files = ["src/unit.c"]
         let err = run_triage(
             &adapter, "model-x", 4096, &target, &facts, &plan, &findings, &traces,
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::Awaiting { attempt: None, .. }),
+            "typed, not prose: {err}"
+        );
+        let err = err.to_string();
         assert!(err.contains("awaiting response: "), "{err}");
 
         let req_path = the_request_file(&traces);

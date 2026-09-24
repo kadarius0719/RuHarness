@@ -350,6 +350,7 @@ impl Stage for DriverStage<'_> {
         Ok(Judged {
             wrote_candidate: true,
             failure,
+            verdict: None,
         })
     }
 

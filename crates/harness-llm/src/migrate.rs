@@ -259,6 +259,10 @@ pub struct MigrationOutcome {
     /// render differently from the recorded one (empty = conformant; see
     /// [`crate::conformance`]). `None` when nothing was verified.
     pub drifted: Option<Vec<usize>>,
+    /// The final turn's stored oracle verdict (`<attempt_dir>/
+    /// attempt-verdict.json`) when the final turn was judged by the oracle
+    /// in this run; `None` otherwise, and after a verification.
+    pub verdict: Option<harness_core::Verdict>,
 }
 
 /// Run one migration attempt for `unit`: a translate turn, then repair turns
@@ -383,6 +387,7 @@ pub fn run_migration(
         attempt_dir: outcome.attempt_dir,
         candidate_dir: outcome.candidate,
         drifted: outcome.drifted,
+        verdict: outcome.verdict,
     })
 }
 
@@ -439,6 +444,7 @@ impl Stage for MigrateStage<'_> {
                     explanation: class_explanation("check"),
                     evidence: listed.concat(),
                 }),
+                verdict: None,
             });
         }
         let candidate = write_candidate(ctx.work_dir, self.crate_name, logic, ffi)?;
@@ -490,6 +496,7 @@ impl Stage for MigrateStage<'_> {
         Ok(Judged {
             wrote_candidate: true,
             failure,
+            verdict: (!ctx.verifying).then_some(verdict),
         })
     }
 
@@ -1059,7 +1066,14 @@ int add(int a, int b) { return a + b; }\n";
                     }
                     Ok(response)
                 }
-                Some(Err(message)) => Err(Error::Invariant(message)),
+                // A scripted hand-off is the typed error the real adapter raises.
+                Some(Err(message)) => match message.strip_prefix("awaiting response: ") {
+                    Some(path) => Err(Error::Awaiting {
+                        path: std::path::PathBuf::from(path),
+                        attempt: None,
+                    }),
+                    None => Err(Error::Invariant(message)),
+                },
                 None => Err(Error::Invariant("provider script exhausted".into())),
             }
         }

@@ -20,9 +20,8 @@ use harness_core::UnitStatus;
 use harness_core::{attempts, hash, Facts, Plan, TargetContext};
 use harness_oracle::bench::{CSide, Scorer};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
-use crate::out;
+use crate::{lock_ledger, out};
 
 #[derive(Subcommand)]
 pub enum BenchCmd {
@@ -115,7 +114,7 @@ pub enum BenchCmd {
     },
 }
 
-pub fn run(cmd: BenchCmd) -> Result<ExitCode> {
+pub fn run(cmd: BenchCmd) -> Result<u8> {
     match cmd {
         BenchCmd::Vendor { suite, from } => cmd_vendor(&suite, &from),
         BenchCmd::VerifyCorpus { suite } => cmd_verify_corpus(&suite),
@@ -159,7 +158,7 @@ pub fn run(cmd: BenchCmd) -> Result<ExitCode> {
 /// cases, whether or not the unit opted in; nothing is written. Outcomes:
 /// GREEN, RED (the candidate's), N/A (a C-side detail: the driver, the
 /// interface lines or the toolchain), skipped (no target or not verified).
-fn cmd_boundary(suite_dir: &Path, only: &[String]) -> Result<ExitCode> {
+fn cmd_boundary(suite_dir: &Path, only: &[String]) -> Result<u8> {
     let suite = harness_core::bench::Suite::load(&suite_dir.join("suite.toml"))?;
     let selected: Vec<&SuiteCase> = suite
         .cases
@@ -179,6 +178,7 @@ fn cmd_boundary(suite_dir: &Path, only: &[String]) -> Result<ExitCode> {
         let root = root_raw.canonicalize()?;
         let ctx = TargetContext::load(&root)?;
         let ledger = Ledger::new(&ctx.root);
+        let _lock = lock_ledger(&ledger, "bench boundary")?;
         let plan = Plan::load(&ledger.plan_path())?;
         let Some(unit) = plan.units.iter().find(|u| u.symbols.contains(&case.symbol)) else {
             skipped += 1;
@@ -242,11 +242,7 @@ fn cmd_boundary(suite_dir: &Path, only: &[String]) -> Result<ExitCode> {
         "bench boundary: {green} green, {red} red, {vacuous} vacuous, {not_applicable} not \
          applicable, {skipped} skipped, {errors} error(s)"
     ));
-    Ok(if errors > 0 {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    })
+    Ok(if errors > 0 { 1 } else { 0 })
 }
 
 /// `--jobs`, defaulting to half the available cores (at least 1).
@@ -267,7 +263,7 @@ pub fn load_verified(suite_dir: &Path) -> Result<(Suite, CorpusLock)> {
     Ok((suite, lock))
 }
 
-fn cmd_vendor(suite_dir: &Path, from: &Path) -> Result<ExitCode> {
+fn cmd_vendor(suite_dir: &Path, from: &Path) -> Result<u8> {
     let suite = Suite::load(&suite_dir.join("suite.toml"))?;
     let (derived, lock) = harness_core::bench::vendor(suite_dir, &suite, from)?;
     derived.store(&suite_dir.join("suite.toml"))?;
@@ -288,10 +284,10 @@ fn cmd_vendor(suite_dir: &Path, from: &Path) -> Result<ExitCode> {
         derived.upstream.tag,
         &derived.upstream.commit[..12]
     ));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
-fn cmd_verify_corpus(suite_dir: &Path) -> Result<ExitCode> {
+fn cmd_verify_corpus(suite_dir: &Path) -> Result<u8> {
     let (suite, lock) = load_verified(suite_dir)?;
     out(format!(
         "bench verify-corpus: OK — {} locked file(s), {} case(s), {}@{}",
@@ -300,7 +296,7 @@ fn cmd_verify_corpus(suite_dir: &Path) -> Result<ExitCode> {
         suite.upstream.tag,
         &suite.upstream.commit[..12]
     ));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// The generated `harness.toml` of a case (docs/SCHEMAS.md "M4 additions").
@@ -329,7 +325,7 @@ fn case_config(case: &SuiteCase, has_include: bool) -> String {
     )
 }
 
-fn cmd_init(suite_dir: &Path, check: bool) -> Result<ExitCode> {
+fn cmd_init(suite_dir: &Path, check: bool) -> Result<u8> {
     let (suite, _lock) = load_verified(suite_dir)?;
     let mut drift: Vec<String> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
@@ -365,13 +361,13 @@ fn cmd_init(suite_dir: &Path, check: bool) -> Result<ExitCode> {
             out(format!("bench init --check: {d}"));
         }
         if !drift.is_empty() {
-            return Ok(ExitCode::FAILURE);
+            return Ok(1);
         }
         out(format!(
             "bench init --check: {} case(s) match",
             suite.cases.len()
         ));
-        return Ok(ExitCode::SUCCESS);
+        return Ok(0);
     }
     for f in &failed {
         out(format!("bench init: NOT initialized — {f}"));
@@ -383,12 +379,13 @@ fn cmd_init(suite_dir: &Path, check: bool) -> Result<ExitCode> {
         suite.cases.len(),
         failed.len()
     ));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// Scan + plan one case target and give each unit its default oracle table.
 fn init_case(root: &Path, case: &SuiteCase) -> Result<()> {
     let ctx = TargetContext::load(root)?;
+    let _lock = lock_ledger(&Ledger::new(&ctx.root), "bench init")?;
     crate::scan_target(&ctx)?;
     crate::plan_target(&ctx)?;
     let ledger = Ledger::new(&ctx.root);
@@ -448,7 +445,7 @@ pub fn driver_state(
     })
 }
 
-fn cmd_status(suite_dir: &Path) -> Result<ExitCode> {
+fn cmd_status(suite_dir: &Path) -> Result<u8> {
     let (suite, _lock) = load_verified(suite_dir)?;
     let mut tally: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for case in &suite.cases {
@@ -468,7 +465,7 @@ fn cmd_status(suite_dir: &Path) -> Result<ExitCode> {
         suite.cases.len(),
         summary.join(" ")
     ));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// One case's pipeline line: `<unit-status> driver=<state> driver-attempts=N migrate-attempts=N (<last outcome>)`.
@@ -925,10 +922,47 @@ fn print_totals(scores: &Scores) {
     }
 }
 
-fn cmd_score(suite_dir: &Path, cases: &[String], write: bool, jobs: usize) -> Result<ExitCode> {
+/// The cases a `--case` selection names (all when empty).
+fn select<'a>(suite: &'a harness_core::bench::Suite, only: &[String]) -> Vec<&'a SuiteCase> {
+    suite
+        .cases
+        .iter()
+        .filter(|case| only.is_empty() || only.iter().any(|o| *o == case.path || o == case.name()))
+        .collect()
+}
+
+/// Take the writer lock of every selected case that has a ledger, up front
+/// (docs/CLI-HARDENING.md §1): a bench run builds inside the case ledgers
+/// (`units/<id>/<crate>/target/`, `Cargo.lock`) and `--replay` writes
+/// `.replay-<id>/` scratch, so contention is reported before any build, and
+/// `check`'s two passes (replay, then scoring) run under ONE hold — the
+/// crate the replay judged against is the crate that is scored. A suite
+/// run therefore excludes `migrate` on its selected cases for its duration.
+fn lock_cases(
+    suite_dir: &Path,
+    cases: &[&SuiteCase],
+    command: &str,
+) -> Result<Vec<harness_core::ledger::WriterLock>> {
+    let mut locks = Vec::new();
+    for case in cases {
+        let root = case.target_root(suite_dir);
+        if !root.join("harness.toml").exists() || !Ledger::new(&root).plan_path().exists() {
+            continue;
+        }
+        let root = root.canonicalize()?;
+        let lock = lock_ledger(&Ledger::new(&root), &format!("bench {command}"))
+            .with_context(|| format!("bench {command}: {}", case.path))?;
+        locks.push(lock);
+    }
+    Ok(locks)
+}
+
+fn cmd_score(suite_dir: &Path, cases: &[String], write: bool, jobs: usize) -> Result<u8> {
     if write && !cases.is_empty() {
         bail!("--write records the WHOLE suite; drop --case");
     }
+    let (suite, _) = load_verified(suite_dir)?;
+    let _locks = lock_cases(suite_dir, &select(&suite, cases), "score")?;
     // Recording a baseline re-verifies every verified unit and re-validates
     // every generated driver first (review, M4): a red unit must never be
     // written into the regression baseline as verified.
@@ -944,7 +978,7 @@ fn cmd_score(suite_dir: &Path, cases: &[String], write: bool, jobs: usize) -> Re
                 problems.len()
             );
         }
-        return Ok(ExitCode::FAILURE);
+        return Ok(1);
     }
     if write {
         scores.store(&suite_dir.join("scores.json"))?;
@@ -953,12 +987,14 @@ fn cmd_score(suite_dir: &Path, cases: &[String], write: bool, jobs: usize) -> Re
             suite_dir.join("scores.json").display()
         ));
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
-fn cmd_check(suite_dir: &Path, replay: bool, jobs: usize) -> Result<ExitCode> {
+fn cmd_check(suite_dir: &Path, replay: bool, jobs: usize) -> Result<u8> {
     let baseline = Scores::load(&suite_dir.join("scores.json"))
         .context("loading the committed scores.json (run `bench score --write` first)")?;
+    let (suite, _) = load_verified(suite_dir)?;
+    let _locks = lock_cases(suite_dir, &select(&suite, &[]), "check")?;
     let mut problems = Vec::new();
     if replay {
         problems.extend(replay_all(suite_dir)?);
@@ -984,7 +1020,7 @@ fn cmd_check(suite_dir: &Path, replay: bool, jobs: usize) -> Result<ExitCode> {
     // An environment/lock mismatch makes vector comparisons meaningless.
     if !cmp.incomparable.is_empty() {
         out("bench check: INCOMPARABLE — re-baseline with `bench score --write`".into());
-        return Ok(ExitCode::FAILURE);
+        return Ok(1);
     }
     // Regressions on unchanged cases (and lost verified status anywhere) are
     // judged per case: other cases' changed inputs never mask them.
@@ -994,7 +1030,7 @@ fn cmd_check(suite_dir: &Path, replay: bool, jobs: usize) -> Result<ExitCode> {
             cmp.regressions.len(),
             problems.len()
         ));
-        return Ok(ExitCode::from(crate::EXIT_ORACLE_RED));
+        return Ok(crate::EXIT_ORACLE_RED);
     }
     if !cmp.input_changes.is_empty() || !cmp.membership.is_empty() {
         out(
@@ -1002,13 +1038,13 @@ fn cmd_check(suite_dir: &Path, replay: bool, jobs: usize) -> Result<ExitCode> {
              ones (`bench score --write`)"
                 .into(),
         );
-        return Ok(ExitCode::FAILURE);
+        return Ok(1);
     }
     out(format!(
         "bench check: OK — no regression ({} improvement(s))",
         cmp.improvements.len()
     ));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// Replay-verify every recorded driver and migrate attempt of every case

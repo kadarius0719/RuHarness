@@ -48,6 +48,7 @@ pub mod driver_gen;
 pub mod emission;
 pub mod migrate;
 mod openai_compat;
+pub mod progress;
 pub mod providers;
 mod trajectory;
 pub mod triage;
@@ -56,6 +57,7 @@ pub use adapters::{AnthropicAdapter, TraceAdapter};
 pub use driver_gen::{run_driver_generation, DriverOutcome};
 pub use emission::{deny_scan, parse_emission, EmissionResult};
 pub use migrate::{run_migration, MigrateParams, MigrationOutcome};
+pub use progress::Progress;
 pub use providers::{checked_complete, ProviderProfile, ResolvedProvider};
 pub use triage::{run_triage, TriageOutcome};
 

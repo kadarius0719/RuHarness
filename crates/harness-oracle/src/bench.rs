@@ -609,34 +609,31 @@ impl Scorer {
     }
 }
 
-/// An exclusive lock file (`create_new`), removed on drop. A crashed run
-/// leaves it behind; the error says so.
+/// An exclusive `flock(2)` on `.bench/LOCK` (a permanent, harness-owned,
+/// gitignored file), held on the open file description for the life of the
+/// value: the kernel releases it when the holder exits or dies, so a
+/// crashed run never leaves a stale lock (docs/CLI-HARDENING.md §1).
 #[derive(Debug)]
-struct BenchLock(PathBuf);
+struct BenchLock(#[allow(dead_code)] std::fs::File);
 
 impl BenchLock {
     fn acquire(path: &Path) -> Result<BenchLock, Error> {
-        match std::fs::OpenOptions::new()
+        let file = std::fs::OpenOptions::new()
+            .read(true)
             .write(true)
-            .create_new(true)
+            .create(true)
+            .truncate(false)
             .open(path)
-        {
-            Ok(_) => Ok(BenchLock(path.to_path_buf())),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                Err(Error::Invariant(format!(
-                    "another bench scoring run holds {} (runs share the verified snapshot); if no \
-                 run is active it is stale from a crash — remove it",
-                    path.display()
-                )))
-            }
-            Err(e) => Err(Error::io(path, e)),
+            .map_err(|e| Error::io(path, e))?;
+        match file.try_lock() {
+            Ok(()) => Ok(BenchLock(file)),
+            Err(std::fs::TryLockError::WouldBlock) => Err(Error::Invariant(format!(
+                "another bench scoring run holds {} (runs share the verified snapshot); wait for \
+                 it to finish",
+                path.display()
+            ))),
+            Err(std::fs::TryLockError::Error(e)) => Err(Error::io(path, e)),
         }
-    }
-}
-
-impl Drop for BenchLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
     }
 }
 

@@ -556,10 +556,12 @@ impl ProviderAdapter for TraceAdapter {
         }
         if self.external {
             write_pretty(&Self::request_path(&self.dir, req)?, req)?;
-            Err(Error::Invariant(format!(
-                "awaiting response: {}",
-                response_path.display()
-            )))
+            // Typed (docs/CLI-HARDENING.md §4): the trajectory fills in the
+            // attempt id; the CLI maps it to its `awaiting` event.
+            Err(Error::Awaiting {
+                path: response_path,
+                attempt: None,
+            })
         } else {
             Err(Error::Invariant(format!(
                 "missing trace {} — record a live run first or use the external provider",

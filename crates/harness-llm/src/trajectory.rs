@@ -139,6 +139,10 @@ pub(crate) struct Judged {
     pub(crate) wrote_candidate: bool,
     /// `None` = green.
     pub(crate) failure: Option<Failure>,
+    /// The oracle verdict this judge STORED (`attempt-verdict.json`), when
+    /// it stored one — the migrate stage on a live judged turn; never while
+    /// verifying, never for a driver or a deny-scan failure.
+    pub(crate) verdict: Option<harness_core::Verdict>,
 }
 
 /// Where a run writes, handed to [`Stage::judge`].
@@ -227,6 +231,8 @@ pub(crate) struct Outcome {
     /// After a verification: the 0-based turns whose request HEAD would
     /// render differently (empty = conformant). `None` = nothing verified.
     pub(crate) drifted: Option<Vec<usize>>,
+    /// The final turn's stored oracle verdict (see [`Judged::verdict`]).
+    pub(crate) verdict: Option<harness_core::Verdict>,
 }
 
 /// Everything one stage run is bound to.
@@ -268,6 +274,7 @@ impl<'a> Job<'a> {
                 record: recorded,
                 candidate: None,
                 drifted: Some(drifted),
+                verdict: None,
             });
         }
 
@@ -308,6 +315,7 @@ impl<'a> Job<'a> {
                         attempt_dir,
                         candidate,
                         drifted: Some(drifted),
+                        verdict: None,
                     });
                 }
                 _ => base_id,
@@ -349,13 +357,14 @@ impl<'a> Job<'a> {
             provider.live.then(|| params.traces_dir.join(&id)),
             max_turns,
         );
-        let wrote_candidate = run.drive(&mut record, first)?;
+        let (wrote_candidate, verdict) = run.drive(&mut record, first)?;
 
         Ok(Outcome {
             record,
             candidate: wrote_candidate.then(|| self.stage.candidate_path(&work_dir)),
             attempt_dir: work_dir,
             drifted: None,
+            verdict,
         })
     }
 
@@ -477,6 +486,7 @@ impl<'a> Job<'a> {
                 attempt_dir: latest_dir,
                 candidate,
                 drifted: Some(replay.drifted),
+                verdict: None,
             })));
         }
         live_sample_id(&attempts_dir, base, true).map(TraceBackedSample::Run)
@@ -1057,13 +1067,19 @@ struct Run<'a> {
 
 impl Run<'_> {
     /// Drive the trajectory to its end, journaling after every turn.
-    /// Returns whether a candidate was written.
-    fn drive(&self, record: &mut AttemptRecord, first: CompletionRequest) -> Result<bool, Error> {
+    /// Returns whether a candidate was written and the final turn's stored
+    /// verdict, when the final turn stored one.
+    fn drive(
+        &self,
+        record: &mut AttemptRecord,
+        first: CompletionRequest,
+    ) -> Result<(bool, Option<harness_core::Verdict>), Error> {
         let provider = self.provider;
         let stage = self.job.stage;
         let texts = stage.texts();
         let mut state = RepairState::default();
         let mut wrote_candidate = false;
+        let mut last_verdict: Option<harness_core::Verdict>;
         let mut request = first;
         let mut index = 0usize;
         loop {
@@ -1099,6 +1115,17 @@ impl Run<'_> {
                 }
             }
             let head_key = TraceAdapter::request_key(&request)?;
+            crate::progress::sink().turn_start(
+                &record.unit,
+                &record.id,
+                index + 1,
+                if index == 0 {
+                    texts.first_kind
+                } else {
+                    "repair"
+                },
+                &head_key,
+            );
             // Verifying: the RECORDED turn is judged, whatever HEAD would
             // ask — HEAD's rendering only decides conformance (module docs).
             // Nothing is ever sent.
@@ -1148,6 +1175,9 @@ impl Run<'_> {
                 texts.spec,
             );
             let mut outcome: Option<&'static str> = None;
+            // Only a judged turn stores a verdict; any other kind of turn
+            // leaves none for this turn.
+            last_verdict = None;
             let result: &'static str = match parsed {
                 ParsedEmission::Blocked(_) => {
                     outcome = Some("blocked");
@@ -1171,6 +1201,7 @@ impl Run<'_> {
                     };
                     let judged = stage.judge(&ctx, &files, record)?;
                     wrote_candidate |= judged.wrote_candidate;
+                    last_verdict = judged.verdict;
                     match judged.failure {
                         None => {
                             outcome = Some("green");
@@ -1203,12 +1234,15 @@ impl Run<'_> {
                 input_tokens: usage(response.input_tokens),
                 output_tokens: usage(response.output_tokens),
             });
+            if let Some(turn) = record.turns.last() {
+                crate::progress::sink().turn_end(&record.unit, &record.id, index + 1, turn);
+            }
             if outcome.is_none() && index + 1 >= self.max_turns {
                 outcome = Some(exhausted_outcome(&record.turns));
             }
             if let Some(outcome) = outcome {
                 self.finish(record, outcome)?;
-                return Ok(wrote_candidate);
+                return Ok((wrote_candidate, last_verdict));
             }
             self.store(record)?;
             index += 1;
@@ -1231,6 +1265,17 @@ impl Run<'_> {
     ///   response" above all) is propagated unchanged; the record says
     ///   `in-progress`, which is exactly right.
     fn call_failed(&self, record: &AttemptRecord, index: usize, e: Error) -> Error {
+        // The hand-off names the attempt it resumes (the adapter cannot).
+        if let Error::Awaiting {
+            path,
+            attempt: None,
+        } = e
+        {
+            return Error::Awaiting {
+                path,
+                attempt: Some(record.id.clone()),
+            };
+        }
         if self.verifying.is_some() || !is_context_error(&e) {
             return e;
         }

@@ -1327,3 +1327,50 @@ resolution. The ones that changed the design's direction:
 Follow-ups (not this milestone): `verify` lacks the R6 gate; driver-attempt Accept; queueing on
 contention; an async client for cooperative cancellation.
 
+## 2026-09-24 — CLI hardening IMPLEMENTED (writer lock, `promote`, cancellation, `--json` events)
+
+Built against the reviewed design (`docs/CLI-HARDENING.md`, now "IMPLEMENTED"), then a
+4-lens adversarial code review (11 confirmed, 0 refuted; §R) and a fix pass with regression
+tests. What landed:
+- **Writer lock** — `harness_core::ledger::WriterLock` on `migration/.lock` via std
+  `File::try_lock` (zero crates; MSRV 1.85 → 1.89): symlink/hard-link-proof open protocol,
+  holder line written under the lock and truncated on clean release, readers only READ it,
+  `Error::Locked` fail-fast with the holder named. Every writing command takes it; `bench
+  score|check` lock every selected case up front and hold across both passes; `bench
+  boundary|init` per case. `BenchLock` migrated to the same mechanism (no more "remove it
+  yourself"). `state status` is two-phase and reports `write in flight` only for a LIVE holder
+  (`kill -0`) — every signal death leaves a dead holder's line, and the review caught that it
+  would have masked real contradictions.
+- **Promotion** — `promote_attempt` with one marker for the whole protocol, an idempotent
+  green tail (verdicts → status → `promoted` → `.prev` → marker last), `recover_promotion` by
+  evidence (finish or roll back; a FIRST promotion is now covered), `migrate --no-promote`,
+  `[llm.migrate] promote_on_green`, and `harness promote <UNIT> <ATTEMPT> [--replace]` with the
+  full refusal list (clean id, record id/unit, migrate record, green, digest, binding to the
+  current `unit_source`+`driver`, plan staleness, R6 driver freshness). A rolled-back
+  promotion reports its checks but never a `verdict` line (nothing was stored).
+- **Cancellation** — `exec.rs`: `CANCELLED` + a registry of live process groups; spawns happen
+  under the registry lock; a child that ends after the cancellation is `Error::Interrupted`,
+  never a `ChildEnd` (`built_with_env` gained the outer/inner result shape); the handler kills
+  every live group, writes its courtesy output from a helper thread with a 250 ms budget (a
+  stalled `--json` consumer or a closed stderr must not stop it), then dies BY the signal
+  (`emulate_default_handler`). SIGHUP is registered only when the output is a terminal, so
+  `nohup harness … &` keeps its inherited `SIG_IGN` — both pinned by e2e tests (stalled pipe;
+  `sh -c 'trap "" HUP; exec harness …'`), and the cancellation e2e now watches a spinning C
+  driver named `drv_c` die.
+- **`--json` events** — `report.rs` (process-global mode, whole-line writes under a mutex),
+  the `ruharness-events` v1 stream (header/result, message, facts/unit via
+  `harness_core::status::UnitReport` shared by the human line and the event, turn-start/turn-end
+  from a `harness_llm::progress` sink the trajectory reports to, attempt with the promotion
+  reason, check/verdict — including migrate's final judged turn at `attempt-verdict.json` —,
+  promote, awaiting with the exact resume command, error with typed kinds from
+  `Error::{Locked, Stale, Awaiting, Interrupted}`). `run_triage` carries the typed `Awaiting`
+  through its batch fold (the review caught it re-stringifying it).
+- One new crate: `signal-hook` 0.4.4 (+`signal-hook-registry`, `errno`). Deviation from the
+  design recorded: the progress sink is process-global (installed once under `--json`) rather
+  than a `MigrateParams` field — 16 construction sites, same semantics.
+Gates: fmt/clippy clean, `cargo test --workspace` green (465 tests incl. the three hardening
+e2e tests), `bench check --suite targets/tractor --replay --jobs 6`: `198 reproduce (1
+conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)`, OK — no regression.
+Follow-ups (from both reviews): `verify` lacks the R6 gate; driver-attempt Accept; queueing on
+contention; an async client for cooperative cancellation. Next: the `harness-tui` design.
+

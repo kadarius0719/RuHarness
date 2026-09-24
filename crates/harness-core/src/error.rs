@@ -60,6 +60,42 @@ pub enum Error {
         /// green record needs `loosening` unless this is not green).
         replayed_outcome: String,
     },
+    /// Another harness command holds the ledger's writer lock
+    /// (docs/CLI-HARDENING.md §1). `holder` is the record it wrote — `None`
+    /// when it had not written one yet.
+    #[error(
+        "ledger is locked by another harness command ({}); {}",
+        crate::ledger::describe_holder(.holder),
+        if .holder.is_some() { "wait for it or stop it" } else { "retry" }
+    )]
+    Locked {
+        /// The holder's record, when readable.
+        holder: Option<crate::ledger::Holder>,
+    },
+    /// A ledger input is stale against the tree: the command refuses rather
+    /// than act on evidence that no longer describes the sources.
+    #[error("{subject} is stale: {hint}")]
+    Stale {
+        /// What is stale (`facts.jsonl`, `unit \`u\``, `finding f-…`).
+        subject: String,
+        /// What changed and what to run.
+        hint: String,
+    },
+    /// The `external` hand-off wrote a request and waits for its response
+    /// file (docs/SCHEMAS.md "Provider profiles"). `attempt` is the attempt
+    /// being resumed, when one exists (the trajectory fills it in).
+    #[error("awaiting response: {}", .path.display())]
+    Awaiting {
+        /// The response file the next run will pick up.
+        path: PathBuf,
+        /// The attempt id, when the hand-off happened inside a trajectory.
+        attempt: Option<String>,
+    },
+    /// The harness was cancelled (SIGINT/SIGTERM/SIGHUP) while a child was
+    /// running: the child was killed and its end is NOT evidence
+    /// (docs/CLI-HARDENING.md §3).
+    #[error("interrupted: the harness was cancelled while a child process was running")]
+    Interrupted,
 }
 
 impl Error {

@@ -13,9 +13,8 @@ use harness_core::ledger::Ledger;
 use harness_core::plan::{self as plan_mod, OracleValue};
 use harness_core::{hash, Facts, Plan, TargetContext};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
-use crate::{out, require_sandbox, safe_ledger_dir, EXIT_ORACLE_RED};
+use crate::{lock_ledger, out, report, require_sandbox, safe_ledger_dir, EXIT_ORACLE_RED};
 
 /// Arguments of `harness gen-driver`.
 pub struct GenDriverArgs {
@@ -46,7 +45,7 @@ pub fn default_oracle_entries(unit_id: &str, files: &[String]) -> Vec<(&'static 
     ]
 }
 
-pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<ExitCode> {
+pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
     let GenDriverArgs {
         unit: unit_id,
         target,
@@ -60,6 +59,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<ExitCode> {
     require_sandbox(allow_unsandboxed, "harness gen-driver")?;
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
+    let _lock = lock_ledger(&ledger, &format!("gen-driver {unit_id}"))?;
     let plan_doc = Plan::load(&ledger.plan_path())?;
     plan_doc
         .execution_order()
@@ -69,10 +69,11 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<ExitCode> {
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
     let closure = facts.include_closure(&unit.files);
     if hash::file_set_hash_on_disk(&ctx.root, &closure)? != unit.source_hash {
-        bail!(
-            "unit `{unit_id}` is stale: source changed since planning; run `harness scan`, \
-             then `harness plan`"
-        );
+        return Err(harness_core::Error::Stale {
+            subject: format!("unit `{unit_id}`"),
+            hint: "source changed since planning; run `harness scan`, then `harness plan`".into(),
+        }
+        .into());
     }
     // Where a promoted driver will live; refuse up front (before any model
     // call) when promotion could only ever clobber a human-written driver.
@@ -125,14 +126,25 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<ExitCode> {
     let outcome =
         match harness_llm::run_driver_generation(&params, &judge, &ctx, &facts, &plan_doc, unit) {
             Ok(o) => o,
-            Err(e) if e.to_string().contains("awaiting response") => {
+            Err(e @ harness_core::Error::Awaiting { .. }) => {
                 eprintln!("{e:#}");
                 eprintln!(
                     "gen-driver: external provider mode — supply the response file under {} and \
-                 re-run",
+                     re-run",
                     traces.display()
                 );
-                return Ok(ExitCode::FAILURE);
+                if let harness_core::Error::Awaiting { path, attempt } = &e {
+                    report::event(&report::Awaiting {
+                        k: "awaiting",
+                        attempt: attempt.as_deref(),
+                        path: path.display().to_string(),
+                        resume: format!(
+                            "harness gen-driver {unit_id} --target {}",
+                            target.display()
+                        ),
+                    });
+                }
+                return Err(e.into());
             }
             Err(e) => return Err(e.into()),
         };
@@ -161,15 +173,15 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<ExitCode> {
         ));
     }
     if record.outcome != "green" {
-        return Ok(ExitCode::from(EXIT_ORACLE_RED));
+        return Ok(EXIT_ORACLE_RED);
     }
     let Some(candidate) = outcome.candidate_driver.as_ref() else {
         out("gen-driver: green attempt verified (replay run); nothing promoted".into());
-        return Ok(ExitCode::SUCCESS);
+        return Ok(0);
     };
     if resolved.kind == "replay" {
         out("gen-driver: replay run; nothing promoted".into());
-        return Ok(ExitCode::SUCCESS);
+        return Ok(0);
     }
     let bytes = std::fs::read(candidate).context("reading the green candidate driver")?;
     if hash::bytes_hash(&bytes) != record.candidate_digest {
@@ -178,7 +190,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<ExitCode> {
     if dest.exists() {
         if std::fs::read(&dest).context("reading the current driver")? == bytes {
             out("gen-driver: this driver is already the unit's driver".into());
-            return Ok(ExitCode::SUCCESS);
+            return Ok(0);
         }
         if !promote {
             out(
@@ -187,7 +199,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<ExitCode> {
                  then goes stale until re-verified)"
                     .to_string(),
             );
-            return Ok(ExitCode::SUCCESS);
+            return Ok(0);
         }
     }
     promote_driver(&ctx, &ledger, unit, &dest, &bytes)?;
@@ -203,7 +215,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<ExitCode> {
         dest_rel,
         validation_path.display()
     ));
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// Write the driver, validate it IN PLACE, and persist the validation only

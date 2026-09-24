@@ -183,7 +183,10 @@ Human stdout is NOT a contract — machine consumers read the ledger files.
   prints per-unit fresh/verified-but-stale/contradiction.
 
 Exit codes: `0` ok/green · `1` harness error (including stale-plan refusal) ·
-`2` usage error (clap's own) · `10` oracle red. Pinned by integration test.
+`2` usage error (clap's own) · `10` oracle red. Pinned by integration test. On
+SIGINT/SIGTERM/SIGHUP the harness kills every live sandboxed process group and then
+terminates BY that signal (`code() == None`; shells report 130/143/129) — see "CLI
+hardening" below.
 
 ## facts.db (deferred to M2 — design frozen on paper, no code at M1)
 
@@ -559,16 +562,24 @@ stripped.
 
 ## Promotion protocol
 
-On green, when the unit is not already verified/merged (or `--promote`):
-(1) the final attempt record is written first; (2) the candidate's closed file list
-is staged to `units/<id>/.promote-<attempt>/`; (3) two renames: `<crate>` →
-`.<crate>.prev`, staged → `<crate>`; (4) the normal `verify` runs — red ⇒ `.prev` is
-renamed back and status/verdicts are untouched; green ⇒ `.prev` is deleted and
-`promoted: true` is recorded. A leftover `.<crate>.prev` found at startup is resolved
-by EVIDENCE: if the committed green verdict's `rust_crate` digest matches the crate on
-disk, the promotion had completed and only the backup is removed; otherwise the
-unverified candidate is rolled back. An ERROR during the in-place verify rolls back
-exactly like a red verdict.
+On green, when promotion is due (see "CLI hardening": `--promote` > `--no-promote` >
+`[llm.migrate] promote_on_green` > default; never from a replay run), or on
+`harness promote`: (1) the final attempt record is written first; (2) the candidate's
+closed file list is staged into the marker `units/<id>/.promote-<attempt>/`, whose
+digest must equal the record's `candidate_digest`; (3) two renames: `<crate>` →
+`.<crate>.prev` (when a crate exists), staged → `<crate>` — the marker stays; (4) the
+normal `verify` runs IN PLACE — red, or an ERROR, ⇒ the crate is removed, `.prev`
+renamed back, the marker removed, status/verdicts untouched; (5) green ⇒ the tail, every
+step idempotent, in this order: `oracle-latest.json` → `oracle-last-green.json` →
+`oracle-latest.md` → plan status `verified` → attempt `promoted: true` → `.prev`
+removed → the marker removed LAST. Recovery (`recover_promotion`, run by every writing
+command right after the writer lock) resolves every marker by EVIDENCE: the crate on
+disk is the attempt's candidate (digest) or not — if not, the old crate is untouched or
+moved aside, so `.prev` is restored when the crate is absent and the marker dropped; if
+so, the committed verdict is green and bound to it (finish the tail) or it is not (roll
+back as in (4)). A bare `.<crate>.prev` with no marker (the pre-marker protocol) is
+resolved the same way. A promoted attempt is bound to the CURRENT `unit_source` and
+`driver` digests; `harness promote` refuses otherwise (stale).
 
 ## CLI additions
 
@@ -871,3 +882,107 @@ runner}` + `heldout/tools/…` (never inside a target root), `scores.json`.
 | `suite.toml` `[[case]]`/`[[excluded]]`, `corpus.lock` | `bench vendor` |
 | `scores.json` | `bench score --write` |
 | `units/<id>/superseded.jsonl` | a human (reviewed); verified by `bench check --replay` |
+
+---
+
+# CLI hardening (post-M4; docs/CLI-HARDENING.md, §R authoritative)
+
+The milestone the review cockpit and the MCP bridge need from the CLI: they read the
+ledger and spawn `harness` for every write.
+
+## CLI contract additions
+
+- `harness --json <cmd> …` — a global flag: stdout carries the `ruharness-events`
+  stream (below) and nothing else; human logs and errors go to stderr. Without it,
+  nothing changes.
+- `harness migrate` gains `--no-promote` (record a green attempt without promoting;
+  conflicts with `--promote`). Promotion precedence: `--promote` > `--no-promote` >
+  `[llm.migrate] promote_on_green` > default (promote on green unless the unit is
+  already verified). The awaiting-response hint prints the exact resume command,
+  flags included.
+- `harness promote <UNIT> <ATTEMPT> [--replace] [--target DIR] [--allow-unsandboxed]`
+  — promote a recorded green migrate attempt (full id, positional) and verify it in
+  place: exit 0 verified · 10 rolled back on a red in-place verdict · 1 refused. Refusals,
+  in order, before any write: the id is a clean path segment; the record carries that id
+  and belongs to the unit; it is a migrate record (`stage` absent), green, its last turn
+  green, with a candidate digest; not already promoted (or `--replace`); the migrate
+  preconditions hold (plan `source_hash` matches the tree; R6 — a unit with
+  driver-generation history has a `validated` driver); the record's `unit_source` and
+  `driver` equal the current tree's (`stale` otherwise); `candidate/` exists and matches
+  the digest; the unit is not already verified/merged (or `--replace`). Requires the
+  sandbox like `migrate`.
+- Signals: on SIGINT/SIGTERM/SIGHUP the harness marks itself cancelled (no child is
+  spawned after it, and a child that ends after it is an `interrupted` harness error —
+  never journaled evidence), SIGKILLs every live sandboxed process group, emits the
+  events-mode `result`, and dies BY the signal.
+- Writer lock: every writing subcommand (`scan`, `plan`, `verify`, `detect`, `observe`,
+  `review`, `migrate`, `gen-driver`, `promote`, `sync-runtime` without `--check`, and
+  `bench score|check|boundary|init` per case) holds an exclusive `flock(2)` on
+  `<target>/migration/.lock` (gitignored, never deleted) from just after loading the
+  target to exit; a `bench score|check` locks EVERY selected case up front and keeps
+  the locks across both of `check`'s passes. Contention is a `locked` error, exit 1:
+  `ledger is locked by another harness command (pid N, \`migrate u-lib\`, since
+  <RFC 3339>); wait for it or stop it`. Readers (`state status`, clients) never lock:
+  they READ the holder line, and a unit that looks inconsistent while a LIVE writer is
+  at work is reported `write in flight`, not a contradiction (a dead holder's leftover
+  line — every signal death leaves one — is ignored).
+- SIGHUP is handled only when stdout or stderr is a terminal; a detached run (`nohup`,
+  output redirected or piped) keeps its inherited disposition. SIGINT/SIGTERM are handled
+  unconditionally. The handler's stderr line and events-mode `result` are written from a
+  helper thread with a 250 ms budget, so a stalled consumer or a closed stderr never
+  delays dying by the signal.
+
+## harness.toml additions (optional; additive)
+
+```toml
+[llm.migrate]
+promote_on_green = false   # default true; false = only `harness promote` (or an
+                           # explicit --promote) promotes — "Accept = an explicit act",
+                           # sticky across the several runs one `external` attempt takes
+```
+
+## The writer lock file: `migration/.lock` (gitignored)
+
+Created on first use, never deleted. Its content is one JSON line written by the holder
+under the lock — `{"pid":N,"command":"migrate u-lib","started":"<RFC 3339 UTC>"}` —
+and truncated to empty on a clean release; a crashed holder leaves its line (the kernel
+freed the lock; the line names the dead pid). Diagnostics only, never consulted for
+staleness. Wall-clock is allowed: the file is outside every hashed set and non-canonical.
+The harness never truncates through a link: a symlink or hard-linked `.lock`, or a
+symlinked `migration/`, is refused.
+
+## The events stream: `ruharness-events` (v1, `--json`)
+
+Newline-delimited JSON on stdout, one compact object per line, no timestamps. First line
+`{"k":"header","schema":"ruharness-events","schema_version":1,"command":"migrate",
+"args":[…],"pid":N,"harness":"<version>"}`; last line `{"k":"result","exit":N}` (plus
+`"signal":"SIGINT"` when the harness dies by a signal, best effort). `k` is an open
+enum: consumers skip unknown kinds and ignore unknown fields; additive changes never
+bump the version. Every value is the ledger's own, verbatim.
+
+| `k` | fields |
+|---|---|
+| `message` | `text` — every human line the command prints |
+| `facts` | `files`, `stale` (`state status`) |
+| `unit` | `id`, `status`, `source_fresh`, `verdict {state: present\|missing\|unreadable, green (present only), stale: [source\|rust-crate\|driver]}`, `contradiction`, `write_in_flight {pid, command, started}` (only when a LIVE writer holds the ledger — `kill -0`; a dead holder's leftover line is ignored), `attempts [{id, provider_kind, outcome, bound}]` (`state status`, one per unit) |
+| `turn-start` | `unit`, `attempt`, `index` (1-based), `kind`, `request_key` (HEAD's rendering) |
+| `turn-end` | `unit`, `attempt`, `index`, and the Turn verbatim: `kind`, `result` (the closed set `green \| format \| check \| build \| oracle \| crash-timeout \| truncated \| blocked`, treated as open), `request_key`, `response_hash`, `input_tokens`, `output_tokens` |
+| `attempt` | `unit`, `id`, `outcome`, `provider`, `model`, `promoted`, `promotion` (the reason, courtesy) |
+| `check` | `unit`, `name`, `passed`, `detail` — one per oracle check (`verify`, `migrate`'s final judged turn, a promotion — including a rolled-back one, whose verdict is not stored) |
+| `verdict` | `unit`, `green`, `path` — only after the verdict was stored at `path` (`verify`, migrate's final judged turn at `attempts/<id>/attempt-verdict.json`, a green promotion); a rolled-back promotion emits its `check` lines and `promote{result:"rolled-back"}` but no `verdict` |
+| `promote` | `unit`, `attempt`, `result` (`verified` / `rolled-back`) |
+| `awaiting` | `attempt` (null for triage), `path`, `resume` (the exact re-run command) |
+| `error` | `kind` (`locked` / `stale` / `awaiting` / `interrupted` / `harness`), `message`, `holder` (locked only) |
+
+The kinds come from typed `harness_core::Error` variants (`Locked`, `Stale`,
+`Awaiting`, `Interrupted`), not from prose matching.
+
+## Writer table additions
+
+| File | Writer |
+|---|---|
+| `migration/.lock` | every writing command (holder line; truncated on release) |
+| `units/<id>/<crate>/**`, `oracle-latest*.json`, plan status | `migrate` (promotion), `promote`, `verify` |
+| `units/<id>/.promote-<attempt>/` (marker, transient) | `migrate` (promotion), `promote`; resolved by recovery |
+| `units/<id>/<crate>/target/**`, `Cargo.lock`; `units/<id>/.replay-*/` | `bench score`, `bench check` (builds; scratch) |
+

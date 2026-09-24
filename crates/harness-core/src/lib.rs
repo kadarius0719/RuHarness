@@ -22,6 +22,7 @@ pub mod plan;
 pub mod planner;
 pub mod risk;
 pub mod runtime_view;
+pub mod status;
 pub mod traits;
 pub mod verdict;
 

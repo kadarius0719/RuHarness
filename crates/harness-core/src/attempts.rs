@@ -167,6 +167,50 @@ pub fn load_unit_driver_attempts(ledger: &Ledger, unit: &str) -> Result<Vec<Atte
     load_records(&ledger.unit_dir(unit).join("driver-attempts"))
 }
 
+/// One migrate attempt of `unit` by id, for callers that take the id from
+/// outside (`--attempt`, `harness promote`, a client): `id` must be a clean
+/// path segment (never joined otherwise), the record filed under it must
+/// carry that id (the attempts ledger is target-owned input — a record
+/// posing under another directory's name is refused, not trusted) and
+/// belong to `unit`. `None` when there is no such attempt.
+pub fn load_pinned(ledger: &Ledger, unit: &str, id: &str) -> Result<Option<AttemptRecord>, Error> {
+    if !crate::plan::is_clean_segment(id) {
+        return Err(Error::Invariant(format!(
+            "{:?} is not an attempt id",
+            printable(id, 64)
+        )));
+    }
+    let dir = attempt_dir(ledger, unit, id);
+    let record = match AttemptRecord::load(&dir) {
+        Ok(record) => record,
+        Err(e) if e.is_not_found() => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if record.id != id {
+        return Err(Error::Invariant(format!(
+            "{} holds a record with id {:?}, not `{id}` — the attempts ledger is inconsistent; \
+             refusing to touch it",
+            dir.join("attempt.json").display(),
+            printable(&record.id, 64)
+        )));
+    }
+    if record.unit != unit {
+        return Err(Error::Invariant(format!(
+            "attempt {id} belongs to unit `{}`, not `{unit}`",
+            printable(&record.unit, 64)
+        )));
+    }
+    Ok(Some(record))
+}
+
+/// `text` reduced to printable ASCII and cut to `max_bytes`.
+fn printable(text: &str, max_bytes: usize) -> String {
+    text.chars()
+        .map(|c| if (' '..='~').contains(&c) { c } else { '?' })
+        .take(max_bytes)
+        .collect()
+}
+
 fn load_records(dir: &Path) -> Result<Vec<AttemptRecord>, Error> {
     let dir = dir.to_path_buf();
     if !dir.exists() {
