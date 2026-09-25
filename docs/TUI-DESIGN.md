@@ -1,6 +1,7 @@
 # harness-tui — the review cockpit
 
-Status: IMPLEMENTED (2026-09-24); **§9 records the new direction** (a user-friendly wrapper
+Status: IMPLEMENTED (2026-09-24); harness-mcp, which reuses this crate's library, is built
+too (docs/MCP-DESIGN.md). **§9 records the new direction** (a user-friendly wrapper
 with an arrow-key file tree, deterministic actions on Enter and a chat pane inside) for the
 next designs. §R holds the resolutions of the 20 confirmed findings of the
 design review; §R2 the 9 (16 raw) of the code review of steps 1–3; §R3 the 27 of the code
@@ -19,8 +20,9 @@ the running command at the bottom. Three acts: **Accept** (promote a green attem
 reviewed), and a **labelled hand edit** (a human attempt, judged like any other and never
 counted as the pipeline's). Everything else is reading.
 
-Not a chat client (chat lives in Claude Code through `harness-mcp`, a later milestone that
-reuses this crate's read model as a library), not an editor (a hand edit happens in
+Not a chat client (today chat runs in a separate Claude Code session through `harness-mcp` —
+built, docs/MCP-DESIGN.md — which reuses this crate's library: the read model, the events
+reader and the child process; §9 moves chat into the cockpit), not an editor (a hand edit happens in
 `$EDITOR` and comes back through `harness override`), not a second writer: **every write is
 a spawned `harness --json` command**; the TUI never touches the ledger and never takes the
 writer lock; the ledger is re-read — it is the truth — when a spawned command has been
@@ -28,11 +30,13 @@ reaped.
 
 ## 1. Crate, features and dependencies
 
-`crates/harness-tui` = a **library** (`harness_tui::model`: the snapshot, the pair locator,
-the display filter — depends on harness-core, tree-sitter, tree-sitter-rust only) **plus a
+`crates/harness-tui` = a **library** (`model`, `pairs`, `display`: the snapshot, the pair
+locator, the display filter; `events`: the `ruharness-events` reader; `spawn`: the child
+process — depends on harness-core, tree-sitter, tree-sitter-rust, unicode-width and
+serde_json only) **plus a
 binary** `harness-tui` behind the default feature `tui` (`required-features = ["tui"]`;
 ratatui, crossterm, similar, tree-sitter-highlight, signal-hook are optional and enabled by
-`tui`). `harness-mcp` will depend on it with `default-features = false` — the "feature
+`tui`). `harness-mcp` depends on it with `default-features = false` — the "feature
 gated" of the brief. The workspace root gains `default-members` = every crate except
 harness-tui, so a plain `cargo build` at the root stays lean; `cargo test --workspace` and
 CI still build it. `#![forbid(unsafe_code)]`, `#![deny(missing_docs)]`. Workspace
@@ -397,7 +401,8 @@ agent runtime (the chat embeds an existing one); no new crates without the usual
 **Suggested order** (each: design → adversarial review → build → review → verify the fixes):
 1. The wrapper UX design: file tree, panes, menus / action list on `Enter`, mouse, wording,
    plain-language progress and results; then build it on today's engine.
-2. harness-mcp, with the requester label for chat-requested migrations.
+2. harness-mcp's requester label for chat-requested migrations (the server itself is built:
+   docs/MCP-DESIGN.md, six tools, steer attempts only).
 3. The chat pane (after its spike), plus the "migrate this" skill.
 
 **Open questions for the UX design review:** mouse support (crossterm already carries it —

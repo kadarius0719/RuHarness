@@ -6,8 +6,10 @@ first, then this:
 ---
 
 Resume RuHarness — the **cockpit-as-a-friendly-wrapper** session. Everything is on `main` and
-pushed (the last sessions ended at the commits "Record the new cockpit direction …" and
-"harness-mcp: the stdio MCP server, reviewed three times"). Before doing anything else:
+pushed. The two parallel sessions of 2026-09-24 (harness-tui's front end; harness-mcp on top of
+it) were reconciled afterwards: 611 tests and the cockpit's pty signal tests green after the
+MCP session's group-wide cancel, the cockpit opened and quit cleanly, the docs brought in line
+(DECISIONS.md "Reconciliation of the parallel sessions"). Before doing anything else:
 
 1. Read `DECISIONS.md` from "2026-09-24 — Direction change (user)" to the end (the direction,
    then the harness-mcp build), then `docs/TUI-DESIGN.md` §9 (the new direction), §3–§4 and §R3,

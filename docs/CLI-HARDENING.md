@@ -4,8 +4,8 @@ Status: IMPLEMENTED (2026-09-24; §R holds the resolutions of the 15 confirmed d
 findings and the 11 confirmed code-review findings — the text below is the design as built). Sources and rejected
 alternatives: DECISIONS.md "TUI track: §15 research spike" and "CLI hardening: design review".
 
-The review cockpit (`harness-tui`, next milestone) and the Claude Code bridge (`harness-mcp`)
-are *clients* of the `harness` CLI: they read the ledger and spawn `harness` for every write.
+The review cockpit (`harness-tui`) and the Claude Code bridge (`harness-mcp`) — both built
+since — are *clients* of the `harness` CLI: they read the ledger and spawn `harness` for every write.
 Four things must be true of the CLI before a second process can drive it safely:
 
 1. two writers can never mutate one ledger at once (**§1 writer lock**);

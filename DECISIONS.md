@@ -1581,6 +1581,7 @@ After trying the cockpit, the user set its direction (recorded in full in docs/T
 - **Order proposed:** (1) the wrapper UX design → review → build on today's engine;
   (2) harness-mcp, adding the requester label for chat-requested migrations (MCP-DESIGN §7);
   (3) the chat pane after its spike, plus the "migrate this" skill.
+
 ## 2026-09-24 — harness-mcp: the stdio MCP server (MCP-DESIGN, built, reviewed three times)
 
 `crates/harness-mcp` (one binary; harness-core, harness-tui without its terminal front end,
@@ -1664,3 +1665,31 @@ touched the central rule.
   --replay --jobs 6` at the start of the session and again on the final code: replay `198
   reproduce (1 conformant, 197 drifted), 2 expected divergence(s), 0 skipped, 0 problem(s)`,
   `bench check: OK — no regression` — identical.
+
+## 2026-09-24 — Reconciliation of the parallel sessions (harness-tui front end ∥ harness-mcp)
+
+Two sessions worked on 2026-09-24 in parallel: one built the cockpit's terminal front end and
+recorded the user's direction change, the other built harness-mcp on top of it. Checked
+afterwards, from `main` at 4c140b7:
+- **Nothing lost.** `cargo test --workspace` 611 passed, 0 failed; the cockpit's pty tests
+  (`a_hangup_cancels_the_running_harness_and_its_sandboxed_group`,
+  `a_terminated_edit_is_never_lost`) pass.
+- **The MCP session's changes to harness-tui** (`git diff a02e79d 4c140b7 -- crates/harness-tui`):
+  `spawn::interrupt` now INTs the child's process GROUP (`/bin/kill -INT -- -<pgid>`), reader
+  threads start through `Builder` (a failure kills and reaps the child instead of panicking),
+  a non-blocking `try_interrupt` for panic hooks; `pairs` reads each C file once per call (same
+  results: a stale or unreadable file is still "stale"). The cockpit's `x`, `Q` and its own
+  signal path all go through `spawn::interrupt`, so they now reach the whole group — which
+  TUI-DESIGN §4 already said. The group holds only the CLI: every process the oracle spawns
+  leads its own group (`harness-oracle/src/exec.rs`, `process_group(0)`), so the CLI still
+  cancels its sandboxed groups itself.
+- **The cockpit opened once** in a 120×40 pty on the read_scalefactors case: split layout, the
+  pair, the green verdict; `q` exits 0 and restores the terminal (paste off, cursor, alternate
+  screen). Seen in passing, for the redesign: the bottom key-hint line is cut at the right edge.
+- **Docs reconciled**: TUI-DESIGN status, §0, §1 (the library now holds `events` and `spawn`,
+  and harness-mcp depends on it) and §9's order (harness-mcp is built; its requester label
+  remains); README: the cockpit and harness-mcp sections now say how they work together today
+  (a separate agent session, `g` to re-read after an act from chat, the writer lock between
+  them) and where the cockpit is going; CLI-HARDENING's "next milestone". Stale code comments
+  (the `Cancel` doc comment in app.rs, the `tui` feature comment in Cargo.toml) are left for the
+  wrapper build.

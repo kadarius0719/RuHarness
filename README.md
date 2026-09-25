@@ -359,7 +359,7 @@ cockpit shows you its exact command line and asks `y/n` before running it.
 | `m` | **Modify**: type a note; a new attempt is seeded from the shown one | `harness migrate <unit> --no-promote --from=<attempt> --steer=<note>` |
 | `e` | **Hand edit** in `$VISUAL`/`$EDITOR`, recorded as a labelled human attempt; a hand edit is never lost — one that was not recorded is kept, `E` offers it again, and its path is printed on exit | `harness override <unit> <staged copy> [--note=<text>]` |
 | `r` / `R` | retry the shown attempt's run / resume a hand-off once its response file is there | the run's own command |
-| `x` | cancel the running command (the harness kills its sandboxed processes) | — |
+| `x` | cancel the running command: SIGINT to its process group; the harness then kills its sandboxed processes | — |
 
 Moving around: `j`/`k` scroll, `]f`/`[f` next/previous function, `J`/`K` units, `Tab`
 then `Enter` to show an attempt, `d` to diff it against the attempt the crate came
@@ -370,7 +370,15 @@ where a unit's crate came from: `*` unassisted pipeline output, `*s` a steered a
 run (default: `harness` on your PATH, else the one next to the cockpit);
 `--allow-unsandboxed` is passed on to the acts that run code. A closed terminal cancels
 a running command cleanly. A plain `cargo build` at the root skips the cockpit; build it
-with `cargo build -p harness-tui` (CI builds everything).
+with `cargo build -p harness-tui` (CI builds everything). The cockpit re-reads the ledger
+after its own commands and while one runs; after a change made elsewhere (the CLI, or an
+act from chat — next section) press `g`.
+
+**Where it is going.** These keys suit keyboard power users. The cockpit is being
+redesigned as a friendly wrapper — arrow keys and the mouse over a file tree of the
+target, `Enter` for the actions that fit a file's state, on-screen hints, and a chat pane
+inside it for model work (docs/TUI-DESIGN.md §9). Until then, chat happens in a separate
+agent session through `harness-mcp`.
 
 ## The ledger in chat (`harness-mcp`)
 
@@ -379,6 +387,15 @@ structured data and pose the review acts that stay labelled. Like the cockpit it
 the ledger itself and every act is a spawned `harness --json …` command, so the writer
 lock, the sandbox and the oracle apply unchanged; the one file it writes is the response
 to a hand-off it posed (`harness_answer`).
+
+It is the chat half of the review cockpit. Today you run it in its own agent session (for
+example Claude Code in a second terminal, with the `.mcp.json` entry below) beside the
+cockpit: both read the same ledger, the cockpit shows what an act from chat recorded once
+it re-reads (`g`), and if both start a writing command at once the CLI's writer lock
+refuses the second (`locked`, with the holder). A chat pane inside the cockpit, with this
+server as its tools, is planned (docs/TUI-DESIGN.md §9); "migrate this" from chat also
+needs a ledger label recording who asked (docs/MCP-DESIGN.md §7), so this server poses no
+fresh translation yet.
 
 | Tool | What it does |
 |---|---|
