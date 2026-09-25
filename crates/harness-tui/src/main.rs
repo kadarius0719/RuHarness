@@ -184,16 +184,37 @@ fn guard<T>(m: &'static Mutex<T>) -> MutexGuard<'static, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Tell the user where every kept hand edit is (stderr, after the
-/// terminal is restored).
-fn announce_kept_edits() {
-    for dir in guard(&KEPT_EDITS).iter() {
-        let _ = writeln!(
-            std::io::stderr(),
-            "harness-tui: a hand edit that was not recorded is kept in {}",
-            dir.display()
-        );
+/// How long a restore or an announcement may take: a terminal that stopped
+/// reading (a frozen ssh session) must never hold up dying (review PROC-2).
+const WRITE_WAIT: Duration = Duration::from_millis(250);
+
+/// Run `f` on a helper thread and wait at most `budget` for it: the writes
+/// go through the stdout lock, which a main thread blocked in a write to a
+/// stalled terminal holds (harness-cli's signal path does the same).
+fn bounded(budget: Duration, f: impl FnOnce() + Send + 'static) {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let helper = std::thread::Builder::new().spawn(move || {
+        f();
+        let _ = tx.send(());
+    });
+    if helper.is_ok() {
+        let _ = rx.recv_timeout(budget);
     }
+}
+
+/// Tell the user where every kept hand edit is (stderr, after the
+/// terminal is restored) — bounded.
+fn announce_kept_edits() {
+    let dirs = guard(&KEPT_EDITS).clone();
+    bounded(WRITE_WAIT, move || {
+        for dir in dirs {
+            let _ = writeln!(
+                std::io::stderr(),
+                "harness-tui: a hand edit that was not recorded is kept in {}",
+                dir.display()
+            );
+        }
+    });
 }
 
 /// Signal the editor with `sig` — only while it is unreaped (never a pid
@@ -209,13 +230,17 @@ fn forward(child: &mut Child, sig: i32) {
     }
 }
 
-/// Leave the terminal as the shell expects it: no bracketed paste, cursor
-/// shown, main screen, cooked mode.
+/// Leave the terminal as the shell expects it: cooked mode first (on the
+/// tty's own descriptor, no stdout lock), then — bounded — no bracketed
+/// paste, cursor shown, main screen.
 fn restore_terminal() {
-    let mut out = std::io::stdout();
-    let _ = out.execute(DisableBracketedPaste);
-    let _ = out.execute(cursor::Show);
-    let _ = ratatui::try_restore();
+    let _ = terminal::disable_raw_mode();
+    bounded(WRITE_WAIT, || {
+        let mut out = std::io::stdout();
+        let _ = out.execute(DisableBracketedPaste);
+        let _ = out.execute(cursor::Show);
+        let _ = ratatui::try_restore();
+    });
 }
 
 fn install_signal_path(slot: ChildSlot) -> std::io::Result<()> {
@@ -283,11 +308,12 @@ fn resume(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
     }
 }
 
-/// The signal path is ending the process: wait for it.
+/// The signal path is ending the process: wait for it — bounded, well past
+/// its worst case (1 s for the child, the guard's wait, two bounded
+/// restores and the announcement), so a dying cockpit never lingers.
 fn park() -> ! {
-    loop {
-        std::thread::sleep(Duration::from_secs(5));
-    }
+    std::thread::sleep(Duration::from_secs(10));
+    std::process::exit(1);
 }
 
 /// Run the editor on the session's files as a tracked child (so TERM/HUP
@@ -338,8 +364,13 @@ fn hand_edit(
 ) -> Result<(), String> {
     let session = handedit::prepare(crate_dir, &std::env::temp_dir())
         .map_err(|e| format!("hand edit: {e}"))?;
+    // Named on any way out from now on, until finish_edit decides: a signal
+    // between the editor's exit and the staging names it too (PROC-4).
+    let edit = session.tmp.join("edit");
+    guard(&KEPT_EDITS).push(edit.clone());
     if let Err(e) = suspend(terminal) {
         let _ = resume(terminal);
+        guard(&KEPT_EDITS).retain(|d| *d != edit);
         let _ = std::fs::remove_dir_all(&session.tmp);
         return Err(format!("hand edit: {e}"));
     }
@@ -377,10 +408,12 @@ fn finish_edit(
     // What the editor saved, or left beside the files (its recovery data
     // after a hangup): never removed.
     let keep = changed || session.has_leftovers();
-    if keep {
+    {
         let edit = session.tmp.join("edit");
         let mut kept = guard(&KEPT_EDITS);
-        if !kept.contains(&edit) {
+        if !keep {
+            kept.retain(|d| *d != edit);
+        } else if !kept.contains(&edit) {
             kept.push(edit);
         }
     }
@@ -443,21 +476,18 @@ fn finish_edit(
 
 /// Start the loads the app asked for, and hand it the ones that finished:
 /// the requests in flight fold (the loader answers the latest), so each
-/// finished load carries the strongest reason asked for up to it.
+/// finished load carries the strongest reason asked for up to it — and one
+/// that a later reaped or asked-for read supersedes is dropped
+/// (`app::fold_loaded`).
 fn pump_loads(app: &mut App, loader: &mut Loader, whys: &mut Vec<(u64, LoadWhy)>) {
     if let Some(why) = app.load_request.take() {
         let seq = loader.request(&app.config.target);
         whys.push((seq, why));
     }
     if let Some(loaded) = loader.poll() {
-        let why = whys
-            .iter()
-            .filter(|(seq, _)| *seq <= loaded.seq)
-            .map(|(_, why)| *why)
-            .max()
-            .unwrap_or(LoadWhy::Tick);
-        whys.retain(|(seq, _)| *seq > loaded.seq);
-        app.on_loaded(loaded.result, why);
+        if let Some(why) = harness_tui::app::fold_loaded(whys, loaded.seq) {
+            app.on_loaded(loaded.result, why);
+        }
     }
     app.loading = loader.loading();
 }
@@ -478,7 +508,12 @@ fn run(
         }
         pump_loads(app, loader, &mut whys);
         app.expire_notice(Instant::now());
-        terminal.draw(|f| view::draw(f, app))?;
+        // Under the guard: a frame in flight when a signal restores the
+        // terminal finishes before the second restore (PROC-5).
+        match GUARD.enable(|| terminal.draw(|f| view::draw(f, app)).map(|_| ())) {
+            Some(drawn) => drawn?,
+            None => park(),
+        }
         // A dialog drawn whole, quiet for 300 ms, with no input pending,
         // arms: typed-ahead, pasted or auto-repeated input never answers it.
         if app.dialog_waiting() {
@@ -507,6 +542,8 @@ fn run(
             if let Some(status) = r.finished() {
                 running = None;
                 if let Some(tmp) = app.on_child_exit(status) {
+                    // The mirror first: a signal never names a removed edit.
+                    *guard(&KEPT_EDITS) = app.kept_paths();
                     let _ = std::fs::remove_dir_all(tmp);
                 }
             }
@@ -531,6 +568,7 @@ fn run(
                         r.poll_exit()?;
                         if let Some(status) = r.finished() {
                             if let Some(tmp) = app.on_child_exit(status) {
+                                *guard(&KEPT_EDITS) = app.kept_paths();
                                 let _ = std::fs::remove_dir_all(tmp);
                             }
                             break;
@@ -566,6 +604,7 @@ fn run(
                 }
             }
             Command::Cleanup(tmp) => {
+                *guard(&KEPT_EDITS) = app.kept_paths();
                 let _ = std::fs::remove_dir_all(tmp);
             }
         }
@@ -655,10 +694,19 @@ fn main() -> ExitCode {
     // bracketed paste off, shows the cursor and names kept edits — without
     // the guard's mutex (a panic inside an enable holds it).
     let ratatui_hook = std::panic::take_hook();
+    let hook_slot = slot.clone();
     std::panic::set_hook(Box::new(move |info| {
         GUARD.restore_on_panic(restore_terminal);
         announce_kept_edits();
         ratatui_hook(info);
+        // A helper thread (the loader, a pipe reader, the signal path)
+        // panicked: the main thread parks once the guard is dying, so the
+        // process ends here — the running command interrupted first
+        // (PROC-3; harness-mcp does the same).
+        if std::thread::current().name() != Some("main") {
+            let _ = spawn::try_interrupt(&hook_slot);
+            std::process::exit(101);
+        }
     }));
     let result = run(&mut terminal, &mut app, &slot, &mut loader);
     restore_terminal();
@@ -683,11 +731,84 @@ mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
 
+    /// The kept-edit mirror is process-wide: its tests run one at a time.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    /// Review PROC-2: a restore or an announcement that blocks (a terminal
+    /// that stopped reading) holds up the caller at most its budget.
+    #[test]
+    fn a_blocked_write_never_holds_up_dying() {
+        // The caller runs on a thread of its own, so a regression fails the
+        // test in 2 s instead of hanging it.
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (_keep, blocked) = std::sync::mpsc::channel::<()>();
+            bounded(Duration::from_millis(100), move || {
+                let _ = blocked.recv();
+            });
+            let _ = done.send(());
+        });
+        assert!(
+            finished.recv_timeout(Duration::from_secs(2)).is_ok(),
+            "a blocked write held the caller up"
+        );
+    }
+
+    /// Review PROC-4: an edit the editor left unchanged (nothing to keep)
+    /// leaves the kept list it joined when the editor started.
+    #[test]
+    fn an_unchanged_edit_leaves_the_kept_list() {
+        let _serial = guard(&SERIAL);
+        let base =
+            std::env::temp_dir().join(format!("harness-tui-unchanged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let crate_dir = base.join("crate");
+        std::fs::create_dir_all(crate_dir.join("src")).unwrap();
+        for f in handedit::EDIT_FILES {
+            std::fs::write(crate_dir.join(f), "pub fn f() {}\n").unwrap();
+        }
+        let session = handedit::prepare(&crate_dir, &base).unwrap();
+        let edit = session.tmp.join("edit");
+        guard(&KEPT_EDITS).push(edit.clone());
+        let case = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib")
+            .canonicalize()
+            .unwrap();
+        let mut app = App::new(
+            Config {
+                target: case.clone(),
+                harness: None,
+                allow_unsandboxed: false,
+                layout: LayoutMode::Auto,
+                providers: vec!["external".into()],
+            },
+            load::read(&case).unwrap(),
+        );
+        let mut named_at_resume = None;
+        let result = finish_edit(
+            &mut app,
+            "u-lib",
+            &session,
+            Ok(ExitStatus::from_raw(0)),
+            None,
+            || {
+                named_at_resume = Some(guard(&KEPT_EDITS).contains(&edit));
+                Ok(())
+            },
+        );
+        assert!(result.is_err(), "no change, nothing to record");
+        // Gone before resume: a signal then never names a removed edit.
+        assert_eq!(named_at_resume, Some(false));
+        assert!(!guard(&KEPT_EDITS).contains(&edit));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// SAFE-10, CHK-5: a changed hand edit is on the kept list the signal
     /// path prints BEFORE `resume` runs — a signal that lands during
     /// `resume` names it.
     #[test]
     fn a_changed_edit_is_kept_before_the_terminal_is_taken_back() {
+        let _serial = guard(&SERIAL);
         let base = std::env::temp_dir().join(format!("harness-tui-finish-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let crate_dir = base.join("crate");

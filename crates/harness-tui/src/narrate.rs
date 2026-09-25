@@ -81,6 +81,7 @@ pub struct Narrator {
     awaited: bool,
     error: Option<(String, String)>,
     last_message: Option<String>,
+    locked_by: Option<String>,
 }
 
 fn arg_value(argv: &[OsString], flag: &str) -> Option<String> {
@@ -120,6 +121,7 @@ impl Narrator {
             awaited: false,
             error: None,
             last_message: None,
+            locked_by: None,
         }
     }
 
@@ -235,6 +237,7 @@ impl Narrator {
                         let who = holder
                             .as_ref()
                             .map_or_else(|| "another command".into(), |h| h.command.clone());
+                        self.locked_by = Some(who.clone());
                         self.step = format!(
                             "Another command is changing this project ({who}). Nothing was done."
                         );
@@ -276,7 +279,11 @@ impl Narrator {
                 None => "Finished — red".into(),
             },
             Ending::Paused => "Paused".into(),
-            Ending::Locked | Ending::Refused => {
+            Ending::Locked => format!(
+                "Refused: another command is changing this project ({}) — nothing was done",
+                self.locked_by.as_deref().unwrap_or("another command")
+            ),
+            Ending::Refused => {
                 let why = self
                     .error
                     .as_ref()
@@ -389,9 +396,11 @@ mod tests {
         );
         assert!(n.step().ends_with("Nothing was done."));
         assert_eq!(n.ending(Some(1), None), Ending::Locked);
-        assert!(n
-            .last(Some(1), None, Duration::from_secs(1))
-            .starts_with("Scan the project — Refused: "));
+        assert_eq!(
+            n.last(Some(1), None, Duration::from_secs(1)),
+            "Scan the project — Refused: another command is changing this project (verify \
+             u001-katajainen) — nothing was done (1 s)"
+        );
     }
 
     #[test]

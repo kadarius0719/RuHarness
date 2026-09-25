@@ -105,6 +105,10 @@ pub enum Cause {
     /// The crate matches neither a recorded attempt's candidate nor what the
     /// oracle last judged.
     ChangedOutside,
+    /// The crate matches no recorded attempt, and there is no verdict to
+    /// compare it with (deleted or unreadable): whose code it is cannot be
+    /// told (review ENG-11).
+    NoEvidence,
 }
 
 impl Cause {
@@ -128,6 +132,12 @@ impl Cause {
             Cause::ChangedOutside => {
                 "changed outside the harness — restore it, or record it with `harness \
                  override` (see Help)"
+                    .into()
+            }
+            Cause::NoEvidence => {
+                "its verdict is missing, so the harness cannot tell whose code the crate is — \
+                 restore oracle-latest.json (git), or record the crate with `harness override` \
+                 (see Help)"
                     .into()
             }
         }
@@ -167,7 +177,7 @@ pub enum UnitState {
 }
 
 impl UnitState {
-    /// Its glyph (`""` for the fallback).
+    /// Its glyph (`""` for the fallback, which shows its word alone).
     pub fn glyph(&self) -> &'static str {
         match self {
             UnitState::Blocked => "⊘",
@@ -177,7 +187,8 @@ impl UnitState {
             UnitState::OriginUnknown => "✓?",
             UnitState::Tried => "◐",
             UnitState::Planned => "◇",
-            UnitState::Other(_) => "·",
+            // The fallback has no glyph (§2.3): only its word.
+            UnitState::Other(_) => "",
         }
     }
 
@@ -378,13 +389,19 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
         return UnitState::Attention(Cause::PromotionInterrupted(id.clone()));
     }
     // The specific causes first: harness-core also calls a verified unit
-    // whose verdict went stale a contradiction.
+    // whose verdict went stale a contradiction. The C changed since planning
+    // only while the plan says so: once `plan` re-approved it, a verdict
+    // still stale on its source needs a Re-check (review ENG-2).
     let present = r.verdict.state == VerdictState::Present;
-    if !r.source_fresh || (present && r.verdict.stale.iter().any(|s| s == "source")) {
+    if !r.source_fresh {
         return UnitState::Attention(Cause::SourceChanged);
     }
     if unit.crate_digest.is_some() && !known_code(unit) {
-        return UnitState::Attention(Cause::ChangedOutside);
+        return UnitState::Attention(if present {
+            Cause::ChangedOutside
+        } else {
+            Cause::NoEvidence
+        });
     }
     if present && !r.verdict.stale.is_empty() {
         return UnitState::Attention(Cause::StaleVerdict);
@@ -462,6 +479,10 @@ pub fn build(snapshot: &Snapshot, walk: &TreeWalk) -> Files {
             let owner = owners.get(path).copied();
             let mut fns = functions.get(path).cloned().unwrap_or_default();
             fns.sort();
+            // One row per name: the scanner records each `#if` branch's
+            // definition (review ENG-7); the first span stands for them.
+            let mut named = BTreeSet::new();
+            fns.retain(|(_, name, _)| named.insert(*name));
             let public = fns.iter().any(|(_, _, public)| *public);
             let state = if walk.absent.contains(path) {
                 FileState::Missing
@@ -469,10 +490,12 @@ pub fn build(snapshot: &Snapshot, walk: &TreeWalk) -> Files {
                 FileState::Changed
             } else if !recorded.contains(path) {
                 FileState::New
+            } else if let Some(u) = owner {
+                // A file owned by a unit takes its owner's state — a header
+                // in a unit's files too (review ENG-12).
+                FileState::Owned(u)
             } else if path.ends_with(".h") {
                 FileState::Header
-            } else if let Some(u) = owner {
-                FileState::Owned(u)
             } else if !public {
                 FileState::NoExports
             } else {
@@ -859,6 +882,82 @@ mod tests {
             s.replace("\n// by someone\n", "")
         });
         assert!(t.unit("u-lib").known_code);
+    }
+
+    /// Review ENG-2: once `plan` re-approved a unit's changed C, a verdict
+    /// still stale on its source asks for a Re-check, not a scan.
+    #[test]
+    fn a_reapproved_source_asks_for_a_recheck() {
+        let t = Copy::of(CASE, "reapproved");
+        t.edit(LIB_C, |s| format!("{s}/* edited */\n"));
+        assert_eq!(
+            t.unit("u-lib").state,
+            UnitState::Attention(Cause::SourceChanged)
+        );
+        // What `scan` then `plan` do: the facts and the plan take the new
+        // hashes; the verdict stays stale on its source.
+        let path = Ledger::new(&t.0).facts_path();
+        let mut facts = Facts::load(&path).unwrap();
+        for f in facts.files.iter_mut() {
+            f.hash = harness_core::hash::file_hash(&t.0.join(&f.path)).unwrap();
+        }
+        facts.store(&path).unwrap();
+        let closure = facts.include_closure(&[LIB_C.to_string()]);
+        let now = harness_core::hash::file_set_hash_on_disk(&t.0, &closure).unwrap();
+        t.edit("migration/plan.toml", |s| {
+            let start = s.find("source_hash = \"").unwrap() + "source_hash = \"".len();
+            let end = start + s[start..].find('"').unwrap();
+            format!("{}{now}{}", &s[..start], &s[end..])
+        });
+        assert_eq!(
+            t.unit("u-lib").state,
+            UnitState::Attention(Cause::StaleVerdict)
+        );
+    }
+
+    /// Review ENG-7: a function defined in two `#if` branches is one row.
+    #[test]
+    fn a_function_defined_twice_is_one_row() {
+        let t = Copy::of(CASE, "dupfn");
+        t.write("test_case/src/dup.c", "static int g(void) { return 0; }\n");
+        t.scanned(
+            "test_case/src/dup.c",
+            &[
+                ("test_case/src/dup.c::g", "internal", 1),
+                ("test_case/src/dup.c::g", "internal", 3),
+            ],
+        );
+        let (_, files) = t.read();
+        assert_eq!(
+            files.file("test_case/src/dup.c").unwrap().functions.len(),
+            1
+        );
+    }
+
+    /// Review ENG-11: a missing verdict is not "changed outside the harness"
+    /// — the cause says what is missing.
+    #[test]
+    fn a_missing_verdict_is_named_as_such() {
+        let t = Copy::of("targets/zopfli", "noverdict");
+        std::fs::remove_file(t.0.join("migration/units/u001-katajainen/oracle-latest.json"))
+            .unwrap();
+        assert_eq!(
+            t.unit("u001-katajainen").state,
+            UnitState::Attention(Cause::NoEvidence)
+        );
+    }
+
+    /// Review ENG-12: a header in a unit's files takes its owner's state.
+    #[test]
+    fn an_owned_header_takes_its_owners_state() {
+        let t = Copy::of(CASE, "ownedh");
+        t.edit("migration/plan.toml", |s| {
+            s.replace(
+                "files = [\"test_case/src/lib.c\"]",
+                "files = [\"test_case/src/lib.c\", \"test_case/include/lib.h\"]",
+            )
+        });
+        assert_eq!(t.state(LIB_H), FileState::Owned(0));
     }
 
     /// The tree's limits bound the listing and say so; the facts' files

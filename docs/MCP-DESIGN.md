@@ -159,7 +159,9 @@ answered. The outcome comes first; `checks` (failed first), `turns`, `messages` 
   is not enough (§R2 TRUST-4).
 - **Size, and what is read at all.** Before anything is read — for every read AND every act —
   a preflight (`harness_tui::preflight` since 2026-09-25: one implementation, which the
-  cockpit also runs before every load) checks every file the read model reads or hashes in-process: ledger records and
+  cockpit also runs before every load; since then, too, a source or driver deleted after the
+  scan no longer makes the read model fail: it binds no attempt, as `state status` reads it —
+  COCKPIT-WRAPPER-DESIGN §R3 ENG-10) checks every file the read model reads or hashes in-process: ledger records and
   verdicts ≤ 1 MiB and `facts.jsonl`, `plan.toml`, drivers and sources ≤ 64 MiB (those two grow
   with the project; the 1 MiB of the reviewed text would refuse a large codebase's facts), crate
   trees ≤ 32 MiB, and ≤ 256 MiB of records and verdicts held in memory at once; every one a

@@ -1,7 +1,7 @@
 ┌ Files ───────────────────────┐┌ u-lib · migrated ────────────────────────────────────────────────────────────────────┐
 │▾ harness-tui-gdialog-0000000…││✓ u-lib migrated · status verified                                                    │
 │  ▾ test_case/            ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
-│    ▾ include/                ││C  read_scalefactors (test_case/src/lib.… ⇄ Rust  read_scalefactors (src/ffi.rs:11)   │
+│    ▾ include/                ││C  read_scalefactors (lib.c:17)           ⇄ Rust  read_scalefactors (src/ffi.rs:11)   │
 │        · lib.h         header││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe extern "C" fn read_scalefa›│
 │    ▾ src/                ✓1/1││18                                   int› │  12     bs: *mut BsT,                     │
 │      ▸ ✓ lib.c       migrated││19     static const float g_deq_L12[18 *› │  13     pba: *mut u8,                     │
@@ -27,4 +27,4 @@
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
  Ready.
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+ ↑↓ scroll   ←→ button   Enter press   Esc cancel

@@ -111,6 +111,9 @@ impl App {
         if self.config.harness.is_none() {
             return Some("no `harness` binary found (PATH, or --harness <path>): read-only".into());
         }
+        if let Some(e) = &self.holder_error {
+            return Some(format!("the writer lock could not be read ({e})"));
+        }
         self.holder
             .as_ref()
             .map(|h| format!("busy: `{}` (checked just now)", h.command))
@@ -176,7 +179,31 @@ impl App {
                     .into(),
             );
         }
+        // Only code the View shows (review ENG-4): an internal function or
+        // a header shows C source, not the crate.
+        if self.pairs_unit.as_deref() != Some(unit.unit.id.as_str()) || self.pairs_digest.is_none()
+        {
+            return Some(
+                "open the unit (or its crate) first — the cockpit re-checks only code it shows"
+                    .into(),
+            );
+        }
         None
+    }
+
+    /// Why an act that replaces or edits the unit crate must wait: the crate
+    /// holds code the harness does not know (review SAFE-8, SAFE-9).
+    fn unknown_crate(&self, u: usize) -> Option<String> {
+        let unit = &self.snapshot.units[u];
+        (unit.crate_dir.is_some() && !self.files.units.get(u).is_some_and(|i| i.known_code)).then(
+            || {
+                format!(
+                    "{}'s crate holds code the harness does not know — record it with `harness \
+                     override` or restore it first (see Help)",
+                    unit.unit.id
+                )
+            },
+        )
     }
 
     /// The unit's own items (unit, crate, owned file or function), labelled
@@ -215,12 +242,18 @@ impl App {
             })
             .map(|a| a.record.id.as_str())
             .collect();
+        // Accept is confirmed on the attempt, where its code is shown — a
+        // unit's view shows the unit crate (review ENG-5): the item opens it.
         match acceptable.as_slice() {
             [] => {}
-            [one] => {
-                let label = format!("Accept {} into {id}", crate::app::short_id(one));
-                items.push(self.act_item(label, Act::Accept, Some(unit), Some(one)));
-            }
+            [one] => items.push(item(
+                format!(
+                    "Accept {} into {id} (opens it first)",
+                    crate::app::short_id(one)
+                ),
+                Action::ChooseAttempt(id.to_string()),
+                None,
+            )),
             _ => items.push(item(
                 of("Choose an attempt to accept…"),
                 Action::ChooseAttempt(id.to_string()),
@@ -233,18 +266,19 @@ impl App {
     pub fn menu_items(&self) -> Vec<Item> {
         let sel = &self.selection;
         let mut items = Vec::new();
-        match sel {
-            Selection::Dir(_) | Selection::Units => items.push(item(
+        // Every node opens into the View (§4.2 "any | Open"); a directory
+        // and the units group also fold.
+        items.push(item("Open", Action::Open, None));
+        if matches!(sel, Selection::Dir(_) | Selection::Units) {
+            items.push(item(
                 if self.expansion.is_open(sel) {
                     "Fold"
                 } else {
-                    "Open"
+                    "Unfold"
                 },
                 Action::Fold,
                 None,
-            )),
-            Selection::Project => {}
-            _ => items.push(item("Open", Action::Open, None)),
+            ));
         }
         items.push(item("Re-read the project", Action::Reread, Some("g")));
         let file_state = match sel {
@@ -303,10 +337,13 @@ impl App {
             }
             _ => {}
         }
-        if let (Selection::Crate(_) | Selection::Attempt(..), Some(_)) = (sel, owner) {
+        if let (Selection::Crate(_) | Selection::Attempt(..), Some(u)) = (sel, owner) {
             let mut it = item("Hand edit", Action::HandEdit, Some("e"));
             if let Err(why) = self.hand_edit_target() {
                 it.greyed = Some(why);
+            } else if matches!(sel, Selection::Crate(_)) {
+                // Editing unknown code would record all of it as a human's.
+                it.greyed = self.unknown_crate(u);
             }
             items.push(it);
         }
@@ -330,7 +367,13 @@ impl App {
                 );
                 cont.greyed = self.busy();
                 items.push(cont);
-                items.push(item("Discard my kept hand edit", Action::DiscardKept, None));
+                // Never while a command runs: it may be the override
+                // recording this very edit (review SAFE-7).
+                let mut discard = item("Discard my kept hand edit", Action::DiscardKept, None);
+                discard.greyed = self
+                    .running
+                    .then(|| "a command is running (one at a time)".to_string());
+                items.push(discard);
             }
         }
         // Model work that happens in chat.
@@ -374,6 +417,9 @@ impl App {
         };
         let r = &a.record;
         let finished = r.outcome != "in-progress";
+        if a.verdict.as_ref().is_some_and(|v| !v.checks.is_empty()) {
+            items.push(item("Show the checks", Action::ShowChecks, Some("v")));
+        }
         // Accept: a green attempt (greyed when it cannot be promoted now).
         if r.outcome == "green" {
             let replace =
@@ -387,7 +433,11 @@ impl App {
             } else {
                 format!("Accept {} into {}", crate::app::short_id(id), unit.unit.id)
             };
-            items.push(self.act_item(label, Act::Accept, Some(unit), Some(id)));
+            let mut accept = self.act_item(label, Act::Accept, Some(unit), Some(id));
+            if accept.greyed.is_none() {
+                accept.greyed = self.unknown_crate(u);
+            }
+            items.push(accept);
         }
         if self.diff_available(unit, a) {
             items.push(item(
@@ -480,6 +530,7 @@ mod tests {
         assert_eq!(
             at(Selection::Project),
             [
+                "Open",
                 "Re-read the project",
                 "Scan the project",
                 "Refresh the plan",
@@ -488,7 +539,7 @@ mod tests {
         );
         assert_eq!(
             at(Selection::Dir("test_case".into())),
-            ["Fold", "Re-read the project"]
+            ["Open", "Fold", "Re-read the project"]
         );
         assert_eq!(
             at(Selection::File("test_case/src/lib.c".into())),
@@ -534,6 +585,7 @@ mod tests {
                 "Open",
                 "Re-read the project",
                 "Hand edit",
+                "Show the checks",
                 "Replace u-lib's verified crate with a-13c9",
                 "Modify with a note"
             ]
@@ -544,6 +596,7 @@ mod tests {
                 "Open",
                 "Re-read the project",
                 "Hand edit",
+                "Show the checks",
                 "Replace u-lib's verified crate with a-28d8",
                 "Compare with the promoted attempt",
                 "Modify with a note"
@@ -555,6 +608,7 @@ mod tests {
                 "Open",
                 "Re-read the project",
                 "Hand edit",
+                "Show the checks",
                 "Compare with the promoted attempt",
                 "Modify with a note"
             ]
@@ -595,6 +649,87 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("a command is running"));
+    }
+
+    fn find(app: &App, action: &Action) -> Item {
+        app.menu_items()
+            .into_iter()
+            .find(|i| i.action == *action)
+            .unwrap_or_else(|| panic!("no {action:?} in {:?}", labels(&app.menu_items())))
+    }
+
+    /// Review SAFE-8, SAFE-9: with the unit crate changed outside the
+    /// harness, Accept (which would replace it) and a hand edit of it (which
+    /// would record it all as a human's) wait until it is recorded or
+    /// restored. Review ENG-4: Re-check needs the unit's code on screen.
+    #[test]
+    fn unknown_code_is_never_replaced_or_relabelled() {
+        let mut app = app("unknownmenu");
+        let logic = app.snapshot.units[0]
+            .crate_dir
+            .clone()
+            .unwrap()
+            .join("src/logic.rs");
+        let text = std::fs::read_to_string(&logic).unwrap();
+        std::fs::write(&logic, format!("{text}\n// someone\n")).unwrap();
+        assert!(app.reload(true));
+        app.select(Selection::Attempt("u-lib".into(), "a-13c941dfff95".into()));
+        let accept = find(&app, &Action::Act(crate::app::Act::Accept));
+        assert!(accept.greyed.unwrap().contains("does not know"));
+        app.select(Selection::Crate("u-lib".into()));
+        assert!(find(&app, &Action::HandEdit)
+            .greyed
+            .unwrap()
+            .contains("does not know"));
+        std::fs::write(&logic, &text).unwrap();
+        assert!(app.reload(true));
+        assert_eq!(find(&app, &Action::HandEdit).greyed, None);
+        // An internal function shows C source: Re-check waits for the unit.
+        app.select(Selection::Function(
+            "test_case/src/lib.c".into(),
+            "test_case/src/lib.c::get_bits".into(),
+        ));
+        let recheck = find(&app, &Action::Act(crate::app::Act::Verify));
+        assert!(recheck.greyed.unwrap().contains("open the unit"));
+        app.select(Selection::Unit("u-lib".into()));
+        assert_eq!(
+            find(&app, &Action::Act(crate::app::Act::Verify)).greyed,
+            None
+        );
+    }
+
+    /// Review ENG-5: Accept from a unit opens the attempt first (where its
+    /// code is shown); review SAFE-7: Discard waits while a command runs.
+    #[test]
+    fn unit_accept_opens_the_attempt_and_discard_waits() {
+        let mut app = app("unitaccept");
+        let ledger = harness_core::ledger::Ledger::new(&app.config.target);
+        let dir = harness_core::attempts::attempt_dir(&ledger, "u-lib", "a-28d8ddc411f9");
+        let mut r = harness_core::attempts::AttemptRecord::load(&dir).unwrap();
+        r.promoted = false;
+        r.store(&dir).unwrap();
+        assert!(app.reload(true));
+        app.select(Selection::Unit("u-lib".into()));
+        let it = app
+            .menu_items()
+            .into_iter()
+            .find(|i| i.label.starts_with("Accept a-28d8 into u-lib"))
+            .expect("the unit's Accept");
+        assert_eq!(it.action, Action::ChooseAttempt("u-lib".into()));
+        assert!(
+            it.pending.is_none(),
+            "nothing is accepted from the unit's view"
+        );
+        app.choose(&it);
+        assert_eq!(
+            app.selection,
+            Selection::Attempt("u-lib".into(), "a-28d8ddc411f9".into())
+        );
+        app.edit_staged("u-lib".into(), "/tmp/d/stage".into(), "/tmp/d".into());
+        app.mode = Mode::Normal;
+        app.select(Selection::Project);
+        app.running = true;
+        assert!(find(&app, &Action::DiscardKept).greyed.is_some());
     }
 
     /// Mutation-checked rules, over every node of both committed targets:

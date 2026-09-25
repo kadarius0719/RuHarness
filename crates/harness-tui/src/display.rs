@@ -28,6 +28,24 @@ fn is_bidi_control(c: char) -> bool {
     )
 }
 
+/// Invisible format characters (a soft hyphen, zero-width spaces and
+/// joiners, word joiners, line and paragraph separators, the byte-order
+/// mark, the tag block): rendered as `?`, so two target names never look
+/// alike on screen while differing (review SAFE-13).
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200D}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{FEFF}'
+            | '\u{E0000}'..='\u{E007F}'
+    )
+}
+
 /// `raw` without a trailing `\r`, cut to [`MAX_LINE_BYTES`] on a char
 /// boundary.
 pub fn cut(raw: &str) -> &str {
@@ -67,7 +85,7 @@ impl Sanitizer {
                 let spaces = TAB_WIDTH - self.col % TAB_WIDTH;
                 out.extend(std::iter::repeat_n(' ', spaces));
                 self.col += spaces;
-            } else if c.is_control() || is_bidi_control(c) {
+            } else if c.is_control() || is_bidi_control(c) || is_invisible_format(c) {
                 out.push('?');
                 self.col += 1;
             } else {
@@ -111,6 +129,14 @@ mod tests {
         assert_eq!(line("/* \u{202E}evil */"), "/* ?evil */");
         assert_eq!(line("crlf\r"), "crlf");
         assert_eq!(line("cr\rmid"), "cr?mid");
+    }
+
+    /// SAFE-13: invisible format characters never make two names look alike.
+    #[test]
+    fn invisible_format_characters_are_shown() {
+        assert_eq!(line("lib\u{200B}.c"), "lib?.c");
+        assert_eq!(line("\u{FEFF}a\u{00AD}b\u{2060}c\u{E0041}"), "?a?b?c?");
+        assert_eq!(line("a\u{2028}b"), "a?b");
     }
 
     #[test]

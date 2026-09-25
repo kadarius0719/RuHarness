@@ -27,4 +27,4 @@
 └ c or Esc close ──────────────────────────────────────────────────────────────────────────────────────────────────────┘
  Ready. Last: Re-check u-lib — GREEN — all 8 checks passed (41 s)                                            [Details c]
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+ ↑↓ scroll   c/Esc close

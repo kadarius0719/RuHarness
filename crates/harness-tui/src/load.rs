@@ -22,6 +22,9 @@ pub struct Read {
     pub walk: TreeWalk,
     /// The writer lock's live holder, if any.
     pub holder: Option<Holder>,
+    /// The target's effective migrate model (`[llm.migrate]` over `[llm]`),
+    /// named in the model acts' dialogs — read here, never on the UI thread.
+    pub migrate_model: String,
 }
 
 /// Read the target at `target`: the preflight, then the snapshot, the walk
@@ -30,17 +33,40 @@ pub fn read(target: &Path) -> Result<Read, String> {
     preflight::preflight(target)?;
     let snapshot = Snapshot::load(target).map_err(|e| e.to_string())?;
     let ctx = harness_core::TargetContext::load(target).map_err(|e| e.to_string())?;
-    let walk = files::walk_tree(
-        &snapshot.root,
-        &ctx.config.target.source_dir,
-        snapshot.facts.as_ref(),
-    );
+    // The tree lists only what lies inside the target (review SAFE-11): a
+    // source_dir that leaves it is refused, as is one that resolves outside.
+    let source_dir = &ctx.config.target.source_dir;
+    let clean = !source_dir.is_empty()
+        && Path::new(source_dir).components().all(|c| {
+            matches!(
+                c,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        });
+    let inside = snapshot
+        .root
+        .join(source_dir)
+        .canonicalize()
+        .is_ok_and(|dir| dir.starts_with(&snapshot.root));
+    if !clean || !inside {
+        return Err(format!(
+            "harness.toml's source_dir {source_dir:?} is not a directory inside the target"
+        ));
+    }
+    let walk = files::walk_tree(&snapshot.root, source_dir, snapshot.facts.as_ref());
     let holder = harness_core::status::live_holder(&Ledger::new(&snapshot.root))
         .map_err(|e| e.to_string())?;
+    let llm = &ctx.config.llm;
+    let migrate_model = llm
+        .migrate
+        .as_ref()
+        .and_then(|m| m.model.clone())
+        .unwrap_or_else(|| llm.model.clone());
     Ok(Read {
         snapshot,
         walk,
         holder,
+        migrate_model,
     })
 }
 
@@ -128,7 +154,11 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    /// Reads started so far (the test waits on it instead of guessing).
+    static STARTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
     fn slow(target: &Path) -> Result<Read, String> {
+        STARTED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         std::thread::sleep(Duration::from_millis(300));
         Err(format!("slow {}", target.display()))
     }
@@ -157,9 +187,12 @@ mod tests {
             start.elapsed() < Duration::from_millis(100),
             "request blocked"
         );
-        // Two more while the first runs (it has started by now): one read
-        // answers both.
-        std::thread::sleep(Duration::from_millis(100));
+        // Two more while the first runs: one read answers both.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while STARTED.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "the first read never started");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         loader.request(Path::new("/b"));
         loader.request(Path::new("/c"));
         let first = wait(&mut loader);
@@ -199,6 +232,61 @@ mod tests {
             .unwrap();
         let err = read(&dir).unwrap_err();
         assert!(err.contains("too large"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review SAFE-11: the tree lists only what lies inside the target — a
+    /// source_dir that leaves it, by path or by link, is refused.
+    #[test]
+    fn a_source_dir_outside_the_target_is_refused() {
+        let dir = std::env::temp_dir().join(format!("harness-tui-srcdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let case = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib");
+        assert!(std::process::Command::new("rsync")
+            .args([
+                "-a",
+                "--exclude=target",
+                "--exclude=build",
+                "--exclude=.lock"
+            ])
+            .arg(format!("{}/", case.display()))
+            .arg(&dir)
+            .status()
+            .unwrap()
+            .success());
+        let config = dir.join("harness.toml");
+        // Without include_dirs (they must lie inside source_dir).
+        let text: String = std::fs::read_to_string(&config)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with("include_dirs"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        for bad in ["/", "..", "test_case/../.."] {
+            std::fs::write(
+                &config,
+                text.replace(
+                    "source_dir = \"test_case\"",
+                    &format!("source_dir = {bad:?}"),
+                ),
+            )
+            .unwrap();
+            let err = read(&dir).unwrap_err();
+            assert!(
+                err.contains("not a directory inside the target"),
+                "{bad}: {err}"
+            );
+        }
+        std::fs::write(
+            &config,
+            text.replace("source_dir = \"test_case\"", "source_dir = \"out\""),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/usr", dir.join("out")).unwrap();
+        assert!(read(&dir)
+            .unwrap_err()
+            .contains("not a directory inside the target"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

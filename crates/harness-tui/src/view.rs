@@ -33,8 +33,6 @@ pub const WIDE_FROM: u16 = 120;
 pub const FILES_WIDE: u16 = 32;
 /// The Files pane at 80–119 columns.
 pub const FILES_NARROW: u16 = 24;
-/// From this many columns the right side is reserved for the chat (§10).
-pub const CHAT_FROM: u16 = 150;
 /// The C and the Rust sit side by side when the View is at least this wide.
 pub const SPLIT_VIEW_MIN: u16 = 78;
 /// The dialog's width (narrower terminals get what they have).
@@ -527,10 +525,13 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     let word_w = width_of(&display::line(&word));
     let name_w = width_of(&display::line(&name));
     // The word shows at the right edge when it fits; the selected row
-    // always shows it (the name gives way).
+    // always shows it — cut first, the name keeping at least half the row
+    // (review USE-8).
     let show_word = !word.is_empty() && !internal && (name_w + 2 + word_w <= room || selected);
     let (name_text, pad, word_text) = if show_word {
-        let word_text = ellipsis(&word, room.saturating_sub(2).max(1).min(word_w));
+        let name_keep = name_w.min(room / 2);
+        let word_room = room.saturating_sub(name_keep + 1).max(1);
+        let word_text = ellipsis(&word, word_room.min(word_w));
         let name_room = room.saturating_sub(width_of(&word_text) + 1);
         let name_text = ellipsis(&name, name_room);
         let pad = room.saturating_sub(width_of(&name_text) + width_of(&word_text));
@@ -856,7 +857,8 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             let count = |st: FileState| app.files.files.iter().filter(|f| f.state == st).count();
             let mut text = format!("{} files scanned", s.files);
             for (n, what) in [
-                (s.stale, "changed"),
+                // The stale paths hold the missing files too (ENG-6).
+                (s.stale.saturating_sub(count(FileState::Missing)), "changed"),
                 (count(FileState::New), "new"),
                 (count(FileState::Missing), "missing"),
             ] {
@@ -986,7 +988,7 @@ fn draw_list(
     app.layout.pair_rows = Vec::new();
     let focused = app.focus == Focus::View;
     let link_row = if focused {
-        links.get(app.link).map(|(row, _)| *row)
+        app.link.and_then(|l| links.get(l)).map(|(row, _)| *row)
     } else {
         None
     };
@@ -1254,6 +1256,37 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
 }
 
 /// The focused pane's keys, in priority order.
+/// The keys that work in the open overlay, when one is open (review USE-3);
+/// `None` in the panes.
+fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
+    Some(match &app.mode {
+        Mode::Normal => return None,
+        Mode::Menu(_) => vec![("↑↓", "choose"), ("Enter", "do it"), ("Esc", "close")],
+        Mode::Dialog(c) => {
+            let mut h = vec![("↑↓", "scroll")];
+            if c.dialog.armed {
+                h.push(("←→", "button"));
+                h.push(("Enter", "press"));
+            }
+            h.push(("Esc", "cancel"));
+            h
+        }
+        Mode::Note { .. } | Mode::EditNote { .. } => {
+            vec![("Enter", "continue"), ("Esc", "cancel")]
+        }
+        Mode::Details { .. } => {
+            let mut h = vec![("↑↓", "scroll"), ("c/Esc", "close")];
+            if app.running {
+                h.push(("x", "cancel"));
+            }
+            h
+        }
+        Mode::Help { .. } => vec![("↑↓", "scroll"), ("any other key", "close")],
+        Mode::Verdict { .. } => vec![("↑↓", "check"), ("PgDn", "detail"), ("Esc", "close")],
+        Mode::Diff { .. } => vec![("↑↓", "scroll"), ("Esc", "close")],
+    })
+}
+
 fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     let mut h: Vec<(&'static str, &'static str)> = Vec::new();
     match app.focus {
@@ -1288,12 +1321,18 @@ fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
 
 fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
     let width = area.width as usize;
-    let tail: [(&'static str, &'static str); 2] = [("?", "help"), ("q", "quit")];
+    // In an overlay, only its keys; in the panes, the focused pane's, with
+    // `? help` and `q quit` always last.
+    type Keys = Vec<(&'static str, &'static str)>;
+    let (list, tail): (Keys, Keys) = match overlay_hints(app) {
+        Some(keys) => (keys, Vec::new()),
+        None => (hints(app), vec![("?", "help"), ("q", "quit")]),
+    };
     let entry = |(k, v): &(&str, &str)| format!(" {k} {v} ");
     let tail_w: usize = tail.iter().map(|e| width_of(&entry(e)) + 1).sum();
     let mut chosen = Vec::new();
     let mut used = tail_w;
-    for e in hints(app) {
+    for e in list {
         let w = width_of(&entry(&e)) + 1;
         if used + w > width {
             continue; // drop whole entries, never cut one
@@ -1575,7 +1614,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
     let c: &mut Confirm = c;
-    let width = DIALOG_COLUMNS.min(area.width.saturating_sub(2)).max(20);
+    let width = DIALOG_COLUMNS.min(area.width.saturating_sub(2));
     let inner_w = width.saturating_sub(2) as usize;
     let mut rows: Vec<Line<'static>> = Vec::new();
     for b in &c.body {
@@ -1598,8 +1637,14 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let total = rows.len();
     c.dialog.scroll = c.dialog.scroll.min(total.saturating_sub(page));
     let scroll = c.dialog.scroll;
-    // The argv must be seen to its end before the dialog can arm.
-    c.dialog.seen = c.dialog.seen || scroll + page >= total;
+    // The argv must be seen to its end before the dialog can arm — and only
+    // on a terminal large enough to show it (review SAFE-5).
+    let usable = inner_w >= 20 && page >= 2;
+    c.dialog.seen = c.dialog.seen || (usable && scroll + page >= total);
+    if !usable {
+        c.body =
+            vec!["The terminal is too small for this dialog; enlarge it, or press Esc.".into()];
+    }
     // The buttons and the dialog's state, pinned at the bottom.
     let mut spans = Vec::new();
     let mut spots = Vec::new();
@@ -1921,20 +1966,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         } else {
             FILES_NARROW
         };
-        // At 150 columns or more the right side is reserved for the chat
-        // (§10); nothing is drawn there yet.
-        let chat_w = if area.width >= CHAT_FROM {
-            area.width / 4
-        } else {
-            0
-        };
-        let [files, view, _chat] = Layout::default()
+        // The chat's side (§10, from 150 columns) is taken only once the chat
+        // exists: an empty strip read as broken (review USE-15; DECISIONS).
+        let [files, view] = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(files_w),
-                Constraint::Min(20),
-                Constraint::Length(chat_w),
-            ])
+            .constraints([Constraint::Length(files_w), Constraint::Min(20)])
             .areas(main);
         draw_files(frame, app, files);
         draw_view(frame, app, view);
@@ -2111,6 +2147,12 @@ mod tests {
         for (i, s) in states.into_iter().enumerate() {
             app.files.units[i].state = s;
         }
+        // A blocked unit owns no file (§2.3: ⊘ on unit rows only): its file
+        // is nobody's, as `files::build` leaves it (review USE-7).
+        for f in app.files.files.iter_mut().filter(|f| f.owner == Some(0)) {
+            f.owner = None;
+            f.state = FileState::NotInPlan;
+        }
         let extra = [
             ("src/zopfli/gone.c", FileState::Missing),
             ("src/zopfli/edited.c", FileState::Changed),
@@ -2205,6 +2247,9 @@ mod tests {
             passed: true,
             detail: "183832 bytes identical".into(),
         });
+        let pending = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
         app.running = true;
         app.run = Some(RunPanel {
             argv,
@@ -2229,6 +2274,7 @@ mod tests {
             // that renders the same whatever the test's speed.
             started: Instant::now() - std::time::Duration::from_millis(41_050),
             plan_changes: 0,
+            pending,
         });
     }
 
@@ -2352,6 +2398,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Review USE-3: the hint bar lists the keys that work in the open
+    /// overlay; `? help` and `q quit` only in the panes.
+    #[test]
+    fn the_hint_bar_follows_the_mode() {
+        let mut app = app("ghintmode");
+        let bar = |app: &mut App| {
+            text(&render(app, 120, 24))
+                .lines()
+                .last()
+                .unwrap()
+                .to_string()
+        };
+        assert!(bar(&mut app).ends_with("? help   q quit"));
+        app.open_menu();
+        assert_eq!(bar(&mut app).trim(), "↑↓ choose   Enter do it   Esc close");
+        crate::app::tests::code(&mut app, KeyCode::Esc);
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'm');
+        assert_eq!(bar(&mut app).trim(), "Enter continue   Esc cancel");
+        crate::app::tests::code(&mut app, KeyCode::Esc);
+        key(&mut app, 'a');
+        assert_eq!(bar(&mut app).trim(), "↑↓ scroll   Esc cancel");
+        arm(&mut app);
+        assert_eq!(
+            bar(&mut app).trim(),
+            "↑↓ scroll   ←→ button   Enter press   Esc cancel"
+        );
+    }
+
+    /// Review SAFE-5: a terminal too small to show a dialog whole never
+    /// lets it arm.
+    #[test]
+    fn a_dialog_on_a_tiny_terminal_never_arms() {
+        let mut app = app("gtiny");
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'a');
+        // Even scrolled to its end, a dialog too small to show its command
+        // never counts as seen.
+        for (w, h) in [(18u16, 30u16), (120, 5), (120, 4)] {
+            if let Mode::Dialog(c) = &mut app.mode {
+                c.dialog.scroll = usize::MAX / 2;
+            }
+            render(&mut app, w, h);
+            let Mode::Dialog(c) = &app.mode else { panic!() };
+            assert!(!c.dialog.seen, "{w}x{h}");
+        }
+        render(&mut app, 120, 30);
+        let Mode::Dialog(c) = &app.mode else { panic!() };
+        assert!(c.dialog.seen);
+    }
+
+    /// Review USE-15: no blank strip at 150 columns and wider — the View
+    /// takes the width until the chat exists.
+    #[test]
+    fn no_blank_strip_at_wide_widths() {
+        let mut app = app("gwide160");
+        render(&mut app, 160, 20);
+        let (view, _) = app
+            .hits
+            .iter()
+            .find(|(_, h)| *h == Hit::Pane(Focus::View))
+            .unwrap();
+        assert_eq!(view.x + view.width, 160);
     }
 
     /// The hit-record API (Build B's mouse): each drawn tree row, the panes,

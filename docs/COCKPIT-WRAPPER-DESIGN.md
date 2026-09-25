@@ -940,3 +940,38 @@ three of them high:
 | CHK-11 | low | holes in the state table (merged with no provenance, ⊘ on files, a doubly owned file) | a fallback row; ⊘ on unit rows only; the non-blocked owner wins (§2.3) |
 | CHK-12 | low | the layout rules and mocks contradicted each other | words on rows when they fit; mocks redrawn at 120 and 76 columns (§1, §5) |
 | CHK-13 | low | "the CLI re-checks everything" was false for these gates; a half-seeded record was retried unseeded | the gates declared as the cockpit's own, re-checked at confirm; a half-seeded Retry refused (§4.3) |
+
+## R3. Code review of Build A — 51 findings, verified, resolved (2026-09-25)
+
+Four lenses (safety & provenance, process & terminal, engine & state, usability & design
+conformance) over c39c9b6, then two independent verifiers that read the reviewed commit
+only: 51 findings, 49 distinct — 33 confirmed, 13 partly, 3 real but as this design asked,
+0 refuted (overlaps merged below). Every fix has a regression test that fails
+without it, and the rules are mutation-checked. Where a resolution changes this design, the
+text above is not rewritten; this table governs.
+
+| finding (ids) | resolution |
+|---|---|
+| dialog focus wrapped: one `←` from the safe button reached Discard, Run, Stop (USE-1, SAFE-6) | focus clamps: `←` stays on the safe button; a destructive button is reached only by moving right to it |
+| Try again rebuilt the command without its unit, attempt and note: Re-check and Retry retries always refused, dialogs said "the unit" (USE-2, ENG-1, SAFE-4) | the run keeps the confirmed command whole; Try again offers it; the "Last:" line says "another command is changing this project (…) — nothing was done" |
+| confirm-time gates read the last snapshot's crate and did unbounded reads on the UI thread (SAFE-1, SAFE-2, PROC-6) | confirm runs the preflight first, re-reads the plan (refuses when it names another crate), then hashes; the migrate model is read by the loader, not the dialog |
+| "unchanged since shown" compared against a digest a background load replaced (SAFE-3, ENG-8) | the digest shown is captured into the command when the dialog opens |
+| Resume: no gate at confirm; a blind hand-off could be tracked (SAFE-4, SAFE-12) | Resume re-checks at confirm (in progress, seeded, this cockpit's, response present); an `awaiting` of a run without `--steer` is never tracked |
+| a stale tick read applied after a reap pruned the new hand-off (PROC-1) | `app::fold_loaded`: a read superseded by a later reaped or asked-for read is dropped, its reasons carried over |
+| restores could block on the stdout lock of a stalled terminal; a helper-thread panic froze the process; drawing outside the guard; a window after the editor where a signal named no edit; the mirror updated after deletion (PROC-2…5, PROC-11) | cooked mode first, then bounded writes on a helper (as harness-cli does); a helper-thread panic interrupts the child and exits 101; `park()` is bounded; frames draw under the guard; the edit joins the kept list before the editor starts; the mirror is updated before any deletion |
+| a verified unit whose C `plan` re-approved stayed "C changed — scan, refresh" (ENG-2) | SourceChanged only while the plan is stale; a verdict stale on its source is StaleVerdict ("Re-check it") |
+| Next step stuck on blocked units and on a plan with no units; missing files counted twice (ENG-3, ENG-6) | blocked units skipped; "No plan yet" only without a plan file; the stale paths already hold the missing files |
+| Re-check offered where the View shows C source, then always refused (ENG-4) | greyed: "open the unit (or its crate) first — the cockpit re-checks only code it shows" |
+| Accept from a unit, crate or file promoted a candidate the View never showed (ENG-5; this design's §4.2 listed it) | **changed**: the unit-level item is "Accept a-… into u-… (opens it first)": it selects the attempt, whose code the View shows; Accept is confirmed there |
+| Accept and Hand edit offered on a crate changed outside the harness (SAFE-8, SAFE-9) | both greyed until the crate is restored or recorded with `harness override` |
+| Discard offered while the override recording that edit ran (SAFE-7); the lock read failing open (SAFE-10) | Discard greyed while a command runs; an unreadable lock file is busy |
+| source_dir unchecked: the tree could list files outside the target (SAFE-11) | a source_dir that leaves the target, by path or link, makes the read refuse |
+| invisible format characters passed the filter; 4-hex short ids in dialogs; ids unchecked in argv (SAFE-13) | U+200B–D, U+2060–64, U+FEFF, U+00AD, U+2028/9, the tag block shown as `?`; full ids in dialog titles; ids must be plain path segments |
+| a dialog could arm on the frame that first showed it after a stall; tiny terminals (SAFE-5) | the quiet time also runs from the first full draw; a dialog never arms on a terminal too small to show it (it says so) |
+| a deleted verdict called an M0 crate "changed outside" (ENG-11) | a new cause: "its verdict is missing, so the harness cannot tell whose code the crate is"; Re-check stays greyed (unknown code is never verified) |
+| owned headers showed "header"; a function of a changed file showed the file's word (ENG-12) | an owned file takes its owner's state, headers too; an in-unit function takes its unit's state |
+| duplicate definitions (`#if`/`#else`) made identical rows and stuck `↓` (ENG-7) | one row per name |
+| the model's fallback caught every error (ENG-10) | only a missing input binds nothing; harness-mcp now reports such a target instead of refusing it (MCP-DESIGN §4) |
+| `v` missing on attempts (ENG-9, USE-5); the hint bar ignored menus and dialogs (USE-3); functions opened at line 1 (USE-4); the fallback glyph was the header's (USE-6); ⊘ on a file in a golden (USE-7); names squeezed to `…` (USE-8); sandbox words contradicted (USE-9); no Open on the project (USE-10); `E` only on some nodes, Discard titled "Record" (USE-11); "Too soon" hid "scroll" (USE-12); Enter in the View jumped to a link on first run (USE-13); unbounded sideways scroll, Space paging the tree, Ctrl-C ignored in overlays (USE-14) | Show the checks on attempts; the hint bar lists the open overlay's keys (`? help`/`q quit` only in the panes); a function opens at its line; the fallback has no glyph; the golden fixed; the name keeps half the row and the C heading its line number; sandbox words follow the flag; Open on every node; `E` from anywhere, the discard dialog says what it is; "scroll to the end" first; Enter jumps only to a chosen link; sideways scroll stops at the widest line; no Space in the tree; Ctrl-C closes overlays |
+| an empty quarter of the screen from 150 columns (USE-15; this design's §1/§10) | **changed**: the View takes the width until the chat exists |
+| pty tests: UTF-8 split across reads, restore order unchecked, cooked mode unchecked, reused pids killed, temp dirs leaked; the loader test timing-dependent (PROC-7…10) | bytes decoded across reads; the restores asserted LAST; the shell records `stty -a` after a TERM (icanon, echo); only live pids reaped; temp dirs in drop guards; the loader test waits on the first read |

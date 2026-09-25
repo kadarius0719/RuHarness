@@ -17,7 +17,7 @@ use crate::handedit;
 use crate::highlight::{Highlighter, Lang, Pieces};
 use crate::load::Read;
 use crate::menu::{self, Action, Item};
-use crate::model::{AttemptView, AuthorshipView, ProvenanceView, Snapshot, UnitView};
+use crate::model::{AttemptView, AuthorshipView, ProvenanceView, Snapshot, UnitView, NO_PLAN};
 use crate::narrate::{Ending, Narrator};
 use crate::pairs::{CSide, FunctionPair, RustNote, SourceSpan};
 use crate::spawn::ChildMsg;
@@ -160,6 +160,10 @@ pub struct Pending {
     pub expect_attempt: Option<String>,
     /// Modify: the note, remembered for its attempt whatever happens.
     pub note: Option<String>,
+    /// Re-check: the unit crate's content hash the View showed when the
+    /// dialog opened — confirm refuses unless the crate on disk still has it
+    /// ("unchanged since shown"; captured once, never updated by a load).
+    pub shown_digest: Option<String>,
 }
 
 /// What the event loop must do after a key.
@@ -198,6 +202,31 @@ pub enum LoadWhy {
     Reaped,
     /// `g`: the pairs are re-read, and the outcome is said.
     Key,
+}
+
+/// A read finished: which reason to apply it with, or `None` when it must
+/// be dropped. `asked` holds the reasons of the reads asked for, by their
+/// request number; the requests up to `seq` are answered by this read (the
+/// loader folds them). A read is dropped when a LATER read was asked for
+/// after a command was reaped or on `g` (review PROC-1): it started before
+/// that command ended, and applying it would undo what the command did
+/// (a hand-off just posed, the lock just released); its reasons carry over
+/// to that later read.
+pub fn fold_loaded(asked: &mut Vec<(u64, LoadWhy)>, seq: u64) -> Option<LoadWhy> {
+    let why = asked
+        .iter()
+        .filter(|(s, _)| *s <= seq)
+        .map(|(_, w)| *w)
+        .max()
+        .unwrap_or(LoadWhy::Tick);
+    asked.retain(|(s, _)| *s > seq);
+    match asked.iter_mut().find(|(_, w)| *w >= LoadWhy::Reaped) {
+        Some((_, later)) => {
+            *later = (*later).max(why);
+            None
+        }
+        None => Some(why),
+    }
 }
 
 /// What a dialog is for.
@@ -342,6 +371,8 @@ pub struct RunPanel {
     pub started: Instant,
     /// `plan`'s change lines, for the summary notice.
     pub plan_changes: usize,
+    /// The command as it was confirmed (Try again offers it again, whole).
+    pub pending: Pending,
 }
 
 /// An `external` hand-off waiting for its response file.
@@ -488,8 +519,9 @@ pub struct App {
     /// The View's links (the project summary's and a directory's files, the
     /// units), as the last draw laid them out.
     pub links: Vec<Selection>,
-    /// The focused link in the View.
-    pub link: usize,
+    /// The focused link in the View: none until the user moves to one, so
+    /// `Enter` there opens the menu as the Next step says (review USE-13).
+    pub link: Option<usize>,
     /// Overlay, menu or dialog.
     pub mode: Mode,
     /// A transient notice.
@@ -511,9 +543,18 @@ pub struct App {
     pub pairs: Vec<PairView>,
     /// The unit crate's content hash the pairs were built from.
     pub pairs_digest: Option<String>,
+    /// The unit whose crate the pairs show (none for an attempt's crate or
+    /// C source).
+    pub pairs_unit: Option<String>,
+    /// The target's effective migrate model, as the last read found it
+    /// (named in the model acts' dialogs).
+    pub migrate_model: String,
     /// The C source the View shows (a file no unit owns, a header, an
     /// internal function's file).
     pub source: Option<SourceView>,
+    /// The widest code line the View holds, in columns (tabs as 8):
+    /// horizontal scroll stops there (review USE-14).
+    pub code_cols: usize,
     /// What the last draw laid out.
     pub layout: Layout,
     /// Clickable regions of the last frame.
@@ -527,6 +568,8 @@ pub struct App {
     pub notes: BTreeMap<String, String>,
     /// The writer lock's live holder, as last read.
     pub holder: Option<Holder>,
+    /// Why the writer lock could not be read, when it could not (busy).
+    pub holder_error: Option<String>,
     /// A read of the ledger the event loop should start.
     pub load_request: Option<LoadWhy>,
     /// A read is under way (set by the event loop).
@@ -632,6 +675,7 @@ impl App {
     pub fn new(config: Config, read: Read) -> App {
         let files = files::build(&read.snapshot, &read.walk);
         let holder = read.holder;
+        let migrate_model = read.migrate_model;
         let mut app = App {
             config,
             snapshot: read.snapshot,
@@ -646,7 +690,7 @@ impl App {
             scroll: 0,
             hscroll: 0,
             links: Vec::new(),
-            link: 0,
+            link: None,
             mode: Mode::Normal,
             notice: None,
             plan_notice: None,
@@ -657,13 +701,17 @@ impl App {
             awaiting: Vec::new(),
             pairs: Vec::new(),
             pairs_digest: None,
+            pairs_unit: None,
+            migrate_model,
             source: None,
+            code_cols: 0,
             layout: Layout::default(),
             hits: Vec::new(),
             kept_edits: Vec::new(),
             leftovers: Vec::new(),
             notes: BTreeMap::new(),
             holder,
+            holder_error: None,
             load_request: None,
             loading: false,
             diff_rows: None,
@@ -736,7 +784,7 @@ impl App {
         self.rebuild_rows();
         self.scroll = 0;
         self.hscroll = 0;
-        self.link = 0;
+        self.link = None;
         self.refresh_view(false);
     }
 
@@ -845,6 +893,8 @@ impl App {
         self.snapshot = read.snapshot;
         self.walk = read.walk;
         self.holder = read.holder;
+        self.holder_error = None;
+        self.migrate_model = read.migrate_model;
         self.files = files::build(&self.snapshot, &self.walk);
         self.selection = tree::surviving(&self.snapshot, &self.files, &self.selection);
         // A finished (or vanished) attempt no longer awaits anything.
@@ -879,9 +929,18 @@ impl App {
     /// Read the writer lock's live holder now (the menu opens with it, a
     /// dialog confirms with it).
     pub fn refresh_holder(&mut self) {
-        self.holder = harness_core::status::live_holder(&Ledger::new(&self.config.target))
-            .ok()
-            .flatten();
+        match harness_core::status::live_holder(&Ledger::new(&self.config.target)) {
+            Ok(holder) => {
+                self.holder = holder;
+                self.holder_error = None;
+            }
+            // Fail closed: a lock file that cannot be read is not "free"
+            // (review SAFE-10).
+            Err(e) => {
+                self.holder = None;
+                self.holder_error = Some(e.to_string());
+            }
+        }
     }
 
     /// The key of what the View shows, as far as the snapshot tells: a
@@ -925,9 +984,21 @@ impl App {
         if !force && self.pairs_key.as_ref() == Some(&key) {
             return;
         }
+        self.build_view(key);
+        let lines = self
+            .source
+            .iter()
+            .flat_map(|s| s.lines.iter())
+            .chain(self.pairs.iter().flat_map(|p| p.c.iter().chain(&p.rust)));
+        self.code_cols = lines.map(code_width).max().unwrap_or(0);
+        self.hscroll = self.hscroll.min(self.code_cols);
+    }
+
+    fn build_view(&mut self, key: String) {
         self.pairs_key = Some(key);
         self.pairs.clear();
         self.pairs_digest = None;
+        self.pairs_unit = None;
         self.source = None;
         let sel = self.selection.clone();
         // C source: a file no unit owns, a header, an internal function.
@@ -950,6 +1021,15 @@ impl App {
         };
         if let Some(path) = source_of {
             self.source = Some(self.read_source(&path));
+            // A function's source opens at the function (review USE-4).
+            if let Selection::Function(p, name) = &sel {
+                let line = self
+                    .files
+                    .file(p)
+                    .and_then(|f| f.functions.iter().find(|x| &x.name == name))
+                    .map_or(1, |x| x.line as usize);
+                self.scroll = line.saturating_sub(1);
+            }
             return;
         }
         let Some(u) = self.owning_unit(&sel) else {
@@ -978,6 +1058,7 @@ impl App {
         }
         if !matches!(sel, Selection::Attempt(..)) {
             self.pairs_digest = unit.crate_digest.clone();
+            self.pairs_unit = Some(unit.unit.id.clone());
         }
         let crate_name = crate_dir
             .as_deref()
@@ -1184,6 +1265,15 @@ impl App {
             } => {
                 push(run, Tone::Warn, format!("awaiting response: {path}"));
                 push(run, Tone::Dim, format!("  hint: {resume}"));
+                // Only a steer attempt's hand-off is this cockpit's to resume:
+                // a blind one belongs to the audited protocol (SAFE-12).
+                let steer = run
+                    .argv
+                    .iter()
+                    .any(|a| a.to_string_lossy().starts_with("--steer="));
+                if !steer {
+                    return;
+                }
                 self.run_awaiting = Some(Awaiting {
                     attempt,
                     path: PathBuf::from(path),
@@ -1246,6 +1336,7 @@ impl App {
             narrator: Narrator::new(&pending.label, &pending.argv),
             started: Instant::now(),
             plan_changes: 0,
+            pending: pending.clone(),
         });
         self.notice = None;
     }
@@ -1299,16 +1390,12 @@ impl App {
             ));
             let ending = run.narrator.ending(status.code(), signal.as_deref());
             if ending == Ending::Locked {
-                self.try_again = Some(Pending {
-                    act: run.act,
-                    argv: run.argv.clone(),
-                    label: run.narrator.label.clone(),
-                    unit: None,
-                    attempt: None,
-                    cleanup: run.cleanup.clone(),
-                    expect_attempt: None,
-                    note: None,
-                });
+                // The same command, whole: its unit, attempt, note and hand
+                // edit (review USE-2/ENG-1/SAFE-4). Its dialog re-checks
+                // everything again at confirm.
+                let mut again = run.pending.clone();
+                again.cleanup = run.cleanup.clone();
+                self.try_again = Some(again);
             }
             if run.act == Act::Plan && ending == Ending::Done {
                 self.plan_before = Some(run.plan_changes);
@@ -1398,6 +1485,12 @@ impl App {
         if self.running {
             return Err("a command is running (x cancels it)".into());
         }
+        // Ids reach the argv as positionals: plain path segments only.
+        for id in [unit, attempt].into_iter().flatten() {
+            if !harness_core::plan::is_clean_segment(id) {
+                return Err(format!("{id:?} is not a plain id; not passed to a command"));
+            }
+        }
         let find_unit = || -> Result<&UnitView, String> {
             let id = unit.ok_or("no unit")?;
             self.snapshot
@@ -1420,6 +1513,7 @@ impl App {
             cleanup: None,
             expect_attempt: None,
             note: None,
+            shown_digest: None,
         };
         match act {
             Act::Scan | Act::Plan | Act::Detect => {
@@ -1609,6 +1703,7 @@ impl App {
             cleanup: Some(tmp),
             expect_attempt: None,
             note: None,
+            shown_digest: None,
         })
     }
 
@@ -1668,22 +1763,9 @@ impl App {
     /// file it writes and what changes (§5.1).
     pub fn dialog_words(&self, p: &Pending) -> (String, Vec<String>) {
         let unit = p.unit.as_deref().unwrap_or("the unit");
-        let attempt = p.attempt.as_deref().map(short_id).unwrap_or_default();
-        // The target's effective migrate model (`[llm.migrate]` over
-        // `[llm]`), as harness-mcp reports it: the provider is the
-        // cockpit's, the model the target's.
-        let routing = || {
-            harness_core::TargetContext::load(&self.config.target)
-                .ok()
-                .map(|c| {
-                    let llm = &c.config.llm;
-                    llm.migrate
-                        .as_ref()
-                        .and_then(|m| m.model.clone())
-                        .unwrap_or_else(|| llm.model.clone())
-                })
-                .unwrap_or_else(|| "?".into())
-        };
+        // Full ids in the dialog: a short id may name two attempts (SAFE-13).
+        let attempt = p.attempt.clone().unwrap_or_default();
+        let routing = || self.migrate_model.clone();
         let (title, mut body) = match p.act {
             Act::Scan => (
                 "Scan the project?".to_string(),
@@ -1709,7 +1791,11 @@ impl App {
             Act::Verify => (
                 format!("Re-check {unit} with the oracle?"),
                 vec![
-                    format!("Builds {unit}'s Rust and runs it against the C in the sandbox."),
+                    if self.config.allow_unsandboxed {
+                        format!("Builds {unit}'s Rust and runs it against the C.")
+                    } else {
+                        format!("Builds {unit}'s Rust and runs it against the C in the sandbox.")
+                    },
                     format!(
                         "Writes units/{unit}/oracle-latest.json and .md (and \
                          oracle-last-green.json when green) and {unit}'s status in plan.toml: \
@@ -1833,8 +1919,15 @@ impl App {
         }));
     }
 
-    /// Open an act's dialog (nothing runs yet).
-    pub fn ask(&mut self, pending: Pending) {
+    /// Open an act's dialog (nothing runs yet). A Re-check captures the
+    /// crate digest the View shows now: confirm compares the disk with it.
+    pub fn ask(&mut self, mut pending: Pending) {
+        if pending.act == Act::Verify {
+            pending.shown_digest = match (&pending.unit, &self.pairs_unit) {
+                (Some(u), Some(shown)) if u == shown => self.pairs_digest.clone(),
+                _ => None,
+            };
+        }
         self.open_dialog(Purpose::Act(pending));
     }
 
@@ -1860,41 +1953,64 @@ impl App {
     }
 
     /// The cockpit's own gates, again at confirm time on a FRESH read (§4.3):
-    /// the lock holder; Re-check only on known code unchanged since shown;
-    /// Retry's refusals on the record as it is now.
+    /// the preflight first (every read below is then of a regular file within
+    /// its cap, and the crate holds no link — review SAFE-2), the lock
+    /// holder; Re-check only on the crate the plan names NOW, known code,
+    /// unchanged since the dialog opened; Retry's refusals and Resume's
+    /// conditions on the record as it is now.
     fn confirm_gate(&mut self, p: &Pending) -> Result<(), String> {
         self.refresh_holder();
         if self.running {
             return Err("a command is running (one at a time)".into());
         }
-        if let Some(h) = &self.holder {
-            return Err(format!("busy: `{}` (checked just now)", h.command));
+        if let Some(why) = self.busy() {
+            return Err(why);
         }
-        let ledger = Ledger::new(&self.config.target);
+        let target = self.config.target.clone();
+        crate::preflight::preflight(&target)
+            .map_err(|why| format!("the project cannot be read safely: {why}"))?;
+        let ledger = Ledger::new(&target);
+        let record = |unit: &str, attempt: &str| {
+            let dir = harness_core::attempts::attempt_dir(&ledger, unit, attempt);
+            AttemptRecord::load(&dir)
+                .map_err(|e| format!("attempt {attempt} could not be read: {e}"))
+        };
         match p.act {
             Act::Verify => {
                 let id = p.unit.as_deref().ok_or("no unit")?;
-                let unit = self.snapshot.unit(id).ok_or("the unit is gone")?;
-                let dir = unit.crate_dir.clone().ok_or("the unit has no crate")?;
+                // The crate `verify` will judge: the one the plan names now.
+                let plan = harness_core::plan::Plan::load(&ledger.plan_path())
+                    .map_err(|e| format!("the plan could not be read: {e}"))?;
+                let dir = plan
+                    .units
+                    .iter()
+                    .find(|u| u.id == id)
+                    .and_then(|u| u.oracle_param_str("rust_crate"))
+                    .map(|name| ledger.unit_dir(id).join(name))
+                    .ok_or_else(|| format!("{id} has no crate in the plan"))?;
+                let shown = self.snapshot.unit(id).and_then(|u| u.crate_dir.clone());
+                if shown.as_deref() != Some(dir.as_path()) {
+                    return Err(format!(
+                        "the plan now names another crate for {id} — press g and look again"
+                    ));
+                }
                 let now = harness_core::hash::crate_content_hash(&dir)
                     .map_err(|e| format!("the crate could not be read: {e}"))?;
-                if self.pairs_digest.as_deref() != Some(now.as_str()) {
+                if p.shown_digest.as_deref() != Some(now.as_str()) {
                     return Err(
                         "the crate changed on disk since the cockpit showed it — press g and \
                          look again"
                             .into(),
                     );
                 }
-                let recorded = unit
-                    .attempts
-                    .iter()
-                    .any(|a| a.record.candidate_digest == now);
+                let unit = self.snapshot.unit(id).ok_or("the unit is gone")?;
+                let recorded = unit.attempts.iter().any(|a| {
+                    a.record.candidate_digest == now
+                        && record(id, &a.record.id).is_ok_and(|r| r.candidate_digest == now)
+                });
                 let judged = Verdict::load(&ledger.verdict_latest_path(id))
                     .ok()
-                    .zip(
-                        harness_core::hash::unit_crate_file_set_hash(&self.config.target, &dir)
-                            .ok(),
-                    )
+                    .zip(harness_core::hash::unit_crate_file_set_hash(&target, &dir).ok())
                     .is_some_and(|(v, set)| {
                         !v.inputs.rust_crate.is_empty() && v.inputs.rust_crate == set
                     });
@@ -1912,13 +2028,36 @@ impl App {
                 let (Some(u), Some(a)) = (p.unit.as_deref(), p.attempt.as_deref()) else {
                     return Err("no attempt".into());
                 };
-                let dir = harness_core::attempts::attempt_dir(&ledger, u, a);
-                let record = AttemptRecord::load(&dir)
-                    .map_err(|e| format!("attempt {a} could not be read: {e}"))?;
-                match retry_refusal(&record, &self.config.providers) {
+                match retry_refusal(&record(u, a)?, &self.config.providers) {
                     Some(why) => Err(why),
                     None => Ok(()),
                 }
+            }
+            Act::Resume => {
+                let (Some(u), Some(a)) = (p.unit.as_deref(), p.attempt.as_deref()) else {
+                    return Err("no attempt".into());
+                };
+                let r = record(u, a)?;
+                if r.outcome != "in-progress" {
+                    return Err(format!("attempt {a} is no longer in progress"));
+                }
+                // Only a steer attempt's hand-off: a blind one is the audited
+                // protocol's (SAFE-12).
+                if r.seeded_from.is_none() || r.steer_note.is_none() {
+                    return Err(format!(
+                        "attempt {a} is not a steer attempt: its hand-off is the audited \
+                         protocol's to answer"
+                    ));
+                }
+                let aw = self
+                    .awaiting
+                    .iter()
+                    .find(|aw| aw.attempt.as_deref() == Some(a))
+                    .ok_or_else(|| format!("attempt {a} is not waiting on this cockpit"))?;
+                if !response_present(&aw.path) {
+                    return Err(format!("no response yet at {}", aw.path.display()));
+                }
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -2020,7 +2159,7 @@ impl App {
                     Some(a) => self.jump(Selection::Attempt(id.clone(), a)),
                     None => self.jump(unit),
                 }
-                self.notice = notice("choose the attempt to accept, then Enter");
+                self.notice = notice("look over its code, then Enter and Accept (or a)");
                 Command::None
             }
             Action::ShowChecks => {
@@ -2079,7 +2218,15 @@ impl App {
             Action::DiscardKept => {
                 if let Some(k) = self.kept_edits.last().cloned() {
                     match self.hand_edit_argv(&k.unit, &k.stage, k.tmp.clone(), Some(&k.note)) {
-                        Ok(p) => self.ask(p),
+                        Ok(p) => {
+                            self.ask(p);
+                            if let Mode::Dialog(c) = &mut self.mode {
+                                c.title = format!(
+                                    "Your kept hand edit of {}: keep it, record it, or discard it?",
+                                    k.unit
+                                );
+                            }
+                        }
                         Err(why) => {
                             self.notice = notice(format!(
                                 "{why}; the hand edit is kept in {}",
@@ -2127,12 +2274,13 @@ impl App {
                 Some(Act::Scan),
             ));
         };
+        // The stale paths hold the missing files too (review ENG-6).
         let changed = state.stale
             + self
                 .files
                 .files
                 .iter()
-                .filter(|f| f.state == FileState::New || f.state == FileState::Missing)
+                .filter(|f| f.state == FileState::New)
                 .count();
         if changed > 0 {
             return Some((
@@ -2143,10 +2291,18 @@ impl App {
                 Some(Act::Scan),
             ));
         }
-        if self.snapshot.units.is_empty() {
+        // Only a missing plan: a plan with no units is a plan (review ENG-3).
+        if self.snapshot.units.is_empty() && self.snapshot.note.as_deref() == Some(NO_PLAN) {
             return Some(("No plan yet — Refresh the plan".into(), Some(Act::Plan)));
         }
-        if let Some(u) = self.snapshot.units.iter().find(|u| !u.report.source_fresh) {
+        // A blocked unit's files left: refreshing the plan never makes it
+        // fresh, so it is no next step.
+        if let Some(u) = self
+            .snapshot
+            .units
+            .iter()
+            .find(|u| !u.report.source_fresh && u.report.status != "blocked")
+        {
             return Some((
                 format!(
                     "{}'s C changed since it was planned — scan, refresh the plan, then review \
@@ -2348,6 +2504,7 @@ impl App {
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('v') | KeyCode::Enter => {
                         Mode::Normal
                     }
+                    _ if ctrl_c => Mode::Normal,
                     _ => Mode::Verdict { selected, scroll },
                 };
                 return Command::None;
@@ -2363,6 +2520,7 @@ impl App {
                     KeyCode::PageDown | KeyCode::Char(' ') => scroll.saturating_add(20),
                     KeyCode::PageUp => scroll.saturating_sub(20),
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => return Command::None,
+                    _ if ctrl_c => return Command::None,
                     _ => scroll,
                 };
                 self.mode = Mode::Diff {
@@ -2542,8 +2700,8 @@ impl App {
             KeyCode::Char('[') => self.pending_bracket = Some('['),
             KeyCode::Char('J') => self.next_unit(true),
             KeyCode::Char('K') => self.next_unit(false),
-            KeyCode::Enter if self.focus == Focus::View && !self.links.is_empty() => {
-                if let Some(sel) = self.links.get(self.link).cloned() {
+            KeyCode::Enter if self.focus == Focus::View && self.link.is_some() => {
+                if let Some(sel) = self.link.and_then(|l| self.links.get(l)).cloned() {
                     self.jump(sel);
                     self.focus = Focus::Files;
                 }
@@ -2556,7 +2714,22 @@ impl App {
                     self.notice = notice("nothing is running");
                 }
             }
-            KeyCode::Char(c @ ('a' | 'm' | 'e' | 'E' | 'r' | 'R' | 'd' | 'v')) => {
+            // The kept hand edit, from anywhere (review USE-11).
+            KeyCode::Char('E') => match self.kept_edits.last().cloned() {
+                None => self.notice = notice("no kept hand edit"),
+                Some(_) if self.running => {
+                    self.notice = notice("a command is running (one at a time)")
+                }
+                Some(k) => {
+                    self.mode = Mode::EditNote {
+                        input: k.note,
+                        unit: k.unit,
+                        stage: k.stage,
+                        tmp: k.tmp,
+                    }
+                }
+            },
+            KeyCode::Char(c @ ('a' | 'm' | 'e' | 'r' | 'R' | 'd' | 'v')) => {
                 return self.accelerator(&c.to_string());
             }
             KeyCode::Backspace => {
@@ -2578,7 +2751,7 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.move_rows(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_rows(1),
             KeyCode::PageUp => self.move_rows(-page),
-            KeyCode::PageDown | KeyCode::Char(' ') => self.move_rows(page),
+            KeyCode::PageDown => self.move_rows(page),
             KeyCode::Home => self.move_rows(isize::MIN / 2),
             KeyCode::End => self.move_rows(isize::MAX / 2),
             KeyCode::Left => {
@@ -2618,14 +2791,22 @@ impl App {
         let page = self.layout.page.max(1);
         if !self.links.is_empty() {
             let last = self.links.len() - 1;
+            let at = self.link;
             match code {
-                KeyCode::Up | KeyCode::Char('k') => self.link = self.link.saturating_sub(1),
-                KeyCode::Down | KeyCode::Char('j') => self.link = (self.link + 1).min(last),
-                KeyCode::PageUp => self.link = self.link.saturating_sub(page),
-                KeyCode::PageDown | KeyCode::Char(' ') => self.link = (self.link + page).min(last),
-                KeyCode::Home => self.link = 0,
-                KeyCode::End => self.link = last,
-                KeyCode::Left | KeyCode::Esc => self.focus = Focus::Files,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.link = Some(at.map_or(0, |l| l.saturating_sub(1)))
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.link = Some(at.map_or(0, |l| (l + 1).min(last)))
+                }
+                KeyCode::PageUp => self.link = Some(at.map_or(0, |l| l.saturating_sub(page))),
+                KeyCode::PageDown => self.link = Some(at.map_or(0, |l| (l + page).min(last))),
+                KeyCode::Home => self.link = Some(0),
+                KeyCode::End => self.link = Some(last),
+                KeyCode::Left | KeyCode::Esc => {
+                    self.link = None;
+                    self.focus = Focus::Files;
+                }
                 _ => {}
             }
             return;
@@ -2648,7 +2829,11 @@ impl App {
                     self.hscroll = self.hscroll.saturating_sub(8);
                 }
             }
-            KeyCode::Right => self.hscroll = self.hscroll.saturating_add(8),
+            // Never past the longest code line (review USE-14).
+            KeyCode::Right => {
+                let room = self.code_cols.saturating_sub(8);
+                self.hscroll = (self.hscroll + 8).min(room);
+            }
             KeyCode::Esc => self.focus = Focus::Files,
             _ => {}
         }
@@ -2705,10 +2890,10 @@ impl App {
                     return ("", String::new());
                 };
                 let in_unit = f.functions.iter().any(|x| &x.name == name && x.in_unit);
-                if in_unit {
-                    files::file_label(&self.files, &f.state)
-                } else {
-                    ("", "internal".into())
+                match (in_unit, f.owner.and_then(|u| self.files.units.get(u))) {
+                    // It takes its unit's state (§2.3), whatever its file's.
+                    (true, Some(info)) => (info.state.glyph(), info.state.word()),
+                    _ => ("", "internal".into()),
                 }
             }
             Selection::Unit(id) => {
@@ -2751,6 +2936,24 @@ impl App {
                 None => ("", String::new()),
             },
         }
+    }
+}
+
+/// A code line's width in columns, tabs taken as 8.
+fn code_width(line: &CodeLine) -> usize {
+    match line {
+        CodeLine::Code { pieces, .. } => {
+            pieces
+                .iter()
+                .map(|(_, t)| {
+                    t.chars()
+                        .map(|c| if c == '\t' { 8 } else { 1 })
+                        .sum::<usize>()
+                })
+                .sum::<usize>()
+                + 8
+        }
+        CodeLine::Link(_) | CodeLine::Note(_) => 0,
     }
 }
 
@@ -2930,7 +3133,14 @@ fn pair_view(highlighter: &mut Highlighter, p: &FunctionPair, crate_name: &str) 
     let short = p.symbol.rsplit("::").next().unwrap_or(&p.symbol);
     let (c_title, c) = match &p.c {
         CSide::Source(span) => (
-            format!("{} ({}:{})", span.name, span.file, span.first_line),
+            // The file's own name: the View's title names its path, and a
+            // cut heading keeps the line number (review USE-8).
+            format!(
+                "{} ({}:{})",
+                span.name,
+                span.file.rsplit('/').next().unwrap_or(&span.file),
+                span.first_line
+            ),
             code_lines(highlighter, Lang::C, span),
         ),
         CSide::StaleFacts { file } => (
@@ -3126,7 +3336,10 @@ pub(crate) mod tests {
         let Mode::Dialog(c) = &app.mode else {
             unreachable!()
         };
-        assert_eq!(c.title, "Replace u-lib's verified crate with a-13c9?");
+        assert_eq!(
+            c.title,
+            "Replace u-lib's verified crate with a-13c941dfff95?"
+        );
         // Unarmed, `y` is dropped.
         assert_eq!(key(&mut app, 'y'), Command::None);
         assert!(matches!(app.mode, Mode::Dialog(_)));
@@ -3550,6 +3763,7 @@ pub(crate) mod tests {
             cleanup: None,
             expect_attempt: None,
             note: None,
+            shown_digest: None,
         }
     }
 
@@ -4001,7 +4215,7 @@ pub(crate) mod tests {
         assert_eq!(key(&mut app, 'D'), Command::Cleanup(tmp.clone()));
         assert!(app.kept_edits.is_empty());
         key(&mut app, 'E');
-        assert!(said(&app).contains("nothing to do"), "{}", said(&app));
+        assert!(said(&app).contains("no kept hand edit"), "{}", said(&app));
         // The crate must be in the executor layout for `e` at all.
         attempt(&mut app, PROVENANCE);
         assert!(matches!(key(&mut app, 'e'), Command::Edit { .. }));
@@ -4097,7 +4311,10 @@ pub(crate) mod tests {
             let path = app.config.target.join(format!("r{n}.json"));
             std::fs::write(&path, "{}").unwrap();
             app.on_spawned(&pending(
-                vec![OsString::from(format!("run-{n}"))],
+                vec![
+                    OsString::from(format!("run-{n}")),
+                    OsString::from("--steer=x"),
+                ],
                 Act::Modify,
             ));
             app.on_child_msg(ChildMsg::Event(Event::Awaiting {
@@ -4112,11 +4329,11 @@ pub(crate) mod tests {
         assert_eq!(app.awaiting.len(), 2);
         attempt(&mut app, a);
         key(&mut app, 'R');
-        assert_eq!(dialog_argv(&app), ["run-1"]);
+        assert_eq!(dialog_argv(&app), ["run-1", "--steer=x"]);
         code(&mut app, KeyCode::Esc);
         attempt(&mut app, b);
         key(&mut app, 'R');
-        assert_eq!(dialog_argv(&app), ["run-2"]);
+        assert_eq!(dialog_argv(&app), ["run-2", "--steer=x"]);
     }
 
     /// §6.2: a plan run leaves one summary line until the next command.
@@ -4212,6 +4429,356 @@ pub(crate) mod tests {
             panic!("{:?}", app.notice);
         };
         assert!(title.contains(PROVENANCE));
+    }
+
+    fn locked(app: &mut App, p: &Pending) {
+        app.on_spawned(p);
+        app.on_child_msg(ChildMsg::Event(Event::Error {
+            kind: "locked".into(),
+            message: "ledger is locked".into(),
+            holder: Some(crate::events::Holder {
+                pid: Some(1),
+                command: "verify u-lib".into(),
+                started: String::new(),
+            }),
+        }));
+        app.on_child_exit(ExitStatus::from_raw(1 << 8));
+        app.load_now();
+    }
+
+    /// Review USE-2/ENG-1/SAFE-4: Try again offers the WHOLE command again —
+    /// a Re-check keeps its unit, runs its gates, names its object.
+    #[test]
+    fn try_again_offers_the_whole_command() {
+        let mut app = app("tryagain2");
+        app.select(Selection::Unit("u-lib".into()));
+        let p = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
+        locked(&mut app, &p);
+        assert!(app
+            .last
+            .as_deref()
+            .unwrap()
+            .contains("another command is changing this project"));
+        key(&mut app, 't');
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("{:?}", app.notice)
+        };
+        assert_eq!(c.title, "Re-check u-lib with the oracle?");
+        arm(&mut app);
+        let Command::Spawn(again) = key(&mut app, 'y') else {
+            panic!("refused: {}", said(&app));
+        };
+        assert_eq!(again.argv, p.argv);
+        assert_eq!(again.unit.as_deref(), Some("u-lib"));
+    }
+
+    /// Review PROC-1: a read that started before a command was reaped is
+    /// dropped when the reaped (or asked-for) read follows; its reasons
+    /// carry over; a lone tick applies.
+    #[test]
+    fn a_read_superseded_by_the_reaped_read_is_dropped() {
+        let mut asked = vec![(1, LoadWhy::Tick), (2, LoadWhy::Reaped)];
+        assert_eq!(fold_loaded(&mut asked, 1), None);
+        assert_eq!(asked, [(2, LoadWhy::Reaped)]);
+        assert_eq!(fold_loaded(&mut asked, 2), Some(LoadWhy::Reaped));
+        let mut asked = vec![(3, LoadWhy::Key), (4, LoadWhy::Reaped)];
+        assert_eq!(fold_loaded(&mut asked, 3), None);
+        assert_eq!(asked, [(4, LoadWhy::Key)], "the Key carries over");
+        let mut asked = vec![(5, LoadWhy::Tick), (6, LoadWhy::Tick)];
+        assert_eq!(
+            fold_loaded(&mut asked, 5),
+            Some(LoadWhy::Tick),
+            "ticks never starve"
+        );
+        let mut asked = vec![(7, LoadWhy::Tick), (8, LoadWhy::Reaped)];
+        assert_eq!(fold_loaded(&mut asked, 8), Some(LoadWhy::Reaped), "folded");
+        assert!(asked.is_empty());
+    }
+
+    /// Review SAFE-12: a blind hand-off is never tracked for Resume, and a
+    /// Resume confirms only for a steer attempt still in progress.
+    #[test]
+    fn resume_is_only_for_steer_hand_offs_rechecked_at_confirm() {
+        let mut app = app("resumeblind");
+        let awaited = "a-000000000abd";
+        in_progress_attempt(&app, awaited);
+        app.reload(true);
+        let response = app.config.target.join("response.json");
+        std::fs::write(&response, "{\"text\": \"x\"}").unwrap();
+        let blind = vec![OsString::from(HARNESS), OsString::from("migrate")];
+        let awaiting = |app: &mut App, argv: Vec<OsString>| {
+            app.on_spawned(&pending(argv, Act::Retry));
+            app.on_child_msg(ChildMsg::Event(Event::Awaiting {
+                attempt: Some(awaited.into()),
+                path: response.display().to_string(),
+                resume: String::new(),
+                args: None,
+            }));
+            app.on_child_exit(ExitStatus::from_raw(1 << 8));
+            app.load_now();
+        };
+        awaiting(&mut app, blind);
+        assert!(
+            app.awaiting.is_empty(),
+            "a blind hand-off is the audited protocol's"
+        );
+        let steer = vec![OsString::from(HARNESS), OsString::from("--steer=x")];
+        awaiting(&mut app, steer);
+        assert_eq!(app.awaiting.len(), 1);
+        attempt(&mut app, awaited);
+        key(&mut app, 'R');
+        assert!(matches!(app.mode, Mode::Dialog(_)), "{}", said(&app));
+        // The record loses its seed under the open dialog: refused.
+        record(&mut app, awaited, |r| r.seeded_from = None);
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(said(&app).contains("not a steer attempt"), "{}", said(&app));
+    }
+
+    /// Review SAFE-1, SAFE-2: at confirm the plan is read again — a unit
+    /// whose plan now names another crate is refused — and the preflight
+    /// runs first, so a link planted in the crate is refused, never hashed.
+    #[test]
+    fn recheck_confirms_on_a_fresh_plan_and_a_preflight() {
+        let mut app = app("recheckfresh");
+        app.select(Selection::Unit("u-lib".into()));
+        let open = |app: &mut App| {
+            let p = app
+                .act_argv(Act::Verify, Some("u-lib"), None, None)
+                .unwrap();
+            app.ask(p);
+            arm(app);
+        };
+        open(&mut app);
+        let plan = app.config.target.join("migration/plan.toml");
+        let text = std::fs::read_to_string(&plan).unwrap();
+        std::fs::write(
+            &plan,
+            text.replace("rust_crate = \"u_lib_rs\"", "rust_crate = \"other_rs\""),
+        )
+        .unwrap();
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(said(&app).contains("another crate"), "{}", said(&app));
+        std::fs::write(&plan, &text).unwrap();
+        open(&mut app);
+        let src = app.snapshot.units[0].crate_dir.clone().unwrap().join("src");
+        std::os::unix::fs::symlink("/dev/zero", src.join("zero.rs")).unwrap();
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(
+            said(&app).contains("cannot be read safely"),
+            "{}",
+            said(&app)
+        );
+        std::fs::remove_file(src.join("zero.rs")).unwrap();
+        open(&mut app);
+        assert!(
+            matches!(key(&mut app, 'y'), Command::Spawn(_)),
+            "{}",
+            said(&app)
+        );
+    }
+
+    /// Review SAFE-3/ENG-8: the digest shown is captured when the dialog
+    /// opens; a load behind the open dialog cannot move it.
+    #[test]
+    fn a_load_behind_the_dialog_never_moves_what_was_shown() {
+        let mut app = app("digestpin");
+        app.select(Selection::Unit("u-lib".into()));
+        let p = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
+        app.ask(p);
+        // Another KNOWN crate replaces it (a recorded candidate).
+        let unit_crate = app.snapshot.units[0].crate_dir.clone().unwrap();
+        let ledger = Ledger::new(&app.config.target);
+        let cand = attempts::attempt_dir(&ledger, "u-lib", RED).join("candidate/src/logic.rs");
+        std::fs::copy(&cand, unit_crate.join("src/logic.rs")).unwrap();
+        let cand_ffi = attempts::attempt_dir(&ledger, "u-lib", RED).join("candidate/src/ffi.rs");
+        std::fs::copy(&cand_ffi, unit_crate.join("src/ffi.rs")).unwrap();
+        // A tick load lands while the dialog is open.
+        app.request_load(LoadWhy::Reaped);
+        app.load_now();
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(
+            said(&app).contains("changed on disk since the cockpit showed it"),
+            "{}",
+            said(&app)
+        );
+    }
+
+    /// Review SAFE-10: a lock file that cannot be read is busy, not free.
+    #[test]
+    fn an_unreadable_lock_is_busy() {
+        let mut app = app("lockdir");
+        let lock = Ledger::new(&app.config.target).lock_path();
+        let _ = std::fs::remove_file(&lock);
+        std::fs::create_dir_all(&lock).unwrap();
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'a');
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(
+            said(&app).contains("the writer lock could not be read"),
+            "{}",
+            said(&app)
+        );
+    }
+
+    /// Review ENG-3, ENG-6: the Next step skips a blocked unit and knows an
+    /// empty plan from none; a missing file counts once.
+    #[test]
+    fn the_next_step_skips_blocked_units_and_counts_once() {
+        let mut app = app("nextstep2");
+        let plan = app.config.target.join("migration/plan.toml");
+        let text = std::fs::read_to_string(&plan).unwrap();
+        std::fs::write(
+            &plan,
+            text.replace("status = \"verified\"", "status = \"blocked\"")
+                .replace("source_hash = \"blake3:fd", "source_hash = \"blake3:00"),
+        )
+        .unwrap();
+        assert!(app.reload(true));
+        assert!(!app.snapshot.units[0].report.source_fresh);
+        assert_eq!(app.next_step(), None, "a blocked unit is no next step");
+        let head = text.split("[[unit]]").next().unwrap().to_string();
+        std::fs::write(&plan, head).unwrap();
+        assert!(app.reload(true));
+        assert!(app.snapshot.units.is_empty());
+        assert_eq!(app.next_step(), None, "an empty plan is a plan");
+        std::fs::remove_file(app.config.target.join("test_case/include/lib.h")).unwrap();
+        assert!(app.reload(true));
+        assert_eq!(
+            app.next_step().unwrap().0,
+            "1 file changed since the scan — Scan the project again"
+        );
+    }
+
+    /// Review USE-4: an internal function's source opens at the function.
+    #[test]
+    fn a_function_opens_at_its_line() {
+        let mut app = app("fnline");
+        app.select(Selection::Function(
+            LIB_C.into(),
+            "test_case/src/lib.c::get_bits".into(),
+        ));
+        assert_eq!(app.scroll, 2, "get_bits starts at line 3");
+    }
+
+    /// Review USE-13, USE-14: Enter in the View opens the menu until a link
+    /// was chosen; sideways scroll stops at the widest line; Space does not
+    /// page the tree; Ctrl-C closes the checks.
+    #[test]
+    fn view_keys_behave() {
+        let mut app = app("viewkeys");
+        let lib = app.config.target.join(LIB_C);
+        let c = std::fs::read_to_string(&lib).unwrap();
+        std::fs::write(&lib, format!("{c}\n")).unwrap();
+        assert!(app.reload(true));
+        app.links = vec![Selection::File(LIB_C.into())];
+        app.focus = Focus::View;
+        code(&mut app, KeyCode::Enter);
+        assert!(
+            matches!(app.mode, Mode::Menu(_)),
+            "no link chosen: the menu"
+        );
+        code(&mut app, KeyCode::Esc);
+        code(&mut app, KeyCode::Down);
+        code(&mut app, KeyCode::Enter);
+        assert_eq!(app.selection, Selection::File(LIB_C.into()));
+        app.select(Selection::Unit("u-lib".into()));
+        app.focus = Focus::View;
+        app.links.clear();
+        for _ in 0..1000 {
+            code(&mut app, KeyCode::Right);
+        }
+        assert!(
+            app.hscroll <= app.code_cols,
+            "{} > {}",
+            app.hscroll,
+            app.code_cols
+        );
+        assert!(app.hscroll > 0);
+        app.focus = Focus::Files;
+        let before = app.selection.clone();
+        key(&mut app, ' ');
+        assert_eq!(app.selection, before);
+        key(&mut app, 'v');
+        assert!(matches!(app.mode, Mode::Verdict { .. }));
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        app.on_key(ctrl_c, Instant::now());
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    /// Review USE-9, SAFE-13, USE-11: the words follow the sandbox flag;
+    /// ids that are not plain never reach an argv; E works from anywhere
+    /// and Discard's dialog says what it is.
+    #[test]
+    fn words_ids_and_the_kept_edit() {
+        let mut app = app("words");
+        app.config.allow_unsandboxed = true;
+        let p = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
+        let (_, body) = app.dialog_words(&p);
+        assert!(
+            !body.iter().any(|b| b.contains("in the sandbox")),
+            "{body:?}"
+        );
+        // An attempt whose id is not a plain segment (a copied record named
+        // `-x`): it exists, and still never reaches the argv.
+        let ledger = Ledger::new(&app.config.target);
+        let from = attempts::attempt_dir(&ledger, "u-lib", PROVENANCE);
+        let odd = from.parent().unwrap().join("-x");
+        assert!(std::process::Command::new("cp")
+            .arg("-R")
+            .arg(&from)
+            .arg(&odd)
+            .status()
+            .unwrap()
+            .success());
+        let mut rec = AttemptRecord::load(&odd).unwrap();
+        rec.id = "-x".into();
+        rec.store(&odd).unwrap();
+        assert!(app.reload(true));
+        assert!(
+            app.snapshot.units[0].attempt("-x").is_some(),
+            "the odd attempt is read"
+        );
+        let err = app
+            .act_argv(Act::Accept, Some("u-lib"), Some("-x"), None)
+            .unwrap_err();
+        assert!(err.contains("not a plain id"), "{err}");
+        app.edit_staged(
+            "u-lib".into(),
+            PathBuf::from("/tmp/w/stage"),
+            PathBuf::from("/tmp/w"),
+        );
+        code(&mut app, KeyCode::Esc);
+        app.select(Selection::File(LIB_C.into()));
+        key(&mut app, 'E');
+        assert!(
+            matches!(app.mode, Mode::EditNote { .. }),
+            "E from a file row"
+        );
+        code(&mut app, KeyCode::Esc);
+        app.select(Selection::Project);
+        app.open_menu();
+        if let Mode::Menu(m) = &mut app.mode {
+            m.focus = m
+                .items
+                .iter()
+                .position(|i| i.action == Action::DiscardKept)
+                .unwrap();
+        }
+        code(&mut app, KeyCode::Enter);
+        let Mode::Dialog(c) = &app.mode else { panic!() };
+        assert!(
+            c.title.contains("keep it, record it, or discard it"),
+            "{}",
+            c.title
+        );
     }
 
     #[test]

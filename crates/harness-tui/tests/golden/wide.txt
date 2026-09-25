@@ -2,7 +2,7 @@
 │▾ harness-tui-g000-0000000000 ││✓ u-lib migrated · status verified                                                    │
 │  ▾ test_case/            ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
 │    ▾ include/                ││Internal: get_bits() (compared through the unit's exported functions)                 │
-│        · lib.h         header││C  read_scalefactors (test_case/src/lib.… ⇄ Rust  read_scalefactors (src/ffi.rs:11)   │
+│        · lib.h         header││C  read_scalefactors (lib.c:17)           ⇄ Rust  read_scalefactors (src/ffi.rs:11)   │
 │    ▾ src/                ✓1/1││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe extern "C" fn read_scalefa›│
 │      ▸ ✓ lib.c       migrated││18                                   int› │  12     bs: *mut BsT,                     │
 │  ▾ Units (1)                 ││19     static const float g_deq_L12[18 *› │  13     pba: *mut u8,                     │

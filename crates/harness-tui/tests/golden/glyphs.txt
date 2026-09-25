@@ -1,7 +1,7 @@
 ┌ Files ───────────────────────┐┌ src/zopfli · ✗1 ⚠1 !1 +1 ?1 ✓5/14 (+1 ✓?) ───────────────────────────────────────────┐
 │▾ harness-tui-gglyph-00000000…││✗1 ⚠1 !1 +1 ?1 ✓5/14 (+1 ✓?)                                                          │
 │  ▾ src/                      ││✓  blocksplitter.c  migrated (by hand)                                                │
-│    ▾ … ✗1 ⚠1 !1 +1 ?1 ✓5/14 …││·  blocksplitter.h  header                                                            │
+│    ▾ zopfli/ ✗1 ⚠1 !1 +1 ?1 …││·  blocksplitter.h  header                                                            │
 │      ▸ ✓ blocksplitter.c     ││⚠  cache.c  needs attention                                                           │
 │        · blocksplitter.h     ││·  cache.h  header                                                                    │
 │      ▸ ⚠ cache.c             ││✓  deflate.c  migrated (by hand)                                                      │
@@ -13,9 +13,9 @@
 │      ▸ ? gone.c       missing││·  gzip_container.h  header                                                           │
 │      ▸ ✓? gzip_container.c   ││✗  hash.c  failing                                                                    │
 │        · gzip_container.h    ││·  hash.h  header                                                                     │
-│      ▸ ✗ hash.c       failing││⊘  katajainen.c  blocked                                                              │
+│      ▸ ✗ hash.c       failing││○  katajainen.c  not in the plan                                                      │
 │        · hash.h        header││·  katajainen.h  header                                                               │
-│      ▸ ⊘ katajainen.c        ││○  loose.c  not in the plan                                                           │
+│      ▸ ○ katajainen.c        ││○  loose.c  not in the plan                                                           │
 │        · katajainen.h  header││✓  lz77.c  migrated                                                                   │
 │      ▸ ○ loose.c             ││·  lz77.h  header                                                                     │
 │      ▸ ✓ lz77.c      migrated││✓  squeeze.c  migrated (by hand)                                                      │
@@ -30,9 +30,9 @@
 │        · util.h        header││·  zlib_container.h  header                                                           │
 │      ▸ ◇ zlib_container.c    ││·  zopfli.h  header                                                                   │
 │        · zlib_container.h    ││◇  zopfli_bin.c  planned                                                              │
-│        · zopfli.h      header││·  zopfli_lib.c  in progress                                                          │
+│        · zopfli.h      header││   zopfli_lib.c  in progress                                                          │
 │      ▸ ◇ zopfli_bin.c        ││                                                                                      │
-│      ▸ · zopfli_lib.c        ││                                                                                      │
+│      ▸ zopfli_lib.c          ││                                                                                      │
 │  ▾ Units (11)                ││                                                                                      │
 │    ▸ ⊘ u001-katajainen       ││                                                                                      │
 │    ▸ ⚠ u-cache               ││                                                                                      │
@@ -43,7 +43,7 @@
 │    ▸ ✓? u-gzip_container     ││                                                                                      │
 │    ▸ ◐ u-util           tried││                                                                                      │
 │    ▸ ◇ u-zlib_container      ││                                                                                      │
-│    ▸ · u-zopfli_lib          ││                                                                                      │
+│    ▸ u-zopfli_lib            ││                                                                                      │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
  Ready.
 

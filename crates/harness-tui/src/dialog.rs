@@ -135,6 +135,10 @@ pub struct Dialog {
     pub quiet_since: Instant,
     /// A key was dropped since the last draw: "Too soon — wait for ready".
     pub too_soon: bool,
+    /// When the loop first found it drawn whole: the quiet time also runs
+    /// from here, so a stalled loop never arms a dialog on the very frame
+    /// that first shows it (review SAFE-5).
+    pub seen_at: Option<Instant>,
 }
 
 impl Dialog {
@@ -149,6 +153,7 @@ impl Dialog {
             armed: false,
             quiet_since: now,
             too_soon: false,
+            seen_at: None,
         }
     }
 
@@ -163,10 +168,13 @@ impl Dialog {
     /// The event loop's check after a draw: arm when drawn whole, quiet for
     /// [`ARM_QUIET`], with no input `pending`. Returns whether it is armed.
     pub fn arm(&mut self, now: Instant, pending: bool) -> bool {
-        if !self.armed
-            && self.seen
-            && !pending
-            && now.saturating_duration_since(self.quiet_since) >= ARM_QUIET
+        if self.seen && self.seen_at.is_none() {
+            self.seen_at = Some(now);
+        }
+        let since = self
+            .seen_at
+            .map_or(self.quiet_since, |s| s.max(self.quiet_since));
+        if !self.armed && self.seen && !pending && now.saturating_duration_since(since) >= ARM_QUIET
         {
             self.armed = true;
             self.too_soon = false;
@@ -216,8 +224,11 @@ impl Dialog {
         }
         let n = self.buttons.len();
         match key.code {
-            KeyCode::Right | KeyCode::Tab => self.focus = (self.focus + 1) % n,
-            KeyCode::Left | KeyCode::BackTab => self.focus = (self.focus + n - 1) % n,
+            // Focus never wraps: `←` from the safe button stays on it, and a
+            // destructive button is only ever reached by moving right to it
+            // (review USE-1/SAFE-6).
+            KeyCode::Right | KeyCode::Tab => self.focus = (self.focus + 1).min(n - 1),
+            KeyCode::Left | KeyCode::BackTab => self.focus = self.focus.saturating_sub(1),
             KeyCode::Enter => return Outcome::Close(self.buttons[self.focus].choice),
             KeyCode::Char(c) if plain => {
                 if let Some(b) = self.buttons.iter().find(|b| b.letters.contains(&c)) {
@@ -234,10 +245,11 @@ impl Dialog {
         if self.armed {
             let letter = self.buttons.get(1).map_or("y", |b| b.key);
             format!("ready: → then Enter, or {letter}")
+        } else if !self.seen {
+            // Waiting alone never arms it: say what does (review USE-12).
+            "↓ more below — scroll to the end".into()
         } else if self.too_soon {
             "Too soon — wait for ready".into()
-        } else if !self.seen {
-            "↓ more below — scroll to the end".into()
         } else {
             "reading…".into()
         }
@@ -260,6 +272,7 @@ mod tests {
     fn drawn(kind: Kind, t0: Instant) -> Dialog {
         let mut d = Dialog::new(kind, t0);
         d.seen = true;
+        d.seen_at = Some(t0);
         d
     }
 
@@ -293,6 +306,7 @@ mod tests {
         assert!(!d.arm(t0 + ms(1000), false), "not seen to the end");
         assert_eq!(d.state_text(), "↓ more below — scroll to the end");
         d.seen = true;
+        d.seen_at = Some(t0);
         assert!(!d.arm(t0 + ms(1000), true), "input pending");
         assert!(d.arm(t0 + ms(1000), false));
         d.input(t0 + ms(1001));
@@ -358,8 +372,21 @@ mod tests {
             Outcome::Close(Choice::Run)
         );
         let _ = &mut d;
+        // Focus never wraps: ← from the safe button stays on it (USE-1).
+        for kind in [Kind::Act, Kind::Override, Kind::Quit, Kind::Cancel] {
+            let mut d = armed(kind);
+            d.on_key(press(KeyCode::Left), t0);
+            d.on_key(press(KeyCode::BackTab), t0);
+            assert_eq!(
+                d.on_key(press(KeyCode::Enter), t0),
+                Outcome::Close(Choice::Safe),
+                "{kind:?}"
+            );
+        }
         let mut d = armed(Kind::Override);
-        d.on_key(press(KeyCode::Left), t0);
+        for _ in 0..5 {
+            d.on_key(press(KeyCode::Right), t0);
+        }
         assert_eq!(
             d.on_key(press(KeyCode::Enter), t0),
             Outcome::Close(Choice::Discard)
@@ -418,6 +445,29 @@ mod tests {
             let mut d = Dialog::new(Kind::Act, t0);
             assert_eq!(d.on_key(key, t0), Outcome::Close(Choice::Safe));
         }
+    }
+
+    /// SAFE-5: the quiet time also runs from the first draw that showed it
+    /// whole — a loop that stalled past 300 ms after the opening key never
+    /// arms the dialog on the frame that first shows it.
+    #[test]
+    fn a_dialog_never_arms_on_the_frame_that_first_shows_it() {
+        let t0 = Instant::now();
+        let mut d = Dialog::new(Kind::Act, t0);
+        d.seen = true; // the first draw, after a 2 s stall
+        assert!(!d.arm(t0 + ms(2000), false));
+        assert!(!d.arm(t0 + ms(2299), false));
+        assert!(d.arm(t0 + ms(2300), false));
+    }
+
+    /// USE-12: an unseen dialog says what arms it, even after a dropped key.
+    #[test]
+    fn an_unseen_dialog_asks_to_scroll_first() {
+        let t0 = Instant::now();
+        let mut d = Dialog::new(Kind::Act, t0);
+        d.on_key(press(KeyCode::Char('y')), t0);
+        assert!(d.too_soon);
+        assert_eq!(d.state_text(), "↓ more below — scroll to the end");
     }
 
     /// Scroll keys scroll before arming, and restart the wait: the argv must

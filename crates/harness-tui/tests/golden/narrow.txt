@@ -2,7 +2,7 @@
 │▾ harness-tui-g00-000…││✓ u-lib migrated · status verified                    │
 │  ▾ test_case/    ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, │
 │    ▾ include/        ││fresh                                                 │
-│        · lib.h       ││C    read_scalefactors (test_case/src/lib.c:17)       │
+│        · lib.h       ││C    read_scalefactors (lib.c:17)                     │
 │    ▾ src/        ✓1/1││17 void read_scalefactors(bs_t *bs, uint8_t *pba, uin›│
 │      ▸ ✓ lib.c       ││18                                   int bands, float›│
 │  ▾ Units (1)         ││19     static const float g_deq_L12[18 * 3] = {       │

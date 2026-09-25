@@ -193,7 +193,7 @@ impl Snapshot {
         let plan = match Plan::load(&ledger.plan_path()) {
             Ok(p) => p,
             Err(e) if e.is_not_found() => {
-                snapshot.note = Some("no plan — run `harness plan`".into());
+                snapshot.note = Some(NO_PLAN.into());
                 snapshot.facts = Some(facts);
                 return Ok(snapshot);
             }
@@ -221,6 +221,9 @@ impl Snapshot {
     }
 }
 
+/// [`Snapshot::note`] when the plan file does not exist.
+pub const NO_PLAN: &str = "no plan — run `harness plan`";
+
 /// The binding of inputs that could not be read: no record carries it.
 const UNREADABLE: &str = "blake3:unreadable";
 
@@ -243,11 +246,18 @@ fn unit_view(
 ) -> Result<UnitView, Error> {
     let report = status::unit_report(ctx, ledger, facts, unit)?;
     let records = attempts::load_unit_attempts(ledger, &unit.id)?;
-    // A source or driver that cannot be read (deleted since the scan) binds
-    // nothing — as `state status` reads it ("unreadable") — rather than
-    // making the whole ledger unreadable: the cockpit shows the file missing.
-    let (unit_source, driver) = attempts::current_binding(ctx, facts, unit)
-        .unwrap_or_else(|_| (UNREADABLE.into(), UNREADABLE.into()));
+    // A source or driver deleted since the scan binds nothing — as `state
+    // status` reads it ("unreadable") — rather than making the whole ledger
+    // unreadable: the cockpit shows the file missing. (With the source
+    // unbound no attempt is bound whatever the driver's hash, so both are
+    // set alike.)
+    let (unit_source, driver) = match attempts::current_binding(ctx, facts, unit) {
+        Ok(binding) => binding,
+        // Missing inputs bind nothing (no record carries this binding);
+        // any other error still fails the read.
+        Err(e) if e.is_not_found() => (UNREADABLE.into(), UNREADABLE.into()),
+        Err(e) => return Err(e),
+    };
     let crate_digest = attempts::unit_crate_digest(ledger, unit)?;
     let authorship = |r: &AttemptRecord| match attempts::authorship(&records, r) {
         Authorship::Pipeline => AuthorshipView::Pipeline,
@@ -442,6 +452,25 @@ mod tests {
             .unwrap()
             .stale_paths
             .contains(&"test_case/include/lib.h".to_string()));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Review ENG-10: only a MISSING input binds nothing; any other read
+    /// error still fails the read (the cockpit keeps its last snapshot).
+    #[test]
+    fn an_unreadable_source_still_fails_the_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("harness-tui-eacces-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        copy(
+            &repo().join("targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib"),
+            &tmp,
+        );
+        let h = tmp.join("test_case/include/lib.h");
+        std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = Snapshot::load(&tmp);
+        std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(result.is_err(), "a permission error is not a missing file");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

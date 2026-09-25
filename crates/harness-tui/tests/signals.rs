@@ -100,12 +100,13 @@ fn wait_for<T>(what: &str, secs: u64, mut probe: impl FnMut() -> Option<T>) -> T
     }
 }
 
-/// Kills whatever the test started, whatever happens.
+/// Kills whatever the test started that is still alive, whatever happens
+/// (a pid that died long ago is left alone: it may have been reused).
 struct Reaper(Vec<u32>);
 
 impl Drop for Reaper {
     fn drop(&mut self) {
-        for pid in &self.0 {
+        for pid in self.0.iter().filter(|p| alive(**p)) {
             let _ = Command::new("/bin/kill")
                 .args(["-KILL", &pid.to_string()])
                 .stderr(Stdio::null())
@@ -114,11 +115,35 @@ impl Drop for Reaper {
     }
 }
 
+/// A directory removed on drop — also when the test fails.
+struct TmpDir(PathBuf);
+
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The pty's bytes as text, decoded across reads: a UTF-8 character split
+/// between two reads is kept until it is whole (never a U+FFFD).
+fn decode(carry: &mut Vec<u8>, chunk: &[u8]) -> String {
+    carry.extend_from_slice(chunk);
+    let upto = match std::str::from_utf8(carry) {
+        Ok(_) => carry.len(),
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        Err(_) => carry.len(),
+    };
+    let text = String::from_utf8_lossy(&carry[..upto]).into_owned();
+    carry.drain(..upto);
+    text
+}
+
 #[test]
 fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
     let harness_path = harness_bin();
     let tmp = std::env::temp_dir().join(format!("harness-tui-signals-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
+    let _cleanup = TmpDir(tmp.clone());
     let target_dir = tmp.join("zopfli");
     copy_dir(&repo().join("targets/zopfli"), &target_dir);
     let target = target_dir.canonicalize().unwrap();
@@ -210,14 +235,13 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
         let mut stdout = script.stdout.take().unwrap();
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
+            let mut carry = Vec::new();
             while let Ok(n) = stdout.read(&mut buf) {
                 if n == 0 {
                     break;
                 }
-                screen
-                    .lock()
-                    .unwrap()
-                    .push_str(&String::from_utf8_lossy(&buf[..n]));
+                let text = decode(&mut carry, &buf[..n]);
+                screen.lock().unwrap().push_str(&text);
             }
         });
     }
@@ -334,6 +358,21 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
         let after = screen.lock().unwrap()[before..].to_string();
         (after.contains("\u{1b}[?25h") && after.contains("\u{1b}[?2004l")).then_some(())
     });
+    // …and they are the last word: nothing re-enabled after them.
+    let after = screen.lock().unwrap()[before..].to_string();
+    let last = |seq: &str| after.rfind(seq);
+    assert!(
+        last("\u{1b}[?25h") > last("\u{1b}[?25l"),
+        "the cursor left hidden"
+    );
+    assert!(
+        last("\u{1b}[?2004l") > last("\u{1b}[?2004h"),
+        "bracketed paste left on"
+    );
+    assert!(
+        last("\u{1b}[?1049l") > last("\u{1b}[?1049h"),
+        "left in the alternate screen"
+    );
     wait_for("the kept-edit notice", 5, || {
         saw("a hand edit that was not recorded is kept in").then_some(())
     });
@@ -368,8 +407,29 @@ fn cockpit(
     Arc<Mutex<String>>,
     std::process::ChildStdin,
 ) {
+    cockpit_then(args, env, None)
+}
+
+/// [`cockpit`]; with `stty_out`, the shell outlives the cockpit and records
+/// the terminal's modes (`stty -a`) there once it is gone — the cockpit is
+/// then the shell's child, not `script`'s.
+fn cockpit_then(
+    args: &str,
+    env: &[(&str, &Path)],
+    stty_out: Option<&Path>,
+) -> (
+    std::process::Child,
+    Arc<Mutex<String>>,
+    std::process::ChildStdin,
+) {
     let tui = env!("CARGO_BIN_EXE_harness-tui");
-    let inner = format!("stty rows 40 cols 140; exec '{tui}' {args}");
+    let inner = match stty_out {
+        None => format!("stty rows 40 cols 140; exec '{tui}' {args}"),
+        Some(out) => format!(
+            "stty rows 40 cols 140; '{tui}' {args}; stty -a > '{}'",
+            out.display()
+        ),
+    };
     let mut cmd = Command::new("script");
     if cfg!(target_os = "macos") {
         cmd.args(["-q", "/dev/null", "/bin/sh", "-c", &inner]);
@@ -392,13 +452,13 @@ fn cockpit(
     let mut out = child.stdout.take().unwrap();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
+        let mut carry = Vec::new();
         while let Ok(n) = out.read(&mut buf) {
             if n == 0 {
                 break;
             }
-            sink.lock()
-                .unwrap()
-                .push_str(&String::from_utf8_lossy(&buf[..n]));
+            let text = decode(&mut carry, &buf[..n]);
+            sink.lock().unwrap().push_str(&text);
         }
     });
     let keys = child.stdin.take().unwrap();
@@ -431,6 +491,7 @@ fn squeezed(screen: &Mutex<String>) -> String {
 fn a_terminated_edit_is_never_lost() {
     let tmp = std::env::temp_dir().join(format!("harness-tui-editsig-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
+    let _cleanup = TmpDir(tmp.clone());
     let target = tmp.join("case");
     copy_dir(
         &repo().join("targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib"),
@@ -637,9 +698,11 @@ fn a_term_right_after_the_editor_restores_and_names_the_edit() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let (mut script, screen, mut keys) = cockpit(
+    let stty = case.0.join("stty.txt");
+    let (mut script, screen, mut keys) = cockpit_then(
         &format!("--target '{}' --harness /usr/bin/true", target.display()),
         &[("EDITOR", &editor), ("TMPDIR", &edits)],
+        Some(&stty),
     );
     let mut reaper = Reaper(vec![script.id()]);
     let mut press = |bytes: &[u8]| {
@@ -651,7 +714,8 @@ fn a_term_right_after_the_editor_restores_and_names_the_edit() {
         squeezed(&screen).contains("Files").then_some(())
     });
     let tui_pid = wait_for("the cockpit process", 10, || {
-        children_of(script.id()).into_iter().next()
+        let shell = children_of(script.id()).into_iter().next()?;
+        children_of(shell).into_iter().next()
     });
     reaper.0.push(tui_pid);
     press(b"J");
@@ -683,6 +747,15 @@ fn a_term_right_after_the_editor_restores_and_names_the_edit() {
     assert!(
         last("\u{1b}[?2004l") > last("\u{1b}[?2004h"),
         "bracketed paste left on"
+    );
+    // Cooked mode again: the shell after it reads a canonical, echoing tty.
+    let modes = wait_for("the shell's stty -a", 10, || {
+        std::fs::read_to_string(&stty).ok()
+    });
+    let words: Vec<&str> = modes.split_whitespace().collect();
+    assert!(
+        words.contains(&"icanon") && words.contains(&"echo"),
+        "{modes}"
     );
     let kept: Vec<PathBuf> = std::fs::read_dir(&edits)
         .unwrap()
