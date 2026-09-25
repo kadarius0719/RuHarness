@@ -47,7 +47,7 @@ fn is_invisible_format(c: char) -> bool {
             | '\u{200B}'..='\u{200D}'
             | '\u{2028}'
             | '\u{2029}'
-            | '\u{2060}'..='\u{2065}'
+            | '\u{2060}'..='\u{206F}'
             | '\u{3164}'
             | '\u{FE00}'..='\u{FE0F}'
             | '\u{FEFF}'
@@ -151,6 +151,7 @@ mod tests {
         assert_eq!(line("\u{FEFF}a\u{00AD}b\u{2060}c\u{E0041}"), "?a?b?c?");
         assert_eq!(line("a\u{2028}b"), "a?b");
         assert_eq!(line("x\u{FE0F}\u{3164}\u{E0100}y"), "x???y");
+        assert_eq!(line("a\u{206A}b\u{206F}c"), "a?b?c");
     }
 
     #[test]

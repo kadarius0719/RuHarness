@@ -1004,3 +1004,19 @@ test, all mutation-checked (18 more mutations, killed):
 | a glyph-less state showed nothing when its word did not fit (USE-6 partial); long titles clipped (NEW-9) | a unit or file with no glyph always shows its word; a title too long for the border is repeated whole in the dialog |
 | pty tests: the Reaper still killed reused pids; an empty `stty` file raced; the hangup test's edit dir outside its temp dir (PROC-10, NEW-4/5/10) | a pid is killed only while it runs the program recorded for it; the read waits for `icanon`; `TMPDIR` under the test's dir |
 | wording: the Re-check reason without a verdict; the menu's footer vs its hints; the summary repeating the CLI's "run `harness scan`" | worded for the case; "↑↓ move · Enter choose · Esc close"; the note dropped (the Next step says it) |
+
+## R5. Check of the second fix pass — resolved (2026-09-25)
+
+One checker over 2d6a662: 14 of the 19 §R4 rows complete, 5 partial, 7 findings — resolved,
+each with a regression test, mutation-checked (8 more, killed):
+
+| finding | resolution |
+|---|---|
+| the crate's menu hashed the crate on the UI thread, outside the preflight: a FIFO in it froze the cockpit (N2-1, SAFE-9 partial) | the menu greys from the last read (and says so when that read failed); the edit's start runs the preflight's crate checks (`preflight::check_crate`), then re-hashes |
+| Accept skipped its check when the last read saw no crate (N2-2) | Accept resolves the crate from the plan now and checks it on disk |
+| exit and a panic's unwinding dropped the terminal — ratatui's drop shows the cursor with an unbounded write (N2-7, PROC-2 partial) | the terminal is never dropped (`ManuallyDrop`); `restore_terminal` shows the cursor, bounded |
+| a dialog armed earlier still acted while too small to show (N2-4) | a dialog acts and arms only on a frame big enough to show it |
+| Try again of a Re-check whose crate changed refused forever (N2-5) | the offer goes; "choose Re-check from the menu again" |
+| `known_now` parsed every record on the UI thread (N2-6) | the last read's digests pick the candidates; each is confirmed fresh |
+| U+206A–U+206F passed the filter (N2-3, SAFE-13 partial) | filtered |
+| the confirm-time preflight still runs on the UI thread for Re-check, Accept, Retry and Resume (NEW-4 partial) | kept, bounded by the preflight's own caps; revisit (move the confirm to the loader) when a real target makes it slow |

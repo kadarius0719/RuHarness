@@ -690,13 +690,17 @@ fn main() -> ExitCode {
         app.say("no `harness` binary found (PATH, or --harness <path>): read-only, acts disabled");
     }
     // Under the guard: a signal during the setup restores after it.
-    let Some(mut terminal) = GUARD.enable(|| {
+    let Some(terminal) = GUARD.enable(|| {
         let terminal = ratatui::init();
         let _ = std::io::stdout().execute(EnableBracketedPaste);
         terminal
     }) else {
         park();
     };
+    // Never dropped: ratatui's drop shows the cursor with an unbounded write
+    // (a stalled terminal would hang the exit, or a panic's unwinding);
+    // `restore_terminal` does it bounded (review N2-7).
+    let mut terminal = std::mem::ManuallyDrop::new(terminal);
     // Our own hook, not ratatui's: its restore is an unbounded write to the
     // terminal (review NEW-12). Ours restores through the guard — without
     // its mutex on the main thread, which may hold it (a panic inside an

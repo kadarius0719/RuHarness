@@ -275,6 +275,13 @@ fn source(target: &Path, rel: &str) -> Result<u64, String> {
     Ok(meta.len())
 }
 
+/// [`crate_tree`] alone: the checks a crate passes before it is hashed or
+/// copied on the UI thread (the cockpit's hand edit), without the whole
+/// preflight. Its size, or why not.
+pub fn check_crate(dir: &Path) -> Result<u64, String> {
+    crate_tree(dir)
+}
+
 /// A crate tree: absent, or `Cargo.toml`/`Cargo.lock` and every entry
 /// under `src/` (dotfiles aside) regular and never a symlink, within
 /// [`MAX_CRATE_BYTES`]. Its size.

@@ -1665,6 +1665,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     // The argv must be seen to its end before the dialog can arm — and only
     // on a terminal large enough to show it (review SAFE-5).
     let usable = inner_w >= 20 && page >= 2;
+    c.dialog.usable = usable;
     c.dialog.seen = c.dialog.seen || (usable && scroll + page >= total);
     // Too small: this frame shows a note in place of the words — the
     // dialog's own words are never changed (review NEW-1).

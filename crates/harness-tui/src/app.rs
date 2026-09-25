@@ -1736,13 +1736,15 @@ impl App {
                 "this crate is not in the executor layout (src/logic.rs + src/ffi.rs)".into(),
             );
         }
-        // The unit crate as it is NOW: a hand edit of code the harness does
-        // not know would record all of it as a human's (review SAFE-9).
+        // The unit crate: a hand edit of code the harness does not know
+        // would record all of it as a human's (review SAFE-9). From the last
+        // read here (the menu is built on every key: no hashing); the crate
+        // is re-checked on disk when the edit starts (`hand_edit_fresh`).
         if !matches!(self.selection, Selection::Attempt(..)) {
-            let now = harness_core::hash::crate_content_hash(&dir)
-                .map_err(|e| format!("the crate could not be read: {e}"))?;
-            if unit.crate_digest.as_deref() != Some(now.as_str()) {
-                return Err("the crate changed on disk since the cockpit read it — press g".into());
+            if let Some(e) = &self.last_load_error {
+                return Err(format!(
+                    "the project could not be read ({e}) — nothing is edited until it reads"
+                ));
             }
             let known = self
                 .snapshot
@@ -1760,6 +1762,25 @@ impl App {
             }
         }
         Ok((unit.unit.id.clone(), dir))
+    }
+
+    /// The unit crate as it is NOW, before a hand edit copies it: it passes
+    /// the preflight's crate checks (regular files within the cap, no link —
+    /// never a hash of a FIFO on the UI thread, review N2-1), and its content
+    /// hash is still the one the last read judged known.
+    pub fn hand_edit_fresh(&self, dir: &Path) -> Result<(), String> {
+        if matches!(self.selection, Selection::Attempt(..)) {
+            return Ok(());
+        }
+        crate::preflight::check_crate(dir)
+            .map_err(|why| format!("the crate cannot be read safely: {why}"))?;
+        let now = harness_core::hash::crate_content_hash(dir)
+            .map_err(|e| format!("the crate could not be read: {e}"))?;
+        let read = self.unit_view().and_then(|u| u.crate_digest.as_deref());
+        if read != Some(now.as_str()) {
+            return Err("the crate changed on disk since the cockpit read it — press g".into());
+        }
+        Ok(())
     }
 
     /// Whether `d` can compare `a` with the provenance attempt.
@@ -2070,7 +2091,17 @@ impl App {
             // not know, checked on the crate as it is now (review SAFE-8).
             Act::Accept => {
                 let id = p.unit.as_deref().ok_or("no unit")?;
-                let Some(dir) = self.snapshot.unit(id).and_then(|u| u.crate_dir.clone()) else {
+                // The crate promote will replace: the one the plan names now,
+                // as it is on disk now — not the last read's (review N2-2).
+                let plan = harness_core::plan::Plan::load(&ledger.plan_path())
+                    .map_err(|e| format!("the plan could not be read: {e}"))?;
+                let Some(dir) = plan
+                    .units
+                    .iter()
+                    .find(|u| u.id == id)
+                    .and_then(|u| u.oracle_param_str("rust_crate"))
+                    .map(|name| ledger.unit_dir(id).join(name))
+                else {
                     return Ok(());
                 };
                 if !dir.join("Cargo.toml").is_file() {
@@ -2130,15 +2161,20 @@ impl App {
     /// what the oracle last judged (§4.3).
     fn known_now(&self, id: &str, dir: &Path, now: &str) -> Result<(), String> {
         let ledger = Ledger::new(&self.config.target);
+        // The last read's digests pick the candidates; each is confirmed
+        // fresh (review N2-6: never every record parsed on the UI thread).
         let recorded = self.snapshot.unit(id).is_some_and(|unit| {
-            unit.attempts.iter().any(|a| {
-                let fresh = AttemptRecord::load(&harness_core::attempts::attempt_dir(
-                    &ledger,
-                    id,
-                    &a.record.id,
-                ));
-                fresh.is_ok_and(|r| r.candidate_digest == now)
-            })
+            unit.attempts
+                .iter()
+                .filter(|a| a.record.candidate_digest == now)
+                .any(|a| {
+                    let fresh = AttemptRecord::load(&harness_core::attempts::attempt_dir(
+                        &ledger,
+                        id,
+                        &a.record.id,
+                    ));
+                    fresh.is_ok_and(|r| r.candidate_digest == now)
+                })
         });
         let judged = Verdict::load(&ledger.verdict_latest_path(id))
             .ok()
@@ -2159,6 +2195,16 @@ impl App {
         match (confirm.purpose, choice) {
             (Purpose::Act(p), Choice::Run | Choice::Record) => match self.confirm_gate(&p) {
                 Ok(()) => Command::Spawn(p),
+                // A Re-check offered again whose crate changed: it can never
+                // confirm — the offer goes (review N2-5).
+                Err(why) if p.act == Act::Verify && self.try_again.as_ref() == Some(&p) => {
+                    self.try_again = None;
+                    self.notice = notice(format!(
+                        "{}: {why}; choose Re-check from the menu again",
+                        p.label
+                    ));
+                    Command::None
+                }
                 Err(why) => {
                     self.notice = notice(format!("{}: {why}", p.label));
                     if let Some(tmp) = &p.cleanup {
@@ -2281,7 +2327,10 @@ impl App {
                 }
                 Command::None
             }
-            Action::HandEdit => match self.hand_edit_target() {
+            Action::HandEdit => match self
+                .hand_edit_target()
+                .and_then(|(unit, dir)| self.hand_edit_fresh(&dir).map(|()| (unit, dir)))
+            {
                 Ok((unit, crate_dir)) => Command::Edit { unit, crate_dir },
                 Err(why) => {
                     self.notice = notice(why);
@@ -5029,10 +5078,114 @@ pub(crate) mod tests {
             .join("src/logic.rs");
         let text = std::fs::read_to_string(&logic).unwrap();
         std::fs::write(&logic, format!("{text}\n// later\n")).unwrap();
+        let (_, dir) = app.hand_edit_target().unwrap();
         assert!(app
-            .hand_edit_target()
+            .hand_edit_fresh(&dir)
             .unwrap_err()
             .contains("changed on disk"));
+        // …and choosing the Hand edit says so instead of starting it.
+        let it = app
+            .menu_items()
+            .into_iter()
+            .find(|i| i.action == Action::HandEdit)
+            .unwrap();
+        assert_eq!(app.choose(&it), Command::None);
+        assert!(said(&app).contains("changed on disk"), "{}", said(&app));
+    }
+
+    /// Third pass, N2-1: the crate's menu never hashes the crate (a FIFO in
+    /// it would freeze the UI thread); the edit's own start checks it first.
+    #[test]
+    fn a_fifo_in_the_crate_never_freezes_the_menu() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        // A regression blocks forever on the FIFO, and nothing can unblock a
+        // read reliably: the watchdog fails the whole test binary instead, so
+        // the mutation check sees a failure rather than a hang.
+        let done = Arc::new(AtomicBool::new(false));
+        let watched = Arc::clone(&done);
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while Instant::now() < deadline {
+                if watched.load(Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            eprintln!("a_fifo_in_the_crate_never_freezes_the_menu: blocked on the FIFO");
+            std::process::exit(1);
+        });
+        let mut app = app("fifocrate");
+        app.select(Selection::Crate("u-lib".into()));
+        let dir = app.snapshot.units[0].crate_dir.clone().unwrap();
+        assert!(std::process::Command::new("mkfifo")
+            .arg(dir.join("src/zz.rs"))
+            .status()
+            .unwrap()
+            .success());
+        assert!(!app.reload(true), "the read refuses the FIFO");
+        let edit = app
+            .menu_items()
+            .into_iter()
+            .find(|i| i.action == Action::HandEdit)
+            .unwrap();
+        assert!(edit.greyed.unwrap().contains("could not be read"));
+        let err = app.hand_edit_fresh(&dir).unwrap_err();
+        assert!(err.contains("cannot be read safely"), "{err}");
+        done.store(true, Ordering::SeqCst);
+    }
+
+    /// Third pass, N2-2: Accept checks the crate the plan names NOW, even
+    /// when the last read saw none.
+    #[test]
+    fn accept_checks_a_crate_the_last_read_did_not_see() {
+        let mut app = app("acceptnocrate");
+        let dir = app.snapshot.units[0].crate_dir.clone().unwrap();
+        let aside = app.config.target.join("aside");
+        std::fs::rename(&dir, &aside).unwrap();
+        assert!(app.reload(true));
+        assert!(app.snapshot.units[0].crate_dir.is_none());
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'a');
+        assert!(matches!(app.mode, Mode::Dialog(_)), "{}", said(&app));
+        std::fs::rename(&aside, &dir).unwrap();
+        let logic = dir.join("src/logic.rs");
+        let text = std::fs::read_to_string(&logic).unwrap();
+        std::fs::write(&logic, format!("{text}\n// by someone\n")).unwrap();
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(said(&app).contains("does not know"), "{}", said(&app));
+    }
+
+    /// Third pass, N2-5: a Re-check offered again whose crate changed can
+    /// never confirm — the offer goes.
+    #[test]
+    fn a_stale_try_again_is_dropped() {
+        let mut app = app("staletry");
+        app.select(Selection::Unit("u-lib".into()));
+        let p = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
+        app.ask(p);
+        let Mode::Dialog(c) = &app.mode else { panic!() };
+        let Purpose::Act(shown) = &c.purpose else {
+            panic!()
+        };
+        let shown = shown.clone();
+        code(&mut app, KeyCode::Esc);
+        locked(&mut app, &shown);
+        let logic = app.snapshot.units[0]
+            .crate_dir
+            .clone()
+            .unwrap()
+            .join("src/logic.rs");
+        let text = std::fs::read_to_string(&logic).unwrap();
+        std::fs::write(&logic, format!("{text}\n// changed by the holder\n")).unwrap();
+        key(&mut app, 't');
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(app.try_again.is_none());
+        assert!(said(&app).contains("from the menu again"), "{}", said(&app));
     }
 
     #[test]

@@ -139,6 +139,10 @@ pub struct Dialog {
     /// from here, so a stalled loop never arms a dialog on the very frame
     /// that first shows it (review SAFE-5).
     pub seen_at: Option<Instant>,
+    /// The last frame could show it (set by the view): a dialog on a
+    /// terminal too small to show its words and buttons neither arms nor
+    /// acts, whatever it showed before (review N2-4).
+    pub usable: bool,
 }
 
 impl Dialog {
@@ -154,6 +158,7 @@ impl Dialog {
             quiet_since: now,
             too_soon: false,
             seen_at: None,
+            usable: true,
         }
     }
 
@@ -174,7 +179,11 @@ impl Dialog {
         let since = self
             .seen_at
             .map_or(self.quiet_since, |s| s.max(self.quiet_since));
-        if !self.armed && self.seen && !pending && now.saturating_duration_since(since) >= ARM_QUIET
+        if !self.armed
+            && self.seen
+            && self.usable
+            && !pending
+            && now.saturating_duration_since(since) >= ARM_QUIET
         {
             self.armed = true;
             self.too_soon = false;
@@ -218,7 +227,7 @@ impl Dialog {
             self.scroll = self.scroll.saturating_add_signed(by);
             return Outcome::Stay;
         }
-        if !self.armed {
+        if !self.armed || !self.usable {
             self.too_soon = true;
             return Outcome::Stay;
         }
@@ -458,6 +467,28 @@ mod tests {
         assert!(!d.arm(t0 + ms(2000), false));
         assert!(!d.arm(t0 + ms(2299), false));
         assert!(d.arm(t0 + ms(2300), false));
+    }
+
+    /// Third pass, N2-4: a dialog on a frame too small to show it neither
+    /// arms nor acts, even one armed before.
+    #[test]
+    fn a_dialog_too_small_now_never_acts() {
+        let t0 = Instant::now();
+        let mut d = drawn(Kind::Act, t0);
+        d.usable = false;
+        assert!(!d.arm(t0 + ms(1000), false));
+        d.usable = true;
+        assert!(d.arm(t0 + ms(1000), false));
+        d.usable = false;
+        assert_eq!(
+            d.on_key(press(KeyCode::Char('y')), t0 + ms(1100)),
+            Outcome::Stay
+        );
+        d.usable = true;
+        assert_eq!(
+            d.on_key(press(KeyCode::Char('y')), t0 + ms(1200)),
+            Outcome::Close(Choice::Run)
+        );
     }
 
     /// USE-12: an unseen dialog says what arms it, even after a dropped key.

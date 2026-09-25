@@ -1800,3 +1800,90 @@ scanner's (SCOPE-4). Also decided separately: `verify`'s R6 gate.
 **Revisit when**: the hand-rolled tree passes ~400 lines or needs drag → `tui-tree-widget`
 (vetted, zero new transitive crates); the chat pane lands → the idle watcher (off the UI thread,
 every file the snapshot reads) and how chat's acts reach the activity panel.
+
+## 2026-09-25 — Cockpit wrapper, Build A: built, reviewed, fix pass verified twice
+
+docs/COCKPIT-WRAPPER-DESIGN.md Build A is built: the keyboard-complete navigator. Commits on
+`main`: 50a3213 (step 0: the shipped cockpit's bugs), c39c9b6 (steps 1–4), c089575 (the code
+review's fix pass), 2d6a662 (the fix pass verified, second fix pass), and this handoff (the
+second pass checked, third fix pass).
+
+**Baseline before the work** (quiet machine, zero tokens, 32 min): `bench check --replay
+--jobs 6` → 198 reproduce (1 conformant, 197 drifted), 2 expected divergences, 0 problems;
+no regression. Tests 611 → 695.
+
+**What was built** (the design's order):
+- Step 0, each fix after a failing test: `Q` is `q` and the quit prompt is armed (SAFE-11); the
+  terminal guard `harness_tui::termguard` (enables under a mutex, nothing once dying; the
+  signal path restores, waits ≤ 200 ms, restores again; the panic hook never takes the mutex)
+  and the kept edit named before `resume` (SAFE-10, CHK-5); `--provider` (default `external`),
+  Modify passes the first, Retry refuses blind, half-seeded and unlisted (SAFE-3, SAFE-12,
+  CHK-1, CHK-13); harness-mcp's read preflight moved to `harness_tui::preflight` (harness-mcp
+  re-exports it) and the cockpit reads on a loader thread (`harness_tui::load`), the
+  preflight first (SAFE-6, CHK-10).
+- Step 1: `dialog` (the arming latch with an injected clock: drawn whole, 300 ms quiet from
+  the last input AND the first full draw, nothing pending; focus on the safe button; a
+  letter, or a move plus Enter, once armed); `menu` (items per node and state; greyed with
+  reasons; model items under a separator; accelerators are the menu's shortcuts; one argv
+  builder, `App::act_argv`, gains scan/plan/detect/verify).
+- Step 2: `harness_core::walk::confined` (errors, skips, truncation as data); the scanner uses
+  it — facts byte-identical on zopfli, read_scalefactors and a copy with inside links (a
+  committed test compares with the committed facts), and a FIFO named `a.c` is now skipped and
+  reported instead of hanging `harness scan`; `status::live_holder` public; the two model
+  fields; `files` (the state rules, pure).
+- Step 3: `tree` (Selection keyed by path/id, expansion, back stack); `app` rebuilt around the
+  selection; `view` (Files, the View per selection, two activity rows with `narrate`, notices,
+  a mode-aware hint bar, help with the legend, empty states, the hit record for Build B);
+  goldens; `signals.rs` rewritten with a small VT interpreter (ratatui redraws only changed
+  cells: a byte-stream search cannot see "ready"); a keyboard end-to-end (Enter → Scan → ready
+  → → Enter → Done, facts rewritten) and a TERM right after the editor (restores last, cooked
+  mode checked with `stty -a`, the edit named).
+- Step 4: README's cockpit section, TUI-DESIGN §1/§3/§4, MCP-DESIGN §4.
+
+**Review** (docs/COCKPIT-WRAPPER-DESIGN.md §R3, §R4): four lenses → 51 findings, 49 distinct,
+two verifiers: 33 confirmed, 13 partly, 3 real-but-as-designed, 0 refuted. Fix pass; then
+three checkers of the fix pass (two re-checked each resolution, one hunted regressions: 12
+new, 1 medium found by all three — a dialog drawn once too small lost its words for good);
+second fix pass; a scoped check of it (14 of 19 rows complete; 7 findings, 3 medium: the
+crate's menu hashed a crate outside the preflight, so a FIFO froze the cockpit; Accept skipped
+its check when the last read saw no crate; the terminal's drop was an unbounded write at exit);
+third fix pass (§R5). Every fix has a regression test; the final run kills all 68 mutations
+(the design's named rules and every fix of the three passes). Real end-to-end runs through a
+pty (first run: Scan → Refresh the plan; a Re-check) found one wart (the CLI's own "run
+`harness scan`" note repeated under the Next step), fixed.
+
+**Decisions taken in the review, changing the reviewed design** (recorded in §R3/§R4):
+- **Accept from a unit, crate or file opens the attempt first** (ENG-5; the design's §4.2 put
+  a direct Accept there, but the unit's View shows the unit crate — TUI-DESIGN §R STATE-2,
+  "Accept never promotes unseen code"). Accept also confirms on the crate as it is now:
+  unknown code is never replaced; a hand edit of unknown code waits too.
+- **No blank chat strip** from 150 columns (USE-15; §1/§10 reserved it, drawn empty): the View
+  takes the width until the chat exists. Revisit with the chat pane.
+- **Modify pins `--model=`** to the target's migrate model as last read: the model a dialog
+  names is the one that runs (the provider stays the cockpit's list).
+- Focus never wraps in a dialog; `Open` on every node; `E` works from anywhere; the confirm
+  preflight only where confirm reads (Re-check, Accept, Retry, Resume); a Re-check with
+  nothing shown opens no dialog; a new cause "its verdict is missing" (not "changed outside").
+- The read model binds nothing, instead of failing, when a source or driver was deleted
+  (NotFound only): the cockpit can show the file missing; harness-mcp now reports such a
+  target instead of refusing it.
+
+**Found in passing, not the cockpit's**: `ledger::tests::a_reader_never_makes_a_writer_fail`
+fails when another test in the same binary forks (a fork holds a duplicate of the lock fd,
+so `flock` stays held a moment); the new walk test was changed to use a socket instead of
+`mkfifo`. Other tests in harness-core must not spawn processes, or that test should retry.
+
+**Next** (unchanged order): Build B (the mouse: modes through the guard with a pty restore test
+first; gestures; review) — the hit record exists and is tested. Then the chat pane (spike
+first) with harness-mcp's requester label and a "migrate this" skill; the feature-workflow
+view; C-vs-Rust performance baselines; the briefing's M5. Still separate tasks: the crate
+content hash skipping files outside `src/` (SAFE-5 of the design review); harness-detect's
+walk following symlinks out of `source_dir` (now easy: `walk::confined`); `verify`'s R6 gate.
+Carry-forwards as before (§16 escalation + `harness usage`; `crash-timeout`; a Linux sandbox;
+the two deferred replay items; driver-attempt Accept; queueing on lock contention; an async
+client for cooperative cancellation; per-function verdict dots; bounded reads in harness-core;
+harness-mcp's revisit triggers).
+
+**Revisit when**: the chat pane lands → reserve its side then; a real target makes the
+confirm-time preflight slow on the UI thread → move the confirm to the loader; the hand-rolled
+tree passes ~400 lines → `tui-tree-widget` (vetted, zero new crates).

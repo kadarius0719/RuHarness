@@ -344,13 +344,11 @@ impl App {
             }
             _ => {}
         }
-        if let (Selection::Crate(_) | Selection::Attempt(..), Some(u)) = (sel, owner) {
+        if let (Selection::Crate(_) | Selection::Attempt(..), Some(_)) = (sel, owner) {
             let mut it = item("Hand edit", Action::HandEdit, Some("e"));
+            // (`hand_edit_target` refuses a unit crate of unknown code.)
             if let Err(why) = self.hand_edit_target() {
                 it.greyed = Some(why);
-            } else if matches!(sel, Selection::Crate(_)) {
-                // Editing unknown code would record all of it as a human's.
-                it.greyed = self.unknown_crate(u);
             }
             items.push(it);
         }
@@ -801,6 +799,32 @@ mod tests {
                 }))
                 .collect();
             let mut acts = 0;
+            // Busy too: every act greyed "busy", and choosing it never opens
+            // a dialog (with nothing busy, most greyed items would not open one
+            // anyway).
+            let busy = harness_core::ledger::Holder {
+                pid: std::process::id(),
+                command: "verify u-x".into(),
+                started: String::new(),
+            };
+            for sel in &nodes {
+                app.select(sel.clone());
+                app.holder = Some(busy.clone());
+                for it in app.menu_items() {
+                    if matches!(it.action, Action::Act(_)) {
+                        assert!(
+                            it.greyed.is_some(),
+                            "{sel:?} {}: not greyed while busy",
+                            it.label
+                        );
+                        let before = app.mode.clone();
+                        assert_eq!(app.choose(&it), Command::None);
+                        assert!(!matches!(app.mode, Mode::Dialog(_)), "{sel:?} {}", it.label);
+                        app.mode = before;
+                    }
+                }
+                app.holder = None;
+            }
             for sel in &nodes {
                 app.select(sel.clone());
                 for it in app.menu_items() {
