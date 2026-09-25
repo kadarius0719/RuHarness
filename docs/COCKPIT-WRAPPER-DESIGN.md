@@ -1,6 +1,7 @@
 # The cockpit as a friendly wrapper — design
 
-Status: DESIGN, reviewed (2026-09-24). Not built yet.
+Status: DESIGN, reviewed (2026-09-24). **Build A is built (2026-09-25)**; its code review is
+in DECISIONS.md. Build B (the mouse) is next.
 
 This design implements docs/TUI-DESIGN.md §9, "Suggested order" 1: the user's direction,
 recorded in DECISIONS.md "Direction change (user)". It went through two review rounds:

@@ -1,23 +1,36 @@
-//! The cockpit's state and key handling (docs/TUI-DESIGN.md §3, §4, §6).
+//! The cockpit's state and key handling (docs/COCKPIT-WRAPPER-DESIGN.md;
+//! the engine of docs/TUI-DESIGN.md §2–§4 holds).
 //!
-//! [`App::on_key`] never performs an act: it returns a [`Command`] for the
-//! event loop, and every act first shows its exact argv and asks `y/n` —
-//! there is no automatic spawn (the resume watcher only marks "response
-//! present"). The ledger is re-read — it is the truth — after a spawned
-//! command has been reaped, on `g`, and on the 2 s watcher tick.
+//! One navigator — a tree of the target's C files and units, keyed by
+//! [`Selection`] — one View showing the selection, and an always-visible
+//! activity panel. [`App::on_key`] never performs an act: it returns a
+//! [`Command`] for the event loop, and every act, quit and cancel goes
+//! through an ARMED dialog ([`crate::dialog`]) that shows its exact argv —
+//! there is no automatic spawn. The ledger is read on the loader thread
+//! (the preflight first): after a spawned command is reaped, on `g`, and on
+//! the 2 s tick while a command runs or a hand-off is outstanding.
 
+use crate::dialog::{Choice, Dialog, Kind, Outcome};
 use crate::events::{Event, EVENTS_SCHEMA, EVENTS_SCHEMA_VERSION};
+use crate::files::{self, FileState, Files, TreeWalk, UnitState};
 use crate::handedit;
 use crate::highlight::{Highlighter, Lang, Pieces};
+use crate::load::Read;
+use crate::menu::{self, Action, Item};
 use crate::model::{AttemptView, AuthorshipView, ProvenanceView, Snapshot, UnitView};
+use crate::narrate::{Ending, Narrator};
 use crate::pairs::{CSide, FunctionPair, RustNote, SourceSpan};
 use crate::spawn::ChildMsg;
-use harness_core::attempts::HUMAN_KIND;
+use crate::tree::{self, Expansion, Row, Selection};
+use harness_core::attempts::{AttemptRecord, HUMAN_KIND};
+use harness_core::ledger::{Holder, Ledger};
 use harness_core::verdict::Verdict;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+use std::time::{Duration, Instant};
 
 /// The hand-off provider (a profile name or an adapter kind): its answers
 /// are written by whoever answers the request file.
@@ -28,11 +41,15 @@ pub const MAX_NOTE_BYTES: usize = 2000;
 pub const MAX_EDIT_NOTE_BYTES: usize = 400;
 /// Run-panel lines kept.
 const MAX_RUN_LINES: usize = 2000;
+/// A notice clears on the next key or after this long.
+pub const NOTICE_TTL: Duration = Duration::from_secs(8);
+/// Largest file the View shows as C source; the rest is cut with a note.
+pub const MAX_SOURCE_VIEW_BYTES: u64 = 1024 * 1024;
 
 /// Wide or stacked pairs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutMode {
-    /// Side by side at ≥ [`crate::view::WIDE_MIN_COLUMNS`] columns, stacked below.
+    /// Side by side when the View is wide enough, stacked below.
     Auto,
     /// Always side by side.
     Split,
@@ -58,30 +75,29 @@ pub struct Config {
     pub providers: Vec<String>,
 }
 
-/// Which pane `j`/`k` move.
+/// The focused pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
-    /// The rail's attempt list.
-    Rail,
-    /// The function pairs.
-    Pairs,
+    /// The file tree.
+    Files,
+    /// The View.
+    View,
 }
 
-/// What the pairs panel shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Shown {
-    /// The unit's crate.
-    Crate,
-    /// An attempt's crate (its candidate, or a hand edit's kept files).
-    Attempt(String),
-}
-
-/// An act.
+/// An act: every write is a spawned `harness --json …`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Act {
+    /// `scan`: rewrites the facts.
+    Scan,
+    /// `plan`: reconciles the plan.
+    Plan,
+    /// `detect`: rewrites the observer findings.
+    Detect,
+    /// `verify <unit>`: Re-check with the oracle.
+    Verify,
     /// `a`: promote a green attempt.
     Accept,
-    /// `m`: a steer attempt seeded from the shown one.
+    /// `m`: a steer attempt seeded from an attempt.
     Modify,
     /// `e`: a labelled hand edit.
     HandEdit,
@@ -92,43 +108,58 @@ pub enum Act {
 }
 
 impl Act {
-    /// Its name in prompts.
+    /// Its name in the activity panel.
     pub fn label(self) -> &'static str {
         match self {
-            Act::Accept => "Accept (promote)",
-            Act::Modify => "Modify (steer)",
-            Act::HandEdit => "Hand edit (override)",
+            Act::Scan => "Scan the project",
+            Act::Plan => "Refresh the plan",
+            Act::Detect => "Find hazards",
+            Act::Verify => "Re-check",
+            Act::Accept => "Accept",
+            Act::Modify => "Modify",
+            Act::HandEdit => "Hand edit",
             Act::Retry => "Retry",
             Act::Resume => "Resume",
         }
     }
+
+    /// Its accelerator.
+    pub fn accel(self) -> Option<&'static str> {
+        match self {
+            Act::Accept => Some("a"),
+            Act::Modify => Some("m"),
+            Act::HandEdit => Some("e"),
+            Act::Retry => Some("r"),
+            Act::Resume => Some("R"),
+            Act::Scan | Act::Plan | Act::Detect | Act::Verify => None,
+        }
+    }
+
+    /// It calls a model.
+    pub fn model(self) -> bool {
+        matches!(self, Act::Modify | Act::Retry | Act::Resume)
+    }
 }
 
-/// Why a read of the ledger was asked for (docs/COCKPIT-WRAPPER-DESIGN.md
-/// §6.3: loads run on the loader thread; the requests fold, the strongest
-/// reason winning).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LoadWhy {
-    /// The 2 s tick while a command runs or a hand-off is outstanding.
-    Tick,
-    /// A spawned command was reaped: the pairs are re-read too.
-    Reaped,
-    /// `g`: the pairs are re-read, and the outcome is said.
-    Key,
-}
-
-/// A command waiting for `y`.
+/// A command waiting for its dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pending {
     /// Which act.
     pub act: Act,
     /// The exact argv, the resolved binary first.
     pub argv: Vec<OsString>,
-    /// A hand edit's temp dir, removed once the command was reaped (or the
-    /// prompt declined).
+    /// The act in words, for the activity panel ("Re-check u-lib").
+    pub label: String,
+    /// The unit it acts on, when it is unit-wide.
+    pub unit: Option<String>,
+    /// The attempt it acts on, when there is one.
+    pub attempt: Option<String>,
+    /// A hand edit's temp dir, removed once the override recorded it.
     pub cleanup: Option<PathBuf>,
     /// A resume: the attempt its first `turn-start` must name.
     pub expect_attempt: Option<String>,
+    /// Modify: the note, remembered for its attempt whatever happens.
+    pub note: Option<String>,
 }
 
 /// What the event loop must do after a key.
@@ -142,7 +173,7 @@ pub enum Command {
     CancelAndQuit,
     /// Spawn a confirmed act.
     Spawn(Pending),
-    /// `/bin/kill -INT` the running command.
+    /// `/bin/kill -INT` the running command's group.
     Cancel,
     /// Re-read the ledger.
     Reload,
@@ -155,6 +186,54 @@ pub enum Command {
     },
     /// Remove a temp dir nobody needs any more.
     Cleanup(PathBuf),
+}
+
+/// Why a read of the ledger was asked for (the requests fold, the strongest
+/// reason winning).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LoadWhy {
+    /// The 2 s tick while a command runs or a hand-off is outstanding.
+    Tick,
+    /// A spawned command was reaped: the pairs are re-read too.
+    Reaped,
+    /// `g`: the pairs are re-read, and the outcome is said.
+    Key,
+}
+
+/// What a dialog is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Purpose {
+    /// An act (or a hand edit's override).
+    Act(Pending),
+    /// Quit while a command runs.
+    Quit,
+    /// Cancel the running command.
+    Cancel,
+}
+
+/// An open dialog: its words and its latch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Confirm {
+    /// The latch and the buttons.
+    pub dialog: Dialog,
+    /// A question naming the object.
+    pub title: String,
+    /// What it writes and changes, in words (untrusted values filtered by
+    /// the view).
+    pub body: Vec<String>,
+    /// What it is for.
+    pub purpose: Purpose,
+}
+
+/// The open menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Menu {
+    /// Its items.
+    pub items: Vec<Item>,
+    /// The focused item.
+    pub focus: usize,
+    /// The full reason of a greyed item `Enter` was pressed on.
+    pub footer: Option<String>,
 }
 
 /// An overlay or prompt.
@@ -187,6 +266,10 @@ pub enum Mode {
     Note {
         /// The note so far.
         input: String,
+        /// The unit.
+        unit: String,
+        /// The attempt it seeds from.
+        attempt: String,
     },
     /// After a changed hand edit: typing its optional note.
     EditNote {
@@ -199,10 +282,15 @@ pub enum Mode {
         /// The temp dir to remove afterwards.
         tmp: PathBuf,
     },
-    /// An act's argv, waiting for `y`/`n`.
-    Confirm(Pending),
-    /// `q` while a command runs.
-    QuitConfirm,
+    /// `Enter`: the action menu.
+    Menu(Menu),
+    /// An armed confirmation.
+    Dialog(Box<Confirm>),
+    /// `c`: the activity details (today's run panel).
+    Details {
+        /// First row shown.
+        scroll: usize,
+    },
 }
 
 /// One line of the run panel.
@@ -229,7 +317,7 @@ pub enum Tone {
     Dim,
 }
 
-/// The last (or current) spawned command, as the run panel shows it.
+/// The last (or current) spawned command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunPanel {
     /// The argv as spawned.
@@ -248,6 +336,12 @@ pub struct RunPanel {
     pub recorded: bool,
     /// A hand edit's temp dir, decided on when the command is over.
     pub cleanup: Option<PathBuf>,
+    /// The plain-language narration.
+    pub narrator: Narrator,
+    /// When it started.
+    pub started: Instant,
+    /// `plan`'s change lines, for the summary notice.
+    pub plan_changes: usize,
 }
 
 /// An `external` hand-off waiting for its response file.
@@ -257,8 +351,10 @@ pub struct Awaiting {
     pub attempt: Option<String>,
     /// The response file.
     pub path: PathBuf,
-    /// The argv of the run that ended awaiting (re-spawned by `R`).
+    /// The argv of the run that ended awaiting (re-spawned by Resume).
     pub argv: Vec<OsString>,
+    /// Its label.
+    pub label: String,
     /// The CLI's human hint (text only).
     pub resume_hint: String,
     /// The response file exists, is non-empty and parses as a JSON object.
@@ -312,12 +408,54 @@ pub struct PairView {
 /// What the last draw laid out (the view writes it; keys read it).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Layout {
-    /// First row of each pair in the pairs panel.
+    /// First row of each pair in the View.
     pub pair_rows: Vec<usize>,
-    /// Rows the pairs panel has in total.
+    /// Rows the View has in total.
     pub total_rows: usize,
-    /// Rows visible at once.
+    /// Rows visible at once in the View.
     pub page: usize,
+    /// Rows visible at once in the tree.
+    pub tree_page: usize,
+    /// Below 80 columns: one pane at a time.
+    pub single_pane: bool,
+}
+
+/// What a click at a spot would mean (Build B): the view records each
+/// clickable region as it draws.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Hit {
+    /// A tree row's node.
+    Row(Selection),
+    /// A pane.
+    Pane(Focus),
+    /// A menu item.
+    MenuItem(usize),
+    /// A dialog button.
+    Button(usize),
+    /// A hint-bar entry: the key it stands for.
+    Hint(&'static str),
+    /// Inside the dialog (a click there does nothing).
+    Dialog,
+}
+
+/// A transient notice (activity row 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    /// Its words (untrusted parts filtered by the view).
+    pub text: String,
+    /// When it was posted (it clears after [`NOTICE_TTL`]).
+    pub at: Instant,
+}
+
+/// The View's C source of a file no unit owns (or a header).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceView {
+    /// Repo-relative path.
+    pub path: String,
+    /// Highlighted lines.
+    pub lines: Vec<CodeLine>,
+    /// What was cut, or why nothing is shown.
+    pub note: Option<String>,
 }
 
 /// The cockpit.
@@ -327,60 +465,82 @@ pub struct App {
     pub config: Config,
     /// The ledger, as last read.
     pub snapshot: Snapshot,
-    /// Selected unit (index into `snapshot.units`).
-    pub unit: usize,
-    /// Rail cursor: 0 = the unit crate, `i` = attempt `i - 1`.
-    pub rail: usize,
-    /// What the pairs panel shows.
-    pub shown: Shown,
-    /// Which pane `j`/`k` move.
+    /// The source tree, as last walked.
+    pub walk: TreeWalk,
+    /// The states of files, functions and units.
+    pub files: Files,
+    /// What is selected.
+    pub selection: Selection,
+    /// Which nodes are folded or opened.
+    pub expansion: Expansion,
+    /// The flattened tree.
+    pub rows: Vec<Row>,
+    /// Where a jump came from (`Esc`/`Backspace` go back).
+    pub back: Vec<Selection>,
+    /// The focused pane.
     pub focus: Focus,
-    /// First pairs-panel row shown.
+    /// First tree row shown.
+    pub tree_offset: usize,
+    /// First View row shown.
     pub scroll: usize,
-    /// Overlay or prompt.
+    /// First View column shown (code lines).
+    pub hscroll: usize,
+    /// The View's links (the project summary's and a directory's files, the
+    /// units), as the last draw laid them out.
+    pub links: Vec<Selection>,
+    /// The focused link in the View.
+    pub link: usize,
+    /// Overlay, menu or dialog.
     pub mode: Mode,
-    /// A one-line message for the status bar.
-    pub notice: Option<String>,
+    /// A transient notice.
+    pub notice: Option<Notice>,
+    /// After `plan`: one summary line kept until the next command starts.
+    pub plan_notice: Option<String>,
     /// The last (or current) spawned command.
     pub run: Option<RunPanel>,
     /// A command is running.
     pub running: bool,
-    /// The outstanding `external` hand-offs, one per awaited attempt.
+    /// The idle line: "Last: …".
+    pub last: Option<String>,
+    /// `t`: the command to offer again after a `locked` refusal or a failed
+    /// start.
+    pub try_again: Option<Pending>,
+    /// The outstanding `external` hand-offs this cockpit posed.
     pub awaiting: Vec<Awaiting>,
-    /// The pairs of the shown crate, highlighted.
+    /// The pairs the View shows, highlighted.
     pub pairs: Vec<PairView>,
+    /// The unit crate's content hash the pairs were built from.
+    pub pairs_digest: Option<String>,
+    /// The C source the View shows (a file no unit owns, a header, an
+    /// internal function's file).
+    pub source: Option<SourceView>,
     /// What the last draw laid out.
     pub layout: Layout,
-    /// Every staged hand edit not yet recorded (asked for, running, refused,
-    /// declined, or kept after an editor abort), oldest first. The cockpit
-    /// never removes one unless the override recorded it or the user
-    /// discarded it explicitly (`D` at its armed prompt); `E` offers the
-    /// latest again; their paths are printed on exit.
+    /// Clickable regions of the last frame.
+    pub hits: Vec<(ratatui::layout::Rect, Hit)>,
+    /// Every staged hand edit not yet recorded, oldest first; never removed
+    /// unless the override recorded it or the user discarded it.
     pub kept_edits: Vec<KeptEdit>,
-    /// Temp dirs kept only for what an editor left in them (a swap or
-    /// `.save` file after an abort): never re-offered, printed on exit.
+    /// Temp dirs kept only for what an editor left in them.
     pub leftovers: Vec<PathBuf>,
-    /// First row of the Confirm overlay shown (a long argv scrolls).
-    pub confirm_scroll: usize,
-    /// The view showed the Confirm overlay's whole argv (set by the view).
-    pub confirm_seen: bool,
-    /// The Confirm prompt may take its `y`: armed by the event loop once it
-    /// was drawn whole with no input pending, so typed-ahead or pasted input
-    /// can never answer it.
-    pub confirm_armed: bool,
-    /// The open diff wrapped at `.0` columns (a view cache: a diff is
-    /// wrapped once per width, not every frame).
-    pub diff_rows: Option<(usize, Vec<ratatui::text::Line<'static>>)>,
-    /// A read of the ledger the event loop should start (on its loader).
+    /// Modify's last note per attempt (cancelled, declined or refused).
+    pub notes: BTreeMap<String, String>,
+    /// The writer lock's live holder, as last read.
+    pub holder: Option<Holder>,
+    /// A read of the ledger the event loop should start.
     pub load_request: Option<LoadWhy>,
     /// A read is under way (set by the event loop).
     pub loading: bool,
-    /// The last load's failure, said once until it changes.
+    /// The open diff wrapped at `.0` columns (a view cache).
+    pub diff_rows: Option<(usize, Vec<ratatui::text::Line<'static>>)>,
+    /// The time of the last input, as the event loop reported it.
+    pub now: Instant,
     last_load_error: Option<String>,
-    pairs_key: Option<(String, Shown, String)>,
+    pairs_key: Option<String>,
     pending_bracket: Option<char>,
     highlighter: Highlighter,
     run_awaiting: Option<Awaiting>,
+    plan_before: Option<usize>,
 }
 
 fn os(s: impl Into<OsString>) -> OsString {
@@ -405,11 +565,10 @@ pub fn shell_line(argv: &[OsString]) -> String {
         .join(" ")
 }
 
-/// Whether the awaited response file is there to resume from: it exists,
-/// is non-empty, and parses as a JSON object (a half-written file does not).
+/// Whether the awaited response file is there to resume from: a regular
+/// file within the ledger cap (never a FIFO, a device or a huge file read
+/// on the UI thread), non-empty, that parses as a JSON object.
 pub fn response_present(path: &Path) -> bool {
-    // A regular file within the ledger cap: never a FIFO, a device or a
-    // huge file read on the UI thread.
     let regular = std::fs::metadata(path)
         .is_ok_and(|m| m.is_file() && m.len() <= crate::preflight::MAX_LEDGER_FILE_BYTES);
     regular
@@ -419,79 +578,236 @@ pub fn response_present(path: &Path) -> bool {
         })
 }
 
+/// An unseeded attempt of the `external` provider: its retry would pose a
+/// BLIND hand-off, which only the audited protocol may answer (SAFE-3).
+pub fn blind(r: &AttemptRecord) -> bool {
+    r.seeded_from.is_none()
+        && r.steer_note.is_none()
+        && r.provider_kind != HUMAN_KIND
+        && (r.provider == EXTERNAL_PROVIDER || r.provider_kind == EXTERNAL_PROVIDER)
+}
+
+/// Why Retry refuses `r` under `providers`, if it does: a hand edit, an
+/// unfinished attempt, a half-seeded record (CHK-13), a blind hand-off
+/// (SAFE-3), a provider not on the list (SAFE-12).
+pub fn retry_refusal(r: &AttemptRecord, providers: &[String]) -> Option<String> {
+    if r.provider_kind == HUMAN_KIND {
+        return Some("a hand edit has no run to retry".into());
+    }
+    if r.outcome == "in-progress" {
+        return Some(format!("attempt {} is not finished", r.id));
+    }
+    if r.seeded_from.is_some() != r.steer_note.is_some() {
+        return Some(format!(
+            "attempt {} records only half of a steer (its seed or its note): inconsistent, \
+             not retried",
+            r.id
+        ));
+    }
+    if blind(r) {
+        return Some(format!(
+            "attempt {} is a blind `external` hand-off: only the audited protocol \
+             (targets/tractor/handoff-tools) retries it",
+            r.id
+        ));
+    }
+    if !providers.contains(&r.provider) {
+        return Some(format!(
+            "provider `{}` is not allowed — start with `--provider {}`",
+            r.provider, r.provider
+        ));
+    }
+    None
+}
+
+fn notice(text: impl Into<String>) -> Option<Notice> {
+    Some(Notice {
+        text: text.into(),
+        at: Instant::now(),
+    })
+}
+
 impl App {
-    /// A cockpit over `snapshot`.
-    pub fn new(config: Config, snapshot: Snapshot) -> App {
+    /// A cockpit over what the first read found.
+    pub fn new(config: Config, read: Read) -> App {
+        let files = files::build(&read.snapshot, &read.walk);
+        let holder = read.holder;
         let mut app = App {
             config,
-            snapshot,
-            unit: 0,
-            rail: 0,
-            shown: Shown::Crate,
-            focus: Focus::Pairs,
+            snapshot: read.snapshot,
+            walk: read.walk,
+            files,
+            selection: Selection::Project,
+            expansion: Expansion::default(),
+            rows: Vec::new(),
+            back: Vec::new(),
+            focus: Focus::Files,
+            tree_offset: 0,
             scroll: 0,
+            hscroll: 0,
+            links: Vec::new(),
+            link: 0,
             mode: Mode::Normal,
             notice: None,
+            plan_notice: None,
             run: None,
             running: false,
+            last: None,
+            try_again: None,
             awaiting: Vec::new(),
             pairs: Vec::new(),
+            pairs_digest: None,
+            source: None,
             layout: Layout::default(),
+            hits: Vec::new(),
             kept_edits: Vec::new(),
             leftovers: Vec::new(),
-            diff_rows: None,
-            confirm_scroll: 0,
-            confirm_seen: false,
-            confirm_armed: false,
+            notes: BTreeMap::new(),
+            holder,
             load_request: None,
             loading: false,
+            diff_rows: None,
+            now: Instant::now(),
             last_load_error: None,
             pairs_key: None,
             pending_bracket: None,
             highlighter: Highlighter::new(),
             run_awaiting: None,
+            plan_before: None,
         };
-        app.refresh_pairs(true);
+        app.rebuild_rows();
+        app.refresh_view(true);
         app
     }
 
-    /// The selected unit.
+    /// Post a transient notice (activity row 2).
+    pub fn say(&mut self, text: impl Into<String>) {
+        self.notice = notice(text);
+    }
+
+    // ----- the selection -------------------------------------------------
+
+    /// The unit the selection belongs to.
     pub fn unit_view(&self) -> Option<&UnitView> {
-        self.snapshot.units.get(self.unit)
+        self.owning_unit(&self.selection)
+            .and_then(|u| self.snapshot.units.get(u))
     }
 
-    /// The shown attempt, when an attempt is shown.
+    /// The selected attempt, when an attempt is selected.
     pub fn shown_attempt(&self) -> Option<&AttemptView> {
-        match &self.shown {
-            Shown::Attempt(id) => self.unit_view()?.attempt(id),
-            Shown::Crate => None,
+        match &self.selection {
+            Selection::Attempt(_, id) => self.unit_view()?.attempt(id),
+            _ => None,
         }
     }
 
-    /// The crate the pairs panel reads.
+    /// The crate the View's pairs read: an attempt's, else the unit crate.
     pub fn shown_crate(&self) -> Option<PathBuf> {
-        match &self.shown {
-            Shown::Crate => self.unit_view()?.crate_dir.clone(),
-            Shown::Attempt(_) => self.shown_attempt()?.crate_dir().map(Path::to_path_buf),
+        match &self.selection {
+            Selection::Attempt(..) => self.shown_attempt()?.crate_dir().map(Path::to_path_buf),
+            _ => self.unit_view()?.crate_dir.clone(),
         }
     }
 
-    /// The verdict of what is shown: the unit's latest, or the attempt's.
+    /// The verdict of what is shown: an attempt's, else the unit's latest.
     pub fn shown_verdict(&self) -> Option<&Verdict> {
-        match &self.shown {
-            Shown::Crate => self.unit_view()?.verdict.as_ref(),
-            Shown::Attempt(_) => self.shown_attempt()?.verdict.as_ref(),
+        match &self.selection {
+            Selection::Attempt(..) => self.shown_attempt()?.verdict.as_ref(),
+            _ => self.unit_view()?.verdict.as_ref(),
         }
     }
 
-    /// Ask the event loop for a read of the ledger (folded with any
-    /// request not yet started).
+    /// The selected row, when it is shown.
+    pub fn cursor(&self) -> Option<usize> {
+        tree::row_of(&self.rows, &self.selection)
+    }
+
+    fn rebuild_rows(&mut self) {
+        self.rows = tree::rows(&self.snapshot, &self.files, &self.walk, &self.expansion);
+    }
+
+    /// Select `sel` (revealing it), re-reading the View when it changed.
+    pub fn select(&mut self, sel: Selection) {
+        if sel == self.selection {
+            return;
+        }
+        tree::reveal(&mut self.expansion, &sel);
+        self.selection = sel;
+        self.rebuild_rows();
+        self.scroll = 0;
+        self.hscroll = 0;
+        self.link = 0;
+        self.refresh_view(false);
+    }
+
+    /// A jump: the current selection goes onto the back stack.
+    pub fn jump(&mut self, sel: Selection) {
+        if sel != self.selection {
+            self.back.push(self.selection.clone());
+            self.select(sel);
+        }
+    }
+
+    fn go_back(&mut self) -> bool {
+        while let Some(prev) = self.back.pop() {
+            if tree::exists(&self.snapshot, &self.files, &prev) {
+                self.select(prev);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn move_rows(&mut self, by: isize) {
+        let selectable: Vec<usize> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.selection().is_some())
+            .map(|(i, _)| i)
+            .collect();
+        if selectable.is_empty() {
+            return;
+        }
+        let here = self.cursor().unwrap_or(0);
+        let at = selectable.partition_point(|i| *i < here);
+        let target = (at as isize + by).clamp(0, selectable.len() as isize - 1) as usize;
+        if let Some(sel) = self.rows[selectable[target]].selection().cloned() {
+            self.select(sel);
+        }
+    }
+
+    fn set_open(&mut self, sel: &Selection, open: bool) {
+        self.expansion.set(sel, open);
+        self.rebuild_rows();
+    }
+
+    fn next_unit(&mut self, forward: bool) {
+        let n = self.snapshot.units.len();
+        if n == 0 {
+            return;
+        }
+        let here = self.owning_unit(&self.selection);
+        let next = match (here, forward) {
+            (None, true) => 0,
+            (None, false) => n - 1,
+            (Some(u), true) => (u + 1).min(n - 1),
+            (Some(u), false) => u.saturating_sub(1),
+        };
+        let id = self.snapshot.units[next].unit.id.clone();
+        self.select(Selection::Unit(id));
+    }
+
+    // ----- reading -------------------------------------------------------
+
+    /// Ask the event loop for a read of the ledger (folded with any request
+    /// not yet started).
     pub fn request_load(&mut self, why: LoadWhy) {
         self.load_request = Some(self.load_request.map_or(why, |w| w.max(why)));
     }
 
-    /// Re-read the ledger now, on this thread (the preflight, then the
-    /// snapshot): what a test does in place of the loader.
+    /// Re-read the ledger now, on this thread (the preflight, the snapshot,
+    /// the walk): what a test does in place of the loader.
     pub fn reload(&mut self, pairs: bool) -> bool {
         self.load_request = None;
         let result = crate::load::read(&self.config.target);
@@ -509,44 +825,28 @@ impl App {
         }
     }
 
-    /// A read finished: keep the selection by id; after a reaped command or
-    /// `g` the shown crate is re-read too (the pairs are re-read anyway when
-    /// the shown crate changed); look for the awaited responses. A failed
+    /// A read finished: the selection is kept by key (a vanished node
+    /// gives way to its parent); after a reaped command or `g` the shown
+    /// crate is re-read too; the awaited responses are looked for. A failed
     /// read keeps the last snapshot and says why — once, until the reason
-    /// changes. `false` when it failed.
-    pub fn on_loaded(&mut self, result: Result<Snapshot, String>, why: LoadWhy) -> bool {
-        let unit_id = self.unit_view().map(|u| u.unit.id.clone());
-        let rail_id = self.rail_attempt_id();
-        match result {
-            Ok(snapshot) => {
-                self.snapshot = snapshot;
-                self.last_load_error = None;
-            }
+    /// changes (`g` always says it). `false` when it failed.
+    pub fn on_loaded(&mut self, result: Result<Read, String>, why: LoadWhy) -> bool {
+        let read = match result {
+            Ok(read) => read,
             Err(e) => {
                 if why == LoadWhy::Key || self.last_load_error.as_deref() != Some(e.as_str()) {
-                    self.notice = Some(format!("unreadable: {e}"));
+                    self.notice = notice(format!("unreadable: {e}"));
                 }
                 self.last_load_error = Some(e);
                 return false;
             }
-        }
-        self.unit = unit_id
-            .and_then(|id| self.snapshot.units.iter().position(|u| u.unit.id == id))
-            .unwrap_or(0);
-        let attempts = self.unit_view().map_or(0, |u| u.attempts.len());
-        self.rail = match rail_id {
-            Some(id) => self
-                .unit_view()
-                .and_then(|u| u.attempts.iter().position(|a| a.record.id == id))
-                .map_or(0, |i| i + 1),
-            None => 0,
-        }
-        .min(attempts);
-        if let Shown::Attempt(id) = &self.shown {
-            if self.unit_view().and_then(|u| u.attempt(id)).is_none() {
-                self.shown = Shown::Crate;
-            }
-        }
+        };
+        self.last_load_error = None;
+        self.snapshot = read.snapshot;
+        self.walk = read.walk;
+        self.holder = read.holder;
+        self.files = files::build(&self.snapshot, &self.walk);
+        self.selection = tree::surviving(&self.snapshot, &self.files, &self.selection);
         // A finished (or vanished) attempt no longer awaits anything.
         let units = &self.snapshot.units;
         self.awaiting.retain(|aw| match &aw.attempt {
@@ -556,67 +856,129 @@ impl App {
             }),
             None => true,
         });
-        self.refresh_pairs(why >= LoadWhy::Reaped);
+        self.rebuild_rows();
+        self.refresh_view(why >= LoadWhy::Reaped);
         self.check_response();
+        if let Some(n) = self.plan_before.take() {
+            self.plan_notice = Some(if n == 0 {
+                "plan: no changes".into()
+            } else {
+                format!(
+                    "plan changed {n} unit{} — review `git diff migration/plan.toml` (c for the \
+                     lines)",
+                    if n == 1 { "" } else { "s" }
+                )
+            });
+        }
         if why == LoadWhy::Key {
-            self.notice = Some("ledger re-read".into());
+            self.notice = notice("re-read");
         }
         true
     }
 
-    /// What the shown crate's bytes are, as far as the snapshot tells: an
-    /// attempt's record is rewritten after its `candidate/` on every judged
-    /// turn; the unit crate's verdict names its digest. A change re-reads
-    /// the pairs, so Accept never promotes code the panel did not show.
-    fn shown_fingerprint(&self) -> String {
-        match &self.shown {
-            Shown::Attempt(_) => self.shown_attempt().map_or_else(String::new, |a| {
+    /// Read the writer lock's live holder now (the menu opens with it, a
+    /// dialog confirms with it).
+    pub fn refresh_holder(&mut self) {
+        self.holder = harness_core::status::live_holder(&Ledger::new(&self.config.target))
+            .ok()
+            .flatten();
+    }
+
+    /// The key of what the View shows, as far as the snapshot tells: a
+    /// change re-reads it (Accept never promotes unseen code; an outside C
+    /// edit shows the stale label, an outside Rust edit the new code).
+    fn view_key(&self) -> String {
+        let unit = self.unit_view();
+        let stale = unit.map_or_else(String::new, |u| {
+            let stale: &[String] = self
+                .snapshot
+                .facts_state
+                .as_ref()
+                .map_or(&[], |s| &s.stale_paths);
+            u.unit
+                .files
+                .iter()
+                .filter(|f| stale.contains(f))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",")
+        });
+        let crate_part = match self.shown_attempt() {
+            Some(a) => {
                 let r = &a.record;
                 format!("{}|{}|{}", r.outcome, r.turns.len(), r.candidate_digest)
+            }
+            None => unit.map_or_else(String::new, |u| {
+                format!(
+                    "{}|{:?}|{}|{:?}",
+                    u.report.status, u.crate_digest, u.report.source_fresh, u.provenance
+                )
             }),
-            Shown::Crate => self.unit_view().map_or_else(String::new, |u| {
-                let digest = u
-                    .verdict
-                    .as_ref()
-                    .map_or("", |v| v.inputs.rust_crate.as_str());
-                format!("{}|{}|{:?}", u.report.status, digest, u.provenance)
-            }),
-        }
+        };
+        format!("{:?}|{stale}|{crate_part}", self.selection)
     }
 
-    fn rail_attempt_id(&self) -> Option<String> {
-        let unit = self.unit_view()?;
-        self.rail
-            .checked_sub(1)
-            .and_then(|i| unit.attempts.get(i))
-            .map(|a| a.record.id.clone())
-    }
-
-    /// Recompute the highlighted pairs when what is shown changed (or
-    /// `force`).
-    pub fn refresh_pairs(&mut self, force: bool) {
-        let key = self.unit_view().map(|u| {
-            (
-                u.unit.id.clone(),
-                self.shown.clone(),
-                self.shown_fingerprint(),
-            )
-        });
-        if !force && key == self.pairs_key {
+    /// Recompute what the View shows when the selection or its inputs
+    /// changed (or `force`).
+    pub fn refresh_view(&mut self, force: bool) {
+        let key = self.view_key();
+        if !force && self.pairs_key.as_ref() == Some(&key) {
             return;
         }
-        self.pairs_key = key;
-        let Some(unit) = self.snapshot.units.get(self.unit) else {
-            self.pairs.clear();
+        self.pairs_key = Some(key);
+        self.pairs.clear();
+        self.pairs_digest = None;
+        self.source = None;
+        let sel = self.selection.clone();
+        // C source: a file no unit owns, a header, an internal function.
+        let source_of = match &sel {
+            Selection::File(p) => {
+                let owned = self
+                    .files
+                    .file(p)
+                    .is_some_and(|f| matches!(f.state, FileState::Owned(_)));
+                (!owned).then(|| p.clone())
+            }
+            Selection::Function(p, name) => {
+                let public = self
+                    .files
+                    .file(p)
+                    .is_some_and(|f| f.functions.iter().any(|x| &x.name == name && x.in_unit));
+                (!public).then(|| p.clone())
+            }
+            _ => None,
+        };
+        if let Some(path) = source_of {
+            self.source = Some(self.read_source(&path));
+            return;
+        }
+        let Some(u) = self.owning_unit(&sel) else {
             return;
         };
-        let crate_dir = match &self.shown {
-            Shown::Crate => unit.crate_dir.clone(),
-            Shown::Attempt(id) => unit
-                .attempt(id)
-                .and_then(|a| a.crate_dir().map(Path::to_path_buf)),
-        };
-        let raw = self.snapshot.pairs(unit, crate_dir.as_deref());
+        let unit = &self.snapshot.units[u];
+        let crate_dir = self.shown_crate();
+        let mut raw = self.snapshot.pairs(unit, crate_dir.as_deref());
+        match &sel {
+            Selection::File(p) => {
+                let names: Vec<String> = self
+                    .files
+                    .file(p)
+                    .map(|f| {
+                        f.functions
+                            .iter()
+                            .filter(|x| x.in_unit)
+                            .map(|x| x.name.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                raw.retain(|pair| names.contains(&pair.symbol));
+            }
+            Selection::Function(_, name) => raw.retain(|pair| &pair.symbol == name),
+            _ => {}
+        }
+        if !matches!(sel, Selection::Attempt(..)) {
+            self.pairs_digest = unit.crate_digest.clone();
+        }
         let crate_name = crate_dir
             .as_deref()
             .and_then(Path::file_name)
@@ -629,6 +991,58 @@ impl App {
         self.scroll = self.scroll.min(self.layout.total_rows);
     }
 
+    /// A file's C source for the View: display-filtered by the view,
+    /// highlighted, at most [`MAX_SOURCE_VIEW_BYTES`], a regular file only.
+    fn read_source(&mut self, path: &str) -> SourceView {
+        let full = self.config.target.join(path);
+        let mut view = SourceView {
+            path: path.to_string(),
+            lines: Vec::new(),
+            note: None,
+        };
+        let meta = match std::fs::metadata(&full) {
+            Ok(m) => m,
+            Err(e) => {
+                view.note = Some(format!("{path}: {e}"));
+                return view;
+            }
+        };
+        if !meta.is_file() {
+            view.note = Some(format!("{path} is not a regular file; not shown"));
+            return view;
+        }
+        use std::io::Read as _;
+        let mut bytes = Vec::new();
+        let read = std::fs::File::open(&full)
+            .and_then(|f| f.take(MAX_SOURCE_VIEW_BYTES).read_to_end(&mut bytes));
+        if let Err(e) = read {
+            view.note = Some(format!("{path}: {e}"));
+            return view;
+        }
+        if meta.len() > MAX_SOURCE_VIEW_BYTES {
+            view.note = Some(format!(
+                "cut at {} KiB of {} KiB",
+                MAX_SOURCE_VIEW_BYTES / 1024,
+                meta.len() / 1024
+            ));
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+        view.lines = self
+            .highlighter
+            .lines(Lang::C, &lines)
+            .into_iter()
+            .enumerate()
+            .map(|(i, pieces)| CodeLine::Code {
+                number: i + 1,
+                pieces,
+            })
+            .collect();
+        view
+    }
+
+    // ----- the running command ------------------------------------------
+
     /// Feed one message of the running command.
     pub fn on_child_msg(&mut self, msg: ChildMsg) {
         let Some(run) = self.run.as_mut() else {
@@ -640,162 +1054,177 @@ impl App {
                 run.lines.drain(..run.lines.len() - MAX_RUN_LINES);
             }
         };
-        match msg {
-            ChildMsg::Stderr(line) => push(run, Tone::Dim, line),
-            ChildMsg::Eof(_) => {}
-            ChildMsg::Event(ev) => match ev {
-                Event::Header {
-                    schema,
-                    schema_version,
-                    ..
-                } => {
-                    if schema != EVENTS_SCHEMA || schema_version > EVENTS_SCHEMA_VERSION {
+        let ev = match msg {
+            ChildMsg::Stderr(line) => {
+                push(run, Tone::Dim, line);
+                return;
+            }
+            ChildMsg::Eof(_) => return,
+            ChildMsg::Event(ev) => ev,
+        };
+        run.narrator.on_event(&ev);
+        match ev {
+            Event::Header {
+                schema,
+                schema_version,
+                ..
+            } => {
+                if schema != EVENTS_SCHEMA || schema_version > EVENTS_SCHEMA_VERSION {
+                    push(
+                        run,
+                        Tone::Warn,
+                        format!(
+                            "events schema {schema} v{schema_version} is newer than this \
+                             cockpit knows (v{EVENTS_SCHEMA_VERSION}); reading what it can"
+                        ),
+                    );
+                }
+            }
+            Event::Message { text } => {
+                if run.act == Act::Plan
+                    && text.starts_with("plan: ")
+                    && !text.starts_with("plan: no changes")
+                    && !text.starts_with("plan: execution order")
+                {
+                    run.plan_changes += 1;
+                }
+                push(run, Tone::Plain, text)
+            }
+            Event::TurnStart {
+                attempt,
+                index,
+                kind,
+                ..
+            } => {
+                if let Some(expected) = run.expect_attempt.take() {
+                    if expected != attempt {
                         push(
                             run,
                             Tone::Warn,
                             format!(
-                                "events schema {schema} v{schema_version} is newer than this \
-                                 cockpit knows (v{EVENTS_SCHEMA_VERSION}); reading what it can"
+                                "resumed run is on attempt {attempt}, not the awaited \
+                                 {expected} — shown, not chased"
                             ),
                         );
                     }
                 }
-                Event::Message { text } => push(run, Tone::Plain, text),
-                Event::TurnStart {
-                    attempt,
-                    index,
-                    kind,
-                    ..
-                } => {
-                    if let Some(expected) = run.expect_attempt.take() {
-                        if expected != attempt {
-                            push(
-                                run,
-                                Tone::Warn,
-                                format!(
-                                    "resumed run is on attempt {attempt}, not the awaited \
-                                     {expected} — shown, not chased"
-                                ),
-                            );
-                        }
-                    }
-                    push(
-                        run,
-                        Tone::Plain,
-                        format!("turn {index} {kind} → …  ({attempt})"),
-                    );
-                }
-                Event::TurnEnd {
-                    index,
-                    kind,
-                    result,
-                    ..
-                } => {
-                    let tone = if result == "green" {
-                        Tone::Good
-                    } else {
-                        Tone::Bad
-                    };
-                    push(run, tone, format!("turn {index} {kind} → {result}"));
-                }
-                Event::Check {
-                    name,
-                    passed,
-                    detail,
-                    ..
-                } => {
-                    let first = detail.lines().next().unwrap_or("");
-                    let (tone, mark) = if passed {
-                        (Tone::Good, "✓")
-                    } else {
-                        (Tone::Bad, "✗")
-                    };
-                    push(run, tone, format!("[check] {name} {mark} {first}"));
-                }
-                Event::Verdict { green, path, .. } => push(
+                push(
                     run,
-                    if green { Tone::Good } else { Tone::Bad },
-                    format!("verdict {} → {path}", if green { "GREEN" } else { "RED" }),
-                ),
-                Event::Attempt {
-                    id,
-                    outcome,
-                    promotion,
-                    ..
-                } => {
-                    // `override` emits it only once the human attempt is
-                    // stored: the edit is in the ledger now.
-                    run.recorded = true;
-                    push(
-                        run,
-                        if outcome == "green" {
-                            Tone::Good
-                        } else {
-                            Tone::Bad
-                        },
-                        format!("attempt {id} {outcome} ({promotion})"),
-                    )
-                }
-                Event::Promote {
-                    attempt, result, ..
-                } => push(
+                    Tone::Plain,
+                    format!("turn {index} {kind} → …  ({attempt})"),
+                );
+            }
+            Event::TurnEnd {
+                index,
+                kind,
+                result,
+                ..
+            } => {
+                let tone = if result == "green" {
+                    Tone::Good
+                } else {
+                    Tone::Bad
+                };
+                push(run, tone, format!("turn {index} {kind} → {result}"));
+            }
+            Event::Check {
+                name,
+                passed,
+                detail,
+                ..
+            } => {
+                let first = detail.lines().next().unwrap_or("");
+                let (tone, mark) = if passed {
+                    (Tone::Good, "✓")
+                } else {
+                    (Tone::Bad, "✗")
+                };
+                push(run, tone, format!("[check] {name} {mark} {first}"));
+            }
+            Event::Verdict { green, path, .. } => push(
+                run,
+                if green { Tone::Good } else { Tone::Bad },
+                format!("verdict {} → {path}", if green { "GREEN" } else { "RED" }),
+            ),
+            Event::Attempt {
+                id,
+                outcome,
+                promotion,
+                ..
+            } => {
+                // `override` emits it only once the human attempt is
+                // stored: the edit is in the ledger now.
+                run.recorded = true;
+                push(
                     run,
-                    if result == "verified" {
+                    if outcome == "green" {
                         Tone::Good
                     } else {
                         Tone::Bad
                     },
-                    format!("promote {attempt}: {result}"),
-                ),
-                Event::Awaiting {
+                    format!("attempt {id} {outcome} ({promotion})"),
+                )
+            }
+            Event::Promote {
+                attempt, result, ..
+            } => push(
+                run,
+                if result == "verified" {
+                    Tone::Good
+                } else {
+                    Tone::Bad
+                },
+                format!("promote {attempt}: {result}"),
+            ),
+            Event::Awaiting {
+                attempt,
+                path,
+                resume,
+                ..
+            } => {
+                push(run, Tone::Warn, format!("awaiting response: {path}"));
+                push(run, Tone::Dim, format!("  hint: {resume}"));
+                self.run_awaiting = Some(Awaiting {
                     attempt,
-                    path,
-                    resume,
-                    ..
-                } => {
-                    push(run, Tone::Warn, format!("awaiting response: {path}"));
-                    push(run, Tone::Dim, format!("  hint: {resume}"));
-                    self.run_awaiting = Some(Awaiting {
-                        attempt,
-                        path: PathBuf::from(path),
-                        argv: run.argv.clone(),
-                        resume_hint: resume,
-                        response_present: false,
-                    });
-                }
-                Event::Error {
-                    kind,
-                    message,
-                    holder,
-                } => {
-                    push(run, Tone::Bad, format!("error ({kind}): {message}"));
-                    if let Some(h) = holder {
-                        push(
-                            run,
-                            Tone::Dim,
-                            format!(
-                                "  held by pid {} `{}` since {}",
-                                h.pid.map_or("?".into(), |p| p.to_string()),
-                                h.command,
-                                h.started
-                            ),
-                        );
-                    }
-                }
-                Event::Result { exit, signal } => {
-                    run.saw_result = true;
+                    path: PathBuf::from(path),
+                    argv: run.argv.clone(),
+                    label: run.narrator.label.clone(),
+                    resume_hint: resume,
+                    response_present: false,
+                });
+            }
+            Event::Error {
+                kind,
+                message,
+                holder,
+            } => {
+                push(run, Tone::Bad, format!("error ({kind}): {message}"));
+                if let Some(h) = holder {
                     push(
                         run,
                         Tone::Dim,
-                        match signal {
-                            Some(sig) => format!("result: exit {exit} ({sig})"),
-                            None => format!("result: exit {exit}"),
-                        },
+                        format!(
+                            "  held by pid {} `{}` since {}",
+                            h.pid.map_or("?".into(), |p| p.to_string()),
+                            h.command,
+                            h.started
+                        ),
                     );
                 }
-                Event::Other { k, line } => push(run, Tone::Dim, format!("[{k}] {line}")),
-                Event::NotJson { line } => push(run, Tone::Warn, format!("? {line}")),
-            },
+            }
+            Event::Result { exit, signal } => {
+                run.saw_result = true;
+                push(
+                    run,
+                    Tone::Dim,
+                    match signal {
+                        Some(sig) => format!("result: exit {exit} ({sig})"),
+                        None => format!("result: exit {exit}"),
+                    },
+                );
+            }
+            Event::Other { k, line } => push(run, Tone::Dim, format!("[{k}] {line}")),
+            Event::NotJson { line } => push(run, Tone::Warn, format!("? {line}")),
         }
     }
 
@@ -803,6 +1232,8 @@ impl App {
     pub fn on_spawned(&mut self, pending: &Pending) {
         self.running = true;
         self.run_awaiting = None;
+        self.try_again = None;
+        self.plan_notice = None;
         self.run = Some(RunPanel {
             argv: pending.argv.clone(),
             lines: Vec::new(),
@@ -812,17 +1243,22 @@ impl App {
             act: pending.act,
             recorded: false,
             cleanup: pending.cleanup.clone(),
+            narrator: Narrator::new(&pending.label, &pending.argv),
+            started: Instant::now(),
+            plan_changes: 0,
         });
         self.notice = None;
     }
 
-    /// The confirmed act could not be started (a hand edit stays kept).
+    /// The confirmed act could not be started (a hand edit stays kept):
+    /// `t` offers it again.
     pub fn on_spawn_failed(&mut self, pending: Pending, why: &str) {
-        self.notice = Some(if pending.act == Act::HandEdit {
+        self.notice = notice(if pending.act == Act::HandEdit {
             format!("could not start the command: {why}; the hand edit is kept — E offers it again")
         } else {
-            format!("could not start the command: {why}")
+            format!("could not start the command: {why} — t tries again")
         });
+        self.try_again = Some(pending);
     }
 
     /// The paths of every kept hand edit and editor leftover, for the exit
@@ -840,17 +1276,15 @@ impl App {
     }
 
     /// The spawned command is over (both pipes at EOF, reaped): say how it
-    /// ended, and re-read the ledger. Returns the hand-edit temp dir to
-    /// remove — only when the override RECORDED the edit (its `attempt`
-    /// event); otherwise the edit stays kept and `E` offers it again (a
-    /// refusal — `locked`, stale inputs, an interrupt — must never cost the
-    /// user their edit).
+    /// ended, and ask for a read of the ledger. Returns the hand-edit temp
+    /// dir to remove — only when the override RECORDED the edit.
     pub fn on_child_exit(&mut self, status: ExitStatus) -> Option<PathBuf> {
         use std::os::unix::process::ExitStatusExt;
         self.running = false;
+        let signal = status.signal().map(signal_name);
         if let Some(run) = self.run.as_mut() {
-            let text = match (status.code(), status.signal()) {
-                (_, Some(sig)) => format!("interrupted ({})", signal_name(sig)),
+            let text = match (status.code(), &signal) {
+                (_, Some(sig)) => format!("interrupted ({sig})"),
                 (Some(code), _) if !run.saw_result => {
                     format!("exited without result (exit {code})")
                 }
@@ -858,10 +1292,30 @@ impl App {
                 (None, None) => "ended".into(),
             };
             run.exit = Some(text);
+            self.last = Some(run.narrator.last(
+                status.code(),
+                signal.as_deref(),
+                run.started.elapsed(),
+            ));
+            let ending = run.narrator.ending(status.code(), signal.as_deref());
+            if ending == Ending::Locked {
+                self.try_again = Some(Pending {
+                    act: run.act,
+                    argv: run.argv.clone(),
+                    label: run.narrator.label.clone(),
+                    unit: None,
+                    attempt: None,
+                    cleanup: run.cleanup.clone(),
+                    expect_attempt: None,
+                    note: None,
+                });
+            }
+            if run.act == Act::Plan && ending == Ending::Done {
+                self.plan_before = Some(run.plan_changes);
+            }
         }
         if let Some(aw) = self.run_awaiting.take() {
-            // One entry per awaited attempt: a re-await replaces its entry,
-            // an earlier hand-off of another attempt is kept.
+            // One entry per awaited attempt.
             self.awaiting.retain(|o| o.attempt != aw.attempt);
             self.awaiting.push(aw);
         }
@@ -870,6 +1324,9 @@ impl App {
             if let (Act::HandEdit, Some(tmp)) = (run.act, run.cleanup.take()) {
                 if run.recorded {
                     self.kept_edits.retain(|k| k.tmp != tmp);
+                    if let Some(t) = self.try_again.as_mut() {
+                        t.cleanup = None;
+                    }
                     remove = Some(tmp);
                 } else {
                     run.lines.push(RunLine {
@@ -894,13 +1351,14 @@ impl App {
     }
 
     /// The 2 s watcher: while a command runs or a hand-off is outstanding,
-    /// re-read the ledger (on the loader) and look for the response files.
-    /// Never spawns.
+    /// ask for a read (on the loader). Never spawns.
     pub fn tick(&mut self) {
         if self.running || !self.awaiting.is_empty() {
             self.request_load(LoadWhy::Tick);
         }
     }
+
+    // ----- the argv of every act ------------------------------------------
 
     fn harness_argv(&self, rest: &[OsString]) -> Result<Vec<OsString>, String> {
         let harness = self
@@ -926,31 +1384,69 @@ impl App {
         argv
     }
 
-    fn needs_attempt(&self) -> Result<(&UnitView, &AttemptView), String> {
-        let unit = self.unit_view().ok_or("no unit")?;
-        match &self.shown {
-            Shown::Crate => Err("select an attempt first (Tab, j/k, Enter)".into()),
-            Shown::Attempt(id) => unit
-                .attempt(id)
-                .map(|a| (unit, a))
-                .ok_or_else(|| format!("attempt {id} is gone")),
-        }
-    }
-
-    /// The argv of an act on what is shown, or why it is not available.
-    pub fn act_argv(&self, act: Act, note: Option<&str>) -> Result<Pending, String> {
+    /// The argv of an act on the project, a unit (by id) or one of its
+    /// attempts, or why it is not available — the ONE argv builder: the
+    /// menu, the accelerators and the dialogs all use it, and no tree path
+    /// ever enters it.
+    pub fn act_argv(
+        &self,
+        act: Act,
+        unit: Option<&str>,
+        attempt: Option<&str>,
+        note: Option<&str>,
+    ) -> Result<Pending, String> {
         if self.running {
             return Err("a command is running (x cancels it)".into());
         }
-        let pending = |argv, expect_attempt| Pending {
+        let find_unit = || -> Result<&UnitView, String> {
+            let id = unit.ok_or("no unit")?;
+            self.snapshot
+                .unit(id)
+                .ok_or_else(|| format!("unit {id} is gone"))
+        };
+        let find_attempt = || -> Result<(&UnitView, &AttemptView), String> {
+            let u = find_unit()?;
+            let id = attempt.ok_or("select an attempt first")?;
+            u.attempt(id)
+                .map(|a| (u, a))
+                .ok_or_else(|| format!("attempt {id} is gone"))
+        };
+        let pending = |argv, label: String, unit: Option<&str>, attempt: Option<&str>| Pending {
             act,
             argv,
+            label,
+            unit: unit.map(str::to_string),
+            attempt: attempt.map(str::to_string),
             cleanup: None,
-            expect_attempt,
+            expect_attempt: None,
+            note: None,
         };
         match act {
+            Act::Scan | Act::Plan | Act::Detect => {
+                let sub = match act {
+                    Act::Scan => "scan",
+                    Act::Plan => "plan",
+                    _ => "detect",
+                };
+                let argv = self.harness_argv(&[os(sub), self.target_arg()])?;
+                Ok(pending(argv, act.label().to_string(), None, None))
+            }
+            Act::Verify => {
+                let u = find_unit()?;
+                let argv = self.with_sandbox_flag(self.harness_argv(&[
+                    os("verify"),
+                    os(&u.unit.id),
+                    self.target_arg(),
+                ])?);
+                Ok(pending(
+                    argv,
+                    format!("Re-check {}", u.unit.id),
+                    Some(&u.unit.id),
+                    None,
+                ))
+            }
             Act::Accept => {
-                let (unit, a) = self.needs_attempt()?;
+                let (u, a) = find_attempt()?;
                 let r = &a.record;
                 if r.outcome != "green" || a.last_result() != "green" {
                     return Err(format!(
@@ -965,23 +1461,20 @@ impl App {
                     ));
                 }
                 let replace =
-                    r.promoted || matches!(unit.report.status.as_str(), "verified" | "merged");
-                let mut rest = vec![
-                    os("promote"),
-                    os(&unit.unit.id),
-                    os(&r.id),
-                    self.target_arg(),
-                ];
+                    r.promoted || matches!(u.report.status.as_str(), "verified" | "merged");
+                let mut rest = vec![os("promote"), os(&u.unit.id), os(&r.id), self.target_arg()];
                 if replace {
                     rest.push(os("--replace"));
                 }
                 Ok(pending(
                     self.with_sandbox_flag(self.harness_argv(&rest)?),
-                    None,
+                    format!("Accept {} into {}", short_id(&r.id), u.unit.id),
+                    Some(&u.unit.id),
+                    Some(&r.id),
                 ))
             }
             Act::Modify => {
-                let (unit, a) = self.needs_attempt()?;
+                let (u, a) = find_attempt()?;
                 let r = &a.record;
                 if r.outcome == "in-progress" {
                     return Err(format!("attempt {} is not finished", r.id));
@@ -998,9 +1491,7 @@ impl App {
                         r.id
                     ));
                 }
-                let Some(note) = note else {
-                    return Err("no note".into());
-                };
+                let note = note.ok_or("no note")?;
                 let provider = self
                     .config
                     .providers
@@ -1012,106 +1503,63 @@ impl App {
                 steer.push(note);
                 let rest = vec![
                     os("migrate"),
-                    os(&unit.unit.id),
+                    os(&u.unit.id),
                     self.target_arg(),
                     os("--no-promote"),
                     os(format!("--provider={provider}")),
                     from,
                     steer,
                 ];
-                Ok(pending(
+                let mut p = pending(
                     self.with_sandbox_flag(self.harness_argv(&rest)?),
-                    None,
-                ))
+                    format!("Modify {}", short_id(&r.id)),
+                    Some(&u.unit.id),
+                    Some(&r.id),
+                );
+                p.note = Some(note.to_string());
+                Ok(p)
             }
             Act::Retry => {
-                let (unit, a) = self.needs_attempt()?;
+                let (u, a) = find_attempt()?;
                 let r = &a.record;
-                if r.outcome == "in-progress" {
-                    return Err(format!("attempt {} is not finished", r.id));
-                }
-                if r.provider_kind == HUMAN_KIND {
-                    return Err("a hand edit has no run to retry".into());
-                }
-                // Its seed and note travel together, or it is not retried:
-                // a half-seeded record would run unseeded (CHK-13).
-                let seed = match (&r.seeded_from, &r.steer_note) {
-                    (Some(seed), Some(note)) => Some((seed, note)),
-                    (None, None) => None,
-                    _ => {
-                        return Err(format!(
-                            "attempt {} records only half of a steer (its seed or its note): \
-                             inconsistent, not retried",
-                            r.id
-                        ))
-                    }
-                };
-                // An unseeded `external` attempt's retry would pose a BLIND
-                // hand-off, which only the audited protocol may answer
-                // (SAFE-3).
-                if seed.is_none()
-                    && (r.provider == EXTERNAL_PROVIDER || r.provider_kind == EXTERNAL_PROVIDER)
-                {
-                    return Err(format!(
-                        "attempt {} is a blind `external` hand-off: only the audited protocol \
-                         (targets/tractor/handoff-tools) retries it",
-                        r.id
-                    ));
-                }
-                if !self.config.providers.contains(&r.provider) {
-                    return Err(format!(
-                        "provider `{}` is not allowed — start with `--provider {}`",
-                        r.provider, r.provider
-                    ));
+                if let Some(why) = retry_refusal(r, &self.config.providers) {
+                    return Err(why);
                 }
                 let mut rest = vec![
                     os("migrate"),
-                    os(&unit.unit.id),
+                    os(&u.unit.id),
                     self.target_arg(),
                     os("--no-promote"),
                     os("--retry"),
                     os(format!("--provider={}", r.provider)),
                     os(format!("--model={}", r.model)),
                 ];
-                if let Some((seed, note)) = seed {
+                if let (Some(seed), Some(note)) = (&r.seeded_from, &r.steer_note) {
                     rest.push(os(format!("--from={seed}")));
                     rest.push(os(format!("--steer={note}")));
                 }
                 Ok(pending(
                     self.with_sandbox_flag(self.harness_argv(&rest)?),
-                    None,
+                    format!("Retry {}", short_id(&r.id)),
+                    Some(&u.unit.id),
+                    Some(&r.id),
                 ))
             }
             Act::Resume => {
-                if self.awaiting.is_empty() {
-                    return Err("nothing is awaiting a response".into());
-                }
-                // The hand-off of the shown attempt, else the newest one
-                // whose response is present.
-                let shown = match &self.shown {
-                    Shown::Attempt(id) => Some(id.as_str()),
-                    Shown::Crate => None,
-                };
+                let id = attempt.ok_or("select the paused attempt first")?;
                 let aw = self
                     .awaiting
                     .iter()
-                    .find(|aw| shown.is_some() && aw.attempt.as_deref() == shown)
-                    .or_else(|| {
-                        self.awaiting
-                            .iter()
-                            .rev()
-                            .find(|aw| response_present(&aw.path))
-                    })
-                    .or(self.awaiting.last())
-                    .ok_or("nothing is awaiting a response")?;
-                if let Some(id) = &aw.attempt {
-                    let in_progress = self.snapshot.units.iter().any(|u| {
-                        u.attempt(id)
-                            .is_some_and(|a| a.record.outcome == "in-progress")
-                    });
-                    if !in_progress {
-                        return Err(format!("attempt {id} is no longer in progress"));
-                    }
+                    .find(|aw| aw.attempt.as_deref() == Some(id))
+                    .ok_or_else(|| {
+                        format!("attempt {id} is not waiting on a hand-off this cockpit posed")
+                    })?;
+                let in_progress = self.snapshot.units.iter().any(|u| {
+                    u.attempt(id)
+                        .is_some_and(|a| a.record.outcome == "in-progress")
+                });
+                if !in_progress {
+                    return Err(format!("attempt {id} is no longer in progress"));
                 }
                 if !response_present(&aw.path) {
                     return Err(format!(
@@ -1119,34 +1567,17 @@ impl App {
                         aw.path.display()
                     ));
                 }
-                Ok(pending(aw.argv.clone(), aw.attempt.clone()))
+                let mut p = pending(
+                    aw.argv.clone(),
+                    format!("Resume {}", short_id(id)),
+                    unit,
+                    Some(id),
+                );
+                p.expect_attempt = Some(id.to_string());
+                Ok(p)
             }
             Act::HandEdit => Err("the hand edit is prepared by the editor flow".into()),
         }
-    }
-
-    /// Keep a staged hand edit without asking for it now (an editor that
-    /// exited non-zero after saving): `E` offers it.
-    pub fn keep_edit(&mut self, unit: String, stage: PathBuf, tmp: PathBuf) {
-        self.forget_edit(&tmp);
-        self.kept_edits.push(KeptEdit {
-            unit,
-            stage,
-            tmp,
-            note: String::new(),
-        });
-    }
-
-    /// A changed hand edit is staged in `stage`: it is kept, and its
-    /// optional note asked for.
-    pub fn edit_staged(&mut self, unit: String, stage: PathBuf, tmp: PathBuf) {
-        self.keep_edit(unit.clone(), stage.clone(), tmp.clone());
-        self.mode = Mode::EditNote {
-            input: String::new(),
-            unit,
-            stage,
-            tmp,
-        };
     }
 
     /// The override argv for a staged hand edit in `stage`, with its note
@@ -1172,12 +1603,17 @@ impl App {
         Ok(Pending {
             act: Act::HandEdit,
             argv: self.with_sandbox_flag(self.harness_argv(&rest)?),
+            label: format!("Record the hand edit of {unit}"),
+            unit: Some(unit.to_string()),
+            attempt: None,
             cleanup: Some(tmp),
             expect_attempt: None,
+            note: None,
         })
     }
 
-    fn hand_edit_target(&self) -> Result<(String, PathBuf), String> {
+    /// The unit and crate a hand edit of the selection would edit.
+    pub fn hand_edit_target(&self) -> Result<(String, PathBuf), String> {
         if self.running {
             return Err("a command is running".into());
         }
@@ -1185,7 +1621,7 @@ impl App {
         let unit = self.unit_view().ok_or("no unit")?;
         let dir = self
             .shown_crate()
-            .ok_or("nothing to edit: no crate is shown")?;
+            .ok_or("nothing to edit: the crate does not exist")?;
         if !handedit::editable(&dir) {
             return Err(
                 "this crate is not in the executor layout (src/logic.rs + src/ffi.rs)".into(),
@@ -1194,37 +1630,16 @@ impl App {
         Ok((unit.unit.id.clone(), dir))
     }
 
-    fn select_unit(&mut self, unit: usize) {
-        if unit < self.snapshot.units.len() && unit != self.unit {
-            self.unit = unit;
-            self.rail = 0;
-            self.shown = Shown::Crate;
-            self.scroll = 0;
-            self.refresh_pairs(false);
-        }
-    }
-
-    fn scroll_to_pair(&mut self, forward: bool) {
-        let rows = &self.layout.pair_rows;
-        let target = if forward {
-            rows.iter().copied().find(|r| *r > self.scroll)
-        } else {
-            rows.iter().copied().rev().find(|r| *r < self.scroll)
-        };
-        if let Some(row) = target {
-            self.scroll = row;
-        }
-    }
-
-    fn max_scroll(&self) -> usize {
-        self.layout.total_rows.saturating_sub(1)
+    /// Whether `d` can compare `a` with the provenance attempt.
+    pub fn diff_available(&self, unit: &UnitView, a: &AttemptView) -> bool {
+        unit.provenance.attempt().is_some_and(|p| {
+            p != a.record.id && unit.attempt(p).is_some_and(|b| b.crate_dir().is_some())
+        }) && a.crate_dir().is_some()
     }
 
     fn diff(&self) -> Result<Mode, String> {
         let unit = self.unit_view().ok_or("no unit")?;
-        let shown = self
-            .shown_attempt()
-            .ok_or("select an attempt to compare (Tab, j/k, Enter)")?;
+        let shown = self.shown_attempt().ok_or("select an attempt to compare")?;
         let base_id = unit
             .provenance
             .attempt()
@@ -1247,49 +1662,527 @@ impl App {
         })
     }
 
-    /// An armed prompt is open: an act's Confirm, or the quit prompt.
-    fn prompting(&self) -> bool {
-        matches!(self.mode, Mode::Confirm(_) | Mode::QuitConfirm)
-    }
+    // ----- dialogs ---------------------------------------------------------
 
-    /// Whether the open prompt waits to be armed (see
-    /// [`App::confirm_armed`]).
-    pub fn confirm_waiting(&self) -> bool {
-        self.prompting() && self.confirm_seen && !self.confirm_armed
-    }
-
-    /// Handle one key press.
-    pub fn on_key(&mut self, key: KeyEvent) -> Command {
-        let command = self.on_key_inner(key);
-        if !self.prompting() {
-            // Every prompt opens unarmed, unseen, at its top.
-            self.confirm_armed = false;
-            self.confirm_seen = false;
-            self.confirm_scroll = 0;
+    /// The words of an act's dialog: a question naming the object, and every
+    /// file it writes and what changes (§5.1).
+    pub fn dialog_words(&self, p: &Pending) -> (String, Vec<String>) {
+        let unit = p.unit.as_deref().unwrap_or("the unit");
+        let attempt = p.attempt.as_deref().map(short_id).unwrap_or_default();
+        // The target's effective migrate model (`[llm.migrate]` over
+        // `[llm]`), as harness-mcp reports it: the provider is the
+        // cockpit's, the model the target's.
+        let routing = || {
+            harness_core::TargetContext::load(&self.config.target)
+                .ok()
+                .map(|c| {
+                    let llm = &c.config.llm;
+                    llm.migrate
+                        .as_ref()
+                        .and_then(|m| m.model.clone())
+                        .unwrap_or_else(|| llm.model.clone())
+                })
+                .unwrap_or_else(|| "?".into())
+        };
+        let (title, mut body) = match p.act {
+            Act::Scan => (
+                "Scan the project?".to_string(),
+                vec![
+                    "Reads every C file and rewrites migration/facts.jsonl.".into(),
+                    "A changed C file makes the verdicts that used it out of date.".into(),
+                ],
+            ),
+            Act::Plan => (
+                "Refresh the plan?".into(),
+                vec![
+                    "Rewrites migration/plan.toml: re-approves the changed sources of every \
+                     unit whose C changed, verified units included; adds and removes units; \
+                     blocks units whose files left."
+                        .into(),
+                    "Review `git diff migration/plan.toml` afterwards.".into(),
+                ],
+            ),
+            Act::Detect => (
+                "Find hazards in the project?".into(),
+                vec!["Runs the detectors and rewrites the observer findings.".into()],
+            ),
+            Act::Verify => (
+                format!("Re-check {unit} with the oracle?"),
+                vec![
+                    format!("Builds {unit}'s Rust and runs it against the C in the sandbox."),
+                    format!(
+                        "Writes units/{unit}/oracle-latest.json and .md (and \
+                         oracle-last-green.json when green) and {unit}'s status in plan.toml: \
+                         green → verified; red → a verified unit becomes \"in progress\" (a \
+                         merged one keeps its status)."
+                    ),
+                    "Changes no code. The crate is unchanged since the cockpit last showed it."
+                        .into(),
+                ],
+            ),
+            Act::Accept => {
+                let replace = p.argv.iter().any(|a| a == "--replace");
+                (
+                    if replace {
+                        format!("Replace {unit}'s verified crate with {attempt}?")
+                    } else {
+                        format!("Accept {attempt} into {unit}?")
+                    },
+                    vec![
+                        format!(
+                            "Replaces {unit}'s crate with {attempt}'s candidate and verifies it \
+                             in place; writes the oracle files and {unit}'s status in plan.toml, \
+                             and marks the attempt promoted."
+                        ),
+                        "If it does not verify in place, the old crate is put back.".into(),
+                    ],
+                )
+            }
+            Act::Modify | Act::Retry | Act::Resume => {
+                let provider = p.argv.iter().find_map(|a| {
+                    a.to_string_lossy()
+                        .strip_prefix("--provider=")
+                        .map(str::to_string)
+                });
+                let model = p.argv.iter().find_map(|a| {
+                    a.to_string_lossy()
+                        .strip_prefix("--model=")
+                        .map(str::to_string)
+                });
+                let (provider, model) = match p.act {
+                    Act::Retry => (
+                        format!("{} (from the attempt record)", provider.unwrap_or_default()),
+                        format!("{} (from the attempt record)", model.unwrap_or_default()),
+                    ),
+                    _ => (
+                        provider.unwrap_or_else(|| "as the paused run".into()),
+                        model.unwrap_or_else(|| {
+                            format!("{} (the target's migrate routing)", routing())
+                        }),
+                    ),
+                };
+                let title = match p.act {
+                    Act::Modify => format!("Modify {attempt} with your note?"),
+                    Act::Retry => format!("Retry {attempt}?"),
+                    _ => format!("Resume {attempt} with the hand-off's answer?"),
+                };
+                let mut body = vec![
+                    format!("A model call: provider {provider}, model {model}."),
+                    format!(
+                        "Records a new attempt of {unit}; never promotes it. Can take minutes."
+                    ),
+                ];
+                if p.act == Act::Modify {
+                    if let Some(n) = &p.note {
+                        body.push(format!("Your note: {n}"));
+                    }
+                }
+                (title, body)
+            }
+            Act::HandEdit => (
+                format!("Record your hand edit of {unit}?"),
+                vec![
+                    "Records a human attempt, judged by the oracle; never promotes it.".into(),
+                    "The edit is staged as exactly src/logic.rs + src/ffi.rs. Keep for later \
+                     keeps it (E offers it again); Discard removes it."
+                        .into(),
+                ],
+            ),
+        };
+        if p.argv.iter().any(|a| a == "--allow-unsandboxed") {
+            body.push("--allow-unsandboxed: runs code WITHOUT the sandbox.".into());
         }
-        command
+        (title, body)
     }
+
+    fn open_dialog(&mut self, purpose: Purpose) {
+        let (kind, title, body) = match &purpose {
+            Purpose::Act(p) => {
+                let (title, body) = self.dialog_words(p);
+                let kind = if p.act == Act::HandEdit {
+                    Kind::Override
+                } else {
+                    Kind::Act
+                };
+                (kind, title, body)
+            }
+            Purpose::Quit => (
+                Kind::Quit,
+                "Quit while a command runs?".into(),
+                vec![
+                    "A command is running.".into(),
+                    "Quit, let it finish: it runs on to its end on its own.".into(),
+                    "Stop it and quit: it is interrupted (SIGINT) first.".into(),
+                ],
+            ),
+            Purpose::Cancel => (
+                Kind::Cancel,
+                "Stop the running command?".into(),
+                vec![
+                    "It is interrupted (SIGINT to its process group) and cleans up; what it \
+                     finished stays recorded."
+                        .into(),
+                ],
+            ),
+        };
+        self.mode = Mode::Dialog(Box::new(Confirm {
+            dialog: Dialog::new(kind, self.now),
+            title,
+            body,
+            purpose,
+        }));
+    }
+
+    /// Open an act's dialog (nothing runs yet).
+    pub fn ask(&mut self, pending: Pending) {
+        self.open_dialog(Purpose::Act(pending));
+    }
+
+    /// The event loop's check after a draw: arm the open dialog when drawn
+    /// whole, quiet for 300 ms, with no input `pending`.
+    pub fn arm(&mut self, now: Instant, pending: bool) {
+        if let Mode::Dialog(c) = &mut self.mode {
+            c.dialog.arm(now, pending);
+        }
+    }
+
+    /// A dialog waits to be armed (the loop polls for pending input then).
+    pub fn dialog_waiting(&self) -> bool {
+        matches!(&self.mode, Mode::Dialog(c) if c.dialog.waiting())
+    }
+
+    /// An input event was read at `now` (the dialog's quiet time restarts).
+    pub fn on_input(&mut self, now: Instant) {
+        self.now = now;
+        if let Mode::Dialog(c) = &mut self.mode {
+            c.dialog.input(now);
+        }
+    }
+
+    /// The cockpit's own gates, again at confirm time on a FRESH read (§4.3):
+    /// the lock holder; Re-check only on known code unchanged since shown;
+    /// Retry's refusals on the record as it is now.
+    fn confirm_gate(&mut self, p: &Pending) -> Result<(), String> {
+        self.refresh_holder();
+        if self.running {
+            return Err("a command is running (one at a time)".into());
+        }
+        if let Some(h) = &self.holder {
+            return Err(format!("busy: `{}` (checked just now)", h.command));
+        }
+        let ledger = Ledger::new(&self.config.target);
+        match p.act {
+            Act::Verify => {
+                let id = p.unit.as_deref().ok_or("no unit")?;
+                let unit = self.snapshot.unit(id).ok_or("the unit is gone")?;
+                let dir = unit.crate_dir.clone().ok_or("the unit has no crate")?;
+                let now = harness_core::hash::crate_content_hash(&dir)
+                    .map_err(|e| format!("the crate could not be read: {e}"))?;
+                if self.pairs_digest.as_deref() != Some(now.as_str()) {
+                    return Err(
+                        "the crate changed on disk since the cockpit showed it — press g and \
+                         look again"
+                            .into(),
+                    );
+                }
+                let recorded = unit
+                    .attempts
+                    .iter()
+                    .any(|a| a.record.candidate_digest == now);
+                let judged = Verdict::load(&ledger.verdict_latest_path(id))
+                    .ok()
+                    .zip(
+                        harness_core::hash::unit_crate_file_set_hash(&self.config.target, &dir)
+                            .ok(),
+                    )
+                    .is_some_and(|(v, set)| {
+                        !v.inputs.rust_crate.is_empty() && v.inputs.rust_crate == set
+                    });
+                if !(recorded || judged) {
+                    return Err(
+                        "the crate differs from every recorded attempt and from what the \
+                         oracle last judged — restore it, or record it with `harness override` \
+                         (see Help)"
+                            .into(),
+                    );
+                }
+                Ok(())
+            }
+            Act::Retry => {
+                let (Some(u), Some(a)) = (p.unit.as_deref(), p.attempt.as_deref()) else {
+                    return Err("no attempt".into());
+                };
+                let dir = harness_core::attempts::attempt_dir(&ledger, u, a);
+                let record = AttemptRecord::load(&dir)
+                    .map_err(|e| format!("attempt {a} could not be read: {e}"))?;
+                match retry_refusal(&record, &self.config.providers) {
+                    Some(why) => Err(why),
+                    None => Ok(()),
+                }
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn close_dialog(&mut self, confirm: Confirm, choice: Choice) -> Command {
+        match (confirm.purpose, choice) {
+            (Purpose::Act(p), Choice::Run | Choice::Record) => match self.confirm_gate(&p) {
+                Ok(()) => Command::Spawn(p),
+                Err(why) => {
+                    self.notice = notice(format!("{}: {why}", p.label));
+                    if let Some(tmp) = &p.cleanup {
+                        self.notice = notice(format!(
+                            "{}: {why}; the hand edit is kept in {} — E offers it again",
+                            p.label,
+                            tmp.join("edit").display()
+                        ));
+                    }
+                    Command::None
+                }
+            },
+            (Purpose::Act(p), Choice::Discard) => {
+                let tmp = p.cleanup.clone().unwrap_or_default();
+                self.forget_edit(&tmp);
+                self.notice = notice("hand edit discarded");
+                Command::Cleanup(tmp)
+            }
+            (Purpose::Act(p), _) => {
+                self.notice = notice(match p.cleanup {
+                    Some(_) => format!(
+                        "{}: not run; the hand edit is kept — E offers it again",
+                        p.label
+                    ),
+                    None => format!("{}: not run", p.label),
+                });
+                Command::None
+            }
+            (Purpose::Quit, Choice::QuitLeave) => Command::Quit,
+            (Purpose::Quit, Choice::QuitStop) => Command::CancelAndQuit,
+            (Purpose::Cancel, Choice::Stop) => Command::Cancel,
+            (Purpose::Quit | Purpose::Cancel, _) => Command::None,
+        }
+    }
+
+    // ----- the menu ----------------------------------------------------------
+
+    /// `Enter`: the selection's menu, opened with a fresh check of the lock
+    /// holder, focused on the recommended item.
+    pub fn open_menu(&mut self) {
+        self.refresh_holder();
+        let items = self.menu_items();
+        let next = self.next_step().and_then(|(_, act)| act);
+        let focus = menu::recommended(&items, &self.selection, next);
+        self.mode = Mode::Menu(Menu {
+            items,
+            focus,
+            footer: None,
+        });
+    }
+
+    /// Act on a menu item (or an accelerator's item).
+    pub(crate) fn choose(&mut self, it: &Item) -> Command {
+        if let Some(why) = &it.greyed {
+            self.notice = notice(format!("{}: {why}", it.label));
+            return Command::None;
+        }
+        match &it.action {
+            Action::Open => {
+                self.focus = Focus::View;
+                Command::None
+            }
+            Action::Fold => {
+                let sel = self.selection.clone();
+                let open = !self.expansion.is_open(&sel);
+                self.set_open(&sel, open);
+                Command::None
+            }
+            Action::Reread => Command::Reload,
+            Action::Act(_) => {
+                if let Some(p) = &it.pending {
+                    self.ask(p.clone());
+                }
+                Command::None
+            }
+            Action::OpenUnit(id) => {
+                self.jump(Selection::Unit(id.clone()));
+                Command::None
+            }
+            Action::ChooseAttempt(id) => {
+                let unit = Selection::Unit(id.clone());
+                self.expansion.set(&unit, true);
+                let first = self.snapshot.unit(id).and_then(|u| {
+                    u.attempts
+                        .iter()
+                        .find(|a| a.record.outcome == "green" && a.bound && !a.record.promoted)
+                        .map(|a| a.record.id.clone())
+                });
+                match first {
+                    Some(a) => self.jump(Selection::Attempt(id.clone(), a)),
+                    None => self.jump(unit),
+                }
+                self.notice = notice("choose the attempt to accept, then Enter");
+                Command::None
+            }
+            Action::ShowChecks => {
+                if self.shown_verdict().is_some_and(|v| !v.checks.is_empty()) {
+                    self.mode = Mode::Verdict {
+                        selected: 0,
+                        scroll: 0,
+                    };
+                } else {
+                    self.notice = notice("no verdict for what is shown");
+                }
+                Command::None
+            }
+            Action::Compare => {
+                match self.diff() {
+                    Ok(mode) => {
+                        self.diff_rows = None;
+                        self.mode = mode;
+                    }
+                    Err(why) => self.notice = notice(why),
+                }
+                Command::None
+            }
+            Action::HandEdit => match self.hand_edit_target() {
+                Ok((unit, crate_dir)) => Command::Edit { unit, crate_dir },
+                Err(why) => {
+                    self.notice = notice(why);
+                    Command::None
+                }
+            },
+            Action::Modify => {
+                if let (Some(u), Some(a)) = (
+                    self.unit_view().map(|u| u.unit.id.clone()),
+                    self.shown_attempt().map(|a| a.record.id.clone()),
+                ) {
+                    let input = self.notes.get(&a).cloned().unwrap_or_default();
+                    self.mode = Mode::Note {
+                        input,
+                        unit: u,
+                        attempt: a,
+                    };
+                }
+                Command::None
+            }
+            Action::ContinueKept => {
+                if let Some(k) = self.kept_edits.last().cloned() {
+                    self.mode = Mode::EditNote {
+                        input: k.note,
+                        unit: k.unit,
+                        stage: k.stage,
+                        tmp: k.tmp,
+                    };
+                }
+                Command::None
+            }
+            Action::DiscardKept => {
+                if let Some(k) = self.kept_edits.last().cloned() {
+                    match self.hand_edit_argv(&k.unit, &k.stage, k.tmp.clone(), Some(&k.note)) {
+                        Ok(p) => self.ask(p),
+                        Err(why) => {
+                            self.notice = notice(format!(
+                                "{why}; the hand edit is kept in {}",
+                                k.tmp.join("edit").display()
+                            ))
+                        }
+                    }
+                }
+                Command::None
+            }
+            Action::Cancel => {
+                if self.running {
+                    self.open_dialog(Purpose::Cancel);
+                }
+                Command::None
+            }
+            Action::Migrate => Command::None,
+        }
+    }
+
+    /// The accelerator `key`: the selection's menu item bound to it.
+    fn accelerator(&mut self, key: &str) -> Command {
+        self.refresh_holder();
+        let items = self.menu_items();
+        match items.iter().find(|i| i.accel == Some(key)) {
+            Some(it) => {
+                let it = it.clone();
+                self.choose(&it)
+            }
+            None => {
+                self.notice = notice(format!("{key}: nothing to do for the selection"));
+                Command::None
+            }
+        }
+    }
+
+    // ----- the project summary --------------------------------------------
+
+    /// The Next step, stated as a fact (§3), and the act it points to — never
+    /// model work.
+    pub fn next_step(&self) -> Option<(String, Option<Act>)> {
+        let Some(state) = &self.snapshot.facts_state else {
+            return Some((
+                "Nothing is scanned yet — press Enter and choose Scan the project".into(),
+                Some(Act::Scan),
+            ));
+        };
+        let changed = state.stale
+            + self
+                .files
+                .files
+                .iter()
+                .filter(|f| f.state == FileState::New || f.state == FileState::Missing)
+                .count();
+        if changed > 0 {
+            return Some((
+                format!(
+                    "{changed} file{} changed since the scan — Scan the project again",
+                    if changed == 1 { "" } else { "s" }
+                ),
+                Some(Act::Scan),
+            ));
+        }
+        if self.snapshot.units.is_empty() {
+            return Some(("No plan yet — Refresh the plan".into(), Some(Act::Plan)));
+        }
+        if let Some(u) = self.snapshot.units.iter().find(|u| !u.report.source_fresh) {
+            return Some((
+                format!(
+                    "{}'s C changed since it was planned — scan, refresh the plan, then review \
+                     its diff",
+                    u.unit.id
+                ),
+                Some(Act::Plan),
+            ));
+        }
+        None
+    }
+
+    // ----- keys ---------------------------------------------------------------
 
     /// A bracketed paste: text for a note being typed (line breaks become
-    /// spaces), ignored anywhere else — a paste never answers a prompt.
+    /// spaces), ignored anywhere else — a paste never answers a dialog.
     pub fn on_paste(&mut self, text: &str) {
         let clean: String = text
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
         let (dropped, max) = match &mut self.mode {
-            Mode::Note { input } => (push_bounded(input, &clean, MAX_NOTE_BYTES), MAX_NOTE_BYTES),
+            Mode::Note { input, .. } => {
+                (push_bounded(input, &clean, MAX_NOTE_BYTES), MAX_NOTE_BYTES)
+            }
             Mode::EditNote { input, .. } => (
                 push_bounded(input, &clean, MAX_EDIT_NOTE_BYTES),
                 MAX_EDIT_NOTE_BYTES,
             ),
             _ => {
-                self.notice = Some("paste ignored outside a note".into());
+                self.notice = notice("paste ignored outside a note");
                 return;
             }
         };
         if dropped > 0 {
-            self.notice = Some(format!(
+            self.notice = notice(format!(
                 "the paste did not fit: {dropped} bytes dropped (a note is at most {max} bytes)"
             ));
         }
@@ -1301,26 +2194,120 @@ impl App {
         }
     }
 
-    /// `n`/`Esc`: nothing runs; a hand edit stays kept.
-    fn decline(&mut self, pending: &Pending) {
-        self.notice = Some(match pending.cleanup {
-            Some(_) => format!(
-                "{}: not run; the hand edit is kept — E offers it again (D at its prompt discards it)",
-                pending.act.label()
-            ),
-            None => format!("{}: not run", pending.act.label()),
-        });
+    /// Handle one key press read at `now`.
+    pub fn on_key(&mut self, key: KeyEvent, now: Instant) -> Command {
+        self.now = now;
+        // A notice clears on the next key (a new one may replace it).
+        if self.notice.as_ref().is_some_and(|n| n.at < now) {
+            self.notice = None;
+        }
+        self.on_key_inner(key, now)
     }
 
-    fn on_key_inner(&mut self, key: KeyEvent) -> Command {
+    /// Clear a notice older than [`NOTICE_TTL`].
+    pub fn expire_notice(&mut self, now: Instant) {
+        if self
+            .notice
+            .as_ref()
+            .is_some_and(|n| now.saturating_duration_since(n.at) >= NOTICE_TTL)
+        {
+            self.notice = None;
+        }
+    }
+
+    fn on_key_inner(&mut self, key: KeyEvent, now: Instant) -> Command {
         let ctrl_c =
             key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
-        // A key with Ctrl or Alt is never text, never a `y`.
+        // A key with Ctrl or Alt is never text, never an answer.
         let plain = !key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => {}
+            Mode::Dialog(mut confirm) => {
+                return match confirm.dialog.on_key(key, now) {
+                    Outcome::Stay => {
+                        self.mode = Mode::Dialog(confirm);
+                        Command::None
+                    }
+                    Outcome::Close(choice) => self.close_dialog(*confirm, choice),
+                };
+            }
+            Mode::Menu(mut m) => {
+                let n = m.items.len();
+                match key.code {
+                    KeyCode::Esc => return Command::None,
+                    _ if ctrl_c => return Command::None,
+                    KeyCode::Up | KeyCode::Char('k') if n > 0 => {
+                        m.focus = (m.focus + n - 1) % n;
+                        m.footer = None;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if n > 0 => {
+                        m.focus = (m.focus + 1) % n;
+                        m.footer = None;
+                    }
+                    KeyCode::Home => m.focus = 0,
+                    KeyCode::End => m.focus = n.saturating_sub(1),
+                    KeyCode::Enter => {
+                        if let Some(it) = m.items.get(m.focus).cloned() {
+                            if let Some(why) = &it.greyed {
+                                m.footer = Some(why.clone());
+                            } else {
+                                return self.choose(&it);
+                            }
+                        }
+                    }
+                    KeyCode::Char(c) if plain => {
+                        let s = c.to_string();
+                        if let Some(it) = m
+                            .items
+                            .iter()
+                            .find(|i| i.accel == Some(s.as_str()))
+                            .cloned()
+                        {
+                            if let Some(why) = &it.greyed {
+                                m.footer = Some(why.clone());
+                            } else {
+                                return self.choose(&it);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                self.mode = Mode::Menu(m);
+                return Command::None;
+            }
+            Mode::Details { scroll } => {
+                self.mode = match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => Mode::Details {
+                        scroll: scroll.saturating_sub(1),
+                    },
+                    KeyCode::Down | KeyCode::Char('j') => Mode::Details {
+                        scroll: scroll.saturating_add(1),
+                    },
+                    KeyCode::PageUp => Mode::Details {
+                        scroll: scroll.saturating_sub(10),
+                    },
+                    KeyCode::PageDown | KeyCode::Char(' ') => Mode::Details {
+                        scroll: scroll.saturating_add(10),
+                    },
+                    KeyCode::Home => Mode::Details { scroll: 0 },
+                    KeyCode::End => Mode::Details {
+                        scroll: usize::MAX / 2,
+                    },
+                    KeyCode::Esc | KeyCode::Char('c') => Mode::Normal,
+                    _ => {
+                        // Other keys act as in the panes (x cancels, q quits).
+                        self.mode = Mode::Details { scroll };
+                        let command = self.normal_key(key, ctrl_c, plain);
+                        if matches!(self.mode, Mode::Normal) {
+                            self.mode = Mode::Details { scroll };
+                        }
+                        return command;
+                    }
+                };
+                return Command::None;
+            }
             Mode::Help { scroll } => {
                 self.mode = match key.code {
                     KeyCode::Char('j') | KeyCode::Down => Mode::Help {
@@ -1341,7 +2328,6 @@ impl App {
             }
             Mode::Verdict { selected, scroll } => {
                 let n = self.shown_verdict().map_or(0, |v| v.checks.len());
-                // The view clamps `scroll` to what the detail needs.
                 self.mode = match key.code {
                     KeyCode::Char('j') | KeyCode::Down => Mode::Verdict {
                         selected: (selected + 1).min(n.saturating_sub(1)),
@@ -1371,69 +2357,77 @@ impl App {
                 lines,
                 title,
             } => {
-                // The view clamps `scroll` to the wrapped rows it has.
-                self.mode = match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => Mode::Diff {
-                        scroll: scroll.saturating_add(1),
-                        lines,
-                        title,
-                    },
-                    KeyCode::Char('k') | KeyCode::Up => Mode::Diff {
-                        scroll: scroll.saturating_sub(1),
-                        lines,
-                        title,
-                    },
-                    KeyCode::PageDown | KeyCode::Char(' ') => Mode::Diff {
-                        scroll: scroll.saturating_add(20),
-                        lines,
-                        title,
-                    },
-                    KeyCode::PageUp => Mode::Diff {
-                        scroll: scroll.saturating_sub(20),
-                        lines,
-                        title,
-                    },
-                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => Mode::Normal,
-                    _ => Mode::Diff {
-                        scroll,
-                        lines,
-                        title,
-                    },
+                let scroll = match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => scroll.saturating_add(1),
+                    KeyCode::Char('k') | KeyCode::Up => scroll.saturating_sub(1),
+                    KeyCode::PageDown | KeyCode::Char(' ') => scroll.saturating_add(20),
+                    KeyCode::PageUp => scroll.saturating_sub(20),
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => return Command::None,
+                    _ => scroll,
+                };
+                self.mode = Mode::Diff {
+                    scroll,
+                    lines,
+                    title,
                 };
                 return Command::None;
             }
-            Mode::Note { mut input } => {
+            Mode::Note {
+                mut input,
+                unit,
+                attempt,
+            } => {
+                let keep = |app: &mut App, input: String, unit: String, attempt: String| {
+                    app.mode = Mode::Note {
+                        input,
+                        unit,
+                        attempt,
+                    };
+                };
                 match key.code {
-                    KeyCode::Esc => self.notice = Some("steer cancelled".into()),
-                    _ if ctrl_c => self.notice = Some("steer cancelled".into()),
+                    KeyCode::Esc => {
+                        self.notes.insert(attempt, input);
+                        self.notice = notice("Modify cancelled; your note is kept for next time");
+                    }
+                    _ if ctrl_c => {
+                        self.notes.insert(attempt, input);
+                        self.notice = notice("Modify cancelled; your note is kept for next time");
+                    }
                     KeyCode::Enter => {
+                        self.notes.insert(attempt.clone(), input.clone());
                         if input.trim().is_empty() {
-                            self.notice = Some("an empty note steers nothing".into());
-                            self.mode = Mode::Note { input };
+                            self.notice = notice("an empty note steers nothing");
+                            keep(self, input, unit, attempt);
                         } else if let Some(why) = note_problem(&input, MAX_NOTE_BYTES) {
                             // The CLI would refuse it: say so here, keep typing.
-                            self.notice = Some(why);
-                            self.mode = Mode::Note { input };
+                            self.notice = notice(why);
+                            keep(self, input, unit, attempt);
                         } else {
-                            match self.act_argv(Act::Modify, Some(&input)) {
-                                Ok(p) => self.mode = Mode::Confirm(p),
-                                Err(why) => self.notice = Some(why),
+                            match self.act_argv(
+                                Act::Modify,
+                                Some(&unit),
+                                Some(&attempt),
+                                Some(&input),
+                            ) {
+                                Ok(p) => self.ask(p),
+                                Err(why) => self.notice = notice(why),
                             }
                         }
                     }
                     KeyCode::Backspace => {
                         input.pop();
-                        self.mode = Mode::Note { input };
+                        keep(self, input, unit, attempt);
                     }
                     KeyCode::Char(c) if plain && !c.is_control() => {
                         if input.len() + c.len_utf8() <= MAX_NOTE_BYTES {
                             input.push(c);
                         } else {
-                            self.notice = Some(format!("a note is at most {MAX_NOTE_BYTES} bytes"));
+                            self.notice =
+                                notice(format!("a note is at most {MAX_NOTE_BYTES} bytes"));
                         }
-                        self.mode = Mode::Note { input };
+                        keep(self, input, unit, attempt);
                     }
-                    _ => self.mode = Mode::Note { input },
+                    _ => keep(self, input, unit, attempt),
                 }
                 return Command::None;
             }
@@ -1446,32 +2440,29 @@ impl App {
                 match key.code {
                     KeyCode::Esc => {
                         self.stash_note(&tmp, input);
-                        self.notice = Some("hand edit kept — E offers it again".into());
+                        self.notice = notice("hand edit kept — E offers it again");
                         return Command::None;
                     }
                     _ if ctrl_c => {
                         self.stash_note(&tmp, input);
-                        self.notice = Some("hand edit kept — E offers it again".into());
+                        self.notice = notice("hand edit kept — E offers it again");
                         return Command::None;
                     }
                     KeyCode::Enter
                         if !input.trim().is_empty()
                             && note_problem(&input, MAX_EDIT_NOTE_BYTES).is_some() =>
                     {
-                        // The CLI would refuse it: say so here, keep typing.
-                        self.notice = note_problem(&input, MAX_EDIT_NOTE_BYTES);
+                        self.notice = note_problem(&input, MAX_EDIT_NOTE_BYTES).and_then(notice);
                     }
                     KeyCode::Enter => {
                         self.stash_note(&tmp, input.clone());
                         match self.hand_edit_argv(&unit, &stage, tmp.clone(), Some(&input)) {
                             Ok(p) => {
-                                self.mode = Mode::Confirm(p);
+                                self.ask(p);
                                 return Command::None;
                             }
-                            // Nothing to spawn it with (read-only): the edit
-                            // stays where it is, and says so.
                             Err(why) => {
-                                self.notice = Some(format!(
+                                self.notice = notice(format!(
                                     "{why}; the hand edit is kept in {}",
                                     tmp.join("edit").display()
                                 ));
@@ -1486,7 +2477,7 @@ impl App {
                         if input.len() + c.len_utf8() <= MAX_EDIT_NOTE_BYTES {
                             input.push(c);
                         } else {
-                            self.notice = Some(format!(
+                            self.notice = notice(format!(
                                 "a hand-edit note is at most {MAX_EDIT_NOTE_BYTES} bytes"
                             ));
                         }
@@ -1501,82 +2492,20 @@ impl App {
                 };
                 return Command::None;
             }
-            Mode::Confirm(pending) => {
-                return match key.code {
-                    // Only a plain `y` to a prompt that was shown whole and
-                    // armed with no input pending (see `confirm_armed`).
-                    KeyCode::Char('y') | KeyCode::Char('Y') if plain && self.confirm_armed => {
-                        Command::Spawn(pending)
-                    }
-                    KeyCode::Char('y') | KeyCode::Char('Y') if plain => {
-                        self.notice = Some(if self.confirm_seen {
-                            "typed ahead of the prompt — read the command, then press y".into()
-                        } else {
-                            "the command continues below — j scrolls to its end, then y".into()
-                        });
-                        self.mode = Mode::Confirm(pending);
-                        Command::None
-                    }
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                        self.decline(&pending);
-                        Command::None
-                    }
-                    _ if ctrl_c => {
-                        self.decline(&pending);
-                        Command::None
-                    }
-                    // Discarding a hand edit is its own, armed key.
-                    KeyCode::Char('D') if plain && pending.cleanup.is_some() => {
-                        if self.confirm_armed {
-                            let tmp = pending.cleanup.clone().unwrap_or_default();
-                            self.forget_edit(&tmp);
-                            self.notice = Some("hand edit discarded".into());
-                            Command::Cleanup(tmp)
-                        } else {
-                            self.notice =
-                                Some("typed ahead of the prompt — read it, then press D".into());
-                            self.mode = Mode::Confirm(pending);
-                            Command::None
-                        }
-                    }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        self.confirm_scroll = self.confirm_scroll.saturating_add(1);
-                        self.mode = Mode::Confirm(pending);
-                        Command::None
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        self.confirm_scroll = self.confirm_scroll.saturating_sub(1);
-                        self.mode = Mode::Confirm(pending);
-                        Command::None
-                    }
-                    _ => {
-                        self.mode = Mode::Confirm(pending);
-                        Command::None
-                    }
-                };
-            }
-            Mode::QuitConfirm => {
-                // Armed like an act's prompt (SAFE-11): a `q` typed ahead or
-                // held never quits, and nothing but `Esc`/`n` acts unarmed.
-                return match key.code {
-                    KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Command::None,
-                    KeyCode::Char('q') | KeyCode::Char('Q') if plain && self.confirm_armed => {
-                        Command::Quit
-                    }
-                    KeyCode::Char('x') if plain && self.confirm_armed => Command::CancelAndQuit,
-                    _ => {
-                        if matches!(key.code, KeyCode::Char('q' | 'Q' | 'x')) || ctrl_c {
-                            self.notice =
-                                Some("too soon — read the prompt, then press q or x".into());
-                        }
-                        self.mode = Mode::QuitConfirm;
-                        Command::None
-                    }
-                };
-            }
         }
+        self.normal_key(key, ctrl_c, plain)
+    }
 
-        // Normal mode.
+    fn quit(&mut self) -> Command {
+        if self.running {
+            self.open_dialog(Purpose::Quit);
+            Command::None
+        } else {
+            Command::Quit
+        }
+    }
+
+    fn normal_key(&mut self, key: KeyEvent, ctrl_c: bool, plain: bool) -> Command {
         if let Some(open) = self.pending_bracket.take() {
             if key.code == KeyCode::Char('f') {
                 self.scroll_to_pair(open == ']');
@@ -1586,121 +2515,263 @@ impl App {
         if ctrl_c {
             return self.quit();
         }
+        if !plain {
+            return Command::None;
+        }
         match key.code {
-            // `Q` is `q`: while a command runs, both ask (armed).
             KeyCode::Char('q') | KeyCode::Char('Q') => return self.quit(),
-            KeyCode::Char('?') => self.mode = Mode::Help { scroll: 0 },
-            KeyCode::Esc => self.notice = None,
-            KeyCode::Char(']') => self.pending_bracket = Some(']'),
-            KeyCode::Char('[') => self.pending_bracket = Some('['),
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.focus = match self.focus {
-                    Focus::Rail => Focus::Pairs,
-                    Focus::Pairs => Focus::Rail,
+            KeyCode::Char('?') | KeyCode::F(1) => self.mode = Mode::Help { scroll: 0 },
+            KeyCode::Char('c') => {
+                self.mode = Mode::Details {
+                    scroll: usize::MAX / 2,
                 }
-            }
-            KeyCode::Char('J') => self.select_unit(self.unit + 1),
-            KeyCode::Char('K') => {
-                if let Some(prev) = self.unit.checked_sub(1) {
-                    self.select_unit(prev);
-                }
-            }
-            KeyCode::Char('j') | KeyCode::Down => match self.focus {
-                Focus::Rail => {
-                    let n = self.unit_view().map_or(0, |u| u.attempts.len());
-                    self.rail = (self.rail + 1).min(n);
-                }
-                Focus::Pairs => self.scroll = (self.scroll + 1).min(self.max_scroll()),
-            },
-            KeyCode::Char('k') | KeyCode::Up => match self.focus {
-                Focus::Rail => self.rail = self.rail.saturating_sub(1),
-                Focus::Pairs => self.scroll = self.scroll.saturating_sub(1),
-            },
-            KeyCode::PageDown | KeyCode::Char(' ') => {
-                self.scroll = (self.scroll + self.layout.page.max(1)).min(self.max_scroll())
-            }
-            KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(self.layout.page.max(1)),
-            KeyCode::Enter if self.focus == Focus::Rail => {
-                self.shown = match self.rail_attempt_id() {
-                    Some(id) => Shown::Attempt(id),
-                    None => Shown::Crate,
-                };
-                self.scroll = 0;
-                self.refresh_pairs(false);
             }
             KeyCode::Char('g') => return Command::Reload,
-            KeyCode::Char('v') => {
-                if self.shown_verdict().is_some_and(|v| !v.checks.is_empty()) {
-                    self.mode = Mode::Verdict {
-                        selected: 0,
-                        scroll: 0,
-                    };
-                } else {
-                    self.notice = Some("no verdict for what is shown".into());
+            KeyCode::Char('t') => match self.try_again.clone() {
+                Some(p) if !self.running => self.ask(p),
+                Some(_) => self.notice = notice("a command is running (one at a time)"),
+                None => self.notice = notice("nothing to try again"),
+            },
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.focus = match self.focus {
+                    Focus::Files => Focus::View,
+                    Focus::View => Focus::Files,
                 }
             }
-            KeyCode::Char('d') => match self.diff() {
-                Ok(mode) => {
-                    self.diff_rows = None;
-                    self.mode = mode;
-                }
-                Err(why) => self.notice = Some(why),
-            },
-            KeyCode::Char('a') => self.ask(Act::Accept),
-            KeyCode::Char('r') => self.ask(Act::Retry),
-            KeyCode::Char('R') => self.ask(Act::Resume),
-            KeyCode::Char('m') => {
-                // Check everything but the note before asking for it.
-                match self.act_argv(Act::Modify, Some("-")) {
-                    Ok(_) => {
-                        self.mode = Mode::Note {
-                            input: String::new(),
-                        }
-                    }
-                    Err(why) => self.notice = Some(why),
+            KeyCode::Char(']') => self.pending_bracket = Some(']'),
+            KeyCode::Char('[') => self.pending_bracket = Some('['),
+            KeyCode::Char('J') => self.next_unit(true),
+            KeyCode::Char('K') => self.next_unit(false),
+            KeyCode::Enter if self.focus == Focus::View && !self.links.is_empty() => {
+                if let Some(sel) = self.links.get(self.link).cloned() {
+                    self.jump(sel);
+                    self.focus = Focus::Files;
                 }
             }
-            KeyCode::Char('E') => match self.kept_edits.last().cloned() {
-                Some(_) if self.running => self.notice = Some("a command is running".into()),
-                Some(k) => {
-                    self.mode = Mode::EditNote {
-                        input: k.note,
-                        unit: k.unit,
-                        stage: k.stage,
-                        tmp: k.tmp,
-                    }
-                }
-                None => self.notice = Some("no kept hand edit".into()),
-            },
-            KeyCode::Char('e') => match self.hand_edit_target() {
-                Ok((unit, crate_dir)) => return Command::Edit { unit, crate_dir },
-                Err(why) => self.notice = Some(why),
-            },
+            KeyCode::Enter => self.open_menu(),
             KeyCode::Char('x') => {
                 if self.running {
-                    return Command::Cancel;
+                    self.open_dialog(Purpose::Cancel);
+                } else {
+                    self.notice = notice("nothing is running");
                 }
-                self.notice = Some("nothing is running".into());
             }
-            _ => {}
+            KeyCode::Char(c @ ('a' | 'm' | 'e' | 'E' | 'r' | 'R' | 'd' | 'v')) => {
+                return self.accelerator(&c.to_string());
+            }
+            KeyCode::Backspace => {
+                if !self.go_back() {
+                    self.notice = notice("nothing to go back to");
+                }
+            }
+            _ => match self.focus {
+                Focus::Files => self.tree_key(key.code),
+                Focus::View => self.view_key_press(key.code),
+            },
         }
         Command::None
     }
 
-    fn ask(&mut self, act: Act) {
-        match self.act_argv(act, None) {
-            Ok(p) => self.mode = Mode::Confirm(p),
-            Err(why) => self.notice = Some(format!("{}: {why}", act.label())),
+    fn tree_key(&mut self, code: KeyCode) {
+        let page = self.layout.tree_page.max(1) as isize;
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => self.move_rows(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_rows(1),
+            KeyCode::PageUp => self.move_rows(-page),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.move_rows(page),
+            KeyCode::Home => self.move_rows(isize::MIN / 2),
+            KeyCode::End => self.move_rows(isize::MAX / 2),
+            KeyCode::Left => {
+                let sel = self.selection.clone();
+                let row = self.cursor().and_then(|i| self.rows.get(i)).cloned();
+                match row {
+                    Some(r) if r.open => self.set_open(&sel, false),
+                    _ => {
+                        if let Some(p) = sel.parent() {
+                            self.select(p);
+                        }
+                    }
+                }
+            }
+            KeyCode::Right => {
+                let sel = self.selection.clone();
+                let row = self.cursor().and_then(|i| self.rows.get(i)).cloned();
+                match row {
+                    Some(r) if r.expandable && !r.open => self.set_open(&sel, true),
+                    _ => self.focus = Focus::View,
+                }
+            }
+            KeyCode::Esc => {
+                if !self.go_back() {
+                    self.notice = None;
+                }
+            }
+            _ => {}
         }
     }
 
-    fn quit(&mut self) -> Command {
-        if self.running {
-            self.mode = Mode::QuitConfirm;
-            Command::None
-        } else {
-            Command::Quit
+    fn max_scroll(&self) -> usize {
+        self.layout.total_rows.saturating_sub(1)
+    }
+
+    fn view_key_press(&mut self, code: KeyCode) {
+        let page = self.layout.page.max(1);
+        if !self.links.is_empty() {
+            let last = self.links.len() - 1;
+            match code {
+                KeyCode::Up | KeyCode::Char('k') => self.link = self.link.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => self.link = (self.link + 1).min(last),
+                KeyCode::PageUp => self.link = self.link.saturating_sub(page),
+                KeyCode::PageDown | KeyCode::Char(' ') => self.link = (self.link + page).min(last),
+                KeyCode::Home => self.link = 0,
+                KeyCode::End => self.link = last,
+                KeyCode::Left | KeyCode::Esc => self.focus = Focus::Files,
+                _ => {}
+            }
+            return;
         }
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll = (self.scroll + 1).min(self.max_scroll())
+            }
+            KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(page),
+            KeyCode::PageDown | KeyCode::Char(' ') => {
+                self.scroll = (self.scroll + page).min(self.max_scroll())
+            }
+            KeyCode::Home => self.scroll = 0,
+            KeyCode::End => self.scroll = self.max_scroll(),
+            KeyCode::Left => {
+                if self.hscroll == 0 {
+                    self.focus = Focus::Files;
+                } else {
+                    self.hscroll = self.hscroll.saturating_sub(8);
+                }
+            }
+            KeyCode::Right => self.hscroll = self.hscroll.saturating_add(8),
+            KeyCode::Esc => self.focus = Focus::Files,
+            _ => {}
+        }
+    }
+
+    fn scroll_to_pair(&mut self, forward: bool) {
+        let rows = &self.layout.pair_rows;
+        let target = if forward {
+            rows.iter().copied().find(|r| *r > self.scroll)
+        } else {
+            rows.iter().copied().rev().find(|r| *r < self.scroll)
+        };
+        if let Some(row) = target {
+            self.scroll = row;
+        }
+    }
+
+    // ----- the hand edit -------------------------------------------------------
+
+    /// Keep a staged hand edit without asking for it now (an editor that
+    /// exited non-zero after saving): `E` offers it.
+    pub fn keep_edit(&mut self, unit: String, stage: PathBuf, tmp: PathBuf) {
+        self.forget_edit(&tmp);
+        self.kept_edits.push(KeptEdit {
+            unit,
+            stage,
+            tmp,
+            note: String::new(),
+        });
+    }
+
+    /// A changed hand edit is staged in `stage`: it is kept, and its
+    /// optional note asked for.
+    pub fn edit_staged(&mut self, unit: String, stage: PathBuf, tmp: PathBuf) {
+        self.keep_edit(unit.clone(), stage.clone(), tmp.clone());
+        self.mode = Mode::EditNote {
+            input: String::new(),
+            unit,
+            stage,
+            tmp,
+        };
+    }
+
+    /// The glyph and word of the node `sel` (for rows, titles and tests).
+    pub fn node_label(&self, sel: &Selection) -> (&'static str, String) {
+        match sel {
+            Selection::Project | Selection::Dir(_) | Selection::Units => ("", String::new()),
+            Selection::File(p) => match self.files.file(p) {
+                Some(f) => files::file_label(&self.files, &f.state),
+                None => ("", String::new()),
+            },
+            Selection::Function(p, name) => {
+                let Some(f) = self.files.file(p) else {
+                    return ("", String::new());
+                };
+                let in_unit = f.functions.iter().any(|x| &x.name == name && x.in_unit);
+                if in_unit {
+                    files::file_label(&self.files, &f.state)
+                } else {
+                    ("", "internal".into())
+                }
+            }
+            Selection::Unit(id) => {
+                match self.snapshot.units.iter().position(|u| &u.unit.id == id) {
+                    Some(u) => {
+                        let s: &UnitState = &self.files.units[u].state;
+                        (s.glyph(), s.word())
+                    }
+                    None => ("", String::new()),
+                }
+            }
+            Selection::Crate(id) => match self.snapshot.unit(id) {
+                Some(u) => (
+                    "",
+                    if u.crate_dir.is_some() {
+                        provenance_words(u)
+                    } else {
+                        "no crate yet".into()
+                    },
+                ),
+                None => ("", String::new()),
+            },
+            Selection::Attempt(u, a) => match self.snapshot.unit(u).and_then(|x| x.attempt(a)) {
+                Some(at) => {
+                    let unit = self.snapshot.unit(u).expect("found above");
+                    let waiting = self
+                        .awaiting
+                        .iter()
+                        .any(|aw| aw.attempt.as_deref() == Some(a.as_str()));
+                    let mut word = at.record.outcome.replace('-', " ");
+                    if waiting {
+                        word = "waiting for your answer".into();
+                    }
+                    let tags = attempt_tags(unit, at);
+                    if !tags.is_empty() {
+                        word = format!("{word} {}", tags.join(" "));
+                    }
+                    ("", word)
+                }
+                None => ("", String::new()),
+            },
+        }
+    }
+}
+
+/// A unit crate's provenance in words.
+pub fn provenance_words(unit: &UnitView) -> String {
+    match &unit.provenance {
+        ProvenanceView::None if matches!(unit.report.status.as_str(), "verified" | "merged") => {
+            "origin not recorded".into()
+        }
+        ProvenanceView::None => "no attempt produced it".into(),
+        ProvenanceView::Pipeline(id) => format!("from attempt {} (pipeline)", short_id(id)),
+        ProvenanceView::Ambiguous(ids) => format!("ambiguous: {} attempts match", ids.len()),
+        ProvenanceView::Steered(id) => format!("from attempt {} (steered)", short_id(id)),
+        ProvenanceView::Human { attempt, origin } if attempt == origin => {
+            format!("from hand edit {}", short_id(origin))
+        }
+        ProvenanceView::Human { attempt, origin } => format!(
+            "from {} (a steer of hand edit {})",
+            short_id(attempt),
+            short_id(origin)
+        ),
     }
 }
 
@@ -1907,7 +2978,7 @@ fn pair_view(highlighter: &mut Highlighter, p: &FunctionPair, crate_name: &str) 
     }
 }
 
-/// The rail tags of an attempt: provenance, supersession, lineage.
+/// An attempt's tags: provenance, supersession, lineage.
 pub fn attempt_tags(unit: &UnitView, a: &AttemptView) -> Vec<String> {
     let mut tags = Vec::new();
     let id = a.record.id.as_str();
@@ -1946,18 +3017,21 @@ pub fn short_id(id: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::testutil::{scratch_target, READ_SCALEFACTORS};
-    use harness_core::attempts::{self, AttemptRecord};
-    use ratatui::crossterm::event::{KeyEvent, KeyModifiers};
+    use harness_core::attempts;
+    use std::os::unix::process::ExitStatusExt;
 
-    const PROVENANCE: &str = "a-13c941dfff95";
-    const HARNESS: &str = "/opt/ruharness/bin/harness";
+    pub(crate) const PROVENANCE: &str = "a-13c941dfff95";
+    pub(crate) const SUPERSEDED: &str = "a-28d8ddc411f9";
+    pub(crate) const RED: &str = "a-d2e5513cdfa6";
+    pub(crate) const HARNESS: &str = "/opt/ruharness/bin/harness";
+    pub(crate) const LIB_C: &str = "test_case/src/lib.c";
 
-    fn app(tag: &str) -> App {
-        let target = scratch_target(READ_SCALEFACTORS, tag);
-        let snapshot = Snapshot::load(&target).unwrap();
+    pub(crate) fn app_of(rel: &str, tag: &str) -> App {
+        let target = scratch_target(rel, tag);
+        let read = crate::load::read(&target).unwrap();
         App::new(
             Config {
                 target,
@@ -1966,65 +3040,77 @@ mod tests {
                 layout: LayoutMode::Auto,
                 providers: vec!["external".into()],
             },
-            snapshot,
+            read,
         )
     }
 
-    fn key(app: &mut App, c: char) -> Command {
-        app.on_key(KeyEvent::from(KeyCode::Char(c)))
+    pub(crate) fn app(tag: &str) -> App {
+        app_of(READ_SCALEFACTORS, tag)
     }
 
-    fn code(app: &mut App, code: KeyCode) -> Command {
-        app.on_key(KeyEvent::from(code))
+    pub(crate) fn key(app: &mut App, c: char) -> Command {
+        app.on_key(KeyEvent::from(KeyCode::Char(c)), Instant::now())
     }
 
-    fn show(app: &mut App, id: &str) {
-        let i = app
-            .unit_view()
-            .unwrap()
-            .attempts
-            .iter()
-            .position(|a| a.record.id == id)
-            .unwrap();
-        app.focus = Focus::Rail;
-        app.rail = i + 1;
-        code(app, KeyCode::Enter);
-        assert_eq!(app.shown, Shown::Attempt(id.into()));
+    pub(crate) fn code(app: &mut App, code: KeyCode) -> Command {
+        app.on_key(KeyEvent::from(code), Instant::now())
     }
 
-    fn strs(argv: &[OsString]) -> Vec<String> {
+    pub(crate) fn attempt(app: &mut App, id: &str) {
+        app.select(Selection::Attempt("u-lib".into(), id.into()));
+    }
+
+    pub(crate) fn strs(argv: &[OsString]) -> Vec<String> {
         argv.iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
     }
 
-    /// What the event loop does once the prompt was drawn whole with no
-    /// input pending.
-    fn arm(app: &mut App) {
-        app.confirm_seen = true;
-        app.confirm_armed = true;
-    }
-
-    fn confirm_argv(app: &App) -> Vec<String> {
-        match &app.mode {
-            Mode::Confirm(p) => strs(&p.argv),
-            other => panic!("not confirming: {other:?} (notice {:?})", app.notice),
+    /// What the event loop does once the dialog was drawn whole, quiet, with
+    /// no input pending.
+    pub(crate) fn arm(app: &mut App) {
+        if let Mode::Dialog(c) = &mut app.mode {
+            c.dialog.seen = true;
+            c.dialog.armed = true;
         }
     }
 
-    /// §4: every act shows its exact argv and asks; `y` spawns exactly that,
-    /// `n` spawns nothing.
+    pub(crate) fn dialog_argv(app: &App) -> Vec<String> {
+        match &app.mode {
+            Mode::Dialog(c) => match &c.purpose {
+                Purpose::Act(p) => strs(&p.argv),
+                other => panic!("not an act: {other:?}"),
+            },
+            other => panic!("no dialog: {other:?} (notice {:?})", app.notice),
+        }
+    }
+
+    fn said(app: &App) -> String {
+        app.notice
+            .as_ref()
+            .map(|n| n.text.clone())
+            .unwrap_or_default()
+    }
+
+    fn record(app: &mut App, id: &str, f: impl FnOnce(&mut AttemptRecord)) {
+        let ledger = Ledger::new(&app.config.target);
+        let dir = attempts::attempt_dir(&ledger, "u-lib", id);
+        let mut rec = AttemptRecord::load(&dir).unwrap();
+        f(&mut rec);
+        rec.store(&dir).unwrap();
+        assert!(app.reload(true));
+    }
+
+    /// §4, §5: an act shows its exact argv in an armed dialog; Run spawns
+    /// exactly that; the safe button spawns nothing.
     #[test]
-    fn acts_show_their_exact_argv_and_ask_first() {
+    fn acts_show_their_exact_argv_in_an_armed_dialog() {
         let mut app = app("acts");
         let root = app.config.target.display().to_string();
-        // Nothing but the unit crate shown: acts on an attempt say so.
-        assert_eq!(key(&mut app, 'a'), Command::None);
-        assert!(app.notice.as_deref().unwrap().contains("select an attempt"));
-        show(&mut app, PROVENANCE);
+        attempt(&mut app, PROVENANCE);
         // Accept on a verified unit replaces.
         assert_eq!(key(&mut app, 'a'), Command::None);
-        let argv = confirm_argv(&app);
+        let argv = dialog_argv(&app);
         assert_eq!(
             argv,
             [
@@ -2037,21 +3123,26 @@ mod tests {
                 "--replace"
             ]
         );
+        let Mode::Dialog(c) = &app.mode else {
+            unreachable!()
+        };
+        assert_eq!(c.title, "Replace u-lib's verified crate with a-13c9?");
+        // Unarmed, `y` is dropped.
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(matches!(app.mode, Mode::Dialog(_)));
         arm(&mut app);
         let Command::Spawn(p) = key(&mut app, 'y') else {
-            panic!("y must spawn");
+            panic!("y must spawn once armed: {:?}", app.notice);
         };
         assert_eq!(strs(&p.argv), argv);
         assert_eq!(app.mode, Mode::Normal);
-        // Modify: a note that starts with `-` travels attached (§R2 5).
-        assert_eq!(key(&mut app, 'm'), Command::None);
-        assert!(matches!(app.mode, Mode::Note { .. }));
-        for c in "- keep the wrapping add".chars() {
-            key(&mut app, c);
-        }
+        // Modify: a note that starts with `-` travels attached; the provider
+        // is the cockpit's.
+        key(&mut app, 'm');
+        app.on_paste("- keep the wrapping add");
         code(&mut app, KeyCode::Enter);
         assert_eq!(
-            confirm_argv(&app),
+            dialog_argv(&app),
             [
                 HARNESS,
                 "--json",
@@ -2064,121 +3155,384 @@ mod tests {
                 "--steer=- keep the wrapping add"
             ]
         );
-        assert_eq!(key(&mut app, 'n'), Command::None, "n spawns nothing");
+        assert_eq!(
+            code(&mut app, KeyCode::Esc),
+            Command::None,
+            "Esc spawns nothing"
+        );
         assert_eq!(app.mode, Mode::Normal);
-        // With --allow-unsandboxed the acts that run code pass it on.
+        // With --allow-unsandboxed the acts that run code pass it on, and
+        // the dialog says so in words.
         app.config.allow_unsandboxed = true;
         key(&mut app, 'a');
         assert_eq!(
-            confirm_argv(&app).last().map(String::as_str),
+            dialog_argv(&app).last().map(String::as_str),
             Some("--allow-unsandboxed")
         );
+        let Mode::Dialog(c) = &app.mode else {
+            unreachable!()
+        };
+        assert!(c.body.iter().any(|b| b.contains("WITHOUT the sandbox")));
         code(&mut app, KeyCode::Esc);
-        // Read-only without a harness binary.
+        // Read-only without a harness binary: greyed, said.
         app.config.harness = None;
         key(&mut app, 'a');
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.notice.as_deref().unwrap().contains("read-only"));
+        assert!(said(&app).contains("read-only"), "{}", said(&app));
     }
 
+    /// The project-wide acts and Re-check: their argv carries no tree path.
     #[test]
-    fn acts_are_refused_with_a_reason_when_they_do_not_apply() {
-        let mut app = app("refusals");
-        // The superseded attempt is green but the unit's crate is another's;
-        // its sibling rules still hold. A red attempt: no Accept.
-        let unit = app.unit_view().unwrap().clone();
-        let other = unit
-            .attempts
-            .iter()
-            .find(|a| a.record.id != PROVENANCE)
-            .unwrap()
-            .record
-            .id
-            .clone();
-        show(&mut app, &other);
-        // A red attempt: no Accept, but it can seed a steer.
-        let red = unit
-            .attempts
-            .iter()
-            .find(|a| a.record.outcome == "red")
-            .expect("the fixture has a red attempt")
-            .record
-            .id
-            .clone();
-        show(&mut app, &red);
+    fn project_and_unit_acts_have_their_argv() {
+        let app = app("projacts");
+        let root = app.config.target.display().to_string();
+        for (act, sub) in [
+            (Act::Scan, "scan"),
+            (Act::Plan, "plan"),
+            (Act::Detect, "detect"),
+        ] {
+            let p = app.act_argv(act, None, None, None).unwrap();
+            assert_eq!(
+                strs(&p.argv),
+                [HARNESS, "--json", sub, &format!("--target={root}")]
+            );
+        }
+        let p = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
+        assert_eq!(
+            strs(&p.argv),
+            [
+                HARNESS,
+                "--json",
+                "verify",
+                "u-lib",
+                &format!("--target={root}")
+            ]
+        );
+        assert_eq!(p.label, "Re-check u-lib");
+    }
+
+    /// Accelerators act on the selection; what does not apply says so.
+    #[test]
+    fn accelerators_act_on_the_selection() {
+        let mut app = app("accel");
+        // The project: no attempt to accept.
+        assert_eq!(key(&mut app, 'a'), Command::None);
+        assert!(said(&app).contains("nothing to do"), "{}", said(&app));
+        // A red attempt: Accept does not apply; Modify does.
+        attempt(&mut app, RED);
         key(&mut app, 'a');
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app
-            .notice
-            .as_deref()
-            .unwrap()
-            .contains("only a green attempt"));
-        // Modify needs a finished, bound attempt with a candidate and verdict.
-        let ledger = harness_core::ledger::Ledger::new(&app.config.target);
-        let dir = attempts::attempt_dir(&ledger, "u-lib", &red);
-        std::fs::remove_dir_all(dir.join("candidate")).unwrap();
-        app.reload(true);
-        show(&mut app, &red);
+        assert!(said(&app).contains("nothing to do"));
         key(&mut app, 'm');
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(
-            app.notice.as_deref().unwrap().contains("no candidate"),
-            "{:?}",
-            app.notice
-        );
-        let mut rec = AttemptRecord::load(&dir).unwrap();
-        rec.driver = "blake3:another-driver".into();
-        rec.store(&dir).unwrap();
-        app.reload(true);
-        show(&mut app, &red);
-        key(&mut app, 'm');
-        assert!(
-            app.notice.as_deref().unwrap().contains("superseded inputs"),
-            "{:?}",
-            app.notice
-        );
-        show(&mut app, &other);
+        assert!(matches!(app.mode, Mode::Note { .. }));
+        code(&mut app, KeyCode::Esc);
+        // Retry is never offered for a blind external attempt.
+        key(&mut app, 'r');
+        assert!(said(&app).contains("nothing to do"), "{}", said(&app));
         // x with nothing running, R with nothing awaiting.
-        assert_eq!(key(&mut app, 'x'), Command::None);
-        assert!(app
-            .notice
-            .as_deref()
-            .unwrap()
-            .contains("nothing is running"));
+        key(&mut app, 'x');
+        assert!(said(&app).contains("nothing is running"));
         key(&mut app, 'R');
-        assert!(app
-            .notice
-            .as_deref()
-            .unwrap()
-            .contains("nothing is awaiting"));
-        // While a command runs, no act starts.
+        assert!(said(&app).contains("nothing to do"));
+        // While a command runs, no act starts; x opens the cancel dialog.
         app.running = true;
+        attempt(&mut app, PROVENANCE);
         key(&mut app, 'a');
-        assert!(app
-            .notice
-            .as_deref()
-            .unwrap()
-            .contains("a command is running"));
+        assert!(
+            said(&app).contains("a command is running"),
+            "{}",
+            said(&app)
+        );
+        assert_eq!(key(&mut app, 'x'), Command::None);
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.purpose == Purpose::Cancel));
+        arm(&mut app);
         assert_eq!(key(&mut app, 'x'), Command::Cancel);
-        // q asks; its prompt is armed like any other.
-        assert_eq!(key(&mut app, 'q'), Command::None);
-        assert_eq!(app.mode, Mode::QuitConfirm);
+    }
+
+    /// SAFE-11: `Q` is `q`; while a command runs both open the quit dialog,
+    /// which acts only once armed; `Ctrl-C` too.
+    #[test]
+    fn quit_goes_through_an_armed_dialog_while_a_command_runs() {
+        let mut app = app("quitarm");
+        app.running = true;
+        for c in ['q', 'Q'] {
+            assert_eq!(key(&mut app, c), Command::None, "{c}");
+            assert!(matches!(&app.mode, Mode::Dialog(d) if d.purpose == Purpose::Quit));
+            for k in ['q', 'Q', 'x'] {
+                assert_eq!(key(&mut app, k), Command::None, "{k} unarmed");
+            }
+            code(&mut app, KeyCode::Esc);
+        }
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(app.on_key(ctrl_c, Instant::now()), Command::None);
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'q'), Command::Quit);
+        key(&mut app, 'q');
         arm(&mut app);
         assert_eq!(key(&mut app, 'x'), Command::CancelAndQuit);
-        app.mode = Mode::Normal;
         app.running = false;
-        assert_eq!(key(&mut app, 'q'), Command::Quit);
+        assert_eq!(key(&mut app, 'Q'), Command::Quit);
+        assert_eq!(app.on_key(ctrl_c, Instant::now()), Command::Quit);
+    }
+
+    /// Mutation-checked rule, through the whole app: a held `Enter` on a
+    /// tree row opens the menu, chooses the recommended item, opens its
+    /// dialog — and never runs it.
+    #[test]
+    fn a_held_enter_never_runs_anything() {
+        let mut app = app("heldenter");
+        // The recommended item of a stale project is Scan.
+        app.select(Selection::Project);
+        let lib = app.config.target.join(LIB_C);
+        let text = std::fs::read_to_string(&lib).unwrap();
+        std::fs::write(&lib, format!("{text}\n")).unwrap();
+        assert!(app.reload(true));
+        let t0 = Instant::now();
+        let mut t = t0;
+        let mut spawned = false;
+        for i in 0..200 {
+            t += if i == 1 {
+                Duration::from_millis(600)
+            } else {
+                Duration::from_millis(30)
+            };
+            app.on_input(t);
+            if let Command::Spawn(_) = app.on_key(KeyEvent::from(KeyCode::Enter), t) {
+                spawned = true;
+            }
+            // The loop draws and tries to arm between reads.
+            if let Mode::Dialog(c) = &mut app.mode {
+                c.dialog.seen = true;
+            }
+            app.arm(t + Duration::from_millis(29), false);
+        }
+        assert!(!spawned);
+    }
+
+    /// SAFE-3, SAFE-12, CHK-13: Retry is never offered for a blind attempt,
+    /// refuses a half-seeded record and a provider not on the list — in the
+    /// menu, and again at confirm on a fresh read.
+    #[test]
+    fn retry_refuses_blind_half_seeded_and_unlisted_providers() {
+        let mut app = app("retryrules");
+        let root = app.config.target.display().to_string();
+        attempt(&mut app, PROVENANCE);
+        let retry = |app: &App| {
+            app.menu_items()
+                .into_iter()
+                .find(|i| i.action == Action::Act(Act::Retry))
+        };
+        assert!(retry(&app).is_none(), "never offered for a blind hand-off");
+        // A profile of the external kind under another name: blind too.
+        record(&mut app, PROVENANCE, |r| r.provider = "handoff".into());
+        app.config.providers.push("handoff".into());
+        assert!(retry(&app).is_none());
+        // Half seeded: greyed, never retried unseeded.
+        for (seed, note) in [(Some("a-000000000000"), None), (None, Some("- use iter()"))] {
+            record(&mut app, PROVENANCE, |r| {
+                r.provider = "external".into();
+                r.seeded_from = seed.map(String::from);
+                r.steer_note = note.map(String::from);
+            });
+            let it = retry(&app).expect("offered, greyed");
+            assert!(it.greyed.as_deref().unwrap().contains("half"), "{it:?}");
+            key(&mut app, 'r');
+            assert_eq!(app.mode, Mode::Normal);
+        }
+        // A steer attempt of a listed provider: its own run shape.
+        record(&mut app, PROVENANCE, |r| {
+            r.seeded_from = Some("a-000000000000".into());
+            r.steer_note = Some("- use iter()".into());
+        });
+        key(&mut app, 'r');
+        let model = app.shown_attempt().unwrap().record.model.clone();
+        assert_eq!(
+            dialog_argv(&app),
+            [
+                HARNESS,
+                "--json",
+                "migrate",
+                "u-lib",
+                &format!("--target={root}"),
+                "--no-promote",
+                "--retry",
+                "--provider=external",
+                &format!("--model={model}"),
+                "--from=a-000000000000",
+                "--steer=- use iter()",
+            ]
+        );
+        // The record changes under the open dialog: refused at confirm.
+        let ledger = Ledger::new(&app.config.target);
+        let dir = attempts::attempt_dir(&ledger, "u-lib", PROVENANCE);
+        let mut rec = AttemptRecord::load(&dir).unwrap();
+        rec.steer_note = None;
+        rec.store(&dir).unwrap();
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(said(&app).contains("half"), "{}", said(&app));
+        // A provider not on the list: greyed, naming the flag.
+        record(&mut app, PROVENANCE, |r| {
+            r.steer_note = Some("- use iter()".into());
+            r.provider = "anthropic-live".into();
+            r.provider_kind = "anthropic".into();
+        });
+        let it = retry(&app).unwrap();
+        assert!(it
+            .greyed
+            .unwrap()
+            .contains("start with `--provider anthropic-live`"));
+        // An unseeded attempt of a listed live provider is a human's retry.
+        app.config.providers.push("anthropic-live".into());
+        record(&mut app, PROVENANCE, |r| {
+            r.seeded_from = None;
+            r.steer_note = None;
+        });
+        key(&mut app, 'r');
+        assert!(dialog_argv(&app).contains(&"--provider=anthropic-live".to_string()));
+    }
+
+    /// CHK-1: Modify passes the first listed provider; its dialog names the
+    /// provider and the target's model in words; the note is remembered per
+    /// attempt, whatever happens to the dialog.
+    #[test]
+    fn modify_passes_the_listed_provider_and_remembers_the_note() {
+        let mut app = app("modprov");
+        app.config.providers = vec!["local".into(), "external".into()];
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'm');
+        app.on_paste("tighten the loop");
+        code(&mut app, KeyCode::Enter);
+        let argv = dialog_argv(&app);
+        assert_eq!(
+            argv.iter()
+                .filter(|a| a.starts_with("--provider"))
+                .collect::<Vec<_>>(),
+            ["--provider=local"]
+        );
+        let Mode::Dialog(c) = &app.mode else {
+            unreachable!()
+        };
+        assert!(c.body[0].contains("provider local"), "{:?}", c.body);
+        assert!(c.body[0].contains("migrate routing"), "{:?}", c.body);
+        code(&mut app, KeyCode::Esc);
+        key(&mut app, 'm');
+        assert!(matches!(&app.mode, Mode::Note { input, .. } if input == "tighten the loop"));
+        code(&mut app, KeyCode::Esc);
+        key(&mut app, 'm');
+        assert!(matches!(&app.mode, Mode::Note { input, .. } if input == "tighten the loop"));
+    }
+
+    /// §4.3, §6.3: Re-check runs only on code the harness knows, unchanged
+    /// since the cockpit showed it — checked again at confirm.
+    #[test]
+    fn recheck_needs_known_code_unchanged_since_shown() {
+        let mut app = app("recheck");
+        app.select(Selection::Unit("u-lib".into()));
+        let recheck = |app: &App| {
+            app.menu_items()
+                .into_iter()
+                .find(|i| i.action == Action::Act(Act::Verify))
+                .unwrap()
+        };
+        assert_eq!(recheck(&app).greyed, None);
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else { panic!() };
+        let i = m
+            .items
+            .iter()
+            .position(|i| i.action == Action::Act(Act::Verify))
+            .unwrap();
+        for _ in 0..i {
+            code(&mut app, KeyCode::Down);
+        }
+        if let Mode::Menu(m) = &mut app.mode {
+            m.focus = i;
+        }
+        code(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Dialog(_)), "{:?}", app.notice);
+        // The crate changes on disk after it was shown: refused at confirm.
+        let logic = app.snapshot.units[0]
+            .crate_dir
+            .clone()
+            .unwrap()
+            .join("src/logic.rs");
+        let text = std::fs::read_to_string(&logic).unwrap();
+        std::fs::write(&logic, format!("{text}\n// later\n")).unwrap();
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(
+            said(&app).contains("changed on disk since the cockpit showed it"),
+            "{}",
+            said(&app)
+        );
+        // Re-read: now it is unknown code — greyed with the reason.
+        assert!(app.reload(true));
+        let it = recheck(&app);
+        assert!(it
+            .greyed
+            .unwrap()
+            .contains("differs from every recorded attempt"));
+        // Put back: known again.
+        std::fs::write(&logic, text).unwrap();
+        assert!(app.reload(true));
+        assert_eq!(recheck(&app).greyed, None);
+    }
+
+    /// CHK-7: a live holder of the writer lock greys every spawning item,
+    /// read when the menu opens; and it refuses at confirm.
+    #[test]
+    fn a_live_holder_greys_the_acts_and_refuses_at_confirm() {
+        let mut app = app("busy");
+        let lock = Ledger::new(&app.config.target).lock_path();
+        let holder = format!(
+            "{{\"pid\":{},\"command\":\"verify u-lib\",\"started\":\"2026-09-25T00:00:00Z\"}}\n",
+            std::process::id()
+        );
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'a');
+        assert!(matches!(app.mode, Mode::Dialog(_)));
+        std::fs::write(&lock, &holder).unwrap();
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(
+            said(&app).contains("busy: `verify u-lib`"),
+            "{}",
+            said(&app)
+        );
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else { panic!() };
+        let accept = m
+            .items
+            .iter()
+            .find(|i| i.action == Action::Act(Act::Accept))
+            .unwrap();
+        assert!(accept.greyed.as_deref().unwrap().contains("busy"));
+        std::fs::remove_file(&lock).unwrap();
+        code(&mut app, KeyCode::Esc);
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else { panic!() };
+        let accept = m
+            .items
+            .iter()
+            .find(|i| i.action == Action::Act(Act::Accept))
+            .unwrap();
+        assert_eq!(accept.greyed, None, "re-read when the menu opens");
     }
 
     fn in_progress_attempt(app: &App, id: &str) {
-        let ledger = harness_core::ledger::Ledger::new(&app.config.target);
-        let seed = &app.unit_view().unwrap().attempt(PROVENANCE).unwrap().record;
+        let ledger = Ledger::new(&app.config.target);
+        let seed = &app.snapshot.units[0].attempt(PROVENANCE).unwrap().record;
         let record = AttemptRecord {
             id: id.into(),
             outcome: "in-progress".into(),
             turns: vec![],
             candidate_digest: String::new(),
             promoted: false,
+            seeded_from: Some(PROVENANCE.into()),
+            steer_note: Some("- a note".into()),
             ..seed.clone()
         };
         let dir = attempts::attempt_dir(&ledger, "u-lib", id);
@@ -2186,40 +3540,76 @@ mod tests {
         record.store(&dir).unwrap();
     }
 
-    /// §4 Resume, §7: the watcher only marks "response present" (it never
-    /// spawns); `R` asks and re-spawns the STORED argv; it stays available
-    /// after a failed resume; a finished attempt ends it.
+    fn pending(argv: Vec<OsString>, act: Act) -> Pending {
+        Pending {
+            act,
+            argv,
+            label: act.label().into(),
+            unit: Some("u-lib".into()),
+            attempt: None,
+            cleanup: None,
+            expect_attempt: None,
+            note: None,
+        }
+    }
+
+    /// §4 Resume: the watcher only marks "response present" (it never
+    /// spawns); Resume re-spawns the STORED argv of this cockpit's hand-off;
+    /// it stays available after a failed resume; a finished attempt ends it.
     #[test]
     fn resume_is_gated_on_state_and_survives_a_failed_resume() {
-        use std::os::unix::process::ExitStatusExt;
         let mut app = app("resume");
         let awaited = "a-000000000abc";
         in_progress_attempt(&app, awaited);
         app.reload(true);
         let response = app.config.target.join("response.json");
-        let argv: Vec<OsString> = [HARNESS, "--json", "migrate", "u-lib", "--no-promote"]
-            .map(OsString::from)
-            .to_vec();
-        let pending = Pending {
-            act: Act::Modify,
-            argv: argv.clone(),
-            cleanup: None,
-            expect_attempt: None,
-        };
-        app.on_spawned(&pending);
+        let argv: Vec<OsString> = [
+            HARNESS,
+            "--json",
+            "migrate",
+            "u-lib",
+            "--no-promote",
+            "--steer=x",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        app.on_spawned(&pending(argv.clone(), Act::Modify));
         app.on_child_msg(ChildMsg::Event(Event::Awaiting {
             attempt: Some(awaited.into()),
             path: response.display().to_string(),
             resume: "harness migrate u-lib …".into(),
             args: None,
         }));
+        assert!(app
+            .run
+            .as_ref()
+            .unwrap()
+            .narrator
+            .step()
+            .starts_with("Paused: waiting"));
         app.on_child_exit(ExitStatus::from_raw(1 << 8));
         app.load_now();
         assert_eq!(app.awaiting.len(), 1);
+        assert_eq!(
+            app.last.as_deref().map(|l| l.contains("Paused")),
+            Some(true),
+            "{:?}",
+            app.last
+        );
+        attempt(&mut app, awaited);
+        assert_eq!(
+            app.node_label(&app.selection.clone()).1,
+            "waiting for your answer steer ← a-13c9"
+        );
         // No response yet, then a torn one: not resumable; the tick spawns
-        // nothing either way (it has no way to).
-        key(&mut app, 'R');
-        assert!(app.notice.as_deref().unwrap().contains("no response yet"));
+        // nothing either way.
+        let resume = |app: &App| {
+            app.menu_items()
+                .into_iter()
+                .find(|i| i.action == Action::Act(Act::Resume))
+                .unwrap()
+        };
+        assert!(resume(&app).greyed.unwrap().contains("no response yet"));
         std::fs::write(&response, "{\"text\": ").unwrap();
         app.tick();
         app.load_now();
@@ -2229,15 +3619,14 @@ mod tests {
         app.load_now();
         assert!(app.awaiting[0].response_present);
         assert_eq!(app.mode, Mode::Normal, "the watcher never spawns or asks");
-        // R: the stored argv, unchanged, expecting the awaited attempt.
         key(&mut app, 'R');
         arm(&mut app);
         let Command::Spawn(p) = key(&mut app, 'y') else {
-            panic!("R must ask, then spawn");
+            panic!("R must ask, then spawn: {:?}", app.notice);
         };
         assert_eq!(p.argv, argv);
         assert_eq!(p.expect_attempt.as_deref(), Some(awaited));
-        // The resumed run fails without a new hand-off: R stays available.
+        // The resumed run fails without a new hand-off: Resume stays.
         app.on_spawned(&p);
         app.on_child_msg(ChildMsg::Event(Event::TurnStart {
             unit: "u-lib".into(),
@@ -2252,18 +3641,13 @@ mod tests {
             .lines
             .iter()
             .any(|l| l.text.contains("not the awaited")));
-        app.on_child_msg(ChildMsg::Event(Event::Error {
-            kind: "harness".into(),
-            message: "boom".into(),
-            holder: None,
-        }));
         app.on_child_exit(ExitStatus::from_raw(1 << 8));
         app.load_now();
         key(&mut app, 'R');
-        assert!(matches!(app.mode, Mode::Confirm(_)), "{:?}", app.notice);
+        assert!(matches!(app.mode, Mode::Dialog(_)), "{:?}", app.notice);
         code(&mut app, KeyCode::Esc);
         // The attempt finished (another answerer resumed it): gone.
-        let ledger = harness_core::ledger::Ledger::new(&app.config.target);
+        let ledger = Ledger::new(&app.config.target);
         let dir = attempts::attempt_dir(&ledger, "u-lib", awaited);
         let mut rec = AttemptRecord::load(&dir).unwrap();
         rec.outcome = "red".into();
@@ -2271,49 +3655,43 @@ mod tests {
         app.tick();
         app.load_now();
         assert!(app.awaiting.is_empty());
-        key(&mut app, 'R');
-        assert!(app
-            .notice
-            .as_deref()
-            .unwrap()
-            .contains("nothing is awaiting"));
     }
 
     /// §4: the ledger is re-read after the command is REAPED — never on its
-    /// `result` event (the CLI emits it before dying on a signal).
+    /// `result` event — and on the loader, not the UI thread.
     #[test]
     fn the_ledger_is_reread_after_reaping_not_on_result() {
-        use std::os::unix::process::ExitStatusExt;
         let mut app = app("reap");
         let late = "a-0000000000ff";
-        let pending = Pending {
-            act: Act::Retry,
-            argv: vec![OsString::from(HARNESS)],
-            cleanup: None,
-            expect_attempt: None,
-        };
-        app.on_spawned(&pending);
+        let p = pending(vec![OsString::from(HARNESS)], Act::Retry);
+        app.on_spawned(&p);
         in_progress_attempt(&app, late);
         app.on_child_msg(ChildMsg::Event(Event::Result {
             exit: 130,
             signal: Some("SIGINT".into()),
         }));
         assert!(
-            app.unit_view().unwrap().attempt(late).is_none(),
+            app.snapshot.units[0].attempt(late).is_none(),
             "re-read on `result`"
         );
         app.on_child_exit(ExitStatus::from_raw(2));
         assert!(
-            app.unit_view().unwrap().attempt(late).is_none(),
+            app.snapshot.units[0].attempt(late).is_none(),
             "read on the UI thread"
         );
         assert_eq!(app.load_request, Some(LoadWhy::Reaped));
         app.load_now();
-        assert!(app.unit_view().unwrap().attempt(late).is_some());
-        let run = app.run.as_ref().unwrap();
-        assert_eq!(run.exit.as_deref(), Some("interrupted (SIGINT)"));
-        // Without a `result` the run says so.
-        app.on_spawned(&pending);
+        assert!(app.snapshot.units[0].attempt(late).is_some());
+        assert_eq!(
+            app.run.as_ref().unwrap().exit.as_deref(),
+            Some("interrupted (SIGINT)")
+        );
+        assert!(
+            app.last.as_deref().unwrap().contains("Stopped (SIGINT)"),
+            "{:?}",
+            app.last
+        );
+        app.on_spawned(&p);
         app.on_child_exit(ExitStatus::from_raw(3 << 8));
         assert_eq!(
             app.run.as_ref().unwrap().exit.as_deref(),
@@ -2321,76 +3699,257 @@ mod tests {
         );
     }
 
+    /// §6.1: a `locked` refusal offers Try again (`t`), which opens the same
+    /// dialog with the same argv; a failed start does too.
     #[test]
-    fn navigation_keeps_to_the_panes() {
-        let mut app = app("nav");
-        let n = app.unit_view().unwrap().attempts.len();
-        code(&mut app, KeyCode::Tab);
-        assert_eq!(app.focus, Focus::Rail);
-        for _ in 0..n + 5 {
-            key(&mut app, 'j');
-        }
-        assert_eq!(app.rail, n, "the cursor stops at the last attempt");
-        code(&mut app, KeyCode::Tab);
-        app.layout = Layout {
-            pair_rows: vec![0, 10, 25],
-            total_rows: 40,
-            page: 10,
-        };
-        key(&mut app, ']');
-        key(&mut app, 'f');
-        assert_eq!(app.scroll, 10);
-        key(&mut app, ']');
-        key(&mut app, 'f');
-        assert_eq!(app.scroll, 25);
-        key(&mut app, '[');
-        key(&mut app, 'f');
-        assert_eq!(app.scroll, 10);
-        // J/K stay within the plan's units.
-        let before = app.unit;
-        key(&mut app, 'K');
-        assert_eq!(app.unit, before);
-        // v opens the verdict of what is shown; ? the keys.
-        key(&mut app, 'v');
-        assert!(matches!(app.mode, Mode::Verdict { selected: 0, .. }));
+    fn a_locked_refusal_offers_try_again() {
+        let mut app = app("tryagain");
+        let p = app.act_argv(Act::Scan, None, None, None).unwrap();
+        app.on_spawned(&p);
+        app.on_child_msg(ChildMsg::Event(Event::Error {
+            kind: "locked".into(),
+            message: "ledger is locked".into(),
+            holder: Some(crate::events::Holder {
+                pid: Some(1),
+                command: "verify u-lib".into(),
+                started: String::new(),
+            }),
+        }));
+        app.on_child_exit(ExitStatus::from_raw(1 << 8));
+        assert!(app
+            .last
+            .as_deref()
+            .unwrap()
+            .starts_with("Scan the project — Refused"));
+        key(&mut app, 't');
+        assert_eq!(dialog_argv(&app), strs(&p.argv));
         code(&mut app, KeyCode::Esc);
+        app.try_again = None;
+        app.on_spawn_failed(p.clone(), "no such file");
+        key(&mut app, 't');
+        assert_eq!(dialog_argv(&app), strs(&p.argv));
+    }
+
+    /// §2.2, §8: the tree moves by rows, folds and opens, goes to the parent
+    /// and into the View; a jump pushes the back stack; J/K move by unit.
+    #[test]
+    fn navigation_moves_folds_jumps_and_goes_back() {
+        let mut app = app("nav");
+        assert_eq!(app.selection, Selection::Project);
+        code(&mut app, KeyCode::Down);
+        assert_eq!(app.selection, Selection::Dir("test_case".into()));
+        // ← folds an open node, ← again goes to the parent.
+        code(&mut app, KeyCode::Left);
+        assert!(!app.expansion.is_open(&Selection::Dir("test_case".into())));
+        code(&mut app, KeyCode::Left);
+        assert_eq!(app.selection, Selection::Project);
+        code(&mut app, KeyCode::Down);
+        code(&mut app, KeyCode::Right);
+        assert!(app.expansion.is_open(&Selection::Dir("test_case".into())));
+        // Down to lib.c, → opens it (its functions), → again into the View.
+        while app.selection != Selection::File(LIB_C.into()) {
+            code(&mut app, KeyCode::Down);
+        }
+        code(&mut app, KeyCode::Right);
+        assert!(app.rows.iter().any(|r| r.selection()
+            == Some(&Selection::Function(
+                LIB_C.into(),
+                "read_scalefactors".into()
+            ))));
+        code(&mut app, KeyCode::Right);
+        assert_eq!(app.focus, Focus::View);
+        // ← at column 0 returns to Files.
+        code(&mut app, KeyCode::Left);
+        assert_eq!(app.focus, Focus::Files);
+        // A jump from the menu: Open unit, then Esc goes back.
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else { panic!() };
+        let i = m
+            .items
+            .iter()
+            .position(|i| matches!(i.action, Action::OpenUnit(_)))
+            .unwrap();
+        if let Mode::Menu(m) = &mut app.mode {
+            m.focus = i;
+        }
+        code(&mut app, KeyCode::Enter);
+        assert_eq!(app.selection, Selection::Unit("u-lib".into()));
+        code(&mut app, KeyCode::Esc);
+        assert_eq!(app.selection, Selection::File(LIB_C.into()));
+        // J/K stay within the units.
+        key(&mut app, 'J');
+        assert_eq!(app.selection, Selection::Unit("u-lib".into()));
+        key(&mut app, 'K');
+        assert_eq!(app.selection, Selection::Unit("u-lib".into()));
+        // Help, and the details.
         key(&mut app, '?');
         assert_eq!(app.mode, Mode::Help { scroll: 0 });
         key(&mut app, 'j');
-        assert_eq!(app.mode, Mode::Help { scroll: 1 }, "j scrolls the help");
-        key(&mut app, 'x');
-        assert_eq!(app.mode, Mode::Normal, "any other key closes it");
+        assert_eq!(app.mode, Mode::Help { scroll: 1 });
+        key(&mut app, 'z');
+        assert_eq!(app.mode, Mode::Normal);
+        key(&mut app, 'c');
+        assert!(matches!(app.mode, Mode::Details { .. }));
+        key(&mut app, 'c');
+        assert_eq!(app.mode, Mode::Normal);
     }
 
+    /// A reload keeps the selection by key; a vanished node gives way to its
+    /// parent.
     #[test]
-    fn diff_compares_with_the_provenance_attempt() {
-        let mut app = app("diff");
-        key(&mut app, 'd');
-        assert!(app.notice.as_deref().unwrap().contains("select an attempt"));
-        show(&mut app, PROVENANCE);
-        key(&mut app, 'd');
-        let Mode::Diff { lines, .. } = &app.mode else {
-            panic!("{:?}", app.notice);
+    fn a_reload_keeps_the_selection_or_moves_to_the_parent() {
+        let mut app = app("keepsel");
+        attempt(&mut app, PROVENANCE);
+        in_progress_attempt(&app, "a-000000000001");
+        assert!(app.reload(false));
+        assert_eq!(
+            app.selection,
+            Selection::Attempt("u-lib".into(), PROVENANCE.into())
+        );
+        let ledger = Ledger::new(&app.config.target);
+        std::fs::remove_dir_all(attempts::attempt_dir(&ledger, "u-lib", PROVENANCE)).unwrap();
+        assert!(app.reload(false));
+        assert_eq!(app.selection, Selection::Unit("u-lib".into()));
+    }
+
+    /// Review STATE-2, ENG-3, §13 Freshness: the pairs follow what they show
+    /// — an attempt's new candidate on the tick, an outside Rust edit to the
+    /// unit crate, and an outside C edit shows the stale label.
+    #[test]
+    fn the_view_follows_outside_edits() {
+        let mut app = app("fresh");
+        app.select(Selection::Unit("u-lib".into()));
+        let crate_dir = app.snapshot.units[0].crate_dir.clone().unwrap();
+        let ffi = crate_dir.join("src/ffi.rs");
+        let text = std::fs::read_to_string(&ffi).unwrap();
+        std::fs::write(
+            &ffi,
+            text.replacen(
+                "fn read_scalefactors(",
+                "fn read_scalefactors( // outside",
+                1,
+            ),
+        )
+        .unwrap();
+        app.running = true;
+        app.tick();
+        app.load_now();
+        let has = |app: &App, needle: &str| {
+            app.pairs.iter().any(|p| {
+                p.rust.iter().chain(&p.c).any(|l| match l {
+                    CodeLine::Code { pieces, .. } => pieces.iter().any(|(_, t)| t.contains(needle)),
+                    CodeLine::Note(t) | CodeLine::Link(t) => t.contains(needle),
+                })
+            })
         };
-        assert_eq!(lines, &["the Rust sources are identical"]);
+        assert!(
+            has(&app, "// outside"),
+            "an outside Rust edit shows the new code"
+        );
+        let lib = app.config.target.join(LIB_C);
+        let c = std::fs::read_to_string(&lib).unwrap();
+        std::fs::write(&lib, format!("/* moved */\n{c}")).unwrap();
+        app.tick();
+        app.load_now();
+        assert!(
+            has(&app, "facts predate test_case/src/lib.c"),
+            "an outside C edit shows the stale label"
+        );
+        // The shown attempt's candidate changes on disk (a judged turn).
+        attempt(&mut app, PROVENANCE);
+        let ledger = Ledger::new(&app.config.target);
+        let dir = attempts::attempt_dir(&ledger, "u-lib", PROVENANCE);
+        let cand = dir.join("candidate/src/ffi.rs");
+        let t = std::fs::read_to_string(&cand).unwrap();
+        std::fs::write(
+            &cand,
+            t.replacen(
+                "fn read_scalefactors(",
+                "fn read_scalefactors( // judged",
+                1,
+            ),
+        )
+        .unwrap();
+        let mut rec = AttemptRecord::load(&dir).unwrap();
+        rec.candidate_digest = "blake3:changed".into();
+        rec.store(&dir).unwrap();
+        app.tick();
+        app.load_now();
+        assert!(has(&app, "// judged"));
     }
 
-    /// §4 `e`, §R2 5: after a changed edit the optional note is asked
-    /// for, and travels attached. Declining keeps the edit (`E` offers it
-    /// again, with its note); only an armed `D` discards it.
+    /// §3: a file no unit owns shows its C source; an owned file its pairs
+    /// and its internal functions; a public function one pair; an internal
+    /// function its file's C.
     #[test]
-    fn a_staged_hand_edit_asks_for_its_note_then_its_argv() {
+    fn the_view_shows_the_selection() {
+        let mut app = app("viewsel");
+        app.select(Selection::File(LIB_C.into()));
+        assert_eq!(app.pairs.len(), 1);
+        assert!(app.source.is_none());
+        app.select(Selection::File("test_case/include/lib.h".into()));
+        assert!(app.pairs.is_empty());
+        let src = app.source.as_ref().unwrap();
+        assert!(!src.lines.is_empty());
+        app.select(Selection::Function(
+            LIB_C.into(),
+            "read_scalefactors".into(),
+        ));
+        assert_eq!(app.pairs.len(), 1);
+        app.select(Selection::Function(
+            LIB_C.into(),
+            "test_case/src/lib.c::get_bits".into(),
+        ));
+        assert!(app.source.is_some());
+        app.select(Selection::Attempt("u-lib".into(), RED.into()));
+        assert_eq!(app.pairs.len(), 1);
+        assert!(
+            app.pairs_digest.is_none(),
+            "an attempt's crate is not the unit crate"
+        );
+    }
+
+    /// §3 Next step: stated as a fact, first match wins; never model work.
+    #[test]
+    fn the_next_step_is_a_fact() {
+        let mut app = app("next");
+        assert_eq!(app.next_step(), None);
+        let lib = app.config.target.join(LIB_C);
+        let c = std::fs::read_to_string(&lib).unwrap();
+        std::fs::write(&lib, format!("{c}\n")).unwrap();
+        app.reload(true);
+        let (text, act) = app.next_step().unwrap();
+        assert_eq!(
+            text,
+            "1 file changed since the scan — Scan the project again"
+        );
+        assert_eq!(act, Some(Act::Scan));
+        std::fs::remove_file(app.config.target.join("migration/plan.toml")).unwrap();
+        std::fs::write(&lib, c).unwrap();
+        app.reload(true);
+        assert_eq!(app.next_step().unwrap().1, Some(Act::Plan));
+        std::fs::remove_file(app.config.target.join("migration/facts.jsonl")).unwrap();
+        app.reload(true);
+        assert_eq!(app.next_step().unwrap().1, Some(Act::Scan));
+        // The project menu opens focused on it.
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else { panic!() };
+        assert_eq!(m.items[m.focus].action, Action::Act(Act::Scan));
+    }
+
+    /// §4 `e`, §R2 5: after a changed edit the optional note is asked for,
+    /// and travels attached; Keep for later keeps the edit (E offers it
+    /// again, with its note); only an armed Discard removes it.
+    #[test]
+    fn a_staged_hand_edit_asks_for_its_note_then_its_dialog() {
         let mut app = app("handedit");
         let root = app.config.target.display().to_string();
         let (stage, tmp) = (PathBuf::from("/tmp/h/stage"), PathBuf::from("/tmp/h"));
         app.edit_staged("u-lib".into(), stage.clone(), tmp.clone());
-        for c in "-by hand".chars() {
-            key(&mut app, c);
-        }
+        app.on_paste("-by hand");
         code(&mut app, KeyCode::Enter);
-        let argv = confirm_argv(&app);
         assert_eq!(
-            argv,
+            dialog_argv(&app),
             [
                 HARNESS,
                 "--json",
@@ -2401,13 +3960,13 @@ mod tests {
                 "--note=-by hand"
             ]
         );
-        let Mode::Confirm(p) = &app.mode else {
+        let Mode::Dialog(c) = &app.mode else {
             unreachable!()
         };
-        assert_eq!(p.cleanup.as_deref(), Some(tmp.as_path()));
-        // Declined (n, Esc): kept, with its note.
-        assert_eq!(key(&mut app, 'n'), Command::None);
-        assert_eq!(app.kept_edits.len(), 1);
+        assert_eq!(c.dialog.kind, crate::dialog::Kind::Override);
+        assert_eq!(c.dialog.buttons[0].label, "Keep for later");
+        // Keep for later (Esc): kept, with its note.
+        assert_eq!(code(&mut app, KeyCode::Esc), Command::None);
         assert_eq!(app.kept_paths(), [tmp.join("edit")]);
         key(&mut app, 'E');
         assert!(
@@ -2417,106 +3976,48 @@ mod tests {
         );
         assert_eq!(code(&mut app, KeyCode::Esc), Command::None);
         assert_eq!(app.kept_edits.len(), 1, "Esc keeps it too");
-        // No note: no --note at all.
-        app.edit_staged("u-lib".into(), stage.clone(), tmp.clone());
+        // The project menu offers the kept edit and its discard.
+        app.select(Selection::Project);
+        let items = app.menu_items();
+        assert!(items.iter().any(|i| i.action == Action::ContinueKept));
+        let discard = items
+            .iter()
+            .find(|i| i.action == Action::DiscardKept)
+            .unwrap()
+            .clone();
+        app.open_menu();
+        if let Mode::Menu(m) = &mut app.mode {
+            m.focus = m.items.iter().position(|i| *i == discard).unwrap();
+        }
         code(&mut app, KeyCode::Enter);
-        assert!(!confirm_argv(&app).iter().any(|a| a.starts_with("--note")));
-        assert_eq!(app.kept_edits.len(), 1, "one edit, one entry");
-        // D discards — only once the prompt is armed.
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("{:?}", app.mode)
+        };
+        assert_eq!(c.dialog.focus, 0, "focused on Keep");
+        // D discards — only once armed.
         assert_eq!(key(&mut app, 'D'), Command::None);
-        assert!(matches!(app.mode, Mode::Confirm(_)));
+        assert!(matches!(app.mode, Mode::Dialog(_)));
         arm(&mut app);
         assert_eq!(key(&mut app, 'D'), Command::Cleanup(tmp.clone()));
         assert!(app.kept_edits.is_empty());
-        assert_eq!(app.mode, Mode::Normal);
         key(&mut app, 'E');
-        assert!(app.notice.as_deref().unwrap().contains("no kept hand edit"));
-        // The shown crate must be in the executor layout for `e` at all.
-        show(&mut app, PROVENANCE);
+        assert!(said(&app).contains("nothing to do"), "{}", said(&app));
+        // The crate must be in the executor layout for `e` at all.
+        attempt(&mut app, PROVENANCE);
         assert!(matches!(key(&mut app, 'e'), Command::Edit { .. }));
     }
 
-    /// Review ACTS-1: typed-ahead or pasted input never answers a prompt; a
-    /// Ctrl- or Alt-modified key is never text and never a `y`.
-    #[test]
-    fn a_prompt_takes_only_a_considered_plain_y() {
-        use ratatui::crossterm::event::KeyModifiers;
-        let mut app = app("typeahead");
-        show(&mut app, PROVENANCE);
-        key(&mut app, 'a');
-        assert!(matches!(app.mode, Mode::Confirm(_)));
-        // The `y` of a burst, before the prompt was armed: refused.
-        assert_eq!(key(&mut app, 'y'), Command::None);
-        assert!(matches!(app.mode, Mode::Confirm(_)));
-        // Seen but not armed (input was pending): still refused.
-        app.confirm_seen = true;
-        assert!(app.confirm_waiting());
-        assert_eq!(key(&mut app, 'y'), Command::None);
-        // Armed: Ctrl-Y is not a `y`, a paste never answers.
-        app.confirm_armed = true;
-        let ctrl_y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
-        assert_eq!(app.on_key(ctrl_y), Command::None);
-        app.on_paste("y\ny");
-        assert!(matches!(app.mode, Mode::Confirm(_)));
-        assert!(matches!(key(&mut app, 'y'), Command::Spawn(_)));
-        // Leaving a prompt disarms the next one.
-        key(&mut app, 'a');
-        assert!(!app.confirm_armed && !app.confirm_seen);
-        code(&mut app, KeyCode::Esc);
-        // In a note: a paste is text (line breaks as spaces), Ctrl-J is not.
-        key(&mut app, 'm');
-        app.on_paste("keep\r\nthe loop");
-        app.on_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
-        assert_eq!(
-            app.mode,
-            Mode::Note {
-                input: "keep  the loop".into()
-            }
-        );
-    }
-
-    /// Review ACTS-2: a note the CLI would refuse is refused at the prompt.
-    #[test]
-    fn notes_the_cli_refuses_are_refused_at_the_prompt() {
-        assert!(note_problem("[TASK]", 400).is_some());
-        assert!(note_problem("fine [not a header]", 400).is_none());
-        assert!(note_problem(&"x".repeat(401), 400).is_some());
-        let mut app = app("notes");
-        app.edit_staged(
-            "u-lib".into(),
-            PathBuf::from("/tmp/n/stage"),
-            PathBuf::from("/tmp/n"),
-        );
-        app.on_paste("[GUIDANCE]");
-        code(&mut app, KeyCode::Enter);
-        assert!(matches!(app.mode, Mode::EditNote { .. }), "{:?}", app.mode);
-        assert!(app.notice.as_deref().unwrap().contains("section header"));
-        assert_eq!(
-            code(&mut app, KeyCode::Esc),
-            Command::None,
-            "kept, not discarded"
-        );
-        show(&mut app, PROVENANCE);
-        key(&mut app, 'm');
-        app.on_paste("[TASK]");
-        code(&mut app, KeyCode::Enter);
-        assert!(matches!(app.mode, Mode::Note { .. }));
-    }
-
-    /// Review ACTS-2 / STATE-3 / PROC-1 (and the verification round): an
-    /// override that recorded nothing (refused, interrupted, failed to
-    /// start) keeps the edit, `E` offers it again, and only a recorded one
-    /// frees its temp dir.
+    /// Review ACTS-2 / STATE-3 / PROC-1: an override that recorded nothing
+    /// keeps the edit, E offers it again; only a recorded one frees its dir.
     #[test]
     fn an_unrecorded_override_keeps_the_edit_and_reoffers_it() {
-        use std::os::unix::process::ExitStatusExt;
         let mut app = app("keepedit");
         let tmp = PathBuf::from("/tmp/k");
         app.edit_staged("u-lib".into(), tmp.join("stage"), tmp.clone());
         code(&mut app, KeyCode::Enter);
         arm(&mut app);
         let Command::Spawn(p) = key(&mut app, 'y') else {
-            panic!("y must spawn");
+            panic!("y must spawn: {:?}", app.notice);
         };
         let argv = p.argv.clone();
         app.on_spawned(&p);
@@ -2531,18 +4032,15 @@ mod tests {
             "kept"
         );
         assert_eq!(app.kept_paths(), [tmp.join("edit")]);
-        // `E` offers it again (its note, then the same command).
         key(&mut app, 'E');
         code(&mut app, KeyCode::Enter);
-        assert_eq!(confirm_argv(&app), strs(&argv));
+        assert_eq!(dialog_argv(&app), strs(&argv));
         arm(&mut app);
         let Command::Spawn(p) = key(&mut app, 'y') else {
             panic!("y must spawn");
         };
-        // A failed start keeps it too.
         app.on_spawn_failed(p.clone(), "no such file");
         assert_eq!(app.kept_edits.len(), 1);
-        // Recorded (its `attempt` event): the temp dir goes.
         app.on_spawned(&p);
         app.on_child_msg(ChildMsg::Event(Event::Attempt {
             unit: "u-lib".into(),
@@ -2557,84 +4055,39 @@ mod tests {
         assert!(app.kept_edits.is_empty());
     }
 
-    /// The verification round: a paste that does not fit says so.
+    /// Review ACTS-2: notes the CLI refuses are refused at the prompt; a
+    /// paste that does not fit says so; a paste never answers a dialog.
     #[test]
-    fn a_paste_that_does_not_fit_is_reported() {
-        let mut app = app("pastefit");
-        show(&mut app, PROVENANCE);
+    fn notes_and_pastes() {
+        assert!(note_problem("[TASK]", 400).is_some());
+        assert!(note_problem("fine [not a header]", 400).is_none());
+        assert!(note_problem(&"x".repeat(401), 400).is_some());
+        let mut app = app("notes");
+        app.edit_staged(
+            "u-lib".into(),
+            PathBuf::from("/tmp/n/stage"),
+            PathBuf::from("/tmp/n"),
+        );
+        app.on_paste("[GUIDANCE]");
+        code(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::EditNote { .. }), "{:?}", app.mode);
+        assert!(said(&app).contains("section header"));
+        code(&mut app, KeyCode::Esc);
+        attempt(&mut app, PROVENANCE);
         key(&mut app, 'm');
         app.on_paste(&"x".repeat(MAX_NOTE_BYTES + 10));
-        assert!(app.notice.as_deref().unwrap().contains("10 bytes dropped"));
+        assert!(said(&app).contains("10 bytes dropped"));
+        code(&mut app, KeyCode::Esc);
+        key(&mut app, 'a');
+        app.on_paste("y\ny");
+        assert!(matches!(app.mode, Mode::Dialog(_)));
+        assert!(said(&app).contains("paste ignored"));
     }
 
-    /// The verification round (STATE-10): after a command is reaped the
-    /// pairs are re-read even when nothing the fingerprint sees changed
-    /// (the unit crate edited on disk).
-    #[test]
-    fn a_reaped_command_rereads_the_shown_crate() {
-        use std::os::unix::process::ExitStatusExt;
-        let mut app = app("reap-pairs");
-        let crate_dir = app.unit_view().unwrap().crate_dir.clone().unwrap();
-        let ffi = crate_dir.join("src/ffi.rs");
-        let text = std::fs::read_to_string(&ffi).unwrap();
-        std::fs::write(
-            &ffi,
-            text.replacen(
-                "fn read_scalefactors(",
-                "fn read_scalefactors( // on disk",
-                1,
-            ),
-        )
-        .unwrap();
-        let pending = Pending {
-            act: Act::Retry,
-            argv: vec![OsString::from(HARNESS)],
-            cleanup: None,
-            expect_attempt: None,
-        };
-        app.on_spawned(&pending);
-        app.on_child_exit(ExitStatus::from_raw(0));
-        app.load_now();
-        let seen = app.pairs.iter().any(|p| {
-            p.rust.iter().any(|l| matches!(l, CodeLine::Code { pieces, .. } if pieces.iter().any(|(_, t)| t.contains("// on disk"))))
-        });
-        assert!(seen);
-    }
-
-    /// The verification round: the diff is bounded as a whole, and says
-    /// what it cut.
-    #[test]
-    fn the_diff_is_bounded_as_a_whole() {
-        let base = std::env::temp_dir().join(format!("harness-tui-diffcap-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let (old, new) = (base.join("old"), base.join("new"));
-        for d in [&old, &new] {
-            std::fs::create_dir_all(d.join("src")).unwrap();
-        }
-        for i in 0..3 {
-            let body: String = (0..9_000).map(|n| format!("line {n}\n")).collect();
-            std::fs::write(old.join(format!("src/f{i}.rs")), &body).unwrap();
-            std::fs::write(
-                new.join(format!("src/f{i}.rs")),
-                body.replace("line", "LINE"),
-            )
-            .unwrap();
-        }
-        let lines = diff_crates((&old, "a-old"), (&new, "a-new"));
-        assert!(lines.len() <= MAX_DIFF_LINES + 1, "{}", lines.len());
-        assert!(
-            lines.last().unwrap().contains("the diff stops here"),
-            "{:?}",
-            lines.last()
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// Review ACTS-3: every outstanding hand-off is tracked; `R` resumes the
-    /// shown attempt's.
+    /// Review ACTS-3: every outstanding hand-off is tracked; Resume resumes
+    /// the selected attempt's.
     #[test]
     fn several_hand_offs_are_tracked() {
-        use std::os::unix::process::ExitStatusExt;
         let mut app = app("handoffs");
         let (a, b) = ("a-00000000000a", "a-00000000000b");
         in_progress_attempt(&app, a);
@@ -2643,13 +4096,10 @@ mod tests {
         for (id, n) in [(a, 1), (b, 2)] {
             let path = app.config.target.join(format!("r{n}.json"));
             std::fs::write(&path, "{}").unwrap();
-            let pending = Pending {
-                act: Act::Modify,
-                argv: vec![OsString::from(format!("run-{n}"))],
-                cleanup: None,
-                expect_attempt: None,
-            };
-            app.on_spawned(&pending);
+            app.on_spawned(&pending(
+                vec![OsString::from(format!("run-{n}"))],
+                Act::Modify,
+            ));
             app.on_child_msg(ChildMsg::Event(Event::Awaiting {
                 attempt: Some(id.into()),
                 path: path.display().to_string(),
@@ -2660,65 +4110,57 @@ mod tests {
             app.load_now();
         }
         assert_eq!(app.awaiting.len(), 2);
-        show(&mut app, a);
+        attempt(&mut app, a);
         key(&mut app, 'R');
-        assert_eq!(confirm_argv(&app), ["run-1"]);
+        assert_eq!(dialog_argv(&app), ["run-1"]);
         code(&mut app, KeyCode::Esc);
-        show(&mut app, b);
+        attempt(&mut app, b);
         key(&mut app, 'R');
-        assert_eq!(confirm_argv(&app), ["run-2"]);
+        assert_eq!(dialog_argv(&app), ["run-2"]);
     }
 
-    /// Review STATE-2, STATE-10: a reload keeps the selection by id, and
-    /// the pairs follow the shown crate's bytes — on the 2 s tick too.
+    /// §6.2: a plan run leaves one summary line until the next command.
     #[test]
-    fn reloads_keep_the_selection_and_refresh_changed_pairs() {
-        let mut app = app("refresh");
-        show(&mut app, PROVENANCE);
-        let rail = app.rail;
-        // Another attempt appears (sorting before it): selection kept by id.
-        in_progress_attempt(&app, "a-000000000001");
-        assert!(app.reload(false));
-        assert_eq!(app.shown, Shown::Attempt(PROVENANCE.into()));
-        assert_eq!(app.rail_attempt_id().as_deref(), Some(PROVENANCE));
-        assert!(
-            app.rail != rail || app.unit_view().unwrap().attempts[rail - 1].record.id == PROVENANCE
-        );
-        // The shown attempt's candidate changes on disk (a judged turn):
-        // the tick re-reads the pairs.
-        let ledger = harness_core::ledger::Ledger::new(&app.config.target);
-        let dir = attempts::attempt_dir(&ledger, "u-lib", PROVENANCE);
-        let ffi = dir.join("candidate/src/ffi.rs");
-        let text = std::fs::read_to_string(&ffi).unwrap();
-        std::fs::write(
-            &ffi,
-            text.replacen(
-                "fn read_scalefactors(",
-                "fn read_scalefactors( // changed",
-                1,
-            ),
-        )
-        .unwrap();
-        let mut rec = AttemptRecord::load(&dir).unwrap();
-        rec.candidate_digest = "blake3:changed".into();
-        rec.store(&dir).unwrap();
-        app.running = true;
-        app.tick();
+    fn a_plan_run_leaves_its_summary() {
+        let mut app = app("plansum");
+        let p = app.act_argv(Act::Plan, None, None, None).unwrap();
+        app.on_spawned(&p);
+        for text in ["plan: u-lib: re-approved", "plan: execution order: u-lib"] {
+            app.on_child_msg(ChildMsg::Event(Event::Message { text: text.into() }));
+        }
+        app.on_child_exit(ExitStatus::from_raw(0));
         app.load_now();
-        let seen = app.pairs.iter().any(|p| {
-            p.rust.iter().any(|l| matches!(l, CodeLine::Code { pieces, .. } if pieces.iter().any(|(_, t)| t.contains("// changed"))))
-        });
-        assert!(seen, "the pairs still show the old candidate");
-        // The shown attempt vanishes: back to the crate.
-        std::fs::remove_dir_all(&dir).unwrap();
-        app.reload(false);
-        assert_eq!(app.shown, Shown::Crate);
+        assert_eq!(
+            app.plan_notice.as_deref(),
+            Some("plan changed 1 unit — review `git diff migration/plan.toml` (c for the lines)")
+        );
+        app.on_spawned(&app.act_argv(Act::Scan, None, None, None).unwrap());
+        assert_eq!(app.plan_notice, None);
+    }
+
+    /// §6.3: a failed read keeps the last snapshot and says why once; `g`
+    /// always says it; requests fold.
+    #[test]
+    fn a_failed_read_keeps_the_last_snapshot() {
+        let mut app = app("failread");
+        let units = app.snapshot.units.len();
+        assert!(!app.on_loaded(Err("boom".into()), LoadWhy::Tick));
+        assert_eq!(app.snapshot.units.len(), units);
+        assert_eq!(said(&app), "unreadable: boom");
+        app.notice = None;
+        assert!(!app.on_loaded(Err("boom".into()), LoadWhy::Tick));
+        assert_eq!(app.notice, None, "said once");
+        assert!(!app.on_loaded(Err("boom".into()), LoadWhy::Key));
+        assert_eq!(said(&app), "unreadable: boom");
+        app.request_load(LoadWhy::Reaped);
+        app.request_load(LoadWhy::Tick);
+        assert_eq!(app.load_request, Some(LoadWhy::Reaped));
     }
 
     /// Review STATE-1, STATE-9: the diff covers every file of both sides,
-    /// whatever an earlier file's lines end with, and refuses huge files.
+    /// is bounded as a whole, and refuses huge files.
     #[test]
-    fn the_diff_covers_every_file_and_refuses_huge_ones() {
+    fn the_diff_is_complete_and_bounded() {
         let base = std::env::temp_dir().join(format!("harness-tui-diff-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let (old, new) = (base.join("old"), base.join("new"));
@@ -2740,197 +4182,36 @@ mod tests {
         std::fs::write(new.join("src/logic.rs"), vec![b'x'; 2 * 1024 * 1024]).unwrap();
         let lines = diff_crates((&old, "a-old"), (&new, "a-new"));
         assert!(lines.iter().any(|l| l.contains("not diffed")), "{lines:?}");
+        for i in 0..3 {
+            let body: String = (0..9_000).map(|n| format!("line {n}\n")).collect();
+            std::fs::write(old.join(format!("src/f{i}.rs")), &body).unwrap();
+            std::fs::write(
+                new.join(format!("src/f{i}.rs")),
+                body.replace("line", "LINE"),
+            )
+            .unwrap();
+        }
+        let lines = diff_crates((&old, "a-old"), (&new, "a-new"));
+        assert!(lines.len() <= MAX_DIFF_LINES + 1, "{}", lines.len());
+        assert!(lines.last().unwrap().contains("the diff stops here"));
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Rewrite the record of `id` in the scratch ledger.
-    fn edit_record(app: &mut App, id: &str, f: impl FnOnce(&mut AttemptRecord)) {
-        let ledger = harness_core::ledger::Ledger::new(&app.config.target);
-        let dir = attempts::attempt_dir(&ledger, "u-lib", id);
-        let mut rec = AttemptRecord::load(&dir).unwrap();
-        f(&mut rec);
-        rec.store(&dir).unwrap();
-        assert!(app.reload(true));
-    }
-
-    /// SAFE-11: `Q` is `q`, and the quit prompt acts only once armed — a
-    /// `q` typed ahead or held never quits, `Q` never cancels unasked.
+    /// `d` compares an attempt with the provenance attempt.
     #[test]
-    fn quit_and_its_prompt_go_through_arming() {
-        let mut app = app("quitarm");
-        app.running = true;
-        assert_eq!(
-            key(&mut app, 'Q'),
-            Command::None,
-            "Q never cancels directly"
+    fn compare_is_offered_against_the_provenance_attempt() {
+        let mut app = app("diff");
+        attempt(&mut app, PROVENANCE);
+        assert!(
+            !app.menu_items().iter().any(|i| i.action == Action::Compare),
+            "not with itself"
         );
-        assert_eq!(app.mode, Mode::QuitConfirm);
-        // Unarmed: q, Q, x and Ctrl-C do nothing but say so.
-        for c in ['q', 'Q', 'x'] {
-            assert_eq!(key(&mut app, c), Command::None, "{c} unarmed");
-            assert_eq!(app.mode, Mode::QuitConfirm);
-        }
-        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(app.on_key(ctrl_c), Command::None);
-        assert!(app.notice.as_deref().unwrap().contains("too soon"));
-        // Drawn whole but input pending: still unarmed.
-        app.confirm_seen = true;
-        assert!(app.confirm_waiting());
-        assert_eq!(key(&mut app, 'q'), Command::None);
-        // Armed: q quits (the command runs on), x stops it and quits.
-        app.confirm_armed = true;
-        assert_eq!(key(&mut app, 'q'), Command::Quit);
-        key(&mut app, 'q');
-        arm(&mut app);
-        assert_eq!(key(&mut app, 'x'), Command::CancelAndQuit);
-        // Esc stays, and the next prompt opens unarmed.
-        key(&mut app, 'q');
-        arm(&mut app);
-        assert_eq!(code(&mut app, KeyCode::Esc), Command::None);
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(!app.confirm_armed && !app.confirm_seen);
-        // With nothing running, q, Q and Ctrl-C quit at once.
-        app.running = false;
-        assert_eq!(key(&mut app, 'Q'), Command::Quit);
-        assert_eq!(app.on_key(ctrl_c), Command::Quit);
-    }
-
-    /// SAFE-3, SAFE-12, CHK-13: Retry never re-poses a blind `external`
-    /// hand-off, never runs a half-seeded record unseeded, and runs only a
-    /// provider the cockpit was started with.
-    #[test]
-    fn retry_refuses_blind_half_seeded_and_unlisted_providers() {
-        let mut app = app("retryrules");
-        let root = app.config.target.display().to_string();
-        let blind = |r: &mut AttemptRecord| {
-            r.provider = "external".into();
-            r.provider_kind = "external".into();
-            r.seeded_from = None;
-            r.steer_note = None;
+        attempt(&mut app, SUPERSEDED);
+        key(&mut app, 'd');
+        let Mode::Diff { title, .. } = &app.mode else {
+            panic!("{:?}", app.notice);
         };
-        edit_record(&mut app, PROVENANCE, blind);
-        show(&mut app, PROVENANCE);
-        key(&mut app, 'r');
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(
-            app.notice.as_deref().unwrap().contains("blind"),
-            "{:?}",
-            app.notice
-        );
-        // A profile of the external kind under another name: blind too.
-        edit_record(&mut app, PROVENANCE, |r| {
-            blind(r);
-            r.provider = "handoff".into();
-        });
-        app.config.providers.push("handoff".into());
-        key(&mut app, 'r');
-        assert!(
-            app.notice.as_deref().unwrap().contains("blind"),
-            "{:?}",
-            app.notice
-        );
-        // Half seeded: refused, never retried unseeded.
-        for (seed, note) in [(Some("a-000000000000"), None), (None, Some("- use iter()"))] {
-            edit_record(&mut app, PROVENANCE, |r| {
-                blind(r);
-                r.seeded_from = seed.map(String::from);
-                r.steer_note = note.map(String::from);
-            });
-            key(&mut app, 'r');
-            assert_eq!(app.mode, Mode::Normal);
-            assert!(
-                app.notice.as_deref().unwrap().contains("half"),
-                "{:?}",
-                app.notice
-            );
-        }
-        // A steer attempt of a listed provider: its own run shape.
-        edit_record(&mut app, PROVENANCE, |r| {
-            blind(r);
-            r.seeded_from = Some("a-000000000000".into());
-            r.steer_note = Some("- use iter()".into());
-        });
-        key(&mut app, 'r');
-        let argv = confirm_argv(&app);
-        assert_eq!(
-            argv,
-            [
-                HARNESS,
-                "--json",
-                "migrate",
-                "u-lib",
-                &format!("--target={root}"),
-                "--no-promote",
-                "--retry",
-                "--provider=external",
-                &format!("--model={}", app.shown_attempt().unwrap().record.model),
-                "--from=a-000000000000",
-                "--steer=- use iter()",
-            ]
-        );
-        code(&mut app, KeyCode::Esc);
-        // A provider not on the list: refused, naming the flag.
-        edit_record(&mut app, PROVENANCE, |r| {
-            r.provider = "anthropic-live".into();
-            r.provider_kind = "anthropic".into();
-        });
-        key(&mut app, 'r');
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(
-            app.notice
-                .as_deref()
-                .unwrap()
-                .contains("start with `--provider anthropic-live`"),
-            "{:?}",
-            app.notice
-        );
-        // An unseeded attempt of a listed live provider is a human's retry.
-        app.config.providers.push("anthropic-live".into());
-        edit_record(&mut app, PROVENANCE, |r| {
-            r.seeded_from = None;
-            r.steer_note = None;
-        });
-        key(&mut app, 'r');
-        assert!(confirm_argv(&app).contains(&"--provider=anthropic-live".to_string()));
-    }
-
-    /// CHK-1: Modify passes the cockpit's first listed provider — the
-    /// target's `harness.toml` never chooses it.
-    #[test]
-    fn modify_passes_the_first_listed_provider() {
-        let mut app = app("modprov");
-        app.config.providers = vec!["local".into(), "external".into()];
-        show(&mut app, PROVENANCE);
-        key(&mut app, 'm');
-        app.on_paste("tighten the loop");
-        code(&mut app, KeyCode::Enter);
-        let argv = confirm_argv(&app);
-        assert_eq!(
-            argv.iter()
-                .filter(|a| a.starts_with("--provider"))
-                .collect::<Vec<_>>(),
-            ["--provider=local"]
-        );
-    }
-
-    /// §6.3, §13 Freshness: a failed read keeps the last snapshot and says
-    /// why once; `g` always says it.
-    #[test]
-    fn a_failed_read_keeps_the_last_snapshot() {
-        let mut app = app("failread");
-        let units = app.snapshot.units.len();
-        assert!(!app.on_loaded(Err("boom".into()), LoadWhy::Tick));
-        assert_eq!(app.snapshot.units.len(), units);
-        assert_eq!(app.notice.as_deref(), Some("unreadable: boom"));
-        app.notice = None;
-        assert!(!app.on_loaded(Err("boom".into()), LoadWhy::Tick));
-        assert_eq!(app.notice, None, "said once");
-        assert!(!app.on_loaded(Err("boom".into()), LoadWhy::Key));
-        assert_eq!(app.notice.as_deref(), Some("unreadable: boom"));
-        // The requests fold, the strongest reason winning.
-        app.request_load(LoadWhy::Reaped);
-        app.request_load(LoadWhy::Tick);
-        assert_eq!(app.load_request, Some(LoadWhy::Reaped));
+        assert!(title.contains(PROVENANCE));
     }
 
     #[test]

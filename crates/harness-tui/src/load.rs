@@ -1,19 +1,47 @@
 //! Reading a target off the UI thread (docs/COCKPIT-WRAPPER-DESIGN.md §6.3):
 //! every read runs the [`preflight`](crate::preflight) first, then
-//! [`Snapshot::load`]; a [`Loader`] runs them on its own thread, one at a
+//! [`Snapshot::load`] and the tree's walk ([`files::walk_tree`]: directory
+//! entries and metadata only), and reads the writer lock's live holder; a
+//! [`Loader`] runs them on its own thread, one at a
 //! time, the latest request winning, so the cockpit keeps answering keys
 //! (`x`, `q`, `Ctrl-C` above all) while a large or slow target is read.
 
+use crate::files::{self, TreeWalk};
 use crate::model::Snapshot;
 use crate::preflight;
+use harness_core::ledger::{Holder, Ledger};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
-/// Read the target at `target`: the preflight, then the snapshot. `Err` is
-/// a reason in words.
-pub fn read(target: &Path) -> Result<Snapshot, String> {
+/// What one read of a target found.
+#[derive(Debug, Clone)]
+pub struct Read {
+    /// The ledger.
+    pub snapshot: Snapshot,
+    /// The source tree.
+    pub walk: TreeWalk,
+    /// The writer lock's live holder, if any.
+    pub holder: Option<Holder>,
+}
+
+/// Read the target at `target`: the preflight, then the snapshot, the walk
+/// and the lock holder. `Err` is a reason in words.
+pub fn read(target: &Path) -> Result<Read, String> {
     preflight::preflight(target)?;
-    Snapshot::load(target).map_err(|e| e.to_string())
+    let snapshot = Snapshot::load(target).map_err(|e| e.to_string())?;
+    let ctx = harness_core::TargetContext::load(target).map_err(|e| e.to_string())?;
+    let walk = files::walk_tree(
+        &snapshot.root,
+        &ctx.config.target.source_dir,
+        snapshot.facts.as_ref(),
+    );
+    let holder = harness_core::status::live_holder(&Ledger::new(&snapshot.root))
+        .map_err(|e| e.to_string())?;
+    Ok(Read {
+        snapshot,
+        walk,
+        holder,
+    })
 }
 
 /// What a load produced.
@@ -21,12 +49,12 @@ pub fn read(target: &Path) -> Result<Snapshot, String> {
 pub struct Loaded {
     /// The request it answers (requests are numbered from 1).
     pub seq: u64,
-    /// The snapshot, or why the target could not be read.
-    pub result: Result<Snapshot, String>,
+    /// What it found, or why the target could not be read.
+    pub result: Result<Read, String>,
 }
 
 /// The function a [`Loader`] runs ([`read`], or a test's stand-in).
-pub type ReadFn = fn(&Path) -> Result<Snapshot, String>;
+pub type ReadFn = fn(&Path) -> Result<Read, String>;
 
 /// A loader thread.
 #[derive(Debug)]
@@ -100,7 +128,7 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    fn slow(target: &Path) -> Result<Snapshot, String> {
+    fn slow(target: &Path) -> Result<Read, String> {
         std::thread::sleep(Duration::from_millis(300));
         Err(format!("slow {}", target.display()))
     }

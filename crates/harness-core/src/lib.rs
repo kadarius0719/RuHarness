@@ -25,6 +25,7 @@ pub mod runtime_view;
 pub mod status;
 pub mod traits;
 pub mod verdict;
+pub mod walk;
 
 pub use config::{TargetConfig, TargetContext};
 pub use error::Error;

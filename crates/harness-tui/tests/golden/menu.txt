@@ -1,0 +1,30 @@
+┌ Files ───────────────────────┐┌ harness-tui-gmenu-0000000000 · !1 ───────────────────────────────────────────────────┐
+│▾ harness-tui-gmenu-000000… !1││Next step: 1 file changed since the scan — Scan the project again                     │
+│  ▾ test_case/              !1││                                                                                      │
+│    ▾ include/                ││2 files scanned · 1 changed                                                           │
+│        · lib.h         header││Units (1): 1 ⚠ needs attention                                                        │
+│    ▾ src/                  !1││                                                                                      │
+│      ▸ ! lib.c               ││Changed since the scan:                                                               │
+│  ▾ Units (1)                 ││  ! test_case/src/lib.c  changed since scan                                           │
+│    ▸ ⚠ u-lib  needs attention││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                           ┌ harness-tui-gmenu-0000000000 ────────────────────────────────┐                           │
+│                           │  Re-read the project                                        g│                           │
+│                           │  Scan the project                                            │                           │
+│                           │  Refresh the plan — 1 file changed or new since the scan — s…│                           │
+│                           │  Find hazards (run the detectors) — 1 file changed or new si…│                           │
+│                           │                                                              │                           │
+│                           │Why not: 1 file changed or new since the scan — scan first    │                           │
+│                           └ Enter choose · Esc close ────────────────────────────────────┘                           │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
+ Ready.
+
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

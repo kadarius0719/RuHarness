@@ -221,6 +221,9 @@ impl Snapshot {
     }
 }
 
+/// The binding of inputs that could not be read: no record carries it.
+const UNREADABLE: &str = "blake3:unreadable";
+
 /// `(base id, sample number)`: `<base>` is sample 1, `<base>.r<N>` sample N.
 fn sample_key(id: &str) -> (&str, u32) {
     match id.rsplit_once(".r") {
@@ -240,7 +243,11 @@ fn unit_view(
 ) -> Result<UnitView, Error> {
     let report = status::unit_report(ctx, ledger, facts, unit)?;
     let records = attempts::load_unit_attempts(ledger, &unit.id)?;
-    let (unit_source, driver) = attempts::current_binding(ctx, facts, unit)?;
+    // A source or driver that cannot be read (deleted since the scan) binds
+    // nothing — as `state status` reads it ("unreadable") — rather than
+    // making the whole ledger unreadable: the cockpit shows the file missing.
+    let (unit_source, driver) = attempts::current_binding(ctx, facts, unit)
+        .unwrap_or_else(|_| (UNREADABLE.into(), UNREADABLE.into()));
     let crate_digest = attempts::unit_crate_digest(ledger, unit)?;
     let authorship = |r: &AttemptRecord| match attempts::authorship(&records, r) {
         Authorship::Pipeline => AuthorshipView::Pipeline,
@@ -412,6 +419,30 @@ mod tests {
                 std::fs::copy(&from, &to).unwrap();
             }
         }
+    }
+
+    /// A source deleted since the scan binds nothing — it never makes the
+    /// ledger unreadable.
+    #[test]
+    fn a_deleted_source_binds_nothing_and_the_ledger_still_reads() {
+        let tmp = std::env::temp_dir().join(format!("harness-tui-deleted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        copy(
+            &repo().join("targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib"),
+            &tmp,
+        );
+        std::fs::remove_file(tmp.join("test_case/include/lib.h")).unwrap();
+        let snap = Snapshot::load(&tmp).expect("the ledger still reads");
+        let unit = snap.unit("u-lib").unwrap();
+        assert!(unit.attempts.iter().all(|a| !a.bound));
+        assert_eq!(unit.provenance, ProvenanceView::None);
+        assert!(snap
+            .facts_state
+            .as_ref()
+            .unwrap()
+            .stale_paths
+            .contains(&"test_case/include/lib.h".to_string()));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

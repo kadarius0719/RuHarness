@@ -40,6 +40,7 @@ use harness_core::error::Error;
 use harness_core::facts::{Facts, FileRecord, RefRecord, SymbolRecord};
 use harness_core::hash::file_hash;
 use harness_core::traits::LanguageFrontend;
+use harness_core::walk;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -85,11 +86,26 @@ impl LanguageFrontend for CFrontend {
     }
 
     fn scan(&self, target: &TargetContext) -> Result<Facts, Error> {
+        self.scan_reporting(target).map(|(facts, _)| facts)
+    }
+}
+
+/// The C frontend's source extensions.
+pub const C_EXTENSIONS: [&str; 2] = ["c", "h"];
+
+impl CFrontend {
+    /// [`LanguageFrontend::scan`], also returning the matching entries the
+    /// walk left out because they are not regular files (a FIFO named `a.c`
+    /// would block the scan forever): the caller reports them. A walk error
+    /// stays fatal.
+    pub fn scan_reporting(&self, target: &TargetContext) -> Result<(Facts, Vec<PathBuf>), Error> {
         let src_dir = target.root.join(&target.config.target.source_dir);
-        let src_canon = src_dir.canonicalize().map_err(|e| Error::io(&src_dir, e))?;
-        let mut abs_files: Vec<PathBuf> = Vec::new();
-        let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
-        collect_source_files(&src_dir, &src_canon, &mut visited, &mut abs_files)?;
+        let walked = walk::confined(&src_dir, &C_EXTENSIONS, walk::Limits::default());
+        if let Some((path, why)) = walked.errors.first() {
+            return Err(Error::io(path, std::io::Error::other(why.clone())));
+        }
+        let skipped: Vec<PathBuf> = walked.skipped.into_iter().map(|(p, _)| p).collect();
+        let abs_files = walked.files;
         let source_rel = lexical_segments(&target.config.target.source_dir).unwrap_or_default();
         let include_dirs: Vec<Vec<String>> = target
             .config
@@ -190,53 +206,16 @@ impl LanguageFrontend for CFrontend {
             })
             .collect();
 
-        Ok(Facts {
-            frontend: self.name().to_string(),
-            files: file_records,
-            symbols,
-            refs,
-        })
+        Ok((
+            Facts {
+                frontend: self.name().to_string(),
+                files: file_records,
+                symbols,
+                refs,
+            },
+            skipped,
+        ))
     }
-}
-
-/// Recursively collect `*.c` and `*.h` files under `dir`. Every entry is
-/// canonicalized first: one that resolves outside `src_canon` (a symlink out
-/// of `source_dir`) is skipped, and a directory already walked (a symlink
-/// cycle) is not walked again.
-fn collect_source_files(
-    dir: &Path,
-    src_canon: &Path,
-    visited: &mut BTreeSet<PathBuf>,
-    out: &mut Vec<PathBuf>,
-) -> Result<(), Error> {
-    let canon_dir = dir.canonicalize().map_err(|e| Error::io(dir, e))?;
-    if !visited.insert(canon_dir) {
-        return Ok(());
-    }
-    let entries = std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))?;
-    let mut paths: Vec<PathBuf> = Vec::new();
-    for entry in entries {
-        paths.push(entry.map_err(|e| Error::io(dir, e))?.path());
-    }
-    paths.sort();
-    for path in paths {
-        // A dangling symlink, or one leading out of source_dir, is not source.
-        let Ok(canon) = path.canonicalize() else {
-            continue;
-        };
-        if !canon.starts_with(src_canon) {
-            continue;
-        }
-        if path.is_dir() {
-            collect_source_files(&path, src_canon, visited, out)?;
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("c") | Some("h")
-        ) {
-            out.push(path);
-        }
-    }
-    Ok(())
 }
 
 /// Render `path` relative to `root` with forward slashes.
@@ -604,5 +583,49 @@ mod tests {
         let paths: Vec<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, vec!["src/a.c"]);
         assert!(facts.files[0].includes.is_empty());
+    }
+
+    /// docs/COCKPIT-WRAPPER-DESIGN.md §2.1: on the shared walk the facts are
+    /// byte-identical to the committed ones (zopfli, the read_scalefactors
+    /// case), and a synthetic copy with a symlink inside source_dir scans as
+    /// it did before (checked by hand against the old walk when switching).
+    #[test]
+    fn the_shared_walk_keeps_the_committed_facts_byte_identical() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for rel in [
+            "targets/zopfli",
+            "targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib",
+        ] {
+            let root = repo.join(rel);
+            let target = TargetContext::load(&root).expect("target loads");
+            let facts = CFrontend.scan(&target).expect("scan");
+            let committed =
+                std::fs::read(root.join("migration/facts.jsonl")).expect("committed facts");
+            assert!(
+                facts.to_canonical_bytes().expect("bytes") == committed,
+                "{rel}: the facts differ from the committed ones"
+            );
+        }
+    }
+
+    /// A FIFO (or any non-regular file) with a C name is skipped and
+    /// reported — never read, so it can no longer hang a scan. A link to a
+    /// file inside source_dir is scanned at its own path.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_c_is_skipped_and_an_inside_link_is_scanned() {
+        let t = TempTarget::new("fifo", "[]");
+        t.write("src/a.c", "int a(void) { return 0; }\n");
+        std::os::unix::fs::symlink(t.0.join("src/a.c"), t.0.join("src/alias.c")).expect("symlink");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(t.0.join("src/pipe.c"))
+            .status()
+            .expect("mkfifo")
+            .success());
+        let target = TargetContext::load(&t.0).expect("target loads");
+        let (facts, skipped) = CFrontend.scan_reporting(&target).expect("scan terminates");
+        let paths: Vec<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["src/a.c", "src/alias.c"]);
+        assert_eq!(skipped, vec![t.0.join("src/pipe.c")]);
     }
 }

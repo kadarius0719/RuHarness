@@ -1,0 +1,30 @@
+┌ Files ───────────────────────┐┌ u-lib · migrated ────────────────────────────────────────────────────────────────────┐
+│▾ harness-tui-gdialog-0000000…││✓ u-lib migrated · status verified                                                    │
+│  ▾ test_case/            ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
+│    ▾ include/                ││C  read_scalefactors (test_case/src/lib.… ⇄ Rust  read_scalefactors (src/ffi.rs:11)   │
+│        · lib.h         header││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe extern "C" fn read_scalefa›│
+│    ▾ src/                ✓1/1││18                                   int› │  12     bs: *mut BsT,                     │
+│      ▸ ✓ lib.c       migrated││19     static const float g_deq_L12[18 *› │  13     pba: *mut u8,                     │
+│  ▾ Units (1)                 ││20         9.53674316e-07f / 3,     7.56› │  14     scfcod: *mut u8,                  │
+│    ▸ ✓ u-lib         migrated││21         6.00777173e-07f / 3,     9.53› │  15     bands: i32,                       │
+│                     ┌ Re-check u-lib with the oracle? ─────────────────────────────────────────┐,                    │
+│                     │Builds u-lib's Rust and runs it against the C in the sandbox.             │                     │
+│                     │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │usize = if bands > 0›│
+│                     │when green) and u-lib's status in plan.toml: green → verified; red → a    │                     │
+│                     │verified unit becomes "in progress" (a merged one keeps its status).      │: &[u8] = if pba.is_›│
+│                     │Changes no code. The crate is unchanged since the cockpit last showed it. │                     │
+│                     │                                                                          │                     │
+│                     │Command: /opt/ruharness/bin/harness --json verify u-lib --target=/work/rea│ce::from_raw_parts(p›│
+│                     │d_scalefactors_lib                                                        │                     │
+│                     │ ready: → then Enter, or y                                                │                     │
+│                     │ [ Cancel  Esc ] [ Run  y ]                                               │ice: &[u8] = if scfc›│
+│                     └──────────────────────────────────────────────────────────────────────────┘                     │
+│                              ││34         7.56931807e-07f / 2047,  6.00› │  28     } else {                          │
+│                              ││35         9.53674316e-07f / 4095,  7.56› │  29         core::slice::from_raw_parts(s›│
+│                              ││36         6.00777173e-07f / 4095,  9.53› │  30     };                                │
+│                              ││Checks  ✓ same exports  ✓ allowed calls only  ✓ driver shape  ✓ same outputs as C     │
+│                              ││        ✓ whole program  ✓ sanitizers  ✓ boundary calls                               │
+└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
+ Ready.
+
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

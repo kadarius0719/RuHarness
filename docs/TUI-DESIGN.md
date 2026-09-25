@@ -3,7 +3,9 @@
 Status: IMPLEMENTED (2026-09-24); harness-mcp, which reuses this crate's library, is built
 too (docs/MCP-DESIGN.md). **§9 records the new direction** (a user-friendly wrapper
 with an arrow-key file tree, deterministic actions on Enter and a chat pane inside); its first
-step is designed and reviewed in docs/COCKPIT-WRAPPER-DESIGN.md (not built yet). §R holds the resolutions of the 20 confirmed findings of the
+step — the keyboard-complete navigator, docs/COCKPIT-WRAPPER-DESIGN.md Build A — is BUILT
+(2026-09-25): §3 below describes today's screen, and the wrapper design governs where it and
+this document differ (menus and armed dialogs replace the `y/n` prompt; `Q` is `q`). §R holds the resolutions of the 20 confirmed findings of the
 design review; §R2 the 9 (16 raw) of the code review of steps 1–3; §R3 the 27 of the code
 review of step 4 (the terminal front end) — all resolved; the text below includes every
 amendment. Sources: the §15 spike
@@ -32,8 +34,9 @@ reaped.
 
 `crates/harness-tui` = a **library** (`model`, `pairs`, `display`: the snapshot, the pair
 locator, the display filter; `events`: the `ruharness-events` reader; `spawn`: the child
-process — depends on harness-core, tree-sitter, tree-sitter-rust, unicode-width and
-serde_json only) **plus a
+process; `preflight`: the read preflight, one implementation for harness-mcp and the
+cockpit; `load`: a read on a loader thread; `files`: the file tree's states — depends on
+harness-core, tree-sitter, tree-sitter-rust, unicode-width and serde_json only) **plus a
 binary** `harness-tui` behind the default feature `tui` (`required-features = ["tui"]`;
 ratatui, crossterm, similar, tree-sitter-highlight, signal-hook are optional and enabled by
 `tui`). `harness-mcp` depends on it with `default-features = false` — the "feature
@@ -118,49 +121,55 @@ render (neither shipped corpus has a tab; a synthetic fixture pins it).
 
 ## 3. Views (`view`, `tui` feature; `TestBackend` golden buffers)
 
+The screen is the friendly wrapper's (docs/COCKPIT-WRAPPER-DESIGN.md §1–§9, built):
+
 ```
-┌ facts fresh ─┬ u-lib · a-13c941dfff95 (green, *) · boundary ✓ … ──────────────┐
-│ ● u-lib      │ read_scalefactors                     ⇄  read_scalefactors (ffi) │
-│ ✗ u-dec  RED │ int read_scalefactors(bitstream *bs,  │ pub extern "C" fn read_…│
-│ ◐ u-hdr stale│ …                                     │ …  → logic::read_scale… │
-│              │ ───────────────────────────────────── │ ────────────────────────│
-│ attempts     │ static int helper(…)                  │ logic fn not identified │
-│ a-13c9 green*│ …                                     │                          │
-│ a-28d8 green │                                       │                          │
-│   superseded │ [verdict] symbol-set ✓ capabilities ✓ … boundary ✓ (31 calls …) │
-├──────────────┴────────────────────────────────────────────────────────────────┤
-│ run: harness --json migrate u-dec --target … --no-promote --from a-… --steer … │
-│ turn 1 steer → oracle · [check] differential-driver ✗ first diff at byte 812 … │
-└────────────────────────────────────────────────────────────────────────────────┘
+┌ Files ───────────────────────┐┌ test_case/src/lib.c · migrated (u-lib) ──────────────────────────┐
+│▾ read_scalefactors_lib   ✓1/1││✓ u-lib migrated · status verified                                │
+│  ▾ test_case/            ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, fresh       │
+│    ▾ include/                ││Internal: get_bits() (compared through the unit's exported fun…)  │
+│        · lib.h         header││C  read_scalefactors (test_case/src/lib.… ⇄ Rust  read_scalefact… │
+│    ▾ src/                ✓1/1││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe exter›│
+│      ▸ ✓ lib.c       migrated││…                                         │  …                   │
+│  ▾ Units (1)                 ││Checks  ✓ same exports  ✓ allowed calls only  ✓ driver shape  …   │
+│    ▸ ✓ u-lib         migrated││        ✓ whole program  ✓ sanitizers  ✓ boundary calls          │
+└──────────────────────────────┘└──────────────────────────────────────────────────────────────────┘
+ Ready. Last: Re-check u-lib — GREEN — all 7 checks passed (41 s)                     [Details c]
+ plan: no changes
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
 ```
 
-- **Rail**: the facts line, units with a glyph (green fresh / red / stale / contradiction /
-  write-in-flight with the holder's command / promotion interrupted / provenance state),
-  then the selected unit's attempts in the defined order (`*` pipeline provenance, `*s`
-  steered, `*h` human, `superseded`, `human`, `steer ← a-…` tags; a steer attempt of human
-  lineage adds `(hand edit a-…)`).
-- **Pairs**: a vertically stacked list of function pairs, each two columns padded to equal
-  height with filler lines; the function boundary is the unit of navigation. `d` compares the
-  Rust side of the selected attempt with the provenance attempt's (`similar` line marks;
-  disabled when provenance names no single attempt: `None`/`Ambiguous`).
-- **Verdict strip**: one chip per check; `v` expands the selected check's detail.
-- **Run panel**: the spawned argv, then its events as they arrive (turn-start/turn-end with
-  the Turn's result, check lines, `awaiting` with the response path and the CLI's `resume`
-  hint as text, `error` with its kind, `result`), then — after the child is reaped — its exit
-  (`exit N`, `interrupted (SIGINT)`, or `exited without result (exit N)`).
-- **Narrow fallback**: below 110 columns (measured from the backend; `--layout stacked`
-  forces it, `--layout split` forbids it) the pairs collapse to C-then-Rust per pair and the
-  rail to a top line.
-- **Keys**: `j/k` scroll, `]f`/`[f` pairs, `J/K` units, `Tab` rail focus, `Enter` select
-  attempt, `d` diff, `v` verdict detail, `a` Accept, `m` Modify, `e` hand edit (`E` the
-  latest kept one), `r` retry,
-  `R` resume, `x` cancel, `g` reload, `?` keys, `q` quit (`Q` cancel + quit), `PgDn`/`PgUp`
-  page. **Every act shows the exact argv and asks `y/n`** — there is no automatic spawn — and
-  a prompt takes a plain `y` only once it was drawn whole (a long argv scrolls, `j`) with no
-  input pending: typed-ahead or pasted input (bracketed paste is on) never answers it; a
-  Ctrl/Alt key is never text. Overlays scroll by wrapped rows, the rail windows both of its
-  lists around their cursors, the verdict strip puts failed checks first and counts what it
-  cut (`+N`), and only the visible rows of the pairs are built.
+- **Files** (32 columns at 120 and wider, 24 at 80–119): the target's C files under
+  `source_dir` (harness-core's `walk::confined`, the scanner's walk, within 20 000 files and
+  32 levels), their functions, then the units with their crate and attempts in the defined
+  order (§2). Every row: a glyph AND a word (`harness_tui::files`: the rules of the wrapper
+  design §2.3, pure over the snapshot and the walk); directories and the project show
+  rollups (`✗2 ⚠1 ✓3/11 (+1 ✓?)`). The selection is keyed by path and id
+  (`tree::Selection`), kept across reloads (a vanished node gives way to its parent).
+- **View**: the project summary with the Next step (a fact, never model work), a
+  directory's files, the C source of a file no unit owns, the pairs of an owned file or a
+  public function (the pair renderer below), a unit, its crate, an attempt with its turns,
+  provider, model and note. A cut code line ends with a dim `›`; `←`/`→` scroll sideways.
+  The C and the Rust sit side by side when the View is at least 78 columns wide (`--layout
+  split|stacked` forces it), else stacked, C first.
+- **Pairs**: each two columns padded to equal height with filler lines; `]f`/`[f` move by
+  function; Compare (`d`) diffs an attempt's Rust with the provenance attempt's (`similar`;
+  offered when provenance names another single attempt). The checks strip puts failed
+  checks first, in words (the raw name in `v`), collapses repeats (`✓ whole program ×3`),
+  and counts what it cut (`+N`).
+- **Activity**: row 1 narrates the running command in words (`narrate::Narrator`, fed the
+  argv and every event), with its elapsed time, `[Cancel x]` and `[Details c]`; idle, "Ready.
+  Last: …" and `[Try again t]` after a `locked` refusal or a failed start. Row 2: a notice
+  (clears on the next key or after 8 s), else the plan summary, else the hand-offs' state.
+  `c` shows the details — the run panel: the argv, every event line, the stderr tail, the
+  exit.
+- **Hint bar**: the focused pane's keys; it drops whole entries, never cuts one; `? help`
+  and `q quit` are always last.
+- **Menus and dialogs**: `Enter` opens the selection's menu (§4 of the wrapper design);
+  every act, quit and cancel is an armed dialog (`dialog`: drawn whole, 300 ms since the last
+  input read, nothing pending — a latch; focus on the safe button; after arming its letter,
+  or a move plus `Enter`). Below 80 columns one pane shows at a time. Each clickable region
+  is recorded as it is drawn (`App::hits`, for Build B's mouse).
 
 ## 4. Acts: every write is a spawned `harness --json …`
 
@@ -168,6 +177,17 @@ The TUI keeps the exact argv of each spawn (`Vec<OsString>`, the resolved binary
 `harness` from `PATH` or `--harness <path>`). `--target` goes after the subcommand (it is not
 global). It passes `--no-promote` on every `migrate` and never `--promote`, and
 `--allow-unsandboxed` only when started with it.
+
+**Since the wrapper (Build A):** the acts are reached from the selection's menu (the keys
+below are its shortcuts) and confirmed in armed dialogs, not a `y/n` prompt. Four
+project- and unit-wide acts join them: `scan`, `plan`, `detect` (`--json <sub>
+--target=<root>`) and Re-check (`--json verify <unit> --target=<root>
+[--allow-unsandboxed]`, only on code the harness knows, unchanged since shown). Modify
+passes `--provider=<the first of the cockpit's --provider list>` (default `external`);
+Retry refuses a blind (unseeded `external`) attempt, a half-seeded record and a provider not
+on the list; Resume applies to this cockpit's own hand-offs. These gates are the cockpit's,
+checked again at confirm on a fresh read (docs/COCKPIT-WRAPPER-DESIGN.md §4.3). No tree path
+ever enters an argv.
 
 | key | argv after the binary | enabled when (from the snapshot; the CLI re-checks everything) |
 |---|---|---|

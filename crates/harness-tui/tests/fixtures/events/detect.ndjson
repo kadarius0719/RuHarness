@@ -1,0 +1,3 @@
+{"k":"header","schema":"ruharness-events","schema_version":1,"command":"detect","args":["--target=/work/read_scalefactors_lib"],"pid":40900,"harness":"0.1.0"}
+{"k":"message","text":"detect: 0 finding(s) -> /work/read_scalefactors_lib/migration/observer/findings.jsonl"}
+{"k":"result","exit":0}

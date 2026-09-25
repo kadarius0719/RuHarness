@@ -1,0 +1,4 @@
+{"k":"header","schema":"ruharness-events","schema_version":1,"command":"plan","args":["--target=/work/read_scalefactors_lib"],"pid":40900,"harness":"0.1.0"}
+{"k":"message","text":"plan: no changes (1 units)"}
+{"k":"message","text":"plan: execution order: u-lib"}
+{"k":"result","exit":0}

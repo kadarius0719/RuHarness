@@ -15,6 +15,7 @@
 
 pub mod display;
 pub mod events;
+pub mod files;
 pub mod load;
 pub mod model;
 pub mod pairs;
@@ -24,11 +25,19 @@ pub mod spawn;
 #[cfg(feature = "tui")]
 pub mod app;
 #[cfg(feature = "tui")]
+pub mod dialog;
+#[cfg(feature = "tui")]
 pub mod handedit;
 #[cfg(feature = "tui")]
 pub mod highlight;
 #[cfg(feature = "tui")]
+pub mod menu;
+#[cfg(feature = "tui")]
+pub mod narrate;
+#[cfg(feature = "tui")]
 pub mod termguard;
+#[cfg(feature = "tui")]
+pub mod tree;
 #[cfg(feature = "tui")]
 pub mod view;
 

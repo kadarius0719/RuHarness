@@ -17,6 +17,10 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// The arrow keys, as a terminal sends them.
+const RIGHT: &[u8] = b"\x1b[C";
+const DOWN: &[u8] = b"\x1b[B";
+
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -249,15 +253,17 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
         keys.flush().unwrap();
         std::thread::sleep(Duration::from_millis(300));
     };
-    wait_for("the cockpit to draw", 30, || saw("units").then_some(()));
+    wait_for("the cockpit to draw", 30, || saw("Files").then_some(()));
     let tui_pid = wait_for("the cockpit process", 10, || {
         children_of(script.id()).into_iter().next()
     });
     reaper.0.push(tui_pid);
-    // Rail focus, the attempt, show it, hand edit.
-    press(b"\t");
-    press(b"j");
-    press(b"\r");
+    // The first unit, open it, down to its crate, then its attempt; hand
+    // edit.
+    press(b"J");
+    press(RIGHT);
+    press(DOWN);
+    press(DOWN);
     press(b"e");
     let deadline = Instant::now() + Duration::from_secs(30);
     while !saw("a note for the human attempt") {
@@ -269,7 +275,17 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
         std::thread::sleep(Duration::from_millis(100));
     }
     press(b"\r");
-    wait_for("the confirmation", 10, || saw("run this?").then_some(()));
+    // The dialog arms (the screen is read as a terminal shows it).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !on_screen(&screen, 48, 160).contains("ready:→thenEnter,ory") {
+        assert!(
+            Instant::now() < deadline,
+            "no armed dialog; the screen:\n{}",
+            rendered(&screen.lock().unwrap(), 48, 160).join("\n")
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(on_screen(&screen, 48, 160).contains("Recordyourhandedit"));
     press(b"y");
     // The override runs: the harness is the cockpit's child, the spinning
     // C driver the harness's.
@@ -455,12 +471,16 @@ while :; do sleep 0.1; done
         std::thread::sleep(Duration::from_millis(300));
     };
     wait_for("the cockpit to draw", 30, || {
-        squeezed(&screen).contains("units").then_some(())
+        squeezed(&screen).contains("Files").then_some(())
     });
     let tui_pid = wait_for("the cockpit process", 10, || {
         children_of(script.id()).into_iter().next()
     });
     reaper.0.push(tui_pid);
+    // The unit's crate.
+    press(b"J");
+    press(RIGHT);
+    press(DOWN);
     // 1. Saved, then the editor exits 1: kept, E offers it.
     press(b"e");
     wait_for("the abort notice", 20, || {
@@ -507,4 +527,268 @@ while :; do sleep 0.1; done
     );
     drop(reaper);
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A scratch copy of the tractor case, removed on drop.
+struct Case(PathBuf);
+
+impl Case {
+    fn new(tag: &str) -> Case {
+        let dir = std::env::temp_dir().join(format!("harness-tui-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        copy_dir(
+            &repo().join("targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib"),
+            &dir.join("case"),
+        );
+        Case(dir)
+    }
+
+    fn target(&self) -> PathBuf {
+        self.0.join("case").canonicalize().unwrap()
+    }
+}
+
+impl Drop for Case {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// docs/COCKPIT-WRAPPER-DESIGN.md §13: the keyboard end to end — Enter
+/// opens the project's menu focused on its Next step (Scan, the C changed),
+/// Enter opens the dialog, and once it is ready a move and Enter run it; the
+/// activity panel says "Done" and the facts are rewritten.
+#[test]
+fn the_keyboard_scans_the_project_end_to_end() {
+    let case = Case::new("e2e-scan");
+    let target = case.target();
+    let lib = target.join("test_case/src/lib.c");
+    let c = std::fs::read_to_string(&lib).unwrap();
+    std::fs::write(&lib, format!("{c}/* edited outside */\n")).unwrap();
+    let facts = target.join("migration/facts.jsonl");
+    let before = std::fs::read_to_string(&facts).unwrap();
+    let (mut script, screen, mut keys) = cockpit(
+        &format!(
+            "--target '{}' --harness '{}'",
+            target.display(),
+            harness_bin().display()
+        ),
+        &[],
+    );
+    let mut reaper = Reaper(vec![script.id()]);
+    // What the screen shows now (the cockpit's pty is 40 × 140).
+    let saw = |needle: &str| {
+        on_screen(&screen, 40, 140).contains(&needle.split_whitespace().collect::<String>())
+    };
+    let mut press = |bytes: &[u8]| {
+        keys.write_all(bytes).unwrap();
+        keys.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    wait_for("the cockpit to draw", 30, || {
+        saw("Next step: 1 file changed").then_some(())
+    });
+    let tui_pid = wait_for("the cockpit process", 10, || {
+        children_of(script.id()).into_iter().next()
+    });
+    reaper.0.push(tui_pid);
+    press(b"\r");
+    wait_for("the menu", 10, || {
+        saw("Enter choose · Esc close").then_some(())
+    });
+    press(b"\r");
+    wait_for("the armed Scan dialog", 10, || {
+        (saw("Scan the project?") && saw("ready: → then Enter, or y")).then_some(())
+    });
+    press(RIGHT);
+    press(b"\r");
+    wait_for("the scan to finish", 60, || {
+        saw("Last: Scan the project — Done").then_some(())
+    });
+    let after = std::fs::read_to_string(&facts).unwrap();
+    assert_ne!(before, after, "the facts are rewritten");
+    press(b"q");
+    wait_for("the cockpit to quit", 10, || {
+        (!alive(tui_pid)).then_some(())
+    });
+    let status = script.wait().unwrap();
+    assert!(status.success(), "{status:?}");
+    drop(reaper);
+}
+
+/// SAFE-10: a TERM that lands right after the editor exits — while the
+/// cockpit stages the edit and takes the terminal back — restores the shell
+/// and names the kept edit.
+#[test]
+fn a_term_right_after_the_editor_restores_and_names_the_edit() {
+    let case = Case::new("e2e-term");
+    let target = case.target();
+    let edits = case.0.join("edits");
+    std::fs::create_dir_all(&edits).unwrap();
+    let editor = case.0.join("editor.sh");
+    // Saves, then asks for a TERM to its parent (the cockpit) a moment after
+    // it has exited.
+    std::fs::write(
+        &editor,
+        "#!/bin/sh\necho '// edited' >> \"$1\"\n(sleep 0.05; kill -TERM $PPID) &\nexit 0\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let (mut script, screen, mut keys) = cockpit(
+        &format!("--target '{}' --harness /usr/bin/true", target.display()),
+        &[("EDITOR", &editor), ("TMPDIR", &edits)],
+    );
+    let mut reaper = Reaper(vec![script.id()]);
+    let mut press = |bytes: &[u8]| {
+        keys.write_all(bytes).unwrap();
+        keys.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    wait_for("the cockpit to draw", 30, || {
+        squeezed(&screen).contains("Files").then_some(())
+    });
+    let tui_pid = wait_for("the cockpit process", 10, || {
+        children_of(script.id()).into_iter().next()
+    });
+    reaper.0.push(tui_pid);
+    press(b"J");
+    press(RIGHT);
+    press(DOWN);
+    let before = screen.lock().unwrap().len();
+    press(b"e");
+    wait_for("the cockpit to die by the TERM", 10, || {
+        (!alive(tui_pid)).then_some(())
+    });
+    let _ = script.wait();
+    wait_for("the kept-edit notice", 5, || {
+        squeezed(&screen)
+            .contains("ahandeditthatwasnotrecordediskeptin")
+            .then_some(())
+    });
+    let after = screen.lock().unwrap()[before..].to_string();
+    // The last word on the terminal is the restore: main screen, cursor
+    // shown, bracketed paste off — after any re-enable.
+    let last = |seq: &str| after.rfind(seq);
+    assert!(
+        last("\u{1b}[?1049l") > last("\u{1b}[?1049h"),
+        "left in the alternate screen"
+    );
+    assert!(
+        last("\u{1b}[?25h") > last("\u{1b}[?25l"),
+        "the cursor left hidden"
+    );
+    assert!(
+        last("\u{1b}[?2004l") > last("\u{1b}[?2004h"),
+        "bracketed paste left on"
+    );
+    let kept: Vec<PathBuf> = std::fs::read_dir(&edits)
+        .unwrap()
+        .map(|e| e.unwrap().path().join("edit/logic.rs"))
+        .collect();
+    assert!(
+        kept.iter()
+            .any(|p| std::fs::read_to_string(p).is_ok_and(|t| t.contains("// edited"))),
+        "{kept:?}"
+    );
+    drop(reaper);
+}
+
+/// What a terminal would show after `bytes`: a small VT interpreter for the
+/// sequences the cockpit's backend writes (cursor moves, erases, text; the
+/// colours and modes are ignored), so a test reads the SCREEN — ratatui
+/// redraws only the cells that changed, so the byte stream alone does not
+/// hold the text a user sees.
+fn rendered(bytes: &str, rows: usize, cols: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    let mut grid = vec![vec![' '; cols]; rows];
+    let (mut r, mut c) = (0usize, 0usize);
+    let mut chars = bytes.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\u{1b}' => match chars.peek() {
+                Some('[') => {
+                    chars.next();
+                    let mut params = String::new();
+                    let mut fin = ' ';
+                    for p in chars.by_ref() {
+                        if p.is_ascii_alphabetic() || p == '~' || p == '@' {
+                            fin = p;
+                            break;
+                        }
+                        params.push(p);
+                    }
+                    let nums: Vec<usize> = params
+                        .trim_start_matches('?')
+                        .split(';')
+                        .map(|n| n.parse().unwrap_or(0))
+                        .collect();
+                    let n =
+                        |i: usize, d: usize| nums.get(i).copied().filter(|v| *v > 0).unwrap_or(d);
+                    match fin {
+                        'H' | 'f' => {
+                            r = n(0, 1).saturating_sub(1).min(rows - 1);
+                            c = n(1, 1).saturating_sub(1).min(cols - 1);
+                        }
+                        'A' => r = r.saturating_sub(n(0, 1)),
+                        'B' => r = (r + n(0, 1)).min(rows - 1),
+                        'C' => c = (c + n(0, 1)).min(cols - 1),
+                        'D' => c = c.saturating_sub(n(0, 1)),
+                        'G' => c = n(0, 1).saturating_sub(1).min(cols - 1),
+                        'J' if nums.first() == Some(&2) || nums.first() == Some(&3) => {
+                            grid = vec![vec![' '; cols]; rows];
+                        }
+                        'J' => {
+                            for cell in grid[r].iter_mut().skip(c) {
+                                *cell = ' ';
+                            }
+                            for row in grid.iter_mut().skip(r + 1) {
+                                *row = vec![' '; cols];
+                            }
+                        }
+                        'K' => {
+                            for cell in grid[r].iter_mut().skip(c) {
+                                *cell = ' ';
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            },
+            '\r' => c = 0,
+            '\n' => r = (r + 1).min(rows - 1),
+            ch if ch.is_control() => {}
+            ch => {
+                let w = ch.width().unwrap_or(0);
+                if w == 0 {
+                    continue;
+                }
+                if c < cols {
+                    grid[r][c] = ch;
+                    if w == 2 && c + 1 < cols {
+                        grid[r][c + 1] = ' ';
+                    }
+                }
+                c = (c + w).min(cols);
+            }
+        }
+    }
+    grid.into_iter()
+        .map(|row| row.into_iter().collect())
+        .collect()
+}
+
+/// The screen now (see [`rendered`]), whitespace removed.
+fn on_screen(screen: &Mutex<String>, rows: usize, cols: usize) -> String {
+    rendered(&screen.lock().unwrap(), rows, cols)
+        .concat()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
 }

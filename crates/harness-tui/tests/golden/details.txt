@@ -1,0 +1,30 @@
+┌ Files ───────────────────────┐┌ harness-tui-gdetails-0000000000 · ✓1/1 ──────────────────────────────────────────────┐
+│▾ harness-tui-gdetails-0… ✓1/1││2 files scanned                                                                       │
+│  ▾ test_case/            ✓1/1││Units (1): 1 ✓ migrated                                                               │
+│    ▾ include/                ││Last: Re-check u-lib — GREEN — all 8 checks passed (41 s)                             │
+│        · lib.h         header││                                                                                      │
+│    ▾ src/                ✓1/1││                                                                                      │
+│      ▸ ✓ lib.c       migrated││                                                                                      │
+│  ▾ Units (1)                 ││                                                                                      │
+│    ▸ ✓ u-lib         migrated││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+┌ Details: Re-check u-lib ─────────────────────────────────────────────────────────────────────────────────────────────┐
+│$ /opt/ruharness/bin/harness --json verify u-lib --target=/work/case                                                  │
+│[check] symbol-set ✓ 1 exported symbol(s) match                                                                       │
+│[check] differential-driver ✓ 183832 bytes identical                                                                  │
+│exit 0                                                                                                                │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└ c or Esc close ──────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ Ready. Last: Re-check u-lib — GREEN — all 8 checks passed (41 s)                                            [Details c]
+
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

@@ -33,7 +33,7 @@ fn copy(src: &Path, dst: &Path) {
 
 /// A scratch copy of the committed target at `rel`, unique per `tag`.
 pub fn scratch_target(rel: &str, tag: &str) -> PathBuf {
-    let dst = std::env::temp_dir().join(format!("harness-tui-{tag}-{}", std::process::id()));
+    let dst = std::env::temp_dir().join(format!("harness-tui-{tag}-{:010}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dst);
     copy(&repo().join(rel), &dst);
     dst.canonicalize().unwrap()

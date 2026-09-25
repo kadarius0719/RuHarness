@@ -15,7 +15,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use harness_core::ledger::Ledger;
 use harness_core::ledger::WriterLock;
-use harness_core::traits::{LanguageFrontend, OracleStrategy};
+use harness_core::traits::OracleStrategy;
 use harness_core::{hash, plan, planner, Error, Facts, Plan, TargetContext, UnitStatus};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -418,7 +418,14 @@ fn cmd_scan(target: PathBuf) -> Result<u8> {
 /// Scan `ctx` and write `facts.jsonl` (the body of `harness scan`).
 pub(crate) fn scan_target(ctx: &TargetContext) -> Result<Facts> {
     let ledger = Ledger::new(&ctx.root);
-    let facts = harness_scan::CFrontend.scan(ctx)?;
+    let (facts, skipped) = harness_scan::CFrontend.scan_reporting(ctx)?;
+    for path in &skipped {
+        // Never read: a FIFO or a device would block the scan forever.
+        out(format!(
+            "scan: skipped {}: not a regular file",
+            path.strip_prefix(&ctx.root).unwrap_or(path).display()
+        ));
+    }
     std::fs::create_dir_all(ledger.dir()).context("creating migration dir")?;
     facts.store(&ledger.facts_path())?;
     Ok(facts)

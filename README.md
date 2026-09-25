@@ -346,40 +346,50 @@ journaled for a child it killed). Writing commands hold a writer lock on
 ```bash
 cargo run -p harness-tui -- --target targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib
 ```
-A terminal UI for reviewing migrations. Units and their attempts are on the left. In
-the middle, each C function sits beside its Rust translation — the exported shim and
-the safe logic function it calls — with filler lines keeping the two sides level. The
-oracle's verdict is underneath, and the running command at the bottom. The cockpit
-only *reads* the ledger: every write is a spawned `harness --json …` command, and the
-cockpit shows you its exact command line and asks `y/n` before running it.
+A terminal UI for the migration, made for arrow keys — nothing to memorise. On the left,
+**Files**: a tree of the target's C files (and, under each, its functions), then its
+**Units** with each unit's crate and attempts. Every row shows its state as a glyph and a
+word: `✓ migrated`, `✓? verified, origin not recorded`, `✗ failing`, `⚠ needs attention`,
+`◐ tried`, `◇ planned`, `! changed since scan`, `+ not scanned yet`, `? missing`, … (`?`
+opens the full legend). On the right, the **View** shows what is selected: the project's
+summary with its next step, a directory's files, a file's C beside its Rust (the exported
+shim and the safe logic function it calls), a unit's checks in words, an attempt's turns.
+Below, the **activity panel** says in plain words what the running command is doing
+("Turn 1: asking the model…", "Checked: same outputs as C — passed"), and the last row
+lists the keys that work right now.
 
-| Key | Act | What runs |
-|---|---|---|
-| `a` | **Accept** the shown green attempt | `harness promote <unit> <attempt>` |
-| `m` | **Modify**: type a note; a new attempt is seeded from the shown one | `harness migrate <unit> --no-promote --from=<attempt> --steer=<note>` |
-| `e` | **Hand edit** in `$VISUAL`/`$EDITOR`, recorded as a labelled human attempt; a hand edit is never lost — one that was not recorded is kept, `E` offers it again, and its path is printed on exit | `harness override <unit> <staged copy> [--note=<text>]` |
-| `r` / `R` | retry the shown attempt's run / resume a hand-off once its response file is there | the run's own command |
-| `x` | cancel the running command: SIGINT to its process group; the harness then kills its sandboxed processes | — |
+Move with `↑`/`↓`, fold and open with `←`/`→` (`→` on a leaf moves into the View, `←`
+comes back), switch panes with `Tab`, go back with `Esc`. **`Enter` opens a short menu of
+what you can do with the selection in its current state** — Scan the project, Refresh the
+plan, Find hazards, Re-check with the oracle, Accept an attempt, Hand edit, Modify with a
+note, Retry, Resume. Items that cannot run now are greyed with the reason. Every act is a
+spawned `harness --json …` command: its dialog names every file it writes, shows the
+exact command, and becomes **ready** only after it was on screen, whole, for a moment
+with no keys pending — keys typed or pasted ahead, and a held `Enter`, never run anything
+(focus starts on Cancel; after "ready", press the key shown or `→` then `Enter`). `c` shows
+the running command's details, `x` cancels it (asked first), `g` re-reads the project, `q`
+quits (asked while a command runs). The letters `a m e E r R x d v` are shortcuts for the
+selection's menu items.
 
-Moving around: `j`/`k` scroll, `]f`/`[f` next/previous function, `J`/`K` units, `Tab`
-then `Enter` to show an attempt, `d` to diff it against the attempt the crate came
-from, `v` for the verdict's details, `?` for every key, `q` to quit. The rail marks
-where a unit's crate came from: `*` unassisted pipeline output, `*s` a steered attempt,
-`*h` a hand edit — the benchmark scores only `*`. Below 110 columns the pairs stack
-(`--layout split|stacked` overrides that). `--harness <path>` picks the binary the acts
-run (default: `harness` on your PATH, else the one next to the cockpit);
-`--allow-unsandboxed` is passed on to the acts that run code. A closed terminal cancels
-a running command cleanly. A plain `cargo build` at the root skips the cockpit; build it
-with `cargo build -p harness-tui` (CI builds everything). The cockpit re-reads the ledger
-after its own commands and while one runs; after a change made elsewhere (the CLI, or an
-act from chat — next section) press `g`.
+The cockpit only *reads* the ledger, on a background thread after a size and type check
+(a hostile target cannot hang it). Its own gates: Re-check runs only on code the harness
+knows (a recorded attempt's candidate, or what the oracle last judged) — a crate changed
+outside the harness shows `⚠` with how to restore it or record it (`harness override`);
+model work runs only with a provider you allow (`--provider NAME`, repeatable, default
+`external`; the target's `harness.toml` never chooses it); a blind `external` hand-off is
+never retried from the cockpit. A hand edit is never lost: one that was not recorded is
+kept, offered again, and its path printed on exit. `--harness <path>` picks the binary the
+acts run (default: `harness` on your PATH, else the one next to the cockpit);
+`--allow-unsandboxed` is passed on to the acts that run code (the dialog says so); below 80
+columns one pane shows at a time; `--layout split|stacked` forces how the pairs sit. A
+closed terminal cancels a running command cleanly. A plain `cargo build` at the root skips
+the cockpit; build it with `cargo build -p harness-tui` (CI builds everything). After a
+change made elsewhere (the CLI, or an act from chat — next section) press `g`.
 
-**Where it is going.** These keys suit keyboard power users. The cockpit is being
-redesigned as a friendly wrapper — arrow keys and the mouse over a file tree of the
-target, `Enter` for the actions that fit a file's state, on-screen hints, and a chat pane
-inside it for model work (docs/TUI-DESIGN.md §9; the first step is designed and reviewed in
-docs/COCKPIT-WRAPPER-DESIGN.md, not built yet). Until then, chat happens in a separate agent
-session through `harness-mcp`.
+**Where it is going.** The mouse comes next (docs/COCKPIT-WRAPPER-DESIGN.md, Build B), then
+a chat pane inside the cockpit for model work (docs/TUI-DESIGN.md §9). Until then, a fresh
+translation is `harness migrate <unit>`, and chat happens in a separate agent session
+through `harness-mcp`.
 
 ## The ledger in chat (`harness-mcp`)
 

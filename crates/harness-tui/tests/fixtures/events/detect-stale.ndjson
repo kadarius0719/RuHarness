@@ -1,0 +1,3 @@
+{"k":"header","schema":"ruharness-events","schema_version":1,"command":"detect","args":["--target=/work/read_scalefactors_lib"],"pid":40900,"harness":"0.1.0"}
+{"k":"error","kind":"stale","message":"facts.jsonl is stale: 1 file(s) changed on disk; run `harness scan` first"}
+{"k":"result","exit":1}

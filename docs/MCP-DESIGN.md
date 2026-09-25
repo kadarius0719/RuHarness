@@ -158,7 +158,8 @@ answered. The outcome comes first; `checks` (failed first), `turns`, `messages` 
   generates (an attempt id: `a-`/`d-` + 12 hex, optionally `.r<N>`) — a slug-shaped ledger value
   is not enough (§R2 TRUST-4).
 - **Size, and what is read at all.** Before anything is read — for every read AND every act —
-  a preflight checks every file the read model reads or hashes in-process: ledger records and
+  a preflight (`harness_tui::preflight` since 2026-09-25: one implementation, which the
+  cockpit also runs before every load) checks every file the read model reads or hashes in-process: ledger records and
   verdicts ≤ 1 MiB and `facts.jsonl`, `plan.toml`, drivers and sources ≤ 64 MiB (those two grow
   with the project; the 1 MiB of the reviewed text would refuse a large codebase's facts), crate
   trees ≤ 32 MiB, and ≤ 256 MiB of records and verdicts held in memory at once; every one a

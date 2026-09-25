@@ -403,7 +403,7 @@ fn finish_edit(
         Ok(Some(stage)) => {
             app.edit_staged(unit.to_string(), stage, session.tmp.clone());
             if let Err(e) = resumed {
-                app.notice = Some(format!(
+                app.say(format!(
                     "the terminal did not come back cleanly ({e}); the edit is kept"
                 ));
             }
@@ -477,17 +477,23 @@ fn run(
             park();
         }
         pump_loads(app, loader, &mut whys);
+        app.expire_notice(Instant::now());
         terminal.draw(|f| view::draw(f, app))?;
-        // A prompt drawn whole with no input pending may take its `y`:
-        // typed-ahead or pasted input never answers it.
-        if app.confirm_waiting() && !event::poll(Duration::ZERO)? {
-            app.confirm_armed = true;
+        // A dialog drawn whole, quiet for 300 ms, with no input pending,
+        // arms: typed-ahead, pasted or auto-repeated input never answers it.
+        if app.dialog_waiting() {
+            let pending = event::poll(Duration::ZERO)?;
+            app.arm(Instant::now(), pending);
         }
         let mut command = Command::None;
         if event::poll(Duration::from_millis(60))? {
-            match event::read()? {
+            let event = event::read()?;
+            let now = Instant::now();
+            // Every input read restarts an open dialog's quiet time.
+            app.on_input(now);
+            match event {
                 TermEvent::Key(key) if key.kind == KeyEventKind::Press => {
-                    command = app.on_key(key);
+                    command = app.on_key(key, now);
                 }
                 TermEvent::Paste(text) => app.on_paste(&text),
                 _ => {}
@@ -547,16 +553,16 @@ fn run(
             Command::Cancel => {
                 if let Some(r) = running.as_mut() {
                     match r.interrupt() {
-                        Ok(true) => app.notice = Some("SIGINT sent; the command cancels".into()),
-                        Ok(false) => app.notice = Some("the command already ended".into()),
-                        Err(e) => app.notice = Some(format!("cancel failed: {e}")),
+                        Ok(true) => app.say("SIGINT sent; the command cancels"),
+                        Ok(false) => app.say("the command already ended"),
+                        Err(e) => app.say(format!("cancel failed: {e}")),
                     }
                 }
             }
             Command::Reload => app.request_load(LoadWhy::Key),
             Command::Edit { unit, crate_dir } => {
                 if let Err(why) = hand_edit(terminal, app, &unit, &crate_dir) {
-                    app.notice = Some(why);
+                    app.say(why);
                 }
             }
             Command::Cleanup(tmp) => {
@@ -635,10 +641,7 @@ fn main() -> ExitCode {
         snapshot,
     );
     if harness.is_none() {
-        app.notice = Some(
-            "no `harness` binary found (PATH, or --harness <path>): read-only, acts disabled"
-                .into(),
-        );
+        app.say("no `harness` binary found (PATH, or --harness <path>): read-only, acts disabled");
     }
     // Under the guard: a signal during the setup restores after it.
     let Some(mut terminal) = GUARD.enable(|| {

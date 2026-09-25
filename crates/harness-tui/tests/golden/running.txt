@@ -1,0 +1,20 @@
+┌ Files ───────────────────────┐┌ harness-tui-grun-0000000000 · ✓1/1 ──────────────────────────────────────────────────┐
+│▾ harness-tui-grun-00000… ✓1/1││2 files scanned                                                                       │
+│  ▾ test_case/            ✓1/1││Units (1): 1 ✓ migrated                                                               │
+│    ▾ include/                ││                                                                                      │
+│        · lib.h         header││                                                                                      │
+│    ▾ src/                ✓1/1││                                                                                      │
+│      ▸ ✓ lib.c       migrated││                                                                                      │
+│  ▾ Units (1)                 ││                                                                                      │
+│    ▸ ✓ u-lib         migrated││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
+ * Re-check u-lib: Checked: same outputs as C — passed · 41 s                                     [Cancel x] [Details c]
+
+ x cancel   ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

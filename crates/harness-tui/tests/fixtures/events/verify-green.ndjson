@@ -1,0 +1,18 @@
+{"k":"header","schema":"ruharness-events","schema_version":1,"command":"verify","args":["u-lib","--target=/work/read_scalefactors_lib","--allow-unsandboxed"],"pid":40900,"harness":"0.1.0"}
+{"k":"check","unit":"u-lib","name":"symbol-set","passed":true,"detail":"1 exported symbol(s) match the unit's symbols exactly"}
+{"k":"check","unit":"u-lib","name":"capabilities","passed":true,"detail":"no capability beyond the C unit's (allowed: none); no asm"}
+{"k":"check","unit":"u-lib","name":"driver-shape","passed":true,"detail":"driver object defines only main, references only the unit and allowlisted libc; source lint clean"}
+{"k":"check","unit":"u-lib","name":"differential-driver","passed":true,"detail":"11503 bytes identical"}
+{"k":"check","unit":"u-lib","name":"whole-program","passed":true,"detail":"not configured for this target"}
+{"k":"check","unit":"u-lib","name":"sanitizers","passed":true,"detail":"asan+ubsan clean"}
+{"k":"check","unit":"u-lib","name":"boundary","passed":true,"detail":"Rust stays inside the C's footprint: 31 call(s), 124 guarded object(s) (6 untouched by the C, 86 partially touched, 0 widened), 0 argument(s) unshadowed; tail and head layouts clean; note: in call 3 the C reads the driver's stack through a pointer field (unchecked)"}
+{"k":"verdict","unit":"u-lib","green":true,"path":"/work/read_scalefactors_lib/migration/units/u-lib/oracle-latest.json"}
+{"k":"message","text":"verify: [PASS] symbol-set — 1 exported symbol(s) match the unit's symbols exactly"}
+{"k":"message","text":"verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm"}
+{"k":"message","text":"verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean"}
+{"k":"message","text":"verify: [PASS] differential-driver — 11503 bytes identical"}
+{"k":"message","text":"verify: [PASS] whole-program — not configured for this target"}
+{"k":"message","text":"verify: [PASS] sanitizers — asan+ubsan clean"}
+{"k":"message","text":"verify: [PASS] boundary — Rust stays inside the C's footprint: 31 call(s), 124 guarded object(s) (6 untouched by the C, 86 partially touched, 0 widened), 0 argument(s) unshadowed; tail and head layouts clean; note: in call 3 the C reads the driver's stack through a pointer field (unchecked)"}
+{"k":"message","text":"verify: u-lib GREEN — status set to verified"}
+{"k":"result","exit":0}
