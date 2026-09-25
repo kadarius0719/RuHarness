@@ -377,8 +377,9 @@ act from chat — next section) press `g`.
 **Where it is going.** These keys suit keyboard power users. The cockpit is being
 redesigned as a friendly wrapper — arrow keys and the mouse over a file tree of the
 target, `Enter` for the actions that fit a file's state, on-screen hints, and a chat pane
-inside it for model work (docs/TUI-DESIGN.md §9). Until then, chat happens in a separate
-agent session through `harness-mcp`.
+inside it for model work (docs/TUI-DESIGN.md §9; the first step is designed and reviewed in
+docs/COCKPIT-WRAPPER-DESIGN.md, not built yet). Until then, chat happens in a separate agent
+session through `harness-mcp`.
 
 ## The ledger in chat (`harness-mcp`)
 

@@ -1693,3 +1693,110 @@ afterwards, from `main` at 4c140b7:
   them) and where the cockpit is going; CLI-HARDENING's "next milestone". Stale code comments
   (the `Cancel` doc comment in app.rs, the `tui` feature comment in Cargo.toml) are left for the
   wrapper build.
+
+## 2026-09-24 — Cockpit wrapper: §15 spike (approachable TUIs; mouse and trees in ratatui)
+
+Time-boxed, three subagents (UX patterns from live sources; ratatui/crossterm mechanics from
+the locked crates' sources; a map of today's engine), premises re-checked by hand. Findings
+that shaped docs/COCKPIT-WRAPPER-DESIGN.md:
+- **Arrow/Enter/Esc/`?`** is chess-tui's scheme (github.com/thomas-mauran/chess-tui); a
+  persistent, focus-dependent hint bar is zellij's answer to "nothing to memorise"
+  (github.com/zellij-org/zellij/discussions/1270); gitui keeps quit unambiguous (`Esc` closes
+  a popup, `q` quits only without one — gitui-org/gitui#771).
+- **The command behind an action**: lazygit's command log shows git commands as they run
+  (toggle `@`), but not before — a long-open request asks for exactly that
+  (jesseduffield/lazygit#2572). The cockpit shows the argv in the confirm dialog (before) and
+  in the activity details (during/after).
+- **Menus**: lazygit's `?` menu lists actions with keys (arrow + Enter) but shows no disabled
+  state (lazygit.dev/keybindings). Decision: inapplicable items hidden, blocked items greyed
+  with the reason.
+- **Long operations**: lazygit's push/fetch spinner locks the UI with no cancel
+  (jesseduffield/lazygit#3324) — the anti-pattern; the cockpit keeps browsing free and
+  offers Cancel.
+- **Mouse**: on by default in zellij (Shift for native selection) and btop; opt-in in k9s;
+  "not a goal" in gitui. Users of lazygit asked for a way to turn it off (#602) → on by
+  default, `--no-mouse`. Selection under capture: Option-drag (Terminal.app, iTerm2),
+  Shift-drag elsewhere; tmux best effort.
+- **crossterm 0.29 `EnableMouseCapture`** writes `?1000h ?1002h ?1003h ?1015h ?1006h`
+  (verified in `crossterm-0.29.0/src/event.rs`): 1003 reports every mouse movement, which
+  would flood the loop and keep the confirm prompt's "no input pending" arming from ever
+  holding. Decision: our own `Command` writing `?1000h ?1006h` (press/release/wheel, SGR),
+  crossterm's `DisableMouseCapture` (resets all five) on every exit path. crossterm reports
+  no double-click (the app times it); `Rect::contains(Position)` and `ListState::offset()`
+  suffice for hit testing (a sketch `cargo check`ed against the locked versions); bare `Esc`
+  is returned without a fixed delay.
+- **Tree widget**: ratatui has none. `tui-tree-widget` 0.24.1 (crates.io API: MIT, released
+  2026-08-09, 860k recent downloads; deps ratatui-core/ratatui-widgets/unicode-width — all
+  already locked, zero new crates; source read: `click_at`, `rendered_at`, identifiers unique
+  among siblings, no `unsafe`) is vetted and viable, but not taken: a flattened row list
+  (~200 lines) is how the cockpit already renders its lists, and the widget's 24 breaking
+  releases would pace our ratatui upgrades. Revisit if the hand-rolled tree passes ~400 lines
+  or needs drag/multi-select.
+- **Engine map**: no per-file state or file → unit index exists (`Snapshot` aggregates
+  freshness only); units own files (`unit.files`); the scanner's file rule is private to
+  harness-scan (`collect_source_files`) — to be shared through harness-core; findings live in
+  `observer/findings.jsonl` and the cockpit never reads them; `scan`, `plan`, `detect`,
+  `verify` are deterministic writers under the lock (`plan`/`detect` refuse stale facts);
+  `observe`, `migrate`, `gen-driver` call a model; there is no plan-approval command.
+- **Seen when opening the cockpit** (reconciliation step): the bottom hint line is cut
+  mid-entry at 120 columns; a target without `harness.toml` is refused with a raw io error.
+
+## 2026-09-24 — Cockpit wrapper: design, adversarial design review (46 → 13 → 1), design only
+
+`docs/COCKPIT-WRAPPER-DESIGN.md` designs TUI-DESIGN §9 "Suggested order" 1: a file tree of the
+target as the one navigator, the View showing the selection, `Enter` for a menu of what fits the
+node's state, armed confirmations worded for a person, an always-visible activity panel that
+narrates in plain language (the command one key away), the mouse in a second build. Not built —
+the user asked for the design only this session.
+
+**Review.** Four lenses (usability for non-vim users, safety & provenance, engine reuse, scope),
+then an independent verifier per lens: 46 findings, 43 confirmed, 3 partly, 0 refuted (13 high).
+A checker of the revision found 13 more (3 high: Modify let the target's `harness.toml` pick a
+paid provider; ⚠ on states nothing could clear, stranding zopfli's u001; "record the crate as it
+is" hit dead ends and relabelled unknown authorship as human). Both rounds' resolutions are in
+the design (§R, §R2); a second, scoped check confirmed all 13 against the code (e.g. u001 passes
+the "known code" test through the verdict's `rust_crate`, the same comparison `promote` makes)
+and found one wording slip, fixed.
+
+**What the review changed** (decisions):
+- **Two builds, each reviewed**: Build A (keyboard-complete navigator, starting with the bugs
+  below), Build B (mouse). One layout down to 80 columns; Activity visible at every width.
+- **Confirmation**: arming is a latch — drawn whole, 300 ms since the last input READ, nothing
+  pending (today's `poll(0)` kept). Keys before arming are dropped with visible feedback. Focus
+  starts on the safe button; after arming a letter, or a move plus `Enter`, confirms — so a held
+  `Enter` (auto-repeat arrives as Press) can never run an act. Quit and cancel are armed dialogs.
+- **Provenance**: Re-check (`verify`) only on code the harness knows — a recorded attempt's
+  candidate, or what the oracle last judged (the verdict's `rust_crate`) — else `⚠ changed outside
+  the harness` (restore, or `harness override`). Verified code with no attributable attempt is
+  `✓? origin not recorded`, not counted as migrated. MCP-DESIGN cut `verify` from chat for the
+  same reason (an unlabelled edit).
+- **Providers**: a cockpit `--provider` list (default `external`) as in harness-mcp; Modify
+  passes it; Retry only for listed providers; never Retry an unseeded `external` attempt (a blind
+  hand-off) or a half-seeded record.
+- **Engine**: `Selection` replaces the rail cursor; `files::build(&Snapshot, &Walk)` pure, with
+  two additive model fields (`stale_paths`, `crate_digest`); a language-neutral
+  `walk::confined` in harness-core returning errors/skips/truncation as data (the scanner stays
+  fail-fast, skips FIFOs, facts proven byte-identical); `status::live_holder` public (busy at
+  project level only); harness-mcp's read preflight moves into the harness-tui library and the
+  cockpit runs it before every load, on a worker thread; a stateful narrator matched to the real
+  events; a non-blocking terminal guard.
+- **Cut or deferred**: the idle watcher (with the chat pane), a findings view, find, right-click,
+  duration promises, a guided "record an outside edit" flow; §10 reserves the chat's screen space
+  and decides nothing else (the chat spike's questions).
+
+**Bugs found in the SHIPPED cockpit** (Build A step 0, each with a failing test first): Retry of
+an unseeded `external` attempt poses a blind hand-off whose hand-written answer would score as
+pipeline output (SAFE-3); Modify and Retry let the target's config/record choose the provider
+(CHK-1, SAFE-12); the cockpit's reads are unbounded — a facts path to `/dev/zero` hangs it
+(SAFE-6); a signal right after the editor races `resume`, leaving a raw terminal and an
+unannounced kept edit (SAFE-10); `Q` and the quit prompt act unarmed (SAFE-11).
+
+**Found outside the cockpit, decided separately** (suggested as their own tasks): the crate
+content hash covers only `Cargo.toml`, `Cargo.lock`, `src/**` while Cargo also builds a crate-root
+`build.rs` (SAFE-5 — an integrity gap in provenance and verdict freshness); harness-detect's own
+walk follows symlinks out of `source_dir` and has no cycle guard, while claiming to be the
+scanner's (SCOPE-4). Also decided separately: `verify`'s R6 gate.
+
+**Revisit when**: the hand-rolled tree passes ~400 lines or needs drag → `tui-tree-widget`
+(vetted, zero new transitive crates); the chat pane lands → the idle watcher (off the UI thread,
+every file the snapshot reads) and how chat's acts reach the activity panel.

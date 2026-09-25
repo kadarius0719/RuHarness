@@ -5,18 +5,19 @@ first, then this:
 
 ---
 
-Resume RuHarness — the **cockpit-as-a-friendly-wrapper** session. Everything is on `main` and
-pushed. The two parallel sessions of 2026-09-24 (harness-tui's front end; harness-mcp on top of
-it) were reconciled afterwards: 611 tests and the cockpit's pty signal tests green after the
-MCP session's group-wide cancel, the cockpit opened and quit cleanly, the docs brought in line
-(DECISIONS.md "Reconciliation of the parallel sessions"). Before doing anything else:
+Resume RuHarness — **Build A of the friendly-wrapper cockpit**. Everything is on `main` and
+pushed. On 2026-09-24 the two parallel sessions (harness-tui's front end; harness-mcp on top
+of it) were reconciled (611 tests and the pty tests green; docs aligned), and the wrapper was
+DESIGNED and reviewed — not built: docs/COCKPIT-WRAPPER-DESIGN.md (46 review findings, 43
+confirmed; the check of the revision found 13 more; all resolved in §R/§R2). Before doing
+anything else:
 
-1. Read `DECISIONS.md` from "2026-09-24 — Direction change (user)" to the end (the direction,
-   then the harness-mcp build), then `docs/TUI-DESIGN.md` §9 (the new direction), §3–§4 and §R3,
-   then `docs/MCP-DESIGN.md` §0, §3, §7 and §R2–§R4 (the chat tool surface as built, and its
-   stated edges), and `docs/CLI-HARDENING.md`.
-2. Confirm the tree is clean and green: `git status`, `cargo test --workspace` (~611 tests),
-   `cargo run -q -p harness-cli -- bench status --suite targets/tractor`.
+1. Read `DECISIONS.md` from "Reconciliation of the parallel sessions" to the end (the spike,
+   then the design and its review), then `docs/COCKPIT-WRAPPER-DESIGN.md` in full, then
+   `docs/TUI-DESIGN.md` §2–§4 (the engine and its safety rules, which all hold) and §R3, and
+   `docs/MCP-DESIGN.md` §0, §3, §4 (the provider list; the preflight being moved).
+2. Confirm the tree is clean and green: `git status`, `cargo test --workspace` (~611 tests,
+   including the pty tests in `crates/harness-tui/tests/signals.rs`).
 3. The scorer needs the gitignored `targets/tractor/.scorer-vendor/` (copy with `cp -cR` from
    another worktree, or `targets/tractor/README.md`'s one-time `cargo vendor`); copy
    `targets/tractor/.bench/` too.
@@ -25,32 +26,34 @@ MCP session's group-wide cancel, the cockpit opened and quit cleanly, the docs b
    Expect `198 reproduce (1 conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)` and
    `bench check: OK — no regression`.
 
-Then, in order — the direction set by the user (DECISIONS.md "Direction change (user)";
-docs/TUI-DESIGN.md §9): the cockpit becomes a user-friendly wrapper — arrow-key/mouse file
-tree, deterministic actions on `Enter`, and a Copilot-style chat pane inside it for model work.
+Then build **Build A** in the design's order (§14), each step committed when green:
 
-* **The wrapper UX design** (TUI-DESIGN §9, "Suggested order" 1): a §15 check of how
-  approachable TUIs do it (file trees, menus, mouse, on-screen hints — e.g. ratatui apps such as
-  chess-tui for arrow/Enter/Esc/`?` navigation), then a design doc, an adversarial design review,
-  the build on today's engine (`harness_tui::{model, events, spawn}`, the acts and their safety
-  rules stay), a code review, a verification of the fixes (and further passes as needed — the
-  last milestone needed three: 33 → 20 → 8 findings).
-* **harness-mcp is built** (MCP-DESIGN, reviewed three times): six tools, steer attempts only,
-  `harness_answer` for the hand-offs it poses, pending blind hand-offs flagged and refused. For
-  "migrate this" from chat it still needs the **requester label** (MCP-DESIGN §7): a
-  chat-requested migration recorded as such and never scored as unassisted — design it with the
-  chat pane, not before.
-* **The chat pane** after a spike on embedding an existing agent runtime headless (Claude Code's
-  streaming mode first: flags, auth, permission prompts inside a pane, resume), with harness-mcp
-  as its tools, plus a "migrate this" project skill.
-* After that: the feature-workflow view and the C-vs-Rust performance baselines, then the
-  briefing's M5 (external detector plugin + `EXTENDING.md`). Carry-forwards: §16 escalation
-  automation + `harness usage`; the `crash-timeout` classifier; a Linux sandbox; the two deferred
-  replay items; `verify` lacks the R6 gate; driver-attempt Accept; queueing on lock contention;
-  an async client for cooperative cancellation; per-function verdict dots; bounded reads in
-  harness-core (MCP-DESIGN §R TRUST-4); harness-mcp's revisit triggers (reads on a worker thread
-  when a real target hashes > 4 GiB per read or blocks the loop; MCP `resources`; an async
-  run-id shape).
+0. **The bugs the review found in the shipped cockpit**, each fixed after a regression test that
+   fails without it: `Q` and the quit prompt through arming (SAFE-11); the non-blocking terminal
+   guard + the kept edit recorded before `resume` (SAFE-10, CHK-5); the Retry refusals (unseeded
+   `external`, half-seeded) and the `--provider` list, Modify passing `--provider` (SAFE-3,
+   SAFE-12, CHK-1, CHK-13); harness-mcp's preflight moved into the harness-tui library and run by
+   the cockpit before every load, loads on a worker thread (SAFE-6, CHK-10).
+1. Dialogs, the arming latch and buttons (clock injected into `app`), the menus' argv table —
+   tested and mutation-checked.
+2. harness-core `walk::confined` + the scanner switched (facts byte-identical on zopfli,
+   read_scalefactors and a symlink copy), `status::live_holder` public, the two additive model
+   fields; `harness_tui::files` and its tests.
+3. The navigator (`Selection`, tree, View, activity rows + narrator, notices, hint bar, help,
+   empty states, hit-record API), goldens, the signals.rs rewrite, the keyboard pty e2e.
+4. README + TUI-DESIGN §3; adversarial code review; fix pass; VERIFY THE FIX PASS (and further
+   passes as needed — the last milestones needed three); mutation checks; DECISIONS handoff;
+   commit and push. Build B (mouse) is the session after.
+
+Separately suggested (their own tasks, not part of Build A): the crate content hash skips files
+outside `src/` (a `build.rs` builds unseen — SAFE-5); harness-detect's walk follows symlinks out
+of `source_dir`. After the wrapper: the chat pane (spike first) with harness-mcp's requester
+label and a "migrate this" skill; then the feature-workflow view and the C-vs-Rust performance
+baselines, then the briefing's M5 (external detector plugin + `EXTENDING.md`). Carry-forwards:
+§16 escalation automation + `harness usage`; the `crash-timeout` classifier; a Linux sandbox; the
+two deferred replay items; `verify` lacks the R6 gate (decide separately); driver-attempt Accept;
+queueing on lock contention; an async client for cooperative cancellation; per-function verdict
+dots; bounded reads in harness-core (MCP-DESIGN §R TRUST-4); harness-mcp's revisit triggers.
 
 Environment (re-check; don't assume):
 
@@ -62,21 +65,22 @@ Environment (re-check; don't assume):
 * The pty and e2e tests (`crates/harness-tui/tests/signals.rs`, `crates/harness-mcp/tests/e2e.rs`)
   need the `harness` binary next to theirs, built from the current sources (`cargo test
   --workspace` builds it; the MCP e2e refuses a stale one).
-* Review agents must not delete scratchpad files they did not create (one cleaned up a mutation
-  runner last session): give each its own subdirectory.
+* Subagents cannot write report files here: they return findings as text, and the main
+  session writes them into its scratchpad (one subdirectory per reviewer) for the verifiers.
+* Review agents must not delete scratchpad files they did not create.
+* Opening the cockpit headless: drive it under `expect` in a 120×40 pty and render the captured
+  bytes with a small VT interpreter (no tmux on this machine).
 
 Process that works (keep it):
 
 * Run a time-boxed research spike in subagents, and verify its premise by running it end to end.
-* Write the design, then give it an adversarial design review from 3–4 lenses.
+* Write the design, give it an adversarial design review from 3–4 lenses, verify every finding
+  against the code, revise — then CHECK THE REVISION (the wrapper's check found 13 more, 3 high).
 * Implement against the reviewed spec, then run an adversarial code review whose findings are
-  verified against the code — then VERIFY THE FIX PASS the same way (it found 20 more last time,
-  2 of them medium; the check of the second pass found 8 more).
+  verified against the code — then VERIFY THE FIX PASS the same way.
 * In the fix pass, add regression tests that fail without the fix, and mutation-check the
-  rule-guarding ones with a script that reverts each fix and runs its test (last time 4 of 38
-  survived the first run: tests that could not see their rule).
-* Real end-to-end tests find what reviews miss (the MCP e2e found the driver-shape gate and a
-  verified unit needing `replace`; a parallel run found a race with a fake's `trap`).
+  rule-guarding ones with a script that reverts each fix and runs its test.
+* Real end-to-end tests find what reviews miss.
 * Hand off in DECISIONS.md, then commit and push to `main`.
 
 Every review so far has found real bugs. Vet every new crate before adding it. No bloat.

@@ -2,8 +2,8 @@
 
 Status: IMPLEMENTED (2026-09-24); harness-mcp, which reuses this crate's library, is built
 too (docs/MCP-DESIGN.md). **§9 records the new direction** (a user-friendly wrapper
-with an arrow-key file tree, deterministic actions on Enter and a chat pane inside) for the
-next designs. §R holds the resolutions of the 20 confirmed findings of the
+with an arrow-key file tree, deterministic actions on Enter and a chat pane inside); its first
+step is designed and reviewed in docs/COCKPIT-WRAPPER-DESIGN.md (not built yet). §R holds the resolutions of the 20 confirmed findings of the
 design review; §R2 the 9 (16 raw) of the code review of steps 1–3; §R3 the 27 of the code
 review of step 4 (the terminal front end) — all resolved; the text below includes every
 amendment. Sources: the §15 spike
