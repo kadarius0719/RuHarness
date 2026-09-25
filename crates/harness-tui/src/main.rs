@@ -10,14 +10,17 @@
 //! editor of a hand edit runs in the foreground, SIGINT belongs to the
 //! editor; TERM and HUP are forwarded to it, and the cockpit dies by them
 //! once it is gone — never under it. A hand edit that was not recorded is
-//! never removed on the way out: its path is printed.
+//! never removed on the way out: its path is printed. The restores never
+//! block (the terminal guard, `harness_tui::termguard`), and the ledger is
+//! read on a loader thread (`harness_tui::load`), the preflight first.
 
 #![forbid(unsafe_code)]
 
-use harness_tui::app::{Act, App, Command, Config, LayoutMode};
+use harness_tui::app::{Act, App, Command, Config, LayoutMode, LoadWhy};
 use harness_tui::handedit;
-use harness_tui::model::Snapshot;
+use harness_tui::load::{self, Loader};
 use harness_tui::spawn::{self, ChildSlot, Running};
+use harness_tui::termguard::{TermGuard, ENABLE_WAIT};
 use harness_tui::view;
 use ratatui::crossterm::cursor;
 use ratatui::crossterm::event::{
@@ -29,15 +32,17 @@ use ratatui::DefaultTerminal;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitCode, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-/// A terminal signal arrived: the loop stops drawing.
-static DYING: AtomicBool = AtomicBool::new(false);
+/// The terminal guard: every enable runs under it; the signal path and the
+/// panic hook restore through it without ever blocking. Once it is dying
+/// the loop stops drawing.
+static GUARD: TermGuard = TermGuard::new();
 
 const USAGE: &str = "\
-usage: harness-tui [--target DIR] [--harness PATH] [--allow-unsandboxed] [--layout split|stacked]
+usage: harness-tui [--target DIR] [--harness PATH] [--provider NAME]... [--allow-unsandboxed]
+                   [--layout split|stacked]
 
 The review cockpit over a target's migration ledger. Every write is a spawned
 `harness --json …` command whose exact argv is shown and confirmed first.
@@ -45,6 +50,10 @@ The review cockpit over a target's migration ledger. Every write is a spawned
   --target DIR          the target repository root (default: .)
   --harness PATH        the harness binary acts spawn (default: `harness` on PATH,
                         else the one next to this binary)
+  --provider NAME       a provider profile model acts may use (repeatable;
+                        default: external). Modify passes the first; Retry
+                        runs only for an attempt whose provider is listed.
+                        The target's harness.toml never chooses it.
   --allow-unsandboxed   pass --allow-unsandboxed to acts that run code
   --layout split|stacked
                         force side-by-side pairs, or stacked ones (default: side by
@@ -56,6 +65,7 @@ struct Args {
     harness: Option<PathBuf>,
     allow_unsandboxed: bool,
     layout: LayoutMode,
+    providers: Vec<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -64,6 +74,7 @@ fn parse_args() -> Result<Args, String> {
         harness: None,
         allow_unsandboxed: false,
         layout: LayoutMode::Auto,
+        providers: Vec::new(),
     };
     let mut it = std::env::args_os().skip(1);
     while let Some(arg) = it.next() {
@@ -83,6 +94,23 @@ fn parse_args() -> Result<Args, String> {
             "--target" => args.target = PathBuf::from(value("--target")?),
             "--harness" => args.harness = Some(PathBuf::from(value("--harness")?)),
             "--allow-unsandboxed" => args.allow_unsandboxed = true,
+            "--provider" => {
+                let name = value("--provider")?.to_string_lossy().into_owned();
+                // A profile name travels attached in one argv element: a
+                // plain word, never a flag or a path.
+                if name.is_empty()
+                    || name.len() > 64
+                    || !name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+                    || name.starts_with(['-', '.'])
+                {
+                    return Err(format!("--provider {name:?}: not a provider profile name"));
+                }
+                if !args.providers.contains(&name) {
+                    args.providers.push(name);
+                }
+            }
             "--layout" => {
                 args.layout = match value("--layout")?.to_str() {
                     Some("split") => LayoutMode::Split,
@@ -92,6 +120,10 @@ fn parse_args() -> Result<Args, String> {
             }
             other => return Err(format!("unexpected argument `{other}`")),
         }
+    }
+    if args.providers.is_empty() {
+        args.providers
+            .push(harness_tui::app::EXTERNAL_PROVIDER.to_string());
     }
     Ok(args)
 }
@@ -206,10 +238,10 @@ fn install_signal_path(slot: ChildSlot) -> std::io::Result<()> {
                     continue;
                 }
             }
-            DYING.store(true, Ordering::SeqCst);
+            GUARD.mark_dying();
             // The CLI's 250 ms courtesy budget plus its group kill.
             let _ = spawn::interrupt_and_wait(&slot, Duration::from_secs(1));
-            restore_terminal();
+            GUARD.restore_for_death(restore_terminal, ENABLE_WAIT);
             announce_kept_edits();
             die_by(sig);
         }
@@ -233,14 +265,29 @@ fn suspend(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
 
 /// Take the terminal back and repaint everything — through `resize`, not
 /// `Terminal::clear`, which asks the terminal for the cursor position (a
-/// terminal that never answers would stall it and fail).
+/// terminal that never answers would stall it and fail). Under the guard:
+/// once the cockpit is dying it never re-enables anything (the signal path
+/// owns the terminal; this thread parks until the process ends).
 fn resume(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
-    std::io::stdout().execute(EnterAlternateScreen)?;
-    terminal::enable_raw_mode()?;
-    std::io::stdout().execute(EnableBracketedPaste)?;
-    terminal.hide_cursor()?;
-    let size = terminal.size()?;
-    terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height))
+    let enabled = GUARD.enable(|| -> std::io::Result<()> {
+        std::io::stdout().execute(EnterAlternateScreen)?;
+        terminal::enable_raw_mode()?;
+        std::io::stdout().execute(EnableBracketedPaste)?;
+        terminal.hide_cursor()?;
+        let size = terminal.size()?;
+        terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height))
+    });
+    match enabled {
+        Some(result) => result,
+        None => park(),
+    }
+}
+
+/// The signal path is ending the process: wait for it.
+fn park() -> ! {
+    loop {
+        std::thread::sleep(Duration::from_secs(5));
+    }
 }
 
 /// Run the editor on the session's files as a tracked child (so TERM/HUP
@@ -291,27 +338,58 @@ fn hand_edit(
 ) -> Result<(), String> {
     let session = handedit::prepare(crate_dir, &std::env::temp_dir())
         .map_err(|e| format!("hand edit: {e}"))?;
+    if let Err(e) = suspend(terminal) {
+        let _ = resume(terminal);
+        let _ = std::fs::remove_dir_all(&session.tmp);
+        return Err(format!("hand edit: {e}"));
+    }
+    let (status, signal) = edit_in_editor(&session);
+    finish_edit(app, unit, &session, status, signal, || {
+        let resumed = resume(terminal);
+        // Keys typed into the cooked terminal while the editor ran answer
+        // nothing (a buffered Esc or `n` must not decide about this edit).
+        while event::poll(Duration::ZERO).unwrap_or(false) {
+            if event::read().is_err() {
+                break;
+            }
+        }
+        resumed
+    })
+}
+
+/// After the editor: what it saved, or left beside the files, joins the
+/// kept list the signal path prints BEFORE anything else happens — staging,
+/// or `resume`, which a signal may interrupt (SAFE-10, CHK-5) — then the
+/// edit is staged and the terminal taken back.
+fn finish_edit(
+    app: &mut App,
+    unit: &str,
+    session: &handedit::Session,
+    status: std::io::Result<ExitStatus>,
+    signal: Option<i32>,
+    resume: impl FnOnce() -> std::io::Result<()>,
+) -> Result<(), String> {
     let discard = |why: String| {
         let _ = std::fs::remove_dir_all(&session.tmp);
         why
     };
-    if let Err(e) = suspend(terminal) {
-        let _ = resume(terminal);
-        return Err(discard(format!("hand edit: {e}")));
-    }
-    let (status, signal) = edit_in_editor(&session);
     let changed = session.changed().unwrap_or(true);
     // What the editor saved, or left beside the files (its recovery data
     // after a hangup): never removed.
     let keep = changed || session.has_leftovers();
+    if keep {
+        let edit = session.tmp.join("edit");
+        let mut kept = guard(&KEPT_EDITS);
+        if !kept.contains(&edit) {
+            kept.push(edit);
+        }
+    }
     if let Some(sig) = signal {
         // TERM/HUP while editing: the edit is kept, the cockpit dies by it.
-        if keep {
-            guard(&KEPT_EDITS).push(session.tmp.join("edit"));
-        } else {
+        if !keep {
             let _ = std::fs::remove_dir_all(&session.tmp);
         }
-        restore_terminal();
+        GUARD.restore_for_death(restore_terminal, ENABLE_WAIT);
         announce_kept_edits();
         die_by(sig);
     }
@@ -320,14 +398,7 @@ fn hand_edit(
         Ok(status) => Err(format!("hand edit aborted: the editor exited {status}")),
         Err(e) => Err(format!("hand edit: the editor: {e}")),
     };
-    let resumed = resume(terminal);
-    // Keys typed into the cooked terminal while the editor ran answer
-    // nothing (a buffered Esc or `n` must not decide about this edit).
-    while event::poll(Duration::ZERO).unwrap_or(false) {
-        if event::read().is_err() {
-            break;
-        }
-    }
+    let resumed = resume();
     let result = match staged {
         Ok(Some(stage)) => {
             app.edit_staged(unit.to_string(), stage, session.tmp.clone());
@@ -370,15 +441,42 @@ fn hand_edit(
     result
 }
 
-fn run(terminal: &mut DefaultTerminal, app: &mut App, slot: &ChildSlot) -> std::io::Result<()> {
+/// Start the loads the app asked for, and hand it the ones that finished:
+/// the requests in flight fold (the loader answers the latest), so each
+/// finished load carries the strongest reason asked for up to it.
+fn pump_loads(app: &mut App, loader: &mut Loader, whys: &mut Vec<(u64, LoadWhy)>) {
+    if let Some(why) = app.load_request.take() {
+        let seq = loader.request(&app.config.target);
+        whys.push((seq, why));
+    }
+    if let Some(loaded) = loader.poll() {
+        let why = whys
+            .iter()
+            .filter(|(seq, _)| *seq <= loaded.seq)
+            .map(|(_, why)| *why)
+            .max()
+            .unwrap_or(LoadWhy::Tick);
+        whys.retain(|(seq, _)| *seq > loaded.seq);
+        app.on_loaded(loaded.result, why);
+    }
+    app.loading = loader.loading();
+}
+
+fn run(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    slot: &ChildSlot,
+    loader: &mut Loader,
+) -> std::io::Result<()> {
     let mut running: Option<Running> = None;
     let mut last_tick = Instant::now();
+    let mut whys: Vec<(u64, LoadWhy)> = Vec::new();
     loop {
-        if DYING.load(Ordering::SeqCst) {
+        if GUARD.dying() {
             // The signal path owns the terminal now.
-            std::thread::sleep(Duration::from_secs(5));
-            continue;
+            park();
         }
+        pump_loads(app, loader, &mut whys);
         terminal.draw(|f| view::draw(f, app))?;
         // A prompt drawn whole with no input pending may take its `y`:
         // typed-ahead or pasted input never answers it.
@@ -455,11 +553,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App, slot: &ChildSlot) -> std::
                     }
                 }
             }
-            Command::Reload => {
-                if app.reload(true) {
-                    app.notice = Some("ledger re-read".into());
-                }
-            }
+            Command::Reload => app.request_load(LoadWhy::Key),
             Command::Edit { unit, crate_dir } => {
                 if let Err(why) = hand_edit(terminal, app, &unit, &crate_dir) {
                     app.notice = Some(why);
@@ -494,10 +588,27 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let snapshot = match Snapshot::load(&target) {
+    if !target.join("harness.toml").is_file() {
+        eprintln!(
+            "harness-tui: {} is not a harness target (no harness.toml); start with `--target \
+             <target dir>`",
+            target.display()
+        );
+        return ExitCode::from(2);
+    }
+    // The first read runs here, before the terminal is taken: a target the
+    // preflight refuses is refused in words.
+    let snapshot = match load::read(&target) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("harness-tui: {e}");
+            eprintln!("harness-tui: {} is unreadable: {e}", target.display());
+            return ExitCode::from(1);
+        }
+    };
+    let mut loader = match Loader::spawn(load::read) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("harness-tui: the loader thread: {e}");
             return ExitCode::from(1);
         }
     };
@@ -519,6 +630,7 @@ fn main() -> ExitCode {
             harness: harness.clone(),
             allow_unsandboxed: args.allow_unsandboxed,
             layout: args.layout,
+            providers: args.providers,
         },
         snapshot,
     );
@@ -528,17 +640,24 @@ fn main() -> ExitCode {
                 .into(),
         );
     }
-    let mut terminal = ratatui::init();
+    // Under the guard: a signal during the setup restores after it.
+    let Some(mut terminal) = GUARD.enable(|| {
+        let terminal = ratatui::init();
+        let _ = std::io::stdout().execute(EnableBracketedPaste);
+        terminal
+    }) else {
+        park();
+    };
     // ratatui's hook restores raw mode and the screen; ours also turns
-    // bracketed paste off, shows the cursor and names kept edits.
+    // bracketed paste off, shows the cursor and names kept edits — without
+    // the guard's mutex (a panic inside an enable holds it).
     let ratatui_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        restore_terminal();
+        GUARD.restore_on_panic(restore_terminal);
         announce_kept_edits();
         ratatui_hook(info);
     }));
-    let _ = std::io::stdout().execute(EnableBracketedPaste);
-    let result = run(&mut terminal, &mut app, &slot);
+    let result = run(&mut terminal, &mut app, &slot, &mut loader);
     restore_terminal();
     announce_kept_edits();
     if app.running && app.run.as_ref().is_some_and(|r| r.act == Act::HandEdit) {
@@ -553,5 +672,62 @@ fn main() -> ExitCode {
             eprintln!("harness-tui: {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// SAFE-10, CHK-5: a changed hand edit is on the kept list the signal
+    /// path prints BEFORE `resume` runs — a signal that lands during
+    /// `resume` names it.
+    #[test]
+    fn a_changed_edit_is_kept_before_the_terminal_is_taken_back() {
+        let base = std::env::temp_dir().join(format!("harness-tui-finish-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let crate_dir = base.join("crate");
+        std::fs::create_dir_all(crate_dir.join("src")).unwrap();
+        for f in handedit::EDIT_FILES {
+            std::fs::write(crate_dir.join(f), "pub fn f() {}\n").unwrap();
+        }
+        let session = handedit::prepare(&crate_dir, &base).unwrap();
+        std::fs::write(&session.files[0], "pub fn f() { /* edited */ }\n").unwrap();
+        let case = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib")
+            .canonicalize()
+            .unwrap();
+        let mut app = App::new(
+            Config {
+                target: case.clone(),
+                harness: None,
+                allow_unsandboxed: false,
+                layout: LayoutMode::Auto,
+                providers: vec!["external".into()],
+            },
+            load::read(&case).unwrap(),
+        );
+        let edit = session.tmp.join("edit");
+        let mut kept_at_resume = None;
+        let result = finish_edit(
+            &mut app,
+            "u-lib",
+            &session,
+            Ok(ExitStatus::from_raw(0)),
+            None,
+            || {
+                kept_at_resume = Some(guard(&KEPT_EDITS).contains(&edit));
+                Ok(())
+            },
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            kept_at_resume,
+            Some(true),
+            "the edit was not kept before resume"
+        );
+        assert!(guard(&KEPT_EDITS).contains(&edit));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

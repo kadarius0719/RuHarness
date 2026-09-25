@@ -199,8 +199,10 @@ pub fn unit_report(
     Ok(report)
 }
 
-/// The ledger's holder, when its process is alive.
-fn live_holder(ledger: &Ledger) -> Result<Option<Holder>, Error> {
+/// The ledger's writer-lock holder, when its process is alive (a dead
+/// holder's leftover line is ignored). Reads one bounded file and probes one
+/// pid — cheap enough for a client to call before offering a writing act.
+pub fn live_holder(ledger: &Ledger) -> Result<Option<Holder>, Error> {
     Ok(WriterLock::holder(ledger)?.filter(|h| pid_alive(h.pid)))
 }
 

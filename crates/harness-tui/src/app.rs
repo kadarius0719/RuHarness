@@ -19,6 +19,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
+/// The hand-off provider (a profile name or an adapter kind): its answers
+/// are written by whoever answers the request file.
+pub const EXTERNAL_PROVIDER: &str = "external";
 /// Longest steer note accepted (the CLI's limit).
 pub const MAX_NOTE_BYTES: usize = 2000;
 /// Longest hand-edit note accepted (the CLI's limit).
@@ -48,6 +51,11 @@ pub struct Config {
     pub allow_unsandboxed: bool,
     /// Pair layout.
     pub layout: LayoutMode,
+    /// The provider profiles a model act may use (`--provider`, repeatable;
+    /// default `external` only). Modify passes the first; Retry runs only
+    /// for a record whose provider is listed. The target's `harness.toml`
+    /// never chooses the provider (docs/COCKPIT-WRAPPER-DESIGN.md §4.3).
+    pub providers: Vec<String>,
 }
 
 /// Which pane `j`/`k` move.
@@ -94,6 +102,19 @@ impl Act {
             Act::Resume => "Resume",
         }
     }
+}
+
+/// Why a read of the ledger was asked for (docs/COCKPIT-WRAPPER-DESIGN.md
+/// §6.3: loads run on the loader thread; the requests fold, the strongest
+/// reason winning).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LoadWhy {
+    /// The 2 s tick while a command runs or a hand-off is outstanding.
+    Tick,
+    /// A spawned command was reaped: the pairs are re-read too.
+    Reaped,
+    /// `g`: the pairs are re-read, and the outcome is said.
+    Key,
 }
 
 /// A command waiting for `y`.
@@ -350,6 +371,12 @@ pub struct App {
     /// The open diff wrapped at `.0` columns (a view cache: a diff is
     /// wrapped once per width, not every frame).
     pub diff_rows: Option<(usize, Vec<ratatui::text::Line<'static>>)>,
+    /// A read of the ledger the event loop should start (on its loader).
+    pub load_request: Option<LoadWhy>,
+    /// A read is under way (set by the event loop).
+    pub loading: bool,
+    /// The last load's failure, said once until it changes.
+    last_load_error: Option<String>,
     pairs_key: Option<(String, Shown, String)>,
     pending_bracket: Option<char>,
     highlighter: Highlighter,
@@ -381,10 +408,15 @@ pub fn shell_line(argv: &[OsString]) -> String {
 /// Whether the awaited response file is there to resume from: it exists,
 /// is non-empty, and parses as a JSON object (a half-written file does not).
 pub fn response_present(path: &Path) -> bool {
-    std::fs::read(path).is_ok_and(|bytes| {
-        !bytes.is_empty()
-            && serde_json::from_slice::<serde_json::Value>(&bytes).is_ok_and(|v| v.is_object())
-    })
+    // A regular file within the ledger cap: never a FIFO, a device or a
+    // huge file read on the UI thread.
+    let regular = std::fs::metadata(path)
+        .is_ok_and(|m| m.is_file() && m.len() <= crate::preflight::MAX_LEDGER_FILE_BYTES);
+    regular
+        && std::fs::read(path).is_ok_and(|bytes| {
+            !bytes.is_empty()
+                && serde_json::from_slice::<serde_json::Value>(&bytes).is_ok_and(|v| v.is_object())
+        })
 }
 
 impl App {
@@ -411,6 +443,9 @@ impl App {
             confirm_scroll: 0,
             confirm_seen: false,
             confirm_armed: false,
+            load_request: None,
+            loading: false,
+            last_load_error: None,
             pairs_key: None,
             pending_bracket: None,
             highlighter: Highlighter::new(),
@@ -449,18 +484,49 @@ impl App {
         }
     }
 
-    /// Re-read the ledger, keeping the selection by id; `pairs` also
-    /// re-reads the shown crate (after a command was reaped, and on `g`);
-    /// the pairs are re-read anyway when the shown crate changed. `false`
-    /// when the ledger could not be read (the notice says why; the last
-    /// snapshot stays).
+    /// Ask the event loop for a read of the ledger (folded with any
+    /// request not yet started).
+    pub fn request_load(&mut self, why: LoadWhy) {
+        self.load_request = Some(self.load_request.map_or(why, |w| w.max(why)));
+    }
+
+    /// Re-read the ledger now, on this thread (the preflight, then the
+    /// snapshot): what a test does in place of the loader.
     pub fn reload(&mut self, pairs: bool) -> bool {
+        self.load_request = None;
+        let result = crate::load::read(&self.config.target);
+        self.on_loaded(result, if pairs { LoadWhy::Key } else { LoadWhy::Tick })
+    }
+
+    /// Serve the pending load request now, on this thread (tests).
+    pub fn load_now(&mut self) -> bool {
+        match self.load_request.take() {
+            Some(why) => {
+                let result = crate::load::read(&self.config.target);
+                self.on_loaded(result, why)
+            }
+            None => false,
+        }
+    }
+
+    /// A read finished: keep the selection by id; after a reaped command or
+    /// `g` the shown crate is re-read too (the pairs are re-read anyway when
+    /// the shown crate changed); look for the awaited responses. A failed
+    /// read keeps the last snapshot and says why — once, until the reason
+    /// changes. `false` when it failed.
+    pub fn on_loaded(&mut self, result: Result<Snapshot, String>, why: LoadWhy) -> bool {
         let unit_id = self.unit_view().map(|u| u.unit.id.clone());
         let rail_id = self.rail_attempt_id();
-        match Snapshot::load(&self.config.target) {
-            Ok(snapshot) => self.snapshot = snapshot,
+        match result {
+            Ok(snapshot) => {
+                self.snapshot = snapshot;
+                self.last_load_error = None;
+            }
             Err(e) => {
-                self.notice = Some(format!("reload failed: {e}"));
+                if why == LoadWhy::Key || self.last_load_error.as_deref() != Some(e.as_str()) {
+                    self.notice = Some(format!("unreadable: {e}"));
+                }
+                self.last_load_error = Some(e);
                 return false;
             }
         }
@@ -490,7 +556,11 @@ impl App {
             }),
             None => true,
         });
-        self.refresh_pairs(pairs);
+        self.refresh_pairs(why >= LoadWhy::Reaped);
+        self.check_response();
+        if why == LoadWhy::Key {
+            self.notice = Some("ledger re-read".into());
+        }
         true
     }
 
@@ -813,8 +883,7 @@ impl App {
                 }
             }
         }
-        self.reload(true);
-        self.check_response();
+        self.request_load(LoadWhy::Reaped);
         remove
     }
 
@@ -825,11 +894,11 @@ impl App {
     }
 
     /// The 2 s watcher: while a command runs or a hand-off is outstanding,
-    /// re-read the ledger and look for the response files. Never spawns.
+    /// re-read the ledger (on the loader) and look for the response files.
+    /// Never spawns.
     pub fn tick(&mut self) {
         if self.running || !self.awaiting.is_empty() {
-            self.reload(false);
-            self.check_response();
+            self.request_load(LoadWhy::Tick);
         }
     }
 
@@ -932,6 +1001,11 @@ impl App {
                 let Some(note) = note else {
                     return Err("no note".into());
                 };
+                let provider = self
+                    .config
+                    .providers
+                    .first()
+                    .ok_or("no provider is allowed (start with --provider <name>)")?;
                 let mut from = os("--from=");
                 from.push(&r.id);
                 let mut steer = os("--steer=");
@@ -941,6 +1015,7 @@ impl App {
                     os(&unit.unit.id),
                     self.target_arg(),
                     os("--no-promote"),
+                    os(format!("--provider={provider}")),
                     from,
                     steer,
                 ];
@@ -958,6 +1033,37 @@ impl App {
                 if r.provider_kind == HUMAN_KIND {
                     return Err("a hand edit has no run to retry".into());
                 }
+                // Its seed and note travel together, or it is not retried:
+                // a half-seeded record would run unseeded (CHK-13).
+                let seed = match (&r.seeded_from, &r.steer_note) {
+                    (Some(seed), Some(note)) => Some((seed, note)),
+                    (None, None) => None,
+                    _ => {
+                        return Err(format!(
+                            "attempt {} records only half of a steer (its seed or its note): \
+                             inconsistent, not retried",
+                            r.id
+                        ))
+                    }
+                };
+                // An unseeded `external` attempt's retry would pose a BLIND
+                // hand-off, which only the audited protocol may answer
+                // (SAFE-3).
+                if seed.is_none()
+                    && (r.provider == EXTERNAL_PROVIDER || r.provider_kind == EXTERNAL_PROVIDER)
+                {
+                    return Err(format!(
+                        "attempt {} is a blind `external` hand-off: only the audited protocol \
+                         (targets/tractor/handoff-tools) retries it",
+                        r.id
+                    ));
+                }
+                if !self.config.providers.contains(&r.provider) {
+                    return Err(format!(
+                        "provider `{}` is not allowed — start with `--provider {}`",
+                        r.provider, r.provider
+                    ));
+                }
                 let mut rest = vec![
                     os("migrate"),
                     os(&unit.unit.id),
@@ -967,7 +1073,7 @@ impl App {
                     os(format!("--provider={}", r.provider)),
                     os(format!("--model={}", r.model)),
                 ];
-                if let (Some(seed), Some(note)) = (&r.seeded_from, &r.steer_note) {
+                if let Some((seed, note)) = seed {
                     rest.push(os(format!("--from={seed}")));
                     rest.push(os(format!("--steer={note}")));
                 }
@@ -1141,16 +1247,21 @@ impl App {
         })
     }
 
-    /// Whether the Confirm prompt waits to be armed (see
+    /// An armed prompt is open: an act's Confirm, or the quit prompt.
+    fn prompting(&self) -> bool {
+        matches!(self.mode, Mode::Confirm(_) | Mode::QuitConfirm)
+    }
+
+    /// Whether the open prompt waits to be armed (see
     /// [`App::confirm_armed`]).
     pub fn confirm_waiting(&self) -> bool {
-        matches!(self.mode, Mode::Confirm(_)) && self.confirm_seen && !self.confirm_armed
+        self.prompting() && self.confirm_seen && !self.confirm_armed
     }
 
     /// Handle one key press.
     pub fn on_key(&mut self, key: KeyEvent) -> Command {
         let command = self.on_key_inner(key);
-        if !matches!(self.mode, Mode::Confirm(_)) {
+        if !self.prompting() {
             // Every prompt opens unarmed, unseen, at its top.
             self.confirm_armed = false;
             self.confirm_seen = false;
@@ -1445,10 +1556,22 @@ impl App {
                 };
             }
             Mode::QuitConfirm => {
+                // Armed like an act's prompt (SAFE-11): a `q` typed ahead or
+                // held never quits, and nothing but `Esc`/`n` acts unarmed.
                 return match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => Command::Quit,
-                    KeyCode::Char('Q') => Command::CancelAndQuit,
-                    _ => Command::None,
+                    KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => Command::None,
+                    KeyCode::Char('q') | KeyCode::Char('Q') if plain && self.confirm_armed => {
+                        Command::Quit
+                    }
+                    KeyCode::Char('x') if plain && self.confirm_armed => Command::CancelAndQuit,
+                    _ => {
+                        if matches!(key.code, KeyCode::Char('q' | 'Q' | 'x')) || ctrl_c {
+                            self.notice =
+                                Some("too soon — read the prompt, then press q or x".into());
+                        }
+                        self.mode = Mode::QuitConfirm;
+                        Command::None
+                    }
                 };
             }
         }
@@ -1464,14 +1587,8 @@ impl App {
             return self.quit();
         }
         match key.code {
-            KeyCode::Char('q') => return self.quit(),
-            KeyCode::Char('Q') => {
-                return if self.running {
-                    Command::CancelAndQuit
-                } else {
-                    Command::Quit
-                }
-            }
+            // `Q` is `q`: while a command runs, both ask (armed).
+            KeyCode::Char('q') | KeyCode::Char('Q') => return self.quit(),
             KeyCode::Char('?') => self.mode = Mode::Help { scroll: 0 },
             KeyCode::Esc => self.notice = None,
             KeyCode::Char(']') => self.pending_bracket = Some(']'),
@@ -1833,7 +1950,7 @@ mod tests {
     use super::*;
     use crate::testutil::{scratch_target, READ_SCALEFACTORS};
     use harness_core::attempts::{self, AttemptRecord};
-    use ratatui::crossterm::event::KeyEvent;
+    use ratatui::crossterm::event::{KeyEvent, KeyModifiers};
 
     const PROVENANCE: &str = "a-13c941dfff95";
     const HARNESS: &str = "/opt/ruharness/bin/harness";
@@ -1847,6 +1964,7 @@ mod tests {
                 harness: Some(PathBuf::from(HARNESS)),
                 allow_unsandboxed: false,
                 layout: LayoutMode::Auto,
+                providers: vec!["external".into()],
             },
             snapshot,
         )
@@ -1941,32 +2059,13 @@ mod tests {
                 "u-lib",
                 &format!("--target={root}"),
                 "--no-promote",
+                "--provider=external",
                 &format!("--from={PROVENANCE}"),
                 "--steer=- keep the wrapping add"
             ]
         );
         assert_eq!(key(&mut app, 'n'), Command::None, "n spawns nothing");
         assert_eq!(app.mode, Mode::Normal);
-        // Retry: the attempt's own run shape.
-        key(&mut app, 'r');
-        let argv = confirm_argv(&app);
-        assert_eq!(
-            argv[..7],
-            [
-                HARNESS,
-                "--json",
-                "migrate",
-                "u-lib",
-                &format!("--target={root}"),
-                "--no-promote",
-                "--retry"
-            ]
-        );
-        assert!(
-            argv.contains(&"--provider=external".to_string()),
-            "{argv:?}"
-        );
-        code(&mut app, KeyCode::Esc);
         // With --allow-unsandboxed the acts that run code pass it on.
         app.config.allow_unsandboxed = true;
         key(&mut app, 'a');
@@ -2061,10 +2160,12 @@ mod tests {
             .unwrap()
             .contains("a command is running"));
         assert_eq!(key(&mut app, 'x'), Command::Cancel);
-        // q asks; Q cancels and quits.
+        // q asks; its prompt is armed like any other.
         assert_eq!(key(&mut app, 'q'), Command::None);
         assert_eq!(app.mode, Mode::QuitConfirm);
-        assert_eq!(key(&mut app, 'Q'), Command::CancelAndQuit);
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'x'), Command::CancelAndQuit);
+        app.mode = Mode::Normal;
         app.running = false;
         assert_eq!(key(&mut app, 'q'), Command::Quit);
     }
@@ -2113,6 +2214,7 @@ mod tests {
             args: None,
         }));
         app.on_child_exit(ExitStatus::from_raw(1 << 8));
+        app.load_now();
         assert_eq!(app.awaiting.len(), 1);
         // No response yet, then a torn one: not resumable; the tick spawns
         // nothing either way (it has no way to).
@@ -2120,9 +2222,11 @@ mod tests {
         assert!(app.notice.as_deref().unwrap().contains("no response yet"));
         std::fs::write(&response, "{\"text\": ").unwrap();
         app.tick();
+        app.load_now();
         assert!(!app.awaiting[0].response_present);
         std::fs::write(&response, "{\"text\": \"x\"}").unwrap();
         app.tick();
+        app.load_now();
         assert!(app.awaiting[0].response_present);
         assert_eq!(app.mode, Mode::Normal, "the watcher never spawns or asks");
         // R: the stored argv, unchanged, expecting the awaited attempt.
@@ -2154,6 +2258,7 @@ mod tests {
             holder: None,
         }));
         app.on_child_exit(ExitStatus::from_raw(1 << 8));
+        app.load_now();
         key(&mut app, 'R');
         assert!(matches!(app.mode, Mode::Confirm(_)), "{:?}", app.notice);
         code(&mut app, KeyCode::Esc);
@@ -2164,6 +2269,7 @@ mod tests {
         rec.outcome = "red".into();
         rec.store(&dir).unwrap();
         app.tick();
+        app.load_now();
         assert!(app.awaiting.is_empty());
         key(&mut app, 'R');
         assert!(app
@@ -2197,6 +2303,12 @@ mod tests {
             "re-read on `result`"
         );
         app.on_child_exit(ExitStatus::from_raw(2));
+        assert!(
+            app.unit_view().unwrap().attempt(late).is_none(),
+            "read on the UI thread"
+        );
+        assert_eq!(app.load_request, Some(LoadWhy::Reaped));
+        app.load_now();
         assert!(app.unit_view().unwrap().attempt(late).is_some());
         let run = app.run.as_ref().unwrap();
         assert_eq!(run.exit.as_deref(), Some("interrupted (SIGINT)"));
@@ -2482,6 +2594,7 @@ mod tests {
         };
         app.on_spawned(&pending);
         app.on_child_exit(ExitStatus::from_raw(0));
+        app.load_now();
         let seen = app.pairs.iter().any(|p| {
             p.rust.iter().any(|l| matches!(l, CodeLine::Code { pieces, .. } if pieces.iter().any(|(_, t)| t.contains("// on disk"))))
         });
@@ -2544,6 +2657,7 @@ mod tests {
                 args: None,
             }));
             app.on_child_exit(ExitStatus::from_raw(1 << 8));
+            app.load_now();
         }
         assert_eq!(app.awaiting.len(), 2);
         show(&mut app, a);
@@ -2590,6 +2704,7 @@ mod tests {
         rec.store(&dir).unwrap();
         app.running = true;
         app.tick();
+        app.load_now();
         let seen = app.pairs.iter().any(|p| {
             p.rust.iter().any(|l| matches!(l, CodeLine::Code { pieces, .. } if pieces.iter().any(|(_, t)| t.contains("// changed"))))
         });
@@ -2626,6 +2741,196 @@ mod tests {
         let lines = diff_crates((&old, "a-old"), (&new, "a-new"));
         assert!(lines.iter().any(|l| l.contains("not diffed")), "{lines:?}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Rewrite the record of `id` in the scratch ledger.
+    fn edit_record(app: &mut App, id: &str, f: impl FnOnce(&mut AttemptRecord)) {
+        let ledger = harness_core::ledger::Ledger::new(&app.config.target);
+        let dir = attempts::attempt_dir(&ledger, "u-lib", id);
+        let mut rec = AttemptRecord::load(&dir).unwrap();
+        f(&mut rec);
+        rec.store(&dir).unwrap();
+        assert!(app.reload(true));
+    }
+
+    /// SAFE-11: `Q` is `q`, and the quit prompt acts only once armed — a
+    /// `q` typed ahead or held never quits, `Q` never cancels unasked.
+    #[test]
+    fn quit_and_its_prompt_go_through_arming() {
+        let mut app = app("quitarm");
+        app.running = true;
+        assert_eq!(
+            key(&mut app, 'Q'),
+            Command::None,
+            "Q never cancels directly"
+        );
+        assert_eq!(app.mode, Mode::QuitConfirm);
+        // Unarmed: q, Q, x and Ctrl-C do nothing but say so.
+        for c in ['q', 'Q', 'x'] {
+            assert_eq!(key(&mut app, c), Command::None, "{c} unarmed");
+            assert_eq!(app.mode, Mode::QuitConfirm);
+        }
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(app.on_key(ctrl_c), Command::None);
+        assert!(app.notice.as_deref().unwrap().contains("too soon"));
+        // Drawn whole but input pending: still unarmed.
+        app.confirm_seen = true;
+        assert!(app.confirm_waiting());
+        assert_eq!(key(&mut app, 'q'), Command::None);
+        // Armed: q quits (the command runs on), x stops it and quits.
+        app.confirm_armed = true;
+        assert_eq!(key(&mut app, 'q'), Command::Quit);
+        key(&mut app, 'q');
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'x'), Command::CancelAndQuit);
+        // Esc stays, and the next prompt opens unarmed.
+        key(&mut app, 'q');
+        arm(&mut app);
+        assert_eq!(code(&mut app, KeyCode::Esc), Command::None);
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.confirm_armed && !app.confirm_seen);
+        // With nothing running, q, Q and Ctrl-C quit at once.
+        app.running = false;
+        assert_eq!(key(&mut app, 'Q'), Command::Quit);
+        assert_eq!(app.on_key(ctrl_c), Command::Quit);
+    }
+
+    /// SAFE-3, SAFE-12, CHK-13: Retry never re-poses a blind `external`
+    /// hand-off, never runs a half-seeded record unseeded, and runs only a
+    /// provider the cockpit was started with.
+    #[test]
+    fn retry_refuses_blind_half_seeded_and_unlisted_providers() {
+        let mut app = app("retryrules");
+        let root = app.config.target.display().to_string();
+        let blind = |r: &mut AttemptRecord| {
+            r.provider = "external".into();
+            r.provider_kind = "external".into();
+            r.seeded_from = None;
+            r.steer_note = None;
+        };
+        edit_record(&mut app, PROVENANCE, blind);
+        show(&mut app, PROVENANCE);
+        key(&mut app, 'r');
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(
+            app.notice.as_deref().unwrap().contains("blind"),
+            "{:?}",
+            app.notice
+        );
+        // A profile of the external kind under another name: blind too.
+        edit_record(&mut app, PROVENANCE, |r| {
+            blind(r);
+            r.provider = "handoff".into();
+        });
+        app.config.providers.push("handoff".into());
+        key(&mut app, 'r');
+        assert!(
+            app.notice.as_deref().unwrap().contains("blind"),
+            "{:?}",
+            app.notice
+        );
+        // Half seeded: refused, never retried unseeded.
+        for (seed, note) in [(Some("a-000000000000"), None), (None, Some("- use iter()"))] {
+            edit_record(&mut app, PROVENANCE, |r| {
+                blind(r);
+                r.seeded_from = seed.map(String::from);
+                r.steer_note = note.map(String::from);
+            });
+            key(&mut app, 'r');
+            assert_eq!(app.mode, Mode::Normal);
+            assert!(
+                app.notice.as_deref().unwrap().contains("half"),
+                "{:?}",
+                app.notice
+            );
+        }
+        // A steer attempt of a listed provider: its own run shape.
+        edit_record(&mut app, PROVENANCE, |r| {
+            blind(r);
+            r.seeded_from = Some("a-000000000000".into());
+            r.steer_note = Some("- use iter()".into());
+        });
+        key(&mut app, 'r');
+        let argv = confirm_argv(&app);
+        assert_eq!(
+            argv,
+            [
+                HARNESS,
+                "--json",
+                "migrate",
+                "u-lib",
+                &format!("--target={root}"),
+                "--no-promote",
+                "--retry",
+                "--provider=external",
+                &format!("--model={}", app.shown_attempt().unwrap().record.model),
+                "--from=a-000000000000",
+                "--steer=- use iter()",
+            ]
+        );
+        code(&mut app, KeyCode::Esc);
+        // A provider not on the list: refused, naming the flag.
+        edit_record(&mut app, PROVENANCE, |r| {
+            r.provider = "anthropic-live".into();
+            r.provider_kind = "anthropic".into();
+        });
+        key(&mut app, 'r');
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(
+            app.notice
+                .as_deref()
+                .unwrap()
+                .contains("start with `--provider anthropic-live`"),
+            "{:?}",
+            app.notice
+        );
+        // An unseeded attempt of a listed live provider is a human's retry.
+        app.config.providers.push("anthropic-live".into());
+        edit_record(&mut app, PROVENANCE, |r| {
+            r.seeded_from = None;
+            r.steer_note = None;
+        });
+        key(&mut app, 'r');
+        assert!(confirm_argv(&app).contains(&"--provider=anthropic-live".to_string()));
+    }
+
+    /// CHK-1: Modify passes the cockpit's first listed provider — the
+    /// target's `harness.toml` never chooses it.
+    #[test]
+    fn modify_passes_the_first_listed_provider() {
+        let mut app = app("modprov");
+        app.config.providers = vec!["local".into(), "external".into()];
+        show(&mut app, PROVENANCE);
+        key(&mut app, 'm');
+        app.on_paste("tighten the loop");
+        code(&mut app, KeyCode::Enter);
+        let argv = confirm_argv(&app);
+        assert_eq!(
+            argv.iter()
+                .filter(|a| a.starts_with("--provider"))
+                .collect::<Vec<_>>(),
+            ["--provider=local"]
+        );
+    }
+
+    /// §6.3, §13 Freshness: a failed read keeps the last snapshot and says
+    /// why once; `g` always says it.
+    #[test]
+    fn a_failed_read_keeps_the_last_snapshot() {
+        let mut app = app("failread");
+        let units = app.snapshot.units.len();
+        assert!(!app.on_loaded(Err("boom".into()), LoadWhy::Tick));
+        assert_eq!(app.snapshot.units.len(), units);
+        assert_eq!(app.notice.as_deref(), Some("unreadable: boom"));
+        app.notice = None;
+        assert!(!app.on_loaded(Err("boom".into()), LoadWhy::Tick));
+        assert_eq!(app.notice, None, "said once");
+        assert!(!app.on_loaded(Err("boom".into()), LoadWhy::Key));
+        assert_eq!(app.notice.as_deref(), Some("unreadable: boom"));
+        // The requests fold, the strongest reason winning.
+        app.request_load(LoadWhy::Reaped);
+        app.request_load(LoadWhy::Tick);
+        assert_eq!(app.load_request, Some(LoadWhy::Reaped));
     }
 
     #[test]

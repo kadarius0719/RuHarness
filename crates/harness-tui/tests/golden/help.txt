@@ -20,7 +20,7 @@ u-lib (Tab, ┌ keys ───────────────────�
             │R            resume a hand-off that awaits a response                                         │
             │x            cancel the running command (SIGINT)                                              │aw_parts(scf
             │g            re-read the ledger                                                               │
-            │q / Q        quit / cancel the running command and quit                                       │
+            │q / Q        quit (while a command runs: q lets it finish, x stops it)                        │
             │             Every act shows its exact command and asks y/n first; a y typed ahead of the prom│nds_n.checke
             │pt, or pasted, never answers it.                                                              │iver
             │                                                                                              │

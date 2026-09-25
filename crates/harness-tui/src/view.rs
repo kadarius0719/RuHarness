@@ -754,7 +754,7 @@ const HELP: &[(&str, &str)] = &[
     ("R", "resume a hand-off that awaits a response"),
     ("x", "cancel the running command (SIGINT)"),
     ("g", "re-read the ledger"),
-    ("q / Q", "quit / cancel the running command and quit"),
+    ("q / Q", "quit (while a command runs: q lets it finish, x stops it)"),
     (
         "",
         "Every act shows its exact command and asks y/n first; a y typed ahead of the prompt, or pasted, never answers it.",
@@ -1049,19 +1049,26 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Mode::QuitConfirm => {
             let rows = vec![
                 Line::from("A command is running."),
-                Line::from("y  quit and leave it running (it finishes on its own)"),
-                Line::from("Q  cancel it (SIGINT) and quit"),
-                Line::from("any other key: stay"),
+                Line::from("q  quit and let it finish (it runs on to its end)"),
+                Line::from("x  stop it (SIGINT) and quit"),
+                Line::from("Esc  stay"),
             ];
+            let prompt = if app.confirm_armed {
+                "ready: q or x · Esc stays"
+            } else {
+                "reading… · Esc stays"
+            };
             overlay(
                 frame,
                 centered(area, 70, 30),
                 " quit? ",
                 &rows,
                 0,
-                None,
+                Some(prompt),
                 None,
             );
+            // Drawn whole: the event loop may arm it.
+            app.confirm_seen = true;
         }
     }
 }
@@ -1225,6 +1232,7 @@ mod tests {
                 harness: Some(PathBuf::from("/opt/ruharness/bin/harness")),
                 allow_unsandboxed: false,
                 layout,
+                providers: vec!["external".into()],
             },
             snapshot,
         )
@@ -1504,7 +1512,7 @@ mod tests {
         let screen = text(&render(&mut app, 140, 40));
         assert!(screen.contains("prefer iter()"));
         app.mode = Mode::QuitConfirm;
-        assert!(text(&render(&mut app, 140, 40)).contains("cancel it (SIGINT) and quit"));
+        assert!(text(&render(&mut app, 140, 40)).contains("x  stop it (SIGINT) and quit"));
         app.run = None;
         app.mode = Mode::Normal;
         app.run = Some(crate::app::RunPanel {
@@ -1614,6 +1622,7 @@ mod tests {
                 harness: None,
                 allow_unsandboxed: false,
                 layout: LayoutMode::Auto,
+                providers: vec!["external".into()],
             },
             snapshot,
         );

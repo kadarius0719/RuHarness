@@ -23,6 +23,9 @@ pub struct FactsState {
     pub files: usize,
     /// Of them, files whose hash no longer matches the tree.
     pub stale: usize,
+    /// Those files (repo-relative, as the facts record them); a missing or
+    /// unreadable file counts as stale. Additive (the cockpit's file tree).
+    pub stale_paths: Vec<String>,
 }
 
 /// Which recorded attempt produced the unit crate (R-5), by id.
@@ -124,6 +127,10 @@ pub struct UnitView {
     pub crate_dir: Option<PathBuf>,
     /// The committed verdict (`oracle-latest.json`), when readable.
     pub verdict: Option<Verdict>,
+    /// The unit crate's content hash (`hash::crate_content_hash`), when it
+    /// exists — what provenance and the "known code" test compare.
+    /// Additive (the cockpit's file tree).
+    pub crate_digest: Option<String>,
 }
 
 impl UnitView {
@@ -168,7 +175,7 @@ impl Snapshot {
             }
             Err(e) => return Err(e),
         };
-        let stale = facts
+        let stale_paths: Vec<String> = facts
             .files
             .iter()
             .filter(|f| {
@@ -176,10 +183,12 @@ impl Snapshot {
                     .map(|h| h != f.hash)
                     .unwrap_or(true)
             })
-            .count();
+            .map(|f| f.path.clone())
+            .collect();
         snapshot.facts_state = Some(FactsState {
             files: facts.files.len(),
-            stale,
+            stale: stale_paths.len(),
+            stale_paths,
         });
         let plan = match Plan::load(&ledger.plan_path()) {
             Ok(p) => p,
@@ -298,6 +307,7 @@ fn unit_view(
         provenance,
         crate_dir,
         verdict: Verdict::load(&ledger.verdict_latest_path(&unit.id)).ok(),
+        crate_digest,
     })
 }
 
