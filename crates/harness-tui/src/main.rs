@@ -202,6 +202,13 @@ fn bounded(budget: Duration, f: impl FnOnce() + Send + 'static) {
     }
 }
 
+/// One line on stderr, bounded (the terminal may have stopped reading).
+fn say(line: String) {
+    bounded(WRITE_WAIT, move || {
+        let _ = writeln!(std::io::stderr(), "{line}");
+    });
+}
+
 /// Tell the user where every kept hand edit is (stderr, after the
 /// terminal is restored) — bounded.
 fn announce_kept_edits() {
@@ -690,21 +697,27 @@ fn main() -> ExitCode {
     }) else {
         park();
     };
-    // ratatui's hook restores raw mode and the screen; ours also turns
-    // bracketed paste off, shows the cursor and names kept edits — without
-    // the guard's mutex (a panic inside an enable holds it).
-    let ratatui_hook = std::panic::take_hook();
+    // Our own hook, not ratatui's: its restore is an unbounded write to the
+    // terminal (review NEW-12). Ours restores through the guard — without
+    // its mutex on the main thread, which may hold it (a panic inside an
+    // enable) — names the kept edits and prints the panic, every write
+    // bounded. A helper thread's panic (the loader, a pipe reader, the
+    // signal path) ends the process: the main thread parks once the guard is
+    // dying — the running command is interrupted first, and the guard waits
+    // for a frame in flight (PROC-3; harness-mcp does the same).
+    let _ratatui_hook = std::panic::take_hook();
     let hook_slot = slot.clone();
     std::panic::set_hook(Box::new(move |info| {
-        GUARD.restore_on_panic(restore_terminal);
-        announce_kept_edits();
-        ratatui_hook(info);
-        // A helper thread (the loader, a pipe reader, the signal path)
-        // panicked: the main thread parks once the guard is dying, so the
-        // process ends here — the running command interrupted first
-        // (PROC-3; harness-mcp does the same).
-        if std::thread::current().name() != Some("main") {
+        let helper = std::thread::current().name() != Some("main");
+        if helper {
             let _ = spawn::try_interrupt(&hook_slot);
+            GUARD.restore_for_death(restore_terminal, ENABLE_WAIT);
+        } else {
+            GUARD.restore_on_panic(restore_terminal);
+        }
+        announce_kept_edits();
+        say(format!("harness-tui: {info}"));
+        if helper {
             std::process::exit(101);
         }
     }));
@@ -712,15 +725,16 @@ fn main() -> ExitCode {
     restore_terminal();
     announce_kept_edits();
     if app.running && app.run.as_ref().is_some_and(|r| r.act == Act::HandEdit) {
-        eprintln!(
+        say(
             "harness-tui: the hand-edit override is still running and may yet record the latest \
              of these (`harness state status` shows it)"
+                .into(),
         );
     }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("harness-tui: {e}");
+            say(format!("harness-tui: {e}"));
             ExitCode::from(1)
         }
     }

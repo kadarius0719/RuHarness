@@ -2,8 +2,10 @@
 //! all"; docs/COCKPIT-WRAPPER-DESIGN.md §6.3): checked BEFORE a snapshot is
 //! read, so a hostile target cannot hang, exhaust or steer a reader. One
 //! implementation for both clients of the read model: harness-mcp runs it
-//! before every tool call, the cockpit before every load (on its loader
-//! thread). Std and harness-core only.
+//! before every tool call; the cockpit before every load (on its loader
+//! thread) and again when a Re-check, Accept, Retry or Resume is confirmed
+//! (those confirms read the ledger and hash a crate). Std and harness-core
+//! only.
 
 use std::path::{Path, PathBuf};
 

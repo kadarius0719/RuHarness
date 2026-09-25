@@ -32,7 +32,7 @@
 │        · zlib_container.h    ││◇  zopfli_bin.c  planned                                                              │
 │        · zopfli.h      header││   zopfli_lib.c  in progress                                                          │
 │      ▸ ◇ zopfli_bin.c        ││                                                                                      │
-│      ▸ zopfli_lib.c          ││                                                                                      │
+│      ▸ zopfli_lib… in progre…││                                                                                      │
 │  ▾ Units (11)                ││                                                                                      │
 │    ▸ ⊘ u001-katajainen       ││                                                                                      │
 │    ▸ ⚠ u-cache               ││                                                                                      │
@@ -43,7 +43,7 @@
 │    ▸ ✓? u-gzip_container     ││                                                                                      │
 │    ▸ ◐ u-util           tried││                                                                                      │
 │    ▸ ◇ u-zlib_container      ││                                                                                      │
-│    ▸ u-zopfli_lib            ││                                                                                      │
+│    ▸ u-zopfli_lib in progress││                                                                                      │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
  Ready.
 

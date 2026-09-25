@@ -14,7 +14,7 @@ use crate::tree::Selection;
 /// What an item does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Open the node: focus moves into the View (or a directory unfolds).
+    /// Open the node: focus moves into the View.
     Open,
     /// Fold a directory (or unfold it).
     Fold,
@@ -124,11 +124,12 @@ impl App {
         let Some(state) = &self.snapshot.facts_state else {
             return Some("nothing is scanned yet — scan first".into());
         };
+        // The stale paths hold the missing files already (review ENG-6).
         let new = self
             .files
             .files
             .iter()
-            .filter(|f| matches!(f.state, FileState::New | FileState::Missing))
+            .filter(|f| f.state == FileState::New)
             .count();
         let n = state.stale + new;
         (n > 0).then(|| {
@@ -173,11 +174,17 @@ impl App {
             );
         }
         if !self.files.units.get(u).is_some_and(|i| i.known_code) {
-            return Some(
-                "the crate differs from every recorded attempt and from what the oracle last \
-                 judged — restore it, or record it with `harness override` (see Help)"
+            return Some(match unit.report.verdict.state {
+                harness_core::status::VerdictState::Present => {
+                    "the crate differs from every recorded attempt and from what the oracle last \
+                     judged — restore it, or record it with `harness override` (see Help)"
+                        .into()
+                }
+                _ => "the crate matches no recorded attempt and there is no verdict to compare \
+                      it with — restore the verdict (git), or record the crate with `harness \
+                      override` (see Help)"
                     .into(),
-            );
+            });
         }
         // Only code the View shows (review ENG-4): an internal function or
         // a header shows C source, not the crate.
@@ -708,6 +715,13 @@ mod tests {
         let mut r = harness_core::attempts::AttemptRecord::load(&dir).unwrap();
         r.promoted = false;
         r.store(&dir).unwrap();
+        // An earlier green attempt whose last turn is not green: not
+        // acceptable — the jump must skip it as the menu does (ENG-5).
+        let first = harness_core::attempts::attempt_dir(&ledger, "u-lib", "a-13c941dfff95");
+        let mut r = harness_core::attempts::AttemptRecord::load(&first).unwrap();
+        r.promoted = false;
+        r.turns.last_mut().unwrap().result = "oracle".into();
+        r.store(&first).unwrap();
         assert!(app.reload(true));
         app.select(Selection::Unit("u-lib".into()));
         let it = app
@@ -730,6 +744,37 @@ mod tests {
         app.select(Selection::Project);
         app.running = true;
         assert!(find(&app, &Action::DiscardKept).greyed.is_some());
+    }
+
+    /// Second fix pass, ENG-6: a missing file counts once in the greyed
+    /// reason too; NEW-10: an owned header with no function shows its
+    /// source, and Re-check waits for the unit.
+    #[test]
+    fn counts_and_owned_headers() {
+        let mut app = app("countsmenu");
+        std::fs::remove_file(app.config.target.join("test_case/include/lib.h")).unwrap();
+        assert!(app.reload(true));
+        let plan = find(&app, &Action::Act(crate::app::Act::Plan));
+        assert_eq!(
+            plan.greyed.as_deref(),
+            Some("1 file changed or new since the scan — scan first")
+        );
+        let mut app = crate::app::tests::app("ownedhmenu");
+        let p = app.config.target.join("migration/plan.toml");
+        let text = std::fs::read_to_string(&p).unwrap();
+        std::fs::write(
+            &p,
+            text.replace(
+                "files = [\"test_case/src/lib.c\"]",
+                "files = [\"test_case/src/lib.c\", \"test_case/include/lib.h\"]",
+            ),
+        )
+        .unwrap();
+        assert!(app.reload(true));
+        app.select(Selection::File("test_case/include/lib.h".into()));
+        assert!(app.source.is_some(), "its source, not an empty pairs view");
+        let recheck = find(&app, &Action::Act(crate::app::Act::Verify));
+        assert!(recheck.greyed.unwrap().contains("open the unit"));
     }
 
     /// Mutation-checked rules, over every node of both committed targets:

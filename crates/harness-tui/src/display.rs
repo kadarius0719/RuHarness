@@ -33,16 +33,29 @@ fn is_bidi_control(c: char) -> bool {
 /// mark, the tag block): rendered as `?`, so two target names never look
 /// alike on screen while differing (review SAFE-13).
 fn is_invisible_format(c: char) -> bool {
+    // Unicode's Default_Ignorable_Code_Point set, less what is filtered
+    // elsewhere (controls, bidi): invisible when rendered (review SAFE-13).
     matches!(
         c,
         '\u{00AD}'
-            | '\u{180E}'
+            | '\u{034F}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{17B4}'
+            | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
             | '\u{200B}'..='\u{200D}'
             | '\u{2028}'
             | '\u{2029}'
-            | '\u{2060}'..='\u{2064}'
+            | '\u{2060}'..='\u{2065}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
             | '\u{FEFF}'
-            | '\u{E0000}'..='\u{E007F}'
+            | '\u{FFA0}'
+            | '\u{FFF0}'..='\u{FFFB}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
     )
 }
 
@@ -137,6 +150,7 @@ mod tests {
         assert_eq!(line("lib\u{200B}.c"), "lib?.c");
         assert_eq!(line("\u{FEFF}a\u{00AD}b\u{2060}c\u{E0041}"), "?a?b?c?");
         assert_eq!(line("a\u{2028}b"), "a?b");
+        assert_eq!(line("x\u{FE0F}\u{3164}\u{E0100}y"), "x???y");
     }
 
     #[test]

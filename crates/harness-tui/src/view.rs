@@ -527,7 +527,13 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     // The word shows at the right edge when it fits; the selected row
     // always shows it — cut first, the name keeping at least half the row
     // (review USE-8).
-    let show_word = !word.is_empty() && !internal && (name_w + 2 + word_w <= room || selected);
+    // A state with no glyph (the fallback) shows its word always: it is its
+    // only sign (review USE-6).
+    let show_word = !word.is_empty()
+        && !internal
+        && (name_w + 2 + word_w <= room
+            || selected
+            || (glyph.is_empty() && matches!(sel, Selection::Unit(_) | Selection::File(_))));
     let (name_text, pad, word_text) = if show_word {
         let name_keep = name_w.min(room / 2);
         let word_room = room.saturating_sub(name_keep + 1).max(1);
@@ -653,7 +659,14 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     let state = unit_state(app, unit);
     if let Some(s) = state {
         let mut spans = vec![
-            Span::styled(format!("{} ", s.glyph()), glyph_style(s.glyph())),
+            Span::styled(
+                if s.glyph().is_empty() {
+                    String::new()
+                } else {
+                    format!("{} ", s.glyph())
+                },
+                glyph_style(s.glyph()),
+            ),
             Span::styled(format!("{} ", unit.unit.id), bold()),
             Span::raw(s.word()),
             Span::styled(format!(" · status {}", unit.report.status), dim()),
@@ -872,7 +885,9 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
     if !app.snapshot.units.is_empty() {
         let mut counts: Vec<(String, usize)> = Vec::new();
         for info in &app.files.units {
-            let key = format!("{} {}", info.state.glyph(), info.state.word());
+            let key = format!("{} {}", info.state.glyph(), info.state.word())
+                .trim()
+                .to_string();
             match counts.iter_mut().find(|(k, _)| *k == key) {
                 Some((_, n)) => *n += 1,
                 None => counts.push((key, 1)),
@@ -888,9 +903,9 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             width,
             Style::default(),
         ));
-    } else if let Some(note) = &app.snapshot.note {
-        lines.extend(wrapped(note, width, dim()));
     }
+    // (The read model's own note — "no plan — run `harness plan`" — is the
+    // CLI's wording; the Next step above says it the cockpit's way.)
     if let Some(h) = &app.holder {
         lines.extend(wrapped(
             &format!("Busy: `{}` holds the writer lock", h.command),
@@ -1255,13 +1270,12 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
     Line::from("")
 }
 
-/// The focused pane's keys, in priority order.
 /// The keys that work in the open overlay, when one is open (review USE-3);
 /// `None` in the panes.
 fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
     Some(match &app.mode {
         Mode::Normal => return None,
-        Mode::Menu(_) => vec![("↑↓", "choose"), ("Enter", "do it"), ("Esc", "close")],
+        Mode::Menu(_) => vec![("↑↓", "move"), ("Enter", "choose"), ("Esc", "close")],
         Mode::Dialog(c) => {
             let mut h = vec![("↑↓", "scroll")];
             if c.dialog.armed {
@@ -1287,6 +1301,7 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
     })
 }
 
+/// The focused pane's keys, in priority order.
 fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     let mut h: Vec<(&'static str, &'static str)> = Vec::new();
     match app.focus {
@@ -1296,13 +1311,18 @@ fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
             h.push(("Enter", "actions"));
         }
         Focus::View => {
+            // Enter goes to a link only once one is chosen (review NEW-6).
+            let chosen = app.link.and_then(|l| app.links.get(l)).is_some();
             if app.links.is_empty() {
                 h.push(("↑↓", "scroll"));
                 h.push(("←→", "side/back"));
                 h.push(("Enter", "actions"));
-            } else {
+            } else if chosen {
                 h.push(("↑↓", "choose"));
                 h.push(("Enter", "go there"));
+            } else {
+                h.push(("↑↓", "choose"));
+                h.push(("Enter", "actions"));
             }
         }
     }
@@ -1617,6 +1637,11 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let width = DIALOG_COLUMNS.min(area.width.saturating_sub(2));
     let inner_w = width.saturating_sub(2) as usize;
     let mut rows: Vec<Line<'static>> = Vec::new();
+    // A title too long for the border is repeated whole, first (review NEW-9).
+    let title_w = width_of(&display::line(&c.title));
+    if title_w + 2 > inner_w {
+        rows.extend(wrapped(&c.title, inner_w, bold()));
+    }
     for b in &c.body {
         rows.extend(wrapped(b, inner_w, Style::default()));
     }
@@ -1641,10 +1666,22 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     // on a terminal large enough to show it (review SAFE-5).
     let usable = inner_w >= 20 && page >= 2;
     c.dialog.seen = c.dialog.seen || (usable && scroll + page >= total);
-    if !usable {
-        c.body =
-            vec!["The terminal is too small for this dialog; enlarge it, or press Esc.".into()];
-    }
+    // Too small: this frame shows a note in place of the words — the
+    // dialog's own words are never changed (review NEW-1).
+    let rows: Vec<Line<'static>> = if usable {
+        rows
+    } else {
+        wrapped(
+            "The terminal is too small for this dialog; enlarge it, or press Esc.",
+            inner_w.max(1),
+            Style::default().fg(Color::Yellow),
+        )
+    };
+    let (total, scroll) = if usable {
+        (total, scroll)
+    } else {
+        (rows.len(), 0)
+    };
     // The buttons and the dialog's state, pinned at the bottom.
     let mut spans = Vec::new();
     let mut spots = Vec::new();
@@ -1665,7 +1702,11 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::styled(text, style));
         x += w + 1;
     }
-    let state = c.dialog.state_text();
+    let state = if usable {
+        c.dialog.state_text()
+    } else {
+        "too small to show".into()
+    };
     let state_style = if c.dialog.armed {
         Style::default().fg(Color::Green)
     } else if c.dialog.too_soon {
@@ -1683,7 +1724,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(bold())
         .title(Span::styled(
-            safe(&format!(" {} ", c.title), inner_w),
+            ellipsis(&format!(" {} ", c.title), inner_w),
             bold(),
         ));
     let inner = block.inner(rect);
@@ -2414,7 +2455,7 @@ mod tests {
         };
         assert!(bar(&mut app).ends_with("? help   q quit"));
         app.open_menu();
-        assert_eq!(bar(&mut app).trim(), "↑↓ choose   Enter do it   Esc close");
+        assert_eq!(bar(&mut app).trim(), "↑↓ move   Enter choose   Esc close");
         crate::app::tests::code(&mut app, KeyCode::Esc);
         attempt(&mut app, PROVENANCE);
         key(&mut app, 'm');
@@ -2426,6 +2467,32 @@ mod tests {
         assert_eq!(
             bar(&mut app).trim(),
             "↑↓ scroll   ←→ button   Enter press   Esc cancel"
+        );
+    }
+
+    /// Second fix pass, NEW-6 (hints): with links in the View but none
+    /// chosen, Enter opens the actions — the bar says so.
+    #[test]
+    fn the_view_hints_follow_the_link() {
+        let mut app = app("glinkhint");
+        let lib = app.config.target.join(LIB_C);
+        let c = std::fs::read_to_string(&lib).unwrap();
+        std::fs::write(&lib, format!("{c}\n")).unwrap();
+        assert!(app.reload(true));
+        crate::app::tests::code(&mut app, KeyCode::Tab);
+        let bar = |app: &mut App| {
+            text(&render(app, 160, 24))
+                .lines()
+                .last()
+                .unwrap()
+                .to_string()
+        };
+        assert!(bar(&mut app).contains("Enter actions"), "{}", bar(&mut app));
+        crate::app::tests::code(&mut app, KeyCode::Down);
+        assert!(
+            bar(&mut app).contains("Enter go there"),
+            "{}",
+            bar(&mut app)
         );
     }
 
@@ -2449,6 +2516,31 @@ mod tests {
         render(&mut app, 120, 30);
         let Mode::Dialog(c) = &app.mode else { panic!() };
         assert!(c.dialog.seen);
+        // Its words survive the small frames (review NEW-1).
+        assert!(
+            c.body
+                .iter()
+                .any(|b| b.contains("marks the attempt promoted")),
+            "{:?}",
+            c.body
+        );
+    }
+
+    /// Second fix pass, NEW-9: a title too long for the border is shown
+    /// whole in the dialog.
+    #[test]
+    fn a_long_title_is_shown_whole() {
+        let mut app = app("glongtitle");
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'a');
+        if let Mode::Dialog(c) = &mut app.mode {
+            c.title = format!(
+                "Replace {}'s verified crate with a-13c941dfff95?",
+                "u".repeat(60)
+            );
+        }
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(screen.contains("with a-13c941dfff95?"), "{screen}");
     }
 
     /// Review USE-15: no blank strip at 150 columns and wider — the View

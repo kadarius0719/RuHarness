@@ -35,20 +35,25 @@ pub fn read(target: &Path) -> Result<Read, String> {
     let ctx = harness_core::TargetContext::load(target).map_err(|e| e.to_string())?;
     // The tree lists only what lies inside the target (review SAFE-11): a
     // source_dir that leaves it is refused, as is one that resolves outside.
-    let source_dir = &ctx.config.target.source_dir;
-    let clean = !source_dir.is_empty()
-        && Path::new(source_dir).components().all(|c| {
-            matches!(
-                c,
-                std::path::Component::Normal(_) | std::path::Component::CurDir
-            )
-        });
-    let inside = snapshot
+    // An empty source_dir is the root, as the scanner reads it; a missing
+    // one lists nothing (the tree says why) — only one that leaves the
+    // target is refused (review NEW-6/NEW-7).
+    let source_dir = match ctx.config.target.source_dir.as_str() {
+        "" => ".",
+        dir => dir,
+    };
+    let clean = Path::new(source_dir).components().all(|c| {
+        matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    });
+    let outside = snapshot
         .root
         .join(source_dir)
         .canonicalize()
-        .is_ok_and(|dir| dir.starts_with(&snapshot.root));
-    if !clean || !inside {
+        .is_ok_and(|dir| !dir.starts_with(&snapshot.root));
+    if !clean || outside {
         return Err(format!(
             "harness.toml's source_dir {source_dir:?} is not a directory inside the target"
         ));
@@ -287,6 +292,23 @@ mod tests {
         assert!(read(&dir)
             .unwrap_err()
             .contains("not a directory inside the target"));
+        // Second fix pass, NEW-6/NEW-7: an empty source_dir is the root; a
+        // missing one reads, its tree saying why it is empty.
+        std::fs::write(
+            &config,
+            text.replace("source_dir = \"test_case\"", "source_dir = \"\""),
+        )
+        .unwrap();
+        let r = read(&dir).expect("an empty source_dir is the root");
+        assert!(r.walk.listed.iter().any(|f| f == "test_case/src/lib.c"));
+        std::fs::write(
+            &config,
+            text.replace("source_dir = \"test_case\"", "source_dir = \"gone\""),
+        )
+        .unwrap();
+        let r = read(&dir).expect("a missing source_dir still reads");
+        assert!(r.walk.listed.is_empty());
+        assert_eq!(r.walk.errors.len(), 1, "{:?}", r.walk.errors);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

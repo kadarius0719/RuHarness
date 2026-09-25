@@ -975,3 +975,32 @@ text above is not rewritten; this table governs.
 | `v` missing on attempts (ENG-9, USE-5); the hint bar ignored menus and dialogs (USE-3); functions opened at line 1 (USE-4); the fallback glyph was the header's (USE-6); ⊘ on a file in a golden (USE-7); names squeezed to `…` (USE-8); sandbox words contradicted (USE-9); no Open on the project (USE-10); `E` only on some nodes, Discard titled "Record" (USE-11); "Too soon" hid "scroll" (USE-12); Enter in the View jumped to a link on first run (USE-13); unbounded sideways scroll, Space paging the tree, Ctrl-C ignored in overlays (USE-14) | Show the checks on attempts; the hint bar lists the open overlay's keys (`? help`/`q quit` only in the panes); a function opens at its line; the fallback has no glyph; the golden fixed; the name keeps half the row and the C heading its line number; sandbox words follow the flag; Open on every node; `E` from anywhere, the discard dialog says what it is; "scroll to the end" first; Enter jumps only to a chosen link; sideways scroll stops at the widest line; no Space in the tree; Ctrl-C closes overlays |
 | an empty quarter of the screen from 150 columns (USE-15; this design's §1/§10) | **changed**: the View takes the width until the chat exists |
 | pty tests: UTF-8 split across reads, restore order unchecked, cooked mode unchecked, reused pids killed, temp dirs leaked; the loader test timing-dependent (PROC-7…10) | bytes decoded across reads; the restores asserted LAST; the shell records `stty -a` after a TERM (icanon, echo); only live pids reaped; temp dirs in drop guards; the loader test waits on the first read |
+
+## R4. Verification of the §R3 fix pass — resolved (2026-09-25)
+
+Three checkers over c089575: two re-checked every §R3 resolution (most complete; SAFE-8,
+SAFE-9, SAFE-13, PROC-2, ENG-5, ENG-6, USE-6 partial; the pty Reaper change ineffective), one
+hunted regressions the fixes introduced (12, none a panic). Resolved, each with a regression
+test, all mutation-checked (18 more mutations, killed):
+
+| finding | resolution |
+|---|---|
+| a dialog drawn once on a terminal too small overwrote its own words for good, then armed without them (NEW-1, found by all three) | the too-small note is drawn in place of the words for that frame only; the words are never changed |
+| Accept had no confirm-time check, so an outside edit after the menu (or Try again) replaced unknown code (SAFE-8 partial, NEW-2) | Accept confirms on the crate as it is now: a recorded candidate or what the oracle last judged, else refused |
+| a hand edit started from the last read of the crate (SAFE-9 partial) | the crate is re-hashed first; changed since the read, or unknown code, refuses |
+| the Modify dialog named the model of the last read while the command took `harness.toml`'s current one (NEW-3) | Modify passes `--model=` — the model the dialog names is the one that runs |
+| the preflight before EVERY confirm refused the Scan that could repair a broken file, and ran on the UI thread (NEW-4/NEW-6) | only where confirm reads: Re-check, Accept, Retry, Resume |
+| Try again of a Re-check re-captured the digest from the View, now elsewhere, and refused with a false reason (NEW-2/NEW-8) | Try again keeps the digest it was shown; a Re-check with nothing shown opens no dialog and says "open u-… first" |
+| a stale link swallowed `Enter`; the hints promised "go there" with no link chosen (NEW-5, NEW-6) | `Enter` goes to a link only when one is chosen and exists, else the menu; the hints follow |
+| a missing or empty `source_dir` refused the whole read (NEW-6/NEW-7) | empty is the root; missing lists nothing, the tree saying why; only a path leaving the target is refused |
+| every re-read snapped a function's source back to the function (NEW-3/NEW-7) | only selecting it does |
+| the plan/detect gate still counted a missing file twice (ENG-6 partial) | counted once |
+| an owned header with no function showed an empty pairs view, with Re-check offered (NEW-5/NEW-10) | its source; Re-check waits for the unit |
+| `public` computed after the one-row-per-name cut (NEW-11) | before it |
+| ChooseAttempt's filter differed from the menu's (ENG-5 partial) | the menu's item already carries the attempt it names: the jump selects the first acceptable one by the same rule (green, last turn green, bound, not promoted) |
+| discarding a kept edit left its Try again (NEW-8) | dropped with it |
+| the panic hook chained ratatui's (an unbounded write) and a helper thread's panic did not wait for a frame in flight (PROC-2 partial, NEW-3, NEW-12) | our own hook only: a helper thread's panic interrupts the child, restores with the guard's bounded wait, prints bounded, exits 101; every exit message bounded |
+| more invisible characters (SAFE-13 partial) | the Default_Ignorable set (variation selectors, Hangul fillers, the Mongolian selectors, the tag block, …) shown as `?` |
+| a glyph-less state showed nothing when its word did not fit (USE-6 partial); long titles clipped (NEW-9) | a unit or file with no glyph always shows its word; a title too long for the border is repeated whole in the dialog |
+| pty tests: the Reaper still killed reused pids; an empty `stty` file raced; the hangup test's edit dir outside its temp dir (PROC-10, NEW-4/5/10) | a pid is killed only while it runs the program recorded for it; the read waits for `icanon`; `TMPDIR` under the test's dir |
+| wording: the Re-check reason without a verdict; the menu's footer vs its hints; the summary repeating the CLI's "run `harness scan`" | worded for the case; "↑↓ move · Enter choose · Esc close"; the note dropped (the Next step says it) |

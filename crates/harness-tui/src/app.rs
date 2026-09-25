@@ -786,6 +786,16 @@ impl App {
         self.hscroll = 0;
         self.link = None;
         self.refresh_view(false);
+        // A function's source opens at the function (review USE-4) — on
+        // selection only: a re-read keeps where the user scrolled (NEW-7).
+        if let (Selection::Function(p, name), Some(_)) = (&self.selection, &self.source) {
+            let line = self
+                .files
+                .file(p)
+                .and_then(|f| f.functions.iter().find(|x| &x.name == name))
+                .map_or(1, |x| x.line as usize);
+            self.scroll = line.saturating_sub(1);
+        }
     }
 
     /// A jump: the current selection goes onto the back stack.
@@ -1004,11 +1014,12 @@ impl App {
         // C source: a file no unit owns, a header, an internal function.
         let source_of = match &sel {
             Selection::File(p) => {
-                let owned = self
-                    .files
-                    .file(p)
-                    .is_some_and(|f| matches!(f.state, FileState::Owned(_)));
-                (!owned).then(|| p.clone())
+                // An owned file with no function in its unit (a header) has
+                // no pairs to show: its source (review NEW-10).
+                let pairs = self.files.file(p).is_some_and(|f| {
+                    matches!(f.state, FileState::Owned(_)) && f.functions.iter().any(|x| x.in_unit)
+                });
+                (!pairs).then(|| p.clone())
             }
             Selection::Function(p, name) => {
                 let public = self
@@ -1021,15 +1032,6 @@ impl App {
         };
         if let Some(path) = source_of {
             self.source = Some(self.read_source(&path));
-            // A function's source opens at the function (review USE-4).
-            if let Selection::Function(p, name) = &sel {
-                let line = self
-                    .files
-                    .file(p)
-                    .and_then(|f| f.functions.iter().find(|x| &x.name == name))
-                    .map_or(1, |x| x.line as usize);
-                self.scroll = line.saturating_sub(1);
-            }
             return;
         }
         let Some(u) = self.owning_unit(&sel) else {
@@ -1364,6 +1366,14 @@ impl App {
 
     fn forget_edit(&mut self, tmp: &Path) {
         self.kept_edits.retain(|k| k.tmp != tmp);
+        // Its Try again would offer an edit that is gone (review NEW-8).
+        if self
+            .try_again
+            .as_ref()
+            .is_some_and(|p| p.cleanup.as_deref() == Some(tmp))
+        {
+            self.try_again = None;
+        }
     }
 
     /// The spawned command is over (both pipes at EOF, reaped): say how it
@@ -1595,12 +1605,16 @@ impl App {
                 from.push(&r.id);
                 let mut steer = os("--steer=");
                 steer.push(note);
+                // The model the dialog names is the one that runs: pinned
+                // from the last read, never re-chosen by a harness.toml edited
+                // meanwhile (review NEW-3).
                 let rest = vec![
                     os("migrate"),
                     os(&u.unit.id),
                     self.target_arg(),
                     os("--no-promote"),
                     os(format!("--provider={provider}")),
+                    os(format!("--model={}", self.migrate_model)),
                     from,
                     steer,
                 ];
@@ -1722,6 +1736,29 @@ impl App {
                 "this crate is not in the executor layout (src/logic.rs + src/ffi.rs)".into(),
             );
         }
+        // The unit crate as it is NOW: a hand edit of code the harness does
+        // not know would record all of it as a human's (review SAFE-9).
+        if !matches!(self.selection, Selection::Attempt(..)) {
+            let now = harness_core::hash::crate_content_hash(&dir)
+                .map_err(|e| format!("the crate could not be read: {e}"))?;
+            if unit.crate_digest.as_deref() != Some(now.as_str()) {
+                return Err("the crate changed on disk since the cockpit read it — press g".into());
+            }
+            let known = self
+                .snapshot
+                .units
+                .iter()
+                .position(|u| u.unit.id == unit.unit.id)
+                .and_then(|i| self.files.units.get(i))
+                .is_some_and(|i| i.known_code);
+            if !known {
+                return Err(format!(
+                    "{}'s crate holds code the harness does not know — record it with `harness \
+                     override` or restore it first (see Help)",
+                    unit.unit.id
+                ));
+            }
+        }
         Ok((unit.unit.id.clone(), dir))
     }
 
@@ -1840,11 +1877,17 @@ impl App {
                         format!("{} (from the attempt record)", provider.unwrap_or_default()),
                         format!("{} (from the attempt record)", model.unwrap_or_default()),
                     ),
+                    // Modify pins the target's migrate model as last read.
+                    Act::Modify => (
+                        provider.unwrap_or_default(),
+                        format!(
+                            "{} (the target's migrate routing)",
+                            model.unwrap_or_else(routing)
+                        ),
+                    ),
                     _ => (
                         provider.unwrap_or_else(|| "as the paused run".into()),
-                        model.unwrap_or_else(|| {
-                            format!("{} (the target's migrate routing)", routing())
-                        }),
+                        model.unwrap_or_else(|| "as the paused run".into()),
                     ),
                 };
                 let title = match p.act {
@@ -1922,11 +1965,22 @@ impl App {
     /// Open an act's dialog (nothing runs yet). A Re-check captures the
     /// crate digest the View shows now: confirm compares the disk with it.
     pub fn ask(&mut self, mut pending: Pending) {
-        if pending.act == Act::Verify {
+        if pending.act == Act::Verify && pending.shown_digest.is_none() {
             pending.shown_digest = match (&pending.unit, &self.pairs_unit) {
                 (Some(u), Some(shown)) if u == shown => self.pairs_digest.clone(),
                 _ => None,
             };
+            // Nothing shown, nothing to re-check (review NEW-2/NEW-8): say
+            // so now rather than refuse at confirm with a false reason.
+            if pending.shown_digest.is_none() {
+                let unit = pending.unit.as_deref().unwrap_or("the unit");
+                self.notice = notice(format!(
+                    "{}: open {unit} (or its crate) first — the cockpit re-checks only code it \
+                     shows",
+                    pending.label
+                ));
+                return;
+            }
         }
         self.open_dialog(Purpose::Act(pending));
     }
@@ -1967,8 +2021,15 @@ impl App {
             return Err(why);
         }
         let target = self.config.target.clone();
-        crate::preflight::preflight(&target)
-            .map_err(|why| format!("the project cannot be read safely: {why}"))?;
+        // The confirms below read the ledger and hash a crate: the preflight
+        // first, so each read is of a regular file within its cap and the
+        // crate holds no link (review SAFE-2). The other acts read nothing
+        // here — a broken file never refuses the Scan that could repair it
+        // (review NEW-6).
+        if matches!(p.act, Act::Verify | Act::Accept | Act::Retry | Act::Resume) {
+            crate::preflight::preflight(&target)
+                .map_err(|why| format!("the project cannot be read safely: {why}"))?;
+        }
         let ledger = Ledger::new(&target);
         let record = |unit: &str, attempt: &str| {
             let dir = harness_core::attempts::attempt_dir(&ledger, unit, attempt);
@@ -2003,26 +2064,27 @@ impl App {
                             .into(),
                     );
                 }
-                let unit = self.snapshot.unit(id).ok_or("the unit is gone")?;
-                let recorded = unit.attempts.iter().any(|a| {
-                    a.record.candidate_digest == now
-                        && record(id, &a.record.id).is_ok_and(|r| r.candidate_digest == now)
-                });
-                let judged = Verdict::load(&ledger.verdict_latest_path(id))
-                    .ok()
-                    .zip(harness_core::hash::unit_crate_file_set_hash(&target, &dir).ok())
-                    .is_some_and(|(v, set)| {
-                        !v.inputs.rust_crate.is_empty() && v.inputs.rust_crate == set
-                    });
-                if !(recorded || judged) {
-                    return Err(
-                        "the crate differs from every recorded attempt and from what the \
-                         oracle last judged — restore it, or record it with `harness override` \
-                         (see Help)"
-                            .into(),
-                    );
+                self.known_now(id, &dir, &now)
+            }
+            // Accept replaces the unit crate: never code the harness does
+            // not know, checked on the crate as it is now (review SAFE-8).
+            Act::Accept => {
+                let id = p.unit.as_deref().ok_or("no unit")?;
+                let Some(dir) = self.snapshot.unit(id).and_then(|u| u.crate_dir.clone()) else {
+                    return Ok(());
+                };
+                if !dir.join("Cargo.toml").is_file() {
+                    return Ok(());
                 }
-                Ok(())
+                let now = harness_core::hash::crate_content_hash(&dir)
+                    .map_err(|e| format!("the crate could not be read: {e}"))?;
+                self.known_now(id, &dir, &now).map_err(|_| {
+                    format!(
+                        "{id}'s crate holds code the harness does not know — Accept would \
+                         replace it; record it with `harness override` or restore it first (see \
+                         Help)"
+                    )
+                })
             }
             Act::Retry => {
                 let (Some(u), Some(a)) = (p.unit.as_deref(), p.attempt.as_deref()) else {
@@ -2060,6 +2122,36 @@ impl App {
                 Ok(())
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Whether the unit crate at `dir`, whose content hash is `now`, is code
+    /// the harness knows — read fresh: a recorded attempt's candidate, or
+    /// what the oracle last judged (§4.3).
+    fn known_now(&self, id: &str, dir: &Path, now: &str) -> Result<(), String> {
+        let ledger = Ledger::new(&self.config.target);
+        let recorded = self.snapshot.unit(id).is_some_and(|unit| {
+            unit.attempts.iter().any(|a| {
+                let fresh = AttemptRecord::load(&harness_core::attempts::attempt_dir(
+                    &ledger,
+                    id,
+                    &a.record.id,
+                ));
+                fresh.is_ok_and(|r| r.candidate_digest == now)
+            })
+        });
+        let judged = Verdict::load(&ledger.verdict_latest_path(id))
+            .ok()
+            .zip(harness_core::hash::unit_crate_file_set_hash(&self.config.target, dir).ok())
+            .is_some_and(|(v, set)| !v.inputs.rust_crate.is_empty() && v.inputs.rust_crate == set);
+        if recorded || judged {
+            Ok(())
+        } else {
+            Err(
+                "the crate differs from every recorded attempt and from what the oracle last \
+                 judged — restore it, or record it with `harness override` (see Help)"
+                    .into(),
+            )
         }
     }
 
@@ -2149,10 +2241,16 @@ impl App {
             Action::ChooseAttempt(id) => {
                 let unit = Selection::Unit(id.clone());
                 self.expansion.set(&unit, true);
+                // The menu's rule exactly (review ENG-5/NEW-4).
                 let first = self.snapshot.unit(id).and_then(|u| {
                     u.attempts
                         .iter()
-                        .find(|a| a.record.outcome == "green" && a.bound && !a.record.promoted)
+                        .find(|a| {
+                            a.record.outcome == "green"
+                                && a.last_result() == "green"
+                                && a.bound
+                                && !a.record.promoted
+                        })
                         .map(|a| a.record.id.clone())
                 });
                 match first {
@@ -2700,7 +2798,10 @@ impl App {
             KeyCode::Char('[') => self.pending_bracket = Some('['),
             KeyCode::Char('J') => self.next_unit(true),
             KeyCode::Char('K') => self.next_unit(false),
-            KeyCode::Enter if self.focus == Focus::View && self.link.is_some() => {
+            KeyCode::Enter
+                if self.focus == Focus::View
+                    && self.link.and_then(|l| self.links.get(l)).is_some() =>
+            {
                 if let Some(sel) = self.link.and_then(|l| self.links.get(l)).cloned() {
                     self.jump(sel);
                     self.focus = Focus::Files;
@@ -3364,6 +3465,7 @@ pub(crate) mod tests {
                 &format!("--target={root}"),
                 "--no-promote",
                 "--provider=external",
+                "--model=claude-sonnet-5",
                 &format!("--from={PROVENANCE}"),
                 "--steer=- keep the wrapping add"
             ]
@@ -4779,6 +4881,158 @@ pub(crate) mod tests {
             "{}",
             c.title
         );
+    }
+
+    /// Second fix pass, SAFE-8/NEW-2: Accept re-checks the unit crate at
+    /// confirm — an outside edit after the dialog opened is refused, from
+    /// the menu and from Try again.
+    #[test]
+    fn accept_refuses_unknown_code_at_confirm() {
+        let mut app = app("acceptknown");
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'a');
+        assert!(matches!(app.mode, Mode::Dialog(_)));
+        let logic = app.snapshot.units[0]
+            .crate_dir
+            .clone()
+            .unwrap()
+            .join("src/logic.rs");
+        let text = std::fs::read_to_string(&logic).unwrap();
+        std::fs::write(&logic, format!("{text}\n// by someone\n")).unwrap();
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(said(&app).contains("does not know"), "{}", said(&app));
+        // Try again of a lock-refused Accept: the same gate.
+        std::fs::write(&logic, &text).unwrap();
+        let p = app
+            .act_argv(Act::Accept, Some("u-lib"), Some(PROVENANCE), None)
+            .unwrap();
+        locked(&mut app, &p);
+        std::fs::write(&logic, format!("{text}\n// again\n")).unwrap();
+        key(&mut app, 't');
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(said(&app).contains("does not know"), "{}", said(&app));
+    }
+
+    /// Second fix pass, NEW-6: the confirm-time preflight runs only where
+    /// confirm reads — a broken record elsewhere never refuses the Scan that
+    /// could repair things; it refuses a Re-check.
+    #[test]
+    fn a_broken_record_never_refuses_a_scan() {
+        let mut app = app("scanpf");
+        let big = attempts::attempt_dir(&Ledger::new(&app.config.target), "u-lib", RED)
+            .join("attempt-verdict.json");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(crate::preflight::MAX_LEDGER_FILE_BYTES + 1)
+            .unwrap();
+        let scan = app.act_argv(Act::Scan, None, None, None).unwrap();
+        app.ask(scan);
+        arm(&mut app);
+        assert!(
+            matches!(key(&mut app, 'y'), Command::Spawn(_)),
+            "{}",
+            said(&app)
+        );
+        app.select(Selection::Unit("u-lib".into()));
+        let verify = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
+        app.ask(verify);
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(
+            said(&app).contains("cannot be read safely"),
+            "{}",
+            said(&app)
+        );
+    }
+
+    /// Second fix pass, NEW-2/NEW-8: a Re-check with nothing shown opens no
+    /// dialog and says why; one shown keeps its digest through Try again.
+    #[test]
+    fn a_recheck_needs_its_code_shown() {
+        let mut app = app("recheckshown");
+        let p = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
+        app.ask(p.clone());
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(said(&app).contains("open u-lib"), "{}", said(&app));
+        app.select(Selection::Unit("u-lib".into()));
+        app.ask(p);
+        let Mode::Dialog(c) = &app.mode else { panic!() };
+        let Purpose::Act(shown) = &c.purpose else {
+            panic!()
+        };
+        let shown = shown.clone();
+        code(&mut app, KeyCode::Esc);
+        locked(&mut app, &shown);
+        app.select(Selection::Project);
+        key(&mut app, 't');
+        arm(&mut app);
+        assert!(
+            matches!(key(&mut app, 'y'), Command::Spawn(_)),
+            "{}",
+            said(&app)
+        );
+    }
+
+    /// Second fix pass, NEW-5, NEW-7: a stale link never swallows Enter; a
+    /// re-read keeps where the user scrolled a function's source.
+    #[test]
+    fn stale_links_and_rereads() {
+        let mut app = app("stalelink");
+        app.focus = Focus::View;
+        app.link = Some(3);
+        app.links.clear();
+        code(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Menu(_)));
+        code(&mut app, KeyCode::Esc);
+        app.focus = Focus::Files;
+        app.select(Selection::Function(
+            LIB_C.into(),
+            "test_case/src/lib.c::get_bits".into(),
+        ));
+        app.scroll = 15;
+        assert!(app.reload(true));
+        assert_eq!(app.scroll, 15);
+    }
+
+    /// Second fix pass, NEW-8: discarding a kept edit also drops its Try
+    /// again; SAFE-9: a hand edit re-reads the crate first.
+    #[test]
+    fn discard_drops_try_again_and_edits_reread_the_crate() {
+        let mut app = app("discardtry");
+        let tmp = PathBuf::from("/tmp/dt");
+        app.edit_staged("u-lib".into(), tmp.join("stage"), tmp.clone());
+        code(&mut app, KeyCode::Enter);
+        let Mode::Dialog(c) = &app.mode else { panic!() };
+        let Purpose::Act(p) = &c.purpose else {
+            panic!()
+        };
+        let p = p.clone();
+        code(&mut app, KeyCode::Esc);
+        locked(&mut app, &p);
+        assert!(app.try_again.is_some());
+        key(&mut app, 't');
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'D'), Command::Cleanup(tmp));
+        assert!(app.try_again.is_none());
+        app.select(Selection::Crate("u-lib".into()));
+        assert!(app.hand_edit_target().is_ok());
+        let logic = app.snapshot.units[0]
+            .crate_dir
+            .clone()
+            .unwrap()
+            .join("src/logic.rs");
+        let text = std::fs::read_to_string(&logic).unwrap();
+        std::fs::write(&logic, format!("{text}\n// later\n")).unwrap();
+        assert!(app
+            .hand_edit_target()
+            .unwrap_err()
+            .contains("changed on disk"));
     }
 
     #[test]

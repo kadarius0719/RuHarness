@@ -100,13 +100,29 @@ fn wait_for<T>(what: &str, secs: u64, mut probe: impl FnMut() -> Option<T>) -> T
     }
 }
 
-/// Kills whatever the test started that is still alive, whatever happens
-/// (a pid that died long ago is left alone: it may have been reused).
-struct Reaper(Vec<u32>);
+/// Kills whatever the test started, whatever happens — each pid only while
+/// it still runs the program it ran when recorded (a pid that died and was
+/// reused by another program is left alone).
+struct Reaper(Vec<(u32, String)>);
+
+impl Reaper {
+    fn new(pid: u32) -> Reaper {
+        let mut r = Reaper(Vec::new());
+        r.push(pid);
+        r
+    }
+
+    fn push(&mut self, pid: u32) {
+        self.0.push((pid, comm_of(pid)));
+    }
+}
 
 impl Drop for Reaper {
     fn drop(&mut self) {
-        for pid in self.0.iter().filter(|p| alive(**p)) {
+        for (pid, comm) in &self.0 {
+            if comm.is_empty() || comm_of(*pid) != *comm {
+                continue;
+            }
             let _ = Command::new("/bin/kill")
                 .args(["-KILL", &pid.to_string()])
                 .stderr(Stdio::null())
@@ -221,6 +237,7 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
     };
     let mut script = script
         .env("EDITOR", &editor)
+        .env("TMPDIR", &tmp)
         .env_remove("VISUAL")
         .env("TERM", "xterm-256color")
         .stdin(Stdio::piped())
@@ -228,7 +245,7 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
         .stderr(Stdio::null())
         .spawn()
         .expect("script(1)");
-    let mut reaper = Reaper(vec![script.id()]);
+    let mut reaper = Reaper::new(script.id());
     let screen = Arc::new(Mutex::new(String::new()));
     {
         let screen = screen.clone();
@@ -281,7 +298,7 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
     let tui_pid = wait_for("the cockpit process", 10, || {
         children_of(script.id()).into_iter().next()
     });
-    reaper.0.push(tui_pid);
+    reaper.push(tui_pid);
     // The first unit, open it, down to its crate, then its attempt; hand
     // edit.
     press(b"J");
@@ -318,7 +335,7 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
             .into_iter()
             .find(|p| comm_of(*p).ends_with("harness"))
     });
-    reaper.0.push(harness_pid);
+    reaper.push(harness_pid);
     let drivers = wait_for("the spinning driver", 240, || {
         let d: Vec<u32> = children_of(harness_pid)
             .into_iter()
@@ -326,7 +343,9 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
             .collect();
         (!d.is_empty()).then_some(d)
     });
-    reaper.0.extend(&drivers);
+    for d in &drivers {
+        reaper.push(*d);
+    }
     // The harness leads its own group: the hangup cannot reach it.
     let pgid = |pid: u32| {
         let out = Command::new("ps")
@@ -384,17 +403,9 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
         "the holder line: {holder:?}"
     );
     let _ = script.wait();
+    // The interrupted edit's dir lives under `tmp` (TMPDIR): the guard
+    // removes both.
     drop(reaper);
-    let _ = std::fs::remove_dir_all(&tmp);
-    // The cockpit's own temp dir of the interrupted edit.
-    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
-        for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&format!("harness-tui-edit-{tui_pid}-")) {
-                let _ = std::fs::remove_dir_all(e.path());
-            }
-        }
-    }
 }
 
 /// The cockpit under a pty (`script`), sized so it draws, with `env` added
@@ -525,7 +536,7 @@ while :; do sleep 0.1; done
             ("TMPDIR", &edits),
         ],
     );
-    let mut reaper = Reaper(vec![script.id()]);
+    let mut reaper = Reaper::new(script.id());
     let mut press = |bytes: &[u8]| {
         keys.write_all(bytes).unwrap();
         keys.flush().unwrap();
@@ -537,7 +548,7 @@ while :; do sleep 0.1; done
     let tui_pid = wait_for("the cockpit process", 10, || {
         children_of(script.id()).into_iter().next()
     });
-    reaper.0.push(tui_pid);
+    reaper.push(tui_pid);
     // The unit's crate.
     press(b"J");
     press(RIGHT);
@@ -554,7 +565,7 @@ while :; do sleep 0.1; done
     let editor_pid: u32 = wait_for("the second editor", 20, || {
         std::fs::read_to_string(&ready).ok()?.trim().parse().ok()
     });
-    reaper.0.push(editor_pid);
+    reaper.push(editor_pid);
     assert!(Command::new("/bin/kill")
         .args(["-TERM", &tui_pid.to_string()])
         .status()
@@ -636,7 +647,7 @@ fn the_keyboard_scans_the_project_end_to_end() {
         ),
         &[],
     );
-    let mut reaper = Reaper(vec![script.id()]);
+    let mut reaper = Reaper::new(script.id());
     // What the screen shows now (the cockpit's pty is 40 × 140).
     let saw = |needle: &str| {
         on_screen(&screen, 40, 140).contains(&needle.split_whitespace().collect::<String>())
@@ -652,7 +663,7 @@ fn the_keyboard_scans_the_project_end_to_end() {
     let tui_pid = wait_for("the cockpit process", 10, || {
         children_of(script.id()).into_iter().next()
     });
-    reaper.0.push(tui_pid);
+    reaper.push(tui_pid);
     press(b"\r");
     wait_for("the menu", 10, || {
         saw("Enter choose · Esc close").then_some(())
@@ -704,7 +715,7 @@ fn a_term_right_after_the_editor_restores_and_names_the_edit() {
         &[("EDITOR", &editor), ("TMPDIR", &edits)],
         Some(&stty),
     );
-    let mut reaper = Reaper(vec![script.id()]);
+    let mut reaper = Reaper::new(script.id());
     let mut press = |bytes: &[u8]| {
         keys.write_all(bytes).unwrap();
         keys.flush().unwrap();
@@ -717,7 +728,7 @@ fn a_term_right_after_the_editor_restores_and_names_the_edit() {
         let shell = children_of(script.id()).into_iter().next()?;
         children_of(shell).into_iter().next()
     });
-    reaper.0.push(tui_pid);
+    reaper.push(tui_pid);
     press(b"J");
     press(RIGHT);
     press(DOWN);
@@ -750,7 +761,10 @@ fn a_term_right_after_the_editor_restores_and_names_the_edit() {
     );
     // Cooked mode again: the shell after it reads a canonical, echoing tty.
     let modes = wait_for("the shell's stty -a", 10, || {
-        std::fs::read_to_string(&stty).ok()
+        // Created by the redirection before stty writes: wait for its text.
+        std::fs::read_to_string(&stty)
+            .ok()
+            .filter(|t| t.contains("icanon"))
     });
     let words: Vec<&str> = modes.split_whitespace().collect();
     assert!(

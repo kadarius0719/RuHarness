@@ -479,11 +479,13 @@ pub fn build(snapshot: &Snapshot, walk: &TreeWalk) -> Files {
             let owner = owners.get(path).copied();
             let mut fns = functions.get(path).cloned().unwrap_or_default();
             fns.sort();
+            // Before the one-row-per-name cut: a public definition in any
+            // `#if` branch makes the file export (review NEW-11).
+            let public = fns.iter().any(|(_, _, public)| *public);
             // One row per name: the scanner records each `#if` branch's
             // definition (review ENG-7); the first span stands for them.
             let mut named = BTreeSet::new();
             fns.retain(|(_, name, _)| named.insert(*name));
-            let public = fns.iter().any(|(_, _, public)| *public);
             let state = if walk.absent.contains(path) {
                 FileState::Missing
             } else if stale.contains(path) {
@@ -958,6 +960,19 @@ mod tests {
             )
         });
         assert_eq!(t.state(LIB_H), FileState::Owned(0));
+    }
+
+    /// Second fix pass, NEW-11: a public definition in any `#if` branch
+    /// makes the file export, whichever branch comes first.
+    #[test]
+    fn a_later_public_branch_still_exports() {
+        let t = Copy::of(CASE, "laterpublic");
+        t.write("test_case/src/br.c", "static int f(void) { return 0; }\n");
+        t.scanned(
+            "test_case/src/br.c",
+            &[("f", "internal", 1), ("f", "public", 3)],
+        );
+        assert_eq!(t.state("test_case/src/br.c"), FileState::NotInPlan);
     }
 
     /// The tree's limits bound the listing and say so; the facts' files

@@ -128,7 +128,7 @@ The screen is the friendly wrapper's (docs/COCKPIT-WRAPPER-DESIGN.md §1–§9, 
 │▾ read_scalefactors_lib   ✓1/1││✓ u-lib migrated · status verified                                │
 │  ▾ test_case/            ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, fresh       │
 │    ▾ include/                ││Internal: get_bits() (compared through the unit's exported fun…)  │
-│        · lib.h         header││C  read_scalefactors (test_case/src/lib.… ⇄ Rust  read_scalefact… │
+│        · lib.h         header││C  read_scalefactors (lib.c:17)           ⇄ Rust  read_scalefact… │
 │    ▾ src/                ✓1/1││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe exter›│
 │      ▸ ✓ lib.c       migrated││…                                         │  …                   │
 │  ▾ Units (1)                 ││Checks  ✓ same exports  ✓ allowed calls only  ✓ driver shape  …   │
@@ -163,8 +163,9 @@ The screen is the friendly wrapper's (docs/COCKPIT-WRAPPER-DESIGN.md §1–§9, 
   (clears on the next key or after 8 s), else the plan summary, else the hand-offs' state.
   `c` shows the details — the run panel: the argv, every event line, the stderr tail, the
   exit.
-- **Hint bar**: the focused pane's keys; it drops whole entries, never cuts one; `? help`
-  and `q quit` are always last.
+- **Hint bar**: the keys that work now — the focused pane's, with `? help` and `q quit`
+  always last; in a menu, dialog, note, help or details, only that overlay's keys. It
+  drops whole entries, never cuts one.
 - **Menus and dialogs**: `Enter` opens the selection's menu (§4 of the wrapper design);
   every act, quit and cancel is an armed dialog (`dialog`: drawn whole, 300 ms since the last
   input read, nothing pending — a latch; focus on the safe button; after arming its letter,
