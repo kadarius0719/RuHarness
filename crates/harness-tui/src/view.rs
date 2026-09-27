@@ -3170,6 +3170,53 @@ mod tests {
         ));
     }
 
+    /// Verification NEW-1: the same mechanism stopped a running command — a
+    /// slow double click on "Cancel the running command" landed on the
+    /// Cancel dialog's `[Stop it x]`. Every size the verifier swept, and a
+    /// second press at any time within the settle time.
+    #[test]
+    fn a_slow_double_click_on_cancel_never_stops_the_command() {
+        let mut app = app("mcancel");
+        running(&mut app);
+        attempt(&mut app, PROVENANCE);
+        let t0 = Instant::now();
+        for (i, (w, h)) in [(80, 24), (100, 25), (120, 30), (160, 41)]
+            .into_iter()
+            .enumerate()
+        {
+            let t = t0 + Duration::from_secs(10 * i as u64);
+            app.mode = Mode::Normal;
+            app.open_menu();
+            render(&mut app, w, h);
+            let Mode::Menu(m) = &app.mode else { panic!() };
+            let cancel = m
+                .items
+                .iter()
+                .position(|i| i.label.starts_with("Cancel the running"))
+                .unwrap();
+            let at = spot(&app, &Hit::MenuItem(cancel));
+            click(&mut app, at, t);
+            assert!(matches!(&app.mode, Mode::Dialog(c) if c.purpose == Purpose::Cancel));
+            render(&mut app, w, h);
+            app.arm(t + ms(30), false);
+            app.arm(t + ms(340), false);
+            render(&mut app, w, h);
+            let stop = spot(&app, &Hit::Button(1));
+            // Within the window of the click that opened it: swallowed; after
+            // a pause, refused while it settles.
+            for late in [380, 450, 950] {
+                for spot in [at, stop] {
+                    assert_eq!(
+                        click(&mut app, spot, t + ms(late)),
+                        Command::None,
+                        "{w}x{h}"
+                    );
+                }
+            }
+            assert!(matches!(app.mode, Mode::Dialog(_)), "{w}x{h}");
+        }
+    }
+
     /// Reviews SAFE-B-1, SAFE-B-8: the activity row's buttons answer only in
     /// the panes. Under a dialog they do nothing (never its letter: `x` on
     /// an armed quit dialog is "Stop it and quit"); under a note they never
@@ -3377,13 +3424,17 @@ mod tests {
         event(&mut app, MouseEventKind::ScrollUp, files, t);
         assert_eq!(app.tree_offset, 0, "clamped");
         event(&mut app, MouseEventKind::ScrollDown, files, t);
-        // A key in the View, or the wheel in an overlay, leaves it (review
-        // USE-B-13, ENG-B-4); a key in the tree follows the selection.
+        // A key in the View, or the wheel in an overlay — with the focus in
+        // the tree too — leaves it (review USE-B-13, ENG-B-4); a key in the
+        // tree follows the selection.
         app.focus = Focus::View;
         crate::app::tests::code(&mut app, KeyCode::Down);
         key(&mut app, 'c');
+        app.focus = Focus::Files;
         render(&mut app, 120, 16);
-        event(&mut app, MouseEventKind::ScrollDown, (60, 12), t);
+        let details = spot(&app, &Hit::Overlay);
+        event(&mut app, MouseEventKind::ScrollDown, details, t);
+        assert!(matches!(app.mode, Mode::Details { .. }));
         app.mode = Mode::Normal;
         render(&mut app, 120, 16);
         assert_eq!(app.tree_offset, 3, "still where the wheel left it");
@@ -3495,6 +3546,11 @@ mod tests {
         render(&mut app, 120, 30);
         click_on(&mut app, &Hit::Hint("?"), t);
         assert!(matches!(app.mode, Mode::Help { .. }));
+        // A quick press anywhere right after the click that opened it is
+        // part of that gesture — not a click outside Help.
+        render(&mut app, 120, 30);
+        click(&mut app, (0, 0), t + ms(150));
+        assert!(matches!(app.mode, Mode::Help { .. }), "swallowed");
         render(&mut app, 120, 30);
         click_on(&mut app, &Hit::Hint("any other key"), t + ms(1000));
         assert!(matches!(app.mode, Mode::Normal), "Help closed");
