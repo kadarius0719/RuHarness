@@ -3163,7 +3163,9 @@ mod tests {
         assert!(matches!(&app.mode, Mode::Dialog(c) if c.dialog.armed));
         render(&mut app, 120, 30);
         let run = spot(&app, &Hit::Button(1));
-        for late in [450, 500, 700, 950] {
+        // Two refused clicks close together are no double click that could
+        // swallow the next, allowed one (review PROC-B-2).
+        for late in [450, 500, 700, 950, 1000] {
             assert_eq!(
                 click(&mut app, run, t + ms(late)),
                 Command::None,
@@ -3993,7 +3995,8 @@ mod tests {
         render(&mut app, 120, 30);
         click(&mut app, fold, t + ms(150));
         assert!(app.expansion.is_open(&unit), "opened once");
-        // A slipped click on Tab.
+        // A slipped click on Tab, read now (a key clears older notices).
+        let mut app = crate::app::tests::app("mslip");
         render(&mut app, 120, 30);
         let (r, _) = app
             .hits
@@ -4002,8 +4005,9 @@ mod tests {
             .cloned()
             .unwrap();
         let focus = app.focus;
-        event(&mut app, LEFT, (r.x + 1, r.y), t + ms(2000));
-        event(&mut app, UP, (r.x + r.width - 1, r.y), t + ms(2050));
+        let now = Instant::now();
+        event(&mut app, LEFT, (r.x + 1, r.y), now);
+        event(&mut app, UP, (r.x + r.width - 1, r.y), now);
         assert_ne!(app.focus, focus, "pressed");
         assert!(app.notice.as_ref().is_none_or(|n| n.text != DRAG_HINT));
     }

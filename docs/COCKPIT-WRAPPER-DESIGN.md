@@ -1046,4 +1046,27 @@ changes §7 (or §1), this table governs.
 | a crashed editor could leave `?1002h`/`?1003h` on (a flood restarting every dialog's quiet time); a failed resume left the mouse off for good; other fatal signals skipped the restore; `bounded` could skip it; a zero coordinate panicked debug builds (PROC-B-3, -4, -9, -8, -6) | `EnableMouse` resets 1003/1002/1015 first; the loop re-applies the mouse state after every hand edit (and turns it on first, under the guard); QUIT/USR1/USR2/ALRM go through the signal path; `bounded` runs inline if no thread starts; crossterm's overflow checks are off in dev |
 | tests took click targets from the hit record itself; the swallow, the loop's per-event step, the stall rule, the clip boundary and a dozen §7 behaviours had no killing test; the pty double click and trailing checks could flake (TEST-B-1…7, PROC-B-7) | every hit is checked against what the buffer shows under it (a scrolled tree, a scrolled list, the activity row, Help, a menu, a dialog); `App::on_event` is the loop's step; `QueueClock` is tested; the pty double click is re-sent until the menu shows and trailing bytes are waited for |
 | wording: Help's `m` line and hint, jargon, README claims (USE-B-15, USE-B-17) | reworded; README describes what the mouse does now |
+| the hint bar's `↑↓`/`←→` did nothing on a click, and crowd out clickable entries at narrow widths (USE-B-11) | `←→` folds the selection, `↑↓` says what moves; the ranking and the overlays' border prompts stay (accepted) |
 | **accepted** — hits are the last frame's: a reload that shifts rows within the user's reaction time can put another row under the pointer (NEW-3); the checks' rows, the notice row and the Next step are not clickable, and a double click on the View's code does nothing (USE-B-14); a stop (TSTP) is not handled — raw mode makes Ctrl-Z a key | effects limited to selection and menus (every act still asks, armed); revisit with the chat pane |
+
+## R7. Check of the fix pass — resolved (2026-09-27)
+
+Three checkers over 2a05443: two re-checked every §R6 row (most complete; the rows on
+activity buttons and dialog buttons partial through one hole, several rows partial on tests,
+USE-B-11 missing from the table — added above), one hunted regressions (1 medium, 8 low). The
+medium was found by all three. Resolved, each with a regression test; the mutation list now
+holds 67 mutations of the Build B rules and fixes: 65 killed, 2 equivalent (a second guard
+covers each: the held press's screen-and-dialog check behind the key that drops it; the wheel
+no longer touching the follow state either way).
+
+| finding | resolution |
+|---|---|
+| **med** — a press held while a key opened something survived: its release answered the new screen — a held `[Cancel x]` + `q` quit and stopped the command; an accepted press on a button + Esc, `x` answered an unarmed Cancel dialog (N-C1-1 = N-C2-1 = N-C3-1) | any key or paste drops a held press; a release answers only the screen and the dialog (by when it opened) it was pressed in |
+| the settle and the swallow were timed at read time: a press read late after a stall could have come inside them (N-C2-2); the queue clock charged an idle press the poll's wait (N-C1-4) | both allow for how long the press may have waited; a poll that waited saw the event as it returned |
+| a swallow chained: steady clicks < 400 ms apart were all eaten, with no word (N-C1-3, N-C3-2); a double click on ▸ opened and folded (N-C1-5, N-C2-4, N-C3-4); the drag hint showed on a click that slipped along a key and acted (N-C2-3, N-C3-6) | **changed**: the window runs from the gesture and never extends; only a press or release that opened or closed something (the frame), a double click and ▸ (their region) swallow — repeated clicks on a key that opens nothing all count; no drag hint on a click that acted |
+| follow came back on a key judged before it: Tab into a wheeled tree hid the selection; Help in and out snapped it back (N-C3-3) | judged after the key: a key in the panes that leaves the focus in the tree (or the View, for a list's link) |
+| "Too soon — click again" stayed, and showed after a key refused on a small frame (N-C3-7), in the ready colour (N-C1-6); the dialog's hint bar moved Esc when it armed (N-C1-2); the arrows' notice spoke of rows inside a dialog (N-C2-6) | a flag of its own for a refused click, cleared by an accepted press or a key, in yellow; Esc first in the dialog's hints; the notice fits the screen; "· or click" on the ready line |
+| a menu's footer still moved its items on a frame with no room below (N-C2-5) | the footer is cut instead |
+| the drain ate keys typed after a keyboard quit or `e` (N-C3-5); clicks during the signal path's wait for the command reached the shell (PROC-B-1 d) | the drain runs only while the mouse is in use (a press down, or an event in the last 500 ms); the signal path turns the mouse off before it waits |
+| stale comments (N-C3-9); `bounded`'s inline fallback can wait on the stdout lock (N-C3-8) | comments brought up to date; the trade-off written at `bounded` (two failures at once) |
+| **accepted** — keys on an armed dialog need no armed frame (SAFE-B-7's key half: Build A's rule); the overlays' border prompts and the notice row are not clickable; a double click on the View's code does nothing | as decided in §R6 |

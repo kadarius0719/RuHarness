@@ -776,6 +776,9 @@ fn no_mouse_never_turns_the_mouse_on() {
         children_of(script.id()).into_iter().next()
     });
     reaper.push(tui_pid);
+    // Let the loop run a while — it turns the mouse on (or not) after its
+    // first pass — before quitting.
+    std::thread::sleep(Duration::from_millis(600));
     keys.write_all(b"q").unwrap();
     keys.flush().unwrap();
     wait_for("the cockpit to quit", 10, || {
