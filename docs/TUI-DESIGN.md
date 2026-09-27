@@ -170,7 +170,9 @@ The screen is the friendly wrapper's (docs/COCKPIT-WRAPPER-DESIGN.md §1–§9, 
   every act, quit and cancel is an armed dialog (`dialog`: drawn whole, 300 ms since the last
   input read, nothing pending — a latch; focus on the safe button; after arming its letter,
   or a move plus `Enter`). Below 80 columns one pane shows at a time. Each clickable region
-  is recorded as it is drawn (`App::hits`, for Build B's mouse).
+  is recorded as it is drawn (`App::hits`); the mouse (wrapper design §7, Build B) answers
+  from that record — a click selects, a double click is `Enter`, the wheel scrolls, a
+  dialog's buttons answer only once armed — and is switched off on every way out.
 
 ## 4. Acts: every write is a spawned `harness --json …`
 

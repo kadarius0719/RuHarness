@@ -983,3 +983,156 @@ fn on_screen(screen: &Mutex<String>, rows: usize, cols: usize) -> String {
         .filter(|c| !c.is_whitespace())
         .collect()
 }
+
+/// A left click at the 0-based cell (`col`, `row`), as a terminal in SGR
+/// mouse mode sends it: the press, then the release.
+fn sgr_click(col: usize, row: usize) -> String {
+    let (x, y) = (col + 1, row + 1);
+    format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m")
+}
+
+/// Where `needle` is on the screen: every (row, column) it starts at, in
+/// cells (a wide character's second cell is a space in [`rendered`]).
+fn locate(grid: &[String], needle: &str) -> Vec<(usize, usize)> {
+    let needle: Vec<char> = needle.chars().collect();
+    let mut found = Vec::new();
+    for (r, row) in grid.iter().enumerate() {
+        let cells: Vec<char> = row.chars().collect();
+        for c in 0..cells.len().saturating_sub(needle.len() - 1) {
+            if cells[c..c + needle.len()] == needle[..] {
+                found.push((r, c));
+            }
+        }
+    }
+    found
+}
+
+/// docs/COCKPIT-WRAPPER-DESIGN.md §7 end to end, through the terminal's
+/// own mouse reports (SGR, parsed by crossterm): a double click on the
+/// project opens its menu; a click on "Scan the project" opens its dialog;
+/// a click on Run that lands before the dialog is ready is dropped ("Too
+/// soon"), and one once it is ready runs the scan. A drag says how to
+/// select text; Help's line turns the mouse off and `m` on again.
+#[test]
+fn the_mouse_scans_the_project_end_to_end() {
+    let case = Case::new("e2e-mouse");
+    let target = case.target();
+    let lib = target.join("test_case/src/lib.c");
+    let c = std::fs::read_to_string(&lib).unwrap();
+    std::fs::write(&lib, format!("{c}/* edited outside */\n")).unwrap();
+    let facts = target.join("migration/facts.jsonl");
+    let before = std::fs::read_to_string(&facts).unwrap();
+    let (mut script, screen, mut keys) = cockpit(
+        &format!(
+            "--target '{}' --harness '{}'",
+            target.display(),
+            harness_bin().display()
+        ),
+        &[],
+    );
+    let mut reaper = Reaper::new(script.id());
+    let saw = |needle: &str| {
+        on_screen(&screen, 40, 140).contains(&needle.split_whitespace().collect::<String>())
+    };
+    let grid = || rendered(&screen.lock().unwrap(), 40, 140);
+    let mut send = |bytes: &[u8]| {
+        keys.write_all(bytes).unwrap();
+        keys.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    wait_for("the cockpit to draw", 30, || {
+        saw("Next step: 1 file changed").then_some(())
+    });
+    let tui_pid = wait_for("the cockpit process", 10, || {
+        children_of(script.id()).into_iter().next()
+    });
+    reaper.push(tui_pid);
+    // The project is the tree's first row (inside the Files border).
+    let project = sgr_click(3, 1);
+    let open_menu = format!("{project}{project}");
+    send(open_menu.as_bytes());
+    wait_for("the menu (a double click)", 10, || {
+        saw("Enter choose · Esc close").then_some(())
+    });
+    // The menu's item: its row starts at the menu's left border.
+    let item = || {
+        let g = grid();
+        locate(&g, "Scan the project")
+            .into_iter()
+            .find(|&(r, c)| c >= 3 && g[r].chars().nth(c - 3) == Some('│'))
+    };
+    let (ir, ic) = wait_for("the Scan item", 10, item);
+    send(sgr_click(ic + 2, ir).as_bytes());
+    wait_for("the ready Scan dialog", 10, || {
+        (saw("Scan the project?") && saw("ready: → then Enter, or y")).then_some(())
+    });
+    let (br, bc) = wait_for("the Run button", 10, || {
+        locate(&grid(), "[ Run  y ]").into_iter().next()
+    });
+    let run = sgr_click(bc + 2, br);
+    // Esc: not run. The same dialog again — and a click on Run read right
+    // after the click that opened it: dropped, the scan not run.
+    send(b"\x1b");
+    wait_for("the dialog to close", 10, || {
+        (!saw("Scan the project?")).then_some(())
+    });
+    send(open_menu.as_bytes());
+    wait_for("the menu again", 10, || {
+        saw("Enter choose · Esc close").then_some(())
+    });
+    let (ir, ic) = wait_for("the Scan item", 10, item);
+    send(format!("{}{run}", sgr_click(ic + 2, ir)).as_bytes());
+    wait_for("the early click dropped", 10, || {
+        saw("Too soon — wait for ready").then_some(())
+    });
+    assert!(
+        !saw("Last: Scan the project"),
+        "an unarmed click ran the scan"
+    );
+    assert_eq!(std::fs::read_to_string(&facts).unwrap(), before);
+    wait_for("the dialog to be ready", 10, || {
+        saw("ready: → then Enter, or y").then_some(())
+    });
+    send(run.as_bytes());
+    wait_for("the scan to finish", 60, || {
+        saw("Last: Scan the project — Done").then_some(())
+    });
+    assert_ne!(
+        std::fs::read_to_string(&facts).unwrap(),
+        before,
+        "the facts are rewritten"
+    );
+    // A drag: a press and a release on different cells.
+    send(b"\x1b[<0;50;6M\x1b[<0;70;9m");
+    wait_for("the drag hint", 10, || {
+        saw("To select text, hold Option").then_some(())
+    });
+    // Help's line turns the mouse off (the terminal told), `m` on again.
+    send(b"?");
+    let (hr, hc) = wait_for("Help's mouse line", 10, || {
+        locate(&grid(), "Mouse: on").into_iter().next()
+    });
+    let on_before = screen.lock().unwrap().len();
+    send(sgr_click(hc + 2, hr).as_bytes());
+    wait_for("the mouse off", 10, || saw("Mouse: off").then_some(()));
+    assert!(mouse_left_off(&screen.lock().unwrap()[on_before..]));
+    send(b"m");
+    wait_for("the mouse on again", 10, || saw("Mouse: on").then_some(()));
+    {
+        let s = screen.lock().unwrap();
+        let tail = &s[on_before..];
+        assert!(
+            tail.rfind(MOUSE_ON) > tail.rfind("\u{1b}[?1000l"),
+            "the mouse not turned on again"
+        );
+    }
+    send(b"\x1b");
+    send(b"q");
+    wait_for("the cockpit to quit", 10, || {
+        (!alive(tui_pid)).then_some(())
+    });
+    let status = script.wait().unwrap();
+    assert!(status.success(), "{status:?}");
+    assert!(mouse_left_off(&screen.lock().unwrap()));
+    drop(reaper);
+}

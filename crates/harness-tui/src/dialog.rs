@@ -249,6 +249,24 @@ impl Dialog {
         Outcome::Stay
     }
 
+    /// A click on button `i`, read at `now` (docs/COCKPIT-WRAPPER-DESIGN.md
+    /// §7): a deliberate press at a position, so no prior move is needed —
+    /// but only once armed, and only on a frame that can show the dialog.
+    /// Before that it is dropped like a key: "Too soon", and the wait
+    /// restarts. The safe button too: a double click that opened the dialog
+    /// never lands on it.
+    pub fn click(&mut self, i: usize, now: Instant) -> Outcome {
+        self.input(now);
+        if !self.armed || !self.usable {
+            self.too_soon = true;
+            return Outcome::Stay;
+        }
+        match self.buttons.get(i) {
+            Some(b) => Outcome::Close(b.choice),
+            None => Outcome::Stay,
+        }
+    }
+
     /// The status the dialog shows beside its buttons.
     pub fn state_text(&self) -> String {
         if self.armed {
@@ -325,6 +343,26 @@ mod tests {
             Outcome::Stay
         );
         assert!(d.armed);
+    }
+
+    /// §7: a click on a button is dropped before arming (any button, the
+    /// safe one too), restarting the wait; once armed it is that button;
+    /// never on a frame too small to show the dialog.
+    #[test]
+    fn a_click_acts_only_once_armed() {
+        let t0 = Instant::now();
+        let mut d = drawn(Kind::Override, t0);
+        for i in 0..3 {
+            assert_eq!(d.click(i, t0 + ms(100)), Outcome::Stay);
+            assert!(d.too_soon);
+        }
+        assert!(!d.arm(t0 + ms(399), false), "the wait restarted at 100 ms");
+        assert!(d.arm(t0 + ms(400), false));
+        assert_eq!(d.click(2, t0 + ms(401)), Outcome::Close(Choice::Discard));
+        assert_eq!(d.click(0, t0 + ms(401)), Outcome::Close(Choice::Safe));
+        assert_eq!(d.click(9, t0 + ms(401)), Outcome::Stay);
+        d.usable = false;
+        assert_eq!(d.click(1, t0 + ms(402)), Outcome::Stay);
     }
 
     /// Mutation-checked rule: a held `Enter` never runs anything — one

@@ -527,6 +527,11 @@ fn run(
     let mut whys: Vec<(u64, LoadWhy)> = Vec::new();
     // The terminal's mouse modes, as last written (set up with the terminal).
     let mut mouse_on = app.mouse;
+    // Double clicks are timed by the cockpit (§7): after an iteration that
+    // took longer than the window, the input read next may have waited in
+    // the queue — its presses are untimed until a poll finds the queue empty.
+    let mut last_poll = Instant::now();
+    let mut caught_up = true;
     loop {
         if GUARD.dying() {
             // The signal path owns the terminal now.
@@ -547,15 +552,24 @@ fn run(
             app.arm(Instant::now(), pending);
         }
         let mut command = Command::None;
-        if event::poll(Duration::from_millis(60))? {
+        if last_poll.elapsed() > harness_tui::app::DOUBLE_CLICK {
+            caught_up = false;
+        }
+        let ready = event::poll(Duration::from_millis(60))?;
+        last_poll = Instant::now();
+        if !ready {
+            caught_up = true;
+        } else {
             let event = event::read()?;
             let now = Instant::now();
-            // Every input read restarts an open dialog's quiet time.
+            // Every input read restarts an open dialog's quiet time — the
+            // mouse's too.
             app.on_input(now);
             match event {
                 TermEvent::Key(key) if key.kind == KeyEventKind::Press => {
                     command = app.on_key(key, now);
                 }
+                TermEvent::Mouse(mouse) => command = app.on_mouse(mouse, now, caught_up),
                 TermEvent::Paste(text) => app.on_paste(&text),
                 _ => {}
             }

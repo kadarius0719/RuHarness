@@ -371,6 +371,16 @@ the running command's details, `x` cancels it (asked first), `g` re-reads the pr
 quits (asked while a command runs). The letters `a m e E r R x d v` are shortcuts for the
 selection's menu items.
 
+The mouse works too: a click selects a row (and its pane), a double click opens its menu
+(as `Enter`), the wheel scrolls the open menu or dialog, else the pane under the pointer,
+and a click on a key in the bottom bar or on `[Cancel x]`/`[Details c]` presses it. A
+dialog's buttons answer a click only once it is **ready**, like its keys. Selecting text
+belongs to the terminal: hold Option (Terminal, iTerm2) or Shift (most others) while you
+drag, or turn the mouse off with `m` in Help (`?`). `--no-mouse` starts with it off — for a
+terminal without SGR mouse reports; in tmux, `set -g mouse on`. The mouse is switched off
+whenever the cockpit hands the terminal back: on quit, a crash, a signal, and while a hand
+edit's editor runs.
+
 The cockpit only *reads* the ledger, on a background thread after a size and type check
 (a hostile target cannot hang it). Its own gates: Re-check runs only on code the harness
 knows (a recorded attempt's candidate, or what the oracle last judged) — a crate changed
@@ -386,8 +396,8 @@ closed terminal cancels a running command cleanly. A plain `cargo build` at the 
 the cockpit; build it with `cargo build -p harness-tui` (CI builds everything). After a
 change made elsewhere (the CLI, or an act from chat — next section) press `g`.
 
-**Where it is going.** The mouse comes next (docs/COCKPIT-WRAPPER-DESIGN.md, Build B), then
-a chat pane inside the cockpit for model work (docs/TUI-DESIGN.md §9). Until then, a fresh
+**Where it is going.** A chat pane inside the cockpit for model work (docs/TUI-DESIGN.md §9)
+comes next. Until then, a fresh
 translation is `harness migrate <unit>`, and chat happens in a separate agent session
 through `harness-mcp`.
 
