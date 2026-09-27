@@ -11,13 +11,33 @@
 //!   undone by an enable that raced it.
 //! - The panic hook marks dying and restores, never taking the mutex: a panic
 //!   inside an enable, which holds it, cannot deadlock the hook.
+//!
+//! The mouse (docs/COCKPIT-WRAPPER-DESIGN.md §7) is one more enable:
+//! [`EnableMouse`] under the guard; crossterm's `DisableMouseCapture` (every
+//! mode reset) on every way out.
 
+use ratatui::crossterm;
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 
 /// How long the signal path waits for an enable in flight.
 pub const ENABLE_WAIT: Duration = Duration::from_millis(200);
+
+/// The mouse modes the cockpit uses: button presses and releases (and the
+/// wheel) only, with SGR coordinates — `?1000h ?1006h`. Not crossterm's
+/// `EnableMouseCapture`, which also sets `?1003h` (every movement: a flood
+/// of events through the loop) and `?1002h`/`?1015h`. Its reset is
+/// crossterm's `DisableMouseCapture`, which resets all five.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnableMouse;
+
+impl crossterm::Command for EnableMouse {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str("\x1b[?1000h\x1b[?1006h")
+    }
+}
 
 /// See the module docs.
 #[derive(Debug, Default)]
@@ -85,6 +105,24 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
     use std::sync::{mpsc, Arc};
+
+    fn ansi(command: impl crossterm::Command) -> String {
+        let mut out = String::new();
+        command.write_ansi(&mut out).unwrap();
+        out
+    }
+
+    /// §7: the mouse is button tracking with SGR coordinates only — never
+    /// every movement — and crossterm's reset turns off each mode it sets.
+    #[test]
+    fn the_mouse_modes_and_their_reset() {
+        let on = ansi(EnableMouse);
+        assert_eq!(on, "\x1b[?1000h\x1b[?1006h");
+        let off = ansi(crossterm::event::DisableMouseCapture);
+        for mode in ["1000", "1006", "1002", "1003", "1015"] {
+            assert!(off.contains(&format!("\x1b[?{mode}l")), "{off:?}");
+        }
+    }
 
     /// §13 Terminal guard: a signal while an enable is blocked (a write the
     /// terminal never takes) still restores, twice, within the bound — and

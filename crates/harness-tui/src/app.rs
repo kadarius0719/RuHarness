@@ -559,6 +559,10 @@ pub struct App {
     pub layout: Layout,
     /// Clickable regions of the last frame.
     pub hits: Vec<(ratatui::layout::Rect, Hit)>,
+    /// The mouse is on (docs/COCKPIT-WRAPPER-DESIGN.md §7): the event loop
+    /// keeps the terminal's mouse modes in step with it. `--no-mouse` starts
+    /// with it off; Help turns it on and off.
+    pub mouse: bool,
     /// Every staged hand edit not yet recorded, oldest first; never removed
     /// unless the override recorded it or the user discarded it.
     pub kept_edits: Vec<KeptEdit>,
@@ -707,6 +711,7 @@ impl App {
             code_cols: 0,
             layout: Layout::default(),
             hits: Vec::new(),
+            mouse: true,
             kept_edits: Vec::new(),
             leftovers: Vec::new(),
             notes: BTreeMap::new(),

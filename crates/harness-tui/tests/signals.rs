@@ -21,6 +21,40 @@ use std::time::{Duration, Instant};
 const RIGHT: &[u8] = b"\x1b[C";
 const DOWN: &[u8] = b"\x1b[B";
 
+/// The mouse modes the cockpit enables (button tracking, SGR coordinates —
+/// never `?1003h`, every movement) and their resets
+/// (docs/COCKPIT-WRAPPER-DESIGN.md §7).
+const MOUSE_ON: &str = "\u{1b}[?1000h\u{1b}[?1006h";
+const MOUSE_MODES: [(&str, &str); 2] = [
+    ("\u{1b}[?1000h", "\u{1b}[?1000l"),
+    ("\u{1b}[?1006h", "\u{1b}[?1006l"),
+];
+/// What the test editors print first: where the editor ran in the stream.
+const EDITOR_MARK: &str = "EDITOR-RAN-MARK";
+
+/// The mouse is off at the end of `bytes`: each mode's reset is there, after
+/// its last enable.
+fn mouse_left_off(bytes: &str) -> bool {
+    MOUSE_MODES.iter().all(|(on, off)| {
+        bytes
+            .rfind(off)
+            .is_some_and(|o| bytes.rfind(on).is_none_or(|n| o > n))
+    })
+}
+
+/// The mouse was off whenever a test editor ran: before each of its marks,
+/// the resets come after the enables.
+fn mouse_off_in_editors(stream: &str) -> usize {
+    let marks: Vec<usize> = stream.match_indices(EDITOR_MARK).map(|(i, _)| i).collect();
+    for &m in &marks {
+        assert!(
+            mouse_left_off(&stream[..m]),
+            "the mouse was on while the editor ran"
+        );
+    }
+    marks.len()
+}
+
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -212,7 +246,7 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
     let editor = tmp.join("editor.sh");
     std::fs::write(
         &editor,
-        "#!/bin/sh\necho '// edited in the cockpit' >> \"$1\"\n",
+        format!("#!/bin/sh\nprintf '{EDITOR_MARK}'\necho '// edited in the cockpit' >> \"$1\"\n"),
     )
     .unwrap();
     {
@@ -392,6 +426,22 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
         last("\u{1b}[?1049l") > last("\u{1b}[?1049h"),
         "left in the alternate screen"
     );
+    // The mouse (§7): on from the start, off while the editor ran, on again
+    // once the cockpit took the terminal back — and off, LAST, after the
+    // hangup.
+    let stream = screen.lock().unwrap().clone();
+    let mark = stream.find(EDITOR_MARK).expect("the editor ran");
+    assert!(stream[..mark].contains(MOUSE_ON), "the mouse was never on");
+    assert_eq!(mouse_off_in_editors(&stream), 1);
+    assert!(
+        stream[mark..before].contains(MOUSE_ON),
+        "the mouse was not re-enabled after the editor"
+    );
+    assert!(mouse_left_off(&after), "no mouse reset after the hangup");
+    assert!(
+        mouse_left_off(&stream),
+        "the mouse left on after the hangup"
+    );
     wait_for("the kept-edit notice", 5, || {
         saw("a hand edit that was not recorded is kept in").then_some(())
     });
@@ -515,6 +565,7 @@ fn a_terminated_edit_is_never_lost() {
     std::fs::write(
         &editor,
         r#"#!/bin/sh
+printf 'EDITOR-RAN-MARK'
 n=$(cat "$COUNTER" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$COUNTER"
 if [ "$n" = 1 ]; then echo '// saved, then aborted' >> "$1"; exit 1; fi
 trap 'echo buffer > "$(dirname "$1")/.logic.rs.swp"; exit 1' TERM
@@ -597,6 +648,11 @@ while :; do sleep 0.1; done
         2,
         "both named on the way out"
     );
+    // The mouse was off in both editors, and the TERM left it off.
+    let stream = screen.lock().unwrap().clone();
+    assert!(stream.contains(MOUSE_ON), "the mouse was never on");
+    assert_eq!(mouse_off_in_editors(&stream), 2);
+    assert!(mouse_left_off(&stream), "the mouse left on after the TERM");
     drop(reaper);
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -685,6 +741,46 @@ fn the_keyboard_scans_the_project_end_to_end() {
     });
     let status = script.wait().unwrap();
     assert!(status.success(), "{status:?}");
+    // A plain quit leaves the mouse off, last.
+    let stream = screen.lock().unwrap().clone();
+    assert!(stream.contains(MOUSE_ON), "the mouse was never on");
+    assert!(mouse_left_off(&stream), "the mouse left on after quitting");
+    drop(reaper);
+}
+
+/// `--no-mouse` (§7): the cockpit never turns the mouse on — and still
+/// resets it on the way out.
+#[test]
+fn no_mouse_never_turns_the_mouse_on() {
+    let case = Case::new("e2e-nomouse");
+    let target = case.target();
+    let (mut script, screen, mut keys) = cockpit(
+        &format!(
+            "--target '{}' --harness /usr/bin/true --no-mouse",
+            target.display()
+        ),
+        &[],
+    );
+    let mut reaper = Reaper::new(script.id());
+    wait_for("the cockpit to draw", 30, || {
+        squeezed(&screen).contains("Files").then_some(())
+    });
+    let tui_pid = wait_for("the cockpit process", 10, || {
+        children_of(script.id()).into_iter().next()
+    });
+    reaper.push(tui_pid);
+    keys.write_all(b"q").unwrap();
+    keys.flush().unwrap();
+    wait_for("the cockpit to quit", 10, || {
+        (!alive(tui_pid)).then_some(())
+    });
+    let status = script.wait().unwrap();
+    assert!(status.success(), "{status:?}");
+    let stream = screen.lock().unwrap().clone();
+    for (on, _) in MOUSE_MODES {
+        assert!(!stream.contains(on), "the mouse was turned on");
+    }
+    assert!(mouse_left_off(&stream));
     drop(reaper);
 }
 
@@ -702,7 +798,10 @@ fn a_term_right_after_the_editor_restores_and_names_the_edit() {
     // it has exited.
     std::fs::write(
         &editor,
-        "#!/bin/sh\necho '// edited' >> \"$1\"\n(sleep 0.05; kill -TERM $PPID) &\nexit 0\n",
+        format!(
+            "#!/bin/sh\nprintf '{EDITOR_MARK}'\necho '// edited' >> \"$1\"\n(sleep 0.05; kill \
+             -TERM $PPID) &\nexit 0\n"
+        ),
     )
     .unwrap();
     {
@@ -759,6 +858,11 @@ fn a_term_right_after_the_editor_restores_and_names_the_edit() {
         last("\u{1b}[?2004l") > last("\u{1b}[?2004h"),
         "bracketed paste left on"
     );
+    // The mouse: off while the editor ran, and off last.
+    let stream = screen.lock().unwrap().clone();
+    assert!(stream.contains(MOUSE_ON), "the mouse was never on");
+    assert_eq!(mouse_off_in_editors(&stream), 1);
+    assert!(mouse_left_off(&after), "the mouse left on after the TERM");
     // Cooked mode again: the shell after it reads a canonical, echoing tty.
     let modes = wait_for("the shell's stty -a", 10, || {
         // Created by the redirection before stty writes: wait for its text.

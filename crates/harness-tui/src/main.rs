@@ -20,11 +20,12 @@ use harness_tui::app::{Act, App, Command, Config, LayoutMode, LoadWhy};
 use harness_tui::handedit;
 use harness_tui::load::{self, Loader};
 use harness_tui::spawn::{self, ChildSlot, Running};
-use harness_tui::termguard::{TermGuard, ENABLE_WAIT};
+use harness_tui::termguard::{EnableMouse, TermGuard, ENABLE_WAIT};
 use harness_tui::view;
 use ratatui::crossterm::cursor;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as TermEvent,
+    KeyEventKind,
 };
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::ExecutableCommand;
@@ -42,7 +43,7 @@ static GUARD: TermGuard = TermGuard::new();
 
 const USAGE: &str = "\
 usage: harness-tui [--target DIR] [--harness PATH] [--provider NAME]... [--allow-unsandboxed]
-                   [--layout split|stacked]
+                   [--layout split|stacked] [--no-mouse]
 
 The review cockpit over a target's migration ledger. Every write is a spawned
 `harness --json …` command whose exact argv is shown and confirmed first.
@@ -58,6 +59,9 @@ The review cockpit over a target's migration ledger. Every write is a spawned
   --layout split|stacked
                         force side-by-side pairs, or stacked ones (default: side by
                         side at 110 columns and wider)
+  --no-mouse            start with the mouse off (Help turns it on): for a
+                        terminal without SGR mouse reports, or to select text
+                        without holding Option / Shift
 ";
 
 struct Args {
@@ -66,6 +70,7 @@ struct Args {
     allow_unsandboxed: bool,
     layout: LayoutMode,
     providers: Vec<String>,
+    mouse: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -75,6 +80,7 @@ fn parse_args() -> Result<Args, String> {
         allow_unsandboxed: false,
         layout: LayoutMode::Auto,
         providers: Vec::new(),
+        mouse: true,
     };
     let mut it = std::env::args_os().skip(1);
     while let Some(arg) = it.next() {
@@ -94,6 +100,7 @@ fn parse_args() -> Result<Args, String> {
             "--target" => args.target = PathBuf::from(value("--target")?),
             "--harness" => args.harness = Some(PathBuf::from(value("--harness")?)),
             "--allow-unsandboxed" => args.allow_unsandboxed = true,
+            "--no-mouse" => args.mouse = false,
             "--provider" => {
                 let name = value("--provider")?.to_string_lossy().into_owned();
                 // A profile name travels attached in one argv element: a
@@ -238,12 +245,15 @@ fn forward(child: &mut Child, sig: i32) {
 }
 
 /// Leave the terminal as the shell expects it: cooked mode first (on the
-/// tty's own descriptor, no stdout lock), then — bounded — no bracketed
-/// paste, cursor shown, main screen.
+/// tty's own descriptor, no stdout lock), then — bounded — the mouse off
+/// (every mode, whether or not it was on: a shell left in mouse mode gets
+/// escape codes for every click), no bracketed paste, cursor shown, main
+/// screen.
 fn restore_terminal() {
     let _ = terminal::disable_raw_mode();
     bounded(WRITE_WAIT, || {
         let mut out = std::io::stdout();
+        let _ = out.execute(DisableMouseCapture);
         let _ = out.execute(DisableBracketedPaste);
         let _ = out.execute(cursor::Show);
         let _ = ratatui::try_restore();
@@ -286,8 +296,10 @@ fn die_by(sig: i32) -> ! {
     std::process::exit(128 + sig);
 }
 
-/// Hand the terminal to the editor: cooked mode, main screen, cursor shown.
+/// Hand the terminal to the editor: the mouse off, cooked mode, main
+/// screen, cursor shown.
 fn suspend(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
+    std::io::stdout().execute(DisableMouseCapture)?;
     std::io::stdout().execute(DisableBracketedPaste)?;
     terminal.show_cursor()?;
     terminal::disable_raw_mode()?;
@@ -298,13 +310,17 @@ fn suspend(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
 /// Take the terminal back and repaint everything — through `resize`, not
 /// `Terminal::clear`, which asks the terminal for the cursor position (a
 /// terminal that never answers would stall it and fail). Under the guard:
-/// once the cockpit is dying it never re-enables anything (the signal path
-/// owns the terminal; this thread parks until the process ends).
-fn resume(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
+/// once the cockpit is dying it never re-enables anything — the mouse
+/// neither (the signal path owns the terminal; this thread parks until the
+/// process ends).
+fn resume(terminal: &mut DefaultTerminal, mouse: bool) -> std::io::Result<()> {
     let enabled = GUARD.enable(|| -> std::io::Result<()> {
         std::io::stdout().execute(EnterAlternateScreen)?;
         terminal::enable_raw_mode()?;
         std::io::stdout().execute(EnableBracketedPaste)?;
+        if mouse {
+            std::io::stdout().execute(EnableMouse)?;
+        }
         terminal.hide_cursor()?;
         let size = terminal.size()?;
         terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height))
@@ -375,15 +391,16 @@ fn hand_edit(
     // between the editor's exit and the staging names it too (PROC-4).
     let edit = session.tmp.join("edit");
     guard(&KEPT_EDITS).push(edit.clone());
+    let mouse = app.mouse;
     if let Err(e) = suspend(terminal) {
-        let _ = resume(terminal);
+        let _ = resume(terminal, mouse);
         guard(&KEPT_EDITS).retain(|d| *d != edit);
         let _ = std::fs::remove_dir_all(&session.tmp);
         return Err(format!("hand edit: {e}"));
     }
     let (status, signal) = edit_in_editor(&session);
     finish_edit(app, unit, &session, status, signal, || {
-        let resumed = resume(terminal);
+        let resumed = resume(terminal, mouse);
         // Keys typed into the cooked terminal while the editor ran answer
         // nothing (a buffered Esc or `n` must not decide about this edit).
         while event::poll(Duration::ZERO).unwrap_or(false) {
@@ -508,6 +525,8 @@ fn run(
     let mut running: Option<Running> = None;
     let mut last_tick = Instant::now();
     let mut whys: Vec<(u64, LoadWhy)> = Vec::new();
+    // The terminal's mouse modes, as last written (set up with the terminal).
+    let mut mouse_on = app.mouse;
     loop {
         if GUARD.dying() {
             // The signal path owns the terminal now.
@@ -615,6 +634,24 @@ fn run(
                 let _ = std::fs::remove_dir_all(tmp);
             }
         }
+        // The mouse turned on or off (Help): the terminal follows, under the
+        // guard — nothing is enabled once the cockpit is dying.
+        if app.mouse != mouse_on {
+            let on = app.mouse;
+            let set = GUARD.enable(|| {
+                let mut out = std::io::stdout();
+                if on {
+                    out.execute(EnableMouse).map(|_| ())
+                } else {
+                    out.execute(DisableMouseCapture).map(|_| ())
+                }
+            });
+            match set {
+                Some(set) => set?,
+                None => park(),
+            }
+            mouse_on = on;
+        }
         *guard(&KEPT_EDITS) = app.kept_paths();
     }
     *guard(&KEPT_EDITS) = app.kept_paths();
@@ -689,10 +726,14 @@ fn main() -> ExitCode {
     if harness.is_none() {
         app.say("no `harness` binary found (PATH, or --harness <path>): read-only, acts disabled");
     }
+    app.mouse = args.mouse;
     // Under the guard: a signal during the setup restores after it.
     let Some(terminal) = GUARD.enable(|| {
         let terminal = ratatui::init();
         let _ = std::io::stdout().execute(EnableBracketedPaste);
+        if args.mouse {
+            let _ = std::io::stdout().execute(EnableMouse);
+        }
         terminal
     }) else {
         park();
