@@ -1887,3 +1887,100 @@ harness-mcp's revisit triggers).
 **Revisit when**: the chat pane lands → reserve its side then; a real target makes the
 confirm-time preflight slow on the UI thread → move the confirm to the loader; the hand-rolled
 tree passes ~400 lines → `tui-tree-widget` (vetted, zero new crates).
+
+## 2026-09-27 — Cockpit wrapper, Build B (the mouse): built, reviewed, three fix passes
+
+docs/COCKPIT-WRAPPER-DESIGN.md Build B is built: the mouse. Commits on `main`: 156b033
+(step 1: the mouse modes through the terminal guard), 9e54cf2 (step 2: the gestures),
+3fc3bec + ae4d904 (the review's fix pass), 2a05443 (§R6), 0500157 + 7fe0440 (the fix pass
+checked, second fix pass, §R7), e7b9e78 + 554363a (the second pass checked, third fix
+pass, §R8) and this handoff.
+
+**Baseline**: 695 tests green before the work; the CLI and the scanner are untouched (no
+bench check needed — only the workspace `Cargo.toml` gained a dev profile line for
+crossterm). Tests 695 → 731.
+
+**What was built** (the design's order):
+- Step 1, starting with its pty restore test: `termguard::EnableMouse` (our own crossterm
+  `Command`: `?1003l ?1002l ?1015l` then `?1000h ?1006h` — button tracking with SGR
+  coordinates, never every movement); enabled under the guard (the loop's first pass, and
+  `resume` after the editor; never once dying); crossterm's `DisableMouseCapture` on every
+  way out (`restore_terminal`: quit, error, the panic hook, the signal path; `suspend`
+  before the editor; the signal path also before it waits for the command). `--no-mouse`.
+  pty tests: on from the start, off in every test editor (a mark the editors print), on again
+  after `resume`, off LAST after a HUP, a TERM right after or during the editor, a USR1, a
+  plain quit; `--no-mouse` never on.
+- Step 2: gestures from the hit record through `App::on_event` (the loop's step: every
+  input restarts a dialog's quiet time) and `App::on_mouse`. Click selects and focuses; ▸
+  folds; a double click (rows, links; 400 ms, the first press timed with how long it may
+  have waited in the queue — `QueueClock`) is `Enter`; the wheel scrolls the open menu,
+  dialog or overlay, else the pane under the pointer (the tree and a list keep their
+  selection); hint-bar keys and the activity row's buttons press their key (the activity
+  row only in the panes); keys, buttons and menu items act on the release on the same spot,
+  in the same screen and dialog; a drag of two cells says how to select text; Help's
+  "Mouse on/off" (`m`).
+
+**Review** (§R6): four lenses → 48 findings, two verifiers: 0 refuted (a few "partly" or
+"as designed"). One high: the activity row's `[Cancel x]` was pressed as the key `x` under
+an ARMED quit dialog — a click outside a dialog stopped the command and quit. A medium:
+the second press of a slow double click on a menu item found the dialog it had opened
+armed (300 ms quiet < 400 ms window < the OS double-click time) and pressed the button
+drawn under it — "Find hazards" → Run; the verifiers found "Cancel the running command" →
+`[Stop it x]` at every size. A real pty drive before the review found the triple click
+(E2E-1). Fix pass; then three checkers of it (two re-checked the §R6 rows, one hunted
+regressions): one medium found by all three — a press held while a KEY opened a dialog
+was released onto it — and ~15 lows; second fix pass (§R7); a scoped check of it (no high or medium: one low-medium regression — "Stop it and quit" left the
+mouse's reports of its 1.5 s wait to the shell — and lows); third fix pass (§R8), not
+checked again (lows, each mutation-checked).
+Mutation list: 75 mutations of the Build B rules ("the mouse is off on every exit path",
+"a click never runs an unarmed dialog") and of every fix of the three passes — all killed.
+The mutation runner lives in the session scratchpad only (a string replacement per mutant,
+the guarding test, restore); it is not committed.
+
+**Decisions taken in the review, changing §7** (recorded in §R6/§R7, which govern):
+- A dialog button answers a press AND release on it, never within `CLICK_SETTLE` = 1 s of
+  the dialog opening (allowing for queue delay), and — all but the safe one — only once a
+  frame showed it armed. The keyboard's rule is unchanged (Build A's latch).
+- A click on Quit is asked first even with nothing running (`Kind::QuitIdle`); the key `q`
+  still quits at once when idle.
+- Swallows: a press or release that opens or closes something swallows presses anywhere for
+  the 400 ms window (from the gesture, never extended); a double click and ▸ swallow their
+  own region. Repeated clicks on a key that opens nothing all count.
+- A click on ▸/▾ folds (§7 had no fold gesture; functions were keyboard-only).
+- Below 80 columns the details leave the activity rows and the hint bar (§1 said "the
+  whole screen"), so a click can close them.
+- Apple's Terminal has no key that lets a drag through (its docs name only ⌘R, "Allow
+  Mouse Reporting"); the words say Shift (most terminals), Option (iTerm2), ⌘R in
+  Terminal, or `m` in Help.
+- `[profile.dev.package.crossterm] overflow-checks = false`: crossterm 0.29 computes a
+  report's coordinate as `n - 1`; a zero coordinate panicked debug builds.
+
+**Accepted / later**: hits are the last frame's (a reload that shifts rows within the
+user's reaction time can put another row under the pointer — selection and menus only);
+the overlays' border prompts, the notice row and the checks' rows are not clickable; keys on
+an armed dialog need no armed frame (Build A); TSTP is not handled (raw mode makes Ctrl-Z a
+key); `bounded`'s inline fallback can wait on the stdout lock when no thread can start AND
+the main thread is stuck in a stalled write.
+
+**Process notes**: the check of the fix pass again found a medium all checkers agreed on —
+keep the scoped re-check after every pass. Mutation checks surfaced equivalent mutants
+where a fix doubled a guard (e.g. the mouse turned off both in `suspend` and in its drain):
+mutate both copies together. A test on a synthetic clock can pass for the wrong reason (a
+key clears notices older than its `now`) — drive such checks with `Instant::now()`.
+
+**Next** (unchanged order): the chat pane (spike first; it takes the right side from 150
+columns — reserve it then) with harness-mcp's requester label and a "migrate this" skill;
+the feature-workflow view; C-vs-Rust performance baselines; the briefing's M5 (external
+detector plugin + `EXTENDING.md`). Still separate tasks: the crate content hash skipping
+files outside `src/` (SAFE-5 of the design review); harness-detect's walk following symlinks
+out of `source_dir` (one line: `walk::confined`); `verify`'s R6 gate; the harness-core
+ledger test that a fork in the same test binary can fail. Carry-forwards as before (§16
+escalation + `harness usage`; `crash-timeout`; a Linux sandbox; the two deferred replay
+items; driver-attempt Accept; queueing on lock contention; an async client for cooperative
+cancellation; per-function verdict dots; bounded reads in harness-core; harness-mcp's
+revisit triggers).
+
+**Revisit when**: the chat pane lands → clickable chat, and whether the notice row and the
+border prompts should answer clicks; a user reports the 1 s settle as slow → measure the
+OS double-click interval instead of a constant; a terminal without SGR reports shows up →
+the X10 parser's coordinate limits (223) and `--no-mouse`.

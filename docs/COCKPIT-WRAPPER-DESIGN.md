@@ -1,7 +1,8 @@
 # The cockpit as a friendly wrapper — design
 
 Status: DESIGN, reviewed (2026-09-24). **Build A is built (2026-09-25)**; its code review is
-in DECISIONS.md. **Build B (the mouse) is built (2026-09-27)**; its review is §R6.
+in DECISIONS.md. **Build B (the mouse) is built (2026-09-27)**; its review and three fix passes
+are §R6–§R8, which govern §7 where they differ. The chat pane (§10) is next.
 
 This design implements docs/TUI-DESIGN.md §9, "Suggested order" 1: the user's direction,
 recorded in DECISIONS.md "Direction change (user)". It went through two review rounds:
