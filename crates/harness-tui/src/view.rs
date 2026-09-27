@@ -1295,10 +1295,11 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
     Some(match &app.mode {
         Mode::Normal => return None,
         Mode::Menu(_) => vec![("↑↓", "move"), ("Enter", "choose"), ("Esc", "close")],
-        // Esc first: arming adds entries after it, never moving it from
-        // under a pointer on its way (review N-C1-2).
+        // Esc never moves when arming adds entries after it (review
+        // N-C1-2) — and never sits under the panes' first entry, `x cancel`
+        // while a command runs, which opens this very kind of dialog (N2-6).
         Mode::Dialog(c) => {
-            let mut h = vec![("Esc", "cancel"), ("↑↓", "scroll")];
+            let mut h = vec![("↑↓", "scroll"), ("Esc", "cancel")];
             if c.dialog.armed {
                 h.push(("←→", "button"));
                 h.push(("Enter", "press"));
@@ -1481,7 +1482,7 @@ const HELP_MOUSE: &[&str] = &[
     "Click: select a row and its pane; a click on ▸ or ▾ opens or folds it. Double click: what \
      you can do (as Enter). The wheel scrolls the open menu or dialog, else the pane under the \
      pointer. A click on a key in the bottom bar presses it. A dialog's buttons answer a click \
-     once it is ready and has been open a second.",
+     a second after it opened — Run and the others that act only once it is ready.",
     "To select text, hold Shift (most terminals) or Option (iTerm2); in Terminal, ⌘R turns \
      its mouse reporting off and on — or turn the mouse off here. In tmux, `set -g mouse on`. \
      If clicks print odd characters, start with --no-mouse.",
@@ -1774,7 +1775,12 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let state = if !usable {
         "too small to show".into()
-    } else if mouse && c.dialog.armed && !c.dialog.click_refused {
+    } else if mouse
+        && c.dialog.armed
+        && !c.dialog.click_refused
+        && c.dialog.opened.elapsed() >= crate::dialog::CLICK_SETTLE
+    {
+        // Invited only once a click would answer (review N2-8).
         format!("{} · or click", c.dialog.state_text())
     } else {
         c.dialog.state_text()
@@ -2564,12 +2570,13 @@ mod tests {
         assert_eq!(bar(&mut app).trim(), "Enter continue   Esc cancel");
         crate::app::tests::code(&mut app, KeyCode::Esc);
         key(&mut app, 'a');
-        // Esc first, where arming never moves it (review N-C1-2).
-        assert_eq!(bar(&mut app).trim(), "Esc cancel   ↑↓ scroll");
+        // Esc where arming never moves it (review N-C1-2), not first — under
+        // the panes' `x cancel` (N2-6).
+        assert_eq!(bar(&mut app).trim(), "↑↓ scroll   Esc cancel");
         arm(&mut app);
         assert_eq!(
             bar(&mut app).trim(),
-            "Esc cancel   ↑↓ scroll   ←→ button   Enter press"
+            "↑↓ scroll   Esc cancel   ←→ button   Enter press"
         );
     }
 
@@ -3017,6 +3024,13 @@ mod tests {
         render(&mut app, 120, 30);
         click(&mut app, empty, t + ms(9100));
         assert!(normal(&app));
+        // A paste between the two presses.
+        render(&mut app, 120, 30);
+        click(&mut app, unit, t + ms(11000));
+        app.on_event(TermEvent::Paste("p".into()), t + ms(11050), Duration::ZERO);
+        render(&mut app, 120, 30);
+        click(&mut app, unit, t + ms(11100));
+        assert!(normal(&app), "a paste between");
     }
 
     /// The real drive (E2E-1): a click, then a quick double click on the
@@ -3790,15 +3804,18 @@ mod tests {
     fn the_queue_clock_bounds_how_long_input_waited() {
         let t = Instant::now();
         let mut q = QueueClock::new(t);
-        q.polled(t, false, t + ms(60));
+        q.polled(t, true, false, t + ms(60));
         assert_eq!(q.late(t + ms(70)), ms(10));
-        // Returned at once: the event may have waited since the last empty
-        // poll — a stall included.
-        q.polled(t + ms(500), true, t + ms(500));
-        assert_eq!(q.late(t + ms(500)), ms(440));
-        // Had to wait: it came after the poll began.
-        q.polled(t + ms(600), true, t + ms(630));
-        assert_eq!(q.late(t + ms(631)), ms(2), "it came as the poll returned");
+        // Input already queued (the zero poll found it): it may have waited
+        // since the last empty poll — a stall included — however long the
+        // poll that returned it took (review N2-3: a slow poll proves
+        // nothing).
+        q.polled(t + ms(500), false, true, t + ms(502));
+        assert_eq!(q.late(t + ms(502)), ms(442));
+        // Proved empty, then returned by the wait: it came during the wait,
+        // and is charged all of it.
+        q.polled(t + ms(600), true, true, t + ms(630));
+        assert_eq!(q.late(t + ms(631)), ms(31));
     }
 
     // ----- the check of the fix pass (§R7) -----------------------------------
@@ -4026,6 +4043,10 @@ mod tests {
         event(&mut app, UP, (40, 5), t + ms(10));
         assert!(app.mouse_busy(t + ms(400)));
         assert!(!app.mouse_busy(t + ms(600)));
+        // After the loop stopped reading with the mouse on (a stopped
+        // command's wait), reports may still come (review N2-1).
+        app.mouse_may_report(t + ms(5000));
+        assert!(app.mouse_busy(t + ms(5400)));
         app.mouse = false;
         assert!(!app.mouse_busy(t + ms(20)));
     }
@@ -4110,7 +4131,7 @@ mod tests {
         assert!(app
             .notice
             .as_ref()
-            .is_some_and(|n| n.text.contains("use the keys")));
+            .is_some_and(|n| n.text == "turn the wheel to scroll; ↑↓ are keys"));
         // The wheel over the panes above the details scrolls the pane.
         let mut app = app_of("targets/zopfli", "mrest2");
         key(&mut app, 'c');
@@ -4124,5 +4145,122 @@ mod tests {
         event(&mut app, MouseEventKind::ScrollDown, files, t);
         assert_eq!(app.tree_offset, 3, "the tree scrolled");
         assert!(matches!(app.mode, Mode::Details { scroll } if scroll == details));
+    }
+
+    // ----- the check of the second fix pass (§R8) ----------------------------
+
+    /// Check N2-9 / p8: the key alone drops a held press — a click on the
+    /// dialog's `Enter press` held while `→` moves the focus to Run never
+    /// runs it (the same screen and dialog: only the key guards this).
+    /// And N2-4: that hint presses the focused button as a click on it
+    /// would — never within the settle time.
+    #[test]
+    fn the_dialogs_enter_hint_is_a_click_on_the_focused_button() {
+        let mut app = app("menterhint");
+        let t = Instant::now();
+        let scan = app.act_argv(Act::Scan, None, None, None).unwrap();
+        app.now = t;
+        app.ask(scan.clone());
+        let when = ready(&mut app, 120, 30, t);
+        let enter = spot(&app, &Hit::Hint("Enter"));
+        event(&mut app, LEFT, enter, when);
+        crate::app::tests::code(&mut app, KeyCode::Right);
+        render(&mut app, 120, 30);
+        assert_eq!(event(&mut app, UP, enter, when + ms(50)), Command::None);
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.dialog.focus == 1));
+        // Focus on Run by a key, then a click on `Enter press` within the
+        // settle time of a fresh dialog: refused.
+        let mut app = crate::app::tests::app("menterhint2");
+        let t = Instant::now();
+        app.now = t;
+        app.ask(scan.clone());
+        render(&mut app, 120, 30);
+        app.arm(t + ms(10), false);
+        app.arm(t + ms(320), false);
+        render(&mut app, 120, 30);
+        app.now = t + ms(350);
+        app.on_key(KeyEvent::from(KeyCode::Right), t + ms(350));
+        render(&mut app, 120, 30);
+        let enter = spot(&app, &Hit::Hint("Enter"));
+        assert_eq!(click(&mut app, enter, t + ms(420)), Command::None);
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.dialog.click_refused));
+        assert_eq!(
+            click(&mut app, enter, t + CLICK_SETTLE + ms(100)),
+            Command::Spawn(scan)
+        );
+    }
+
+    /// Check N2-7: keys the details pass to the panes (J: the next unit)
+    /// bring a wheeled tree back to its selection.
+    #[test]
+    fn a_key_through_the_details_follows_the_tree() {
+        let mut app = app_of("targets/zopfli", "mfollow2");
+        let t = Instant::now();
+        key(&mut app, 'c');
+        render(&mut app, 120, 30);
+        for _ in 0..4 {
+            event(&mut app, MouseEventKind::ScrollDown, (5, 2), t);
+        }
+        render(&mut app, 120, 30);
+        assert!(app.tree_offset > 0);
+        key(&mut app, 'J');
+        render(&mut app, 120, 30);
+        let cursor = app.cursor().unwrap();
+        assert!(
+            cursor >= app.tree_offset && cursor < app.tree_offset + app.layout.tree_page,
+            "the selected unit is in view"
+        );
+        assert!(matches!(app.mode, Mode::Details { .. }));
+    }
+
+    /// Checks N2-8b, N2-9: "· or click" only with the mouse on and once a
+    /// click would answer; "Too soon — click again" in the waiting colour.
+    #[test]
+    fn the_ready_line_invites_a_click_only_when_one_answers() {
+        let mut app = app("mready");
+        let t = Instant::now();
+        let scan = app.act_argv(Act::Scan, None, None, None).unwrap();
+        app.ask(scan);
+        // The dialog's state line, and the colour of its first letter.
+        let state = |app: &mut App| -> (String, Color) {
+            let buffer = render(app, 120, 30);
+            for y in 0..30u16 {
+                let row: Vec<String> = (0..120u16)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect();
+                let line = row.concat();
+                for word in ["ready:", "Too soon —"] {
+                    if let Some(byte) = line.find(word) {
+                        let x = line[..byte].chars().count() as u16;
+                        return (line.trim().to_string(), buffer[(x, y)].fg);
+                    }
+                }
+            }
+            panic!("no state line")
+        };
+        render(&mut app, 120, 30);
+        app.arm(t, false);
+        app.arm(t + ms(400), false);
+        let (line, fg) = state(&mut app);
+        assert!(
+            line.contains("ready") && !line.contains("or click"),
+            "{line}"
+        );
+        assert_eq!(fg, Color::Green);
+        if let Mode::Dialog(c) = &mut app.mode {
+            c.dialog.opened = Instant::now().checked_sub(CLICK_SETTLE * 2).unwrap();
+        }
+        let (line, _) = state(&mut app);
+        assert!(line.contains("· or click"), "{line}");
+        app.mouse = false;
+        let (line, _) = state(&mut app);
+        assert!(!line.contains("or click"), "the mouse off: {line}");
+        app.mouse = true;
+        if let Mode::Dialog(c) = &mut app.mode {
+            c.dialog.click_refused = true;
+        }
+        let (line, fg) = state(&mut app);
+        assert!(line.contains("Too soon — click again"), "{line}");
+        assert_eq!(fg, Color::Yellow);
     }
 }

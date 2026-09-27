@@ -16,7 +16,7 @@
 │                     │                                                                          │                     │
 │                     │Command: /opt/ruharness/bin/harness --json verify u-lib --target=/work/rea│ce::from_raw_parts(p›│
 │                     │d_scalefactors_lib                                                        │                     │
-│                     │ ready: → then Enter, or y · or click                                     │                     │
+│                     │ ready: → then Enter, or y                                                │                     │
 │                     │ [ Cancel  Esc ] [ Run  y ]                                               │ice: &[u8] = if scfc›│
 │                     └──────────────────────────────────────────────────────────────────────────┘                     │
 │                              ││34         7.56931807e-07f / 2047,  6.00› │  28     } else {                          │
@@ -27,4 +27,4 @@
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
  Ready.
 
- Esc cancel   ↑↓ scroll   ←→ button   Enter press
+ ↑↓ scroll   Esc cancel   ←→ button   Enter press

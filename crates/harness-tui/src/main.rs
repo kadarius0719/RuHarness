@@ -322,9 +322,9 @@ fn install_signal_path(slot: ChildSlot) -> std::io::Result<()> {
             {
                 let mut editing = guard(&EDITOR);
                 if let Some(e) = editing.as_mut() {
-                    // The editor owns the terminal: SIGINT is its own; TERM
-                    // and HUP reach it (never a reaped pid), and the main
-                    // thread dies by them once it is gone.
+                    // The editor owns the terminal: SIGINT is its own; the
+                    // other handled signals reach it (never a reaped pid),
+                    // and the main thread dies by them once it is gone.
                     if sig != SIGINT {
                         e.signal.get_or_insert(sig);
                         if let Some(child) = e.child.as_mut() {
@@ -620,9 +620,12 @@ fn run(
             app.arm(Instant::now(), pending);
         }
         let mut command = Command::None;
+        // Proved empty first: only then does an event the wait returns
+        // count as having come during it (review N2-3).
+        let empty = !event::poll(Duration::ZERO)?;
         let began = Instant::now();
         let ready = event::poll(Duration::from_millis(60))?;
-        queue.polled(began, ready, Instant::now());
+        queue.polled(began, empty, ready, Instant::now());
         if ready {
             let event = event::read()?;
             let now = Instant::now();
@@ -652,6 +655,14 @@ fn run(
             Command::None => {}
             Command::Quit => break,
             Command::CancelAndQuit => {
+                // The mouse off before the wait (up to 1.5 s, nothing read):
+                // what comes meanwhile is read away on the way out, never by
+                // the shell (review N2-1).
+                if app.mouse {
+                    bounded(WRITE_WAIT, || {
+                        let _ = std::io::stdout().execute(DisableMouseCapture);
+                    });
+                }
                 let _ = spawn::interrupt_and_wait(slot, Duration::from_secs(1));
                 // A reaped child is finished the normal way (a recorded
                 // hand edit is removed).
@@ -675,6 +686,7 @@ fn run(
                         std::thread::sleep(Duration::from_millis(20));
                     }
                 }
+                app.mouse_may_report(Instant::now());
                 break;
             }
             Command::Spawn(pending) => match Running::spawn(pending.argv.clone(), slot.clone()) {

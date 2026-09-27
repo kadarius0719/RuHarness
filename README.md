@@ -374,9 +374,9 @@ selection's menu items.
 The mouse works too: a click selects a row (and its pane), a click on `▸`/`▾` opens or folds
 it, a double click is `Enter` (a row's menu, or a View link's target), the wheel scrolls the
 open menu or dialog, else the pane under the pointer, and a click on a key in the bottom bar
-or on `[Cancel x]`/`[Details c]` presses it (Quit asks first). A dialog's buttons answer a
-click only once it is **ready** and has been open a second — the second press of a double
-click never lands on one. Selecting text belongs to the terminal: hold Shift (most
+or on `[Cancel x]`/`[Details c]`/`[Try again t]` presses it (Quit asks first). A dialog's
+buttons answer a click a second after it opened — Run and the others that act only once it
+is **ready** — so the second press of a double click never lands on one. Selecting text belongs to the terminal: hold Shift (most
 terminals) or Option (iTerm2) while you drag; in Apple's Terminal, ⌘R turns its mouse
 reporting off and on; or turn the cockpit's mouse off with `m` in Help (`?`). `--no-mouse`
 starts with it off (for a terminal whose clicks print odd characters); in tmux, `set -g

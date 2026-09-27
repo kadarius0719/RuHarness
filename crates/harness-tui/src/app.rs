@@ -65,15 +65,14 @@ pub const DRAG_HINT: &str = "To select text, hold Shift (most terminals) or Opti
 
 /// How long input read now may have waited in the queue (§7: double clicks
 /// are timed by the cockpit; review PROC-B-5). The event loop reports each
-/// poll: one that found nothing, or had to wait for its event, saw the
-/// queue empty.
+/// poll: one that found nothing saw the queue empty when it returned; one
+/// that returned an event saw it empty when it began only if a zero-time
+/// poll just before proved it (a poll that merely took a while may have
+/// been slow itself — review N2-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueClock {
     empty_at: Instant,
 }
-
-/// A poll that took at least this long had to wait for its event.
-const POLL_WAITED: Duration = Duration::from_millis(1);
 
 impl QueueClock {
     /// The queue empty at `now`.
@@ -81,14 +80,15 @@ impl QueueClock {
         QueueClock { empty_at: now }
     }
 
-    /// A poll began at `began` and returned `ready` at `now`.
-    pub fn polled(&mut self, began: Instant, ready: bool, now: Instant) {
+    /// A poll began at `began` — the queue proved `empty` then, or not —
+    /// and returned `ready` at `now`. An event that came during the wait
+    /// is charged the wait (at most the poll's timeout: a double click's
+    /// window is stricter by up to that, the settle never looser).
+    pub fn polled(&mut self, began: Instant, empty: bool, ready: bool, now: Instant) {
         if !ready {
             self.empty_at = now;
-        } else if now.saturating_duration_since(began) >= POLL_WAITED {
-            // It waited, and crossterm's poll returns as soon as input can be
-            // read: the event came in the last moment (review N-C1-4).
-            self.empty_at = now.checked_sub(POLL_WAITED).unwrap_or(began).max(began);
+        } else if empty {
+            self.empty_at = began;
         }
     }
 
@@ -543,10 +543,9 @@ struct Press {
     late: Duration,
     rect: Rect,
     hit: Option<Hit>,
-    /// It acted as a whole gesture — a key, a button, a menu item, a double
-    /// click (its region), or it opened or closed a menu, dialog or overlay
-    /// (the whole frame): a quick press inside this is part of it and is
-    /// swallowed.
+    /// Quick presses inside this are part of its gesture and swallowed: its
+    /// region after a double click or a click on ▸; the whole frame after a
+    /// press or release that opened or closed a menu, dialog or overlay.
     swallow: Option<Rect>,
 }
 
@@ -2602,9 +2601,11 @@ impl App {
     /// A bracketed paste: text for a note being typed (line breaks become
     /// spaces), ignored anywhere else — a paste never answers a dialog.
     pub fn on_paste(&mut self, text: &str) {
-        // Keyboard input: a held press is dropped (review N-C1-1).
+        // Keyboard input: a held press is dropped (review N-C1-1), and two
+        // presses around it are no double click.
         self.held = None;
         self.down = None;
+        self.last_press = None;
         let clean: String = text
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
@@ -2644,13 +2645,14 @@ impl App {
         self.last_press = None;
         self.held = None;
         self.down = None;
-        let was_panes = matches!(self.mode, Mode::Normal);
+        let panes = |mode: &Mode| matches!(mode, Mode::Normal | Mode::Details { .. });
+        let was_panes = panes(&self.mode);
         let command = self.key_event(key, now);
-        // A key in the panes follows again: the tree its selection when the
-        // focus is (or moved) there, a list its chosen link in the View —
-        // never a key in, into or out of an overlay (reviews USE-B-13,
-        // N-C3-3).
-        if was_panes && matches!(self.mode, Mode::Normal) {
+        // A key in the panes (the details pass most keys to them) follows
+        // again: the tree its selection when the focus is (or moved) there,
+        // a list its chosen link in the View — never a key into or out of
+        // an overlay (reviews USE-B-13, N-C3-3, N2-7).
+        if was_panes && panes(&self.mode) {
             match self.focus {
                 Focus::Files => self.tree_follow = true,
                 Focus::View => self.view_follow = true,
@@ -2765,6 +2767,15 @@ impl App {
         }
     }
 
+    /// Reports may still come until [`MOUSE_BUSY`] after `now` (the loop
+    /// stopped reading for a while — waiting for a stopped command — with
+    /// the mouse on): the exit reads them away (review N2-1).
+    pub fn mouse_may_report(&mut self, now: Instant) {
+        if self.mouse {
+            self.last_mouse = Some(now);
+        }
+    }
+
     /// The mouse is on and in use at `now` — a press down, or an event in
     /// the last [`MOUSE_BUSY`]: its last reports may still be on their way
     /// (the loop reads them away before the editor or the shell gets the
@@ -2867,6 +2878,14 @@ impl App {
                 Some((rect, Hit::Button(i))) => {
                     let ok = c.dialog.press_button(i, now, late);
                     hold(self, rect, Hit::Button(i), ok)
+                }
+                // Its `Enter` presses the focused button: a click there is a
+                // click on it (review N2-4) — the safe one at any time, as
+                // the key.
+                Some((rect, hit @ Hit::Hint("Enter"))) => {
+                    let focus = c.dialog.focus;
+                    let ok = focus == 0 || c.dialog.press_button(focus, now, late);
+                    hold(self, rect, hit, ok)
                 }
                 Some((rect, hit @ Hit::Hint(_))) => hold(self, rect, hit, true),
                 _ => Command::None,
@@ -3065,13 +3084,17 @@ impl App {
                 return Command::None;
             }
             "↑↓" | "←→" => {
-                self.notice = notice(
-                    if matches!(self.mode, Mode::Normal | Mode::Details { .. }) {
-                        "click a row, or turn the wheel; ↑↓ ←→ are keys"
-                    } else {
-                        "turn the wheel, or use the keys ↑↓ ←→"
-                    },
-                );
+                self.notice = notice(match self.mode {
+                    Mode::Menu(_) => "click an item, or turn the wheel; ↑↓ are keys",
+                    Mode::Dialog(_) if k == "←→" => {
+                        "←→ are keys: they move between the buttons — or click one"
+                    }
+                    Mode::Dialog(_) | Mode::Help { .. } | Mode::Diff { .. } => {
+                        "turn the wheel to scroll; ↑↓ are keys"
+                    }
+                    Mode::Verdict { .. } => "turn the wheel for the next check; ↑↓ are keys",
+                    _ => "click a row, or turn the wheel; ↑↓ ←→ are keys",
+                });
                 return Command::None;
             }
             "Enter" => &[KeyCode::Enter],
