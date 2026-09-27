@@ -52,7 +52,11 @@ pub const MAX_SOURCE_VIEW_BYTES: u64 = 1024 * 1024;
 /// Two presses on the same row within this long are a double click
 /// (docs/COCKPIT-WRAPPER-DESIGN.md §7), timed by the cockpit.
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
-/// What a drag (a press and a release outside what it pressed) shows:
+/// How recent a mouse event keeps the mouse "in use" ([`App::mouse_busy`]).
+pub const MOUSE_BUSY: Duration = Duration::from_millis(500);
+
+/// What a drag (a press and a release two cells apart, not on what it
+/// pressed) shows:
 /// selecting text belongs to the terminal (§7). Terminal.app has no key
 /// that lets a drag through; ⌘R turns its mouse reporting off (review
 /// USE-B-16).
@@ -82,7 +86,9 @@ impl QueueClock {
         if !ready {
             self.empty_at = now;
         } else if now.saturating_duration_since(began) >= POLL_WAITED {
-            self.empty_at = began;
+            // It waited, and crossterm's poll returns as soon as input can be
+            // read: the event came in the last moment (review N-C1-4).
+            self.empty_at = now.checked_sub(POLL_WAITED).unwrap_or(began).max(began);
         }
     }
 
@@ -545,13 +551,17 @@ struct Press {
 }
 
 /// A press on a key, a button or a menu item: it acts when the button comes
-/// up on it.
+/// up on it, in the same screen and dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Held {
     rect: Rect,
     hit: Hit,
     /// A dialog button whose press was allowed (always, for the rest).
     ok: bool,
+    /// The screen it was pressed in.
+    mode: std::mem::Discriminant<Mode>,
+    /// The dialog it was pressed in, by when that opened.
+    dialog: Option<Instant>,
 }
 
 /// Where the left button went down.
@@ -692,6 +702,7 @@ pub struct App {
     last_press: Option<Press>,
     held: Option<Held>,
     down: Option<Down>,
+    last_mouse: Option<Instant>,
 }
 
 fn os(s: impl Into<OsString>) -> OsString {
@@ -836,6 +847,7 @@ impl App {
             last_press: None,
             held: None,
             down: None,
+            last_mouse: None,
         };
         app.rebuild_rows();
         app.refresh_view(true);
@@ -2590,6 +2602,9 @@ impl App {
     /// A bracketed paste: text for a note being typed (line breaks become
     /// spaces), ignored anywhere else — a paste never answers a dialog.
     pub fn on_paste(&mut self, text: &str) {
+        // Keyboard input: a held press is dropped (review N-C1-1).
+        self.held = None;
+        self.down = None;
         let clean: String = text
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
@@ -2623,14 +2638,25 @@ impl App {
     /// Handle one key press read at `now`.
     pub fn on_key(&mut self, key: KeyEvent, now: Instant) -> Command {
         // A key between two presses: they are no double click (review
-        // ENG-B-7).
+        // ENG-B-7). A key while a press is held drops it: its release never
+        // answers what the key opened meanwhile (reviews N-C1-1, N-C2-1,
+        // N-C3-1).
         self.last_press = None;
-        // A key in the tree follows the selection again (review USE-B-13).
-        if self.focus == Focus::Files {
-            self.tree_follow = true;
+        self.held = None;
+        self.down = None;
+        let was_panes = matches!(self.mode, Mode::Normal);
+        let command = self.key_event(key, now);
+        // A key in the panes follows again: the tree its selection when the
+        // focus is (or moved) there, a list its chosen link in the View —
+        // never a key in, into or out of an overlay (reviews USE-B-13,
+        // N-C3-3).
+        if was_panes && matches!(self.mode, Mode::Normal) {
+            match self.focus {
+                Focus::Files => self.tree_follow = true,
+                Focus::View => self.view_follow = true,
+            }
         }
-        self.view_follow = true;
-        self.key_event(key, now)
+        command
     }
 
     /// A key, from the keyboard or pressed by a click.
@@ -2663,15 +2689,17 @@ impl App {
     // ----- the mouse (§7) --------------------------------------------------------
 
     /// One mouse event, read at `now`; `late`: how long it may have waited
-    /// in the input queue (a press that may have waited never makes a
-    /// double click with one read soon after it). Every gesture ends in
-    /// what a key does, through the same paths: a dialog's buttons answer
-    /// only once it is armed. Rows, links and panes answer the press; keys,
-    /// buttons and menu items answer the release on the same spot (review
-    /// SAFE-B-6: a press dragged off does nothing, and the release is read
-    /// before a click hands the terminal over — PROC-B-1).
+    /// in the input queue (every window below allows for it). Every gesture
+    /// ends in what a key does, through the same paths. Rows, links, panes
+    /// and ▸ answer the press; keys, buttons and menu items answer the
+    /// release on the same spot, in the same screen (review SAFE-B-6: a
+    /// press dragged off does nothing, and the release is read before a
+    /// click hands the terminal over — PROC-B-1). A dialog's button answers
+    /// a click a second after the dialog opened ([`crate::dialog::CLICK_SETTLE`]),
+    /// and any but the safe one only once a frame showed it armed.
     pub fn on_mouse(&mut self, ev: MouseEvent, now: Instant, late: Duration) -> Command {
         self.now = now;
+        self.last_mouse = Some(now);
         let frame = self.layout.frame;
         // Ctrl or Alt held: never an answer, as with keys (review SAFE-B-5)
         // — likely an attempt to select text the terminal did not take.
@@ -2729,25 +2757,49 @@ impl App {
         std::mem::discriminant(&self.mode)
     }
 
+    /// The open dialog, by when it opened (its identity for a held press).
+    fn dialog_opened(&self) -> Option<Instant> {
+        match &self.mode {
+            Mode::Dialog(c) => Some(c.dialog.opened),
+            _ => None,
+        }
+    }
+
+    /// The mouse is on and in use at `now` — a press down, or an event in
+    /// the last [`MOUSE_BUSY`]: its last reports may still be on their way
+    /// (the loop reads them away before the editor or the shell gets the
+    /// terminal; a key-driven quit or edit loses no typed-ahead key —
+    /// review N-C3-5).
+    pub fn mouse_busy(&self, now: Instant) -> bool {
+        self.mouse
+            && (self.down.is_some()
+                || self
+                    .last_mouse
+                    .is_some_and(|t| now.saturating_duration_since(t) <= MOUSE_BUSY))
+    }
+
     fn press(&mut self, at: (u16, u16), now: Instant, late: Duration) -> Command {
         let found = self.hit_at(at);
         let spot = Position::new(at.0, at.1);
-        // The press before, within the window as read.
+        // The press before, when this one may have come within the window
+        // of it (it may have waited `late` in the queue — review N-C2-2).
         let before = self
             .last_press
             .take()
-            .filter(|p| now.saturating_duration_since(p.at) <= DOUBLE_CLICK);
+            .filter(|p| now.saturating_duration_since(p.at) <= DOUBLE_CLICK + late);
         // A quick press inside what a press just did is part of that gesture
-        // and swallowed: the second press of a double click on a key, a
-        // button or a menu item; the third of a triple click; any press
-        // right after one that opened or closed a menu, dialog or overlay
-        // (reviews E2E-1, SAFE-B-2, SAFE-B-3, USE-B-3).
-        if let Some(mut p) = before
-            .clone()
-            .filter(|p| p.swallow.is_some_and(|r| r.contains(spot)))
+        // and swallowed: any press right after one that opened or closed a
+        // menu, dialog or overlay (the whole frame: the second press of a
+        // double click that opened a dialog never lands on it — SAFE-B-2,
+        // USE-B-3); the third press of a triple click; the second on a ▸.
+        // The window runs from the gesture: a swallowed press never extends
+        // it (reviews N-C1-3, N-C3-2), and repeated clicks on a key that
+        // opens nothing (PgDn, `]f`, Tab) all count.
+        if before
+            .as_ref()
+            .is_some_and(|p| p.swallow.is_some_and(|r| r.contains(spot)))
         {
-            p.at = now;
-            self.last_press = Some(p);
+            self.last_press = before;
             return Command::None;
         }
         // A double click: two presses on the same row or link of the frame,
@@ -2762,22 +2814,18 @@ impl App {
             })
         });
         let kind = self.mode_kind();
-        let command = self.press_on(found.clone(), now, double);
+        let command = self.press_on(found.clone(), now, late, double);
         let (rect, hit) = match found {
             Some((rect, hit)) => (rect, Some(hit)),
             None => (Rect::new(at.0, at.1, 1, 1), None),
         };
-        // A dialog button sets none: a press it refused must never swallow
-        // the next, allowed one (review PROC-B-2) — and one it pressed closes
-        // the dialog on its release, which swallows the whole frame.
+        // A key, a button or a menu item sets none here: its release acts,
+        // and one that opens or closes something swallows the frame then
+        // ([`App::note_mode_change`]); a press a dialog refused never
+        // swallows the next, allowed one (review PROC-B-2).
         let swallow = if self.mode_kind() != kind {
             Some(self.layout.frame)
-        } else if double
-            || matches!(
-                hit,
-                Some(Hit::Hint(_) | Hit::Activity(_) | Hit::MenuItem(_))
-            )
-        {
+        } else if double || matches!(hit, Some(Hit::Fold(_))) {
             Some(rect)
         } else {
             None
@@ -2793,18 +2841,31 @@ impl App {
     }
 
     /// What a press does, by what is up (§7).
-    fn press_on(&mut self, found: Option<(Rect, Hit)>, now: Instant, double: bool) -> Command {
+    fn press_on(
+        &mut self,
+        found: Option<(Rect, Hit)>,
+        now: Instant,
+        late: Duration,
+        double: bool,
+    ) -> Command {
         let hold = |app: &mut App, rect: Rect, hit: Hit, ok: bool| {
-            app.held = Some(Held { rect, hit, ok });
+            app.held = Some(Held {
+                rect,
+                hit,
+                ok,
+                mode: app.mode_kind(),
+                dialog: app.dialog_opened(),
+            });
             Command::None
         };
         match &mut self.mode {
             // A button is pressed on its release, if the press was allowed;
-            // any other click in or outside the dialog does nothing (§7,
-            // USE-11) — the activity row's buttons included (SAFE-B-1).
+            // the dialog's own hint-bar keys answer as keys; any other click
+            // in or outside the dialog does nothing (§7, USE-11) — the
+            // activity row's buttons included (SAFE-B-1).
             Mode::Dialog(c) => match found {
                 Some((rect, Hit::Button(i))) => {
-                    let ok = c.dialog.press_button(i, now);
+                    let ok = c.dialog.press_button(i, now, late);
                     hold(self, rect, Hit::Button(i), ok)
                 }
                 Some((rect, hit @ Hit::Hint(_))) => hold(self, rect, hit, true),
@@ -2863,19 +2924,27 @@ impl App {
     /// terminal (§7).
     fn release(&mut self, at: (u16, u16), now: Instant) -> Command {
         let spot = Position::new(at.0, at.1);
+        let here = self.hit_at(at).map(|(_, h)| h);
+        // Released on what was pressed — the same spot, the same screen, the
+        // same dialog (a dialog opened meanwhile is never answered by a
+        // press made before it: reviews N-C1-1, N-C2-1, N-C3-1).
+        let (kind, dialog) = (self.mode_kind(), self.dialog_opened());
+        let held = self.held.take().filter(|h| {
+            h.rect.contains(spot)
+                && here.as_ref() == Some(&h.hit)
+                && h.mode == kind
+                && h.dialog == dialog
+        });
         if let Some(down) = self.down.take() {
+            // A click on a key or button that slipped is no drag (N-C2-3).
             let far = down.cell.0.abs_diff(at.0).max(down.cell.1.abs_diff(at.1)) >= 2;
-            if far && !down.said {
+            if far && !down.said && held.is_none() {
                 self.notice = notice(DRAG_HINT);
             }
         }
-        let Some(held) = self.held.take() else {
+        let Some(held) = held.filter(|h| h.ok) else {
             return Command::None;
         };
-        let here = self.hit_at(at).map(|(_, h)| h);
-        if !held.ok || !held.rect.contains(spot) || here.as_ref() != Some(&held.hit) {
-            return Command::None;
-        }
         let kind = self.mode_kind();
         let command = match held.hit {
             Hit::Button(i) => match &self.mode {
@@ -2996,7 +3065,13 @@ impl App {
                 return Command::None;
             }
             "↑↓" | "←→" => {
-                self.notice = notice("click a row, or turn the wheel; ↑↓ ←→ are keys");
+                self.notice = notice(
+                    if matches!(self.mode, Mode::Normal | Mode::Details { .. }) {
+                        "click a row, or turn the wheel; ↑↓ ←→ are keys"
+                    } else {
+                        "turn the wheel, or use the keys ↑↓ ←→"
+                    },
+                );
                 return Command::None;
             }
             "Enter" => &[KeyCode::Enter],

@@ -3,13 +3,14 @@
 //! model and spawns `harness --json …` for every write; it never takes the
 //! writer lock and never writes the ledger itself.
 //!
-//! Signals (§4 "The TUI's own signals"): SIGINT, SIGTERM and SIGHUP →
-//! interrupt the running command (it leads its own process group, so the
-//! terminal's signal never reached it), wait ≤ 1 s, restore the terminal,
-//! die BY the signal. In raw mode Ctrl-C is a key, not a signal. While the
-//! editor of a hand edit runs in the foreground, SIGINT belongs to the
-//! editor; TERM and HUP are forwarded to it, and the cockpit dies by them
-//! once it is gone — never under it. A hand edit that was not recorded is
+//! Signals (§4 "The TUI's own signals"): SIGINT, SIGTERM and SIGHUP (and
+//! QUIT, USR1, USR2, ALRM: every common signal whose default ends the
+//! process) → the mouse off, interrupt the running command (it leads its
+//! own process group, so the terminal's signal never reached it), wait
+//! ≤ 1 s, restore the terminal, die BY the signal. In raw mode Ctrl-C is a
+//! key, not a signal. While the editor of a hand edit runs in the
+//! foreground, SIGINT belongs to the editor; the others are forwarded to
+//! it, and the cockpit dies by them once it is gone — never under it. A hand edit that was not recorded is
 //! never removed on the way out: its path is printed. The restores never
 //! block (the terminal guard, `harness_tui::termguard`), and the ledger is
 //! read on a loader thread (`harness_tui::load`), the preflight first.
@@ -175,7 +176,8 @@ fn resolve_harness(flag: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
 /// signal path, which cannot reach the `App`: they are never removed there,
 /// only named, so a signal never costs the user their edit.
 static KEPT_EDITS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
-/// The hand edit's editor while it runs: TERM/HUP are forwarded to it and
+/// The hand edit's editor while it runs: TERM/HUP (the handled signals but
+/// INT) are forwarded to it and
 /// recorded here; the main thread, which owns it, dies by the signal once
 /// the editor is gone.
 static EDITOR: Mutex<Option<Editing>> = Mutex::new(None);
@@ -198,7 +200,11 @@ const WRITE_WAIT: Duration = Duration::from_millis(250);
 /// go through the stdout lock, which a main thread blocked in a write to a
 /// stalled terminal holds (harness-cli's signal path does the same).
 /// A helper that cannot be started runs `f` here instead (review PROC-B-8):
-/// an unbounded restore beats none.
+/// an unbounded restore beats none. The trade-off (review N-C3-8): with no
+/// thread to be had AND the main thread stuck in a write to a stalled
+/// terminal (holding the stdout lock), this waits for that lock — two
+/// failures at once; with one of them alone the restore still happens, and
+/// never blocks in the first case alone.
 fn bounded(budget: Duration, f: impl FnOnce() + Send + 'static) {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     let job = std::sync::Arc::new(Mutex::new(Some(f)));
@@ -303,10 +309,11 @@ fn restore_terminal() {
 
 fn install_signal_path(slot: ChildSlot) -> std::io::Result<()> {
     use signal_hook::consts::{SIGALRM, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2};
-    // Every signal whose default ends the process restores the terminal
-    // first — a shell left in mouse mode prints codes for every click
-    // (review PROC-B-9). A stop (TSTP) is not handled: raw mode makes
-    // Ctrl-Z a key, so only another process stops the cockpit.
+    // The common signals whose default ends the process restore the
+    // terminal first — a shell left in mouse mode prints codes for every
+    // click (review PROC-B-9). Not handled: a stop (TSTP — raw mode makes
+    // Ctrl-Z a key, so only another process stops the cockpit) and the rare
+    // PROF, VTALRM, XCPU, XFSZ, SYS.
     let mut signals = signal_hook::iterator::Signals::new([
         SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2, SIGALRM,
     ])?;
@@ -328,6 +335,11 @@ fn install_signal_path(slot: ChildSlot) -> std::io::Result<()> {
                 }
             }
             GUARD.mark_dying();
+            // The mouse off before the wait for the command: a click in
+            // that second never reaches the shell (review PROC-B-1).
+            bounded(WRITE_WAIT, || {
+                let _ = std::io::stdout().execute(DisableMouseCapture);
+            });
             // The CLI's 250 ms courtesy budget plus its group kill.
             let _ = spawn::interrupt_and_wait(&slot, Duration::from_secs(1));
             GUARD.restore_for_death(restore_terminal, ENABLE_WAIT);
@@ -345,11 +357,11 @@ fn die_by(sig: i32) -> ! {
 
 /// Hand the terminal to the editor: the mouse off, cooked mode, main
 /// screen, cursor shown.
-fn suspend(terminal: &mut DefaultTerminal, mouse: bool) -> std::io::Result<()> {
+fn suspend(terminal: &mut DefaultTerminal, drain: bool) -> std::io::Result<()> {
     std::io::stdout().execute(DisableMouseCapture)?;
-    // The click that chose Hand edit came up before it acted; anything
-    // later still on its way is read away here, never by the editor.
-    if mouse {
+    // The click that chose Hand edit came up before it acted; anything of
+    // the mouse's still on its way is read away here, never by the editor.
+    if drain {
         quiet_mouse();
     }
     std::io::stdout().execute(DisableBracketedPaste)?;
@@ -392,6 +404,7 @@ fn park() -> ! {
 }
 
 /// Run the editor on the session's files as a tracked child (so TERM/HUP
+/// and the other handled signals but INT
 /// can be forwarded to it), and wait. The signal that arrived meanwhile, if
 /// any, is returned: the caller dies by it once the edit is safe.
 fn edit_in_editor(session: &handedit::Session) -> (std::io::Result<ExitStatus>, Option<i32>) {
@@ -401,7 +414,7 @@ fn edit_in_editor(session: &handedit::Session) -> (std::io::Result<ExitStatus>, 
         Ok(child) => {
             let pid = child.id();
             if let Some(e) = guard(&EDITOR).as_mut() {
-                // A TERM/HUP that arrived while the editor was starting is
+                // A signal (not INT) that arrived while the editor was starting is
                 // forwarded now.
                 let child = e.child.insert(child);
                 if let Some(sig) = e.signal {
@@ -444,7 +457,10 @@ fn hand_edit(
     let edit = session.tmp.join("edit");
     guard(&KEPT_EDITS).push(edit.clone());
     let mouse = app.mouse;
-    if let Err(e) = suspend(terminal, mouse) {
+    // A click's last reports are read away first — only when the mouse was
+    // in use: an `e` typed on the keyboard loses no key typed after it.
+    let drain = app.mouse_busy(Instant::now());
+    if let Err(e) = suspend(terminal, drain) {
         let _ = resume(terminal, mouse);
         guard(&KEPT_EDITS).retain(|d| *d != edit);
         let _ = std::fs::remove_dir_all(&session.tmp);
@@ -494,7 +510,8 @@ fn finish_edit(
         }
     }
     if let Some(sig) = signal {
-        // TERM/HUP while editing: the edit is kept, the cockpit dies by it.
+        // A signal (not INT) while editing: the edit is kept, the cockpit
+        // dies by it.
         if !keep {
             let _ = std::fs::remove_dir_all(&session.tmp);
         }
@@ -820,9 +837,10 @@ fn main() -> ExitCode {
         }
     }));
     let result = run(&mut terminal, &mut app, &slot, &mut loader);
-    // The release of the click that quit (and anything after it) is read
-    // here, not by the shell.
-    if app.mouse {
+    // Anything of the mouse's still on its way after the click that quit
+    // (or one just before a key did) is read here, not by the shell; a quit
+    // from the keyboard with the mouse idle drains nothing (review N-C3-5).
+    if app.mouse_busy(Instant::now()) {
         quiet_mouse();
     }
     restore_terminal();

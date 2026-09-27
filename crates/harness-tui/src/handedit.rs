@@ -31,7 +31,7 @@ pub fn editor_command(visual: Option<OsString>, editor: Option<OsString>) -> Str
 /// The `sh -c` script that runs `editor` on `"$@"` — git's rule
 /// (`<editor> "$@"`). When the text is one plain command, `exec` is
 /// prepended, so the child's pid is the editor's own and a forwarded
-/// TERM/HUP reaches it; a leading `VAR=value` or a compound command (`;`,
+/// signal reaches it; a leading `VAR=value` or a compound command (`;`,
 /// `&`, `|`, `(`, `)`, backquote, newline, redirection) is run exactly as
 /// git runs it, because `exec` would break it.
 pub fn editor_script(editor: &str) -> String {

@@ -145,8 +145,12 @@ pub struct Dialog {
     pub armed: bool,
     /// When the last input event was read (the quiet time runs from here).
     pub quiet_since: Instant,
-    /// A key was dropped since the last draw: "Too soon — wait for ready".
+    /// Input was dropped before arming: "Too soon — wait for ready".
     pub too_soon: bool,
+    /// A click on a button was refused although armed (it had not
+    /// settled, or no frame had shown it armed): "Too soon — click again"
+    /// until the next accepted press or key (review N-C3-7).
+    pub click_refused: bool,
     /// When the loop first found it drawn whole: the quiet time also runs
     /// from here, so a stalled loop never arms a dialog on the very frame
     /// that first shows it (review SAFE-5).
@@ -178,6 +182,7 @@ impl Dialog {
             usable: true,
             opened: now,
             shown_armed: false,
+            click_refused: false,
         }
     }
 
@@ -225,9 +230,7 @@ impl Dialog {
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         self.input(now);
-        if self.armed {
-            self.too_soon = false;
-        }
+        self.click_refused = false;
         // The safe choice is always one key away.
         if ctrl_c
             || key.code == KeyCode::Esc
@@ -279,14 +282,24 @@ impl Dialog {
     /// button but the safe one only once the dialog is armed AND was drawn
     /// armed (SAFE-B-7: the user saw "ready"). Refused, it is dropped like a
     /// key: "Too soon", and the quiet time restarts.
-    pub fn press_button(&mut self, i: usize, now: Instant) -> bool {
+    /// `late`: how long the press may have waited in the input queue — it
+    /// is settled only if it came after the settle time even so (review
+    /// N-C2-2).
+    pub fn press_button(&mut self, i: usize, now: Instant, late: Duration) -> bool {
         self.input(now);
-        let settled = now.saturating_duration_since(self.opened) >= CLICK_SETTLE;
+        let settled = now
+            .saturating_duration_since(self.opened)
+            .saturating_sub(late)
+            >= CLICK_SETTLE;
         let ok = settled
             && self.usable
             && i < self.buttons.len()
             && (i == 0 || (self.armed && self.shown_armed));
-        if !ok {
+        if ok {
+            self.click_refused = false;
+        } else if self.armed {
+            self.click_refused = true;
+        } else {
             self.too_soon = true;
         }
         ok
@@ -303,7 +316,7 @@ impl Dialog {
 
     /// The status the dialog shows beside its buttons.
     pub fn state_text(&self) -> String {
-        if self.armed && self.too_soon {
+        if self.armed && self.click_refused {
             // A click refused while it settles (review SAFE-B-2).
             "Too soon — click again".into()
         } else if self.armed {
@@ -393,16 +406,22 @@ mod tests {
         let t0 = Instant::now();
         let mut d = drawn(Kind::Override, t0);
         for i in 0..3 {
-            assert!(!d.press_button(i, t0 + ms(100)));
+            assert!(!d.press_button(i, t0 + ms(100), Duration::ZERO));
             assert!(d.too_soon);
         }
         assert!(!d.arm(t0 + ms(399), false), "the wait restarted at 100 ms");
         assert!(d.arm(t0 + ms(400), false));
         // Armed, not yet drawn armed; and within the settle time.
-        assert!(!d.press_button(1, t0 + CLICK_SETTLE + ms(1)));
+        assert!(!d.press_button(1, t0 + CLICK_SETTLE + ms(1), Duration::ZERO));
         d.shown_armed = true;
-        assert!(!d.press_button(1, t0 + CLICK_SETTLE - ms(1)), "settling");
-        assert!(!d.press_button(0, t0 + CLICK_SETTLE - ms(1)), "settling");
+        assert!(
+            !d.press_button(1, t0 + CLICK_SETTLE - ms(1), Duration::ZERO),
+            "settling"
+        );
+        assert!(
+            !d.press_button(0, t0 + CLICK_SETTLE - ms(1), Duration::ZERO),
+            "settling"
+        );
         assert_eq!(d.state_text(), "Too soon — click again");
         assert_eq!(
             d.on_key(press(KeyCode::Char('z')), t0 + CLICK_SETTLE - ms(1)),
@@ -410,19 +429,45 @@ mod tests {
         );
         assert!(d.state_text().starts_with("ready"), "a key clears it");
         let later = t0 + CLICK_SETTLE;
-        assert!(d.press_button(2, later));
+        assert!(d.press_button(2, later, Duration::ZERO));
         assert_eq!(d.release_button(2), Outcome::Close(Choice::Discard));
-        assert!(d.press_button(0, later));
+        assert!(d.press_button(0, later, Duration::ZERO));
         assert_eq!(d.release_button(0), Outcome::Close(Choice::Safe));
-        assert!(!d.press_button(9, later));
+        assert!(!d.press_button(9, later, Duration::ZERO));
         assert_eq!(d.release_button(9), Outcome::Stay);
         d.usable = false;
-        assert!(!d.press_button(1, later));
+        assert!(!d.press_button(1, later, Duration::ZERO));
         assert_eq!(d.release_button(1), Outcome::Stay, "a frame too small");
-        // Unarmed, the safe button answers once settled (review USE-B-5).
+        // Unarmed, the safe button answers once settled (review USE-B-5); a
+        // refused press before arming says "wait for ready".
         let mut d = drawn(Kind::Act, t0);
-        assert!(d.press_button(0, t0 + CLICK_SETTLE));
-        assert!(!d.press_button(1, t0 + CLICK_SETTLE));
+        assert!(d.press_button(0, t0 + CLICK_SETTLE, Duration::ZERO));
+        assert!(!d.press_button(1, t0 + CLICK_SETTLE, Duration::ZERO));
+        assert!(d.too_soon && !d.click_refused);
+        // A press read late may have come before the settle time (review
+        // N-C2-2): refused.
+        let mut d = drawn(Kind::Act, t0);
+        d.arm(t0 + ms(400), false);
+        d.shown_armed = true;
+        let read = t0 + CLICK_SETTLE + ms(100);
+        assert!(!d.press_button(1, read, ms(200)));
+        assert!(d.press_button(1, read, ms(100)));
+        // "click again" only after a refused click, until a press is
+        // accepted or a key comes (review N-C3-7).
+        let mut d = drawn(Kind::Act, t0);
+        d.arm(t0 + ms(400), false);
+        d.usable = false;
+        let _ = d.on_key(press(KeyCode::Char('y')), t0 + ms(500));
+        d.usable = true;
+        assert!(
+            d.state_text().starts_with("ready"),
+            "a key on a small frame"
+        );
+        assert!(!d.press_button(1, t0 + ms(600), Duration::ZERO));
+        assert_eq!(d.state_text(), "Too soon — click again");
+        d.shown_armed = true;
+        assert!(d.press_button(1, t0 + CLICK_SETTLE, Duration::ZERO));
+        assert!(d.state_text().starts_with("ready"), "accepted");
     }
 
     /// Mutation-checked rule: a held `Enter` never runs anything — one
