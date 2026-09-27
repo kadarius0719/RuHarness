@@ -1070,3 +1070,20 @@ no longer touching the follow state either way).
 | the drain ate keys typed after a keyboard quit or `e` (N-C3-5); clicks during the signal path's wait for the command reached the shell (PROC-B-1 d) | the drain runs only while the mouse is in use (a press down, or an event in the last 500 ms); the signal path turns the mouse off before it waits |
 | stale comments (N-C3-9); `bounded`'s inline fallback can wait on the stdout lock (N-C3-8) | comments brought up to date; the trade-off written at `bounded` (two failures at once) |
 | **accepted** — keys on an armed dialog need no armed frame (SAFE-B-7's key half: Build A's rule); the overlays' border prompts and the notice row are not clickable; a double click on the View's code does nothing | as decided in §R6 |
+
+## R8. Check of the second fix pass — resolved (2026-09-27)
+
+One checker over 2a05443..7fe0440: no high or medium; one low-medium regression and lows.
+Resolved, each with a regression test. The final mutation list holds 75 mutations of the
+Build B rules and every fix of the three passes: all killed (the two equivalents of §R7 were
+replaced by tests that tell the guards apart). This third pass was not checked again: its
+fixes are lows, each mutation-checked.
+
+| finding | resolution |
+|---|---|
+| low-med — "Stop it and quit" waited up to 1.5 s for the command with the mouse on and nothing read; the exit drain, decided by the last mouse event, then skipped what came meanwhile: the shell got it (N2-1, a regression of the §R7 drain rule) | the mouse off before that wait; its reports marked as still coming, so the exit reads them away |
+| the queue clock took "the poll took ≥ 1 ms" as "the queue was empty when it began" — a slow poll returning an old press charged it ~nothing, and the settle could be defeated after a stall (N2-3) | a zero-time poll first; only a queue proved empty counts a waited event as new (charged the whole wait: doubles stricter by ≤ 60 ms, the settle never looser) |
+| the dialog's `Enter press` hint skipped the settle when a key had moved the focus to Run (N2-4); the key-drop guard alone had no test (N2-9, p8) | the hint is a click on the focused button (the safe one at any time); both tested |
+| Esc first in the dialog's hints sat under the panes' `x cancel`: a slow double click on it closed the Cancel dialog it opened (N2-6) | Esc after `↑↓`, where arming still never moves it |
+| keys the details pass to the panes no longer followed the tree (N2-7) | the details count as the panes for follow |
+| wording: "· or click" before a click answered, and with the mouse off untested; the arrows' notice spoke of rows or the wheel where neither fits; README/Help on the safe button; a paste did not break a pair; stale comments (N2-8, N2-9) | "· or click" once settled and only with the mouse on; a notice per screen; reworded; a paste breaks a pair; comments fixed |

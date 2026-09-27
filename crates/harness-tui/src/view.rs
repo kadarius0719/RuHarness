@@ -4190,12 +4190,13 @@ mod tests {
         );
     }
 
-    /// Check N2-7: keys the details pass to the panes (J: the next unit)
-    /// bring a wheeled tree back to its selection.
+    /// Check N2-7: keys the details pass to the panes — Tab back into the
+    /// tree, which moves no selection — bring a wheeled tree back to it.
     #[test]
     fn a_key_through_the_details_follows_the_tree() {
         let mut app = app_of("targets/zopfli", "mfollow2");
         let t = Instant::now();
+        app.focus = Focus::View;
         key(&mut app, 'c');
         render(&mut app, 120, 30);
         for _ in 0..4 {
@@ -4203,12 +4204,13 @@ mod tests {
         }
         render(&mut app, 120, 30);
         assert!(app.tree_offset > 0);
-        key(&mut app, 'J');
+        crate::app::tests::code(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Files);
         render(&mut app, 120, 30);
         let cursor = app.cursor().unwrap();
         assert!(
             cursor >= app.tree_offset && cursor < app.tree_offset + app.layout.tree_page,
-            "the selected unit is in view"
+            "the selection is in view"
         );
         assert!(matches!(app.mode, Mode::Details { .. }));
     }
