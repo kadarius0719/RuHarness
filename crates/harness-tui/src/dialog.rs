@@ -20,6 +20,11 @@ use std::time::{Duration, Instant};
 
 /// The quiet time a dialog needs before it arms.
 pub const ARM_QUIET: Duration = Duration::from_millis(300);
+/// A click on a button answers only this long after the dialog opened
+/// (review SAFE-B-2): longer than a double click, at any usual setting —
+/// the second press of the double click that opened a dialog, landing on a
+/// button drawn under the pointer, never presses it.
+pub const CLICK_SETTLE: Duration = Duration::from_secs(1);
 
 /// What a button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +82,9 @@ pub enum Kind {
     Override,
     /// Quit while a command runs: Stay, Quit (let it finish), Stop it and quit.
     Quit,
+    /// Quit with nothing running, asked by a click (review SAFE-B-4): Stay,
+    /// Quit. The key `q` quits at once; a click is asked first.
+    QuitIdle,
     /// Cancel the running command: Keep running, Stop it.
     Cancel,
 }
@@ -98,6 +106,10 @@ impl Kind {
                 button("Stay", "Esc", &[], Choice::Safe),
                 button("Quit, let it finish", "q", &['q', 'Q'], Choice::QuitLeave),
                 button("Stop it and quit", "x", &['x'], Choice::QuitStop),
+            ],
+            Kind::QuitIdle => vec![
+                button("Stay", "Esc", &[], Choice::Safe),
+                button("Quit", "q", &['q', 'Q'], Choice::QuitLeave),
             ],
             Kind::Cancel => vec![
                 button("Keep running", "Esc", &[], Choice::Safe),
@@ -143,6 +155,11 @@ pub struct Dialog {
     /// terminal too small to show its words and buttons neither arms nor
     /// acts, whatever it showed before (review N2-4).
     pub usable: bool,
+    /// When it opened (a click answers only [`CLICK_SETTLE`] later).
+    pub opened: Instant,
+    /// A frame showed it armed ("ready"), set by the view: a click answers
+    /// only what the user saw (review SAFE-B-7).
+    pub shown_armed: bool,
 }
 
 impl Dialog {
@@ -159,6 +176,8 @@ impl Dialog {
             too_soon: false,
             seen_at: None,
             usable: true,
+            opened: now,
+            shown_armed: false,
         }
     }
 
@@ -206,6 +225,9 @@ impl Dialog {
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         self.input(now);
+        if self.armed {
+            self.too_soon = false;
+        }
         // The safe choice is always one key away.
         if ctrl_c
             || key.code == KeyCode::Esc
@@ -249,27 +271,42 @@ impl Dialog {
         Outcome::Stay
     }
 
-    /// A click on button `i`, read at `now` (docs/COCKPIT-WRAPPER-DESIGN.md
-    /// §7): a deliberate press at a position, so no prior move is needed —
-    /// but only once armed, and only on a frame that can show the dialog.
-    /// Before that it is dropped like a key: "Too soon", and the wait
-    /// restarts. The safe button too: a double click that opened the dialog
-    /// never lands on it.
-    pub fn click(&mut self, i: usize, now: Instant) -> Outcome {
+    /// A press on button `i`, read at `now` (docs/COCKPIT-WRAPPER-DESIGN.md
+    /// §7): whether its release on the button may press it. A click is a
+    /// deliberate press at a position, so no prior move is needed — but
+    /// never within [`CLICK_SETTLE`] of the dialog opening (review
+    /// SAFE-B-2), only on a frame that can show the dialog, and for any
+    /// button but the safe one only once the dialog is armed AND was drawn
+    /// armed (SAFE-B-7: the user saw "ready"). Refused, it is dropped like a
+    /// key: "Too soon", and the quiet time restarts.
+    pub fn press_button(&mut self, i: usize, now: Instant) -> bool {
         self.input(now);
-        if !self.armed || !self.usable {
+        let settled = now.saturating_duration_since(self.opened) >= CLICK_SETTLE;
+        let ok = settled
+            && self.usable
+            && i < self.buttons.len()
+            && (i == 0 || (self.armed && self.shown_armed));
+        if !ok {
             self.too_soon = true;
-            return Outcome::Stay;
         }
+        ok
+    }
+
+    /// The release of an accepted press on button `i` (on the same button):
+    /// its choice — unless the frame can no longer show the dialog.
+    pub fn release_button(&self, i: usize) -> Outcome {
         match self.buttons.get(i) {
-            Some(b) => Outcome::Close(b.choice),
-            None => Outcome::Stay,
+            Some(b) if self.usable => Outcome::Close(b.choice),
+            _ => Outcome::Stay,
         }
     }
 
     /// The status the dialog shows beside its buttons.
     pub fn state_text(&self) -> String {
-        if self.armed {
+        if self.armed && self.too_soon {
+            // A click refused while it settles (review SAFE-B-2).
+            "Too soon — click again".into()
+        } else if self.armed {
             let letter = self.buttons.get(1).map_or("y", |b| b.key);
             format!("ready: → then Enter, or {letter}")
         } else if !self.seen {
@@ -345,24 +382,47 @@ mod tests {
         assert!(d.armed);
     }
 
-    /// §7: a click on a button is dropped before arming (any button, the
-    /// safe one too), restarting the wait; once armed it is that button;
-    /// never on a frame too small to show the dialog.
+    /// Mutation-checked rule (§7, §12.1): a click never runs an unarmed
+    /// dialog. A press on a button is refused — "Too soon", the quiet time
+    /// restarting — within the settle time of opening (the safe button
+    /// too: a double click that opened the dialog never lands on one),
+    /// before the dialog is armed AND drawn armed (all but the safe one),
+    /// and on a frame too small to show it.
     #[test]
-    fn a_click_acts_only_once_armed() {
+    fn a_click_acts_only_once_armed_shown_and_settled() {
         let t0 = Instant::now();
         let mut d = drawn(Kind::Override, t0);
         for i in 0..3 {
-            assert_eq!(d.click(i, t0 + ms(100)), Outcome::Stay);
+            assert!(!d.press_button(i, t0 + ms(100)));
             assert!(d.too_soon);
         }
         assert!(!d.arm(t0 + ms(399), false), "the wait restarted at 100 ms");
         assert!(d.arm(t0 + ms(400), false));
-        assert_eq!(d.click(2, t0 + ms(401)), Outcome::Close(Choice::Discard));
-        assert_eq!(d.click(0, t0 + ms(401)), Outcome::Close(Choice::Safe));
-        assert_eq!(d.click(9, t0 + ms(401)), Outcome::Stay);
+        // Armed, not yet drawn armed; and within the settle time.
+        assert!(!d.press_button(1, t0 + CLICK_SETTLE + ms(1)));
+        d.shown_armed = true;
+        assert!(!d.press_button(1, t0 + CLICK_SETTLE - ms(1)), "settling");
+        assert!(!d.press_button(0, t0 + CLICK_SETTLE - ms(1)), "settling");
+        assert_eq!(d.state_text(), "Too soon — click again");
+        assert_eq!(
+            d.on_key(press(KeyCode::Char('z')), t0 + CLICK_SETTLE - ms(1)),
+            Outcome::Stay
+        );
+        assert!(d.state_text().starts_with("ready"), "a key clears it");
+        let later = t0 + CLICK_SETTLE;
+        assert!(d.press_button(2, later));
+        assert_eq!(d.release_button(2), Outcome::Close(Choice::Discard));
+        assert!(d.press_button(0, later));
+        assert_eq!(d.release_button(0), Outcome::Close(Choice::Safe));
+        assert!(!d.press_button(9, later));
+        assert_eq!(d.release_button(9), Outcome::Stay);
         d.usable = false;
-        assert_eq!(d.click(1, t0 + ms(402)), Outcome::Stay);
+        assert!(!d.press_button(1, later));
+        assert_eq!(d.release_button(1), Outcome::Stay, "a frame too small");
+        // Unarmed, the safe button answers once settled (review USE-B-5).
+        let mut d = drawn(Kind::Act, t0);
+        assert!(d.press_button(0, t0 + CLICK_SETTLE));
+        assert!(!d.press_button(1, t0 + CLICK_SETTLE));
     }
 
     /// Mutation-checked rule: a held `Enter` never runs anything — one
@@ -370,7 +430,13 @@ mod tests {
     /// 30 ms, the loop arming between reads as it does.
     #[test]
     fn a_held_enter_never_runs_anything() {
-        for kind in [Kind::Act, Kind::Override, Kind::Quit, Kind::Cancel] {
+        for kind in [
+            Kind::Act,
+            Kind::Override,
+            Kind::Quit,
+            Kind::QuitIdle,
+            Kind::Cancel,
+        ] {
             let t0 = Instant::now();
             // The press that opened the dialog was read at t0.
             let mut d = drawn(kind, t0);
@@ -420,7 +486,13 @@ mod tests {
         );
         let _ = &mut d;
         // Focus never wraps: ← from the safe button stays on it (USE-1).
-        for kind in [Kind::Act, Kind::Override, Kind::Quit, Kind::Cancel] {
+        for kind in [
+            Kind::Act,
+            Kind::Override,
+            Kind::Quit,
+            Kind::QuitIdle,
+            Kind::Cancel,
+        ] {
             let mut d = armed(kind);
             d.on_key(press(KeyCode::Left), t0);
             d.on_key(press(KeyCode::BackTab), t0);
@@ -477,6 +549,7 @@ mod tests {
             (Kind::Override, 'y'),
             (Kind::Quit, 'q'),
             (Kind::Quit, 'x'),
+            (Kind::QuitIdle, 'q'),
             (Kind::Cancel, 'x'),
         ] {
             let mut d = drawn(kind, t0);

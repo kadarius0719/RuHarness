@@ -371,15 +371,17 @@ the running command's details, `x` cancels it (asked first), `g` re-reads the pr
 quits (asked while a command runs). The letters `a m e E r R x d v` are shortcuts for the
 selection's menu items.
 
-The mouse works too: a click selects a row (and its pane), a double click opens its menu
-(as `Enter`), the wheel scrolls the open menu or dialog, else the pane under the pointer,
-and a click on a key in the bottom bar or on `[Cancel x]`/`[Details c]` presses it. A
-dialog's buttons answer a click only once it is **ready**, like its keys. Selecting text
-belongs to the terminal: hold Option (Terminal, iTerm2) or Shift (most others) while you
-drag, or turn the mouse off with `m` in Help (`?`). `--no-mouse` starts with it off — for a
-terminal without SGR mouse reports; in tmux, `set -g mouse on`. The mouse is switched off
-whenever the cockpit hands the terminal back: on quit, a crash, a signal, and while a hand
-edit's editor runs.
+The mouse works too: a click selects a row (and its pane), a click on `▸`/`▾` opens or folds
+it, a double click is `Enter` (a row's menu, or a View link's target), the wheel scrolls the
+open menu or dialog, else the pane under the pointer, and a click on a key in the bottom bar
+or on `[Cancel x]`/`[Details c]` presses it (Quit asks first). A dialog's buttons answer a
+click only once it is **ready** and has been open a second — the second press of a double
+click never lands on one. Selecting text belongs to the terminal: hold Shift (most
+terminals) or Option (iTerm2) while you drag; in Apple's Terminal, ⌘R turns its mouse
+reporting off and on; or turn the cockpit's mouse off with `m` in Help (`?`). `--no-mouse`
+starts with it off (for a terminal whose clicks print odd characters); in tmux, `set -g
+mouse on`. The mouse is switched off whenever the cockpit hands the terminal back: on quit,
+a crash, a signal, and while a hand edit's editor runs.
 
 The cockpit only *reads* the ledger, on a background thread after a size and type check
 (a hostile target cannot hang it). Its own gates: Re-check runs only on code the harness

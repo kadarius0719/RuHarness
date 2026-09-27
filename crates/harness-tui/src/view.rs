@@ -618,6 +618,14 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
             let y = inner.y + (i - app.tree_offset) as u16;
             app.hits
                 .push((Rect::new(inner.x, y, inner.width, 1), Hit::Row(sel.clone())));
+            // The ▸/▾ marker folds or opens the row (review USE-B-1).
+            let x = 2 * row.depth;
+            if row.expandable && x + 2 <= width {
+                app.hits.push((
+                    Rect::new(inner.x + x as u16, y, 2, 1),
+                    Hit::Fold(sel.clone()),
+                ));
+            }
         }
     }
     frame.render_widget(Paragraph::new(lines), inner);
@@ -1013,7 +1021,7 @@ fn draw_list(
     } else {
         None
     };
-    if let Some(row) = link_row {
+    if let Some(row) = link_row.filter(|_| app.view_follow) {
         app.scroll = follow(lines.len(), height, row, app.scroll);
     } else {
         app.scroll = app.scroll.min(lines.len().saturating_sub(1));
@@ -1229,7 +1237,11 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
     for (b, key) in &buttons {
         x += 1;
         let w = width_of(b) as u16;
-        app.hits.push((Rect::new(x, area.y, w, 1), Hit::Hint(key)));
+        // Only a button drawn whole is clickable (review ENG-B-5).
+        if x + w <= area.x + area.width {
+            app.hits
+                .push((Rect::new(x, area.y, w, 1), Hit::Activity(key)));
+        }
         x += w;
     }
     Line::from(vec![
@@ -1303,7 +1315,14 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
         }
         Mode::Help { .. } => vec![
             ("↑↓", "scroll"),
-            ("m", if app.mouse { "mouse off" } else { "mouse on" }),
+            (
+                "m",
+                if app.mouse {
+                    "turn mouse off"
+                } else {
+                    "turn mouse on"
+                },
+            ),
             ("any other key", "close"),
         ],
         Mode::Verdict { .. } => vec![("↑↓", "check"), ("PgDn", "detail"), ("Esc", "close")],
@@ -1457,12 +1476,13 @@ const HELP_INTRO: &[&str] = &[
 ];
 
 const HELP_MOUSE: &[&str] = &[
-    "Click: select a row and its pane. Double click: what you can do (Enter). The wheel scrolls \
-     the open menu or dialog, else the pane under the pointer. A click on a key in the bottom \
-     bar presses it; a dialog's buttons answer only once it is ready.",
-    "To select text, hold Option (Terminal, iTerm2) or Shift (most others) — or turn the mouse \
-     off. In tmux, `set -g mouse on`. A terminal without SGR mouse reports: start with \
-     --no-mouse.",
+    "Click: select a row and its pane; a click on ▸ or ▾ opens or folds it. Double click: what \
+     you can do (as Enter). The wheel scrolls the open menu or dialog, else the pane under the \
+     pointer. A click on a key in the bottom bar presses it. A dialog's buttons answer a click \
+     once it is ready and has been open a second.",
+    "To select text, hold Shift (most terminals) or Option (iTerm2); in Terminal, ⌘R turns \
+     its mouse reporting off and on — or turn the mouse off here. In tmux, `set -g mouse on`. \
+     If clicks print odd characters, start with --no-mouse.",
 ];
 
 const HELP_KEYS: &[(&str, &str)] = &[
@@ -1477,7 +1497,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("g", "re-read the project"),
     ("t", "try again, after a refusal"),
     ("q", "quit (a dialog while a command runs)"),
-    ("m", "in this screen: the mouse on or off"),
+    ("m (in Help)", "the mouse on or off"),
     ("a m e E r R x d v", "shortcuts for the selection's menu items (Accept, Modify, Hand edit, kept edit, Retry, Resume, Cancel, Compare, Show the checks)"),
     ("j k  ]f [f  J K", "also: move, next/previous pair, next/previous unit"),
 ];
@@ -1528,9 +1548,9 @@ fn help_rows(width: usize, mouse: bool) -> (Vec<Line<'static>>, std::ops::Range<
     rows.push(Line::from(""));
     let start = rows.len();
     let toggle = if mouse {
-        "Mouse: on — [ m: turn it off ]"
+        "Mouse: on — click here, or press m, to turn it off"
     } else {
-        "Mouse: off — [ m: turn it on ]"
+        "Mouse: off — press m to turn it on"
     };
     rows.extend(wrapped(toggle, width, bold()));
     let toggle = start..rows.len();
@@ -1627,6 +1647,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
             style,
         )]));
     }
+    let items_h = (rows.len() as u16 + 2).min(area.height);
     if let Some(why) = &m.footer {
         rows.push(Line::from(""));
         rows.extend(wrapped(
@@ -1635,8 +1656,17 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
             Style::default().fg(Color::Yellow),
         ));
     }
+    // The items stay where they were when a footer appears — it grows the
+    // menu downward — so the next click lands on the item it aimed at
+    // (review USE-B-7); only a footer with no room below moves it up.
     let height = (rows.len() as u16 + 2).min(area.height);
-    let rect = centered(area, width, height);
+    let base = centered(area, width, items_h);
+    let bottom = area.y + area.height;
+    let rect = Rect {
+        y: base.y.min(bottom.saturating_sub(height)).max(area.y),
+        height,
+        ..base
+    };
     let title = format!(" {} ", node_name(app, &app.selection));
     overlay(
         frame,
@@ -1700,6 +1730,9 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     // on a terminal large enough to show it (review SAFE-5).
     let usable = inner_w >= 20 && page >= 2;
     c.dialog.usable = usable;
+    // The user sees "ready" from this frame on: a click may answer it
+    // (review SAFE-B-7).
+    c.dialog.shown_armed = c.dialog.shown_armed || (usable && c.dialog.armed);
     c.dialog.seen = c.dialog.seen || (usable && scroll + page >= total);
     // Too small: this frame shows a note in place of the words — the
     // dialog's own words are never changed (review NEW-1).
@@ -1813,8 +1846,11 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Mode::Menu(m) => draw_menu(frame, app, area, &m),
         Mode::Dialog(_) => draw_dialog(frame, app, area),
         Mode::Details { scroll } => {
+            // Below 80 columns over the panes, the activity rows and the
+            // hint bar still showing — so it can be closed with a click
+            // (review USE-B-4; §1 "Activity and the hint bar stay").
             let rect = if area.width < SINGLE_PANE_BELOW {
-                area
+                Rect::new(area.x, area.y, area.width, area.height.saturating_sub(3))
             } else {
                 let h = area.height / 2;
                 Rect::new(
@@ -2657,11 +2693,18 @@ mod tests {
 
     // ----- the mouse (§7) ------------------------------------------------------
 
-    use crate::app::{DOUBLE_CLICK, DRAG_HINT};
-    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crate::app::{QueueClock, DOUBLE_CLICK, DRAG_HINT};
+    use crate::dialog::{Kind, CLICK_SETTLE};
+    use ratatui::crossterm::event::{
+        Event as TermEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use std::time::Duration;
 
-    fn ms(n: u64) -> std::time::Duration {
-        std::time::Duration::from_millis(n)
+    const LEFT: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
+    const UP: MouseEventKind = MouseEventKind::Up(MouseButton::Left);
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
     }
 
     fn mouse(kind: MouseEventKind, (column, row): (u16, u16)) -> MouseEvent {
@@ -2673,18 +2716,22 @@ mod tests {
         }
     }
 
-    /// What the loop does with one mouse event read at `now`: the input
-    /// restarts a dialog's quiet time, then the gesture.
+    /// One mouse event read at `now` on time, through the loop's own step
+    /// (`App::on_event`: the quiet time, then the gesture).
     fn event(app: &mut App, kind: MouseEventKind, at: (u16, u16), now: Instant) -> Command {
-        app.on_input(now);
-        app.on_mouse(mouse(kind, at), now, true)
+        app.on_event(TermEvent::Mouse(mouse(kind, at)), now, Duration::ZERO)
     }
 
-    /// A left press and its release at `at`, read at `now` (on time).
+    /// A left press and its release at `at`, read at `now`: what the
+    /// release (or the press) did.
     fn click(app: &mut App, at: (u16, u16), now: Instant) -> Command {
-        let command = event(app, MouseEventKind::Down(MouseButton::Left), at, now);
-        event(app, MouseEventKind::Up(MouseButton::Left), at, now);
-        command
+        let pressed = event(app, LEFT, at, now);
+        let released = event(app, UP, at, now + ms(20));
+        if pressed == Command::None {
+            released
+        } else {
+            pressed
+        }
     }
 
     /// A spot inside the region the last frame recorded for `hit` (the one
@@ -2707,6 +2754,139 @@ mod tests {
 
     fn drawn(app: &App, hit: &Hit) -> bool {
         app.hits.iter().any(|(_, h)| h == hit)
+    }
+
+    /// The text the buffer shows inside `r`.
+    fn under(buffer: &Buffer, r: Rect) -> String {
+        (r.y..r.y + r.height)
+            .flat_map(|y| (r.x..r.x + r.width).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+            .collect()
+    }
+
+    /// A dialog that has been open long enough, armed and drawn armed: what
+    /// a click may answer.
+    fn ready(app: &mut App, width: u16, height: u16, opened: Instant) -> Instant {
+        render(app, width, height);
+        app.arm(opened + ms(400), false);
+        app.arm(opened + ms(800), false);
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.dialog.armed));
+        render(app, width, height);
+        opened + CLICK_SETTLE + ms(1)
+    }
+
+    /// Review TEST-B-1: every clickable region is where its thing is drawn —
+    /// on a scrolled tree, a scrolled list, the activity row while a command
+    /// runs, Help, a menu and a dialog — never a region the frame moved.
+    #[test]
+    fn every_hit_is_where_it_is_drawn() {
+        let check = |app: &App, buffer: &Buffer| {
+            let mut seen = 0;
+            for (i, (r, h)) in app.hits.iter().enumerate() {
+                // Only where it is on top: an overlay may cover it.
+                let mid = ratatui::layout::Position::new(r.x + r.width / 2, r.y);
+                if app.hits[i + 1..]
+                    .iter()
+                    .any(|(o, oh)| o.contains(mid) && !matches!(oh, Hit::Fold(_)))
+                {
+                    continue;
+                }
+                let text = under(buffer, *r);
+                let want: Option<String> = match h {
+                    Hit::Row(sel) => Some(node_name(app, sel).chars().take(4).collect()),
+                    Hit::Fold(_) => Some(
+                        if text.starts_with('▾') {
+                            "▾"
+                        } else {
+                            "▸"
+                        }
+                        .into(),
+                    ),
+                    Hit::Link(i) => app.links.get(*i).map(|sel| {
+                        let name = node_name(app, sel);
+                        name.rsplit('/')
+                            .next()
+                            .unwrap_or(&name)
+                            .chars()
+                            .take(4)
+                            .collect()
+                    }),
+                    Hit::Activity(k) | Hit::Hint(k) if *k != "m" || text.contains('m') => {
+                        Some((*k).into())
+                    }
+                    Hit::Hint("m") => Some("Mouse".into()),
+                    Hit::MenuItem(i) => match &app.mode {
+                        Mode::Menu(m) => Some(m.items[*i].label.chars().take(8).collect()),
+                        _ => None,
+                    },
+                    Hit::Button(i) => match &app.mode {
+                        Mode::Dialog(c) => Some(format!(
+                            "[ {}  {} ]",
+                            c.dialog.buttons[*i].label, c.dialog.buttons[*i].key
+                        )),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(want) = want {
+                    assert!(
+                        text.contains(&want),
+                        "{h:?} at {r:?} shows {text:?}, not {want:?}"
+                    );
+                    seen += 1;
+                }
+            }
+            seen
+        };
+        // A scrolled tree, and a scrolled list.
+        let mut app = app_of("targets/zopfli", "mwhere");
+        let t = Instant::now();
+        render(&mut app, 120, 16);
+        let files = spot(&app, &Hit::Pane(Focus::Files));
+        event(&mut app, MouseEventKind::ScrollDown, files, t);
+        event(&mut app, MouseEventKind::ScrollDown, files, t);
+        let buffer = render(&mut app, 120, 16);
+        assert!(app.tree_offset > 0);
+        assert!(check(&app, &buffer) > 5);
+        app.select(Selection::Dir("src/zopfli".into()));
+        render(&mut app, 120, 16);
+        let view = spot(&app, &Hit::Pane(Focus::View));
+        event(&mut app, MouseEventKind::ScrollDown, view, t);
+        let buffer = render(&mut app, 120, 16);
+        assert!(app.scroll > 0);
+        assert!(check(&app, &buffer) > 5);
+        // The activity row while running, Help, a menu, a dialog.
+        let mut app = crate::app::tests::app("mwhere2");
+        running(&mut app);
+        let buffer = render(&mut app, 120, 30);
+        assert!(drawn(&app, &Hit::Activity("x")) && drawn(&app, &Hit::Activity("c")));
+        check(&app, &buffer);
+        key(&mut app, '?');
+        let buffer = render(&mut app, 120, 30);
+        let (r, _) = app
+            .hits
+            .iter()
+            .rev()
+            .find(|(_, h)| *h == Hit::Hint("m"))
+            .unwrap();
+        assert!(under(&buffer, *r).contains("Mouse: on"), "Help's line");
+        check(&app, &buffer);
+        app.mode = Mode::Normal;
+        app.select(Selection::Unit("u-lib".into()));
+        app.open_menu();
+        let buffer = render(&mut app, 120, 30);
+        assert!(check(&app, &buffer) >= 3);
+        app.mode = Mode::Normal;
+        key(&mut app, 'q');
+        let buffer = render(&mut app, 120, 30);
+        assert_eq!(
+            app.hits
+                .iter()
+                .filter(|(_, h)| matches!(h, Hit::Button(_)))
+                .count(),
+            3
+        );
+        check(&app, &buffer);
     }
 
     /// §7: a left click focuses the pane and selects the row; a click on a
@@ -2740,44 +2920,73 @@ mod tests {
         );
     }
 
+    /// Review USE-B-1: a click on a row's ▸/▾ opens or folds it (and
+    /// selects it) — the mouse reaches every node.
+    #[test]
+    fn a_click_on_the_marker_opens_and_folds() {
+        let mut app = app("mfold");
+        let t = Instant::now();
+        render(&mut app, 120, 30);
+        let unit = Selection::Unit("u-lib".into());
+        let fold = Hit::Fold(unit.clone());
+        let rows = app.rows.len();
+        assert!(!app.expansion.is_open(&unit));
+        click_on(&mut app, &fold, t);
+        assert!(app.expansion.is_open(&unit));
+        assert_eq!(app.selection, unit);
+        assert!(app.rows.len() > rows, "its crate and attempts show");
+        render(&mut app, 120, 30);
+        click_on(&mut app, &fold, t + ms(1000));
+        assert!(!app.expansion.is_open(&unit));
+        assert_eq!(app.rows.len(), rows);
+        // The hint bar's ←→ does the same to the selection.
+        render(&mut app, 120, 30);
+        click_on(&mut app, &Hit::Hint("←→"), t + ms(2000));
+        assert!(app.expansion.is_open(&unit));
+    }
+
     /// §7: a double click is `Enter` — two presses on the same row within
-    /// 400 ms, both read on time; never across a stall, never slower, never
-    /// on two rows.
+    /// 400 ms, the first known to have been read on time; never slower,
+    /// never on two rows, never with a key between them.
     #[test]
     fn a_double_click_is_enter_on_the_row() {
         let mut app = app("mdouble");
         let t = Instant::now();
         render(&mut app, 120, 30);
         let unit = spot(&app, &Hit::Row(Selection::Unit("u-lib".into())));
-        let crate_row = spot(&app, &Hit::Row(Selection::Units));
+        let units = spot(&app, &Hit::Row(Selection::Units));
+        let normal = |app: &App| matches!(app.mode, Mode::Normal);
         // Too slow.
         click(&mut app, unit, t);
         render(&mut app, 120, 30);
         click(&mut app, unit, t + DOUBLE_CLICK + ms(1));
-        assert!(matches!(app.mode, Mode::Normal), "slower than the window");
+        assert!(normal(&app), "slower than the window");
         // Two rows.
         render(&mut app, 120, 30);
-        click(&mut app, crate_row, t + ms(2000));
+        click(&mut app, units, t + ms(2000));
         render(&mut app, 120, 30);
         click(&mut app, unit, t + ms(2100));
-        assert!(matches!(app.mode, Mode::Normal), "two rows");
-        // A press read while the loop caught up after a stall is untimed.
+        assert!(normal(&app), "two rows");
+        // The first press may have waited in the queue (a stall): the two
+        // may have been far apart.
         render(&mut app, 120, 30);
-        app.on_mouse(
-            mouse(MouseEventKind::Down(MouseButton::Left), unit),
+        app.on_event(
+            TermEvent::Mouse(mouse(LEFT, unit)),
             t + ms(3000),
-            false,
+            DOUBLE_CLICK,
         );
+        event(&mut app, UP, unit, t + ms(3010));
         render(&mut app, 120, 30);
         click(&mut app, unit, t + ms(3100));
-        assert!(matches!(app.mode, Mode::Normal), "across a stall");
+        assert!(normal(&app), "across a stall");
+        // A key between the two presses.
         render(&mut app, 120, 30);
-        app.on_mouse(
-            mouse(MouseEventKind::Down(MouseButton::Left), unit),
-            t + ms(3200),
-            false,
-        );
-        assert!(matches!(app.mode, Mode::Normal), "the second press untimed");
+        click(&mut app, unit, t + ms(4000));
+        crate::app::tests::code(&mut app, KeyCode::Right);
+        crate::app::tests::code(&mut app, KeyCode::Left);
+        render(&mut app, 120, 30);
+        click(&mut app, unit, t + ms(4100));
+        assert!(normal(&app), "a key between");
         // A double click on the row: its menu, as Enter.
         render(&mut app, 120, 30);
         click(&mut app, unit, t + ms(5000));
@@ -2795,17 +3004,77 @@ mod tests {
         render(&mut app, 120, 30);
         click(&mut app, link, t + ms(7100));
         assert_eq!(app.selection, target);
+        // Two presses on an empty part of a pane: nothing.
+        app.focus = Focus::Files;
+        render(&mut app, 120, 30);
+        let empty = (5, 20);
+        click(&mut app, empty, t + ms(9000));
+        render(&mut app, 120, 30);
+        click(&mut app, empty, t + ms(9100));
+        assert!(normal(&app));
     }
 
-    /// Mutation-checked rule (§12.1): a click never runs an unarmed dialog.
-    /// A click on any button before arming is dropped like a key ("Too
-    /// soon") and restarts the quiet time; once armed, a click on a button
-    /// is that button — no prior move needed.
+    /// The real drive (E2E-1): a click, then a quick double click on the
+    /// same row — a triple click — opened the menu and closed it again. A
+    /// quick press inside what a press just did is swallowed: a triple
+    /// click is a double click, and a burst stays one gesture.
+    #[test]
+    fn a_triple_click_is_a_double_click() {
+        let mut app = app("mtriple");
+        let t = Instant::now();
+        render(&mut app, 120, 30);
+        let unit = spot(&app, &Hit::Row(Selection::Unit("u-lib".into())));
+        for i in 0..5 {
+            click(&mut app, unit, t + ms(150 * i));
+            render(&mut app, 120, 30);
+            if i >= 1 {
+                assert!(
+                    matches!(app.mode, Mode::Menu(_)),
+                    "press {i}: {:?}",
+                    app.mode
+                );
+            }
+        }
+        // Once the burst is over, a click outside the menu closes it.
+        click(&mut app, unit, t + ms(150 * 4) + DOUBLE_CLICK + ms(1));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    /// Review USE-B-3: a double click that dismisses a menu or Help only
+    /// dismisses it — the second press never opens the menu under it.
+    #[test]
+    fn a_double_click_to_dismiss_only_dismisses() {
+        let mut app = app("mdismiss");
+        let t = Instant::now();
+        render(&mut app, 120, 30);
+        // The unit's row, left of the menu and of Help.
+        let unit = (3, spot(&app, &Hit::Row(Selection::Unit("u-lib".into()))).1);
+        for open in [
+            |a: &mut App| a.open_menu(),
+            |a: &mut App| {
+                key(a, '?');
+            },
+        ] {
+            open(&mut app);
+            render(&mut app, 120, 30);
+            click(&mut app, unit, t);
+            render(&mut app, 120, 30);
+            click(&mut app, unit, t + ms(150));
+            assert!(matches!(app.mode, Mode::Normal), "{:?}", app.mode);
+        }
+    }
+
+    /// Mutation-checked rule (§7, §12.1): a click never runs an unarmed
+    /// dialog. A press on a button before arming, before a frame showed it
+    /// armed, or within a second of it opening is dropped ("Too soon") and
+    /// restarts the quiet time; a press dragged off the button does
+    /// nothing; a ready button answers its release.
     #[test]
     fn a_click_never_runs_an_unarmed_dialog() {
         let mut app = app("mbutton");
         let t0 = Instant::now();
         let scan = app.act_argv(Act::Scan, None, None, None).unwrap();
+        app.now = t0;
         app.ask(scan.clone());
         render(&mut app, 120, 30);
         app.arm(t0, false);
@@ -2817,49 +3086,151 @@ mod tests {
                 panic!("an unarmed click closed the dialog")
             };
             assert!(c.dialog.too_soon && !c.dialog.armed);
+            assert_eq!(
+                c.dialog.quiet_since,
+                now + ms(20),
+                "the release restarted it"
+            );
         }
-        // Quiet from the last click (200 ms), not from the first draw.
-        render(&mut app, 120, 30);
-        app.arm(t0 + ms(450), false);
-        assert!(matches!(&app.mode, Mode::Dialog(c) if !c.dialog.armed));
-        app.arm(t0 + ms(501), false);
+        // Armed, but no frame has shown it armed yet.
+        app.arm(t0 + ms(600), false);
         assert!(matches!(&app.mode, Mode::Dialog(c) if c.dialog.armed));
-        assert_eq!(click(&mut app, run, t0 + ms(600)), Command::Spawn(scan));
-        // The quit dialog: its third button is a click once armed.
+        assert_eq!(click(&mut app, run, t0 + CLICK_SETTLE), Command::None);
+        // Shown armed, but within a second of opening.
+        render(&mut app, 120, 30);
+        assert_eq!(
+            click(&mut app, run, t0 + CLICK_SETTLE - ms(30)),
+            Command::None
+        );
+        // A press on Run dragged off: nothing.
+        let later = t0 + CLICK_SETTLE + ms(100);
+        event(&mut app, LEFT, run, later);
+        assert_eq!(
+            event(&mut app, UP, (run.0, run.1 - 3), later),
+            Command::None
+        );
+        assert!(matches!(app.mode, Mode::Dialog(_)));
+        // Ready: its release runs it.
+        assert_eq!(event(&mut app, LEFT, run, later + ms(500)), Command::None);
+        assert_eq!(
+            event(&mut app, UP, run, later + ms(550)),
+            Command::Spawn(scan)
+        );
+        // The quit dialog: its third button, once ready.
         let mut app = crate::app::tests::app("mquitclick");
         app.running = true;
+        let t = Instant::now();
+        app.now = t;
         key(&mut app, 'q');
         render(&mut app, 120, 30);
         let stop = spot(&app, &Hit::Button(2));
-        assert_eq!(click(&mut app, stop, Instant::now()), Command::None);
+        assert_eq!(click(&mut app, stop, t), Command::None);
         assert!(matches!(app.mode, Mode::Dialog(_)));
-        arm(&mut app);
-        assert_eq!(
-            click(&mut app, stop, Instant::now() + ms(1000)),
-            Command::CancelAndQuit
-        );
+        let when = ready(&mut app, 120, 30, t);
+        assert_eq!(click(&mut app, stop, when), Command::CancelAndQuit);
     }
 
-    /// Review §R5: a dialog's button is clickable only where it is drawn
-    /// whole, on a frame big enough to show the dialog.
+    /// Review SAFE-B-2: the second press of a slow double click on a menu
+    /// item never presses the button of the dialog that item opened, even
+    /// with the dialog armed and drawn under the pointer — until a second
+    /// after it opened.
+    #[test]
+    fn a_slow_double_click_never_presses_the_dialog_it_opened() {
+        let mut app = app("mslow");
+        let t = Instant::now();
+        app.select(Selection::Project);
+        app.open_menu();
+        render(&mut app, 120, 30);
+        let Mode::Menu(m) = &app.mode else { panic!() };
+        let detect = m
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("Find hazards"))
+            .unwrap();
+        click_on(&mut app, &Hit::MenuItem(detect), t);
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.title.starts_with("Find hazards")));
+        render(&mut app, 120, 30);
+        app.arm(t + ms(30), false);
+        app.arm(t + ms(350), false);
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.dialog.armed));
+        render(&mut app, 120, 30);
+        let run = spot(&app, &Hit::Button(1));
+        for late in [450, 500, 700, 950] {
+            assert_eq!(
+                click(&mut app, run, t + ms(late)),
+                Command::None,
+                "at {late} ms"
+            );
+            assert!(matches!(app.mode, Mode::Dialog(_)));
+        }
+        render(&mut app, 120, 30);
+        assert!(matches!(
+            click(&mut app, run, t + CLICK_SETTLE + ms(100)),
+            Command::Spawn(_)
+        ));
+    }
+
+    /// Reviews SAFE-B-1, SAFE-B-8: the activity row's buttons answer only in
+    /// the panes. Under a dialog they do nothing (never its letter: `x` on
+    /// an armed quit dialog is "Stop it and quit"); under a note they never
+    /// type; under a menu they are outside it.
+    #[test]
+    fn activity_buttons_answer_only_in_the_panes() {
+        let mut app = app("mactivity");
+        let t = Instant::now();
+        running(&mut app);
+        app.now = t;
+        key(&mut app, 'q');
+        let when = ready(&mut app, 120, 30, t);
+        assert_eq!(click_on(&mut app, &Hit::Activity("x"), when), Command::None);
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.purpose == Purpose::Quit));
+        app.mode = Mode::Normal;
+        key(&mut app, 'x');
+        let when = ready(&mut app, 120, 30, when);
+        assert_eq!(click_on(&mut app, &Hit::Activity("x"), when), Command::None);
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.purpose == Purpose::Cancel));
+        // A note being typed.
+        app.mode = Mode::Note {
+            input: "tighten".into(),
+            unit: "u-lib".into(),
+            attempt: PROVENANCE.into(),
+        };
+        render(&mut app, 120, 30);
+        click_on(&mut app, &Hit::Activity("c"), when + ms(1000));
+        assert!(matches!(&app.mode, Mode::Note { input, .. } if input == "tighten"));
+        // A menu: outside it.
+        app.mode = Mode::Normal;
+        app.open_menu();
+        render(&mut app, 120, 30);
+        click_on(&mut app, &Hit::Activity("c"), when + ms(2000));
+        assert!(matches!(app.mode, Mode::Normal), "closed, no details");
+        // The panes: the button's key.
+        render(&mut app, 120, 30);
+        click_on(&mut app, &Hit::Activity("c"), when + ms(3000));
+        assert!(matches!(app.mode, Mode::Details { .. }));
+    }
+
+    /// Review §R5, ENG-B-5, TEST-B-5: a button is clickable only where it is
+    /// drawn whole — the dialog's and the activity row's — and a dialog's
+    /// only on a frame big enough to show it.
     #[test]
     fn only_whole_buttons_on_a_usable_dialog_are_clickable() {
         let mut app = app("mclip");
         app.running = true;
         key(&mut app, 'q');
-        // 50 columns: the third button does not fit the bar.
-        render(&mut app, 50, 30);
+        // The narrowest frame that shows the third button whole.
+        let whole = (40..=90)
+            .find(|w| {
+                render(&mut app, *w, 30);
+                drawn(&app, &Hit::Button(2))
+            })
+            .unwrap();
+        let buffer = render(&mut app, whole, 30);
+        let (r, _) = app.hits.iter().find(|(_, h)| *h == Hit::Button(2)).unwrap();
+        assert_eq!(under(&buffer, *r), "[ Stop it and quit  x ]");
+        render(&mut app, whole - 1, 30);
+        assert!(!drawn(&app, &Hit::Button(2)), "one column less cuts it");
         assert!(drawn(&app, &Hit::Button(1)));
-        assert!(
-            !drawn(&app, &Hit::Button(2)),
-            "a cut button is not a target"
-        );
-        for (r, h) in &app.hits {
-            if let Hit::Button(_) = h {
-                let (d, _) = app.hits.iter().find(|(_, h)| *h == Hit::Dialog).unwrap();
-                assert!(r.x + r.width < d.x + d.width, "{r:?} past the dialog {d:?}");
-            }
-        }
         // Too small to show it: no button at all, armed or not.
         arm(&mut app);
         render(&mut app, 22, 7);
@@ -2868,16 +3239,27 @@ mod tests {
             panic!()
         };
         assert!(!c.dialog.usable);
-        c.dialog.armed = true;
-        assert_eq!(
-            c.dialog.click(1, Instant::now()),
-            crate::dialog::Outcome::Stay
-        );
+        c.dialog.shown_armed = true;
+        assert!(!c.dialog.press_button(1, Instant::now() + CLICK_SETTLE));
+        // The activity row's buttons, cut by a narrow frame.
+        let mut app = crate::app::tests::app("mclip2");
+        running(&mut app);
+        for w in 16..40 {
+            let buffer = render(&mut app, w, 12);
+            for (r, h) in &app.hits {
+                if let Hit::Activity(_) = h {
+                    assert!(r.x + r.width <= w, "{h:?} past the frame at {w}");
+                    assert!(under(&buffer, *r).ends_with(']'), "{h:?} cut at {w}");
+                }
+            }
+        }
     }
 
     /// §7: a click outside a menu closes it (and does nothing else); inside
     /// it, on no item, nothing; on an item, what `Enter` on it does. A click
-    /// outside a dialog, or on its words, does nothing.
+    /// outside a dialog, or on its words, does nothing; inside Help, the
+    /// checks or the diff, nothing — outside, they close; a note is never
+    /// closed by a click.
     #[test]
     fn outside_a_menu_closes_it_outside_a_dialog_nothing() {
         let mut app = app("moutside");
@@ -2887,9 +3269,8 @@ mod tests {
         render(&mut app, 120, 30);
         click_on(&mut app, &Hit::Dialog, t);
         assert!(matches!(app.mode, Mode::Menu(_)), "inside the menu");
-        // The hint bar's `↑↓` is no one key: nothing.
         click(&mut app, (0, 29), t + ms(500));
-        assert!(matches!(app.mode, Mode::Menu(_)));
+        assert!(matches!(app.mode, Mode::Menu(_)), "the hint bar's ↑↓");
         click(&mut app, (0, 0), t + ms(1000));
         assert!(matches!(app.mode, Mode::Normal));
         assert_eq!(app.selection, Selection::Unit("u-lib".into()));
@@ -2918,18 +3299,64 @@ mod tests {
             app.mode
         );
         render(&mut app, 120, 30);
-        for at in [(0, 0), (119, 29), spot(&app, &Hit::Dialog)] {
+        for at in [(0, 0), (119, 28), spot(&app, &Hit::Dialog)] {
             assert_eq!(click(&mut app, at, t + ms(4000)), Command::None);
             assert!(
                 matches!(app.mode, Mode::Dialog(_)),
                 "a click at {at:?} closed it"
             );
         }
+        // Help: inside nothing, outside closes.
+        app.mode = Mode::Help { scroll: 0 };
+        render(&mut app, 120, 30);
+        click(&mut app, (60, 15), t + ms(5000));
+        assert!(matches!(app.mode, Mode::Help { .. }), "inside Help");
+        click(&mut app, (0, 0), t + ms(6000));
+        assert!(matches!(app.mode, Mode::Normal));
+        // A note: never closed by a click.
+        app.mode = Mode::Note {
+            input: "keep".into(),
+            unit: "u-lib".into(),
+            attempt: PROVENANCE.into(),
+        };
+        render(&mut app, 120, 30);
+        for at in [(0, 0), (60, 15)] {
+            click(&mut app, at, t + ms(7000));
+            assert!(matches!(&app.mode, Mode::Note { input, .. } if input == "keep"));
+        }
+    }
+
+    /// Review USE-B-7: a greyed item's "Why not" grows the menu downward —
+    /// the items stay under the pointer.
+    #[test]
+    fn a_menu_footer_never_moves_its_items() {
+        let mut app = app("mfooter");
+        let lib = app.config.target.join(LIB_C);
+        let c = std::fs::read_to_string(&lib).unwrap();
+        std::fs::write(&lib, format!("{c}\n")).unwrap();
+        assert!(app.reload(true));
+        app.open_menu();
+        render(&mut app, 100, 24);
+        let items = |app: &App| -> Vec<(Rect, Hit)> {
+            app.hits
+                .iter()
+                .filter(|(_, h)| matches!(h, Hit::MenuItem(_)))
+                .cloned()
+                .collect()
+        };
+        let before = items(&app);
+        let Mode::Menu(m) = &app.mode else { panic!() };
+        let greyed = m.items.iter().position(|i| i.greyed.is_some()).unwrap();
+        click_on(&mut app, &Hit::MenuItem(greyed), Instant::now());
+        render(&mut app, 100, 24);
+        assert!(matches!(&app.mode, Mode::Menu(m) if m.footer.is_some()));
+        assert_eq!(items(&app), before);
     }
 
     /// §7: the wheel scrolls an open menu (clamped: it never wraps) or
     /// dialog (restarting its quiet time), else the pane under the pointer
-    /// — the tree without moving the selection, until the next key.
+    /// — the tree and a list without moving what is chosen, until the next
+    /// key there; sideways over the View's code; one check a notch.
     #[test]
     fn the_wheel_scrolls_menus_dialogs_and_the_pane_under_it() {
         let mut app = app_of("targets/zopfli", "mwheel");
@@ -2950,16 +3377,46 @@ mod tests {
         event(&mut app, MouseEventKind::ScrollUp, files, t);
         assert_eq!(app.tree_offset, 0, "clamped");
         event(&mut app, MouseEventKind::ScrollDown, files, t);
+        // A key in the View, or the wheel in an overlay, leaves it (review
+        // USE-B-13, ENG-B-4); a key in the tree follows the selection.
+        app.focus = Focus::View;
+        crate::app::tests::code(&mut app, KeyCode::Down);
+        key(&mut app, 'c');
+        render(&mut app, 120, 16);
+        event(&mut app, MouseEventKind::ScrollDown, (60, 12), t);
+        app.mode = Mode::Normal;
+        render(&mut app, 120, 16);
+        assert_eq!(app.tree_offset, 3, "still where the wheel left it");
+        app.focus = Focus::Files;
         crate::app::tests::code(&mut app, KeyCode::Home);
         render(&mut app, 120, 16);
-        assert_eq!(app.tree_offset, 0, "a key follows the selection again");
-        // The View: its rows, the focus kept.
+        assert_eq!(
+            app.tree_offset, 0,
+            "a key in the tree follows the selection again"
+        );
+        // A list: the chosen link stays chosen, and stays where wheeled.
+        app.select(Selection::Dir("src/zopfli".into()));
+        render(&mut app, 120, 16);
+        click_on(&mut app, &Hit::Link(0), t + ms(1000));
+        render(&mut app, 120, 16);
+        let view = spot(&app, &Hit::Pane(Focus::View));
+        event(&mut app, MouseEventKind::ScrollDown, view, t + ms(2000));
+        event(&mut app, MouseEventKind::ScrollDown, view, t + ms(2000));
+        render(&mut app, 120, 16);
+        assert_eq!(app.link, Some(0), "still chosen");
+        assert_eq!(app.scroll, 6, "not snapped back to the link");
+        // A unit's View: its rows, and sideways, the focus kept.
         app.select(Selection::Unit(app.snapshot.units[0].unit.id.clone()));
         app.focus = Focus::Files;
         render(&mut app, 120, 16);
         let view = spot(&app, &Hit::Pane(Focus::View));
         event(&mut app, MouseEventKind::ScrollDown, view, t);
         assert_eq!(app.scroll, 3.min(app.layout.total_rows.saturating_sub(1)));
+        assert!(app.code_cols > 16, "code wider than a notch");
+        event(&mut app, MouseEventKind::ScrollRight, view, t);
+        assert_eq!(app.hscroll, 8);
+        event(&mut app, MouseEventKind::ScrollLeft, files, t);
+        assert_eq!(app.hscroll, 8, "not over the View");
         assert_eq!(app.focus, Focus::Files);
         // A menu: one item a notch, never wrapping.
         app.open_menu();
@@ -2974,6 +3431,13 @@ mod tests {
         assert!(matches!(&app.mode, Mode::Menu(m) if m.focus == n - 1));
         event(&mut app, MouseEventKind::ScrollUp, (0, 0), t);
         assert!(matches!(&app.mode, Mode::Menu(m) if m.focus == n - 2));
+        // The checks: one a notch.
+        app.mode = Mode::Verdict {
+            selected: 0,
+            scroll: 0,
+        };
+        event(&mut app, MouseEventKind::ScrollDown, (0, 0), t);
+        assert!(matches!(app.mode, Mode::Verdict { selected: 1, .. }));
         // A dialog: it scrolls wherever the pointer is, and the wheel is
         // input — the quiet time restarts.
         app.mode = Mode::Normal;
@@ -2985,10 +3449,44 @@ mod tests {
         assert_eq!(c.dialog.scroll, 3);
         assert_eq!(c.dialog.quiet_since, t + ms(500));
         assert!(!c.dialog.armed);
+        // A note: the wheel does nothing.
+        app.mode = Mode::Note {
+            input: "n".into(),
+            unit: "u".into(),
+            attempt: "a".into(),
+        };
+        event(&mut app, MouseEventKind::ScrollDown, (0, 0), t);
+        assert!(matches!(&app.mode, Mode::Note { input, .. } if input == "n"));
+    }
+
+    /// Review TEST-B-3: every mouse event restarts an open dialog's quiet
+    /// time through the loop's step — a release, a click outside, the
+    /// sideways wheel, a right click.
+    #[test]
+    fn every_mouse_event_restarts_the_quiet_time() {
+        let mut app = app("mquiet");
+        let t = Instant::now();
+        let p = app.act_argv(Act::Scan, None, None, None).unwrap();
+        app.ask(p);
+        render(&mut app, 120, 30);
+        for (i, kind) in [
+            UP,
+            LEFT,
+            MouseEventKind::ScrollLeft,
+            MouseEventKind::Down(MouseButton::Right),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let now = t + ms(100 * (i as u64 + 1));
+            app.on_event(TermEvent::Mouse(mouse(kind, (0, 0))), now, Duration::ZERO);
+            let Mode::Dialog(c) = &app.mode else { panic!() };
+            assert_eq!(c.dialog.quiet_since, now, "{kind:?}");
+        }
     }
 
     /// §7: hint-bar entries and the activity buttons do what their key does
-    /// — Quit while a command runs opens the (armed) quit dialog — and a
+    /// — Quit is asked first, running or not (review SAFE-B-4) — and a
     /// double click on one presses it once.
     #[test]
     fn hints_and_buttons_press_their_keys() {
@@ -2998,70 +3496,150 @@ mod tests {
         click_on(&mut app, &Hit::Hint("?"), t);
         assert!(matches!(app.mode, Mode::Help { .. }));
         render(&mut app, 120, 30);
-        click(&mut app, (0, 0), t + ms(1000));
-        assert!(
-            matches!(app.mode, Mode::Normal),
-            "a click outside Help closes it"
-        );
-        running(&mut app);
+        click_on(&mut app, &Hit::Hint("any other key"), t + ms(1000));
+        assert!(matches!(app.mode, Mode::Normal), "Help closed");
+        // Nothing running: Quit asks, and its Quit quits once ready.
         render(&mut app, 120, 30);
+        app.now = t + ms(2000);
         assert_eq!(
             click_on(&mut app, &Hit::Hint("q"), t + ms(2000)),
             Command::None
         );
-        assert!(matches!(&app.mode, Mode::Dialog(c) if c.purpose == Purpose::Quit));
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.dialog.kind == Kind::QuitIdle));
+        let when = ready(&mut app, 120, 30, t + ms(2020));
+        assert_eq!(click_on(&mut app, &Hit::Button(1), when), Command::Quit);
+        // Running: the quit dialog.
+        app.mode = Mode::Normal;
+        running(&mut app);
+        render(&mut app, 120, 30);
+        assert_eq!(
+            click_on(&mut app, &Hit::Hint("q"), when + ms(1000)),
+            Command::None
+        );
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.dialog.kind == Kind::Quit));
         app.mode = Mode::Normal;
         render(&mut app, 120, 30);
         // `[Details c]`, double-clicked: open (a second `c` would close it).
-        let details = spot(&app, &Hit::Hint("c"));
-        click(&mut app, details, t + ms(3000));
+        let details = spot(&app, &Hit::Activity("c"));
+        // A triple click too (verification: a third press pressed it again).
+        for i in 0..3 {
+            click(&mut app, details, when + ms(3000 + 100 * i));
+            render(&mut app, 120, 30);
+            assert!(
+                matches!(app.mode, Mode::Details { .. }),
+                "{i}: {:?}",
+                app.mode
+            );
+        }
+        // `c/Esc close` closes them.
         render(&mut app, 120, 30);
-        click(&mut app, details, t + ms(3100));
-        assert!(matches!(app.mode, Mode::Details { .. }), "{:?}", app.mode);
-        // With nothing running, q quits as the key does.
-        app.mode = Mode::Normal;
+        click_on(&mut app, &Hit::Hint("c/Esc"), when + ms(4000));
+        assert!(matches!(app.mode, Mode::Normal));
+        // `Enter actions`, double-clicked: the menu opens, and stays (the
+        // second press never lands on its `Esc close`; review TEST-B-2).
         app.running = false;
         render(&mut app, 120, 30);
+        let enter = spot(&app, &Hit::Hint("Enter"));
+        click(&mut app, enter, when + ms(5000));
+        render(&mut app, 120, 30);
+        click(&mut app, enter, when + ms(5100));
+        assert!(matches!(app.mode, Mode::Menu(_)), "{:?}", app.mode);
+        render(&mut app, 120, 30);
+        click_on(&mut app, &Hit::Hint("Esc"), when + ms(6000));
+        assert!(matches!(app.mode, Mode::Normal));
+        // Tab; ]f; ↑↓ says what moves.
+        render(&mut app, 120, 30);
+        click_on(&mut app, &Hit::Hint("Tab"), when + ms(7000));
+        assert_eq!(app.focus, Focus::View);
+        render(&mut app, 120, 30);
+        click_on(&mut app, &Hit::Hint("↑↓"), when + ms(8000));
+        assert!(app
+            .notice
+            .as_ref()
+            .is_some_and(|n| n.text.contains("wheel")));
+        app.select(Selection::Unit("u-lib".into()));
+        app.focus = Focus::View;
+        render(&mut app, 120, 12);
+        let rows = app.layout.pair_rows.clone();
+        click_on(&mut app, &Hit::Hint("]f"), when + ms(9000));
         assert_eq!(
-            click_on(&mut app, &Hit::Hint("q"), t + ms(5000)),
-            Command::Quit
+            Some(app.scroll),
+            rows.iter().copied().find(|r| *r > 0).or(Some(0))
         );
+        // The checks' PgDn.
+        app.mode = Mode::Verdict {
+            selected: 0,
+            scroll: 0,
+        };
+        render(&mut app, 120, 12);
+        click_on(&mut app, &Hit::Hint("PgDn"), when + ms(10000));
+        assert!(matches!(app.mode, Mode::Verdict { scroll, .. } if scroll > 0));
     }
 
-    /// §7: a drag — a press and a release on different cells — says how to
-    /// select text; a click does not. Mouse events outside the frame are
-    /// ignored.
+    /// §7, reviews USE-B-10, SAFE-B-5, SAFE-B-6: a drag — a press and a
+    /// release outside what it pressed — says how to select text, unless
+    /// the press itself said something; a key pressed and dragged off does
+    /// nothing; Ctrl or Alt clicks are never an answer; mouse events outside
+    /// the frame are ignored.
     #[test]
-    fn a_drag_says_how_to_select_text_and_outside_the_frame_is_ignored() {
+    fn a_drag_says_how_to_select_text_and_presses_nothing() {
         let mut app = app("mdrag");
         let t = Instant::now();
         render(&mut app, 120, 30);
-        click(&mut app, (40, 5), t);
-        assert!(app.notice.as_ref().is_none_or(|n| n.text != DRAG_HINT));
-        event(
-            &mut app,
-            MouseEventKind::Down(MouseButton::Left),
-            (40, 5),
-            t + ms(1000),
-        );
-        event(
-            &mut app,
-            MouseEventKind::Up(MouseButton::Left),
-            (60, 7),
-            t + ms(1100),
-        );
-        assert_eq!(
-            app.notice.as_ref().map(|n| n.text.as_str()),
-            Some(DRAG_HINT)
-        );
+        let unit = spot(&app, &Hit::Row(Selection::Unit("u-lib".into())));
+        let said = |app: &App| app.notice.as_ref().map(|n| n.text.clone());
+        click(&mut app, unit, t);
+        assert_ne!(said(&app).as_deref(), Some(DRAG_HINT));
+        // A slip of one cell: a click.
+        event(&mut app, LEFT, unit, t + ms(1000));
+        event(&mut app, UP, (unit.0 + 1, unit.1 + 1), t + ms(1100));
+        assert_ne!(said(&app).as_deref(), Some(DRAG_HINT));
+        // Two cells along the row, or across the View's code: a drag.
+        event(&mut app, LEFT, unit, t + ms(2000));
+        event(&mut app, UP, (unit.0 + 2, unit.1), t + ms(2100));
+        assert_eq!(said(&app).as_deref(), Some(DRAG_HINT));
+        app.notice = None;
+        event(&mut app, LEFT, (60, 7), t + ms(2500));
+        event(&mut app, UP, (80, 9), t + ms(2600));
+        assert_eq!(said(&app).as_deref(), Some(DRAG_HINT));
+        // A key's words, from its release on it, are never covered.
+        render(&mut app, 120, 30);
+        let arrows = spot(&app, &Hit::Hint("↑↓"));
+        event(&mut app, LEFT, arrows, t + ms(2800));
+        event(&mut app, UP, (arrows.0 + 1, arrows.1), t + ms(2810));
+        assert!(said(&app).is_some_and(|w| w.contains("wheel")));
+        // A key pressed and dragged off: not pressed.
+        render(&mut app, 120, 30);
+        let help = spot(&app, &Hit::Hint("?"));
+        event(&mut app, LEFT, help, t + ms(3000));
+        event(&mut app, UP, (help.0, help.1 - 5), t + ms(3100));
+        assert!(matches!(app.mode, Mode::Normal));
+        // Ctrl or Alt: ignored.
+        for modifiers in [KeyModifiers::ALT, KeyModifiers::CONTROL] {
+            let ev = MouseEvent {
+                kind: LEFT,
+                column: help.0,
+                row: help.1,
+                modifiers,
+            };
+            app.on_event(TermEvent::Mouse(ev), t + ms(4000), Duration::ZERO);
+            event(&mut app, UP, help, t + ms(4050));
+            assert!(matches!(app.mode, Mode::Normal), "{modifiers:?}");
+        }
+        // Outside the frame: ignored — a press outside never pairs with a
+        // release inside.
         app.open_menu();
         render(&mut app, 120, 30);
-        click(&mut app, (120, 5), t + ms(2000));
-        click(&mut app, (5, 30), t + ms(3000));
+        click(&mut app, (120, 5), t + ms(5000));
+        click(&mut app, (5, 30), t + ms(6000));
         assert!(
             matches!(app.mode, Mode::Menu(_)),
             "outside the frame: ignored"
         );
+        event(&mut app, LEFT, (40, 5), t + ms(7000));
+        event(&mut app, UP, (130, 5), t + ms(7100));
+        event(&mut app, UP, (40, 9), t + ms(7200));
+        assert_ne!(said(&app).as_deref(), Some(DRAG_HINT));
     }
 
     /// §7: Help's "Mouse on/off" (a key, `m`, and a click on its line);
@@ -3071,17 +3649,25 @@ mod tests {
         let mut app = app("mtoggle");
         let t = Instant::now();
         key(&mut app, '?');
-        render(&mut app, 120, 30);
-        let toggle = spot(&app, &Hit::Hint("m"));
-        let line = text(&render(&mut app, 120, 30));
-        assert!(line.contains("Mouse: on — [ m: turn it off ]"), "{line}");
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(
+            screen.contains("Mouse: on — click here, or press m, to turn it off"),
+            "{screen}"
+        );
+        let (r, _) = app
+            .hits
+            .iter()
+            .rev()
+            .find(|(_, h)| *h == Hit::Hint("m"))
+            .unwrap();
+        let toggle = (r.x + 2, r.y);
         click(&mut app, toggle, t);
         assert!(!app.mouse);
         assert!(matches!(app.mode, Mode::Help { .. }), "Help stays open");
         render(&mut app, 120, 30);
         click(&mut app, toggle, t + ms(1000));
         assert!(!app.mouse, "a click with the mouse off is ignored");
-        assert!(text(&render(&mut app, 120, 30)).contains("Mouse: off — [ m: turn it on ]"));
+        assert!(text(&render(&mut app, 120, 30)).contains("Mouse: off — press m to turn it on"));
         key(&mut app, 'm');
         assert!(app.mouse);
         key(&mut app, 'm');
@@ -3095,6 +3681,8 @@ mod tests {
 
     /// The details sit over the lower half: the tree above answers clicks
     /// and the wheel as without them; the wheel over them scrolls them.
+    /// Below 80 columns they leave the activity rows and the hint bar, so a
+    /// click closes them (review USE-B-4).
     #[test]
     fn the_details_leave_the_panes_above_them_alive() {
         let mut app = app("mdetails");
@@ -3116,5 +3704,32 @@ mod tests {
             "{:?}",
             app.mode
         );
+        // Below 80 columns.
+        let buffer = render(&mut app, 70, 24);
+        assert!(text(&buffer)
+            .lines()
+            .last()
+            .unwrap()
+            .contains("c/Esc close"));
+        click_on(&mut app, &Hit::Hint("c/Esc"), t + ms(3000));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    /// Review PROC-B-5, TEST-B-4: an event may have waited in the queue
+    /// since the last poll that saw it empty — a poll that found nothing,
+    /// or had to wait for its event; never since one that returned at once.
+    #[test]
+    fn the_queue_clock_bounds_how_long_input_waited() {
+        let t = Instant::now();
+        let mut q = QueueClock::new(t);
+        q.polled(t, false, t + ms(60));
+        assert_eq!(q.late(t + ms(70)), ms(10));
+        // Returned at once: the event may have waited since the last empty
+        // poll — a stall included.
+        q.polled(t + ms(500), true, t + ms(500));
+        assert_eq!(q.late(t + ms(500)), ms(440));
+        // Had to wait: it came after the poll began.
+        q.polled(t + ms(600), true, t + ms(630));
+        assert_eq!(q.late(t + ms(631)), ms(31));
     }
 }

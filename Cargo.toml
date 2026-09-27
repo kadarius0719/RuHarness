@@ -35,3 +35,11 @@ unicode-width = "0.2"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
 similar = "3"
 tree-sitter-highlight = "0.27"
+
+# crossterm 0.29 reads a mouse report's coordinate as `n - 1`: a report
+# with a zero coordinate (or an X10 one past column 223) overflows — a
+# panic in debug builds, the pty tests' cockpit included; release builds
+# wrap to a cell outside the frame, which the cockpit ignores (review
+# PROC-B-6).
+[profile.dev.package.crossterm]
+overflow-checks = false

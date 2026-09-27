@@ -649,10 +649,12 @@ while :; do sleep 0.1; done
         "both named on the way out"
     );
     // The mouse was off in both editors, and the TERM left it off.
+    wait_for("the mouse off after the TERM", 5, || {
+        mouse_left_off(&screen.lock().unwrap()).then_some(())
+    });
     let stream = screen.lock().unwrap().clone();
     assert!(stream.contains(MOUSE_ON), "the mouse was never on");
     assert_eq!(mouse_off_in_editors(&stream), 2);
-    assert!(mouse_left_off(&stream), "the mouse left on after the TERM");
     drop(reaper);
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -741,10 +743,15 @@ fn the_keyboard_scans_the_project_end_to_end() {
     });
     let status = script.wait().unwrap();
     assert!(status.success(), "{status:?}");
-    // A plain quit leaves the mouse off, last.
-    let stream = screen.lock().unwrap().clone();
-    assert!(stream.contains(MOUSE_ON), "the mouse was never on");
-    assert!(mouse_left_off(&stream), "the mouse left on after quitting");
+    // A plain quit leaves the mouse off, last (the reader may still hold
+    // the last bytes: waited for — review PROC-B-7).
+    assert!(
+        screen.lock().unwrap().contains(MOUSE_ON),
+        "the mouse was never on"
+    );
+    wait_for("the mouse off after quitting", 5, || {
+        mouse_left_off(&screen.lock().unwrap()).then_some(())
+    });
     drop(reaper);
 }
 
@@ -776,11 +783,13 @@ fn no_mouse_never_turns_the_mouse_on() {
     });
     let status = script.wait().unwrap();
     assert!(status.success(), "{status:?}");
+    wait_for("the mouse reset on the way out", 5, || {
+        mouse_left_off(&screen.lock().unwrap()).then_some(())
+    });
     let stream = screen.lock().unwrap().clone();
     for (on, _) in MOUSE_MODES {
         assert!(!stream.contains(on), "the mouse was turned on");
     }
-    assert!(mouse_left_off(&stream));
     drop(reaper);
 }
 
@@ -1010,9 +1019,10 @@ fn locate(grid: &[String], needle: &str) -> Vec<(usize, usize)> {
 /// docs/COCKPIT-WRAPPER-DESIGN.md §7 end to end, through the terminal's
 /// own mouse reports (SGR, parsed by crossterm): a double click on the
 /// project opens its menu; a click on "Scan the project" opens its dialog;
-/// a click on Run that lands before the dialog is ready is dropped ("Too
-/// soon"), and one once it is ready runs the scan. A drag says how to
-/// select text; Help's line turns the mouse off and `m` on again.
+/// a click on Run that comes right behind it (the second press of a double
+/// click) never runs it, and one a second later, once it is ready, does. A
+/// drag says how to select text; Help's line turns the mouse off and `m`
+/// on again.
 #[test]
 fn the_mouse_scans_the_project_end_to_end() {
     let case = Case::new("e2e-mouse");
@@ -1047,13 +1057,23 @@ fn the_mouse_scans_the_project_end_to_end() {
         children_of(script.id()).into_iter().next()
     });
     reaper.push(tui_pid);
-    // The project is the tree's first row (inside the Files border).
+    // The project is the tree's first row (inside the Files border). A
+    // double click opens its menu — sent again until it does: a slow frame
+    // on a loaded machine may have made the pair too far apart (review
+    // TEST-B-7).
     let project = sgr_click(3, 1);
     let open_menu = format!("{project}{project}");
-    send(open_menu.as_bytes());
-    wait_for("the menu (a double click)", 10, || {
-        saw("Enter choose · Esc close").then_some(())
-    });
+    let menu = |send: &mut dyn FnMut(&[u8])| {
+        for _ in 0..10 {
+            if saw("Enter choose · Esc close") {
+                return;
+            }
+            send(open_menu.as_bytes());
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        panic!("no menu after ten double clicks");
+    };
+    menu(&mut send);
     // The menu's item: its row starts at the menu's left border.
     let item = || {
         let g = grid();
@@ -1070,29 +1090,26 @@ fn the_mouse_scans_the_project_end_to_end() {
         locate(&grid(), "[ Run  y ]").into_iter().next()
     });
     let run = sgr_click(bc + 2, br);
-    // Esc: not run. The same dialog again — and a click on Run read right
-    // after the click that opened it: dropped, the scan not run.
+    // Esc: not run. The same dialog again — and a click on Run right behind
+    // the click that opened it (the second press of a double click, where
+    // the button is drawn): the scan is not run.
     send(b"\x1b");
     wait_for("the dialog to close", 10, || {
         (!saw("Scan the project?")).then_some(())
     });
-    send(open_menu.as_bytes());
-    wait_for("the menu again", 10, || {
-        saw("Enter choose · Esc close").then_some(())
-    });
+    menu(&mut send);
     let (ir, ic) = wait_for("the Scan item", 10, item);
     send(format!("{}{run}", sgr_click(ic + 2, ir)).as_bytes());
-    wait_for("the early click dropped", 10, || {
-        saw("Too soon — wait for ready").then_some(())
-    });
-    assert!(
-        !saw("Last: Scan the project"),
-        "an unarmed click ran the scan"
-    );
-    assert_eq!(std::fs::read_to_string(&facts).unwrap(), before);
     wait_for("the dialog to be ready", 10, || {
         saw("ready: → then Enter, or y").then_some(())
     });
+    assert!(
+        !saw("Last: Scan the project"),
+        "an early click ran the scan"
+    );
+    assert_eq!(std::fs::read_to_string(&facts).unwrap(), before);
+    // A second after it opened, a click on Run runs it.
+    std::thread::sleep(Duration::from_millis(1100));
     send(run.as_bytes());
     wait_for("the scan to finish", 60, || {
         saw("Last: Scan the project — Done").then_some(())
@@ -1105,8 +1122,11 @@ fn the_mouse_scans_the_project_end_to_end() {
     // A drag: a press and a release on different cells.
     send(b"\x1b[<0;50;6M\x1b[<0;70;9m");
     wait_for("the drag hint", 10, || {
-        saw("To select text, hold Option").then_some(())
+        saw("To select text, hold Shift").then_some(())
     });
+    // A report with a zero coordinate (review PROC-B-6): never a panic.
+    send(b"\x1b[<0;0;0M\x1b[<0;0;0m");
+    assert!(alive(tui_pid), "a zero coordinate ended the cockpit");
     // Help's line turns the mouse off (the terminal told), `m` on again.
     send(b"?");
     let (hr, hc) = wait_for("Help's mouse line", 10, || {
@@ -1133,6 +1153,41 @@ fn the_mouse_scans_the_project_end_to_end() {
     });
     let status = script.wait().unwrap();
     assert!(status.success(), "{status:?}");
-    assert!(mouse_left_off(&screen.lock().unwrap()));
+    wait_for("the mouse off after quitting", 5, || {
+        mouse_left_off(&screen.lock().unwrap()).then_some(())
+    });
+    drop(reaper);
+}
+
+/// Review PROC-B-9: a signal whose default ends the process — here USR1 —
+/// goes through the signal path too: the terminal is restored (the mouse
+/// off, the main screen) before the cockpit dies by it.
+#[test]
+fn every_fatal_signal_restores_the_terminal() {
+    let case = Case::new("e2e-usr1");
+    let target = case.target();
+    let (mut script, screen, _keys) = cockpit(
+        &format!("--target '{}' --harness /usr/bin/true", target.display()),
+        &[],
+    );
+    let mut reaper = Reaper::new(script.id());
+    wait_for("the mouse on", 30, || {
+        screen.lock().unwrap().contains(MOUSE_ON).then_some(())
+    });
+    let tui_pid = wait_for("the cockpit process", 10, || {
+        children_of(script.id()).into_iter().next()
+    });
+    reaper.push(tui_pid);
+    assert!(Command::new("/bin/kill")
+        .args(["-USR1", &tui_pid.to_string()])
+        .status()
+        .unwrap()
+        .success());
+    wait_for("the cockpit to die", 10, || (!alive(tui_pid)).then_some(()));
+    let _ = script.wait();
+    wait_for("the restore", 5, || {
+        let s = screen.lock().unwrap();
+        (mouse_left_off(&s) && s.rfind("\u{1b}[?1049l") > s.rfind("\u{1b}[?1049h")).then_some(())
+    });
     drop(reaper);
 }

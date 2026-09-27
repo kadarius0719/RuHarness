@@ -26,7 +26,8 @@ use harness_core::attempts::{AttemptRecord, HUMAN_KIND};
 use harness_core::ledger::{Holder, Ledger};
 use harness_core::verdict::Verdict;
 use ratatui::crossterm::event::{
-    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
 use std::collections::BTreeMap;
@@ -51,9 +52,45 @@ pub const MAX_SOURCE_VIEW_BYTES: u64 = 1024 * 1024;
 /// Two presses on the same row within this long are a double click
 /// (docs/COCKPIT-WRAPPER-DESIGN.md §7), timed by the cockpit.
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
-/// What a drag (a press and a release on different cells) shows: selecting
-/// text belongs to the terminal (§7).
-pub const DRAG_HINT: &str = "To select text, hold Option (Terminal, iTerm2) or Shift (most others)";
+/// What a drag (a press and a release outside what it pressed) shows:
+/// selecting text belongs to the terminal (§7). Terminal.app has no key
+/// that lets a drag through; ⌘R turns its mouse reporting off (review
+/// USE-B-16).
+pub const DRAG_HINT: &str = "To select text, hold Shift (most terminals) or Option (iTerm2); in \
+                             Terminal, ⌘R — or turn the mouse off: m in Help (?)";
+
+/// How long input read now may have waited in the queue (§7: double clicks
+/// are timed by the cockpit; review PROC-B-5). The event loop reports each
+/// poll: one that found nothing, or had to wait for its event, saw the
+/// queue empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueClock {
+    empty_at: Instant,
+}
+
+/// A poll that took at least this long had to wait for its event.
+const POLL_WAITED: Duration = Duration::from_millis(1);
+
+impl QueueClock {
+    /// The queue empty at `now`.
+    pub fn new(now: Instant) -> QueueClock {
+        QueueClock { empty_at: now }
+    }
+
+    /// A poll began at `began` and returned `ready` at `now`.
+    pub fn polled(&mut self, began: Instant, ready: bool, now: Instant) {
+        if !ready {
+            self.empty_at = now;
+        } else if now.saturating_duration_since(began) >= POLL_WAITED {
+            self.empty_at = began;
+        }
+    }
+
+    /// How long an event read at `now` may have waited in the queue.
+    pub fn late(&self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.empty_at)
+    }
+}
 
 /// Wide or stacked pairs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -468,6 +505,8 @@ pub struct Layout {
 pub enum Hit {
     /// A tree row's node.
     Row(Selection),
+    /// A tree row's ▸/▾ marker: a click folds or opens it (review USE-B-1).
+    Fold(Selection),
     /// A link row in the View (an index into [`App::links`]).
     Link(usize),
     /// A pane.
@@ -476,8 +515,13 @@ pub enum Hit {
     MenuItem(usize),
     /// A dialog button drawn whole (never one the frame cut).
     Button(usize),
-    /// A hint-bar entry or an activity button: the key it stands for.
+    /// A hint-bar entry: the key it stands for (the open overlay's keys, or
+    /// the focused pane's).
     Hint(&'static str),
+    /// An activity-row button (`[Cancel x]`, `[Details c]`, `[Try again
+    /// t]`): its key, in the panes only — under a dialog or a note it does
+    /// nothing, under a menu or overlay it is outside it (review SAFE-B-1).
+    Activity(&'static str),
     /// Inside the menu or the dialog (a click there does nothing).
     Dialog,
     /// Inside another overlay: help, the checks, the diff, the details, a
@@ -485,13 +529,39 @@ pub enum Hit {
     Overlay,
 }
 
-/// A press that may begin a double click.
+/// A press that may begin a double click, or that ended a gesture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Press {
     at: Instant,
-    cell: (u16, u16),
+    /// How long it may have waited in the input queue.
+    late: Duration,
+    rect: Rect,
+    hit: Option<Hit>,
+    /// It acted as a whole gesture — a key, a button, a menu item, a double
+    /// click (its region), or it opened or closed a menu, dialog or overlay
+    /// (the whole frame): a quick press inside this is part of it and is
+    /// swallowed.
+    swallow: Option<Rect>,
+}
+
+/// A press on a key, a button or a menu item: it acts when the button comes
+/// up on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Held {
     rect: Rect,
     hit: Hit,
+    /// A dialog button whose press was allowed (always, for the rest).
+    ok: bool,
+}
+
+/// Where the left button went down.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Down {
+    /// Its cell: a release two cells or more away is a drag (a slip of one
+    /// is a click — review USE-B-10).
+    cell: (u16, u16),
+    /// The press itself said something (the drag hint never covers it).
+    said: bool,
 }
 
 /// A transient notice (activity row 2).
@@ -589,8 +659,11 @@ pub struct App {
     /// with it off; Help turns it on and off.
     pub mouse: bool,
     /// The tree keeps the selected row in view; the wheel lets it go until
-    /// the next key or click.
+    /// the next key in the tree or click on it.
     pub tree_follow: bool,
+    /// A View list keeps its chosen link in view; the wheel lets it go
+    /// (review USE-B-12).
+    pub view_follow: bool,
     /// Every staged hand edit not yet recorded, oldest first; never removed
     /// unless the override recorded it or the user discarded it.
     pub kept_edits: Vec<KeptEdit>,
@@ -617,7 +690,8 @@ pub struct App {
     run_awaiting: Option<Awaiting>,
     plan_before: Option<usize>,
     last_press: Option<Press>,
-    down_at: Option<(u16, u16)>,
+    held: Option<Held>,
+    down: Option<Down>,
 }
 
 fn os(s: impl Into<OsString>) -> OsString {
@@ -743,6 +817,7 @@ impl App {
             hits: Vec::new(),
             mouse: true,
             tree_follow: true,
+            view_follow: true,
             kept_edits: Vec::new(),
             leftovers: Vec::new(),
             notes: BTreeMap::new(),
@@ -759,7 +834,8 @@ impl App {
             run_awaiting: None,
             plan_before: None,
             last_press: None,
-            down_at: None,
+            held: None,
+            down: None,
         };
         app.rebuild_rows();
         app.refresh_view(true);
@@ -1995,6 +2071,14 @@ impl App {
                 };
                 (kind, title, body)
             }
+            // Nothing running: only a click asks (the key quits at once).
+            Purpose::Quit if !self.running => (
+                Kind::QuitIdle,
+                "Quit the cockpit?".into(),
+                vec![
+                    "Nothing is running. Hand edits not recorded are named on the way out.".into(),
+                ],
+            ),
             Purpose::Quit => (
                 Kind::Quit,
                 "Quit while a command runs?".into(),
@@ -2538,8 +2622,20 @@ impl App {
 
     /// Handle one key press read at `now`.
     pub fn on_key(&mut self, key: KeyEvent, now: Instant) -> Command {
+        // A key between two presses: they are no double click (review
+        // ENG-B-7).
+        self.last_press = None;
+        // A key in the tree follows the selection again (review USE-B-13).
+        if self.focus == Focus::Files {
+            self.tree_follow = true;
+        }
+        self.view_follow = true;
+        self.key_event(key, now)
+    }
+
+    /// A key, from the keyboard or pressed by a click.
+    fn key_event(&mut self, key: KeyEvent, now: Instant) -> Command {
         self.now = now;
-        self.tree_follow = true;
         // A notice clears on the next key (a new one may replace it).
         if self.notice.as_ref().is_some_and(|n| n.at < now) {
             self.notice = None;
@@ -2547,18 +2643,44 @@ impl App {
         self.on_key_inner(key, now)
     }
 
+    /// One input event, read at `now` — the event loop's step, here so it
+    /// is tested (review TEST-B-3). Every input read restarts an open
+    /// dialog's quiet time: a key, a paste, a resize, the mouse. `late`:
+    /// how long it may have waited in the queue ([`QueueClock`]).
+    pub fn on_event(&mut self, event: TermEvent, now: Instant, late: Duration) -> Command {
+        self.on_input(now);
+        match event {
+            TermEvent::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key, now),
+            TermEvent::Mouse(mouse) => self.on_mouse(mouse, now, late),
+            TermEvent::Paste(text) => {
+                self.on_paste(&text);
+                Command::None
+            }
+            _ => Command::None,
+        }
+    }
+
     // ----- the mouse (§7) --------------------------------------------------------
 
-    /// One mouse event, read at `now`. `timed`: the loop was caught up when
-    /// it read it — a press read while the loop works off input queued
-    /// during a stall never makes a double click (the two presses may have
-    /// been far apart). Every gesture ends in what a key does, through the
-    /// same paths: a dialog's buttons answer only once it is armed.
-    pub fn on_mouse(&mut self, ev: MouseEvent, now: Instant, timed: bool) -> Command {
+    /// One mouse event, read at `now`; `late`: how long it may have waited
+    /// in the input queue (a press that may have waited never makes a
+    /// double click with one read soon after it). Every gesture ends in
+    /// what a key does, through the same paths: a dialog's buttons answer
+    /// only once it is armed. Rows, links and panes answer the press; keys,
+    /// buttons and menu items answer the release on the same spot (review
+    /// SAFE-B-6: a press dragged off does nothing, and the release is read
+    /// before a click hands the terminal over — PROC-B-1).
+    pub fn on_mouse(&mut self, ev: MouseEvent, now: Instant, late: Duration) -> Command {
         self.now = now;
         let frame = self.layout.frame;
-        if !self.mouse || !frame.contains(Position::new(ev.column, ev.row)) {
-            self.down_at = None;
+        // Ctrl or Alt held: never an answer, as with keys (review SAFE-B-5)
+        // — likely an attempt to select text the terminal did not take.
+        let modified = ev
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        if !self.mouse || modified || !frame.contains(Position::new(ev.column, ev.row)) {
+            self.down = None;
+            self.held = None;
             return Command::None;
         }
         let at = (ev.column, ev.row);
@@ -2567,15 +2689,16 @@ impl App {
                 if self.notice.as_ref().is_some_and(|n| n.at < now) {
                     self.notice = None;
                 }
-                self.down_at = Some(at);
-                self.press(at, now, timed)
+                let said = self.notice.clone();
+                self.held = None;
+                let command = self.press(at, now, late);
+                self.down = Some(Down {
+                    cell: at,
+                    said: self.notice != said,
+                });
+                command
             }
-            MouseEventKind::Up(MouseButton::Left) => {
-                if self.down_at.take().is_some_and(|down| down != at) {
-                    self.notice = notice(DRAG_HINT);
-                }
-                Command::None
-            }
+            MouseEventKind::Up(MouseButton::Left) => self.release(at, now),
             MouseEventKind::ScrollUp => self.wheel(at, -1, now),
             MouseEventKind::ScrollDown => self.wheel(at, 1, now),
             MouseEventKind::ScrollLeft => self.wheel_sideways(at, -1),
@@ -2601,48 +2724,162 @@ impl App {
         })
     }
 
-    fn press(&mut self, at: (u16, u16), now: Instant, timed: bool) -> Command {
+    /// Which kind of screen is up: a press that changes it ended a gesture.
+    fn mode_kind(&self) -> std::mem::Discriminant<Mode> {
+        std::mem::discriminant(&self.mode)
+    }
+
+    fn press(&mut self, at: (u16, u16), now: Instant, late: Duration) -> Command {
         let found = self.hit_at(at);
-        // The press before, when both were read on time within the window.
+        let spot = Position::new(at.0, at.1);
+        // The press before, within the window as read.
         let before = self
             .last_press
             .take()
-            .filter(|p| timed && now.saturating_duration_since(p.at) <= DOUBLE_CLICK);
-        // A double click on a key, a button or a menu item presses it once:
-        // the second press is swallowed, whatever the first one opened under
-        // the pointer.
-        if before.as_ref().is_some_and(|p| {
-            p.cell == at && matches!(p.hit, Hit::Hint(_) | Hit::Button(_) | Hit::MenuItem(_))
-        }) {
+            .filter(|p| now.saturating_duration_since(p.at) <= DOUBLE_CLICK);
+        // A quick press inside what a press just did is part of that gesture
+        // and swallowed: the second press of a double click on a key, a
+        // button or a menu item; the third of a triple click; any press
+        // right after one that opened or closed a menu, dialog or overlay
+        // (reviews E2E-1, SAFE-B-2, SAFE-B-3, USE-B-3).
+        if let Some(mut p) = before
+            .clone()
+            .filter(|p| p.swallow.is_some_and(|r| r.contains(spot)))
+        {
+            p.at = now;
+            self.last_press = Some(p);
             return Command::None;
         }
-        // Two presses on the same region of the frame: a double click.
+        // A double click: two presses on the same row or link of the frame,
+        // the first known to have come within the window (its read time
+        // plus how long it may have waited).
         let double = before.is_some_and(|p| {
-            found
-                .as_ref()
-                .is_some_and(|(rect, hit)| p.rect == *rect && p.hit == *hit)
+            found.as_ref().is_some_and(|(rect, hit)| {
+                matches!(hit, Hit::Row(_) | Hit::Link(_))
+                    && p.rect == *rect
+                    && p.hit.as_ref() == Some(hit)
+                    && now.saturating_duration_since(p.at) + p.late <= DOUBLE_CLICK
+            })
         });
-        if timed && !double {
-            self.last_press = found.as_ref().map(|(rect, hit)| Press {
-                at: now,
-                cell: at,
-                rect: *rect,
-                hit: hit.clone(),
-            });
-        }
-        let hit = found.map(|(_, h)| h);
-        if let Some(Hit::Hint(k)) = hit {
-            return self.press_hint(k, now);
-        }
+        let kind = self.mode_kind();
+        let command = self.press_on(found.clone(), now, double);
+        let (rect, hit) = match found {
+            Some((rect, hit)) => (rect, Some(hit)),
+            None => (Rect::new(at.0, at.1, 1, 1), None),
+        };
+        // A dialog button sets none: a press it refused must never swallow
+        // the next, allowed one (review PROC-B-2) — and one it pressed closes
+        // the dialog on its release, which swallows the whole frame.
+        let swallow = if self.mode_kind() != kind {
+            Some(self.layout.frame)
+        } else if double
+            || matches!(
+                hit,
+                Some(Hit::Hint(_) | Hit::Activity(_) | Hit::MenuItem(_))
+            )
+        {
+            Some(rect)
+        } else {
+            None
+        };
+        self.last_press = Some(Press {
+            at: now,
+            late,
+            rect,
+            hit,
+            swallow,
+        });
+        command
+    }
+
+    /// What a press does, by what is up (§7).
+    fn press_on(&mut self, found: Option<(Rect, Hit)>, now: Instant, double: bool) -> Command {
+        let hold = |app: &mut App, rect: Rect, hit: Hit, ok: bool| {
+            app.held = Some(Held { rect, hit, ok });
+            Command::None
+        };
         match &mut self.mode {
-            // A click on a button acts only once the dialog is armed; any
-            // other click in or outside it does nothing (§7, USE-11).
-            Mode::Dialog(c) => {
-                let Some(Hit::Button(i)) = hit else {
-                    return Command::None;
-                };
-                match c.dialog.click(i, now) {
-                    Outcome::Stay => Command::None,
+            // A button is pressed on its release, if the press was allowed;
+            // any other click in or outside the dialog does nothing (§7,
+            // USE-11) — the activity row's buttons included (SAFE-B-1).
+            Mode::Dialog(c) => match found {
+                Some((rect, Hit::Button(i))) => {
+                    let ok = c.dialog.press_button(i, now);
+                    hold(self, rect, Hit::Button(i), ok)
+                }
+                Some((rect, hit @ Hit::Hint(_))) => hold(self, rect, hit, true),
+                _ => Command::None,
+            },
+            // An item is chosen as `Enter` chooses it (on the release); a
+            // click outside the menu closes it — the activity row too.
+            Mode::Menu(_) => match found {
+                Some((rect, hit @ (Hit::MenuItem(_) | Hit::Hint(_)))) => {
+                    hold(self, rect, hit, true)
+                }
+                Some((_, Hit::Dialog)) => Command::None,
+                _ => {
+                    self.mode = Mode::Normal;
+                    Command::None
+                }
+            },
+            // Read-only overlays: their keys answer; a click outside closes
+            // them.
+            Mode::Help { .. } | Mode::Verdict { .. } | Mode::Diff { .. } => match found {
+                Some((rect, hit @ Hit::Hint(_))) => hold(self, rect, hit, true),
+                Some((_, Hit::Overlay)) => Command::None,
+                _ => {
+                    self.mode = Mode::Normal;
+                    Command::None
+                }
+            },
+            // A note being typed: its keys answer; a click never closes it
+            // nor types into it (SAFE-B-8).
+            Mode::Note { .. } | Mode::EditNote { .. } => match found {
+                Some((rect, hit @ Hit::Hint(_))) => hold(self, rect, hit, true),
+                _ => Command::None,
+            },
+            // The details sit over the panes' lower half: the panes above
+            // answer as they do without them.
+            Mode::Details { .. } if matches!(found, Some((_, Hit::Overlay))) => Command::None,
+            Mode::Details { .. } | Mode::Normal => match found {
+                Some((rect, hit @ (Hit::Hint(_) | Hit::Activity(_)))) => {
+                    hold(self, rect, hit, true)
+                }
+                Some((_, Hit::Fold(sel))) => {
+                    self.focus = Focus::Files;
+                    self.select(sel.clone());
+                    let open = !self.expansion.is_open(&sel);
+                    self.set_open(&sel, open);
+                    Command::None
+                }
+                other => self.pane_click(other.map(|(_, h)| h), double, now),
+            },
+        }
+    }
+
+    /// The left button came up at `at`: a held key, button or menu item is
+    /// pressed when it comes up on it (in the frame as it is now); a press
+    /// that came up elsewhere was a drag — selecting text belongs to the
+    /// terminal (§7).
+    fn release(&mut self, at: (u16, u16), now: Instant) -> Command {
+        let spot = Position::new(at.0, at.1);
+        if let Some(down) = self.down.take() {
+            let far = down.cell.0.abs_diff(at.0).max(down.cell.1.abs_diff(at.1)) >= 2;
+            if far && !down.said {
+                self.notice = notice(DRAG_HINT);
+            }
+        }
+        let Some(held) = self.held.take() else {
+            return Command::None;
+        };
+        let here = self.hit_at(at).map(|(_, h)| h);
+        if !held.ok || !held.rect.contains(spot) || here.as_ref() != Some(&held.hit) {
+            return Command::None;
+        }
+        let kind = self.mode_kind();
+        let command = match held.hit {
+            Hit::Button(i) => match &self.mode {
+                Mode::Dialog(c) => match c.dialog.release_button(i) {
                     Outcome::Close(choice) => match std::mem::replace(&mut self.mode, Mode::Normal)
                     {
                         Mode::Dialog(confirm) => self.close_dialog(*confirm, choice),
@@ -2651,49 +2888,74 @@ impl App {
                             Command::None
                         }
                     },
-                }
-            }
-            // An item is chosen as `Enter` chooses it; a click outside the
-            // menu closes it.
-            Mode::Menu(m) => match hit {
-                Some(Hit::MenuItem(i)) if i < m.items.len() => {
-                    m.focus = i;
-                    m.footer = None;
-                    self.on_key(KeyEvent::from(KeyCode::Enter), now)
-                }
-                Some(Hit::Dialog) => Command::None,
-                _ => {
-                    self.mode = Mode::Normal;
-                    Command::None
-                }
+                    Outcome::Stay => Command::None,
+                },
+                _ => Command::None,
             },
-            // Read-only overlays: a click outside closes them.
-            Mode::Help { .. } | Mode::Verdict { .. } | Mode::Diff { .. } => {
-                if hit != Some(Hit::Overlay) {
-                    self.mode = Mode::Normal;
+            Hit::MenuItem(i) => {
+                if let Mode::Menu(m) = &mut self.mode {
+                    if i < m.items.len() {
+                        m.focus = i;
+                        m.footer = None;
+                        return self.release_changed(kind, now, KeyEvent::from(KeyCode::Enter));
+                    }
                 }
                 Command::None
             }
-            // A note being typed is never closed by a click.
-            Mode::Note { .. } | Mode::EditNote { .. } => Command::None,
-            // The details sit over the panes' lower half: the panes above
-            // answer as they do without them.
-            Mode::Details { .. } if hit == Some(Hit::Overlay) => Command::None,
-            Mode::Details { .. } | Mode::Normal => self.pane_click(hit, double, now),
+            Hit::Hint(k) | Hit::Activity(k) => self.press_hint(k, now),
+            _ => Command::None,
+        };
+        self.note_mode_change(kind, now);
+        command
+    }
+
+    /// A key pressed by a release, then [`App::note_mode_change`].
+    fn release_changed(
+        &mut self,
+        kind: std::mem::Discriminant<Mode>,
+        now: Instant,
+        key: KeyEvent,
+    ) -> Command {
+        let command = self.key_event(key, now);
+        self.note_mode_change(kind, now);
+        command
+    }
+
+    /// A release opened or closed a menu, dialog or overlay: quick presses
+    /// anywhere right after it are part of its gesture (review SAFE-B-2).
+    fn note_mode_change(&mut self, kind: std::mem::Discriminant<Mode>, now: Instant) {
+        if self.mode_kind() != kind {
+            let frame = self.layout.frame;
+            match &mut self.last_press {
+                Some(p) => {
+                    p.at = now;
+                    p.swallow = Some(frame);
+                }
+                None => {
+                    self.last_press = Some(Press {
+                        at: now,
+                        late: Duration::ZERO,
+                        rect: frame,
+                        hit: None,
+                        swallow: Some(frame),
+                    })
+                }
+            }
         }
     }
 
     /// A click in the panes: focus the pane, select the row (a double click
     /// is `Enter` on it).
     fn pane_click(&mut self, hit: Option<Hit>, double: bool, now: Instant) -> Command {
-        self.tree_follow = true;
         match hit {
             Some(Hit::Row(sel)) => {
                 self.focus = Focus::Files;
+                self.tree_follow = true;
                 self.select(sel);
             }
             Some(Hit::Link(i)) if i < self.links.len() => {
                 self.focus = Focus::View;
+                self.view_follow = true;
                 self.link = Some(i);
             }
             Some(Hit::Pane(f)) => {
@@ -2703,17 +2965,40 @@ impl App {
             _ => return Command::None,
         }
         if double {
-            self.on_key(KeyEvent::from(KeyCode::Enter), now)
+            self.key_event(KeyEvent::from(KeyCode::Enter), now)
         } else {
             Command::None
         }
     }
 
     /// A click on a hint-bar entry or an activity button: its key (or keys),
-    /// through [`App::on_key`] — so everything a key needs (an armed dialog)
-    /// a click needs too.
+    /// through the key path — so everything a key needs (an armed dialog) a
+    /// click needs too. Quit is asked first, even with nothing running
+    /// (§7 "Quit opens the quit dialog"; review SAFE-B-4): a slip onto it,
+    /// or a hint bar that shifted, never ends the session. `←→` folds or
+    /// opens the selection in the tree; `↑↓` says what does move.
     fn press_hint(&mut self, k: &str, now: Instant) -> Command {
         let keys: &[KeyCode] = match k {
+            "q" if matches!(self.mode, Mode::Normal | Mode::Details { .. }) => {
+                self.open_dialog(Purpose::Quit);
+                return Command::None;
+            }
+            "←→" if self.focus == Focus::Files && matches!(self.mode, Mode::Normal) => {
+                let sel = self.selection.clone();
+                let expandable = self
+                    .cursor()
+                    .and_then(|i| self.rows.get(i))
+                    .is_some_and(|r| r.expandable);
+                if expandable {
+                    let open = !self.expansion.is_open(&sel);
+                    self.set_open(&sel, open);
+                }
+                return Command::None;
+            }
+            "↑↓" | "←→" => {
+                self.notice = notice("click a row, or turn the wheel; ↑↓ ←→ are keys");
+                return Command::None;
+            }
             "Enter" => &[KeyCode::Enter],
             "Esc" | "c/Esc" | "any other key" => &[KeyCode::Esc],
             "Tab" => &[KeyCode::Tab],
@@ -2726,19 +3011,19 @@ impl App {
             "x" => &[KeyCode::Char('x')],
             "t" => &[KeyCode::Char('t')],
             "m" => &[KeyCode::Char('m')],
-            // "↑↓", "←→": two keys, no one click.
             _ => &[],
         };
         let mut command = Command::None;
         for code in keys {
-            command = self.on_key(KeyEvent::from(*code), now);
+            command = self.key_event(KeyEvent::from(*code), now);
         }
         command
     }
 
     /// The wheel (`by` rows up or down): an open menu or dialog, or another
     /// overlay, scrolls; else the pane under the pointer. It never moves the
-    /// focus.
+    /// focus, and never lets the tree follow the selection again (review
+    /// ENG-B-4).
     fn wheel(&mut self, at: (u16, u16), by: isize, now: Instant) -> Command {
         let key = KeyEvent::from(if by < 0 { KeyCode::Up } else { KeyCode::Down });
         let over_overlay = self.hit_at(at).map(|(_, h)| h) == Some(Hit::Overlay);
@@ -2765,12 +3050,13 @@ impl App {
         };
         let mut command = Command::None;
         for _ in 0..repeat {
-            command = self.on_key(key, now);
+            command = self.key_event(key, now);
         }
         command
     }
 
-    /// Scroll the pane at `at` by three rows a notch, the selection kept.
+    /// Scroll the pane at `at` by three rows a notch, the selection (and a
+    /// chosen link) kept where it is.
     fn scroll_pane(&mut self, at: (u16, u16), by: isize) {
         match self.pane_at(at) {
             Some(Focus::Files) => {
@@ -2779,8 +3065,7 @@ impl App {
                 self.tree_offset = (self.tree_offset as isize + 3 * by).clamp(0, last) as usize;
             }
             Some(Focus::View) => {
-                // A list stops following its chosen link while wheeled.
-                self.link = None;
+                self.view_follow = false;
                 let last = self.max_scroll() as isize;
                 self.scroll = (self.scroll as isize + 3 * by).clamp(0, last) as usize;
             }

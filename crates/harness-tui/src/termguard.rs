@@ -28,14 +28,16 @@ pub const ENABLE_WAIT: Duration = Duration::from_millis(200);
 /// The mouse modes the cockpit uses: button presses and releases (and the
 /// wheel) only, with SGR coordinates — `?1000h ?1006h`. Not crossterm's
 /// `EnableMouseCapture`, which also sets `?1003h` (every movement: a flood
-/// of events through the loop) and `?1002h`/`?1015h`. Its reset is
-/// crossterm's `DisableMouseCapture`, which resets all five.
+/// of events through the loop, each restarting a dialog's quiet time) and
+/// `?1002h`/`?1015h` — which are reset first, in case a program before the
+/// cockpit (an editor that crashed) left them on (review PROC-B-3). Its
+/// reset is crossterm's `DisableMouseCapture`, which resets all five.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnableMouse;
 
 impl crossterm::Command for EnableMouse {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        f.write_str("\x1b[?1000h\x1b[?1006h")
+        f.write_str("\x1b[?1003l\x1b[?1002l\x1b[?1015l\x1b[?1000h\x1b[?1006h")
     }
 }
 
@@ -117,7 +119,10 @@ mod tests {
     #[test]
     fn the_mouse_modes_and_their_reset() {
         let on = ansi(EnableMouse);
-        assert_eq!(on, "\x1b[?1000h\x1b[?1006h");
+        assert_eq!(
+            on, "\x1b[?1003l\x1b[?1002l\x1b[?1015l\x1b[?1000h\x1b[?1006h",
+            "every movement, drags and urxvt coordinates off; buttons and SGR on"
+        );
         let off = ansi(crossterm::event::DisableMouseCapture);
         for mode in ["1000", "1006", "1002", "1003", "1015"] {
             assert!(off.contains(&format!("\x1b[?{mode}l")), "{off:?}");

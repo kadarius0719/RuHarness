@@ -24,8 +24,7 @@ use harness_tui::termguard::{EnableMouse, TermGuard, ENABLE_WAIT};
 use harness_tui::view;
 use ratatui::crossterm::cursor;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as TermEvent,
-    KeyEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
 };
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::ExecutableCommand;
@@ -59,9 +58,9 @@ The review cockpit over a target's migration ledger. Every write is a spawned
   --layout split|stacked
                         force side-by-side pairs, or stacked ones (default: side by
                         side at 110 columns and wider)
-  --no-mouse            start with the mouse off (Help turns it on): for a
-                        terminal without SGR mouse reports, or to select text
-                        without holding Option / Shift
+  --no-mouse            start with the mouse off (m in Help turns it on): for
+                        a terminal whose clicks print odd characters, or to
+                        select text with the mouse as usual
 ";
 
 struct Args {
@@ -198,14 +197,56 @@ const WRITE_WAIT: Duration = Duration::from_millis(250);
 /// Run `f` on a helper thread and wait at most `budget` for it: the writes
 /// go through the stdout lock, which a main thread blocked in a write to a
 /// stalled terminal holds (harness-cli's signal path does the same).
+/// A helper that cannot be started runs `f` here instead (review PROC-B-8):
+/// an unbounded restore beats none.
 fn bounded(budget: Duration, f: impl FnOnce() + Send + 'static) {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let job = std::sync::Arc::new(Mutex::new(Some(f)));
+    let theirs = job.clone();
     let helper = std::thread::Builder::new().spawn(move || {
-        f();
+        if let Some(f) = guard_of(&theirs).take() {
+            f();
+        }
         let _ = tx.send(());
     });
-    if helper.is_ok() {
-        let _ = rx.recv_timeout(budget);
+    match helper {
+        Ok(_) => {
+            let _ = rx.recv_timeout(budget);
+        }
+        Err(_) => {
+            if let Some(f) = guard_of(&job).take() {
+                f();
+            }
+        }
+    }
+}
+
+fn guard_of<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// How long the mouse's last reports are waited for once it is turned off.
+const MOUSE_DRAIN: Duration = Duration::from_millis(100);
+
+/// Turn the mouse off while still in raw mode and read away the reports
+/// already on their way — a release, a wheel notch — before the terminal is
+/// handed to the editor or the shell, which would read them as text (review
+/// PROC-B-1). Bounded: the write by [`WRITE_WAIT`], the reads by
+/// [`MOUSE_DRAIN`]. The main thread only: it owns the event reader.
+fn quiet_mouse() {
+    bounded(WRITE_WAIT, || {
+        let _ = std::io::stdout().execute(DisableMouseCapture);
+    });
+    let deadline = Instant::now() + MOUSE_DRAIN;
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        match event::poll(left) {
+            Ok(true) => {
+                if event::read().is_err() {
+                    break;
+                }
+            }
+            _ => break,
+        }
     }
 }
 
@@ -261,8 +302,14 @@ fn restore_terminal() {
 }
 
 fn install_signal_path(slot: ChildSlot) -> std::io::Result<()> {
-    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-    let mut signals = signal_hook::iterator::Signals::new([SIGINT, SIGTERM, SIGHUP])?;
+    use signal_hook::consts::{SIGALRM, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2};
+    // Every signal whose default ends the process restores the terminal
+    // first — a shell left in mouse mode prints codes for every click
+    // (review PROC-B-9). A stop (TSTP) is not handled: raw mode makes
+    // Ctrl-Z a key, so only another process stops the cockpit.
+    let mut signals = signal_hook::iterator::Signals::new([
+        SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2, SIGALRM,
+    ])?;
     std::thread::spawn(move || {
         for sig in signals.forever() {
             {
@@ -298,8 +345,13 @@ fn die_by(sig: i32) -> ! {
 
 /// Hand the terminal to the editor: the mouse off, cooked mode, main
 /// screen, cursor shown.
-fn suspend(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
+fn suspend(terminal: &mut DefaultTerminal, mouse: bool) -> std::io::Result<()> {
     std::io::stdout().execute(DisableMouseCapture)?;
+    // The click that chose Hand edit came up before it acted; anything
+    // later still on its way is read away here, never by the editor.
+    if mouse {
+        quiet_mouse();
+    }
     std::io::stdout().execute(DisableBracketedPaste)?;
     terminal.show_cursor()?;
     terminal::disable_raw_mode()?;
@@ -392,7 +444,7 @@ fn hand_edit(
     let edit = session.tmp.join("edit");
     guard(&KEPT_EDITS).push(edit.clone());
     let mouse = app.mouse;
-    if let Err(e) = suspend(terminal) {
+    if let Err(e) = suspend(terminal, mouse) {
         let _ = resume(terminal, mouse);
         guard(&KEPT_EDITS).retain(|d| *d != edit);
         let _ = std::fs::remove_dir_all(&session.tmp);
@@ -525,13 +577,12 @@ fn run(
     let mut running: Option<Running> = None;
     let mut last_tick = Instant::now();
     let mut whys: Vec<(u64, LoadWhy)> = Vec::new();
-    // The terminal's mouse modes, as last written (set up with the terminal).
-    let mut mouse_on = app.mouse;
-    // Double clicks are timed by the cockpit (§7): after an iteration that
-    // took longer than the window, the input read next may have waited in
-    // the queue — its presses are untimed until a poll finds the queue empty.
-    let mut last_poll = Instant::now();
-    let mut caught_up = true;
+    // The terminal's mouse modes, as last written: none yet — the first
+    // iteration turns the mouse on (under the guard, like every enable).
+    let mut mouse_on: Option<bool> = None;
+    // Double clicks are timed by the cockpit (§7): how long each event may
+    // have waited in the queue (review PROC-B-5).
+    let mut queue = harness_tui::app::QueueClock::new(Instant::now());
     loop {
         if GUARD.dying() {
             // The signal path owns the terminal now.
@@ -552,27 +603,15 @@ fn run(
             app.arm(Instant::now(), pending);
         }
         let mut command = Command::None;
-        if last_poll.elapsed() > harness_tui::app::DOUBLE_CLICK {
-            caught_up = false;
-        }
+        let began = Instant::now();
         let ready = event::poll(Duration::from_millis(60))?;
-        last_poll = Instant::now();
-        if !ready {
-            caught_up = true;
-        } else {
+        queue.polled(began, ready, Instant::now());
+        if ready {
             let event = event::read()?;
             let now = Instant::now();
-            // Every input read restarts an open dialog's quiet time — the
-            // mouse's too.
-            app.on_input(now);
-            match event {
-                TermEvent::Key(key) if key.kind == KeyEventKind::Press => {
-                    command = app.on_key(key, now);
-                }
-                TermEvent::Mouse(mouse) => command = app.on_mouse(mouse, now, caught_up),
-                TermEvent::Paste(text) => app.on_paste(&text),
-                _ => {}
-            }
+            // Every input read restarts an open dialog's quiet time (the
+            // mouse's too), then it is a key, a click or a paste.
+            command = app.on_event(event, now, queue.late(now));
         }
         if let Some(r) = running.as_mut() {
             for msg in r.drain() {
@@ -642,6 +681,9 @@ fn run(
                 if let Err(why) = hand_edit(terminal, app, &unit, &crate_dir) {
                     app.say(why);
                 }
+                // `resume` turned the mouse back on — unless a write failed
+                // on the way: written again below either way (PROC-B-4).
+                mouse_on = None;
             }
             Command::Cleanup(tmp) => {
                 *guard(&KEPT_EDITS) = app.kept_paths();
@@ -650,7 +692,7 @@ fn run(
         }
         // The mouse turned on or off (Help): the terminal follows, under the
         // guard — nothing is enabled once the cockpit is dying.
-        if app.mouse != mouse_on {
+        if mouse_on != Some(app.mouse) {
             let on = app.mouse;
             let set = GUARD.enable(|| {
                 let mut out = std::io::stdout();
@@ -664,7 +706,7 @@ fn run(
                 Some(set) => set?,
                 None => park(),
             }
-            mouse_on = on;
+            mouse_on = Some(on);
         }
         *guard(&KEPT_EDITS) = app.kept_paths();
     }
@@ -745,9 +787,6 @@ fn main() -> ExitCode {
     let Some(terminal) = GUARD.enable(|| {
         let terminal = ratatui::init();
         let _ = std::io::stdout().execute(EnableBracketedPaste);
-        if args.mouse {
-            let _ = std::io::stdout().execute(EnableMouse);
-        }
         terminal
     }) else {
         park();
@@ -781,6 +820,11 @@ fn main() -> ExitCode {
         }
     }));
     let result = run(&mut terminal, &mut app, &slot, &mut loader);
+    // The release of the click that quit (and anything after it) is read
+    // here, not by the shell.
+    if app.mouse {
+        quiet_mouse();
+    }
     restore_terminal();
     announce_kept_edits();
     if app.running && app.run.as_ref().is_some_and(|r| r.act == Act::HandEdit) {

@@ -8,6 +8,7 @@
 │  ▾ Units (1)                 ││  ! test_case/src/lib.c  changed since scan                                           │
 │    ▸ ⚠ u-lib  needs attention││                                                                                      │
 │                              ││                                                                                      │
+│                              ││                                                                                      │
 │                           ┌ harness-tui-gmenu-0000000000 ────────────────────────────────┐                           │
 │                           │  Open                                                        │                           │
 │                           │  Re-read the project                                        g│                           │
@@ -17,7 +18,6 @@
 │                           │                                                              │                           │
 │                           │Why not: 1 file changed or new since the scan — scan first    │                           │
 │                           └ Enter choose · Esc close ────────────────────────────────────┘                           │
-│                              ││                                                                                      │
 │                              ││                                                                                      │
 │                              ││                                                                                      │
 │                              ││                                                                                      │
