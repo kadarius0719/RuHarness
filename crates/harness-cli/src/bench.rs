@@ -1451,8 +1451,17 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                     }
                 }
 
-                for (id, result) in &results {
-                    let id = harness_llm::printable(id, 64);
+                for (raw, result) in &results {
+                    let id = harness_llm::printable(raw, 64);
+                    // A chat-requested attempt says so wherever it is named.
+                    let tag = if records
+                        .iter()
+                        .any(|r| &r.id == raw && r.requester.is_some())
+                    {
+                        " (chat)"
+                    } else {
+                        ""
+                    };
                     match result {
                         ReplayResult::Skipped(_) => {}
                         ReplayResult::Reproduces(drifted) => {
@@ -1460,22 +1469,20 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                             if !drifted.is_empty() {
                                 drifted_attempts += 1;
                             }
-                            let chat = records.iter().any(|r| r.id == id && r.requester.is_some());
                             out(format!(
-                                "bench replay: {} {stage} {id}{} reproduces; prompt: {}",
+                                "bench replay: {} {stage} {id}{tag} reproduces; prompt: {}",
                                 case.path,
-                                if chat { " (chat)" } else { "" },
                                 harness_llm::conformance(drifted)
                             ));
                         }
-                        ReplayResult::Diverged { .. } if excused.contains(id.as_str()) => {}
+                        ReplayResult::Diverged { .. } if excused.contains(raw.as_str()) => {}
                         ReplayResult::Diverged { differences, .. } => problems.push(format!(
-                            "{} {stage} attempt {id} does not replay: {}",
+                            "{} {stage} attempt {id}{tag} does not replay: {}",
                             case.path,
                             differences.join("; ")
                         )),
                         ReplayResult::Failed(e) => problems.push(format!(
-                            "{} {stage} attempt {id} does not replay: {e}",
+                            "{} {stage} attempt {id}{tag} does not replay: {e}",
                             case.path
                         )),
                     }

@@ -73,7 +73,15 @@ pub const STATUSES: &[&str] = &["pending", "in-progress", "verified", "merged", 
 /// A stale verdict input.
 pub const STALE_INPUTS: &[&str] = &["source", "rust-crate", "driver"];
 /// An `error` event's `kind`.
-pub const ERROR_KINDS: &[&str] = &["locked", "stale", "awaiting", "interrupted", "harness"];
+pub const ERROR_KINDS: &[&str] = &[
+    "locked",
+    "stale",
+    "awaiting",
+    "interrupted",
+    "answer-unused",
+    "answer-refused",
+    "harness",
+];
 /// A `promote` event's `result`.
 pub const PROMOTION_RESULTS: &[&str] = &["verified", "rolled-back"];
 /// `requester` (docs/CHAT-PANE-DESIGN.md §4.1).

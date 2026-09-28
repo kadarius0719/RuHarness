@@ -489,21 +489,28 @@ retry it — the chat answers its turns"; of a chat-labelled live record it runs
 
 - `harness migrate <UNIT> … --requester=chat` records the label (§4.1).
 - `harness migrate <UNIT> … --answer=<FILE> --answer-key=<KEY>`:
-  - refused **before anything is written** — by listing and loading only, never a replay or a
-    judge — unless all hold: the provider is of kind `external`; `--requester=chat`; `<KEY>` is 8
-    lowercase hex; the file is ≤ 512 KiB, UTF-8, non-empty; the **latest sample of the derived
-    base** (the base itself when it has no sample) has an **in-progress** record labelled `chat`
-    — `--answer` never creates an attempt or a sample; in `traces/chat/`,
-    `<KEY>.request.json` exists, names the record's model and re-serializes to `<KEY>`, and
-    `<KEY>.response.json` does **not** exist;
+  - refused **up front**, typed `answer-refused` — by listing and loading only, never a replay or
+    a judge, before the run writes anything of its own and without creating a directory (as
+    built: only an interrupted promotion is recovered first, as by every migrate, §R3 CS-12) —
+    unless all hold: the provider is of kind `external`; `--requester=chat`; `<KEY>` is 8
+    lowercase hex; the file is a regular file (not a link) of ≤ 512 KiB, UTF-8, non-empty;
+    `traces/chat/` exists; the attempt **the run will resume** — the base when it is in progress;
+    with `--retry` after a finished base, the latest sample (n ≥ 2) — has an **in-progress**
+    record labelled `chat` naming the run's model (a waiting sample without `--retry` is refused
+    with "pass --retry") — `--answer` never creates an attempt or a sample; in `traces/chat/`,
+    `<KEY>.request.json` exists, names the record's model and re-serializes to `<KEY>` — for an
+    attempt with no turn yet, `<KEY>` is the request its id was derived from (the directory is the
+    unit's, shared by its chat attempts) — and `<KEY>.response.json` does **not** exist;
   - then the resume runs as any resume (its own re-derivation writes: the reset and re-judge);
     the external adapter holds the answer and writes `<KEY>.response.json` **only when asked for
     exactly `<KEY>`** — a no-clobber hard link; body `{text, input_tokens: 0, output_tokens: 0,
     stop_reason: "end_turn"}` (counts 0, never a guess);
   - the one refusal after the fact: the attempt asked for another key first (its inputs moved),
     or finished, without asking for `<KEY>` — typed `answer-unused`, exit 1, nothing written with
-    the answer; when it now waits on another request, the `awaiting` event still names it, so
-    both clients hold the new key.
+    the answer, after the run's own events (a finished attempt's `attempt`/`verdict`/promotion
+    as any run's); when it now waits on another request, the `awaiting` event still names it, so
+    both clients hold the new key. Any other failure keeps its own kind (`locked`,
+    `interrupted`, …).
 - The `awaiting` event gains `request_key`; its `args` and `resume` hint carry `--requester` and
   never `--answer`/`--answer-key`.
 - SCHEMAS.md and CLI-HARDENING.md document all of it; exit codes otherwise unchanged.
@@ -739,8 +746,8 @@ and the brief is the text any other runtime can take. It says, briefly:
   to green, then through a repair turn; each up-front refusal writes nothing (no attempt, no
   sample, no `.replay-` scratch) — including a response that already exists and a finished latest
   sample; `answer-unused` when the attempt asks for another key first; a finished chat attempt and
-  a chat `.r2` re-run and replay from `traces/<base>/` (id and label re-derived; a missing dir an
-  integrity error, never the root); `--retry` of a chat attempt's sample with `--answer`; the
+  a chat `.r2` re-run and replay from `traces/chat/` (id and label re-derived; the samples'
+  `traces/chat/<id>/`; an answer or replay creates no directory); `--retry` of a chat attempt's sample with `--answer`; the
   `awaiting` event's `request_key`, `args` and `resume`.
 - **bench**: a chat fixture with a sample: replayed from `traces/chat/` and reported `(chat)`;
   its crate a problem.

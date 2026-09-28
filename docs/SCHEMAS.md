@@ -507,12 +507,18 @@ Committed evidence per attempt (source only; `attempts/**/target/` is gitignored
   only the audited protocol answers or retries it.
 - `harness migrate … --requester=chat` records the label; `--answer=FILE
   --answer-key=KEY` (`external` and `--requester=chat` only) files FILE as the response to
-  the pending request KEY: refused before anything is written unless the latest sample of
-  the derived base is in progress and labelled, `KEY.request.json` exists in its traces dir
-  (re-serializing to KEY, naming its model) and `KEY.response.json` does not; the adapter
-  writes it (a new file, never over one; counts 0) only when the attempt asks for exactly
-  KEY; a run that never asks for it ends `answer-unused` (exit 1), still reporting the
-  request it waits on.
+  the pending request KEY: refused up front — typed `answer-refused` (exit 1), before the
+  run writes anything of its own and without creating a directory (only an interrupted
+  promotion is recovered first, as by every migrate) — unless FILE is a regular UTF-8 file
+  of at most 512 KiB, not empty, the provider is `external`, the traces dir exists, and the
+  attempt the run will resume (the base in progress; with `--retry`, the latest sample,
+  n ≥ 2, in progress) is labelled, names the run's model, `KEY.request.json` exists there
+  (re-serializing to KEY, naming that model; for an attempt with no turn yet, the request
+  its id was derived from) and `KEY.response.json` does not; the adapter writes it (a new
+  file, never over one; counts 0) only when the attempt asks for exactly KEY; a run that
+  finishes or waits on another request without asking for it ends `answer-unused` (exit 1)
+  after its own events (the `awaiting` event naming the request it now waits on); any
+  other failure keeps its own kind.
 - A human attempt whose judge wrote no `candidate/` (a deny-scan red) keeps its two
   files verbatim in `attempts/<id>/edit/src/{logic.rs,ffi.rs}` — so every human
   attempt holds what its `response_hash` hashes (in `candidate/src/` otherwise).
@@ -1025,7 +1031,7 @@ bump the version. Every value is the ledger's own, verbatim.
 | `verdict` | `unit`, `green`, `path` — only after the verdict was stored at `path` (`verify`, migrate's final judged turn at `attempts/<id>/attempt-verdict.json`, a green promotion); a rolled-back promotion emits its `check` lines and `promote{result:"rolled-back"}` but no `verdict` |
 | `promote` | `unit`, `attempt`, `result` (`verified` / `rolled-back`) |
 | `awaiting` | `attempt` (null for triage), `path`, `resume` (the exact re-run command), `request_key` (the pending request's trace key, when the path names one) |
-| `error` | `kind` (`locked` / `stale` / `awaiting` / `interrupted` / `answer-unused` / `harness`), `message`, `holder` (locked only) |
+| `error` | `kind` (`locked` / `stale` / `awaiting` / `interrupted` / `answer-unused` / `answer-refused` / `harness`), `message`, `holder` (locked only) |
 
 The kinds come from typed `harness_core::Error` variants (`Locked`, `Stale`,
 `Awaiting`, `Interrupted`), not from prose matching.

@@ -164,6 +164,7 @@ pub fn error_kind(e: &anyhow::Error) -> &'static str {
         Some(harness_core::Error::Awaiting { .. }) => "awaiting",
         Some(harness_core::Error::Interrupted) => "interrupted",
         Some(harness_core::Error::AnswerUnused { .. }) => "answer-unused",
+        Some(harness_core::Error::AnswerRefused { .. }) => "answer-refused",
         _ => "harness",
     }
 }
@@ -219,9 +220,14 @@ pub struct Awaiting<'a> {
 /// [`args`] without `--answer`/`--answer-key` (attached `=value` or as the
 /// next word): the command line that resumes a run, answer or not.
 pub fn args_without_answer() -> Vec<String> {
+    without_answer(args())
+}
+
+/// `args` without `--answer`/`--answer-key` (attached or as the next word).
+pub fn without_answer(args: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut skip = false;
-    for arg in args() {
+    for arg in args {
         if skip {
             skip = false;
             continue;
@@ -389,5 +395,54 @@ impl harness_llm::Progress for Progress {
             index,
             turn,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An `awaiting` event's `args` never carry the answer (§R CE-14):
+    /// neither attached nor as the next word, whatever else is kept.
+    #[test]
+    fn the_answer_flags_are_dropped_in_both_spellings() {
+        let args: Vec<String> = [
+            "harness",
+            "--json",
+            "migrate",
+            "u1",
+            "--answer",
+            "/tmp/a.txt",
+            "--requester=chat",
+            "--answer-key",
+            "0123abcd",
+            "--answer=/tmp/b.txt",
+            "--answer-key=fedcba98",
+            "--steer=--answer",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            without_answer(&args),
+            [
+                "harness",
+                "--json",
+                "migrate",
+                "u1",
+                "--requester=chat",
+                "--steer=--answer"
+            ]
+        );
+        assert_eq!(
+            request_key_of(std::path::Path::new(
+                "/t/traces/chat/0123abcd.response.json"
+            )),
+            Some("0123abcd".to_string())
+        );
+        assert_eq!(
+            request_key_of(std::path::Path::new("/t/traces/NOTAKEY1.response.json")),
+            None
+        );
     }
 }

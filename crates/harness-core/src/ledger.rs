@@ -11,19 +11,56 @@ use std::path::{Path, PathBuf};
 /// directory, then rename over the target. An interrupted write can never
 /// truncate or corrupt committed ledger evidence (docs/SCHEMAS.md).
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    use std::io::Write;
     let dir = path
         .parent()
         .ok_or_else(|| Error::Invariant(format!("{} has no parent dir", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
-    let tmp = dir.join(format!(
-        ".{}.tmp-{}",
-        path.file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "ledger".into()),
-        std::process::id()
-    ));
-    std::fs::write(&tmp, bytes).map_err(|e| Error::io(&tmp, e))?;
-    std::fs::rename(&tmp, path).map_err(|e| Error::io(path, e))
+    let name = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "ledger".into());
+    // The temp file is created NEW (O_CREAT|O_EXCL: never through a planted
+    // symlink or over an existing file) under an unpredictable name — the
+    // ledger's directories are target-owned (§R CR-3).
+    let (tmp, mut file) = new_temp_file(dir, &name)?;
+    let written = file.write_all(bytes);
+    drop(file);
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(Error::io(&tmp, e));
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        Error::io(path, e)
+    })
+}
+
+/// A new, exclusively created temp file `.<name>.tmp-<pid>-<random>` in
+/// `dir` (O_CREAT|O_EXCL, so a planted file or symlink of that name is never
+/// written through), retried under another name on a collision.
+pub fn new_temp_file(dir: &Path, name: &str) -> Result<(PathBuf, std::fs::File), Error> {
+    let mut last = None;
+    for _ in 0..8 {
+        let tmp = dir.join(format!(
+            ".{name}.tmp-{}-{}",
+            std::process::id(),
+            crate::hash::random_hex(8)
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => return Ok((tmp, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(Error::io(&tmp, e)),
+        }
+    }
+    Err(Error::io(
+        dir,
+        last.unwrap_or_else(|| std::io::Error::other("no free temp name")),
+    ))
 }
 
 /// Directory name of the ledger inside a target repo.
@@ -375,6 +412,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    /// §R CR-3: the temp file is created new under an unpredictable name —
+    /// a symlink planted at the old predictable name (or any name) is never
+    /// written through — and nothing is left behind.
+    #[test]
+    fn write_atomic_never_writes_through_a_planted_temp_name() {
+        let root = scratch("atomic");
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, "untouched").unwrap();
+        let dir = root.join("ledger");
+        std::fs::create_dir_all(&dir).unwrap();
+        let planted = dir.join(format!(".attempt.json.tmp-{}", std::process::id()));
+        std::os::unix::fs::symlink(&outside, &planted).unwrap();
+        let path = dir.join("attempt.json");
+        write_atomic(&path, b"new").unwrap();
+        write_atomic(&path, b"newer").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "newer");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "untouched");
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        let planted_name = planted.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(left, [planted_name, "attempt.json".to_string()]);
+        let (a, _) = new_temp_file(&dir, "x").unwrap();
+        let (b, _) = new_temp_file(&dir, "x").unwrap();
+        assert_ne!(a, b, "unpredictable, never reused");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

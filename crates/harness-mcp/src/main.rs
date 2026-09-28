@@ -40,6 +40,7 @@ fn main() {
         let default = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             server::shut_down_now(&gate, &slot);
+            acts::remove_answer_dir();
             default(info);
             std::process::exit(101);
         }));
@@ -49,6 +50,7 @@ fn main() {
         std::thread::spawn(move || {
             if let Some(sig) = signals.forever().next() {
                 server::shut_down(&gate, &slot);
+                acts::remove_answer_dir();
                 // Die BY the signal, as the CLI does; exit(128+N) only if the
                 // re-raise fails.
                 let _ = signal_hook::low_level::emulate_default_handler(sig);
@@ -94,7 +96,9 @@ fn main() {
             ""
         }
     ));
-    acts::sweep_answer_dirs();
+    // Off the loop: a temp dir planted with many entries never delays
+    // `initialize` (§R CR-2).
+    std::thread::spawn(acts::sweep_answer_dirs);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
@@ -113,5 +117,6 @@ fn main() {
     });
     let stdout = std::io::stdout();
     let code = Server::new(cfg, stdout.lock(), slot, gate).run(rx);
+    acts::remove_answer_dir();
     std::process::exit(code);
 }

@@ -771,6 +771,17 @@ pub fn retry_refusal(r: &AttemptRecord, providers: &[String]) -> Option<String> 
             r.id
         ));
     }
+    // A chat asked for it and answers its turns: its retry is the chat's to
+    // ask for (docs/CHAT-PANE-DESIGN.md §3.4; §R CS-1).
+    if r.requester.is_some()
+        && (r.provider == EXTERNAL_PROVIDER || r.provider_kind == EXTERNAL_PROVIDER)
+    {
+        return Some(format!(
+            "attempt {} was asked for in chat and the chat answers its turns — ask the chat \
+             to retry it",
+            r.id
+        ));
+    }
     if !providers.contains(&r.provider) {
         return Some(format!(
             "provider `{}` is not allowed — start with `--provider {}`",
@@ -1770,6 +1781,11 @@ impl App {
                 if let (Some(seed), Some(note)) = (&r.seeded_from, &r.steer_note) {
                     rest.push(os(format!("--from={seed}")));
                     rest.push(os(format!("--steer={note}")));
+                }
+                // Its own run shape carries its label: without it the CLI
+                // would derive another attempt's id (§R CS-1).
+                if let Some(requester) = &r.requester {
+                    rest.push(os(format!("--requester={requester}")));
                 }
                 Ok(pending(
                     self.with_sandbox_flag(self.harness_argv(&rest)?),
@@ -4031,14 +4047,23 @@ pub fn attempt_tags(unit: &UnitView, a: &AttemptView) -> Vec<String> {
     match &unit.provenance {
         ProvenanceView::Pipeline(p) if p == id => tags.push("*".into()),
         ProvenanceView::Steered(p) if p == id => tags.push("*s".into()),
+        ProvenanceView::Chat(p) if p == id => tags.push("*c".into()),
         ProvenanceView::Human { attempt, .. } if attempt == id => tags.push("*h".into()),
-        _ => {}
+        ProvenanceView::None
+        | ProvenanceView::Pipeline(_)
+        | ProvenanceView::Steered(_)
+        | ProvenanceView::Chat(_)
+        | ProvenanceView::Human { .. }
+        | ProvenanceView::Ambiguous(_) => {}
     }
     if a.superseded_by.is_some() {
         tags.push("superseded".into());
     }
     if a.record.provider_kind == HUMAN_KIND {
         tags.push("human".into());
+    }
+    if a.record.requester.is_some() {
+        tags.push("asked in chat".into());
     }
     if let Some(seed) = &a.record.seeded_from {
         tags.push(format!("steer ← {}", short_id(seed)));
@@ -4442,6 +4467,62 @@ pub(crate) mod tests {
         });
         key(&mut app, 'r');
         assert!(dialog_argv(&app).contains(&"--provider=anthropic-live".to_string()));
+    }
+
+    /// §R CS-1/CS-13 (CE-14): Retry of an attempt a chat asked for — an
+    /// `external` one is the chat's (greyed, in the menu and at `r`); a live
+    /// one keeps its label on its run shape (without it the CLI would derive
+    /// another attempt's id); its tags say "asked in chat".
+    #[test]
+    fn retry_of_a_chat_attempt_is_the_chats_or_keeps_its_label() {
+        let mut app = app("retrychat");
+        attempt(&mut app, PROVENANCE);
+        let retry = |app: &App| {
+            app.menu_items()
+                .into_iter()
+                .find(|i| i.action == Action::Act(Act::Retry))
+        };
+        record(&mut app, PROVENANCE, |r| {
+            r.provider = "external".into();
+            r.provider_kind = "external".into();
+            r.seeded_from = Some("a-000000000000".into());
+            r.steer_note = Some("- use iter()".into());
+            r.requester = Some("chat".into());
+            r.schema_version = attempts::ATTEMPT_SCHEMA_VERSION_LABELLED;
+        });
+        let it = retry(&app).expect("offered, greyed");
+        assert!(
+            it.greyed.as_deref().unwrap().contains("ask the chat"),
+            "{it:?}"
+        );
+        key(&mut app, 'r');
+        assert_eq!(app.mode, Mode::Normal, "nothing armed");
+        let tags = attempt_tags(app.unit_view().unwrap(), app.shown_attempt().unwrap());
+        assert!(tags.iter().any(|t| t == "asked in chat"), "{tags:?}");
+        // Unseeded and asked in chat: not blind, still the chat's.
+        record(&mut app, PROVENANCE, |r| {
+            r.seeded_from = None;
+            r.steer_note = None;
+        });
+        assert!(retry(&app)
+            .expect("offered, greyed")
+            .greyed
+            .unwrap()
+            .contains("ask the chat"));
+        // A live provider's: its own run shape, label included.
+        app.config.providers.push("anthropic-live".into());
+        record(&mut app, PROVENANCE, |r| {
+            r.provider = "anthropic-live".into();
+            r.provider_kind = "anthropic".into();
+        });
+        key(&mut app, 'r');
+        let argv = dialog_argv(&app);
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some("--requester=chat"),
+            "{argv:?}"
+        );
+        assert!(argv.contains(&"--retry".to_string()));
     }
 
     /// CHK-1: Modify passes the first listed provider; its dialog names the

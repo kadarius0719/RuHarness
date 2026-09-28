@@ -511,32 +511,33 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
     let answer_file = tmp.join("answer.txt");
     let revised = logic.replacen("\n", "\n\n", 1);
     std::fs::write(&answer_file, emission(&revised, ffi)).unwrap();
-    let answer = |key: &str, extra: &[&str]| {
+    let answer_from = |file: &Path, key: &str, extra: &[&str]| {
         let mut args = vec!["--from", &seed];
         args.extend_from_slice(extra);
         args.push("--requester=chat");
-        let a = format!("--answer={}", answer_file.display());
+        let a = format!("--answer={}", file.display());
         let k = format!("--answer-key={key}");
         let mut all: Vec<&str> = args;
         all.push(&a);
         all.push(&k);
         migrate(&all)
     };
-    // The second steer's answer offered to the FIRST attempt: it passes the
-    // up-front checks (a pending chat request), but the attempt asks for
-    // its own request — answer-unused, the second hand-off untouched.
+    let answer = |key: &str, extra: &[&str]| answer_from(&answer_file, key, extra);
+    // The second steer's answer offered to the FIRST attempt: a pending
+    // chat request of the same unit and model, but not the one the first
+    // attempt's id was derived from — refused up front (§R CE-6), the second
+    // hand-off untouched.
     let r = answer(&second_key, &["--steer", "keep the wrapping add explicit"]);
     assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
-    let evs = events(&r);
-    assert_eq!(find(&evs, "error").unwrap()["kind"], "answer-unused");
-    // What it waits on is still reported, without the answer flags.
-    let aw = find(&evs, "awaiting").expect("the request it waits on");
-    assert_eq!(aw["request_key"], first_key.as_str());
-    assert!(!aw["args"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|a| a.as_str().unwrap().starts_with("--answer")));
+    assert_eq!(
+        find(&events(&r), "error").unwrap()["kind"],
+        "answer-refused"
+    );
+    assert!(
+        r.stderr.contains("is not the request attempt"),
+        "{}",
+        r.stderr
+    );
     assert!(!chat_traces
         .join(format!("{second_key}.response.json"))
         .exists());
@@ -556,6 +557,70 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
     let r = answer(&first_key, &["--steer", "keep the wrapping add explicit"]);
     assert_eq!(r.code, 1);
     assert!(r.stderr.contains("--answer refused"), "{}", r.stderr);
+    assert_eq!(
+        find(&events(&r), "error").unwrap()["kind"],
+        "answer-refused",
+        "an up-front refusal is not answer-unused (§R CE-1)"
+    );
+    // The answer file's and key's own checks, typed the same.
+    let link = tmp.join("answer-link.txt");
+    std::os::unix::fs::symlink(&answer_file, &link).unwrap();
+    let empty = tmp.join("empty.txt");
+    std::fs::write(&empty, " \n").unwrap();
+    let steer2 = ["--steer", "name the loop bounds"];
+    for (file, key, why) in [
+        (&link, second_key.as_str(), "symlinks are refused"),
+        (&empty, second_key.as_str(), "the answer is empty"),
+        (&answer_file, "ABCDEF12", "not a trace key"),
+    ] {
+        let r = answer_from(file, key, &steer2);
+        assert_eq!(r.code, 1, "{why}");
+        assert_eq!(
+            find(&events(&r), "error").unwrap()["kind"],
+            "answer-refused"
+        );
+        assert!(r.stderr.contains(why), "{why}: {}", r.stderr);
+    }
+    // Only an `external` run files an answer.
+    let r = answer(
+        &second_key,
+        &["--steer", "name the loop bounds", "--provider=replay"],
+    );
+    assert_eq!(r.code, 1);
+    assert_eq!(
+        find(&events(&r), "error").unwrap()["kind"],
+        "answer-refused"
+    );
+    assert!(r.stderr.contains("only an `external` run"), "{}", r.stderr);
+    // A red answer to the second steer: judged, it poses a repair.
+    let broken = tmp.join("broken.txt");
+    std::fs::write(&broken, emission("fn broken( {\n", ffi)).unwrap();
+    let r = answer_from(&broken, &second_key, &steer2);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    let evs = events(&r);
+    assert_eq!(find(&evs, "error").unwrap()["kind"], "awaiting");
+    let repair_key = find(&evs, "awaiting").unwrap()["request_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(repair_key, second_key);
+    // No repair allowed any more: the resume finishes red without asking
+    // for the repair's answer — answer-unused, AFTER the run's own events
+    // (§R CE-4), nothing filed.
+    let toml = tmp.join("harness.toml");
+    let mut cfg = std::fs::read_to_string(&toml).unwrap();
+    cfg.push_str("\n[llm.migrate]\nmax_repairs = 0\n");
+    std::fs::write(&toml, cfg).unwrap();
+    let r = answer(&repair_key, &steer2);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    let evs = events(&r);
+    let done = find(&evs, "attempt").expect("the finished attempt's own event");
+    assert_eq!(done["id"], second.as_str());
+    assert_eq!(done["outcome"], "red");
+    assert_eq!(find(&evs, "error").unwrap()["kind"], "answer-unused");
+    assert!(!chat_traces
+        .join(format!("{repair_key}.response.json"))
+        .exists());
     // Without the label, clap refuses --answer before anything runs.
     let a = format!("--answer={}", answer_file.display());
     let k = format!("--answer-key={second_key}");
@@ -563,5 +628,4 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
     assert!(r.stderr.contains("--requester"), "{}", r.stderr);
     let _ = std::fs::remove_dir_all(&tmp);
-    let _ = second;
 }

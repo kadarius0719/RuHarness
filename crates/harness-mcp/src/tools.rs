@@ -121,7 +121,7 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
                 "The target's migration ledger: fact freshness; per unit its plan status, source \
                  freshness, verdict (state, colour, stale inputs), contradiction / write in \
                  flight / promotion interrupted, provenance of its crate (pipeline, ambiguous, \
-                 steered, human, none), and its attempts (outcome, provider, bound to the \
+                 steered, asked in chat, human, none), and its attempts (outcome, provider, bound to the \
                  current inputs, promoted, last turn result, candidate, verdict, seed, \
                  authorship, requester, superseded by; `blind_hand_off_pending` marks an \
                  unseeded hand-off no chat asked for, which belongs to the blind protocol); the \

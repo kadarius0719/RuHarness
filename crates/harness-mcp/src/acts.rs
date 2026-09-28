@@ -241,14 +241,52 @@ pub fn promote_argv(
 /// Largest reply `harness_answer` takes (the CLI's `--answer` limit).
 pub const MAX_ANSWER_BYTES: usize = 512 * 1024;
 
+/// This server's private answer dir, created once, fresh:
+/// `harness-mcp-answers-<pid>-<16 hex>` (0700) in the temp dir — never an
+/// existing directory adopted (on a shared `/tmp` another user could have
+/// made it; §R CR-1).
+static ANSWER_DIR: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+
+/// The prefix of every answer dir's name.
+const ANSWER_DIR_PREFIX: &str = "harness-mcp-answers-";
+
+fn answer_dir() -> Result<PathBuf, Refusal> {
+    use std::os::unix::fs::DirBuilderExt;
+    ANSWER_DIR
+        .get_or_init(|| {
+            for _ in 0..8 {
+                let dir = std::env::temp_dir().join(format!(
+                    "{ANSWER_DIR_PREFIX}{}-{}",
+                    std::process::id(),
+                    harness_core::hash::random_hex(8)
+                ));
+                match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+                    Ok(()) => return Ok(dir),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(format!("the answer dir: {e}")),
+                }
+            }
+            Err("the answer dir: no free name".into())
+        })
+        .clone()
+        .map_err(Refusal::refused)
+}
+
+/// Remove this server's answer dir (shutdown; best effort).
+pub fn remove_answer_dir() {
+    if let Some(Ok(dir)) = ANSWER_DIR.get() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 /// The answer file of `harness_answer` (docs/CHAT-PANE-DESIGN.md §4.4):
-/// the reply written OUTSIDE the ledger, in this server's own temp dir
-/// (`harness-mcp-answers-<pid>/`, 0700; the file 0600), for the CLI to file
-/// with `--answer` — harness-mcp writes nothing in the ledger. Removed once
-/// the act that took it ends.
+/// the reply written OUTSIDE the ledger, in this server's private answer
+/// dir (0700; the file 0600, created new), for the CLI to file with
+/// `--answer` — harness-mcp writes nothing in the ledger. Removed once the
+/// act that took it ends, or its spawn fails.
 pub fn answer_file(text: &str) -> Result<PathBuf, Refusal> {
     use std::io::Write;
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    use std::os::unix::fs::OpenOptionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     if text.trim().is_empty() {
@@ -259,19 +297,7 @@ pub fn answer_file(text: &str) -> Result<PathBuf, Refusal> {
             "the reply is longer than {MAX_ANSWER_BYTES} bytes"
         )));
     }
-    let dir = std::env::temp_dir().join(format!("harness-mcp-answers-{}", std::process::id()));
-    match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(Refusal::refused(format!("the answer's temp dir: {e}"))),
-    }
-    let meta = std::fs::symlink_metadata(&dir)
-        .map_err(|e| Refusal::refused(format!("the answer's temp dir: {e}")))?;
-    if !meta.file_type().is_dir() {
-        return Err(Refusal::refused(
-            "the answer's temp dir is not a real directory",
-        ));
-    }
+    let dir = answer_dir()?;
     let path = dir.join(format!(
         "answer-{}.txt",
         NEXT.fetch_add(1, Ordering::SeqCst)
@@ -289,34 +315,66 @@ pub fn answer_file(text: &str) -> Result<PathBuf, Refusal> {
     Ok(path)
 }
 
-/// Remove the answer dirs ([`answer_file`]) of harness-mcp processes that
-/// are gone — a SIGKILLed server leaves the model's code in the temp dir
-/// otherwise (docs/CHAT-PANE-DESIGN.md §R3 S3-18). A pid is alive when
-/// `/bin/kill -0` finds it.
+/// How many answer dirs one sweep probes, at most (a temp dir planted with
+/// thousands never runs thousands of probes; §R CR-2). Every entry's NAME is
+/// looked at — a busy temp dir holds tens of thousands, and a dir past a
+/// bound on entries would never be swept.
+const SWEEP_MAX: usize = 256;
+
+/// Remove the answer dirs ([`answer_file`]) of harness-mcp servers that are
+/// gone — a SIGKILLed server leaves the model's code in the temp dir
+/// otherwise (§R3 S3-18). Only dirs of this user (the owner of this
+/// server's own dir) with mode 0700; a pid counts as gone only when
+/// `/bin/kill -0` says "No such process" — a probe that cannot run, or any
+/// other answer, counts as alive (§R CR-2). Run on a background thread.
 pub fn sweep_answer_dirs() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let Ok(mine) = answer_dir() else {
+        return;
+    };
+    let Ok(me) = std::fs::symlink_metadata(&mine).map(|m| m.uid()) else {
+        return;
+    };
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
         return;
     };
+    let mut probed = 0;
     for entry in entries.flatten() {
+        if probed == SWEEP_MAX {
+            return;
+        }
+        let path = entry.path();
+        if path == mine {
+            continue;
+        }
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(pid) = name
-            .strip_prefix("harness-mcp-answers-")
+            .strip_prefix(ANSWER_DIR_PREFIX)
+            .and_then(|rest| rest.split('-').next())
             .and_then(|p| p.parse::<u32>().ok())
         else {
             continue;
         };
-        if pid == std::process::id() || !entry.file_type().is_ok_and(|t| t.is_dir()) {
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.file_type().is_dir() || meta.uid() != me || meta.permissions().mode() & 0o077 != 0
+        {
             continue;
         }
-        let alive = std::process::Command::new("/bin/kill")
+        probed += 1;
+        let probe = std::process::Command::new("/bin/kill")
             .args(["-0", &pid.to_string()])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
-        if !alive {
-            let _ = std::fs::remove_dir_all(entry.path());
+            .stderr(std::process::Stdio::piped())
+            .output();
+        let gone = probe.is_ok_and(|out| {
+            !out.status.success()
+                && String::from_utf8_lossy(&out.stderr).contains("No such process")
+        });
+        if gone {
+            let _ = std::fs::remove_dir_all(&path);
         }
     }
 }
@@ -505,6 +563,12 @@ impl Collected {
             .push_back(untrusted("harness stderr", line, fence::MESSAGE_CAP));
     }
 
+    /// The act ended with an `attempt` event: the attempt it resumed
+    /// finished (a hand-off it answered is spent).
+    pub fn finished(&self) -> bool {
+        self.attempt.is_some()
+    }
+
     /// The hand-off this run awaits, when it ended awaiting one (the CLI's
     /// `awaiting` error with its event, or an `answer-unused` one whose run
     /// waits on another request): (attempt, response path).
@@ -602,6 +666,10 @@ pub fn act_result(
         })
     });
     let is_error = exit != Some(0) && awaiting.is_none();
+    // The answer this act carried was not used: the run waits on another
+    // request (the new `awaiting`) or finished without asking for it
+    // (§R CE-3).
+    let answer_unused = c.error_kind.as_deref() == Some("answer-unused");
     let mut out = json!({
         "act": posed.tool,
         "argv": argv_value(argv),
@@ -613,6 +681,9 @@ pub fn act_result(
         "verdict": c.verdict,
         "awaiting": awaiting,
     });
+    if answer_unused {
+        out["answer_unused"] = json!(true);
+    }
     if let Some(before) = &posed.finished_before {
         out["recorded"] = match &c.attempt_id {
             Some(a) => Value::Bool(!before.contains(a)),
@@ -1138,10 +1209,12 @@ mod tests {
         let path = answer_file("the reply").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "the reply");
         let dir = path.parent().unwrap();
-        assert_eq!(
-            dir,
-            std::env::temp_dir().join(format!("harness-mcp-answers-{}", std::process::id()))
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with(&format!("harness-mcp-answers-{}-", std::process::id())),
+            "{name}"
         );
+        assert_eq!(dir.parent().unwrap(), std::env::temp_dir().as_path());
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&path), 0o600);
         assert_eq!(mode(dir), 0o700);
@@ -1156,15 +1229,48 @@ mod tests {
     }
 
     #[test]
-    fn answer_dirs_of_dead_servers_are_swept() {
-        // A pid that cannot be alive (beyond pid_max on macOS and Linux).
-        let dead = std::env::temp_dir().join("harness-mcp-answers-4194303999");
-        std::fs::create_dir_all(&dead).unwrap();
-        std::fs::write(dead.join("answer-0.txt"), "code").unwrap();
+    fn answer_dirs_of_dead_servers_are_swept_and_only_those() {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         let mine = answer_file("mine").unwrap();
+        let tmp = std::env::temp_dir();
+        let make = |name: &str, mode: u32| {
+            let dir = tmp.join(name);
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+            std::fs::write(dir.join("answer-0.txt"), "code").unwrap();
+            dir
+        };
+        // A pid that is gone: a child that ended and was reaped.
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let gone = child.id();
+        child.wait().unwrap();
+        let dead = make(
+            &format!("harness-mcp-answers-{gone}-00000000000000aa"),
+            0o700,
+        );
+        // Ours by name but group/world-accessible: not a dir this server made.
+        let open = make(
+            &format!("harness-mcp-answers-{gone}-00000000000000bb"),
+            0o755,
+        );
+        // A pid `kill` cannot probe (out of range): counted alive.
+        let odd = make("harness-mcp-answers-4194303999-00000000000000dd", 0o700);
+        // A live pid's (this test process's parent is alive).
+        let parent = std::os::unix::process::parent_id();
+        let live = make(
+            &format!("harness-mcp-answers-{parent}-00000000000000cc"),
+            0o700,
+        );
         sweep_answer_dirs();
         assert!(!dead.exists(), "a dead server's answers are removed");
+        assert!(open.exists(), "a dir that is not private is left alone");
+        assert!(odd.exists(), "a probe that does not say gone: kept");
+        assert!(live.exists(), "a live server's answers are kept");
         assert!(mine.exists(), "this server's are kept");
+        for d in [&open, &live, &odd] {
+            let _ = std::fs::remove_dir_all(d);
+        }
         let _ = std::fs::remove_file(&mine);
     }
 

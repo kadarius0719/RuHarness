@@ -88,12 +88,19 @@ pub fn authorship(a: &AuthorshipView) -> Value {
     }
 }
 
-/// A blind attempt ([`harness_core::attempts::blind`]: unseeded,
-/// `external`, no chat asked for it) still in progress: a pending hand-off of
-/// the blind, audited protocol — never answered in chat. A chat-requested
-/// hand-off is not blind (docs/CHAT-PANE-DESIGN.md §4.2).
+/// An unseeded `external` attempt no chat asked for, still in progress: a
+/// pending hand-off of the blind, audited protocol — never answered in chat.
+/// Fail-closed: wider than [`harness_core::attempts::blind`] (a record with a
+/// steer note but no seed — inconsistent — counts too, §R CE-12). A
+/// chat-requested hand-off is not blind (docs/CHAT-PANE-DESIGN.md §4.2).
 pub fn blind_hand_off_pending(a: &AttemptView) -> bool {
-    a.record.outcome == "in-progress" && harness_core::attempts::blind(&a.record)
+    use harness_core::attempts::EXTERNAL_KIND as EXTERNAL;
+    let r = &a.record;
+    r.outcome == "in-progress"
+        && (r.provider_kind == EXTERNAL || r.provider == EXTERNAL)
+        && r.seeded_from.is_none()
+        && r.provider_kind != harness_core::attempts::HUMAN_KIND
+        && r.requester.is_none()
 }
 
 /// One attempt, as the status lists it.
@@ -485,57 +492,77 @@ pub fn unit(
 /// envelope.
 pub const REQUEST_PAGE_BYTES: usize = 40 * 1024;
 
-/// The bounds of `text`'s pages: each the longest char-boundary slice whose
-/// fenced value fits `first` bytes (the first page, which shares the budget
-/// with the system prompt) or `rest` bytes — deterministic, so page `n` is
-/// the same slice on every call.
-fn request_pages(text: &str, first: usize, rest: usize) -> Vec<(usize, usize)> {
-    let fits = |slice: &str, budget: usize| {
-        fence::size(&untrusted("hand-off-user", slice, usize::MAX)) <= budget
-    };
-    let mut pages = Vec::new();
-    let mut start = 0;
-    loop {
-        let budget = if pages.is_empty() { first } else { rest };
-        let rest_text = &text[start..];
-        let end = if fits(rest_text, budget) {
-            text.len()
-        } else {
-            // The longest prefix that fits (at least one char, so paging
-            // always advances).
-            let (mut lo, mut hi) = (0usize, rest_text.len());
-            while lo < hi {
-                let mid = (lo + hi).div_ceil(2);
-                let mut m = mid;
-                while !rest_text.is_char_boundary(m) {
-                    m -= 1;
-                }
-                if m > lo && fits(&rest_text[..m], budget) {
-                    lo = m;
-                } else {
-                    hi = mid - 1;
-                }
-            }
-            let mut one = rest_text.len().min(lo.max(1));
-            while !rest_text.is_char_boundary(one) {
-                one += 1;
-            }
-            start + one
-        };
-        pages.push((start, end));
-        if end >= text.len() {
-            return pages;
-        }
-        start = end;
+/// The two texts of a request, in the order its pages show them.
+const REQUEST_PARTS: [&str; 2] = ["hand-off-system", "hand-off-user"];
+
+/// The bytes `c` costs inside a JSON string as serde_json writes it.
+fn escaped_len(c: char) -> usize {
+    match c {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        c if (c as u32) < 0x20 => 6,
+        c => c.len_utf8(),
     }
+}
+
+/// The pages of a request (docs/CHAT-PANE-DESIGN.md §4.4): its system
+/// prompt, then its user message, each page the byte ranges of the parts it
+/// shows (an empty part on none) — as much as fits `budget` bytes AFTER
+/// fencing (JSON escaping included). One linear pass (§R CR-6),
+/// deterministic, so page `n` is the same slices on every call; never zero
+/// pages, and every page advances (at least one char).
+fn request_pages(parts: [&str; 2], budget: usize) -> Vec<[Option<(usize, usize)>; 2]> {
+    let mut pages = Vec::new();
+    let (mut part, mut at) = (0usize, 0usize);
+    while part < parts.len() {
+        let mut page = [None, None];
+        let mut left = budget;
+        while part < parts.len() {
+            let text = parts[part];
+            if at == text.len() {
+                (part, at) = (part + 1, 0);
+                continue;
+            }
+            let mut cost = fence::size(&untrusted(REQUEST_PARTS[part], "", usize::MAX));
+            let mut end = at;
+            for c in text[at..].chars() {
+                let k = escaped_len(c);
+                let fresh = page == [None, None] && end == at;
+                if cost + k > left && !fresh {
+                    break;
+                }
+                cost += k;
+                end += c.len_utf8();
+            }
+            if end == at {
+                break;
+            }
+            page[part] = Some((at, end));
+            left = left.saturating_sub(cost);
+            if end < text.len() {
+                at = end;
+                break;
+            }
+            (part, at) = (part + 1, 0);
+        }
+        if page == [None, None] {
+            break;
+        }
+        pages.push(page);
+    }
+    if pages.is_empty() {
+        pages.push([None, Some((0, 0))]);
+    }
+    pages
 }
 
 /// `harness_request` (docs/CHAT-PANE-DESIGN.md §4.4): the pending hand-off
 /// `key` of `attempt` — only an in-progress attempt labelled `requester:
 /// chat`, read from its `traces/chat/` with the recorded-trace checks (8 hex,
 /// real files of bounded size, the request re-serializing to its key) and no
-/// response yet, naming the attempt's model. Page `page` (1-based) of its
-/// user message, the system prompt with the first page; every text fenced.
+/// response yet, naming the attempt's model; for an attempt with no turn
+/// yet, the request its id was derived from (§R CE-6). Page `page`
+/// (1-based) of its system prompt, then its user message; every text
+/// fenced.
 pub fn request(
     target: &std::path::Path,
     unit: &str,
@@ -561,6 +588,9 @@ pub fn request(
     if record.outcome != "in-progress" {
         return Err("the attempt is not in progress: it waits on no hand-off".into());
     }
+    if page == 0 {
+        return Err("`page` counts from 1".into());
+    }
     let dir = ledger
         .unit_dir(unit)
         .join("traces")
@@ -572,14 +602,24 @@ pub fn request(
             "request {key} names another model than the attempt: it is not this attempt's"
         ));
     }
-    let system = untrusted("hand-off-system", &request.system, usize::MAX);
-    let first = REQUEST_PAGE_BYTES
-        .saturating_sub(fence::size(&system))
-        .max(1024);
-    let pages = request_pages(&request.user, first, REQUEST_PAGE_BYTES);
+    // A later turn's request (a repair) is not re-derived here; the one the
+    // attempt was started with is (traces/chat/ is the unit's, shared by its
+    // chat attempts).
+    if record.turns.is_empty() && !attempts::first_request_of(&record, key) {
+        return Err(format!(
+            "request {key} is not the one this attempt waits on: read the `request_key` its \
+             act returned"
+        ));
+    }
+    let parts = [request.system.as_str(), request.user.as_str()];
+    let pages = request_pages(parts, REQUEST_PAGE_BYTES);
     let total = pages.len() as u64;
-    let Some(&(start, end)) = usize::try_from(page - 1).ok().and_then(|ix| pages.get(ix)) else {
+    let Some(shown) = usize::try_from(page - 1).ok().and_then(|ix| pages.get(ix)) else {
         return Err(format!("page {page} of {total}: there is no such page"));
+    };
+    let fenced = |ix: usize| match shown[ix] {
+        Some((a, b)) => untrusted(REQUEST_PARTS[ix], &parts[ix][a..b], usize::MAX),
+        None => Value::Null,
     };
     Ok(json!({
         "unit": short("unit", unit),
@@ -588,8 +628,8 @@ pub fn request(
         "model": short("model", &request.model),
         "page": page,
         "pages": total,
-        "system": if page == 1 { system } else { Value::Null },
-        "user": untrusted("hand-off-user", &request.user[start..end], usize::MAX),
+        "system": fenced(0),
+        "user": fenced(1),
         "omitted": if page < total { json!({"next_page": page + 1}) } else { Value::Null },
     }))
 }
@@ -599,31 +639,163 @@ mod tests {
     use super::*;
 
     /// `harness_request`'s pages (docs/CHAT-PANE-DESIGN.md §4.4): each fits
-    /// its budget AFTER fencing (JSON escaping included), they tile the
-    /// text exactly, and page `n` is the same slice on every call.
+    /// its budget AFTER fencing (JSON escaping included), the system prompt
+    /// is paged like the user message (§R CE-7), the pages tile both texts
+    /// exactly in order, and page `n` is the same slices on every call.
     #[test]
     fn request_pages_fit_after_fencing_and_tile_the_text() {
-        // Escaping-heavy text: quotes, backslashes, newlines, tabs, a wide
-        // char — each byte can cost several in JSON.
-        let unit = "if (a[\"k\"] == '\\\\') {\n\t return \"é\";\n}\n";
-        let text = unit.repeat(3000);
-        let pages = request_pages(&text, 8 * 1024, 16 * 1024);
-        assert!(pages.len() > 2, "{}", pages.len());
-        assert_eq!(pages[0].0, 0);
-        assert_eq!(pages.last().unwrap().1, text.len());
-        for (k, w) in pages.windows(2).enumerate() {
-            assert_eq!(w[0].1, w[1].0, "page {k} ends where {} begins", k + 1);
+        // Escaping-heavy text: quotes, backslashes, newlines, tabs, other
+        // control chars, a wide char — each byte can cost several in JSON.
+        let unit = "if (a[\"k\"] == '\\\\') {\n\t return \"é\";\u{1}\u{8}\r\n}\n";
+        let user = unit.repeat(3000);
+        let system = "sys \"x\"\n".repeat(4000);
+        let budget = 16 * 1024;
+        for parts in [
+            [system.as_str(), user.as_str()],
+            ["", user.as_str()],
+            [system.as_str(), ""],
+        ] {
+            let pages = request_pages(parts, budget);
+            assert!(pages.len() > 2, "{}", pages.len());
+            let mut next = [0usize, 0usize];
+            let mut seen_user = false;
+            for (k, page) in pages.iter().enumerate() {
+                let mut size = 0;
+                for ix in 0..2 {
+                    if let Some((a, b)) = page[ix] {
+                        assert_eq!(
+                            a, next[ix],
+                            "page {k} part {ix} starts where the last ended"
+                        );
+                        assert!(b > a);
+                        if ix == 0 {
+                            assert!(!seen_user, "the system prompt comes first");
+                        } else {
+                            seen_user = true;
+                        }
+                        next[ix] = b;
+                        size += fence::size(&untrusted(
+                            REQUEST_PARTS[ix],
+                            &parts[ix][a..b],
+                            usize::MAX,
+                        ));
+                    }
+                }
+                assert!(size <= budget, "page {k}: {size} > {budget}");
+            }
+            assert_eq!(
+                next,
+                [parts[0].len(), parts[1].len()],
+                "the pages tile both texts"
+            );
+            assert_eq!(pages, request_pages(parts, budget));
         }
-        for (k, &(a, b)) in pages.iter().enumerate() {
-            let budget = if k == 0 { 8 * 1024 } else { 16 * 1024 };
-            let size = fence::size(&untrusted("hand-off-user", &text[a..b], usize::MAX));
-            assert!(size <= budget, "page {k}: {size} > {budget}");
-            assert!(b > a);
-        }
-        assert_eq!(pages, request_pages(&text, 8 * 1024, 16 * 1024));
-        // A text that fits is one page.
-        assert_eq!(request_pages("short", 1024, 1024), vec![(0, 5)]);
+        // A request that fits is one page with both parts.
+        assert_eq!(
+            request_pages(["sys", "short"], 1024),
+            vec![[Some((0, 3)), Some((0, 5))]]
+        );
+        // An empty request is still one page.
+        assert_eq!(request_pages(["", ""], 1024), vec![[None, Some((0, 0))]]);
+        // A budget too small for one char still advances.
+        let tiny = request_pages(["ab", "cd"], 1);
+        assert_eq!(tiny.len(), 4);
     }
+
+    /// `harness_request` (docs/CHAT-PANE-DESIGN.md §4.4, §R CE-6/CE-7,
+    /// CE-14): only the pending request a chat-labelled, in-progress attempt
+    /// waits on — not another chat attempt's request in the shared
+    /// `traces/chat/`, not another model's, not an answered one; its pages
+    /// fit the result budget, tile the request and count from 1.
+    #[test]
+    fn a_request_is_read_only_for_the_chat_attempt_that_waits_on_it() {
+        use harness_core::attempts::{self, AttemptRecord};
+        use harness_core::traits::CompletionRequest;
+        let tmp = crate::policy::tests::TmpDir::new("request");
+        let t = tmp.0.clone();
+        let ledger = harness_core::ledger::Ledger::new(&t);
+        let chat = t.join("migration/units/u1/traces/chat");
+        std::fs::create_dir_all(&chat).unwrap();
+        let file = |req: &CompletionRequest| {
+            let key = harness_core::traces::request_key(req).unwrap();
+            std::fs::write(
+                chat.join(format!("{key}.request.json")),
+                serde_json::to_string(req).unwrap(),
+            )
+            .unwrap();
+            key
+        };
+        let req = CompletionRequest {
+            model: "m-1".into(),
+            system: "sys".into(),
+            user: "u\"ser\n".repeat(20_000),
+            max_tokens: 100,
+        };
+        let key = file(&req);
+        let other = file(&CompletionRequest {
+            user: "another chat attempt's".into(),
+            ..req.clone()
+        });
+        let foreign = file(&CompletionRequest {
+            model: "m-2".into(),
+            ..req.clone()
+        });
+        let id = attempts::attempt_id_with("u1", "s", "d", "external", "m-1", &key, Some("chat"));
+        let mut rec: AttemptRecord = serde_json::from_value(json!({
+            "schema": "ruharness-attempt", "schema_version": 2, "id": id,
+            "requester": "chat", "unit": "u1", "provider": "external",
+            "provider_kind": "external", "model": "m-1", "prompt_digest": "",
+            "unit_source": "s", "driver": "d", "toolchain": [],
+            "outcome": "in-progress", "turns": [], "candidate_digest": "",
+            "promoted": false,
+        }))
+        .unwrap();
+        let store = |r: &AttemptRecord| {
+            r.store(&attempts::attempt_dir(&ledger, "u1", &r.id))
+                .unwrap()
+        };
+        store(&rec);
+        let read = |key: &str, page: u64| request(&t, "u1", &id, key, page);
+        let first = read(&key, 1).unwrap();
+        assert_eq!(first["request_key"], key.as_str());
+        assert_eq!(first["system"]["text"], "sys");
+        let total = first["pages"].as_u64().unwrap();
+        assert!(total >= 3, "{total}");
+        let mut user = String::new();
+        for n in 1..=total {
+            let p = read(&key, n).unwrap();
+            assert!(fence::size(&p) <= fence::RESULT_BUDGET, "page {n}");
+            assert_eq!(p["system"].is_null(), n > 1, "page {n}");
+            assert_eq!(p["omitted"].is_null(), n == total, "page {n}");
+            user.push_str(p["user"]["text"].as_str().unwrap());
+        }
+        assert_eq!(user, req.user, "the pages tile the request");
+        assert!(read(&key, 0).unwrap_err().contains("counts from 1"));
+        assert!(read(&key, total + 1).unwrap_err().contains("no such page"));
+        assert!(
+            read(&other, 1)
+                .unwrap_err()
+                .contains("not the one this attempt waits on"),
+            "another chat attempt's request, same unit and model"
+        );
+        assert!(read(&foreign, 1).unwrap_err().contains("another model"));
+        assert!(read("../../../x", 1).is_err());
+        let answered = chat.join(format!("{key}.response.json"));
+        std::fs::write(&answered, "{}").unwrap();
+        assert!(read(&key, 1).is_err(), "answered: not pending");
+        std::fs::remove_file(&answered).unwrap();
+        rec.outcome = "green".into();
+        store(&rec);
+        assert!(read(&key, 1).unwrap_err().contains("not in progress"));
+        rec.outcome = "in-progress".into();
+        rec.requester = None;
+        rec.schema_version = 1;
+        store(&rec);
+        assert!(read(&key, 1)
+            .unwrap_err()
+            .contains("not asked for by a chat"));
+    }
+
     use harness_core::verdict::Verdict;
     use std::path::PathBuf;
 
@@ -1296,6 +1468,15 @@ mod tests {
             "a steer hand-off is ours to answer"
         );
         a.record.seeded_from = None;
+        a.record.steer_note = Some("a note with no seed".into());
+        assert!(
+            blind_hand_off_pending(&a),
+            "fail-closed: an inconsistent half-seeded record counts (§R CE-12)"
+        );
+        a.record.steer_note = None;
+        a.record.requester = Some("chat".into());
+        assert!(!blind_hand_off_pending(&a), "a chat asked for it");
+        a.record.requester = None;
         a.record.outcome = "green".into();
         assert!(!blind_hand_off_pending(&a), "finished");
     }

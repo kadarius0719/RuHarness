@@ -355,10 +355,19 @@ impl<'a> Job<'a> {
         let params = self.params;
         let provider = params.provider;
         let texts = self.stage.texts();
-        if params.requester.is_some() && texts.stage.is_some() {
-            return Err(Error::Invariant(
-                "a driver attempt is never chat-requested".into(),
-            ));
+        match params.requester {
+            Some(_) if texts.stage.is_some() => {
+                return Err(Error::Invariant(
+                    "a driver attempt is never chat-requested".into(),
+                ))
+            }
+            Some(r) if r != harness_core::attempts::REQUESTER_CHAT => {
+                return Err(Error::Invariant(format!(
+                    "an unknown requester {:?}",
+                    printable(r, 32)
+                )))
+            }
+            _ => {}
         }
         let first = self.first_request()?;
         // Before any record exists; `checked_complete` repeats it per call.
@@ -858,51 +867,82 @@ impl<'a> Job<'a> {
         Ok(Some(candidate))
     }
 
-    /// The recorded attempt a `replay` run verifies: the one pinned by
-    /// [`MigrateParams::attempt`], else — among the unit's records whose
-    /// FIRST turn has the request key computed from the tree — a finished
-    /// one before an `in-progress` one, then an exact model match, then the
-    /// lowest sample of the lowest id.
     /// `--answer`'s preconditions, by listing and loading only
-    /// (docs/CHAT-PANE-DESIGN.md §4.3): the latest sample of `base` (the base
-    /// itself when it has none) exists, is in progress and labelled; its
-    /// traces dir holds `<key>.request.json` naming its model and
-    /// re-serializing to `key`, and no `<key>.response.json`. `--answer`
-    /// never creates an attempt or a sample, and never files an answer over
-    /// one.
+    /// (docs/CHAT-PANE-DESIGN.md §4.3), refused with the typed
+    /// [`Error::AnswerRefused`]: the attempt the run would resume — chosen
+    /// exactly as the run chooses it (the base in progress; with `--retry`,
+    /// a finished base's latest sample in progress; nothing else) — exists,
+    /// is in progress and labelled; its traces dir holds `<key>.request.json`
+    /// naming its model and re-serializing to `key` (the attempt's own first
+    /// request when it has no turn yet), and no `<key>.response.json`.
+    /// `--answer` never creates an attempt or a sample, replays nothing, and
+    /// never files an answer over one.
     fn check_answer(&self, base: &str, key: &str) -> Result<(), Error> {
-        let refuse = |why: String| Error::Invariant(format!("--answer refused: {why}"));
+        let refuse = |why: String| Error::AnswerRefused { why };
         if self.params.requester.is_none() || self.params.provider.kind != EXTERNAL_KIND {
             return Err(refuse(
                 "only an `external` run with --requester=chat files an answer".into(),
             ));
         }
         let attempts_dir = self.attempts_dir();
-        let latest = sample_ids(&attempts_dir, base)?
-            .last()
-            .map(|(_, id)| id.clone())
-            .unwrap_or_else(|| base.to_string());
-        let record = load_record(&attempts_dir.join(&latest), &latest)?
+        let base_record = load_record(&attempts_dir.join(base), base)?
             .ok_or_else(|| refuse(format!("attempt {base} has no record: nothing to continue")))?;
-        if record.outcome != IN_PROGRESS {
+        let target = if base_record.outcome == IN_PROGRESS {
+            base_record
+        } else {
+            let latest = sample_ids(&attempts_dir, base)?
+                .into_iter()
+                .rfind(|(n, _)| *n >= 2);
+            let in_progress = |id: &str| -> Result<Option<AttemptRecord>, Error> {
+                Ok(load_record(&attempts_dir.join(id), id)?.filter(|r| r.outcome == IN_PROGRESS))
+            };
+            match (latest, self.params.retry) {
+                (Some((_, id)), true) => in_progress(&id)?.ok_or_else(|| {
+                    refuse(format!(
+                        "the latest sample {id} of {base} is not in progress"
+                    ))
+                })?,
+                (Some((_, id)), false) if in_progress(&id)?.is_some() => {
+                    return Err(refuse(format!(
+                        "sample {id} of {base} waits: pass --retry to continue it"
+                    )))
+                }
+                _ => {
+                    return Err(refuse(format!(
+                        "attempt {base} is not in progress ({})",
+                        printable(&base_record.outcome, 32)
+                    )))
+                }
+            }
+        };
+        if target.requester.as_deref() != self.params.requester {
             return Err(refuse(format!(
-                "attempt {latest} is not in progress ({})",
-                printable(&record.outcome, 32)
+                "attempt {} is not labelled chat",
+                target.id
             )));
-        }
-        if record.requester.as_deref() != self.params.requester {
-            return Err(refuse(format!("attempt {latest} is not labelled chat")));
         }
         let request = harness_core::traces::load_pending(self.params.traces_dir, key)
             .map_err(|e| refuse(format!("the hand-off {key}: {e}")))?;
-        if request.model != record.model {
+        if request.model != target.model {
             return Err(refuse(format!(
-                "the hand-off {key} names another model than attempt {latest}"
+                "the hand-off {key} names another model than attempt {}",
+                target.id
+            )));
+        }
+        if target.turns.is_empty() && !harness_core::attempts::first_request_of(&target, key) {
+            return Err(refuse(format!(
+                "the hand-off {key} is not the request attempt {} waits on",
+                target.id
             )));
         }
         Ok(())
     }
 
+    /// The recorded attempt a `replay` run verifies: the one pinned by
+    /// [`MigrateParams::attempt`], else — among the unit's records of the
+    /// run's label whose FIRST turn has the request key computed from the
+    /// tree — a finished one before an `in-progress` one, then an exact
+    /// model match, then the lowest sample of the lowest id.
     fn find_recorded(&self, first_key: &str) -> Result<AttemptRecord, Error> {
         let texts = self.stage.texts();
         let first_kind = texts.first_kind;
@@ -965,6 +1005,9 @@ impl<'a> Job<'a> {
         };
         let mut candidates: Vec<AttemptRecord> = Vec::new();
         let mut finished: Vec<String> = Vec::new();
+        // HEAD's request, but another label: named, never a hint to pin it
+        // without the label (§R CE-10).
+        let mut other_label: Vec<AttemptRecord> = Vec::new();
         for entry in entries.into_iter().flatten() {
             let entry = entry.map_err(|e| Error::io(&attempts_dir, e))?;
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -977,6 +1020,8 @@ impl<'a> Job<'a> {
                     && record.requester.as_deref() == self.params.requester
                 {
                     candidates.push(record);
+                } else if record.unit == unit_id && matches_key(&record) {
+                    other_label.push(record);
                 } else if record.unit == unit_id && record.outcome != IN_PROGRESS {
                     let stale =
                         record.unit_source != self.unit_source || record.driver != self.driver;
@@ -986,6 +1031,20 @@ impl<'a> Job<'a> {
                         record.id
                     });
                 }
+            }
+        }
+        if candidates.is_empty() {
+            if let Some(other) = other_label.first() {
+                return Err(Error::Invariant(format!(
+                    "unit `{unit_id}`'s recorded attempt for HEAD's {first_kind} request is {} — \
+                     replay it {}",
+                    printable(&other.id, 40),
+                    if other.requester.is_some() {
+                        "with --requester=chat (it was requested by chat)"
+                    } else {
+                        "without --requester (it was not requested by chat)"
+                    }
+                )));
             }
         }
         // R-1: no attempt poses HEAD's first question — refuse and name the

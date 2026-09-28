@@ -3288,6 +3288,17 @@ int add(int a, int b) { return a + b; }\n";
         traces: &Path,
         answer_key: Option<&str>,
     ) -> Result<MigrationOutcome, Error> {
+        run_chat_with(fx, provider, oracle, traces, answer_key, false)
+    }
+
+    fn run_chat_with(
+        fx: &Fx,
+        provider: &ResolvedProvider,
+        oracle: &FakeOracle,
+        traces: &Path,
+        answer_key: Option<&str>,
+        retry: bool,
+    ) -> Result<MigrationOutcome, Error> {
         let params = MigrateParams {
             requester: Some(attempts::REQUESTER_CHAT),
             answer_key,
@@ -3296,7 +3307,7 @@ int add(int a, int b) { return a + b; }\n";
             max_tokens: 4096,
             max_repairs: 1,
             traces_dir: traces,
-            retry: false,
+            retry,
             attempt: None,
             steer: None,
         };
@@ -3528,6 +3539,57 @@ int add(int a, int b) { return a + b; }\n";
             "the hand-off fedcba98",
         );
         assert_eq!(snapshot(&fx.unit_dir()), before, "nothing written");
+        // A pending request of ANOTHER model in the same dir: refused.
+        let posed: CompletionRequest = serde_json::from_str(
+            &std::fs::read_to_string(chat_dir.join(format!("{key}.request.json"))).unwrap(),
+        )
+        .unwrap();
+        let file_request = |req: &CompletionRequest| {
+            let k = harness_core::traces::request_key(req).unwrap();
+            std::fs::write(
+                chat_dir.join(format!("{k}.request.json")),
+                serde_json::to_string(req).unwrap(),
+            )
+            .unwrap();
+            k
+        };
+        let foreign = file_request(&CompletionRequest {
+            model: "other-model".into(),
+            ..posed.clone()
+        });
+        let (p, _) = with_answer(&foreign);
+        refused(
+            run_chat(&fx, &p, &oracle(vec![]), &chat_dir, Some(&foreign)),
+            "names another model",
+        );
+        // The same model's pending request that the attempt's id was not
+        // derived from (another chat attempt's, the dir being the unit's):
+        // refused (§R CE-6).
+        let other = file_request(&CompletionRequest {
+            user: format!("{} (another attempt)", posed.user),
+            ..posed.clone()
+        });
+        let (p, _) = with_answer(&other);
+        refused(
+            run_chat(&fx, &p, &oracle(vec![]), &chat_dir, Some(&other)),
+            "is not the request attempt",
+        );
+        for k in [&foreign, &other] {
+            std::fs::remove_file(chat_dir.join(format!("{k}.request.json"))).unwrap();
+        }
+        // A provider of another kind: refused.
+        let (_, slot) = with_answer(&key);
+        let live = resolved(
+            Box::new(TraceAdapter::with_answer(&chat_dir, slot.clone())),
+            "openai-compat",
+            true,
+        );
+        refused(
+            run_chat(&fx, &live, &oracle(vec![]), &chat_dir, Some(&key)),
+            "only an `external` run",
+        );
+        assert!(!slot.used());
+        assert_eq!(snapshot(&fx.unit_dir()), before, "nothing written");
         // Without the label: refused.
         let (p, _) = with_answer(&key);
         let params = MigrateParams {
@@ -3573,6 +3635,90 @@ int add(int a, int b) { return a + b; }\n";
             run_chat(&fx, &p, &oracle(vec![]), &chat_dir, Some(&key)),
             "not in progress",
         );
+    }
+
+    /// §R CS-5/CE-5: `--answer` continues exactly the attempt the run
+    /// resumes — a chat attempt's waiting SAMPLE only with `--retry`
+    /// (refused without it: that run would not continue the sample), then
+    /// answered as that same sample.
+    #[test]
+    fn a_waiting_chat_sample_is_answered_with_retry_only() {
+        let fx = fixture("answersample");
+        let chat_dir = fx.traces.join(attempts::CHAT_TRACES);
+        std::fs::create_dir_all(&chat_dir).unwrap();
+        let external = resolved(
+            Box::new(TraceAdapter::new(&chat_dir, true)),
+            "external",
+            false,
+        );
+        // The base: posed, answered, green.
+        run_chat(&fx, &external, &oracle(vec![]), &chat_dir, None).unwrap_err();
+        let first = pending_keys(&chat_dir).remove(0);
+        let request: CompletionRequest = serde_json::from_str(
+            &std::fs::read_to_string(chat_dir.join(format!("{first}.request.json"))).unwrap(),
+        )
+        .unwrap();
+        TraceAdapter::record(&chat_dir, &request, &good().unwrap()).unwrap();
+        let base = run_chat(&fx, &external, &oracle(vec![green()]), &chat_dir, None).unwrap();
+        assert_eq!(base.record.outcome, "green");
+        // A retry judged red this time (the judge changed): the base no
+        // longer reproduces, so a sample is recorded, and it waits on its
+        // repair.
+        let err = run_chat_with(
+            &fx,
+            &external,
+            &oracle(vec![build_failure("E0308"), build_failure("E0308")]),
+            &chat_dir,
+            None,
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Awaiting { .. }), "{err}");
+        let waiting: Vec<String> = pending_keys(&chat_dir)
+            .into_iter()
+            .filter(|k| !chat_dir.join(format!("{k}.response.json")).exists())
+            .collect();
+        assert_eq!(waiting.len(), 1, "{waiting:?}");
+        let repair = waiting[0].as_str();
+        let with_answer = |key: &str| {
+            let slot = std::sync::Arc::new(crate::adapters::AnswerSlot::new(
+                key.to_string(),
+                good().unwrap().text,
+            ));
+            (
+                resolved(
+                    Box::new(TraceAdapter::with_answer(&chat_dir, slot.clone())),
+                    "external",
+                    false,
+                ),
+                slot,
+            )
+        };
+        // Without --retry: refused up front, nothing written.
+        let before = snapshot(&fx.unit_dir());
+        let (p, slot) = with_answer(repair);
+        let err = run_chat(&fx, &p, &oracle(vec![]), &chat_dir, Some(repair)).unwrap_err();
+        assert!(
+            matches!(err, Error::AnswerRefused { .. }) && err.to_string().contains("pass --retry"),
+            "{err}"
+        );
+        assert!(!slot.used());
+        assert_eq!(snapshot(&fx.unit_dir()), before, "nothing written");
+        // With it: the SAME sample continues, answered, green.
+        let (p, slot) = with_answer(repair);
+        let done = run_chat_with(
+            &fx,
+            &p,
+            &oracle(vec![build_failure("E0308"), green()]),
+            &chat_dir,
+            Some(repair),
+            true,
+        )
+        .unwrap();
+        assert!(slot.used());
+        assert_eq!(done.record.id, format!("{}.r2", base.record.id));
+        assert_eq!(done.record.outcome, "green");
+        assert!(chat_dir.join(format!("{repair}.response.json")).is_file());
     }
 
     #[test]

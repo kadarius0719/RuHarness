@@ -223,6 +223,37 @@ pub fn attempt_id_with(
     format!("a-{}", &hasher.finalize().to_hex().to_string()[..12])
 }
 
+/// The base id of an attempt id: `<base>` for a sample `<base>.r<N>` (N ≥ 2,
+/// canonical decimal), else the id itself.
+pub fn sample_base(id: &str) -> &str {
+    match id.rsplit_once(".r") {
+        Some((base, digits))
+            if digits
+                .parse::<u32>()
+                .is_ok_and(|n| n >= 2 && n.to_string() == digits) =>
+        {
+            base
+        }
+        _ => id,
+    }
+}
+
+/// Whether `key` is the FIRST request of `record` — the only hand-off whose
+/// key the record binds (its id is derived from it): an in-progress record
+/// with no turn yet waits on exactly the request its id names. (A repair's
+/// key is not in the record; §R CE-6.)
+pub fn first_request_of(record: &AttemptRecord, key: &str) -> bool {
+    attempt_id_with(
+        &record.unit,
+        &record.unit_source,
+        &record.driver,
+        &record.provider_kind,
+        &record.model,
+        key,
+        record.requester.as_deref(),
+    ) == sample_base(&record.id)
+}
+
 /// A BLIND hand-off's record (docs/CHAT-PANE-DESIGN.md §4.2): an unseeded
 /// model attempt of the `external` provider that no chat asked for — only
 /// the audited protocol may answer it (or retry it). The ONE predicate: the
@@ -273,9 +304,18 @@ pub fn driver_attempt_dir(ledger: &Ledger, unit: &str, attempt: &str) -> PathBuf
 
 impl AttemptRecord {
     /// Atomic pretty-JSON write of `attempt.json` inside the attempt dir.
-    /// Refuses a record whose `schema_version` is not the one its
-    /// `requester` implies ([`schema_version_for`]).
+    /// Refuses a record no reader would accept: a `requester` outside the
+    /// closed set, or a `schema_version` other than the one its `requester`
+    /// implies ([`schema_version_for`]) — never a record that would make its
+    /// whole unit unreadable (§R CS-11).
     pub fn store(&self, dir: &Path) -> Result<(), Error> {
+        if let Some(other) = self.requester.as_deref().filter(|r| *r != REQUESTER_CHAT) {
+            return Err(Error::Invariant(format!(
+                "attempt {}: an unknown requester {:?}",
+                printable(&self.id, 64),
+                printable(other, 32)
+            )));
+        }
         let want = schema_version_for(self.requester.as_deref());
         if self.schema_version != want {
             return Err(Error::Invariant(format!(
@@ -1098,6 +1138,13 @@ mod tests {
             let err = bad.store(&root).unwrap_err().to_string();
             assert!(err.contains("schema_version"), "{err}");
         }
+        // ... and a label outside the closed set, whatever its version (§R
+        // CS-11): nothing is written.
+        let mut bad = chat.clone();
+        bad.requester = Some("someone".into());
+        let err = bad.store(&root).unwrap_err().to_string();
+        assert!(err.contains("unknown requester"), "{err}");
+        assert_eq!(AttemptRecord::load(&root).unwrap(), chat);
         // load refuses a hostile record, whatever wrote it
         let write = |value: serde_json::Value| {
             std::fs::write(root.join("attempt.json"), value.to_string()).unwrap();

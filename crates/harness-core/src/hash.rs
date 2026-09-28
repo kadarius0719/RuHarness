@@ -103,3 +103,30 @@ fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), Er
     }
     Ok(())
 }
+
+/// `bytes` random bytes as lowercase hex, for unpredictable temp names:
+/// from `/dev/urandom`, else (no such device) blake3 over the time, the pid
+/// and a process-wide counter — unpredictable enough for a name, never a
+/// secret.
+pub fn random_hex(bytes: usize) -> String {
+    use std::io::Read;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut buf = vec![0u8; bytes];
+    let read = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf));
+    if read.is_err() {
+        let mut hasher = blake3::Hasher::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        hasher.update(&now.to_le_bytes());
+        hasher.update(&std::process::id().to_le_bytes());
+        hasher.update(&COUNTER.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+        let digest = hasher.finalize();
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = digest.as_bytes()[i % 32];
+        }
+    }
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}

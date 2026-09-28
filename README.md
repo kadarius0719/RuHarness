@@ -185,6 +185,7 @@ names, then run the same command again.
 | `--promote` | Replace an already-verified unit's Rust with a new green candidate. |
 | `--no-promote` | Record a green attempt without promoting it; `harness promote <unit> <attempt> [--replace]` promotes it later, explicitly (`[llm.migrate] promote_on_green = false` makes that the only path). |
 | `--steer <NOTE> --from <ATTEMPT>` | A new attempt seeded from a finished one: the model sees that attempt's code and stored verdict plus your note, on every turn. A note that starts with `-` must be attached: `--steer='- keep the loop'`. The benchmark never counts a steered crate as unassisted pipeline output. |
+| `--requester=chat` | Label the attempt as asked for in a chat (harness-mcp's acts pass it): its hand-offs live in `traces/chat/`, apart from the blind protocol's, and the benchmark never scores it. With it, `--answer=FILE --answer-key=KEY` (`external` only) files FILE as the answer to the pending request KEY and resumes: refused up front (`answer-refused`) unless the attempt the run resumes waits on KEY; `answer-unused` when the run never asked for it. |
 | `harness override <unit> <dir>` | Record a hand edit (exactly `src/logic.rs` and `src/ffi.rs` of `dir`) as a labelled `human` attempt, judged like a model reply; `harness promote` promotes it; the benchmark never counts it as the pipeline's. |
 | `--attempt ID` | With `--provider replay`: which recorded attempt to re-check. |
 | `--allow-unsandboxed` | Only needed where no sandbox exists (e.g. Linux): accept running untrusted code unconfined. |

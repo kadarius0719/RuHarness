@@ -96,6 +96,14 @@ pub enum Error {
     /// (docs/CLI-HARDENING.md §3).
     #[error("interrupted: the harness was cancelled while a child process was running")]
     Interrupted,
+    /// `harness migrate --answer` was refused before anything was written:
+    /// the attempt it would resume does not wait on that request
+    /// (docs/CHAT-PANE-DESIGN.md §4.3).
+    #[error("--answer refused: {why}")]
+    AnswerRefused {
+        /// Why.
+        why: String,
+    },
     /// `harness migrate --answer` ran, but the attempt never asked for the
     /// answered hand-off: it asked for another request first, or finished
     /// (docs/CHAT-PANE-DESIGN.md §4.3). Nothing was written with the answer.

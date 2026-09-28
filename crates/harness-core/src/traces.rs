@@ -174,13 +174,10 @@ pub fn write_new_response(
     bytes.push(b'\n');
     let name = format!("{key}.response.json");
     let target = dir.join(&name);
-    let tmp = dir.join(format!(".{name}.tmp-{}", std::process::id()));
+    // Created new under an unpredictable name (never through a planted
+    // symlink: the ledger is target-owned — §R CR-3), synced, linked.
+    let (tmp, mut file) = crate::ledger::new_temp_file(dir, &name)?;
     let written = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
         std::fs::hard_link(&tmp, &target)

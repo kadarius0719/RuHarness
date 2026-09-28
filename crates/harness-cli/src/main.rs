@@ -547,6 +547,20 @@ pub(crate) fn require_sandbox(allow_unsandboxed: bool, what: &str) -> Result<()>
 /// symlink: created level by level under the canonical target root, refusing
 /// any component that is not a real directory. Target-owned trees are hostile
 /// — a committed `traces -> /elsewhere` must not redirect harness writes.
+/// [`safe_ledger_dir`] for a run that must create nothing: every component
+/// must already be a real directory (never a symlink).
+fn existing_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<PathBuf> {
+    let mut cur = root.to_path_buf();
+    for comp in components {
+        cur = cur.join(comp);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            _ => bail!("{} is not a real directory", cur.display()),
+        }
+    }
+    Ok(cur)
+}
+
 pub(crate) fn safe_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<PathBuf> {
     let mut cur = root.to_path_buf();
     for comp in components {
@@ -1095,22 +1109,50 @@ impl MigrateArgs {
 const MAX_ANSWER_BYTES: u64 = 512 * 1024;
 
 /// `--answer FILE --answer-key KEY`, checked: KEY 8 lowercase hex; FILE a
-/// regular file of ≤ [`MAX_ANSWER_BYTES`], UTF-8, not blank.
+/// regular file of ≤ [`MAX_ANSWER_BYTES`], UTF-8, not blank. Every refusal
+/// is typed `answer-refused`.
 fn read_answer(file: &Path, key: &str) -> Result<(String, String)> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    let refuse = |why: String| {
+        anyhow::Error::new(Error::AnswerRefused {
+            why: format!("{}: {why}", file.display()),
+        })
+    };
     if !harness_core::traces::is_trace_key(key) {
-        bail!("--answer-key {key:?} is not a trace key (8 lowercase hex digits)");
+        return Err(Error::AnswerRefused {
+            why: format!(
+                "--answer-key {:?} is not a trace key (8 lowercase hex digits)",
+                key.chars().take(16).collect::<String>()
+            ),
+        }
+        .into());
     }
-    let meta = std::fs::metadata(file).with_context(|| format!("--answer {}", file.display()))?;
-    if !meta.is_file() || meta.len() > MAX_ANSWER_BYTES {
-        bail!(
-            "--answer {}: not a regular file of at most {MAX_ANSWER_BYTES} bytes",
-            file.display()
-        );
+    // The path is looked at once (never through a symlink), then the file
+    // opened and its handle checked to be that same regular file, and read
+    // bounded (§R CS-6).
+    let seen = std::fs::symlink_metadata(file).map_err(|e| refuse(e.to_string()))?;
+    if !seen.file_type().is_file() || seen.len() > MAX_ANSWER_BYTES {
+        return Err(refuse(format!(
+            "not a regular file (symlinks are refused) of at most {MAX_ANSWER_BYTES} bytes"
+        )));
     }
-    let text = std::fs::read_to_string(file)
-        .with_context(|| format!("--answer {} (it must be UTF-8)", file.display()))?;
+    let mut opened = std::fs::File::open(file).map_err(|e| refuse(e.to_string()))?;
+    let meta = opened.metadata().map_err(|e| refuse(e.to_string()))?;
+    if !meta.is_file() || meta.dev() != seen.dev() || meta.ino() != seen.ino() {
+        return Err(refuse("the file changed while it was opened".into()));
+    }
+    let mut bytes = Vec::new();
+    (&mut opened)
+        .take(MAX_ANSWER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| refuse(e.to_string()))?;
+    if bytes.len() as u64 > MAX_ANSWER_BYTES {
+        return Err(refuse(format!("longer than {MAX_ANSWER_BYTES} bytes")));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| refuse("it must be UTF-8".into()))?;
     if text.trim().is_empty() {
-        bail!("--answer {}: the answer is empty", file.display());
+        return Err(refuse("the answer is empty".into()));
     }
     Ok((key.to_string(), text))
 }
@@ -1195,42 +1237,38 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
 
     // A chat-requested attempt's hand-offs live apart from the blind
     // protocol's: files keyed by the request alone would be shared with a
-    // blind attempt of the same model (docs/CHAT-PANE-DESIGN.md §4.1).
-    let traces = match (&requester, &answer) {
-        (Some(_), Some(_)) => {
-            // Never created by an answer: the hand-off was posed there.
-            let dir = safe_ledger_dir(&ctx.root, &["migration", "units", &unit_id, "traces"])?
-                .join(attempts::CHAT_TRACES);
-            match std::fs::symlink_metadata(&dir) {
-                Ok(meta) if meta.file_type().is_dir() => dir,
-                _ => bail!(
-                    "--answer refused: {} is not a real directory — no hand-off of a \
-                     chat-requested attempt of `{unit_id}` was posed",
-                    dir.display()
-                ),
+    // blind attempt of the same model (docs/CHAT-PANE-DESIGN.md §4.1). An
+    // answer or a replay creates no directory: the hand-off was posed there,
+    // or there is nothing to replay (§R CS-12).
+    let mut components = vec!["migration", "units", unit_id.as_str(), "traces"];
+    if requester.is_some() {
+        components.push(attempts::CHAT_TRACES);
+    }
+    let traces = if answer.is_some() || provider_name == "replay" {
+        existing_ledger_dir(&ctx.root, &components).map_err(|e| {
+            if answer.is_some() {
+                anyhow::Error::new(Error::AnswerRefused {
+                    why: format!("no hand-off was posed there: {e}"),
+                })
+            } else {
+                e
             }
-        }
-        (Some(_), None) => safe_ledger_dir(
-            &ctx.root,
-            &[
-                "migration",
-                "units",
-                &unit_id,
-                "traces",
-                attempts::CHAT_TRACES,
-            ],
-        )?,
-        (None, _) => safe_ledger_dir(&ctx.root, &["migration", "units", &unit_id, "traces"])?,
+        })?
+    } else {
+        safe_ledger_dir(&ctx.root, &components)?
     };
     let mut resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
     let slot = match answer {
         Some((key, text)) => {
             if resolved.kind != attempts::EXTERNAL_KIND {
-                bail!(
-                    "--answer refused: provider `{provider_name}` is of kind `{}`; only an \
-                     `external` run files an answer",
-                    resolved.kind
-                );
+                return Err(Error::AnswerRefused {
+                    why: format!(
+                        "provider `{provider_name}` is of kind `{}`; only an `external` run \
+                         files an answer",
+                        resolved.kind
+                    ),
+                }
+                .into());
             }
             let slot = std::sync::Arc::new(harness_llm::adapters::AnswerSlot::new(key, text));
             resolved.adapter = Box::new(harness_llm::adapters::TraceAdapter::with_answer(
@@ -1264,11 +1302,30 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         &params, &oracle, &ctx, &facts, &plan_doc, unit, &hazards,
     );
     // An answer the run never asked for is refused after the fact — the
-    // one refusal that cannot come first (its inputs moved, or it finished).
-    if let Some(slot) = slot.as_ref().filter(|s| !s.used()) {
-        // The request it waits on now is still reported: a client tracks
-        // the hand-off it can answer next (docs/CHAT-PANE-DESIGN.md §4.3).
-        if let Err(Error::Awaiting { path, attempt }) = &run {
+    // one refusal that cannot come first — and only when the run ended
+    // awaiting another request or finished; any other error keeps its own
+    // kind (§R CE-1). Awaiting: the request it waits on now is reported
+    // first, so a client tracks the hand-off it can answer next; finished:
+    // the outcome is reported in full first (§R CE-4).
+    let mut unused = slot.as_ref().filter(|s| !s.used()).and_then(|slot| {
+        let why = match &run {
+            Ok(o) => format!(
+                "the attempt finished ({}) without asking for it",
+                o.record.outcome
+            ),
+            Err(Error::Awaiting { path, .. }) => format!(
+                "the attempt asked for another request first ({})",
+                report::request_key_of(path).unwrap_or_else(|| path.display().to_string())
+            ),
+            Err(_) => return None,
+        };
+        Some(Error::AnswerUnused {
+            key: slot.key.clone(),
+            why,
+        })
+    });
+    if let Err(Error::Awaiting { path, attempt }) = &run {
+        if let Some(unused) = unused.take() {
             report::event(&report::Awaiting {
                 k: "awaiting",
                 attempt: attempt.as_deref(),
@@ -1277,20 +1334,8 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
                 args: report::args_without_answer(),
                 request_key: report::request_key_of(path),
             });
+            return Err(unused.into());
         }
-        let why = match &run {
-            Ok(o) => format!("the attempt finished ({})", o.record.outcome),
-            Err(Error::Awaiting { path, .. }) => format!(
-                "the attempt asked for another request first ({})",
-                report::request_key_of(path).unwrap_or_else(|| path.display().to_string())
-            ),
-            Err(e) => format!("the run failed first: {e}"),
-        };
-        return Err(Error::AnswerUnused {
-            key: slot.key.clone(),
-            why,
-        }
-        .into());
     }
     let outcome = match run {
         Ok(o) => o,
@@ -1315,101 +1360,108 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         }
         Err(e) => return Err(e.into()),
     };
-    let record = &outcome.record;
-    for (i, t) in record.turns.iter().enumerate() {
-        out(format!(
-            "migrate: turn {} {} -> {} (tokens in/out: {}/{})",
-            i + 1,
-            t.kind,
-            t.result,
-            t.input_tokens
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "?".into()),
-            t.output_tokens
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "?".into()),
-        ));
-    }
-    out(format!(
-        "migrate: {} attempt {} via `{}` ({}) model `{}` -> {}",
-        unit_id,
-        record.id,
-        record.provider,
-        record.provider_kind,
-        record.model,
-        record.outcome.to_uppercase()
-    ));
-    if let Some(drifted) = &outcome.drifted {
-        out(format!(
-            "migrate: verified from its recorded evidence; prompt: {}",
-            harness_llm::conformance(drifted)
-        ));
-    }
-    // docs/CLI-HARDENING.md §4: migrate's final verdict — one `check` per
-    // check and the `verdict` line — when the last turn was judged by the
-    // oracle in this run (a format/truncated/blocked/deny-scan tail stored
-    // none; a verification stores nothing).
-    if let Some(v) = &outcome.verdict {
-        report::verdict(
-            &unit_id,
-            v,
-            &outcome.attempt_dir.join("attempt-verdict.json"),
-        );
-    }
-    let attempt_event = |promoted: bool, promotion: &str| {
-        report::event(&report::AttemptEvent {
-            k: "attempt",
-            unit: &unit_id,
-            id: &record.id,
-            outcome: &record.outcome,
-            provider: &record.provider,
-            model: &record.model,
-            promoted,
-            promotion,
-        });
-    };
-    if record.outcome != "green" {
-        attempt_event(record.promoted, "not promoted: not green");
-        return Ok(EXIT_ORACLE_RED);
-    }
-
-    // Promotion (docs/SCHEMAS.md; docs/CLI-HARDENING.md §2). Precedence:
-    // --promote > --no-promote > [llm.migrate] promote_on_green > default;
-    // never from a replay run (which writes nothing to the ledger).
-    let already_done = matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged);
-    let (do_promote, reason) = if resolved.kind == "replay" {
-        (false, "replay run")
-    } else if promote_flag {
-        (true, "--promote")
-    } else if no_promote {
-        (false, "--no-promote")
-    } else if already_done {
-        (false, "unit already verified — pass --promote to replace")
-    } else if !promote_on_green {
-        (false, "promote_on_green = false — run `harness promote`")
-    } else {
-        (true, "default")
-    };
-    let (Some(candidate), true) = (outcome.candidate_dir.as_ref(), do_promote) else {
-        out(format!(
-            "migrate: green attempt recorded; not promoted ({reason})"
-        ));
-        attempt_event(record.promoted, &format!("not promoted: {reason}"));
-        return Ok(0);
-    };
-    match promote::promote_attempt(&ctx, &ledger, &oracle, unit, record, candidate)? {
-        promote::Promotion::Verified => {
+    let finish = || -> Result<u8> {
+        let record = &outcome.record;
+        for (i, t) in record.turns.iter().enumerate() {
             out(format!(
-                "migrate: {unit_id} promoted and verified — status set to verified"
+                "migrate: turn {} {} -> {} (tokens in/out: {}/{})",
+                i + 1,
+                t.kind,
+                t.result,
+                t.input_tokens
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "?".into()),
+                t.output_tokens
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "?".into()),
             ));
-            attempt_event(true, &format!("promoted: {reason}"));
-            Ok(0)
         }
-        promote::Promotion::RolledBack => {
-            out("migrate: promoted candidate did not verify in place — rolled back".into());
-            attempt_event(false, "not promoted: red in place — rolled back");
-            Ok(EXIT_ORACLE_RED)
+        out(format!(
+            "migrate: {} attempt {} via `{}` ({}) model `{}` -> {}",
+            unit_id,
+            record.id,
+            record.provider,
+            record.provider_kind,
+            record.model,
+            record.outcome.to_uppercase()
+        ));
+        if let Some(drifted) = &outcome.drifted {
+            out(format!(
+                "migrate: verified from its recorded evidence; prompt: {}",
+                harness_llm::conformance(drifted)
+            ));
         }
+        // docs/CLI-HARDENING.md §4: migrate's final verdict — one `check` per
+        // check and the `verdict` line — when the last turn was judged by the
+        // oracle in this run (a format/truncated/blocked/deny-scan tail stored
+        // none; a verification stores nothing).
+        if let Some(v) = &outcome.verdict {
+            report::verdict(
+                &unit_id,
+                v,
+                &outcome.attempt_dir.join("attempt-verdict.json"),
+            );
+        }
+        let attempt_event = |promoted: bool, promotion: &str| {
+            report::event(&report::AttemptEvent {
+                k: "attempt",
+                unit: &unit_id,
+                id: &record.id,
+                outcome: &record.outcome,
+                provider: &record.provider,
+                model: &record.model,
+                promoted,
+                promotion,
+            });
+        };
+        if record.outcome != "green" {
+            attempt_event(record.promoted, "not promoted: not green");
+            return Ok(EXIT_ORACLE_RED);
+        }
+
+        // Promotion (docs/SCHEMAS.md; docs/CLI-HARDENING.md §2). Precedence:
+        // --promote > --no-promote > [llm.migrate] promote_on_green > default;
+        // never from a replay run (which writes nothing to the ledger).
+        let already_done = matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged);
+        let (do_promote, reason) = if resolved.kind == "replay" {
+            (false, "replay run")
+        } else if promote_flag {
+            (true, "--promote")
+        } else if no_promote {
+            (false, "--no-promote")
+        } else if already_done {
+            (false, "unit already verified — pass --promote to replace")
+        } else if !promote_on_green {
+            (false, "promote_on_green = false — run `harness promote`")
+        } else {
+            (true, "default")
+        };
+        let (Some(candidate), true) = (outcome.candidate_dir.as_ref(), do_promote) else {
+            out(format!(
+                "migrate: green attempt recorded; not promoted ({reason})"
+            ));
+            attempt_event(record.promoted, &format!("not promoted: {reason}"));
+            return Ok(0);
+        };
+        match promote::promote_attempt(&ctx, &ledger, &oracle, unit, record, candidate)? {
+            promote::Promotion::Verified => {
+                out(format!(
+                    "migrate: {unit_id} promoted and verified — status set to verified"
+                ));
+                attempt_event(true, &format!("promoted: {reason}"));
+                Ok(0)
+            }
+            promote::Promotion::RolledBack => {
+                out("migrate: promoted candidate did not verify in place — rolled back".into());
+                attempt_event(false, "not promoted: red in place — rolled back");
+                Ok(EXIT_ORACLE_RED)
+            }
+        }
+    };
+    let code = finish()?;
+    match unused {
+        Some(unused) => Err(unused.into()),
+        None => Ok(code),
     }
 }
 
