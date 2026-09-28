@@ -88,10 +88,12 @@ fn main() {
         cfg.target.display(),
         cfg.target_roots.len(),
         cfg.providers.join(", "),
+        // A binary is named whenever there is one — in cockpit mode that
+        // would be a bug the log shows.
         match (&cfg.harness, cfg.cockpit) {
-            (_, true) => "none — the cockpit's server: it runs no act".to_string(),
+            (Some(h), _) => h.display().to_string(),
+            (None, true) => "none — the cockpit's server: it runs no act".to_string(),
             (None, false) => "none — read-only".to_string(),
-            (Some(h), false) => h.display().to_string(),
         },
         if cfg.allow_unsandboxed {
             "; UNSANDBOXED"

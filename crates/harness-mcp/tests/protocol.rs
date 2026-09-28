@@ -260,5 +260,13 @@ fn the_cockpit_server_runs_no_harness_found_anywhere() {
         "a harness ran: {}",
         std::fs::read_to_string(&ran).unwrap_or_default()
     );
-    assert!(c.stderr.lock().unwrap().contains("the cockpit's server"));
+    // No binary was found — though one was on PATH and next to it.
+    assert!(
+        c.stderr
+            .lock()
+            .unwrap()
+            .contains("harness: none — the cockpit's server"),
+        "{}",
+        c.stderr.lock().unwrap()
+    );
 }

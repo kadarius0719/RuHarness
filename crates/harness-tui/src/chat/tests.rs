@@ -640,3 +640,20 @@ fn a_message_typed_mid_turn_is_its_own_next_turn() {
     assert!(!text(&mut c).contains("not delivered"));
     end(&mut c);
 }
+
+/// Review PRO-11: a leader that exits while something of its group keeps
+/// its pipes open is seen by the 2 s probe: the chat ends.
+#[test]
+fn a_dead_leader_is_seen_though_its_pipes_stay_open() {
+    let tmp = TmpDir::new("chat-leader");
+    let rec = synthetic(&tmp, &start_lines()[..2]);
+    // The wrapper leaves a child holding stdout and stderr, then exits
+    // without exec: the leader dies, the pipes stay open.
+    let mut c = chat(&tmp, &rec, "sleep 30 & exit 0");
+    c.send("hi", None, Instant::now()).unwrap();
+    let ev = pump_until(&mut c, |_, e| {
+        e.iter().any(|e| matches!(e, Event::Ended { .. }))
+    });
+    assert!(ev.contains(&Event::Ended { gen: 1 }));
+    end(&mut c);
+}

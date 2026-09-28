@@ -1117,6 +1117,9 @@ mod tests {
         assert!(stale2.exists());
         assert!(!pid_gone(std::process::id()));
         assert!(pid_gone(dead));
+        // A probe that fails for another reason (EPERM: pid 1 is not ours)
+        // says nothing: alive (§R5).
+        assert!(!pid_gone(1));
     }
 
     fn sh(script: &str) -> Vec<OsString> {

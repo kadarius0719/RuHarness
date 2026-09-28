@@ -1457,3 +1457,73 @@ fn a_tick_read_before_the_reaped_one_answers_nothing() {
     assert!(a.load_now());
     wait_denial(&log, "t1");
 }
+
+/// Review PRO-13: keys within 5 ms of each other are one burst, and the
+/// key after one read with input pending closes it even after a slow frame.
+#[test]
+fn a_burst_includes_its_last_key() {
+    let mut b = Asks::default();
+    let t = Instant::now();
+    b.key_read(t, false);
+    assert!(!b.burst);
+    b.key_read(t + Duration::from_millis(3), false);
+    assert!(b.burst);
+    b.key_read(t + Duration::from_millis(100), true);
+    assert!(b.burst, "input pending after the read");
+    b.key_read(t + Duration::from_millis(140), false);
+    assert!(b.burst, "the burst's last key, 40 ms later");
+    b.key_read(t + Duration::from_millis(600), false);
+    assert!(!b.burst);
+}
+
+/// Review SAF-1's other half: an ending cause BEFORE the person confirmed
+/// the act never withholds the permission the dialog then granted; and a
+/// permit of another model does not cover a Continue.
+#[test]
+fn a_permission_follows_the_confirm_and_its_model() {
+    let tmp = TmpDir::new("asks-epoch-before");
+    let (mut a, _log) = chat_app(Some("targets/zopfli"), "asks-epoch-before", &tmp);
+    a.asks.end_permit("a-ffffffffffff");
+    let gen = a.chat.gen;
+    a.asks.end_permits(gen);
+    ask(&mut a, "r1", "harness_migrate", json!({"unit": "u-cache"}));
+    let p = run_shown(&mut a);
+    a.on_spawned(&p);
+    awaiting_event(&mut a, "a-0123456789ab");
+    assert!(
+        a.asks.permits.contains_key("a-0123456789ab"),
+        "granted after the confirm"
+    );
+    let tmp2 = TmpDir::new("asks-permit-model");
+    let (mut b, _log2) = chat_app(None, "asks-permit-model", &tmp2);
+    chat_record(&mut b, RED, "in-progress");
+    let gen = b.chat.gen;
+    b.asks.table.insert(
+        RED.into(),
+        HandOff {
+            key: "0123abcd".into(),
+            gen,
+            act: "Migrate".into(),
+            turn: Some(1),
+            unit: "u-lib".into(),
+        },
+    );
+    b.chat
+        .keys_read
+        .insert((gen, RED.into(), "0123abcd".into()));
+    b.asks.permits.insert(
+        RED.into(),
+        Permit {
+            gen,
+            model: "claude-opus-5".into(),
+        },
+    );
+    ask(
+        &mut b,
+        "c1",
+        "harness_answer",
+        json!({"unit": "u-lib", "attempt": RED, "request_key": "0123abcd", "text": "t"}),
+    );
+    assert!(b.asks.waiting.is_none(), "not permitted");
+    assert!(b.asks.shown().is_some_and(|r| r.continue_asks));
+}
