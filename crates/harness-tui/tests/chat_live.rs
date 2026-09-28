@@ -478,8 +478,9 @@ fn a_failed_harness_server_ends_the_chat() {
 }
 
 /// TERM to the cockpit mid-turn: the runtime and harness-mcp gone, the
-/// chat's directory removed (§1.4, §9); New chat before it ends the older
-/// chat.
+/// chat's directory removed (§1.4, §9); New chat ends the older chat (one
+/// still ending when New chat comes is `chat::tests::new_chat_kills_a_chat_
+/// still_ending` — review T5).
 #[test]
 #[ignore = "live: RUHARNESS_LIVE_CHAT=1"]
 fn new_chat_then_term_mid_turn() {

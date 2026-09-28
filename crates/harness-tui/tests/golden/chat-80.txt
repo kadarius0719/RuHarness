@@ -1,4 +1,4 @@
-┌ Files ───────────────┐┌ Chat — waiting for you ·…─────[New]─[?]─ View ─ Chat ┐
+┌ Files ───────────────┐┌ Chat — waiting for you · h…───[New]─[?]─ View ─ Chat ┐
 │▾ harness-tui-ch… ✓1/1││› Please migrate u-lib.                               │
 │  ▾ test_case/    ✓1/1││                                                      │
 │    ▾ include/        ││I will ask to migrate u-lib.                          │

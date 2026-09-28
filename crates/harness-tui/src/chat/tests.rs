@@ -537,6 +537,20 @@ fn the_quiet_clock_restarts_after_a_held_act() {
     assert!(c.deny("act", "the outcome"));
     c.pump(Instant::now());
     assert!(!text(&mut c).contains("nothing from the model"));
+    // A request the runtime withdraws restarts it too.
+    c.held.insert("act2".into());
+    c.last_out = Instant::now() - QUIET * 3;
+    let mut events = Vec::new();
+    c.handle(
+        In::Cancel {
+            request_id: "act2".into(),
+        },
+        Instant::now(),
+        &mut events,
+    );
+    assert!(events.iter().any(|e| matches!(e, Event::Withdrawn { .. })));
+    c.pump(Instant::now());
+    assert!(!text(&mut c).contains("nothing from the model"));
     end(&mut c);
 }
 
@@ -569,11 +583,80 @@ fn a_stop_ends_with_its_result_whatever_is_queued() {
     assert!(c.stop());
     pump_until(&mut c, |c, _| !c.stopping());
     assert!(c.turn, "the queued turn runs");
-    assert!(
-        text(&mut c).lines().any(|l| l.trim() == "stopped"),
-        "the marker's own line"
+    let said = text(&mut c);
+    assert_eq!(
+        said.lines().filter(|l| l.trim() == "stopped").count(),
+        1,
+        "the result's line, once:\n{said}"
     );
     assert!(c.stop(), "the next turn can be stopped");
+    end(&mut c);
+}
+
+/// Fix check N4: a Stop sent as its turn ended stops the turn queued
+/// behind it — that turn's marker is the Stop's own, never a message the
+/// cockpit did not send, and the turn that ended by itself is not "stopped".
+#[test]
+fn a_stop_as_its_turn_ends_stops_the_next() {
+    let tmp = TmpDir::new("chat-late-stop");
+    let mut lines = start_lines();
+    lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    lines.push(
+        serde_json::json!({"dir": "in", "msg": {"type": "control_request",
+        "request_id": "i1", "request": {"subtype": "interrupt"}}}),
+    );
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "result", "subtype": "success",
+        "is_error": false, "result": "done", "queued_turn_count": 1}}),
+    );
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "user", "message": {"role": "user",
+        "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}}),
+    );
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "result", "subtype":
+        "error_during_execution", "is_error": true, "terminal_reason": "aborted_streaming",
+        "queued_turn_count": 0}}),
+    );
+    let rec = synthetic(&tmp, &lines);
+    let mut c = chat(&tmp, &rec, "");
+    c.send("hi", None, Instant::now()).unwrap();
+    pump_until(&mut c, |c, _| c.saw_init);
+    assert!(c.stop());
+    let events = pump_until(&mut c, |c, _| !c.turn);
+    assert!(
+        !events.iter().any(|e| matches!(e, Event::Foreign { .. })),
+        "{events:?}"
+    );
+    let said = text(&mut c);
+    assert!(!said.contains("did not send"), "{said}");
+    assert_eq!(
+        said.lines().filter(|l| l.contains("stopped")).count(),
+        1,
+        "the stopped turn's line only:\n{said}"
+    );
+    assert!(c.stopped_last);
+    end(&mut c);
+}
+
+/// Fix check N3, N8: New chat after a chat that ended by itself starts
+/// afresh — the title leaves "ended", the new chat's line is said once
+/// (not again with its first message); a failed start reads "ended".
+#[test]
+fn new_chat_after_an_ended_chat_starts_afresh() {
+    let tmp = TmpDir::new("chat-new-after-end");
+    let mut lines = start_lines();
+    lines.push(init_line(COCKPIT_TOOLS, "failed"));
+    let rec = synthetic(&tmp, &lines);
+    let mut c = chat(&tmp, &rec, "");
+    c.send("hi", None, Instant::now()).unwrap();
+    pump_until(&mut c, |c, _| !c.alive());
+    assert!(c.ended_by_itself, "a failed start reads \"ended\"");
+    assert!(c.new_chat(Instant::now()).is_none());
+    assert!(!c.ended_by_itself);
+    let _ = c.send("again", None, Instant::now());
+    let said = text(&mut c);
+    assert_eq!(said.matches("a new chat").count(), 1, "{said}");
     end(&mut c);
 }
 
@@ -655,5 +738,27 @@ fn a_dead_leader_is_seen_though_its_pipes_stay_open() {
         e.iter().any(|e| matches!(e, Event::Ended { .. }))
     });
     assert!(ev.contains(&Event::Ended { gen: 1 }));
+    end(&mut c);
+}
+
+/// Fix check N4: a leader seen exited is ended only after a moment for its
+/// pipes — what it printed before it exited is read, not dropped.
+#[test]
+fn an_exited_leaders_pipes_are_read_first() {
+    let tmp = TmpDir::new("chat-leader-grace");
+    let rec = synthetic(&tmp, &start_lines()[..2]);
+    let mut c = chat(&tmp, &rec, "sleep 30 & exit 0");
+    c.send("hi", None, Instant::now()).unwrap();
+    let pid = c.live.as_ref().unwrap().pid;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !runtime::leader_exited(pid) {
+        assert!(Instant::now() < deadline, "the leader never exited");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let t = Instant::now() + LEADER_PROBE;
+    assert!(c.pump(t).is_empty(), "seen exited, not yet ended");
+    assert!(c.alive());
+    let ev = c.pump(t + LEADER_GRACE);
+    assert!(ev.contains(&Event::Ended { gen: 1 }), "{ev:?}");
     end(&mut c);
 }

@@ -59,9 +59,21 @@ pub fn state_word(app: &App) -> &'static str {
 /// A key drawn in a bottom row: its column, width and name.
 type KeyAt = (u16, u16, &'static str);
 
-/// The tab strip's width, its border gap included.
-fn strip_width() -> u16 {
-    [" View ", " Chat ● "]
+/// The strip's Chat tab: "Chat ●" outside the chat when it has a request
+/// waiting or new output.
+fn chat_tab(app: &App) -> &'static str {
+    let news = app.asks.shown().is_some() || app.asks.waiting.is_some() || app.chat.unseen;
+    if news && app.focus != Focus::Chat {
+        " Chat ● "
+    } else {
+        " Chat "
+    }
+}
+
+/// The tab strip's width as drawn now, its border gap included (the title
+/// is cut only as far as it needs — fix check).
+fn strip_width(app: &App) -> u16 {
+    [" View ", chat_tab(app)]
         .iter()
         .map(|l| width_of(l) as u16 + 1)
         .sum::<u16>()
@@ -96,32 +108,24 @@ fn border_buttons(
     x
 }
 
-/// The tab strip (§5.1): `View │ Chat` on the right column's top border,
-/// wherever the chat has no column of its own — "Chat ●" when it has a
-/// request waiting or new output. Returns the column left of it.
-pub fn tab_strip(frame: &mut Frame, app: &mut App, area: Rect) -> u16 {
+/// The tab strip (§5.1): `View │ Chat` on the top border of the pane
+/// `on` — wherever the chat has no column of its own — its tab shown
+/// active when it is that pane's (neither on the files: fix check N6);
+/// "Chat ●" when it has a request waiting or new output. Returns the
+/// column left of it.
+pub fn tab_strip(frame: &mut Frame, app: &mut App, area: Rect, on: Focus) -> u16 {
     if area.width < 20 || area.height == 0 {
         return area.x + area.width;
     }
-    let on_chat = app.focus == Focus::Chat;
-    let news = app.asks.shown().is_some() || app.asks.waiting.is_some() || app.chat.unseen;
-    let chat_label = if news && !on_chat {
-        " Chat ● "
-    } else {
-        " Chat "
-    };
+    let chat_label = chat_tab(app);
     let active = Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
-    let (view_style, chat_style) = if on_chat {
-        (dim(), active)
+    let view_style = if on == Focus::View { active } else { dim() };
+    let chat_style = if on == Focus::Chat {
+        active
+    } else if chat_label.contains('●') {
+        Style::default().fg(Color::Yellow)
     } else {
-        (
-            active,
-            if news {
-                Style::default().fg(Color::Yellow)
-            } else {
-                dim()
-            },
-        )
+        dim()
     };
     let end = area.x + area.width - 1;
     let buttons = [
@@ -157,7 +161,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     // with "…" before them, never overwritten.
     let right = area.x + area.width.saturating_sub(1);
     let strip_w = if strip && area.width >= 20 {
-        strip_width()
+        strip_width(app)
     } else {
         0
     };
@@ -202,7 +206,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     frame.render_widget(block, area);
     app.hits.push((area, Hit::Pane(Focus::Chat)));
     let end = if strip {
-        tab_strip(frame, app, area)
+        tab_strip(frame, app, area, Focus::Chat)
     } else {
         right
     };
@@ -526,7 +530,7 @@ mod tests {
             if let Hit::Chat(k) = h {
                 let under = cells(buffer, *r);
                 let want: &[&str] = match *k {
-                    "review" => &["[Review Enter]", "[Review — after the running command]"],
+                    "review" => &["[Review Enter]", "[Review — later]"],
                     "decline" => &["[Decline Esc]"],
                     "decline-draft" => &["[Decline with my draft]"],
                     "hold" => &["[Hold Esc]"],
@@ -666,6 +670,123 @@ mod tests {
 
     /// A request settling is shown greyed; a waiting Continue shows its
     /// Hold; a long transcript follows its newest line.
+    /// Review USE-12, fix check N3: the title says where the chat is — and
+    /// New chat after a chat that ended leaves "ended".
+    #[test]
+    fn the_title_says_where_the_chat_is() {
+        let tmp = TmpDir::new("chat-words");
+        let mut a = chat_app("chat-words", &tmp);
+        assert_eq!(state_word(&a), "ready");
+        a.chat.turn = true;
+        assert_eq!(state_word(&a), "thinking…");
+        assert!(a.chat.stop());
+        assert_eq!(state_word(&a), "stopping…");
+        a.chat.turn = false;
+        a.chat.stopped_last = true;
+        assert_eq!(state_word(&a), "stopped");
+        let _ = a.chat.new_chat(Instant::now());
+        assert_eq!(state_word(&a), "not started");
+        a.chat.ended_by_itself = true;
+        assert_eq!(state_word(&a), "ended");
+        let _ = a.chat.new_chat(Instant::now());
+        assert_eq!(state_word(&a), "not started", "New chat after an ended one");
+    }
+
+    /// Review USE-18: the request's Review waits for a running command in
+    /// words — "later" — and the hint bar offers no `Enter review` then.
+    #[test]
+    fn review_waits_for_the_running_command() {
+        let tmp = TmpDir::new("chat-later");
+        let mut a = chat_app("chat-later", &tmp);
+        a.focus = crate::app::Focus::Chat;
+        request(&mut a, true);
+        assert!(chat_hints(&a).contains(&("Enter", "review")));
+        a.running = true;
+        assert!(!chat_hints(&a).iter().any(|h| h.1 == "review"));
+        let b = render(&mut a, 120, 24);
+        hits_match(&a, &b);
+        assert!(text(&b).contains("[Review — later]"));
+    }
+
+    /// Review USE-4, USE-5, USE-10, USE-11; fix check N6: what the pane
+    /// keeps when room is short — the request's buttons before anything
+    /// else below the transcript, [Stop] and [?] before [New] on the
+    /// title; the settle read from the clock, not the last input's time;
+    /// the strip on the files pane with neither tab shown active.
+    #[test]
+    fn the_pane_keeps_what_matters_when_room_is_short() {
+        let tmp = TmpDir::new("chat-short");
+        let mut a = chat_app("chat-short", &tmp);
+        a.focus = crate::app::Focus::Chat;
+        request(&mut a, true);
+        // The last input long before the request was shown: settled by the
+        // clock all the same (USE-4).
+        a.now = Instant::now() - Duration::from_secs(60);
+        a.chat.input.insert("a draft");
+        // Three rows inside the pane: the buttons and the cursor's row
+        // below one row of transcript.
+        let b = render(&mut a, 120, 8);
+        let screen = text(&b);
+        assert!(screen.contains("[Review Enter]"), "{screen}");
+        assert!(
+            screen.contains("› a draft") || screen.contains("a draft"),
+            "{screen}"
+        );
+        assert!(
+            !screen.contains("About:"),
+            "the context line goes first: {screen}"
+        );
+        let review = a
+            .hits
+            .iter()
+            .find(|(_, h)| *h == Hit::Chat("review"))
+            .map(|(r, _)| *r)
+            .expect("the Review button");
+        assert!(
+            b[(review.x, review.y)].modifier.contains(Modifier::BOLD),
+            "settled: the button is live"
+        );
+        // A narrow pane with a turn running: [Stop] and [?] kept, [New]
+        // dropped (USE-10).
+        a.asks.requests.clear();
+        a.chat.turn = true;
+        let b = render(&mut a, 40, 20);
+        let top = text(&b).lines().next().unwrap_or_default().to_string();
+        assert!(top.contains("[Stop]") && top.contains("[?]"), "{top}");
+        assert!(!top.contains("[New]"), "{top}");
+        // The files pane alone: the strip on it, neither tab active
+        // (USE-11, N6).
+        a.focus = crate::app::Focus::Files;
+        let b = render(&mut a, 60, 20);
+        for key in ["tab-view", "tab-chat"] {
+            let r = a
+                .hits
+                .iter()
+                .find(|(_, h)| *h == Hit::Chat(key))
+                .map(|(r, _)| *r)
+                .unwrap_or_else(|| panic!("the strip's {key} on the files pane"));
+            assert!(
+                !b[(r.x, r.y)].modifier.contains(Modifier::REVERSED),
+                "{key} shown active over the files"
+            );
+        }
+    }
+
+    /// Review USE-14: Help says why the chat is unavailable.
+    #[test]
+    fn help_says_why_the_chat_is_unavailable() {
+        let mut a = app("chat-help-why");
+        a.chat_on = true;
+        a.chat.bins = Err("no `claude` on PATH".into());
+        a.mode = Mode::Help { scroll: 0 };
+        let b = render(&mut a, 120, 200);
+        assert!(
+            text(&b).contains("The chat is unavailable here: no `claude` on PATH."),
+            "{}",
+            text(&b)
+        );
+    }
+
     #[test]
     fn request_waiting_and_long_transcript() {
         let tmp = TmpDir::new("chat-lines");

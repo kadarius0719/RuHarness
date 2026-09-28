@@ -200,6 +200,29 @@ fn wrapped(raw: &str, width: usize, style: Style) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// A chat answer's rows in a dialog `width` columns wide (§3.2): every
+/// line whole — filtered, hard-wrapped, its indentation kept — behind a
+/// gutter only the cockpit writes: a line's first row carries its number,
+/// the rows that go on with it none. No answer can pass a line of its own
+/// off as the rest of the line above (review SAF-2; fix check N1).
+pub(crate) fn answer_rows(text: &str, width: usize) -> Vec<String> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let digits = lines.len().to_string().len();
+    let body = width.saturating_sub(digits + 2).max(1);
+    let mut rows = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let line = Sanitizer::default().push(line);
+        for (j, row) in hard_wrap(&line, body).into_iter().enumerate() {
+            rows.push(if j == 0 {
+                format!("{:>digits$}│ {row}", i + 1)
+            } else {
+                format!("{:>digits$}┆ {row}", "")
+            });
+        }
+    }
+    rows
+}
+
 /// Highlighted raw pieces of one line → spans at most `width` columns wide,
 /// the first `skip` columns scrolled away (horizontal scroll). A line cut at
 /// the right ends with a dim `›`. Returns the spans and the columns used.
@@ -1354,6 +1377,15 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
         Mode::Note { .. } | Mode::EditNote { .. } => {
             vec![("Enter", "continue"), ("Esc", "cancel")]
         }
+        // Opened from the chat, the details keep the chat's keys: no
+        // letters (review USE-1; fix check N2).
+        Mode::Details { .. } if app.focus == Focus::Chat => {
+            let mut h = vec![("↑↓", "scroll"), ("Esc", "close")];
+            if app.running {
+                h.push(("Ctrl-X", "cancel"));
+            }
+            h
+        }
         Mode::Details { .. } => {
             let mut h = vec![("↑↓", "scroll"), ("c/Esc", "close")];
             if app.running {
@@ -1806,6 +1838,19 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         rows.extend(wrapped(b, inner_w, Style::default()));
     }
     if let crate::app::Purpose::Act(p) = &c.purpose {
+        if let Some(text) = p.chat.as_ref().and_then(|t| t.answer.as_deref()) {
+            rows.extend(wrapped(
+                &format!(
+                    "The chat's answer ({} bytes), as the harness will file it — its lines \
+                     numbered; a row without a number goes on with the line above:",
+                    text.len()
+                ),
+                inner_w,
+                Style::default(),
+            ));
+            rows.extend(answer_rows(text, inner_w).into_iter().map(Line::from));
+            rows.push(Line::from("(end of the answer)"));
+        }
         rows.push(Line::from(""));
         // Filtered but NEVER cut: the whole command must be seen (it scrolls).
         let argv = Sanitizer::default().push(&format!("Command: {}", shell_line(&p.argv)));
@@ -2219,13 +2264,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Focus::Files => {
                 draw_files(frame, app, main);
                 if chat {
-                    chat_pane::tab_strip(frame, app, main);
+                    chat_pane::tab_strip(frame, app, main, Focus::Files);
                 }
             }
             Focus::View => {
                 draw_view(frame, app, main);
                 if chat {
-                    chat_pane::tab_strip(frame, app, main);
+                    chat_pane::tab_strip(frame, app, main, Focus::View);
                 }
             }
             Focus::Chat => chat_pane::draw_chat(frame, app, main, false, true),
@@ -2261,7 +2306,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             } else {
                 draw_view(frame, app, right);
                 if chat {
-                    chat_pane::tab_strip(frame, app, right);
+                    chat_pane::tab_strip(frame, app, right, Focus::View);
                 }
             }
         }
@@ -2300,6 +2345,42 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    /// Review SAF-2, fix check N1: an answer's line is shown whole — never
+    /// cut, its indentation kept — and a row that goes on with a line is
+    /// the cockpit's to mark: an answer's own `↩`, `│` or `┆` never passes a
+    /// line of its own off as the rest of the line above.
+    #[test]
+    fn an_answer_is_drawn_whole_behind_the_cockpits_gutter() {
+        let long = format!("pub fn f() {{}}{}HIDDEN();", " ".repeat(5000));
+        let forged = "    // see below ↩\n    std::process::abort();\n  ┆ x();\n\tdone│";
+        let rows = answer_rows(&format!("{long}\n{forged}"), 60);
+        assert!(rows.iter().all(|r| width_of(r) <= 60), "{rows:?}");
+        // The long line: one numbered row, then rows without a number that
+        // hold every byte of it.
+        assert!(rows[0].starts_with("1│ pub fn f()"), "{}", rows[0]);
+        let first_of = |n: &str| rows.iter().position(|r| r.starts_with(n)).unwrap();
+        let two = first_of("2│");
+        let joined: String = rows[..two]
+            .iter()
+            .map(|r| {
+                r.split_once(['│', '┆'])
+                    .unwrap()
+                    .1
+                    .strip_prefix(' ')
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(joined, long);
+        assert!(rows[1..two].iter().all(|r| r.starts_with(" ┆ ")));
+        // Each line of the forged part starts a numbered row, indentation
+        // kept — its own marks are only its text.
+        assert_eq!(rows[two], "2│     // see below ↩");
+        assert_eq!(rows[two + 1], "3│     std::process::abort();");
+        assert_eq!(rows[two + 2], "4│   ┆ x();");
+        assert_eq!(rows[two + 3], "5│         done│");
+        assert_eq!(rows.len(), two + 4);
     }
 
     fn render(app: &mut App, width: u16, height: u16) -> Buffer {
@@ -4407,5 +4488,13 @@ mod tests {
         let (line, fg) = state(&mut app);
         assert!(line.contains("Too soon — click again"), "{line}");
         assert_eq!(fg, Color::Yellow);
+        // Under the chat's dialog rules a click is invited too (review
+        // USE-8).
+        if let Mode::Dialog(c) = &mut app.mode {
+            c.dialog.click_refused = false;
+            c.dialog.chat_rules = true;
+        }
+        let (line, _) = state(&mut app);
+        assert!(line.contains("· or click"), "chat rules: {line}");
     }
 }

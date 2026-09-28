@@ -474,8 +474,9 @@ fn kill_group(pid: u32, sig: &str) -> bool {
         .is_ok()
 }
 
-/// Whether the leader `pid` has exited (a zombie, or gone): `ps` says so.
-/// A failed probe says nothing (alive).
+/// Whether the leader `pid` has exited — a zombie: it is ours until
+/// reaped, so its pid is never another's. `ps` says so; a failed probe
+/// says nothing (alive).
 pub fn leader_exited(pid: u32) -> bool {
     let Ok(out) = Command::new("/bin/ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
@@ -800,6 +801,14 @@ impl Runtime {
     pub fn reap(&self) -> bool {
         reap(&self.procs, self.gen)
     }
+
+    /// Its group was sent SIGKILL, or it is gone from the registry.
+    pub fn killed(&self) -> bool {
+        lock(&self.procs)
+            .iter()
+            .find(|p| p.gen == self.gen)
+            .is_none_or(|p| p.killed)
+    }
 }
 
 /// A chat on its way out (§1.4): stdin closed; SIGTERM to its group at
@@ -853,6 +862,12 @@ impl Ending {
     /// is still ending, §1.2).
     pub fn kill_now(&mut self) -> bool {
         self.runtime.signal("KILL");
+        // No SIGKILL could be sent (`/bin/kill` did not run): nothing to
+        // wait for — it stays to be stepped, its leader unreaped so its
+        // group's id is never another's (fix check N7).
+        if !self.runtime.killed() {
+            return false;
+        }
         let deadline = Instant::now() + Duration::from_millis(500);
         loop {
             if self.runtime.reap() {

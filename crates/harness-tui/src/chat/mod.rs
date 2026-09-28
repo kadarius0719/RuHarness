@@ -39,6 +39,8 @@ pub const QUIET: Duration = Duration::from_secs(60);
 /// How often a live runtime's leader is looked at (a death EOF may not
 /// report).
 const LEADER_PROBE: Duration = Duration::from_secs(2);
+/// How long the pipes of a leader seen exited are still read.
+const LEADER_GRACE: Duration = Duration::from_millis(500);
 /// The Claude Code release the protocol was verified with.
 pub const TESTED_VERSION: &str = "2.1.274";
 /// The tools harness-mcp's cockpit mode offers, by their runtime names.
@@ -188,11 +190,24 @@ pub struct Chat {
     serial: u64,
     last_error: Option<String>,
     probed: Instant,
+    /// When the probe first saw the leader exited.
+    exited_at: Option<Instant>,
     /// Why the last chat ended, for the title: by itself, or asked.
     pub ended_by_itself: bool,
     /// The last turn ended by a Stop (the title says "stopped").
     pub stopped_last: bool,
+    /// Interrupt markers a Stop may still bring: kept until the turn it
+    /// stopped ends aborted or the runtime is idle — one sent as a turn
+    /// ended stops the turn queued behind it (fix check N4).
+    markers: u32,
+    /// A marker came in this turn.
+    marked: bool,
+    /// The new chat's line was said (New chat, before its first message).
+    announced: bool,
 }
+
+/// The transcript's line between two chats.
+const NEW_CHAT: &str = "— a new chat — it does not see the conversation above —";
 
 /// A fresh UUID (version 4) from the system's randomness.
 pub fn fresh_uuid() -> String {
@@ -293,8 +308,12 @@ impl Chat {
             serial: 0,
             last_error: None,
             probed: Instant::now(),
+            exited_at: None,
             ended_by_itself: false,
             stopped_last: false,
+            markers: 0,
+            marked: false,
+            announced: false,
         }
     }
 
@@ -387,6 +406,9 @@ impl Chat {
         self.start_warned = false;
         self.turn = false;
         self.stopping = false;
+        self.markers = 0;
+        self.marked = false;
+        self.exited_at = None;
         self.held.clear();
         self.sent.clear();
         self.started_uuids.clear();
@@ -406,11 +428,8 @@ impl Chat {
     /// starts if it is not running. `Err` says why nothing was sent.
     pub fn send(&mut self, text: &str, context: Option<&str>, now: Instant) -> Result<(), String> {
         if self.live.is_none() {
-            if self.gen > 0 {
-                self.say(
-                    Tone::Cockpit,
-                    "— a new chat — it does not see the conversation above —",
-                );
+            if self.gen > 0 && !std::mem::take(&mut self.announced) {
+                self.say(Tone::Cockpit, NEW_CHAT);
             }
             self.start(now)?;
         }
@@ -471,6 +490,7 @@ impl Chat {
         if sent {
             self.interrupts.insert(id);
             self.stopping = true;
+            self.markers += 1;
             self.say(Tone::Dim, "stopping…");
         }
         sent
@@ -500,11 +520,13 @@ impl Chat {
     /// New chat (asked first by the app): the old conversation ends.
     pub fn new_chat(&mut self, now: Instant) -> Option<Event> {
         let ended = self.end(now, runtime::END_TERM_AFTER, runtime::END_KILL_AFTER);
-        if ended.is_some() {
-            self.say(
-                Tone::Cockpit,
-                "— a new chat — it does not see the conversation above —",
-            );
+        // A chat that ended by itself starts afresh too: its title, its
+        // line — said once (fix check N3).
+        self.ended_by_itself = false;
+        self.stopped_last = false;
+        if (ended.is_some() || self.gen > 0) && !self.announced {
+            self.say(Tone::Cockpit, NEW_CHAT);
+            self.announced = true;
         }
         ended
     }
@@ -522,12 +544,17 @@ impl Chat {
         // pipes never brings EOF: every 2 s its state is looked at — it is
         // a zombie until reaped, so its group is still ours to end
         // (review PRO-11).
-        let gone = if now.saturating_duration_since(self.probed) >= LEADER_PROBE {
+        if self.exited_at.is_none() && now.saturating_duration_since(self.probed) >= LEADER_PROBE {
             self.probed = now;
-            runtime::leader_exited(rt.pid)
-        } else {
-            false
-        };
+            if runtime::leader_exited(rt.pid) {
+                self.exited_at = Some(now);
+            }
+        }
+        // The lines it printed before it exited are read first: the end
+        // waits a moment for its pipes (fix check N4).
+        let gone = self
+            .exited_at
+            .is_some_and(|t| now.saturating_duration_since(t) >= LEADER_GRACE);
         let eof = rt.eof() || gone;
         for msg in msgs {
             match msg {
@@ -614,6 +641,8 @@ impl Chat {
         if let Some(e) = self.end(now, Duration::ZERO, Duration::from_millis(300)) {
             events.push(e);
         }
+        // The title says "ended", not "not started" (fix check N8).
+        self.ended_by_itself = true;
     }
 
     fn check_init(
@@ -778,8 +807,10 @@ impl Chat {
                 if ours {
                     return;
                 }
-                if !replay && self.stopping && stream::is_interrupt_marker(&text) {
-                    self.say(Tone::Dim, "stopped");
+                // A Stop's own marker: the turn's result says "stopped".
+                if !replay && self.markers > 0 && stream::is_interrupt_marker(&text) {
+                    self.markers -= 1;
+                    self.marked = true;
                     return;
                 }
                 self.say(
@@ -851,11 +882,22 @@ impl Chat {
             },
             In::Result(r) => {
                 // A turn's end ends its Stop, whatever is queued behind it:
-                // the next turn is a new one (review PRO-2).
-                let stopped = std::mem::take(&mut self.stopping)
-                    || r.terminal_reason
-                        .as_deref()
-                        .is_some_and(|t| t.starts_with("aborted"));
+                // the next turn is a new one, and can be stopped (review
+                // PRO-2). It was stopped when it ended aborted, brought the
+                // Stop's marker, or ended in error while stopping — never
+                // for a Stop sent as it ended (fix check N4).
+                let aborted = r
+                    .terminal_reason
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("aborted"));
+                let was_stopping = std::mem::take(&mut self.stopping);
+                let stopped =
+                    aborted || std::mem::take(&mut self.marked) || (was_stopping && r.is_error);
+                // No marker comes after its stopped turn's end, nor once
+                // the runtime is idle.
+                if aborted || r.queued_turn_count == 0 {
+                    self.markers = 0;
+                }
                 if r.queued_turn_count > 0 {
                     if stopped {
                         self.say(Tone::Dim, "stopped");

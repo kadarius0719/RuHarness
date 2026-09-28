@@ -1623,11 +1623,15 @@ impl App {
         // A Cancel dialog of the command that ended has nothing left to
         // stop: it closes, and its "Stop it" can never land on a later one
         // (review SAF-3).
+        // Timed from now, not the last input: a press right after it is
+        // swallowed, and a waiting Continue waits its quiet second first
+        // (fix check N5).
         if matches!(&self.mode, Mode::Dialog(c) if c.purpose == Purpose::Cancel) {
             let kind = self.mode_kind();
             self.mode = Mode::Normal;
-            let now = self.now;
+            let now = Instant::now();
             self.note_mode_change(kind, now);
+            self.asks.last_press = Some(now);
             self.notice = notice("the command ended; nothing to stop");
         }
         let signal = status.signal().map(signal_name);
@@ -2966,6 +2970,9 @@ impl App {
     pub fn on_mouse(&mut self, ev: MouseEvent, now: Instant, late: Duration) -> Command {
         self.now = now;
         self.last_mouse = Some(now);
+        // A click is no key of a burst: the keys it presses (a hint's
+        // `Enter`) are the person's own (fix check N10).
+        self.asks.burst = false;
         let frame = self.layout.frame;
         // Ctrl or Alt held: never an answer, as with keys (review SAFE-B-5)
         // — likely an attempt to select text the terminal did not take.
@@ -3267,9 +3274,19 @@ impl App {
             }
             // The chat's own hints only on the panes' screen: under a dialog
             // or an overlay the hint bar is that overlay's, and presses its
-            // keys (review SAF-4 / USE-2).
-            Hit::Hint(k) | Hit::Activity(k)
-                if self.focus == Focus::Chat && matches!(self.mode, Mode::Normal) =>
+            // keys (review SAF-4 / USE-2) — but the activity line's buttons
+            // stay the chat's under the details opened from it, and so does
+            // the details' `Ctrl-X cancel` (fix check N2).
+            Hit::Activity(k)
+                if self.focus == Focus::Chat
+                    && matches!(self.mode, Mode::Normal | Mode::Details { .. }) =>
+            {
+                self.press_chat_hint(k, now)
+            }
+            Hit::Hint(k)
+                if self.focus == Focus::Chat
+                    && (matches!(self.mode, Mode::Normal)
+                        || (matches!(self.mode, Mode::Details { .. }) && k == "Ctrl-X")) =>
             {
                 self.press_chat_hint(k, now)
             }

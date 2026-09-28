@@ -1078,3 +1078,24 @@ calling `harness_answer` — the brief now says the answer goes only there; and 
 queued as the next turn (its echo `isReplay` with the cockpit's `uuid`; the first turn's
 `result` says `queued_turn_count` 0 all the same) — the model still reads it after the tool
 result, so §3.2's behaviour holds; recorded as `fold.jsonl`.
+
+## R8. Check of the Build D fix pass — resolved (2026-09-28)
+
+Two checkers over c1e6362 — every §R7 row against the code with 64 single-line mutations, and a
+regression hunt with probe tests — found every fix present, every high and medium killed by
+its test, no path to a chat act without an armed dialog or a live permission, and what the
+fix pass made reachable. Fix pass 2 answered each; a test for each unless said:
+
+| finding | resolution |
+|---|---|
+| med unsandboxed, low else — the answer could end a line with its own `↩` and pass the next line off as the rest of it (a comment hiding code); the dialog's word-wrap also dropped indentation (N1) | the answer is drawn by the view, not the body: every line hard-wrapped, indentation kept, behind a gutter only the cockpit writes — a line's first row numbered, the rows going on with it not |
+| low-med — under the details opened from the chat, Cancel, Try again and the "x cancel" hint did nothing (N2) | the activity line's buttons stay the chat's there; the details' hints over the chat are `Esc close` and `Ctrl-X cancel` |
+| low — the burst tail after a single read with input pending turned "ok⏎" into a line break, and the typing guard dropped an arrow after Tab (N3) | the tail after two such reads in a row |
+| low — a Stop sent as its turn ended, a turn queued behind: the later marker read as a message the cockpit did not send (permissions withdrawn), and "stopped" was said for a turn not stopped, twice with a queued turn (N4, N9) | markers counted per Stop, kept until the stopped turn ends aborted or the runtime is idle; the marker says nothing; "stopped" is the result's, only for a turn ended aborted, marked, or in error while stopping |
+| low — the Cancel dialog's close was timed from the last input, and a waiting Continue could start in the same step (N5) | timed from now; the Continue's quiet second restarts |
+| low — the epoch bumped by one attempt's end (a hold, a decline) voided an unrelated grant in flight (N6); the person's Cancel of the grant act itself did not void it — an `awaiting` still in its pipe granted (row check N1) | only generation-wide causes bump it, and the Cancel of a grant act |
+| low — no SIGKILL sent (`/bin/kill` not run): each New chat waited 500 ms per such ending (N7) | `kill_now` returns at once when no KILL went; the leader stays unreaped, its group's id never another's (no test: `/bin/kill` cannot be made to fail here) |
+| low — the leader probe could end the chat before its last lines were read (row check N4) | a leader seen exited is ended 500 ms later |
+| nits — a failed start's title "not started" (N8); New chat after a chat that ended kept "ended" and said nothing, and the new-chat line came twice after a live New chat (row check N3); a hint click took the last key's burst flag (N10); the decline reason uncapped (N11); the cursor after a full row before a newline (N12); the strip showing View active over the files, and the title cut for a " Chat ● " not drawn (row check N6) | "ended"; afresh, the line once; a click is no burst; cut at 4 KiB; a row of its own; the strip marks the pane it is on, the title cut to the strip drawn |
+| USE-15 partial — "the permission ended" without the cause | the cause in words: a Stop, a withdrawal, a foreign message, the chat's end |
+| test gaps — Migrate waiting for a command, the quiet clock after a runtime's cancel, the provider list on a Continue, the view rows (settle clock, bottom-block priority, button priority, strip on Files, Help's reason, the Review label, state words, "or click" under the chat rules), a test waiting 5 s on a line never coming | each has a test; still untested: SAF-9's two `dying` checks in `main.rs` (a signal would have to land inside a waiting Continue's quiet second), PRO-9's kept ending and PRO-10 (a KILL that cannot be sent) |

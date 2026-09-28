@@ -162,6 +162,12 @@ impl Input {
         for (i, c) in self.text.char_indices() {
             if c == '\n' {
                 if i == self.cursor {
+                    // After a full row the cursor wraps to a row of its own,
+                    // as at the draft's end (fix check N12).
+                    if col >= width {
+                        rows.push(String::new());
+                        col = 0;
+                    }
                     cursor = (rows.len() - 1, col);
                 }
                 rows.push(String::new());
@@ -264,5 +270,14 @@ mod tests {
         }
         let (_, cursor, _) = w.layout(4);
         assert_eq!(cursor, (1, 0));
+        // The cursor after a full row, on the line's end: a row of its own
+        // (fix check N12).
+        let mut n = Input::default();
+        n.insert("abcd\nx");
+        n.left();
+        n.left();
+        let (rows, cursor, _) = n.layout(4);
+        assert_eq!(cursor, (1, 0), "{rows:?}");
+        assert!(cursor.1 < 4);
     }
 }

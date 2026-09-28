@@ -206,11 +206,15 @@ pub struct Asks {
     pub unsent: Vec<(u64, String)>,
     /// Chat acts' outcomes waiting for the read after their reap, in order.
     pub outcome: Vec<Owed>,
-    /// Bumped by every cause that ends a continuation permission (§3.4):
-    /// a grant act confirmed before a bump grants nothing.
+    /// Bumped by every cause that ends a generation's continuation
+    /// permissions (§3.4) and by the person's Cancel of a grant act: a
+    /// grant act confirmed before a bump grants nothing.
     pub epoch: u64,
-    /// The last key was read with more input pending.
-    last_pending: bool,
+    /// What last ended a generation's permissions, in words (review
+    /// USE-15).
+    pub ended_why: Option<&'static str>,
+    /// Reads in a row, up to the last one, with more input pending.
+    pending_run: u32,
     /// The typing guard is up.
     pub guard: bool,
     /// When the person last typed into the chat's input.
@@ -232,15 +236,17 @@ impl Asks {
     /// it is part of a burst — keys within [`BURST`] of each other, the
     /// last one included.
     pub fn key_read(&mut self, now: Instant, pending: bool) {
-        // The key after one read with input pending is the same burst's
-        // last, even when a frame drawn between the reads took longer than
-        // 5 ms (review PRO-13).
+        // The key after reads with input pending is the same burst's last,
+        // even when a frame drawn between the reads took longer than 5 ms
+        // (review PRO-13) — after two such reads in a row: two keys typed
+        // while the loop was busy ("ok" then Enter) are no paste (fix check
+        // N3).
         let since = self.last_key.map(|t| now.saturating_duration_since(t));
         self.burst = pending
             || since.is_some_and(|d| d < BURST)
-            || (self.last_pending && since.is_some_and(|d| d < BURST_TAIL));
+            || (self.pending_run >= 2 && since.is_some_and(|d| d < BURST_TAIL));
         self.last_key = Some(now);
-        self.last_pending = pending;
+        self.pending_run = if pending { self.pending_run + 1 } else { 0 };
         self.last_press = Some(now);
     }
 
@@ -275,28 +281,27 @@ impl Asks {
         self.meaning += 1;
     }
 
-    /// Every permission of generation `gen` ends — and one a grant act
-    /// running now would give is never given (§3.4; review SAF-1).
-    pub fn end_permits(&mut self, gen: u64) {
+    /// Every permission of generation `gen` ends for `why` — and one a
+    /// grant act running now would give is never given (§3.4; review
+    /// SAF-1).
+    pub fn end_permits(&mut self, gen: u64, why: &'static str) {
         self.permits.retain(|_, p| p.gen != gen);
         self.epoch += 1;
+        self.ended_why = Some(why);
     }
 
     /// The permission for `attempt` ends (a hold, a declined or cancelled
-    /// Continue) — and a grant act running now gives none.
+    /// Continue). A grant act running now is another attempt's (one
+    /// command runs at a time; its attempt is a new one): its grant stands
+    /// (fix check N6).
     pub fn end_permit(&mut self, attempt: &str) {
         self.permits.remove(attempt);
-        self.epoch += 1;
     }
 }
 
-/// Longest piece of an answer line put on one dialog row: the display
-/// filter cuts a line at 4 KiB, so a longer one is split, never cut —
-/// the person sees every byte the harness will build (review SAF-2).
-const ANSWER_PIECE: usize = 1024;
-
-/// The dialog's chat lines (§3.2): who asked, who answers the turns, and a
-/// Continue's answer, whole.
+/// The dialog's chat lines (§3.2): who asked, who answers the turns. A
+/// Continue's answer is drawn whole after them by the view, behind a
+/// gutter only the cockpit writes (`view::answer_rows`).
 pub fn chat_words(tag: &ChatTag, body: &mut Vec<String>, turns: u32) {
     body.insert(
         0,
@@ -313,32 +318,6 @@ pub fn chat_words(tag: &ChatTag, body: &mut Vec<String>, turns: u32) {
                  run without asking again. Nothing is accepted without you."
             ),
         );
-    }
-    if let Some(text) = &tag.answer {
-        body.push(format!(
-            "The chat's answer ({} bytes), as the harness will file it:",
-            text.len()
-        ));
-        for line in text.split('\n') {
-            let mut rest = line;
-            loop {
-                let mut end = rest.len().min(ANSWER_PIECE);
-                while !rest.is_char_boundary(end) {
-                    end -= 1;
-                }
-                let (piece, more) = rest.split_at(end);
-                body.push(if more.is_empty() {
-                    format!("  {piece}")
-                } else {
-                    format!("  {piece}↩")
-                });
-                if more.is_empty() {
-                    break;
-                }
-                rest = more;
-            }
-        }
-        body.push("(end of the answer)".into());
     }
 }
 
@@ -384,11 +363,13 @@ impl App {
             } => self.chat_ask(gen, request_id, &tool, &input, model, now),
             ChatEvent::Withdrawn { gen, request_id } => {
                 // A request of it withdrawn: its permissions end (§3.4).
-                self.asks.end_permits(gen);
+                self.asks.end_permits(gen, "the chat withdrew a request");
                 self.withdraw(|t| t.gen == gen && t.request_id == request_id, now);
             }
             ChatEvent::Read { .. } => {}
-            ChatEvent::Foreign { gen } => self.asks.end_permits(gen),
+            ChatEvent::Foreign { gen } => self
+                .asks
+                .end_permits(gen, "a message the cockpit did not send reached the chat"),
             ChatEvent::Ended { gen } => self.chat_gen_ended(gen, now),
         }
     }
@@ -396,7 +377,7 @@ impl App {
     /// A generation ended: its requests withdrawn, its permissions and
     /// hand-offs gone, its unsent outcomes shown here only (§1.2, §3.3).
     fn chat_gen_ended(&mut self, gen: u64, now: Instant) {
-        self.asks.end_permits(gen);
+        self.asks.end_permits(gen, "the chat ended");
         self.asks.table.retain(|_, h| h.gen != gen);
         self.withdraw(|t| t.gen == gen, now);
         let (theirs, rest): (Vec<_>, Vec<_>) =
@@ -1036,7 +1017,17 @@ impl App {
             // The person's own words: never fenced as untrusted data (the
             // brief tells the model to follow nothing so fenced — review
             // USE-6).
-            let reason = self.chat.input.take();
+            // Cut at the message cap, as every message to the chat (fix
+            // check N11).
+            let mut reason = self.chat.input.take();
+            if reason.len() > fence::MESSAGE_CAP {
+                let mut end = fence::MESSAGE_CAP;
+                while !reason.is_char_boundary(end) {
+                    end -= 1;
+                }
+                reason.truncate(end);
+                reason.push_str(" … (cut)");
+            }
             format!("{DECLINED}, who says: {}", json!(reason))
         } else {
             DECLINED.to_string()
@@ -1268,12 +1259,20 @@ impl App {
     /// The person cancelled the running command: a chat Continue running
     /// under the permission ends it (§3.4).
     pub(super) fn chat_cancelled(&mut self) {
-        let attempt = self
-            .run
-            .as_ref()
-            .filter(|r| self.running && r.pending.act == Act::Continue)
-            .and_then(|r| r.pending.attempt.clone());
-        if let Some(a) = attempt {
+        let Some(run) = self.run.as_ref().filter(|_| self.running) else {
+            return;
+        };
+        // The grant act stopped by the person gives no permission — an
+        // `awaiting` still in its pipe included (fix check N1).
+        if run.pending.chat.as_ref().is_some_and(|t| t.grant) {
+            self.asks.epoch += 1;
+        }
+        if let Some(a) = run
+            .pending
+            .attempt
+            .clone()
+            .filter(|_| run.pending.act == Act::Continue)
+        {
             self.asks.end_permit(&a);
         }
     }
@@ -1297,9 +1296,17 @@ impl App {
             .is_some_and(|pm| pm.gen == tag.gen && pm.model == tag.model)
             && !self.config.allow_unsandboxed;
         if !permitted {
-            // The permission ended meanwhile: it asks instead.
+            // The permission ended meanwhile: it asks instead, saying why
+            // (review USE-15).
             self.asks.waiting = Some(r);
-            self.chat_asks_instead(now, "the permission ended");
+            let why = match self.asks.ended_why {
+                _ if self.config.allow_unsandboxed => {
+                    "no permission runs code without the sandbox".to_string()
+                }
+                Some(w) => format!("the permission ended ({w})"),
+                None => "the permission ended".to_string(),
+            };
+            self.chat_asks_instead(now, &why);
             return Command::None;
         }
         self.refresh_holder();
@@ -1575,7 +1582,7 @@ impl App {
     /// Stop the chat's turn: every permission of it ends (§3.5).
     pub(crate) fn chat_stop(&mut self) {
         if self.chat.stop() {
-            self.asks.end_permits(self.chat.gen);
+            self.asks.end_permits(self.chat.gen, "you stopped the chat");
         }
     }
 
