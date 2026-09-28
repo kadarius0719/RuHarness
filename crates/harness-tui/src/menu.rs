@@ -40,8 +40,10 @@ pub enum Action {
     DiscardKept,
     /// Cancel the running command (`x`): its dialog.
     Cancel,
-    /// Greyed pointer to chat (not built yet).
+    /// Migrate — ask in chat: the request typed into the chat's input.
     Migrate,
+    /// Ask in chat…: the chat focused.
+    AskChat,
 }
 
 /// One menu item.
@@ -393,14 +395,24 @@ impl App {
             Selection::Unit(_) => owner.is_some_and(|u| migratable(&self.snapshot.units[u])),
             _ => false,
         };
+        let chat_off = if !self.chat_on {
+            Some("the chat is off (--no-chat)".to_string())
+        } else {
+            self.chat.bins.as_ref().err().cloned()
+        };
         if offer_migrate {
             let mut it = item("Migrate — ask in chat", Action::Migrate, None);
             it.model = true;
-            it.greyed = Some(
-                "model work happens in chat, which is not built yet; see Help (?) for today's \
-                 route"
-                    .into(),
-            );
+            it.greyed = chat_off.clone().or_else(|| {
+                (!self.chat.input.is_empty())
+                    .then(|| "the chat has a draft — send or clear it first".to_string())
+            });
+            items.push(it);
+        }
+        if self.chat_on {
+            let mut it = item("Ask in chat…", Action::AskChat, None);
+            it.model = true;
+            it.greyed = chat_off;
             items.push(it);
         }
         if self.running {

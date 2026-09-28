@@ -38,6 +38,9 @@ pub const SPLIT_VIEW_MIN: u16 = 78;
 /// The dialog's width (narrower terminals get what they have).
 pub const DIALOG_COLUMNS: u16 = 76;
 
+mod chat_pane;
+pub use chat_pane::{state_word, CHAT_COLUMN_FROM, CHAT_COLUMN_MAX, VIEW_KEEPS};
+
 fn dim() -> Style {
     Style::default().fg(Color::DarkGray)
 }
@@ -1200,12 +1203,21 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
     let width = area.width as usize;
     let mut buttons: Vec<(&'static str, &'static str)> = Vec::new();
+    let in_chat = app.focus == Focus::Chat;
     let (lead, lead_style) = match (&app.run, app.running) {
         (Some(run), true) => {
             let elapsed = run.started.elapsed();
             let frame = SPINNER[(elapsed.as_millis() / 100) as usize % SPINNER.len()];
-            buttons.push(("[Cancel x]", "x"));
-            buttons.push(("[Details c]", "c"));
+            // In the chat letters are text: the keys that work there.
+            buttons.push((
+                if in_chat {
+                    "[Cancel Ctrl-X]"
+                } else {
+                    "[Cancel x]"
+                },
+                "x",
+            ));
+            buttons.push((if in_chat { "[Details]" } else { "[Details c]" }, "c"));
             (
                 format!(
                     "{frame} {}: {} · {}",
@@ -1218,14 +1230,22 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
         }
         _ => {
             if app.try_again.is_some() {
-                buttons.push(("[Try again t]", "t"));
+                buttons.push((
+                    if in_chat {
+                        "[Try again]"
+                    } else {
+                        "[Try again t]"
+                    },
+                    "t",
+                ));
             }
             if app.run.is_some() {
-                buttons.push(("[Details c]", "c"));
+                buttons.push((if in_chat { "[Details]" } else { "[Details c]" }, "c"));
             }
-            let text = match &app.last {
-                Some(last) => format!("Ready. Last: {last}"),
-                None => "Ready.".to_string(),
+            let text = match (app.chat_waits_why(app.now), &app.last) {
+                (Some(why), _) => why.to_string(),
+                (None, Some(last)) => format!("Ready. Last: {last}"),
+                (None, None) => "Ready.".to_string(),
             };
             (text, Style::default())
         }
@@ -1337,6 +1357,7 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
 fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     let mut h: Vec<(&'static str, &'static str)> = Vec::new();
     match app.focus {
+        Focus::Chat => return chat_pane::chat_hints(app),
         Focus::Files => {
             h.push(("↑↓", "move"));
             h.push(("←→", "fold/open"));
@@ -1378,6 +1399,9 @@ fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
     type Keys = Vec<(&'static str, &'static str)>;
     let (list, tail): (Keys, Keys) = match overlay_hints(app) {
         Some(keys) => (keys, Vec::new()),
+        // In the chat `?` and `q` are text: its own hints end in F1 and
+        // Ctrl-C (docs/CHAT-PANE-DESIGN.md §5.4).
+        None if app.focus == Focus::Chat => (hints(app), Vec::new()),
         None => (hints(app), vec![("?", "help"), ("q", "quit")]),
     };
     let entry = |(k, v): &(&str, &str)| format!(" {k} {v} ");
@@ -1533,8 +1557,25 @@ const HELP_LEGEND: &[(&str, &str)] = &[
     ("○", "not in the plan"),
 ];
 
+const HELP_CHAT: &[&str] = &[
+    "The chat (Tab, or click Chat): ask for model work in plain words — \"migrate this\". It \
+     reads the project and ASKS: a request waits on a line above the input, still for a \
+     second; Enter (on an empty input) reviews it in the same armed dialog as every act, Esc \
+     declines it. Scan, the plan, Re-check and Accept stay yours: the chat says which to use.",
+    "Letters in the chat are text. Enter sends; Ctrl-J, \\ then Enter, or Alt-Enter is a new \
+     line. Esc: decline a request, hold a waiting Continue, or stop the reply. Ctrl-C: stop, \
+     clear the draft, or quit (asked). Ctrl-X: cancel the running command. Ctrl-N: a new \
+     chat (asked). ↑↓ PgUp PgDn scroll; Home/End on an empty input: the top / the newest \
+     line. F1: this screen.",
+    "When you run a migration the chat asked for, it answers the model's turns here and each \
+     answer continues the run without asking again — until you hold one (Esc), decline or \
+     cancel one, stop the chat, or start a new one. Nothing is accepted without you.",
+    "After you leave the chat with a draft, letters in the panes are dropped until you press \
+     an arrow, Tab or Esc, or click — they would be commands there.",
+];
+
 const HELP_ROUTES: &[&str] = &[
-    "Model work happens in chat, which is not built yet. Today's routes:",
+    "Other routes for model work:",
     "  harness migrate <unit>: a fresh translation (the blind hand-off, or a live provider)",
     "  harness-mcp in a separate Claude Code session: steer attempts (README)",
     "  harness override <unit> <dir>: record an outside edit as a hand edit",
@@ -1543,10 +1584,21 @@ const HELP_ROUTES: &[&str] = &[
 
 /// Help's rows, and which of them are the mouse on/off line (a click there
 /// is `m`).
-fn help_rows(width: usize, mouse: bool) -> (Vec<Line<'static>>, std::ops::Range<usize>) {
+fn help_rows(
+    width: usize,
+    mouse: bool,
+    chat: bool,
+) -> (Vec<Line<'static>>, std::ops::Range<usize>) {
     let mut rows = Vec::new();
     for l in HELP_INTRO {
         rows.extend(wrapped(l, width, bold()));
+    }
+    if chat {
+        rows.extend(wrapped(
+            "Tab moves Files → View → Chat; in the chat, ask for model work in plain words.",
+            width,
+            bold(),
+        ));
     }
     rows.push(Line::from(""));
     let start = rows.len();
@@ -1571,6 +1623,13 @@ fn help_rows(width: usize, mouse: bool) -> (Vec<Line<'static>>, std::ops::Range<
         rows.extend(wrapped(&format!("{g:<3} {v}"), width, Style::default()));
     }
     rows.push(Line::from(""));
+    if chat {
+        rows.push(Line::from(Span::styled("Chat", bold())));
+        for l in HELP_CHAT {
+            rows.extend(wrapped(l, width, Style::default()));
+        }
+        rows.push(Line::from(""));
+    }
     for l in HELP_ROUTES {
         rows.extend(wrapped(l, width, Style::default()));
     }
@@ -1758,7 +1817,13 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut spots = Vec::new();
     let mut x = 1u16;
     for (i, b) in c.dialog.buttons.iter().enumerate() {
-        let text = format!("[ {}  {} ]", b.label, b.key);
+        // Under the chat-dialog rules no letter presses a button: none is
+        // shown on one (docs/CHAT-PANE-DESIGN.md §3.2).
+        let text = if c.dialog.chat_rules && i > 0 {
+            format!("[ {} ]", b.label)
+        } else {
+            format!("[ {}  {} ]", b.label, b.key)
+        };
         let mut style = if i == 0 || c.dialog.armed {
             bold()
         } else {
@@ -1776,6 +1841,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let state = if !usable {
         "too small to show".into()
     } else if mouse
+        && !c.dialog.chat_rules
         && c.dialog.armed
         && !c.dialog.click_refused
         && c.dialog.opened.elapsed() >= crate::dialog::CLICK_SETTLE
@@ -1893,7 +1959,11 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                 pct(area.width, 86).max(40),
                 pct(area.height, 86).max(10),
             );
-            let (rows, toggle) = help_rows(rect.width.saturating_sub(2) as usize, app.mouse);
+            let (rows, toggle) = help_rows(
+                rect.width.saturating_sub(2) as usize,
+                app.mouse,
+                app.chat_on,
+            );
             let shown = overlay(
                 frame,
                 rect,
@@ -2104,10 +2174,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .areas(area);
     let single = area.width < SINGLE_PANE_BELOW;
     app.layout.single_pane = single;
+    // The chat (docs/CHAT-PANE-DESIGN.md §5.1): a column of its own from
+    // 156 columns once opened; below that the right column shows it only
+    // while it has the focus, and a tab strip keeps it one click away.
+    let chat = app.chat_on;
     if single {
         match app.focus {
             Focus::Files => draw_files(frame, app, main),
-            Focus::View => draw_view(frame, app, main),
+            Focus::View => {
+                draw_view(frame, app, main);
+                if chat {
+                    chat_pane::tab_strip(frame, app, main);
+                }
+            }
+            Focus::Chat => chat_pane::draw_chat(frame, app, main, false, true),
         }
     } else {
         let files_w = if area.width >= WIDE_FROM {
@@ -2115,14 +2195,35 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         } else {
             FILES_NARROW
         };
-        // The chat's side (§10, from 150 columns) is taken only once the chat
-        // exists: an empty strip read as broken (review USE-15; DECISIONS).
-        let [files, view] = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(files_w), Constraint::Min(20)])
-            .areas(main);
-        draw_files(frame, app, files);
-        draw_view(frame, app, view);
+        let column = chat && app.chat_column && area.width >= CHAT_COLUMN_FROM;
+        if column {
+            let chat_w = CHAT_COLUMN_MAX.min(area.width - files_w - VIEW_KEEPS);
+            let [files, view, chat_area] = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(files_w),
+                    Constraint::Min(VIEW_KEEPS),
+                    Constraint::Length(chat_w),
+                ])
+                .areas(main);
+            draw_files(frame, app, files);
+            draw_view(frame, app, view);
+            chat_pane::draw_chat(frame, app, chat_area, true, false);
+        } else {
+            let [files, right] = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(files_w), Constraint::Min(20)])
+                .areas(main);
+            draw_files(frame, app, files);
+            if chat && app.focus == Focus::Chat {
+                chat_pane::draw_chat(frame, app, right, false, true);
+            } else {
+                draw_view(frame, app, right);
+                if chat {
+                    chat_pane::tab_strip(frame, app, right);
+                }
+            }
+        }
     }
     let row = activity_row(app, act1);
     frame.render_widget(Paragraph::new(row), act1);
@@ -2424,6 +2525,7 @@ mod tests {
             started: Instant::now() - std::time::Duration::from_millis(41_050),
             plan_changes: 0,
             pending,
+            collect: Default::default(),
         });
     }
 

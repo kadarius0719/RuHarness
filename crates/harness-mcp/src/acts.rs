@@ -879,6 +879,7 @@ mod tests {
             path: "/t/traces/abcd1234.response.json".into(),
             resume: "harness migrate …".into(),
             args: None,
+            request_key: None,
         });
         let mut p = posed("harness_steer");
         p.arguments =
@@ -930,6 +931,7 @@ mod tests {
             path: "/t/x.response.json".into(),
             resume: String::new(),
             args: None,
+            request_key: None,
         });
         assert!(c.awaited().is_none());
     }

@@ -132,6 +132,9 @@ pub enum Event {
         resume: String,
         /// The command line after the program name, without `--json`.
         args: Option<Vec<String>>,
+        /// The pending request's key (8 lowercase hex) — the event's own, or
+        /// the response file's name when an older CLI gave none.
+        request_key: Option<String>,
     },
     /// The command failed.
     Error {
@@ -248,12 +251,27 @@ fn known(k: &str, v: &Value) -> Option<Event> {
             attempt: text(v, "attempt")?,
             result: text(v, "result")?,
         },
-        "awaiting" => Event::Awaiting {
-            attempt: text(v, "attempt"),
-            path: text(v, "path")?,
-            resume: text(v, "resume").unwrap_or_default(),
-            args: strings(v, "args"),
-        },
+        "awaiting" => {
+            let path = text(v, "path")?;
+            let is_key = |k: &str| {
+                k.len() == 8
+                    && k.bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            };
+            let from_path = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".response.json"))
+                .filter(|k| is_key(k))
+                .map(str::to_string);
+            Event::Awaiting {
+                attempt: text(v, "attempt"),
+                resume: text(v, "resume").unwrap_or_default(),
+                args: strings(v, "args"),
+                request_key: text(v, "request_key").filter(|k| is_key(k)).or(from_path),
+                path,
+            }
+        }
         "error" => Event::Error {
             kind: text(v, "kind")?,
             message: text(v, "message")?,
@@ -376,10 +394,34 @@ mod tests {
                     path,
                     resume,
                     args,
-                } => Some((attempt.clone(), path.clone(), resume.clone(), args.clone())),
+                    request_key,
+                } => Some((
+                    attempt.clone(),
+                    path.clone(),
+                    resume.clone(),
+                    args.clone(),
+                    request_key.clone(),
+                )),
                 _ => None,
             })
             .expect("an awaiting event");
+        // The key: the event's own, or the response file's name.
+        let key = awaiting.4.clone().expect("a request key");
+        assert!(awaiting.1.ends_with(&format!("{key}.response.json")));
+        let named = parse_line(
+            r#"{"k":"awaiting","attempt":"a-1","path":"/t/x.response.json","request_key":"0123abcd"}"#,
+        );
+        assert!(matches!(named, Event::Awaiting { request_key: Some(k), .. } if k == "0123abcd"));
+        let odd = parse_line(
+            r#"{"k":"awaiting","path":"/t/NOTAKEY.response.json","request_key":"../x"}"#,
+        );
+        assert!(matches!(
+            odd,
+            Event::Awaiting {
+                request_key: None,
+                ..
+            }
+        ));
         assert!(awaiting.0.is_some_and(|a| a.starts_with("a-")));
         assert!(awaiting.1.ends_with(".response.json"));
         assert!(awaiting.2.starts_with("harness migrate "));

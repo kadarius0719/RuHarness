@@ -43,6 +43,8 @@ pub enum Choice {
     QuitStop,
     /// Stop the running command (`x`).
     Stop,
+    /// End the chat's conversation and start a new one.
+    NewChat,
 }
 
 /// One button.
@@ -87,6 +89,10 @@ pub enum Kind {
     QuitIdle,
     /// Cancel the running command: Keep running, Stop it.
     Cancel,
+    /// New chat (docs/CHAT-PANE-DESIGN.md §5.4): Stay, Start a new chat —
+    /// no letter presses it (it opens from the chat, under the chat-dialog
+    /// rules).
+    NewChat,
 }
 
 impl Kind {
@@ -114,6 +120,10 @@ impl Kind {
             Kind::Cancel => vec![
                 button("Keep running", "Esc", &[], Choice::Safe),
                 button("Stop it", "x", &['x'], Choice::Stop),
+            ],
+            Kind::NewChat => vec![
+                button("Stay", "Esc", &[], Choice::Safe),
+                button("Start a new chat", "Enter", &[], Choice::NewChat),
             ],
         }
     }
@@ -164,6 +174,12 @@ pub struct Dialog {
     /// A frame showed it armed ("ready"), set by the view: a click answers
     /// only what the user saw (review SAFE-B-7).
     pub shown_armed: bool,
+    /// Opened while the chat had the focus: the chat-dialog rules
+    /// (docs/CHAT-PANE-DESIGN.md §3.2) — no letter presses a button, and a
+    /// focus move or `Enter` in a burst is dropped.
+    pub chat_rules: bool,
+    /// A letter was dropped under the chat-dialog rules: "use the buttons".
+    pub use_buttons: bool,
 }
 
 impl Dialog {
@@ -183,6 +199,8 @@ impl Dialog {
             opened: now,
             shown_armed: false,
             click_refused: false,
+            chat_rules: false,
+            use_buttons: false,
         }
     }
 
@@ -274,6 +292,41 @@ impl Dialog {
         Outcome::Stay
     }
 
+    /// A key under the chat-dialog rules, when they apply
+    /// (docs/CHAT-PANE-DESIGN.md §3.2): a person typing into the chat who
+    /// opened a dialog by mistake can never press Run. No letter presses a
+    /// button — `Esc`, `n` and `N` still take the safe choice and `j`, `k`
+    /// and `Space` still scroll; any other letter is dropped ("use the
+    /// buttons") — and a focus move or `Enter` read in a `burst` (keys
+    /// within 5 ms of each other: a paste without bracketed paste, a key
+    /// repeat) is dropped as a typed-ahead key is before arming. Otherwise
+    /// [`Dialog::on_key`].
+    pub fn on_key_in(&mut self, key: KeyEvent, now: Instant, burst: bool) -> Outcome {
+        if self.chat_rules {
+            let plain = !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+            if let KeyCode::Char(c) = key.code {
+                if plain && !matches!(c, 'n' | 'N' | 'j' | 'k' | ' ') {
+                    self.input(now);
+                    self.use_buttons = true;
+                    self.click_refused = false;
+                    return Outcome::Stay;
+                }
+            }
+            let moves = matches!(
+                key.code,
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter
+            );
+            if burst && moves {
+                self.input(now);
+                self.too_soon = true;
+                return Outcome::Stay;
+            }
+        }
+        self.on_key(key, now)
+    }
+
     /// A press on button `i`, read at `now` (docs/COCKPIT-WRAPPER-DESIGN.md
     /// §7): whether its release on the button may press it. A click is a
     /// deliberate press at a position, so no prior move is needed — but
@@ -319,6 +372,10 @@ impl Dialog {
         if self.armed && self.click_refused {
             // A click refused while it settles (review SAFE-B-2).
             "Too soon — click again".into()
+        } else if self.armed && self.chat_rules && self.use_buttons {
+            "use the buttons: → then Enter, or click".into()
+        } else if self.armed && self.chat_rules {
+            "ready: → then Enter, or click".into()
         } else if self.armed {
             let letter = self.buttons.get(1).map_or("y", |b| b.key);
             format!("ready: → then Enter, or {letter}")
@@ -659,6 +716,78 @@ mod tests {
 
     /// Scroll keys scroll before arming, and restart the wait: the argv must
     /// be seen to its end.
+    /// Mutation-checked rule (docs/CHAT-PANE-DESIGN.md §3.2): under the
+    /// chat-dialog rules no letter presses a button, even armed; the safe
+    /// letters and the scroll letters still work; a focus move or Enter in
+    /// a burst is dropped, the same keys alone act.
+    #[test]
+    fn the_chat_dialog_rules_take_no_letters_and_no_bursts() {
+        let t0 = Instant::now();
+        for kind in [
+            Kind::Act,
+            Kind::Quit,
+            Kind::QuitIdle,
+            Kind::Cancel,
+            Kind::NewChat,
+        ] {
+            let mut d = drawn(kind, t0);
+            d.chat_rules = true;
+            assert!(d.arm(t0 + ms(400), false));
+            for c in ['y', 'q', 'x', 'D', 'Y', 'Q'] {
+                assert_eq!(
+                    d.on_key_in(press(KeyCode::Char(c)), t0 + ms(500), false),
+                    Outcome::Stay,
+                    "{kind:?} {c}"
+                );
+            }
+            assert!(d.use_buttons);
+            assert_eq!(d.state_text(), "use the buttons: → then Enter, or click");
+            // A move and Enter in a burst: dropped; alone: they act.
+            assert_eq!(
+                d.on_key_in(press(KeyCode::Right), t0 + ms(600), true),
+                Outcome::Stay
+            );
+            assert_eq!(d.focus, 0);
+            assert_eq!(
+                d.on_key_in(press(KeyCode::Right), t0 + ms(700), false),
+                Outcome::Stay
+            );
+            assert_eq!(d.focus, 1);
+            assert_eq!(
+                d.on_key_in(press(KeyCode::Enter), t0 + ms(800), true),
+                Outcome::Stay,
+                "Enter in a burst"
+            );
+            let run = d.buttons[1].choice;
+            assert_eq!(
+                d.on_key_in(press(KeyCode::Enter), t0 + ms(900), false),
+                Outcome::Close(run)
+            );
+            // The safe letters, at any time, in a burst too.
+            let mut d = drawn(kind, t0);
+            d.chat_rules = true;
+            assert_eq!(
+                d.on_key_in(press(KeyCode::Char('n')), t0 + ms(1), true),
+                Outcome::Close(Choice::Safe)
+            );
+            let mut d = drawn(kind, t0);
+            d.chat_rules = true;
+            d.on_key_in(press(KeyCode::Char('j')), t0 + ms(1), false);
+            assert_eq!(d.scroll, 1, "j scrolls");
+        }
+        // Without the rules the letter acts.
+        let mut d = drawn(Kind::Act, t0);
+        assert!(d.arm(t0 + ms(400), false));
+        assert_eq!(
+            d.on_key_in(press(KeyCode::Char('y')), t0 + ms(500), true),
+            Outcome::Close(Choice::Run)
+        );
+        let mut d = drawn(Kind::Act, t0);
+        d.chat_rules = true;
+        assert!(d.arm(t0 + ms(400), false));
+        assert_eq!(d.state_text(), "ready: → then Enter, or click");
+    }
+
     #[test]
     fn scroll_keys_scroll_and_restart_the_wait() {
         let t0 = Instant::now();

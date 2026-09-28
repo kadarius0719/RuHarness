@@ -75,6 +75,10 @@ pub struct Narrator {
     subcommand: String,
     model: Option<String>,
     steer: bool,
+    /// A run for the chat (`--requester=chat`): its hand-offs are the
+    /// chat's to answer (docs/CHAT-PANE-DESIGN.md §3.4).
+    chat: bool,
+    turn: Option<u64>,
     step: String,
     checks: Vec<(String, bool)>,
     verdict: Option<String>,
@@ -115,6 +119,8 @@ impl Narrator {
             steer: argv
                 .iter()
                 .any(|a| a.to_string_lossy().starts_with("--steer=")),
+            chat: argv.iter().any(|a| a == "--requester=chat"),
+            turn: None,
             step,
             checks: Vec::new(),
             verdict: None,
@@ -145,6 +151,7 @@ impl Narrator {
                 self.last_message = Some(text.clone());
             }
             Event::TurnStart { index, kind, .. } => {
+                self.turn = Some(*index);
                 self.step = match kind.as_str() {
                     "human" => format!("Turn {index}: checking your hand edit"),
                     _ => {
@@ -210,7 +217,9 @@ impl Narrator {
             }
             Event::Awaiting { path, .. } => {
                 self.awaited = true;
-                self.step = if self.steer {
+                self.step = if self.chat {
+                    self.paused_words()
+                } else if self.steer {
                     format!(
                         "Paused: waiting for the answer to the hand-off (request next to \
                          {path}). Write the answer, then choose Resume."
@@ -250,6 +259,13 @@ impl Narrator {
         }
     }
 
+    fn paused_words(&self) -> String {
+        match self.turn {
+            Some(n) => format!("Paused: the chat answers turn {n}"),
+            None => "Paused: the chat answers its turn".into(),
+        }
+    }
+
     /// How a reaped run ended: `code` is its exit code, `signal` the
     /// signal's name when it died by one.
     pub fn ending(&self, code: Option<i32>, signal: Option<&str>) -> Ending {
@@ -278,6 +294,7 @@ impl Narrator {
                 Some(v) => v.clone(),
                 None => "Finished — red".into(),
             },
+            Ending::Paused if self.chat => self.paused_words(),
             Ending::Paused => "Paused".into(),
             Ending::Locked => format!(
                 "Refused: another command is changing this project ({}) — nothing was done",
@@ -381,6 +398,17 @@ mod tests {
         assert_eq!(
             steer.last(Some(1), None, Duration::from_secs(3)),
             "Modify — Paused (3 s)"
+        );
+        // A chat run: the chat answers it (docs/CHAT-PANE-DESIGN.md §3.4).
+        let mut chat = Narrator::new(
+            "Migrate u (asked in chat)",
+            &argv(&["harness", "--json", "migrate", "u", "--requester=chat"]),
+        );
+        run(&mut chat, &events);
+        assert_eq!(chat.step(), "Paused: the chat answers turn 1");
+        assert_eq!(
+            chat.last(Some(1), None, Duration::from_secs(3)),
+            "Migrate u (asked in chat) — Paused: the chat answers turn 1 (3 s)"
         );
     }
 

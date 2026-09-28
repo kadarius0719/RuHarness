@@ -14,10 +14,17 @@
 //! never removed on the way out: its path is printed. The restores never
 //! block (the terminal guard, `harness_tui::termguard`), and the ledger is
 //! read on a loader thread (`harness_tui::load`), the preflight first.
+//!
+//! The chat (docs/CHAT-PANE-DESIGN.md §1.4): every way out ends its process
+//! group — quit and New chat gracefully (interrupt, stdin closed, then TERM
+//! and KILL), the signal path, the panic hook and a hand edit's editor dying
+//! by a signal bounded (TERM at once, KILL 300 ms later, through one
+//! [`die`]).
 
 #![forbid(unsafe_code)]
 
 use harness_tui::app::{Act, App, Command, Config, LayoutMode, LoadWhy};
+use harness_tui::chat::{self, runtime::Procs};
 use harness_tui::handedit;
 use harness_tui::load::{self, Loader};
 use harness_tui::spawn::{self, ChildSlot, Running};
@@ -44,6 +51,7 @@ static GUARD: TermGuard = TermGuard::new();
 const USAGE: &str = "\
 usage: harness-tui [--target DIR] [--harness PATH] [--provider NAME]... [--allow-unsandboxed]
                    [--layout split|stacked] [--no-mouse]
+                   [--no-chat] [--chat-runtime PATH] [--harness-mcp PATH] [--chat-model NAME]
 
 The review cockpit over a target's migration ledger. Every write is a spawned
 `harness --json …` command whose exact argv is shown and confirmed first.
@@ -62,6 +70,12 @@ The review cockpit over a target's migration ledger. Every write is a spawned
   --no-mouse            start with the mouse off (m in Help turns it on): for
                         a terminal whose clicks print odd characters, or to
                         select text with the mouse as usual
+  --no-chat             no chat pane
+  --chat-runtime PATH   the Claude Code binary the chat runs (default: `claude`
+                        on PATH)
+  --harness-mcp PATH    the harness-mcp the chat reads through (default: the
+                        one next to this binary, else on PATH)
+  --chat-model NAME     the chat's model (default: Claude Code's own)
 ";
 
 struct Args {
@@ -71,6 +85,10 @@ struct Args {
     layout: LayoutMode,
     providers: Vec<String>,
     mouse: bool,
+    chat: bool,
+    chat_runtime: Option<PathBuf>,
+    harness_mcp: Option<PathBuf>,
+    chat_model: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -81,6 +99,10 @@ fn parse_args() -> Result<Args, String> {
         layout: LayoutMode::Auto,
         providers: Vec::new(),
         mouse: true,
+        chat: true,
+        chat_runtime: None,
+        harness_mcp: None,
+        chat_model: None,
     };
     let mut it = std::env::args_os().skip(1);
     while let Some(arg) = it.next() {
@@ -101,6 +123,16 @@ fn parse_args() -> Result<Args, String> {
             "--harness" => args.harness = Some(PathBuf::from(value("--harness")?)),
             "--allow-unsandboxed" => args.allow_unsandboxed = true,
             "--no-mouse" => args.mouse = false,
+            "--no-chat" => args.chat = false,
+            "--chat-runtime" => args.chat_runtime = Some(PathBuf::from(value("--chat-runtime")?)),
+            "--harness-mcp" => args.harness_mcp = Some(PathBuf::from(value("--harness-mcp")?)),
+            "--chat-model" => {
+                let name = value("--chat-model")?.to_string_lossy().into_owned();
+                if !harness_tui::fence::valid_model(&name) {
+                    return Err(format!("--chat-model {name:?}: not a model name"));
+                }
+                args.chat_model = Some(name);
+            }
             "--provider" => {
                 let name = value("--provider")?.to_string_lossy().into_owned();
                 // A profile name travels attached in one argv element: a
@@ -307,6 +339,44 @@ fn restore_terminal() {
     });
 }
 
+/// Every chat process (the live one and the ending ones), for the signal
+/// path, the panic hook and a dying hand edit — which cannot reach the
+/// `App`.
+static CHATS: std::sync::OnceLock<Procs> = std::sync::OnceLock::new();
+
+fn chats() -> Procs {
+    CHATS.get_or_init(Procs::default).clone()
+}
+
+/// The bounded end (docs/CHAT-PANE-DESIGN.md §1.4): SIGTERM to every chat's
+/// group now, the running command interrupted (its own ≤ 1 s), SIGKILL to
+/// the chats' groups no sooner than 300 ms after the TERM, their
+/// directories removed; then the terminal restored and the cockpit dies by
+/// `sig`. The signal thread and a hand edit's editor dying by a signal
+/// both come here.
+fn die(sig: i32, slot: &ChildSlot) -> ! {
+    GUARD.mark_dying();
+    // The mouse off before the waits: a click meanwhile never reaches the
+    // shell (review PROC-B-1).
+    bounded(WRITE_WAIT, || {
+        let _ = std::io::stdout().execute(DisableMouseCapture);
+    });
+    let procs = chats();
+    let termed = Instant::now();
+    chat::runtime::term_all(&procs);
+    // The CLI's 250 ms courtesy budget plus its group kill.
+    let _ = spawn::interrupt_and_wait(slot, Duration::from_secs(1));
+    if let Some(left) =
+        (termed + chat::runtime::BOUNDED_KILL_AFTER).checked_duration_since(Instant::now())
+    {
+        std::thread::sleep(left);
+    }
+    chat::runtime::kill_all(&procs);
+    GUARD.restore_for_death(restore_terminal, ENABLE_WAIT);
+    announce_kept_edits();
+    die_by(sig);
+}
+
 fn install_signal_path(slot: ChildSlot) -> std::io::Result<()> {
     use signal_hook::consts::{SIGALRM, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2};
     // The common signals whose default ends the process restore the
@@ -334,17 +404,7 @@ fn install_signal_path(slot: ChildSlot) -> std::io::Result<()> {
                     continue;
                 }
             }
-            GUARD.mark_dying();
-            // The mouse off before the wait for the command: a click in
-            // that second never reaches the shell (review PROC-B-1).
-            bounded(WRITE_WAIT, || {
-                let _ = std::io::stdout().execute(DisableMouseCapture);
-            });
-            // The CLI's 250 ms courtesy budget plus its group kill.
-            let _ = spawn::interrupt_and_wait(&slot, Duration::from_secs(1));
-            GUARD.restore_for_death(restore_terminal, ENABLE_WAIT);
-            announce_kept_edits();
-            die_by(sig);
+            die(sig, &slot);
         }
     });
     Ok(())
@@ -511,13 +571,12 @@ fn finish_edit(
     }
     if let Some(sig) = signal {
         // A signal (not INT) while editing: the edit is kept, the cockpit
-        // dies by it.
+        // dies by it — the chat's group with it, through the same end as
+        // the signal thread's (docs/CHAT-PANE-DESIGN.md §1.4).
         if !keep {
             let _ = std::fs::remove_dir_all(&session.tmp);
         }
-        GUARD.restore_for_death(restore_terminal, ENABLE_WAIT);
-        announce_kept_edits();
-        die_by(sig);
+        die(sig, &ChildSlot::default());
     }
     let staged = match status {
         Ok(status) if status.success() => session.stage().map_err(|e| format!("hand edit: {e}")),
@@ -585,6 +644,34 @@ fn pump_loads(app: &mut App, loader: &mut Loader, whys: &mut Vec<(u64, LoadWhy)>
     app.loading = loader.loading();
 }
 
+/// Quit (docs/CHAT-PANE-DESIGN.md §1.4): the chat's turn interrupted and
+/// its stdin closed now; after the terminal is restored the cockpit waits
+/// ≤ 1.5 s for it ([`finish_chats`]), then TERM, then KILL 300 ms later.
+fn end_chat_for_quit(app: &mut App) {
+    app.chat.end(
+        Instant::now(),
+        chat::runtime::QUIT_WAIT,
+        chat::runtime::QUIT_WAIT + chat::runtime::BOUNDED_KILL_AFTER,
+    );
+}
+
+/// Step every ending chat until reaped, bounded by their own timers (and a
+/// margin): nothing of the chat's outlives the cockpit.
+fn finish_chats(app: &mut App) {
+    let deadline = Instant::now()
+        + chat::runtime::QUIT_WAIT
+        + chat::runtime::BOUNDED_KILL_AFTER
+        + Duration::from_millis(700);
+    loop {
+        app.chat.ending.retain_mut(|e| !e.step(Instant::now()));
+        if app.chat.ending.is_empty() || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    chat::runtime::kill_all(&app.chat.procs);
+}
+
 fn run(
     terminal: &mut DefaultTerminal,
     app: &mut App,
@@ -606,6 +693,7 @@ fn run(
             park();
         }
         pump_loads(app, loader, &mut whys);
+        app.chat_pump(Instant::now());
         app.expire_notice(Instant::now());
         // Under the guard: a frame in flight when a signal restores the
         // terminal finishes before the second restore (PROC-5).
@@ -629,6 +717,8 @@ fn run(
         if ready {
             let event = event::read()?;
             let now = Instant::now();
+            // More input already waiting: this event is part of a burst.
+            app.input_pending = event::poll(Duration::ZERO)?;
             // Every input read restarts an open dialog's quiet time (the
             // mouse's too), then it is a key, a click or a paste.
             command = app.on_event(event, now, queue.late(now));
@@ -651,10 +741,18 @@ fn run(
             app.tick();
             last_tick = Instant::now();
         }
+        // A Continue under the continuation permission, once nothing holds it.
+        if matches!(command, Command::None) && running.is_none() {
+            command = app.chat_step(Instant::now());
+        }
         match command {
             Command::None => {}
-            Command::Quit => break,
+            Command::Quit => {
+                end_chat_for_quit(app);
+                break;
+            }
             Command::CancelAndQuit => {
+                end_chat_for_quit(app);
                 // The mouse off before the wait (up to 1.5 s, nothing read):
                 // what comes meanwhile is read away on the way out, never by
                 // the shell (review N2-1).
@@ -689,7 +787,17 @@ fn run(
                 app.mouse_may_report(Instant::now());
                 break;
             }
-            Command::Spawn(pending) => match Running::spawn(pending.argv.clone(), slot.clone()) {
+            Command::Spawn(pending) => match Running::spawn_with_input(
+                pending.argv.clone(),
+                slot.clone(),
+                // A chat's answer rides on the command's stdin, never a
+                // file (docs/CHAT-PANE-DESIGN.md §3.4).
+                pending
+                    .chat
+                    .as_ref()
+                    .and_then(|c| c.answer.clone())
+                    .map(String::into_bytes),
+            ) {
                 Ok(r) => {
                     app.on_spawned(&pending);
                     running = Some(r);
@@ -812,6 +920,23 @@ fn main() -> ExitCode {
         app.say("no `harness` binary found (PATH, or --harness <path>): read-only, acts disabled");
     }
     app.mouse = args.mouse;
+    app.chat_on = args.chat;
+    if args.chat {
+        let bins = chat::runtime::resolve(
+            args.chat_runtime.as_deref(),
+            args.harness_mcp.as_deref(),
+            std::env::current_exe().ok().as_deref(),
+            std::env::var_os("PATH").as_deref(),
+        );
+        let vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
+        app.chat = chat::Chat::new(
+            bins,
+            &vars,
+            args.chat_model.clone(),
+            app.config.target.clone(),
+            chats(),
+        );
+    }
     // Under the guard: a signal during the setup restores after it.
     let Some(terminal) = GUARD.enable(|| {
         let terminal = ratatui::init();
@@ -836,12 +961,23 @@ fn main() -> ExitCode {
     let hook_slot = slot.clone();
     std::panic::set_hook(Box::new(move |info| {
         let helper = std::thread::current().name() != Some("main");
+        // The chat's groups: TERM now, KILL 300 ms later — never blocking on
+        // a lock the panicking thread may hold (§1.4).
+        let procs = chats();
+        chat::runtime::try_term_all(&procs);
+        let termed = Instant::now();
         if helper {
             let _ = spawn::try_interrupt(&hook_slot);
             GUARD.restore_for_death(restore_terminal, ENABLE_WAIT);
         } else {
             GUARD.restore_on_panic(restore_terminal);
         }
+        if let Some(left) =
+            (termed + chat::runtime::BOUNDED_KILL_AFTER).checked_duration_since(Instant::now())
+        {
+            std::thread::sleep(left);
+        }
+        chat::runtime::try_kill_all(&procs);
         announce_kept_edits();
         say(format!("harness-tui: {info}"));
         if helper {
@@ -849,6 +985,10 @@ fn main() -> ExitCode {
         }
     }));
     let result = run(&mut terminal, &mut app, &slot, &mut loader);
+    // The loop's error: the chat ends too (quit already began its end).
+    if result.is_err() {
+        end_chat_for_quit(&mut app);
+    }
     // Anything of the mouse's still on its way after the click that quit
     // (or one just before a key did) is read here, not by the shell; a quit
     // from the keyboard with the mouse idle drains nothing (review N-C3-5).
@@ -856,6 +996,7 @@ fn main() -> ExitCode {
         quiet_mouse();
     }
     restore_terminal();
+    finish_chats(&mut app);
     announce_kept_edits();
     if app.running && app.run.as_ref().is_some_and(|r| r.act == Act::HandEdit) {
         say(

@@ -560,6 +560,22 @@ pub fn try_term_all(procs: &Procs) -> bool {
     }
 }
 
+/// [`kill_all`] for the panic hook: nothing when the lock is busy.
+pub fn try_kill_all(procs: &Procs) -> bool {
+    let mut list = match procs.try_lock() {
+        Ok(list) => list,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return false,
+    };
+    for p in list.iter_mut() {
+        kill_group(p.pid, "KILL");
+        p.killed = true;
+        let _ = p.child.try_wait();
+        let _ = std::fs::remove_dir_all(&p.dir);
+    }
+    true
+}
+
 /// The live handle of one chat process (the loop's; its [`Proc`] is in
 /// [`Procs`]).
 #[derive(Debug)]

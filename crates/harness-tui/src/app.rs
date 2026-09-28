@@ -9,7 +9,13 @@
 //! there is no automatic spawn. The ledger is read on the loader thread
 //! (the preflight first): after a spawned command is reaped, on `g`, and on
 //! the 2 s tick while a command runs or a hand-off is outstanding.
+//!
+//! The chat (docs/CHAT-PANE-DESIGN.md) is a third pane: its requests are
+//! the cockpit's own acts, confirmed in the same armed dialog ([`asks`]).
 
+pub mod asks;
+
+use crate::chat::{self, Chat};
 use crate::dialog::{Choice, Dialog, Kind, Outcome};
 use crate::events::{Event, EVENTS_SCHEMA, EVENTS_SCHEMA_VERSION};
 use crate::files::{self, FileState, Files, TreeWalk, UnitState};
@@ -134,6 +140,8 @@ pub enum Focus {
     Files,
     /// The View.
     View,
+    /// The chat.
+    Chat,
 }
 
 /// An act: every write is a spawned `harness --json …`.
@@ -157,6 +165,12 @@ pub enum Act {
     Retry,
     /// `R`: the stored argv of the run that ended awaiting.
     Resume,
+    /// The chat's Migrate: a fresh attempt labelled `requester: chat`
+    /// (docs/CHAT-PANE-DESIGN.md §3.1).
+    Migrate,
+    /// The chat's answer to a hand-off: the attempt resumed with it on the
+    /// command's stdin (§3.4).
+    Continue,
 }
 
 impl Act {
@@ -172,6 +186,8 @@ impl Act {
             Act::HandEdit => "Hand edit",
             Act::Retry => "Retry",
             Act::Resume => "Resume",
+            Act::Migrate => "Migrate",
+            Act::Continue => "Continue",
         }
     }
 
@@ -183,13 +199,18 @@ impl Act {
             Act::HandEdit => Some("e"),
             Act::Retry => Some("r"),
             Act::Resume => Some("R"),
-            Act::Scan | Act::Plan | Act::Detect | Act::Verify => None,
+            Act::Scan | Act::Plan | Act::Detect | Act::Verify | Act::Migrate | Act::Continue => {
+                None
+            }
         }
     }
 
     /// It calls a model.
     pub fn model(self) -> bool {
-        matches!(self, Act::Modify | Act::Retry | Act::Resume)
+        matches!(
+            self,
+            Act::Modify | Act::Retry | Act::Resume | Act::Migrate | Act::Continue
+        )
     }
 }
 
@@ -216,6 +237,9 @@ pub struct Pending {
     /// dialog opened — confirm refuses unless the crate on disk still has it
     /// ("unchanged since shown"; captured once, never updated by a load).
     pub shown_digest: Option<String>,
+    /// An act the chat asked for (docs/CHAT-PANE-DESIGN.md §3): its request,
+    /// answered with the outcome.
+    pub chat: Option<Box<asks::ChatTag>>,
 }
 
 /// What the event loop must do after a key.
@@ -283,6 +307,9 @@ pub fn fold_loaded(asked: &mut Vec<(u64, LoadWhy)>, seq: u64) -> Option<LoadWhy>
 
 /// What a dialog is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Held only inside the boxed `Confirm` of `Mode::Dialog`: its size costs
+// nothing where it lives.
+#[allow(clippy::large_enum_variant)]
 pub enum Purpose {
     /// An act (or a hand edit's override).
     Act(Pending),
@@ -290,6 +317,8 @@ pub enum Purpose {
     Quit,
     /// Cancel the running command.
     Cancel,
+    /// End the chat's conversation (docs/CHAT-PANE-DESIGN.md §5.4).
+    NewChat,
 }
 
 /// An open dialog: its words and its latch.
@@ -425,6 +454,8 @@ pub struct RunPanel {
     pub plan_changes: usize,
     /// The command as it was confirmed (Try again offers it again, whole).
     pub pending: Pending,
+    /// What it reported, for the chat's outcome.
+    pub collect: asks::Collected,
 }
 
 /// An `external` hand-off waiting for its response file.
@@ -528,6 +559,12 @@ pub enum Hit {
     /// t]`): its key, in the panes only — under a dialog or a note it does
     /// nothing, under a menu or overlay it is outside it (review SAFE-B-1).
     Activity(&'static str),
+    /// A key of the chat pane — its request line's and waiting line's
+    /// buttons, its title's `[×]` `[?]` `[New]` `[Stop]`, the tab strip,
+    /// its hint bar — answered on the release like a key, never across a
+    /// change in what the chat's `Enter` or `Esc` mean
+    /// (docs/CHAT-PANE-DESIGN.md §5.5).
+    Chat(&'static str),
     /// Inside the menu or the dialog (a click there does nothing).
     Dialog,
     /// Inside another overlay: help, the checks, the diff, the details, a
@@ -561,6 +598,8 @@ struct Held {
     mode: std::mem::Discriminant<Mode>,
     /// The dialog it was pressed in, by when that opened.
     dialog: Option<Instant>,
+    /// What the chat's `Enter` and `Esc` meant when it was pressed.
+    meaning: u64,
 }
 
 /// Where the left button went down.
@@ -692,6 +731,18 @@ pub struct App {
     pub diff_rows: Option<(usize, Vec<ratatui::text::Line<'static>>)>,
     /// The time of the last input, as the event loop reported it.
     pub now: Instant,
+    /// The chat (docs/CHAT-PANE-DESIGN.md).
+    pub chat: Chat,
+    /// The chat pane exists (`--no-chat` removes it; off in [`App::new`]).
+    pub chat_on: bool,
+    /// From [`crate::view::CHAT_COLUMN_FROM`] columns: the chat's own column
+    /// is open (its `[×]` closes it; the conversation is kept).
+    pub chat_column: bool,
+    /// The chat's requests, hand-offs and permissions.
+    pub asks: asks::Asks,
+    /// Input was pending right after the last event was read (the loop sets
+    /// it): the event is part of a burst.
+    pub input_pending: bool,
     last_load_error: Option<String>,
     pairs_key: Option<String>,
     pending_bracket: Option<char>,
@@ -810,6 +861,7 @@ impl App {
     /// A cockpit over what the first read found.
     pub fn new(config: Config, read: Read) -> App {
         let files = files::build(&read.snapshot, &read.walk);
+        let target = config.target.clone();
         let holder = read.holder;
         let migrate_model = read.migrate_model;
         let mut app = App {
@@ -855,6 +907,17 @@ impl App {
             loading: false,
             diff_rows: None,
             now: Instant::now(),
+            chat: Chat::new(
+                Err("the chat is off".into()),
+                &[],
+                None,
+                target,
+                chat::runtime::Procs::default(),
+            ),
+            chat_on: false,
+            chat_column: false,
+            asks: asks::Asks::default(),
+            input_pending: false,
             last_load_error: None,
             pairs_key: None,
             pending_bracket: None,
@@ -1039,7 +1102,10 @@ impl App {
                 if why == LoadWhy::Key || self.last_load_error.as_deref() != Some(e.as_str()) {
                     self.notice = notice(format!("unreadable: {e}"));
                 }
-                self.last_load_error = Some(e);
+                self.last_load_error = Some(e.clone());
+                if why >= LoadWhy::Reaped {
+                    self.chat_after_read(Some(&e));
+                }
                 return false;
             }
         };
@@ -1076,6 +1142,9 @@ impl App {
         }
         if why == LoadWhy::Key {
             self.notice = notice("re-read");
+        }
+        if why >= LoadWhy::Reaped {
+            self.chat_after_read(None);
         }
         true
     }
@@ -1290,6 +1359,7 @@ impl App {
             ChildMsg::Event(ev) => ev,
         };
         run.narrator.on_event(&ev);
+        run.collect.on_event(&ev);
         match ev {
             Event::Header {
                 schema,
@@ -1407,10 +1477,21 @@ impl App {
                 attempt,
                 path,
                 resume,
+                request_key,
                 ..
             } => {
                 push(run, Tone::Warn, format!("awaiting response: {path}"));
                 push(run, Tone::Dim, format!("  hint: {resume}"));
+                // A run for the chat: its hand-off is the chat's to answer,
+                // never the person's list (docs/CHAT-PANE-DESIGN.md §3.4).
+                if run.argv.iter().any(|a| a == "--requester=chat") {
+                    let tag = run.pending.chat.as_deref().cloned();
+                    let turn = run.collect.turn;
+                    let unit = run.pending.unit.clone().unwrap_or_default();
+                    let label = run.narrator.label.clone();
+                    self.chat_hand_off(attempt, request_key, tag, turn, unit, label);
+                    return;
+                }
                 // Only a steer attempt's hand-off is this cockpit's to resume:
                 // a blind one belongs to the audited protocol (SAFE-12).
                 let steer = run
@@ -1483,8 +1564,10 @@ impl App {
             started: Instant::now(),
             plan_changes: 0,
             pending: pending.clone(),
+            collect: asks::Collected::default(),
         });
         self.notice = None;
+        self.chat_spawned(pending);
     }
 
     /// The confirmed act could not be started (a hand edit stays kept):
@@ -1560,6 +1643,7 @@ impl App {
             self.awaiting.retain(|o| o.attempt != aw.attempt);
             self.awaiting.push(aw);
         }
+        self.chat_reaped(status);
         let mut remove = None;
         if let Some(run) = self.run.as_mut() {
             if let (Act::HandEdit, Some(tmp)) = (run.act, run.cleanup.take()) {
@@ -1595,6 +1679,12 @@ impl App {
     /// ask for a read (on the loader). Never spawns.
     pub fn tick(&mut self) {
         if self.running || !self.awaiting.is_empty() {
+            self.request_load(LoadWhy::Tick);
+        }
+        // Chat hand-offs held after a read that failed: keep reading — the
+        // gates of the chat's next request refuse until one lands
+        // (docs/CHAT-PANE-DESIGN.md §3.3).
+        if !self.asks.table.is_empty() && self.last_load_error.is_some() {
             self.request_load(LoadWhy::Tick);
         }
     }
@@ -1668,6 +1758,7 @@ impl App {
             expect_attempt: None,
             note: None,
             shown_digest: None,
+            chat: None,
         };
         match act {
             Act::Scan | Act::Plan | Act::Detect => {
@@ -1777,24 +1868,7 @@ impl App {
                 if let Some(why) = retry_refusal(r, &self.config.providers) {
                     return Err(why);
                 }
-                let mut rest = vec![
-                    os("migrate"),
-                    os(&u.unit.id),
-                    self.target_arg(),
-                    os("--no-promote"),
-                    os("--retry"),
-                    os(format!("--provider={}", r.provider)),
-                    os(format!("--model={}", r.model)),
-                ];
-                if let (Some(seed), Some(note)) = (&r.seeded_from, &r.steer_note) {
-                    rest.push(os(format!("--from={seed}")));
-                    rest.push(os(format!("--steer={note}")));
-                }
-                // Its own run shape carries its label: without it the CLI
-                // would derive another attempt's id (§R4 CS-1).
-                if let Some(requester) = &r.requester {
-                    rest.push(os(format!("--requester={requester}")));
-                }
+                let rest = self.retry_rest(&u.unit.id, r);
                 Ok(pending(
                     self.with_sandbox_flag(self.harness_argv(&rest)?),
                     format!("Retry {}", short_id(&r.id)),
@@ -1834,7 +1908,32 @@ impl App {
                 Ok(p)
             }
             Act::HandEdit => Err("the hand edit is prepared by the editor flow".into()),
+            Act::Migrate | Act::Continue => Err("only the chat asks for this act".into()),
         }
+    }
+
+    /// A record's own run shape — `migrate <unit> --target=… --no-promote
+    /// --retry` with its provider, model, seed and note, and its label:
+    /// without the label the CLI would derive another attempt's id (§R4
+    /// CS-1).
+    pub(crate) fn retry_rest(&self, unit: &str, r: &AttemptRecord) -> Vec<OsString> {
+        let mut rest = vec![
+            os("migrate"),
+            os(unit),
+            self.target_arg(),
+            os("--no-promote"),
+            os("--retry"),
+            os(format!("--provider={}", r.provider)),
+            os(format!("--model={}", r.model)),
+        ];
+        if let (Some(seed), Some(note)) = (&r.seeded_from, &r.steer_note) {
+            rest.push(os(format!("--from={seed}")));
+            rest.push(os(format!("--steer={note}")));
+        }
+        if let Some(requester) = &r.requester {
+            rest.push(os(format!("--requester={requester}")));
+        }
+        rest
     }
 
     /// The override argv for a staged hand edit in `stage`, with its note
@@ -1867,6 +1966,7 @@ impl App {
             expect_attempt: None,
             note: None,
             shown_digest: None,
+            chat: None,
         })
     }
 
@@ -2031,7 +2131,7 @@ impl App {
                     ],
                 )
             }
-            Act::Modify | Act::Retry | Act::Resume => {
+            Act::Modify | Act::Retry | Act::Resume | Act::Migrate | Act::Continue => {
                 let provider = p.argv.iter().find_map(|a| {
                     a.to_string_lossy()
                         .strip_prefix("--provider=")
@@ -2047,8 +2147,16 @@ impl App {
                         format!("{} (from the attempt record)", provider.unwrap_or_default()),
                         format!("{} (from the attempt record)", model.unwrap_or_default()),
                     ),
+                    // The chat's acts name the model that answers.
+                    _ if p.chat.is_some() && provider.as_deref() == Some(EXTERNAL_PROVIDER) => (
+                        provider.unwrap_or_default(),
+                        format!(
+                            "{} (the chat's — it answers the hand-offs)",
+                            model.unwrap_or_default()
+                        ),
+                    ),
                     // Modify pins the target's migrate model as last read.
-                    Act::Modify => (
+                    Act::Modify | Act::Migrate => (
                         provider.unwrap_or_default(),
                         format!(
                             "{} (the target's migrate routing)",
@@ -2061,8 +2169,11 @@ impl App {
                     ),
                 };
                 let title = match p.act {
+                    Act::Modify if p.chat.is_some() => format!("Modify {attempt} with its note?"),
                     Act::Modify => format!("Modify {attempt} with your note?"),
                     Act::Retry => format!("Retry {attempt}?"),
+                    Act::Migrate => format!("Migrate {unit}?"),
+                    Act::Continue => format!("Continue {attempt} with the chat's answer?"),
                     _ => format!("Resume {attempt} with the hand-off's answer?"),
                 };
                 let mut body = vec![
@@ -2071,10 +2182,23 @@ impl App {
                         "Records a new attempt of {unit}; never promotes it. Can take minutes."
                     ),
                 ];
+                if p.act == Act::Continue {
+                    body[1] = format!(
+                        "Files the chat's answer to the request it read and resumes the attempt of \
+                         {unit}; never promotes it. Can take minutes."
+                    );
+                }
                 if p.act == Act::Modify {
                     if let Some(n) = &p.note {
-                        body.push(format!("Your note: {n}"));
+                        body.push(if p.chat.is_some() {
+                            format!("The chat's note: {n}")
+                        } else {
+                            format!("Your note: {n}")
+                        });
                     }
+                }
+                if let Some(tag) = &p.chat {
+                    asks::chat_words(tag, &mut body);
                 }
                 (title, body)
             }
@@ -2091,6 +2215,10 @@ impl App {
         if p.argv.iter().any(|a| a == "--allow-unsandboxed") {
             body.push("--allow-unsandboxed: runs code WITHOUT the sandbox.".into());
         }
+        let title = match &p.chat {
+            Some(_) => format!("The chat asks: {title}"),
+            None => title,
+        };
         (title, body)
     }
 
@@ -2105,22 +2233,34 @@ impl App {
                 };
                 (kind, title, body)
             }
-            // Nothing running: only a click asks (the key quits at once).
+            // Nothing running: a click, or a conversation to lose, asks.
             Purpose::Quit if !self.running => (
                 Kind::QuitIdle,
                 "Quit the cockpit?".into(),
-                vec![
-                    "Nothing is running. Hand edits not recorded are named on the way out.".into(),
-                ],
+                if self.chat.has_conversation() {
+                    vec!["Quit? The chat's conversation is not kept.".into()]
+                } else {
+                    vec![
+                        "Nothing is running. Hand edits not recorded are named on the way out."
+                            .into(),
+                    ]
+                },
             ),
-            Purpose::Quit => (
-                Kind::Quit,
-                "Quit while a command runs?".into(),
-                vec![
-                    "A command is running.".into(),
+            Purpose::Quit => (Kind::Quit, "Quit while a command runs?".into(), {
+                let mut body = vec![
+                    "A command is running.".to_string(),
                     "Quit, let it finish: it runs on to its end on its own.".into(),
                     "Stop it and quit: it is interrupted (SIGINT) first.".into(),
-                ],
+                ];
+                if self.chat.has_conversation() {
+                    body.push("The chat's conversation is not kept.".into());
+                }
+                body
+            }),
+            Purpose::NewChat => (
+                Kind::NewChat,
+                "Start a new chat?".into(),
+                vec!["The chat forgets this conversation.".into()],
             ),
             Purpose::Cancel => (
                 Kind::Cancel,
@@ -2132,8 +2272,10 @@ impl App {
                 ],
             ),
         };
+        let mut dialog = Dialog::new(kind, self.now);
+        dialog.chat_rules = self.focus == Focus::Chat;
         self.mode = Mode::Dialog(Box::new(Confirm {
-            dialog: Dialog::new(kind, self.now),
+            dialog,
             title,
             body,
             purpose,
@@ -2204,9 +2346,13 @@ impl App {
         // crate holds no link (review SAFE-2). The other acts read nothing
         // here — a broken file never refuses the Scan that could repair it
         // (review NEW-6).
-        if matches!(p.act, Act::Verify | Act::Accept | Act::Retry | Act::Resume) {
+        if matches!(p.act, Act::Verify | Act::Accept | Act::Retry | Act::Resume) || p.chat.is_some()
+        {
             crate::preflight::preflight(&target)
                 .map_err(|why| format!("the project cannot be read safely: {why}"))?;
+        }
+        if let Some(tag) = &p.chat {
+            return self.chat_gate(p, tag);
         }
         let ledger = Ledger::new(&target);
         let record = |unit: &str, attempt: &str| {
@@ -2349,6 +2495,11 @@ impl App {
     }
 
     fn close_dialog(&mut self, confirm: Confirm, choice: Choice) -> Command {
+        if let Purpose::Act(p) = &confirm.purpose {
+            if p.chat.is_some() {
+                return self.close_chat_dialog(confirm, choice);
+            }
+        }
         match (confirm.purpose, choice) {
             (Purpose::Act(p), Choice::Run | Choice::Record) => match self.confirm_gate(&p) {
                 Ok(()) => Command::Spawn(p),
@@ -2392,8 +2543,15 @@ impl App {
             }
             (Purpose::Quit, Choice::QuitLeave) => Command::Quit,
             (Purpose::Quit, Choice::QuitStop) => Command::CancelAndQuit,
-            (Purpose::Cancel, Choice::Stop) => Command::Cancel,
-            (Purpose::Quit | Purpose::Cancel, _) => Command::None,
+            (Purpose::Cancel, Choice::Stop) => {
+                self.chat_cancelled();
+                Command::Cancel
+            }
+            (Purpose::NewChat, Choice::NewChat) => {
+                self.chat_new_chat();
+                Command::None
+            }
+            (Purpose::Quit | Purpose::Cancel | Purpose::NewChat, _) => Command::None,
         }
     }
 
@@ -2547,7 +2705,14 @@ impl App {
                 }
                 Command::None
             }
-            Action::Migrate => Command::None,
+            Action::Migrate => {
+                self.chat_migrate_item();
+                Command::None
+            }
+            Action::AskChat => {
+                self.focus = Focus::Chat;
+                Command::None
+            }
         }
     }
 
@@ -2629,6 +2794,11 @@ impl App {
         self.held = None;
         self.down = None;
         self.last_press = None;
+        if self.focus == Focus::Chat && self.chat_on && matches!(self.mode, Mode::Normal) {
+            let now = self.now;
+            self.chat_paste(text, now);
+            return;
+        }
         let clean: String = text
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
@@ -2668,6 +2838,13 @@ impl App {
         self.last_press = None;
         self.held = None;
         self.down = None;
+        // Keys within 5 ms of each other are one burst (a paste without
+        // bracketed paste, a key repeat — docs/CHAT-PANE-DESIGN.md §3.2).
+        self.asks.key_read(now, self.input_pending);
+        // The typing guard: the chat's typing never reaches the panes.
+        if self.guarded(key) {
+            return Command::None;
+        }
         let panes = |mode: &Mode| matches!(mode, Mode::Normal | Mode::Details { .. });
         let was_panes = panes(&self.mode);
         let command = self.key_event(key, now);
@@ -2679,6 +2856,7 @@ impl App {
             match self.focus {
                 Focus::Files => self.tree_follow = true,
                 Focus::View => self.view_follow = true,
+                Focus::Chat => {}
             }
         }
         command
@@ -2687,8 +2865,22 @@ impl App {
     /// A key, from the keyboard or pressed by a click.
     fn key_event(&mut self, key: KeyEvent, now: Instant) -> Command {
         self.now = now;
-        // A notice clears on the next key (a new one may replace it).
-        if self.notice.as_ref().is_some_and(|n| n.at < now) {
+        // A notice clears on the next key (a new one may replace it) — not
+        // on text typed into the chat (docs/CHAT-PANE-DESIGN.md §5.4).
+        let typing = self.focus == Focus::Chat
+            && matches!(self.mode, Mode::Normal)
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && matches!(
+                key.code,
+                KeyCode::Char(_)
+                    | KeyCode::Backspace
+                    | KeyCode::Delete
+                    | KeyCode::Left
+                    | KeyCode::Right
+            );
+        if !typing && self.notice.as_ref().is_some_and(|n| n.at < now) {
             self.notice = None;
         }
         self.on_key_inner(key, now)
@@ -2744,7 +2936,15 @@ impl App {
                 }
                 let said = self.notice.clone();
                 self.held = None;
+                self.asks.last_press = Some(now);
+                // A click ends the typing guard — unless it took the focus
+                // out of the chat (docs/CHAT-PANE-DESIGN.md §5.4).
+                let was_chat = self.focus == Focus::Chat;
+                self.asks.guard = false;
                 let command = self.press(at, now, late);
+                if was_chat && self.focus != Focus::Chat {
+                    self.asks.leaving_chat(now, !self.chat.input.is_empty());
+                }
                 self.down = Some(Down {
                     cell: at,
                     said: self.notice != said,
@@ -2889,6 +3089,7 @@ impl App {
                 ok,
                 mode: app.mode_kind(),
                 dialog: app.dialog_opened(),
+                meaning: app.asks.meaning,
             });
             Command::None
         };
@@ -2945,7 +3146,7 @@ impl App {
             // answer as they do without them.
             Mode::Details { .. } if matches!(found, Some((_, Hit::Overlay))) => Command::None,
             Mode::Details { .. } | Mode::Normal => match found {
-                Some((rect, hit @ (Hit::Hint(_) | Hit::Activity(_)))) => {
+                Some((rect, hit @ (Hit::Hint(_) | Hit::Activity(_) | Hit::Chat(_)))) => {
                     hold(self, rect, hit, true)
                 }
                 Some((_, Hit::Fold(sel))) => {
@@ -2971,11 +3172,13 @@ impl App {
         // same dialog (a dialog opened meanwhile is never answered by a
         // press made before it: reviews N-C1-1, N-C2-1, N-C3-1).
         let (kind, dialog) = (self.mode_kind(), self.dialog_opened());
+        let meaning = self.asks.meaning;
         let held = self.held.take().filter(|h| {
             h.rect.contains(spot)
                 && here.as_ref() == Some(&h.hit)
                 && h.mode == kind
                 && h.dialog == dialog
+                && h.meaning == meaning
         });
         if let Some(down) = self.down.take() {
             // A click on a key or button that slipped is no drag (N-C2-3).
@@ -3013,7 +3216,11 @@ impl App {
                 }
                 Command::None
             }
+            Hit::Hint(k) | Hit::Activity(k) if self.focus == Focus::Chat => {
+                self.press_chat_hint(k, now)
+            }
             Hit::Hint(k) | Hit::Activity(k) => self.press_hint(k, now),
+            Hit::Chat(k) => self.press_chat(k, now),
             _ => Command::None,
         };
         self.note_mode_change(kind, now);
@@ -3060,17 +3267,17 @@ impl App {
     fn pane_click(&mut self, hit: Option<Hit>, double: bool, now: Instant) -> Command {
         match hit {
             Some(Hit::Row(sel)) => {
-                self.focus = Focus::Files;
+                self.move_focus(Focus::Files);
                 self.tree_follow = true;
                 self.select(sel);
             }
             Some(Hit::Link(i)) if i < self.links.len() => {
-                self.focus = Focus::View;
+                self.move_focus(Focus::View);
                 self.view_follow = true;
                 self.link = Some(i);
             }
             Some(Hit::Pane(f)) => {
-                self.focus = f;
+                self.move_focus(f);
                 return Command::None;
             }
             _ => return Command::None,
@@ -3190,6 +3397,7 @@ impl App {
                 let last = self.max_scroll() as isize;
                 self.scroll = (self.scroll as isize + 3 * by).clamp(0, last) as usize;
             }
+            Some(Focus::Chat) => self.scroll_chat(3 * by),
             None => {}
         }
     }
@@ -3227,7 +3435,7 @@ impl App {
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => {}
             Mode::Dialog(mut confirm) => {
-                return match confirm.dialog.on_key(key, now) {
+                return match confirm.dialog.on_key_in(key, now, self.asks.burst) {
                     Outcome::Stay => {
                         self.mode = Mode::Dialog(confirm);
                         Command::None
@@ -3507,11 +3715,16 @@ impl App {
                 return Command::None;
             }
         }
+        if self.focus == Focus::Chat && self.chat_on {
+            return self.chat_key(key, now);
+        }
         self.normal_key(key, ctrl_c, plain)
     }
 
     fn quit(&mut self) -> Command {
-        if self.running {
+        // A conversation is lost on the way out: asked, even with nothing
+        // running (docs/CHAT-PANE-DESIGN.md §5.4).
+        if self.running || self.chat.has_conversation() {
             self.open_dialog(Purpose::Quit);
             Command::None
         } else {
@@ -3547,10 +3760,8 @@ impl App {
                 None => self.notice = notice("nothing to try again"),
             },
             KeyCode::Tab | KeyCode::BackTab => {
-                self.focus = match self.focus {
-                    Focus::Files => Focus::View,
-                    Focus::View => Focus::Files,
-                }
+                let next = self.next_focus(key.code == KeyCode::Tab);
+                self.move_focus(next);
             }
             KeyCode::Char(']') => self.pending_bracket = Some(']'),
             KeyCode::Char('[') => self.pending_bracket = Some('['),
@@ -3599,6 +3810,7 @@ impl App {
             _ => match self.focus {
                 Focus::Files => self.tree_key(key.code),
                 Focus::View => self.view_key_press(key.code),
+                Focus::Chat => {}
             },
         }
         Command::None
@@ -3785,6 +3997,11 @@ impl App {
                     let mut word = at.record.outcome.replace('-', " ");
                     if waiting {
                         word = "waiting for your answer".into();
+                    }
+                    if at.record.outcome == "in-progress"
+                        && self.asks.table.contains_key(a.as_str())
+                    {
+                        word = "waiting for the chat".into();
                     }
                     let tags = attempt_tags(unit, at);
                     if !tags.is_empty() {
@@ -4691,6 +4908,7 @@ pub(crate) mod tests {
             expect_attempt: None,
             note: None,
             shown_digest: None,
+            chat: None,
         }
     }
 
@@ -4720,6 +4938,7 @@ pub(crate) mod tests {
             path: response.display().to_string(),
             resume: "harness migrate u-lib …".into(),
             args: None,
+            request_key: None,
         }));
         assert!(app
             .run
@@ -5259,6 +5478,7 @@ pub(crate) mod tests {
                 path: path.display().to_string(),
                 resume: String::new(),
                 args: None,
+                request_key: None,
             }));
             app.on_child_exit(ExitStatus::from_raw(1 << 8));
             app.load_now();
@@ -5452,6 +5672,7 @@ pub(crate) mod tests {
                 path: response.display().to_string(),
                 resume: String::new(),
                 args: None,
+                request_key: None,
             }));
             app.on_child_exit(ExitStatus::from_raw(1 << 8));
             app.load_now();
