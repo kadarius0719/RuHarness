@@ -76,6 +76,8 @@ pub const STALE_INPUTS: &[&str] = &["source", "rust-crate", "driver"];
 pub const ERROR_KINDS: &[&str] = &["locked", "stale", "awaiting", "interrupted", "harness"];
 /// A `promote` event's `result`.
 pub const PROMOTION_RESULTS: &[&str] = &["verified", "rolled-back"];
+/// `requester` (docs/CHAT-PANE-DESIGN.md §4.1).
+pub const REQUESTERS: &[&str] = &["chat"];
 
 /// `text` cut to at most `cap` bytes on a char boundary.
 fn cut(text: &str, cap: usize) -> &str {

@@ -151,6 +151,8 @@ pub enum Origin {
     Pipeline,
     /// A steer attempt (a reviewer's note guided it).
     Steered,
+    /// A chat-requested attempt (docs/CHAT-PANE-DESIGN.md §4.2).
+    Chat,
     /// A hand edit.
     Human,
 }
@@ -200,6 +202,7 @@ impl UnitState {
             UnitState::Failing => "failing".into(),
             UnitState::Migrated(Origin::Pipeline) => "migrated".into(),
             UnitState::Migrated(Origin::Steered) => "migrated (steered)".into(),
+            UnitState::Migrated(Origin::Chat) => "migrated (asked in chat)".into(),
             UnitState::Migrated(Origin::Human) => "migrated (by hand)".into(),
             UnitState::OriginUnknown => "verified, origin not recorded".into(),
             UnitState::Tried => "tried".into(),
@@ -417,6 +420,7 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
         return match &unit.provenance {
             ProvenanceView::Pipeline(_) => UnitState::Migrated(Origin::Pipeline),
             ProvenanceView::Steered(_) => UnitState::Migrated(Origin::Steered),
+            ProvenanceView::Chat(_) => UnitState::Migrated(Origin::Chat),
             ProvenanceView::Human { .. } => UnitState::Migrated(Origin::Human),
             ProvenanceView::None | ProvenanceView::Ambiguous(_) => UnitState::OriginUnknown,
         };

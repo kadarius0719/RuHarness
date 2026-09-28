@@ -489,6 +489,30 @@ Committed evidence per attempt (source only; `attempts/**/target/` is gitignored
   attempt's note). `Turn.kind` gains `steer` (the first turn of a seeded attempt) and
   `human` (the one turn of a hand edit). **The ledger defines no order over a unit's
   attempts** (content ids, no timestamps): every seed is named explicitly.
+- **The requester label** (docs/CHAT-PANE-DESIGN.md §4, 2026-09-27): additive, optional
+  `requester` — closed set `chat`: the act that created the attempt was asked for by a
+  chat agent (the cockpit's chat, harness-mcp's acts) and its model turns may be answered
+  there. A record carrying it is written with `schema_version: 2` (an older build refuses
+  it — `SchemaTooNew` — rather than rewriting it without the label or scoring it); a record
+  without it stays version 1, byte-identical. Readers accept both and refuse a record whose
+  label is not `chat` or whose version does not match its label. The id of a labelled
+  attempt mixes the label in: blake3(… ‖ request_key ‖ NUL ‖ `requester:chat`); unlabelled
+  ids are unchanged. A labelled attempt's `external` hand-offs live in
+  `migration/units/<u>/traces/chat/` (its live samples in `traces/chat/<id>/`), never the
+  flat `traces/` — the request key alone would collide with a blind attempt of the same
+  model. Samples inherit the label. Authorship: an unseeded labelled attempt is `chat`
+  (a seeded one stays steered or human); provenance buckets pipeline, steered, chat, human;
+  the benchmark reports a verified crate of chat provenance as a PROBLEM and replays chat
+  attempts (reported `(chat)`). `blind` (harness-core): unseeded, `external`, no label —
+  only the audited protocol answers or retries it.
+- `harness migrate … --requester=chat` records the label; `--answer=FILE
+  --answer-key=KEY` (`external` and `--requester=chat` only) files FILE as the response to
+  the pending request KEY: refused before anything is written unless the latest sample of
+  the derived base is in progress and labelled, `KEY.request.json` exists in its traces dir
+  (re-serializing to KEY, naming its model) and `KEY.response.json` does not; the adapter
+  writes it (a new file, never over one; counts 0) only when the attempt asks for exactly
+  KEY; a run that never asks for it ends `answer-unused` (exit 1), still reporting the
+  request it waits on.
 - A human attempt whose judge wrote no `candidate/` (a deny-scan red) keeps its two
   files verbatim in `attempts/<id>/edit/src/{logic.rs,ffi.rs}` — so every human
   attempt holds what its `response_hash` hashes (in `candidate/src/` otherwise).
@@ -557,8 +581,8 @@ Committed evidence per attempt (source only; `attempts/**/target/` is gitignored
 - **Prompt fixtures:** `crates/harness-llm/tests/prompt-fixtures/*.txt` hold HEAD's
   rendered requests per prompt branch; `cargo test` compares byte for byte
   (`RUHARNESS_UPDATE_PROMPT_FIXTURES=1` rewrites). A prompt edit lands with its
-  fixture diff. The attempt-id DERIVATION is frozen; prompt BYTES are locked, not
-  frozen.
+  fixture diff. The attempt-id DERIVATION is frozen for unlabelled attempts (a
+  `requester` is mixed in, below); prompt BYTES are locked, not frozen.
 - The `prompt truncated by server` and context-preflight checks apply to every
   stage (`observe` and `migrate`); a rejected call leaves no replayable trace.
 
@@ -1000,8 +1024,8 @@ bump the version. Every value is the ledger's own, verbatim.
 | `check` | `unit`, `name`, `passed`, `detail` — one per oracle check (`verify`, `migrate`'s final judged turn, a promotion — including a rolled-back one, whose verdict is not stored) |
 | `verdict` | `unit`, `green`, `path` — only after the verdict was stored at `path` (`verify`, migrate's final judged turn at `attempts/<id>/attempt-verdict.json`, a green promotion); a rolled-back promotion emits its `check` lines and `promote{result:"rolled-back"}` but no `verdict` |
 | `promote` | `unit`, `attempt`, `result` (`verified` / `rolled-back`) |
-| `awaiting` | `attempt` (null for triage), `path`, `resume` (the exact re-run command) |
-| `error` | `kind` (`locked` / `stale` / `awaiting` / `interrupted` / `harness`), `message`, `holder` (locked only) |
+| `awaiting` | `attempt` (null for triage), `path`, `resume` (the exact re-run command), `request_key` (the pending request's trace key, when the path names one) |
+| `error` | `kind` (`locked` / `stale` / `awaiting` / `interrupted` / `answer-unused` / `harness`), `message`, `holder` (locked only) |
 
 The kinds come from typed `harness_core::Error` variants (`Locked`, `Stale`,
 `Awaiting`, `Interrupted`), not from prose matching.

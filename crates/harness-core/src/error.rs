@@ -96,6 +96,16 @@ pub enum Error {
     /// (docs/CLI-HARDENING.md §3).
     #[error("interrupted: the harness was cancelled while a child process was running")]
     Interrupted,
+    /// `harness migrate --answer` ran, but the attempt never asked for the
+    /// answered hand-off: it asked for another request first, or finished
+    /// (docs/CHAT-PANE-DESIGN.md §4.3). Nothing was written with the answer.
+    #[error("answer unused: the run never asked for hand-off {key} ({why})")]
+    AnswerUnused {
+        /// The `--answer-key`.
+        key: String,
+        /// What the run did instead.
+        why: String,
+    },
 }
 
 impl Error {

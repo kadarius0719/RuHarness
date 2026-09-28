@@ -93,7 +93,9 @@ use crate::providers::{
     checked_complete, is_context_error, preflight, EnvLookup, ResolvedProvider,
 };
 use crate::triage::{encode_slice, is_clean_relative_path};
-use harness_core::attempts::{AttemptRecord, Turn, ATTEMPT_SCHEMA_NAME, ATTEMPT_SCHEMA_VERSION};
+use harness_core::attempts::{
+    schema_version_for, AttemptRecord, Turn, ATTEMPT_SCHEMA_NAME, EXTERNAL_KIND,
+};
 use harness_core::error::Error;
 use harness_core::facts::Facts;
 use harness_core::hash;
@@ -195,7 +197,9 @@ pub(crate) trait Stage {
     fn texts(&self) -> &StageTexts;
 
     /// Content-derived base id of an attempt whose first request has key
-    /// `first_key` (migrate ids are FROZEN; driver ids mix in the stage).
+    /// `first_key` (migrate ids are FROZEN for unlabelled attempts; a
+    /// `requester` is mixed in; driver ids mix in the stage).
+    #[allow(clippy::too_many_arguments)]
     fn attempt_id(
         &self,
         unit: &str,
@@ -204,6 +208,7 @@ pub(crate) trait Stage {
         provider_kind: &str,
         model: &str,
         first_key: &str,
+        requester: Option<&str>,
     ) -> String;
 
     /// Judge one parsed reply (`files` in spec order): pre-checks, writing
@@ -350,6 +355,11 @@ impl<'a> Job<'a> {
         let params = self.params;
         let provider = params.provider;
         let texts = self.stage.texts();
+        if params.requester.is_some() && texts.stage.is_some() {
+            return Err(Error::Invariant(
+                "a driver attempt is never chat-requested".into(),
+            ));
+        }
         let first = self.first_request()?;
         // Before any record exists; `checked_complete` repeats it per call.
         preflight(provider, &first)?;
@@ -374,7 +384,14 @@ impl<'a> Job<'a> {
             &provider.kind,
             params.model,
             &first_key,
+            params.requester,
         );
+        if let Some(key) = params.answer_key {
+            // Read-only: listing and loading, never a replay or a judge —
+            // refused before anything is written (docs/CHAT-PANE-DESIGN.md
+            // §4.3).
+            self.check_answer(&base_id, key)?;
+        }
         let id = if provider.live {
             live_sample_id(&self.attempts_dir(), &base_id, params.retry)?
         } else {
@@ -414,7 +431,7 @@ impl<'a> Job<'a> {
         // From here on the attempt dir is a new or a never-finished one.
         let mut record = AttemptRecord {
             schema: ATTEMPT_SCHEMA_NAME.to_string(),
-            schema_version: ATTEMPT_SCHEMA_VERSION,
+            schema_version: schema_version_for(params.requester),
             id: id.clone(),
             unit: self.unit.id.clone(),
             stage: texts.stage.map(str::to_string),
@@ -433,6 +450,7 @@ impl<'a> Job<'a> {
             steer_note: self.steer().map(|seed| seed.note.clone()),
             seed_verdict: self.steer().map(|seed| seed.verdict_hash.clone()),
             note: None,
+            requester: params.requester.map(str::to_string),
         };
         let work_rel = vec![texts.attempts_subdir.to_string(), id.clone()];
         let work_dir = prepare_dir(self.ledger, &self.unit.id, &work_rel)?;
@@ -646,6 +664,7 @@ impl<'a> Job<'a> {
             &recorded.provider_kind,
             &recorded.model,
             &recorded.turns[0].request_key,
+            recorded.requester.as_deref(),
         );
         if derived != base {
             return Err(integrity(format!(
@@ -844,6 +863,46 @@ impl<'a> Job<'a> {
     /// FIRST turn has the request key computed from the tree — a finished
     /// one before an `in-progress` one, then an exact model match, then the
     /// lowest sample of the lowest id.
+    /// `--answer`'s preconditions, by listing and loading only
+    /// (docs/CHAT-PANE-DESIGN.md §4.3): the latest sample of `base` (the base
+    /// itself when it has none) exists, is in progress and labelled; its
+    /// traces dir holds `<key>.request.json` naming its model and
+    /// re-serializing to `key`, and no `<key>.response.json`. `--answer`
+    /// never creates an attempt or a sample, and never files an answer over
+    /// one.
+    fn check_answer(&self, base: &str, key: &str) -> Result<(), Error> {
+        let refuse = |why: String| Error::Invariant(format!("--answer refused: {why}"));
+        if self.params.requester.is_none() || self.params.provider.kind != EXTERNAL_KIND {
+            return Err(refuse(
+                "only an `external` run with --requester=chat files an answer".into(),
+            ));
+        }
+        let attempts_dir = self.attempts_dir();
+        let latest = sample_ids(&attempts_dir, base)?
+            .last()
+            .map(|(_, id)| id.clone())
+            .unwrap_or_else(|| base.to_string());
+        let record = load_record(&attempts_dir.join(&latest), &latest)?
+            .ok_or_else(|| refuse(format!("attempt {base} has no record: nothing to continue")))?;
+        if record.outcome != IN_PROGRESS {
+            return Err(refuse(format!(
+                "attempt {latest} is not in progress ({})",
+                printable(&record.outcome, 32)
+            )));
+        }
+        if record.requester.as_deref() != self.params.requester {
+            return Err(refuse(format!("attempt {latest} is not labelled chat")));
+        }
+        let request = harness_core::traces::load_pending(self.params.traces_dir, key)
+            .map_err(|e| refuse(format!("the hand-off {key}: {e}")))?;
+        if request.model != record.model {
+            return Err(refuse(format!(
+                "the hand-off {key} names another model than attempt {latest}"
+            )));
+        }
+        Ok(())
+    }
+
     fn find_recorded(&self, first_key: &str) -> Result<AttemptRecord, Error> {
         let texts = self.stage.texts();
         let first_kind = texts.first_kind;
@@ -871,14 +930,32 @@ impl<'a> Job<'a> {
             }
             // Evidence-first: a pinned attempt is verified from its own
             // recorded requests, whatever HEAD would ask today.
-            return load_record(&attempts_dir.join(pinned), pinned)?
+            let record = load_record(&attempts_dir.join(pinned), pinned)?
                 .filter(|record| record.unit == unit_id)
                 .ok_or_else(|| {
                     Error::Invariant(format!(
                         "unit `{unit_id}` has no recorded attempt `{pinned}` under {} — {explain}",
                         attempts_dir.display()
                     ))
-                });
+                })?;
+            // Its traces live where its label puts them: the run must read
+            // them there (docs/CHAT-PANE-DESIGN.md §4.1).
+            if record.requester.as_deref() != self.params.requester {
+                return Err(Error::Invariant(format!(
+                    "attempt {pinned} was {} — replay it {}",
+                    if record.requester.is_some() {
+                        "requested by chat"
+                    } else {
+                        "not requested by chat"
+                    },
+                    if record.requester.is_some() {
+                        "with --requester=chat"
+                    } else {
+                        "without --requester"
+                    }
+                )));
+            }
+            return Ok(record);
         }
 
         let entries = match std::fs::read_dir(&attempts_dir) {
@@ -895,7 +972,10 @@ impl<'a> Job<'a> {
                 continue;
             }
             if let Some(record) = load_record(&entry.path(), &name)? {
-                if record.unit == unit_id && matches_key(&record) {
+                if record.unit == unit_id
+                    && matches_key(&record)
+                    && record.requester.as_deref() == self.params.requester
+                {
                     candidates.push(record);
                 } else if record.unit == unit_id && record.outcome != IN_PROGRESS {
                     let stale =

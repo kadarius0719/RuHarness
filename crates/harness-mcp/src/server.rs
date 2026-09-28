@@ -330,7 +330,7 @@ impl<W: Write> Server<W> {
             .filter(|t| t.is_string() || t.is_i64() || t.is_u64())
             .cloned();
         match tool_name {
-            "harness_status" | "harness_unit" => {
+            "harness_status" | "harness_unit" | "harness_request" => {
                 let (structured, is_error) = match self.read(tool_name, &args) {
                     Ok(v) => (v, false),
                     Err(refusal) => (refusal.to_value(), true),
@@ -388,6 +388,19 @@ impl<W: Write> Server<W> {
                 arg(args, "after"),
             )
             .map_err(Refusal::refused)
+        } else if tool == "harness_request" {
+            let page = args
+                .get("page")
+                .and_then(Value::as_u64)
+                .map_or(1, |n| n.max(1));
+            reads::request(
+                &target,
+                arg(args, "unit").unwrap_or_default(),
+                arg(args, "attempt").unwrap_or_default(),
+                arg(args, "request_key").unwrap_or_default(),
+                page,
+            )
+            .map_err(Refusal::refused)
         } else {
             let unit = arg(args, "unit").unwrap_or_default();
             reads::unit(&snapshot, unit, arg(args, "attempt"), arg(args, "symbol"))
@@ -396,7 +409,8 @@ impl<W: Write> Server<W> {
     }
 
     /// The argv and the act of a call — or why not. `harness_answer` writes
-    /// the response file here, before its resume is spawned.
+    /// its answer file here (outside the ledger), for the resume's
+    /// `--answer`.
     fn prepare(
         &mut self,
         tool: &'static str,
@@ -406,10 +420,10 @@ impl<W: Write> Server<W> {
         let posed = |target: PathBuf, model: Option<&str>| Posed {
             tool,
             arguments: Value::Object(args.clone()),
-            unit: unit.to_string(),
             target,
             answering_model: model.map(str::to_string),
             finished_before: None,
+            answer_file: None,
         };
         match tool {
             "harness_steer" => {
@@ -539,6 +553,18 @@ impl<W: Write> Server<W> {
                     .into());
                 };
                 let h = self.hand_offs[ix].clone();
+                // The answer is for the request the caller read: the key the
+                // hand-off named, never whatever the attempt waits on next
+                // (docs/CHAT-PANE-DESIGN.md §3.4, §R SAFE-3).
+                let key = acts::request_key_of(&h.response.to_string_lossy()).map(str::to_string);
+                if key.is_none() || arg(args, "request_key") != key.as_deref() {
+                    return Err(Refusal::refused(format!(
+                        "this hand-off waits on request {}: answer that one (read it with \
+                         harness_request), with its `request_key`",
+                        key.as_deref().unwrap_or("?")
+                    ))
+                    .into());
+                }
                 let expected = h.posed.answering_model.as_deref().unwrap_or_default();
                 if arg(args, "model") != Some(expected) {
                     return Err(Refusal::refused(format!(
@@ -548,14 +574,21 @@ impl<W: Write> Server<W> {
                     .into());
                 }
                 Self::preflight(&h.posed.target)?;
-                acts::write_response(
-                    &h.posed.target,
-                    &h.posed.unit,
-                    &h.response,
-                    arg(args, "text").unwrap_or_default(),
-                )?;
+                // Filed by the CLI (`--answer`): harness-mcp writes nothing in
+                // the ledger (docs/CHAT-PANE-DESIGN.md §4.4).
+                let file = acts::answer_file(arg(args, "text").unwrap_or_default())?;
+                let mut argv = acts::strip_answer(&h.argv);
+                let mut flag = OsString::from("--answer=");
+                flag.push(&file);
+                argv.push(flag);
+                argv.push(OsString::from(format!(
+                    "--answer-key={}",
+                    key.unwrap_or_default()
+                )));
                 self.hand_offs.remove(ix);
-                Ok((h.argv, h.posed))
+                let mut posed = h.posed;
+                posed.answer_file = Some(file);
+                Ok((argv, posed))
             }
             _ => {
                 let target = self.target(args)?;
@@ -721,6 +754,9 @@ impl<W: Write> Server<W> {
             }
         ));
         // The hand-off it now awaits, if any, is this server's to answer.
+        if let Some(file) = &f.posed.answer_file {
+            let _ = std::fs::remove_file(file);
+        }
         if let Some((attempt, response)) = f.collected.awaited() {
             hand_offs.retain(|h| !(h.attempt == attempt && h.posed.target == f.posed.target));
             if hand_offs.len() == MAX_HAND_OFFS {
@@ -729,8 +765,13 @@ impl<W: Write> Server<W> {
             hand_offs.push(HandOff {
                 attempt: attempt.to_string(),
                 response: PathBuf::from(response),
-                argv: f.running.argv().to_vec(),
-                posed: f.posed.clone(),
+                // The posing act's run shape: a later answer is appended to
+                // it, never repeated.
+                argv: acts::strip_answer(f.running.argv()),
+                posed: Posed {
+                    answer_file: None,
+                    ..f.posed.clone()
+                },
             });
         }
         if f.cancelled {
@@ -829,7 +870,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":"l","method":"tools/list"}"#,
         );
         assert_eq!(list[0]["id"], "l");
-        assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 6);
+        assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 7);
         assert_eq!(
             say(&mut s, r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#)[0]["result"],
             json!({})
@@ -1115,7 +1156,8 @@ mod tests {
             &mut s,
             1,
             "harness_answer",
-            json!({"attempt": "a-000000000001", "model": "m", "text": "reply"}),
+            json!({"attempt": "a-000000000001", "request_key": "0123abcd", "model": "m",
+                   "text": "reply"}),
         );
         assert_eq!(r["result"]["isError"], true);
         assert!(structured(&r)["error"]["message"]["text"]
@@ -1389,22 +1431,30 @@ echo '{"k":"result","exit":0}'"#;
     }
 
     /// `harness_answer` end to end with a fake harness: the act awaits, the
-    /// server remembers the hand-off it posed; another model is refused and
-    /// nothing is written; the named model's answer is written (counts 0)
-    /// and the SAME argv resumes it; the hand-off is then forgotten.
+    /// server remembers the hand-off it posed; another model or another key
+    /// is refused; the named model's answer goes to the CLI as `--answer`
+    /// (a private file outside the ledger, removed afterwards) with the
+    /// hand-off's `--answer-key`, appended to the SAME posing argv —
+    /// harness-mcp writes nothing under the target (docs/CHAT-PANE-DESIGN.md
+    /// §4.4); the hand-off is then forgotten.
     #[test]
     fn a_posed_hand_off_is_answered_by_its_model_and_resumed() {
         let _guard = crate::policy::tests::TmpDir::new("ans");
         let base = _guard.0.clone();
         let t = crate::policy::tests::zopfli_copy(&base.join("root/zopfli"));
-        let traces = t.join("migration/units/u001-katajainen/traces");
+        let traces = t.join("migration/units/u001-katajainen/traces/chat");
         std::fs::create_dir_all(&traces).unwrap();
         let response = traces.join("0123abcd.response.json");
         let fake = fake_harness(
             "answer",
             &format!(
                 r#"echo "$@" >> "$0.argv"
-if [ -e '{r}' ]; then
+for a in "$@"; do
+  case "$a" in
+    --answer=*) cp "${{a#--answer=}}" "$0.answered" ;;
+  esac
+done
+if [ -e "$0.answered" ]; then
   echo '{{"k":"attempt","unit":"u","id":"a-00000000000a","outcome":"green","provider":"external","model":"m","promoted":false,"promotion":""}}'
   exit 0
 fi
@@ -1425,16 +1475,18 @@ exit 1"#,
         let r = response_to(&seen, 1).unwrap();
         assert_eq!(r["result"]["isError"], false, "{r}");
         assert_eq!(structured(r)["awaiting"]["attempt"], "a-00000000000a");
+        assert_eq!(structured(r)["awaiting"]["request_key"], "0123abcd");
         assert_eq!(s.hand_offs.len(), 1);
-        // Another model: refused, nothing written, still remembered.
-        // `answer_with` carries the arguments to pass back, the target
-        // included (a hand-off is the posing target's).
+        // `answer_with` carries the arguments to pass back: the attempt, the
+        // request key, the model, the target (a hand-off is the posing
+        // target's).
         let with = &structured(r)["awaiting"]["answer_with"];
         assert_eq!(with["tool"], "harness_answer");
         assert_eq!(
             with["arguments"]["model"], "claude-opus-5-5",
             "plain: passed back as is"
         );
+        assert_eq!(with["arguments"]["request_key"], "0123abcd");
         assert_eq!(with["arguments"]["target"], steer["target"]);
         let posed_args = with["arguments"].clone();
         let answer = |model: &str| {
@@ -1448,7 +1500,8 @@ exit 1"#,
             &mut s,
             9,
             "harness_answer",
-            json!({"attempt": "a-00000000000a", "model": "claude-opus-5-5", "text": "x"}),
+            json!({"attempt": "a-00000000000a", "request_key": "0123abcd",
+                   "model": "claude-opus-5-5", "text": "x"}),
         );
         assert!(structured(&r)["error"]["message"]["text"]
             .as_str()
@@ -1460,7 +1513,14 @@ exit 1"#,
             .as_str()
             .unwrap()
             .contains("claude-opus-5-5"));
-        assert!(!response.exists());
+        // Another request key: refused (the answer is for the request read).
+        let mut other_key = answer("claude-opus-5-5");
+        other_key["request_key"] = json!("fedcba98");
+        let r = call(&mut s, 7, "harness_answer", other_key);
+        assert!(structured(&r)["error"]["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("waits on request 0123abcd"));
         assert_eq!(s.hand_offs.len(), 1);
         // A target spoiled meanwhile: refused before anything is written.
         let linked = t.join("harness.toml");
@@ -1469,10 +1529,9 @@ exit 1"#,
         std::os::unix::fs::symlink(&outside, &linked).unwrap();
         let r = call(&mut s, 8, "harness_answer", answer("claude-opus-5-5"));
         assert_eq!(structured(&r)["error"]["kind"], "unreadable", "{r}");
-        assert!(!response.exists());
         std::fs::remove_file(&linked).unwrap();
         std::fs::rename(&outside, &linked).unwrap();
-        // Its model: written, resumed with the same argv, green.
+        // Its model and key: the CLI gets the answer, green.
         assert!(say(
             &mut s,
             &call_line(3, "harness_answer", answer("claude-opus-5-5"), None)
@@ -1487,17 +1546,35 @@ exit 1"#,
             "harness_steer",
             "the posing act's result"
         );
-        let written: Value =
-            serde_json::from_str(&std::fs::read_to_string(&response).unwrap()).unwrap();
         assert_eq!(
-            written,
-            json!({"text": "src/logic.rs ...", "input_tokens": 0, "output_tokens": 0,
-                   "stop_reason": "end_turn"})
+            std::fs::read_to_string(format!("{}.answered", fake.display())).unwrap(),
+            "src/logic.rs ...",
+            "the CLI got the answer"
+        );
+        assert!(
+            !response.exists(),
+            "harness-mcp writes nothing in the ledger"
         );
         let argvs = std::fs::read_to_string(format!("{}.argv", fake.display())).unwrap();
         let lines: Vec<&str> = argvs.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], lines[1], "the same argv resumes it");
+        let (posing, resume) = (lines[0], lines[1]);
+        assert!(posing.contains("--requester=chat"), "{posing}");
+        let rest = resume
+            .strip_prefix(posing)
+            .unwrap_or_else(|| panic!("the resume is the posing argv plus the answer: {resume}"));
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        assert_eq!(words.len(), 2, "{rest}");
+        let file = words[0].strip_prefix("--answer=").unwrap();
+        assert_eq!(words[1], "--answer-key=0123abcd");
+        assert!(
+            !std::path::Path::new(file).exists(),
+            "the answer file is removed once the act ends"
+        );
+        assert!(
+            !file.starts_with(&*t.to_string_lossy()),
+            "outside the target"
+        );
         assert!(s.hand_offs.is_empty(), "answered: forgotten");
         let r = call(&mut s, 4, "harness_answer", answer("claude-opus-5-5"));
         assert_eq!(r["result"]["isError"], true);
@@ -1518,7 +1595,8 @@ exit 1"#,
         std::fs::write(
             dir.join("attempt.json"),
             json!({
-                "schema": "ruharness-attempt", "schema_version": 1, "id": "a-0000000000aa",
+                "schema": "ruharness-attempt", "schema_version": 2, "id": "a-0000000000aa",
+                "requester": "chat",
                 "unit": "u001-katajainen", "provider": "external", "provider_kind": "external",
                 "model": "claude-opus-5-5", "prompt_digest": "", "unit_source": "s",
                 "driver": "d", "toolchain": [], "outcome": "green", "turns": [],

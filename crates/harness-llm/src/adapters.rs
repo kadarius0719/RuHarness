@@ -410,7 +410,7 @@ fn parse_messages_response(body: &str) -> Result<CompletionResponse, Error> {
 }
 
 /// Largest trace file [`TraceAdapter::load_recorded`] reads.
-pub const MAX_TRACE_BYTES: u64 = 16 * 1024 * 1024;
+pub use harness_core::traces::MAX_TRACE_BYTES;
 
 /// Trace-based adapter: replays recorded responses, or (in `external` mode)
 /// writes request files for an out-of-band model runtime to answer.
@@ -423,6 +423,37 @@ pub const MAX_TRACE_BYTES: u64 = 16 * 1024 * 1024;
 pub struct TraceAdapter {
     dir: PathBuf,
     external: bool,
+    answer: Option<std::sync::Arc<AnswerSlot>>,
+}
+
+/// The answer to ONE pending hand-off (`harness migrate --answer
+/// --answer-key`, docs/CHAT-PANE-DESIGN.md §4.3): the external adapter files
+/// it as `<key>.response.json` only when asked for exactly `key` and no
+/// response exists; the caller reads [`AnswerSlot::used`] after the run (an
+/// answer the run never asked for is `answer-unused`).
+#[derive(Debug)]
+pub struct AnswerSlot {
+    /// The request key the answer is for (8 lowercase hex).
+    pub key: String,
+    /// The reply text.
+    pub text: String,
+    used: std::sync::atomic::AtomicBool,
+}
+
+impl AnswerSlot {
+    /// An answer for `key`.
+    pub fn new(key: impl Into<String>, text: impl Into<String>) -> AnswerSlot {
+        AnswerSlot {
+            key: key.into(),
+            text: text.into(),
+            used: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Whether the run filed it.
+    pub fn used(&self) -> bool {
+        self.used.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 impl TraceAdapter {
@@ -432,79 +463,35 @@ impl TraceAdapter {
         TraceAdapter {
             dir: dir.into(),
             external,
+            answer: None,
+        }
+    }
+
+    /// An `external` adapter over `dir` holding `answer` for one hand-off.
+    pub fn with_answer(
+        dir: impl Into<PathBuf>,
+        answer: std::sync::Arc<AnswerSlot>,
+    ) -> TraceAdapter {
+        TraceAdapter {
+            dir: dir.into(),
+            external: true,
+            answer: Some(answer),
         }
     }
 
     /// Trace key: first 8 lowercase hex of blake3 over the request's
-    /// canonical JSON serialization — `serde_json::to_string(req)`, i.e.
-    /// compact, struct field order (`model`, `system`, `user`,
-    /// `max_tokens`). Deterministic; any change to any field changes it.
+    /// canonical JSON serialization ([`harness_core::traces::request_key`]).
     pub fn request_key(req: &CompletionRequest) -> Result<String, Error> {
-        let canonical = serde_json::to_string(req)
-            .map_err(|e| Error::Invariant(format!("serialize completion request: {e}")))?;
-        let hex = blake3::hash(canonical.as_bytes()).to_hex().to_string();
-        Ok(hex[..8].to_string())
+        harness_core::traces::request_key(req)
     }
 
     /// Read the RECORDED request/response pair stored under `key` in `dir`
-    /// — the evidence-first replay's only way to a recorded turn
-    /// (docs/REPLAY-DESIGN.md §R R-2). Read-only: never writes, never files
-    /// a hand-off. `key` must be exactly 8 lowercase hex digits before it
-    /// becomes a path component; the dir and both files must be real
-    /// (non-symlink) entries of bounded size; the request must re-serialize
-    /// to `key`.
+    /// ([`harness_core::traces::load_recorded`], where the checks live).
     pub fn load_recorded(
         dir: &Path,
         key: &str,
     ) -> Result<(CompletionRequest, CompletionResponse), Error> {
-        if key.len() != 8
-            || !key
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
-            return Err(Error::Invariant(format!(
-                "recorded request key {:?} is not 8 lowercase hex digits",
-                key.chars().take(16).collect::<String>()
-            )));
-        }
-        let regular = |path: &Path| -> Result<(), Error> {
-            let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
-            let is_dir = path == dir && meta.file_type().is_dir();
-            if !(meta.file_type().is_file() || is_dir) {
-                return Err(Error::Invariant(format!(
-                    "{} is not a regular file or directory (symlinks are refused)",
-                    path.display()
-                )));
-            }
-            if meta.file_type().is_file() && meta.len() > MAX_TRACE_BYTES {
-                return Err(Error::Invariant(format!(
-                    "{} exceeds {MAX_TRACE_BYTES} bytes",
-                    path.display()
-                )));
-            }
-            Ok(())
-        };
-        regular(dir)?;
-        let read = |ext: &str| -> Result<(PathBuf, String), Error> {
-            let path = dir.join(format!("{key}.{ext}.json"));
-            regular(&path)?;
-            let text = std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
-            Ok((path, text))
-        };
-        let (req_path, req_text) = read("request")?;
-        let request: CompletionRequest =
-            serde_json::from_str(&req_text).map_err(|e| Error::parse(&req_path, e.to_string()))?;
-        let actual = Self::request_key(&request)?;
-        if actual != key {
-            return Err(Error::Invariant(format!(
-                "{} hashes to request key {actual}, not {key}: the recorded request was altered",
-                req_path.display()
-            )));
-        }
-        let (resp_path, resp_text) = read("response")?;
-        let response: CompletionResponse = serde_json::from_str(&resp_text)
-            .map_err(|e| Error::parse(&resp_path, e.to_string()))?;
-        Ok((request, response))
+        harness_core::traces::load_recorded(dir, key)
     }
 
     /// The `<key>.request.json` path for a request.
@@ -555,6 +542,21 @@ impl ProviderAdapter for TraceAdapter {
                 .map_err(|e| Error::parse(&response_path, e.to_string()));
         }
         if self.external {
+            if let Some(answer) = &self.answer {
+                if !answer.used() && Self::request_key(req)? == answer.key {
+                    // Filed whole or not at all, never over a response (a
+                    // no-clobber link); then read back like any response.
+                    let response = CompletionResponse {
+                        text: answer.text.clone(),
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        stop_reason: "end_turn".to_string(),
+                    };
+                    harness_core::traces::write_new_response(&self.dir, &answer.key, &response)?;
+                    answer.used.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return Ok(response);
+                }
+            }
             write_pretty(&Self::request_path(&self.dir, req)?, req)?;
             // Typed (docs/CLI-HARDENING.md §4): the trajectory fills in the
             // attempt id; the CLI maps it to its `awaiting` event.

@@ -181,7 +181,8 @@ fn hand_offs_busy_cancel_and_eof_end_to_end() {
     c.call(
         3,
         "harness_answer",
-        json!({"attempt": base, "model": "claude-sonnet-5", "text": reply_text()}),
+        json!({"attempt": base, "request_key": "0123abcd", "model": "claude-sonnet-5",
+               "text": reply_text()}),
         None,
     );
     let (r, _) = c.response(&json!(3), 30);
@@ -239,12 +240,49 @@ fn hand_offs_busy_cancel_and_eof_end_to_end() {
     assert_eq!(aw["answering_model"]["text"], "claude-opus-5-5");
     let request = aw["request_path"]["text"].as_str().unwrap();
     assert!(Path::new(request).is_file(), "{request}");
+    // A chat's hand-offs live apart from the blind protocol's
+    // (docs/CHAT-PANE-DESIGN.md §4.1).
+    assert!(
+        Path::new(request).starts_with(unit_dir.join("traces/chat")),
+        "{request}"
+    );
+    let key = aw["request_key"]
+        .as_str()
+        .expect("the request key")
+        .to_string();
+    assert_eq!(aw["answer_with"]["arguments"]["request_key"], key.as_str());
+    // The chat reads the request it answers.
+    c.call(
+        40,
+        "harness_request",
+        json!({"unit": unit, "attempt": steered, "request_key": key}),
+        None,
+    );
+    let (r, _) = c.response(&json!(40), 30);
+    assert!(!is_error(&r), "{r}");
+    let read = structured(&r);
+    assert_eq!(read["page"], 1);
+    assert!(read["user"]["untrusted"].is_string(), "fenced: {read}");
+    assert!(read["system"]["text"]
+        .as_str()
+        .is_some_and(|t| !t.is_empty()));
+    // Never a blind attempt's request.
+    c.call(
+        41,
+        "harness_request",
+        json!({"unit": unit, "attempt": base, "request_key": key}),
+        None,
+    );
+    let (r, _) = c.response(&json!(41), 30);
+    assert!(is_error(&r));
+    assert!(error_text(&r).contains("not asked for by a chat"), "{r}");
     assert!(s["argv"]["text"].as_str().unwrap().contains("--no-promote"));
     // Answered by another model: refused; nothing written.
     c.call(
         5,
         "harness_answer",
-        json!({"attempt": steered, "model": "someone-else", "text": reply_text()}),
+        json!({"attempt": steered, "request_key": key, "model": "someone-else",
+               "text": reply_text()}),
         None,
     );
     let (r, _) = c.response(&json!(5), 30);
@@ -253,12 +291,13 @@ fn hand_offs_busy_cancel_and_eof_end_to_end() {
     let response = aw["response_path"]["text"].as_str().unwrap().to_string();
     assert!(!Path::new(&response).exists());
 
-    // Answered, with a token: the server writes the response and resumes
-    // the SAME attempt to green; progress seen.
+    // Answered, with a token: the CLI files the answer (`--answer`) and
+    // resumes the SAME attempt to green; progress seen.
     c.call(
         6,
         "harness_answer",
-        json!({"attempt": steered, "model": "claude-opus-5-5", "text": reply_text()}),
+        json!({"attempt": steered, "request_key": key, "model": "claude-opus-5-5",
+               "text": reply_text()}),
         Some("tok-6"),
     );
     let (r, before) = c.response(&json!(6), 300);
@@ -285,7 +324,8 @@ fn hand_offs_busy_cancel_and_eof_end_to_end() {
     c.call(
         7,
         "harness_answer",
-        json!({"attempt": steered, "model": "claude-opus-5-5", "text": reply_text()}),
+        json!({"attempt": steered, "request_key": key, "model": "claude-opus-5-5",
+               "text": reply_text()}),
         None,
     );
     let (r, before) = c.response(&json!(7), 30);
@@ -301,6 +341,7 @@ fn hand_offs_busy_cancel_and_eof_end_to_end() {
     let status = structured(&r);
     let a = attempt_of(&status, &steered);
     assert_eq!(a["authorship"], json!({"kind": "steered"}));
+    assert_eq!(a["requester"], "chat");
     assert_eq!(a["seeded_from"], base.as_str());
     assert_eq!(a["bound"], true);
     assert_eq!(a["has_candidate"], true);

@@ -262,6 +262,8 @@ seed) — a mismatch, or a seed verdict modified since, is an integrity error (�
 derivation is frozen and unchanged: its last input is the first turn's request key, so a
 steer attempt never collides with a translate attempt, and the same steer (seed, note,
 inputs, provider kind, model) is the same attempt — `--retry` samples it like any other.
+(2026-09-27: a chat-requested attempt mixes its `requester` into the id —
+docs/CHAT-PANE-DESIGN.md §4.1.)
 
 **Engine** (harness-llm): the job's first turn is a property, `FirstTurn::{Translate,
 Steer{seed, note}}`. `Job::run` renders the first request from it. The verification paths

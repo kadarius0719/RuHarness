@@ -626,6 +626,7 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
                     None
                 }
                 attempts::Provenance::Steered(_)
+                | attempts::Provenance::Chat(_)
                 | attempts::Provenance::Human(_)
                 | attempts::Provenance::None => None,
             };
@@ -1200,7 +1201,8 @@ fn unverified_candidate<'a>(
 /// The problem a VERIFIED case's provenance raises, if any
 /// (docs/TUI-DESIGN.md §5.2, §R2): the benchmark scores unassisted pipeline
 /// output only — a crate promoted from a hand edit (or from a steer attempt
-/// of one), or from a steer attempt, is never counted as the pipeline's; a
+/// of one), from a steer attempt, or from a chat-requested attempt
+/// (docs/CHAT-PANE-DESIGN.md §4.2), is never counted as the pipeline's; a
 /// crate no recorded attempt produced has no provenance to report (R-5).
 /// Ambiguous provenance is reported where it is found, whatever the
 /// verification state.
@@ -1234,6 +1236,11 @@ fn verified_provenance_problem(
              a reviewer's note guided it) — not unassisted pipeline provenance",
             shown(&r.id),
             shown(r.seeded_from.as_deref().unwrap_or("?"))
+        )),
+        attempts::Provenance::Chat(r) => Some(format!(
+            "{case_path}: the verified crate was promoted from chat-requested attempt {} — not \
+             unassisted pipeline provenance",
+            shown(&r.id)
         )),
         attempts::Provenance::None => Some(format!(
             "{case_path}: the verified crate matches no green migrate attempt (provenance unknown)"
@@ -1336,8 +1343,17 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                         results.insert(rec.id.clone(), ReplayResult::Skipped(why));
                         continue;
                     }
+                    // A chat-requested attempt's traces live in the unit's
+                    // `traces/chat/` (docs/CHAT-PANE-DESIGN.md §4.1): it is
+                    // replayed from there, its label re-derived with its id.
+                    let traces = match rec.requester {
+                        Some(_) => traces.join(attempts::CHAT_TRACES),
+                        None => traces.clone(),
+                    };
                     let resolved = harness_llm::providers::resolve("replay", &traces)?;
                     let params = harness_llm::MigrateParams {
+                        requester: rec.requester.as_deref(),
+                        answer_key: None,
                         provider: &resolved,
                         model: &rec.model,
                         max_tokens,
@@ -1444,9 +1460,11 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                             if !drifted.is_empty() {
                                 drifted_attempts += 1;
                             }
+                            let chat = records.iter().any(|r| r.id == id && r.requester.is_some());
                             out(format!(
-                                "bench replay: {} {stage} {id} reproduces; prompt: {}",
+                                "bench replay: {} {stage} {id}{} reproduces; prompt: {}",
                                 case.path,
+                                if chat { " (chat)" } else { "" },
                                 harness_llm::conformance(drifted)
                             ));
                         }
@@ -1481,6 +1499,7 @@ mod tests {
 
     fn rec(id: &str, kind: &str) -> AttemptRecord {
         AttemptRecord {
+            requester: None,
             schema: ATTEMPT_SCHEMA_NAME.into(),
             schema_version: 1,
             id: id.into(),
@@ -1710,6 +1729,16 @@ mod tests {
             text.contains("steer attempt a-s (seeded from a-m") && text.contains("unassisted"),
             "{text}"
         );
+        // A chat-requested attempt (docs/CHAT-PANE-DESIGN.md §4.2): never
+        // unassisted pipeline output, however it was answered.
+        let mut chat = judged("a-c", "external", "green", "green", "blake3:c");
+        chat.requester = Some(attempts::REQUESTER_CHAT.into());
+        chat.schema_version = 2;
+        let text = problem(std::slice::from_ref(&chat), Verification::Verified).unwrap();
+        assert!(
+            text.contains("chat-requested attempt a-c") && text.contains("unassisted"),
+            "{text}"
+        );
         // No attempt produced it: provenance unknown.
         let text = problem(&[], Verification::Verified).unwrap();
         assert!(text.contains("provenance unknown"), "{text}");
@@ -1752,10 +1781,15 @@ mod tests {
         assert_eq!(outcome(&[model_build.clone(), human_green.clone()]), "red");
         assert_eq!(outcome(std::slice::from_ref(&human_green)), "");
         assert_eq!(
-            outcome(&[model_build, seeded(human_green, "a-3")]),
+            outcome(&[model_build.clone(), seeded(human_green, "a-3")]),
             "red",
             "a steered green does not make it mixed"
         );
+        // A chat-requested attempt counts no more than a steered one.
+        let mut chat_green = judged("a-8", "external", "green", "green", "blake3:q");
+        chat_green.requester = Some(attempts::REQUESTER_CHAT.into());
+        assert_eq!(outcome(&[model_build, chat_green.clone()]), "red");
+        assert_eq!(pick(std::slice::from_ref(&chat_green)), None);
     }
 
     /// §R2 8: `--replay` skips a hand edit (nothing to replay) and stale

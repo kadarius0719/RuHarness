@@ -8,8 +8,30 @@ use crate::ledger::Ledger;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Version of the attempt schema this build reads and writes.
+/// Version of the attempt schema a record WITHOUT a `requester` is written
+/// with — every record written before the label existed, byte-identical.
 pub const ATTEMPT_SCHEMA_VERSION: u64 = 1;
+/// Version a record carrying a `requester` is written with
+/// (docs/CHAT-PANE-DESIGN.md §4.1): an older build refuses it
+/// (`SchemaTooNew`) rather than rewriting it without the label or scoring
+/// it as pipeline output.
+pub const ATTEMPT_SCHEMA_VERSION_LABELLED: u64 = 2;
+/// The highest attempt schema version this build reads.
+pub const ATTEMPT_SCHEMA_MAX_READ: u64 = ATTEMPT_SCHEMA_VERSION_LABELLED;
+/// The one `requester` value (docs/CHAT-PANE-DESIGN.md §4.1): the act that
+/// created the attempt was asked for by a chat agent, and its model turns
+/// may be answered there.
+pub const REQUESTER_CHAT: &str = "chat";
+
+/// The schema version a record with `requester` is written with: 2 when
+/// labelled, else 1 (the ONE rule; both record literals use it).
+pub fn schema_version_for(requester: Option<&str>) -> u64 {
+    if requester.is_some() {
+        ATTEMPT_SCHEMA_VERSION_LABELLED
+    } else {
+        ATTEMPT_SCHEMA_VERSION
+    }
+}
 /// `schema` field of attempt.json.
 pub const ATTEMPT_SCHEMA_NAME: &str = "ruharness-attempt";
 /// `stage` of a driver-generation attempt (M4). Migrate attempts carry no
@@ -143,6 +165,13 @@ pub struct AttemptRecord {
     /// A human attempt's note (printable, bounded; additive, optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Who asked for the attempt, when not the pipeline itself — closed:
+    /// [`REQUESTER_CHAT`] (docs/CHAT-PANE-DESIGN.md §4.1). A labelled record
+    /// is schema version 2, its id mixes the label in ([`attempt_id_with`]),
+    /// its hand-offs live in its own traces directory, and it is never
+    /// scored as unassisted pipeline output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester: Option<String>,
 }
 
 /// Content-derived attempt id: `a-` + 12 hex of blake3(unit ‖ NUL ‖ unit_source
@@ -157,14 +186,60 @@ pub fn attempt_id(
     model: &str,
     translate_request_key: &str,
 ) -> String {
+    attempt_id_with(
+        unit,
+        unit_source,
+        driver,
+        provider_kind,
+        model,
+        translate_request_key,
+        None,
+    )
+}
+
+/// [`attempt_id`] of an attempt with `requester`: unchanged without one (the
+/// derivation stays frozen for unlabelled attempts); with one, `‖ NUL ‖
+/// "requester:" requester` is mixed in, so a chat-requested attempt never
+/// shares an id (a directory) with a blind one of the same inputs.
+pub fn attempt_id_with(
+    unit: &str,
+    unit_source: &str,
+    driver: &str,
+    provider_kind: &str,
+    model: &str,
+    translate_request_key: &str,
+    requester: Option<&str>,
+) -> String {
     let mut hasher = blake3::Hasher::new();
     for part in [unit, unit_source, driver, provider_kind, model] {
         hasher.update(part.as_bytes());
         hasher.update(b"\0");
     }
     hasher.update(translate_request_key.as_bytes());
+    if let Some(requester) = requester {
+        hasher.update(b"\0requester:");
+        hasher.update(requester.as_bytes());
+    }
     format!("a-{}", &hasher.finalize().to_hex().to_string()[..12])
 }
+
+/// A BLIND hand-off's record (docs/CHAT-PANE-DESIGN.md §4.2): an unseeded
+/// model attempt of the `external` provider that no chat asked for — only
+/// the audited protocol may answer it (or retry it). The ONE predicate: the
+/// cockpit, harness-mcp and their refusals all use it.
+pub fn blind(r: &AttemptRecord) -> bool {
+    r.seeded_from.is_none()
+        && r.steer_note.is_none()
+        && r.provider_kind != HUMAN_KIND
+        && (r.provider == EXTERNAL_KIND || r.provider_kind == EXTERNAL_KIND)
+        && r.requester.is_none()
+}
+
+/// `provider_kind` (and profile name) of the trace-backed hand-off provider.
+pub const EXTERNAL_KIND: &str = "external";
+/// The subdirectory of a unit's `traces/` that holds the hand-offs of its
+/// chat-requested attempts (docs/CHAT-PANE-DESIGN.md §4.1).
+pub const CHAT_TRACES: &str = "chat";
 
 /// `migration/units/<unit>/attempts/<attempt-id>/`.
 pub fn attempt_dir(ledger: &Ledger, unit: &str, attempt: &str) -> PathBuf {
@@ -198,7 +273,18 @@ pub fn driver_attempt_dir(ledger: &Ledger, unit: &str, attempt: &str) -> PathBuf
 
 impl AttemptRecord {
     /// Atomic pretty-JSON write of `attempt.json` inside the attempt dir.
+    /// Refuses a record whose `schema_version` is not the one its
+    /// `requester` implies ([`schema_version_for`]).
     pub fn store(&self, dir: &Path) -> Result<(), Error> {
+        let want = schema_version_for(self.requester.as_deref());
+        if self.schema_version != want {
+            return Err(Error::Invariant(format!(
+                "attempt {}: schema_version {} with requester {:?} (must be {want})",
+                printable(&self.id, 64),
+                self.schema_version,
+                self.requester.as_deref().map(|r| printable(r, 32))
+            )));
+        }
         let mut text = serde_json::to_string_pretty(self)
             .map_err(|e| Error::Invariant(format!("serialize attempt: {e}")))?;
         text.push('\n');
@@ -214,12 +300,34 @@ impl AttemptRecord {
         if rec.schema != ATTEMPT_SCHEMA_NAME {
             return Err(Error::parse(&path, "not a ruharness-attempt file"));
         }
-        if rec.schema_version > ATTEMPT_SCHEMA_VERSION {
+        if rec.schema_version > ATTEMPT_SCHEMA_MAX_READ {
             return Err(Error::SchemaTooNew {
                 path,
                 found: rec.schema_version,
-                supported: ATTEMPT_SCHEMA_VERSION,
+                supported: ATTEMPT_SCHEMA_MAX_READ,
             });
+        }
+        // The label is closed and tied to the version: every reader refuses
+        // the same hostile records, so no two can disagree about one.
+        match rec.requester.as_deref() {
+            Some(REQUESTER_CHAT) | None => {}
+            Some(other) => {
+                return Err(Error::parse(
+                    &path,
+                    format!("an unknown requester {:?}", printable(other, 32)),
+                ))
+            }
+        }
+        if rec.schema_version != schema_version_for(rec.requester.as_deref()) {
+            return Err(Error::parse(
+                &path,
+                format!(
+                    "schema_version {} does not match its requester (a labelled record is \
+                     version {ATTEMPT_SCHEMA_VERSION_LABELLED}, an unlabelled one \
+                     {ATTEMPT_SCHEMA_VERSION})",
+                    rec.schema_version
+                ),
+            ));
         }
         Ok(rec)
     }
@@ -327,6 +435,11 @@ pub enum Authorship<'a> {
     /// reaches one: carries that human attempt (a hand edit revised by the
     /// model is still a hand edit).
     Human(&'a AttemptRecord),
+    /// An unseeded model attempt labelled `requester: chat`: its turns may
+    /// have been answered in a chat that saw the conversation and the
+    /// repository — never unassisted pipeline output
+    /// (docs/CHAT-PANE-DESIGN.md §4.2).
+    Chat,
 }
 
 /// The [`Authorship`] of `record` among the unit's `records`: follows
@@ -349,6 +462,8 @@ pub fn authorship<'a>(records: &'a [AttemptRecord], record: &'a AttemptRecord) -
     }
     if record.seeded_from.is_some() {
         Authorship::Steered
+    } else if record.requester.is_some() {
+        Authorship::Chat
     } else {
         Authorship::Pipeline
     }
@@ -373,6 +488,10 @@ pub enum Provenance<'a> {
     /// pipeline output guided by a reviewer's note — never counted as
     /// unassisted pipeline output.
     Steered(&'a AttemptRecord),
+    /// No unassisted or steered attempt did, but a chat-requested one did
+    /// ([`Authorship::Chat`]; the lowest id when several): never counted as
+    /// unassisted pipeline output (docs/CHAT-PANE-DESIGN.md §4.2).
+    Chat(&'a AttemptRecord),
     /// Only attempts of human lineage did ([`Authorship::Human`]; the
     /// matched attempt, lowest id — [`authorship`] names its human origin):
     /// a hand edit, never counted as the pipeline's.
@@ -385,7 +504,8 @@ pub enum Provenance<'a> {
 /// collapsed into its seed (the seed is the provenance); then, by
 /// [`authorship`]: exactly one unassisted model attempt →
 /// [`Provenance::Pipeline`], several → [`Provenance::Ambiguous`]; else a
-/// steered one → [`Provenance::Steered`]; else one of human lineage →
+/// steered one → [`Provenance::Steered`]; else a chat-requested one →
+/// [`Provenance::Chat`]; else one of human lineage →
 /// [`Provenance::Human`]; none → [`Provenance::None`]. Not the `promoted`
 /// flag: an older attempt keeps it after a newer one replaced its crate.
 pub fn provenance<'a>(
@@ -415,6 +535,7 @@ pub fn provenance<'a>(
     };
     let mut model: Vec<&AttemptRecord> = Vec::new();
     let mut steered: Vec<&AttemptRecord> = Vec::new();
+    let mut chat: Vec<&AttemptRecord> = Vec::new();
     let mut human: Vec<&AttemptRecord> = Vec::new();
     for r in &matches {
         if seeded_by_a_match(r) {
@@ -423,17 +544,19 @@ pub fn provenance<'a>(
         match authorship(records, r) {
             Authorship::Pipeline => model.push(r),
             Authorship::Steered => steered.push(r),
+            Authorship::Chat => chat.push(r),
             Authorship::Human(_) => human.push(r),
         }
     }
-    for bucket in [&mut model, &mut steered, &mut human] {
+    for bucket in [&mut model, &mut steered, &mut chat, &mut human] {
         bucket.sort_by(|a, b| a.id.cmp(&b.id));
     }
-    match (model.len(), steered.first(), human.first()) {
-        (1, _, _) => Provenance::Pipeline(model[0]),
-        (0, Some(s), _) => Provenance::Steered(s),
-        (0, None, Some(h)) => Provenance::Human(h),
-        (0, None, None) => Provenance::None,
+    match (model.len(), steered.first(), chat.first(), human.first()) {
+        (1, _, _, _) => Provenance::Pipeline(model[0]),
+        (0, Some(s), _, _) => Provenance::Steered(s),
+        (0, None, Some(c), _) => Provenance::Chat(c),
+        (0, None, None, Some(h)) => Provenance::Human(h),
+        (0, None, None, None) => Provenance::None,
         _ => Provenance::Ambiguous(model),
     }
 }
@@ -670,6 +793,7 @@ mod tests {
     #[test]
     fn migrate_records_omit_stage() {
         let rec = AttemptRecord {
+            requester: None,
             schema: ATTEMPT_SCHEMA_NAME.into(),
             schema_version: 1,
             id: "a-000000000000".into(),
@@ -720,6 +844,7 @@ mod tests {
 
     fn prov_rec(id: &str, kind: &str, outcome: &str, digest: &str) -> AttemptRecord {
         AttemptRecord {
+            requester: None,
             schema: ATTEMPT_SCHEMA_NAME.into(),
             schema_version: 1,
             id: id.into(),
@@ -754,6 +879,7 @@ mod tests {
             Provenance::None => "none".to_string(),
             Provenance::Pipeline(r) => format!("pipeline:{}", r.id),
             Provenance::Steered(r) => format!("steered:{}", r.id),
+            Provenance::Chat(r) => format!("chat:{}", r.id),
             // The matched attempt, then its human origin.
             Provenance::Human(r) => match authorship(recs, r) {
                 Authorship::Human(origin) => format!("human:{}@{}", r.id, origin.id),
@@ -842,6 +968,7 @@ mod tests {
             Provenance::None => "none".to_string(),
             Provenance::Pipeline(r) => format!("pipeline:{}", r.id),
             Provenance::Steered(r) => format!("steered:{}", r.id),
+            Provenance::Chat(r) => format!("chat:{}", r.id),
             Provenance::Human(r) => match authorship(recs, r) {
                 Authorship::Human(origin) => format!("human:{}@{}", r.id, origin.id),
                 other => panic!("Human provenance of {other:?} authorship"),
@@ -941,5 +1068,163 @@ mod tests {
         let back: AttemptRecord =
             serde_json::from_str(&serde_json::to_string(&steer).unwrap()).unwrap();
         assert_eq!(back, steer);
+    }
+
+    /// docs/CHAT-PANE-DESIGN.md §4.1: an unlabelled record stays version 1
+    /// and byte-identical; a labelled one is version 2; the label is closed
+    /// and tied to the version, on store and on load.
+    #[test]
+    fn the_requester_label_is_closed_and_tied_to_the_schema_version() {
+        let root = std::env::temp_dir().join(format!("ruharness-requester-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let plain = prov_rec("a-000000000001", "external", "green", "blake3:c");
+        let text = serde_json::to_string(&plain).unwrap();
+        assert!(!text.contains("requester"), "{text}");
+        assert_eq!(schema_version_for(None), 1);
+        plain.store(&root).unwrap();
+        assert_eq!(AttemptRecord::load(&root).unwrap(), plain);
+        let mut chat = plain.clone();
+        chat.requester = Some(REQUESTER_CHAT.into());
+        chat.schema_version = schema_version_for(Some(REQUESTER_CHAT));
+        assert_eq!(chat.schema_version, 2);
+        chat.store(&root).unwrap();
+        assert_eq!(AttemptRecord::load(&root).unwrap(), chat);
+        // store refuses a version its label does not imply
+        for (requester, version) in [(Some(REQUESTER_CHAT), 1), (None, 2)] {
+            let mut bad = plain.clone();
+            bad.requester = requester.map(str::to_string);
+            bad.schema_version = version;
+            let err = bad.store(&root).unwrap_err().to_string();
+            assert!(err.contains("schema_version"), "{err}");
+        }
+        // load refuses a hostile record, whatever wrote it
+        let write = |value: serde_json::Value| {
+            std::fs::write(root.join("attempt.json"), value.to_string()).unwrap();
+        };
+        let mut v = serde_json::to_value(&chat).unwrap();
+        v["requester"] = "someone".into();
+        write(v);
+        let err = AttemptRecord::load(&root).unwrap_err().to_string();
+        assert!(err.contains("unknown requester"), "{err}");
+        let mut v = serde_json::to_value(&chat).unwrap();
+        v["schema_version"] = 1.into();
+        write(v);
+        assert!(AttemptRecord::load(&root)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match its requester"));
+        let mut v = serde_json::to_value(&plain).unwrap();
+        v["schema_version"] = 2.into();
+        write(v);
+        assert!(AttemptRecord::load(&root)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match its requester"));
+        let mut v = serde_json::to_value(&chat).unwrap();
+        v["schema_version"] = 3.into();
+        write(v);
+        assert!(matches!(
+            AttemptRecord::load(&root),
+            Err(Error::SchemaTooNew { found: 3, .. })
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_id_is_frozen_without_a_label_and_differs_with_one() {
+        let args = ("u1", "blake3:s", "blake3:d", "external", "m", "abcd1234");
+        let plain = attempt_id(args.0, args.1, args.2, args.3, args.4, args.5);
+        assert_eq!(
+            plain,
+            attempt_id_with(args.0, args.1, args.2, args.3, args.4, args.5, None)
+        );
+        // The committed ledgers' ids depend on this: unchanged derivation.
+        let mut hasher = blake3::Hasher::new();
+        for part in [args.0, args.1, args.2, args.3, args.4] {
+            hasher.update(part.as_bytes());
+            hasher.update(b"\0");
+        }
+        hasher.update(args.5.as_bytes());
+        assert_eq!(
+            plain,
+            format!("a-{}", &hasher.finalize().to_hex().to_string()[..12])
+        );
+        let chat = attempt_id_with(
+            args.0,
+            args.1,
+            args.2,
+            args.3,
+            args.4,
+            args.5,
+            Some(REQUESTER_CHAT),
+        );
+        assert_ne!(plain, chat, "a chat attempt never shares a blind one's id");
+        assert!(chat.starts_with("a-") && chat.len() == 14, "{chat}");
+    }
+
+    #[test]
+    fn blind_is_unseeded_external_and_asked_for_by_no_chat() {
+        let base = prov_rec("a-000000000001", "external", "in-progress", "");
+        assert!(blind(&base));
+        let mut chat = base.clone();
+        chat.requester = Some(REQUESTER_CHAT.into());
+        assert!(!blind(&chat), "a chat hand-off is not blind");
+        let mut seeded = base.clone();
+        seeded.seeded_from = Some("a-000000000000".into());
+        seeded.steer_note = Some("n".into());
+        assert!(!blind(&seeded));
+        assert!(!blind(&prov_rec(
+            "a-000000000002",
+            "anthropic",
+            "green",
+            ""
+        )));
+        assert!(!blind(&prov_rec("a-000000000003", HUMAN_KIND, "green", "")));
+    }
+
+    #[test]
+    fn chat_provenance_ranks_after_steered_and_before_human() {
+        let chat = |id: &str| {
+            let mut r = prov_rec(id, "external", "green", "blake3:c");
+            r.requester = Some(REQUESTER_CHAT.into());
+            r.schema_version = 2;
+            r
+        };
+        let kind = |recs: &[AttemptRecord]| match provenance(
+            recs,
+            "blake3:src",
+            "blake3:drv",
+            Some("blake3:c"),
+        ) {
+            Provenance::Pipeline(r) => format!("pipeline:{}", r.id),
+            Provenance::Steered(r) => format!("steered:{}", r.id),
+            Provenance::Chat(r) => format!("chat:{}", r.id),
+            Provenance::Human(r) => format!("human:{}", r.id),
+            Provenance::Ambiguous(_) => "ambiguous".into(),
+            Provenance::None => "none".into(),
+        };
+        let c = chat("a-00000000000c");
+        assert_eq!(authorship(std::slice::from_ref(&c), &c), Authorship::Chat);
+        assert_eq!(kind(std::slice::from_ref(&c)), "chat:a-00000000000c");
+        let pipeline = prov_rec("a-00000000000a", "external", "green", "blake3:c");
+        assert_eq!(
+            kind(&[c.clone(), pipeline.clone()]),
+            "pipeline:a-00000000000a",
+            "the same candidate from the blind pipeline outranks a chat attempt"
+        );
+        let mut steer = prov_rec("a-00000000000b", "external", "green", "blake3:c");
+        steer.seeded_from = Some("a-0000000000ff".into());
+        steer.steer_note = Some("n".into());
+        assert_eq!(kind(&[c.clone(), steer.clone()]), "steered:a-00000000000b");
+        let human = prov_rec("a-00000000000d", HUMAN_KIND, "green", "blake3:c");
+        assert_eq!(kind(&[c.clone(), human]), "chat:a-00000000000c");
+        // A seeded chat attempt stays Steered: the label adds who asked.
+        let mut chat_steer = steer.clone();
+        chat_steer.requester = Some(REQUESTER_CHAT.into());
+        assert_eq!(
+            authorship(std::slice::from_ref(&chat_steer), &chat_steer),
+            Authorship::Steered
+        );
     }
 }

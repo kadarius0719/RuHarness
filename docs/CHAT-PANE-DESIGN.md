@@ -1,9 +1,11 @@
 # The cockpit's chat pane — design
 
-Status: DESIGN, reviewed and revised twice (2026-09-27). The adversarial review: four lenses,
-87 findings, four verifiers (two per finding) — 0 refuted (§R). The check of the revision:
-three checkers — two re-checked every §R row, one hunted new problems — 71 findings, the
-highest found by all three (§R2). Every resolution is in the text below.
+Status: DESIGN, reviewed and revised three times (2026-09-27). The adversarial review: four
+lenses, 87 findings, four verifiers (two per finding) — 0 refuted (§R). The check of the
+revision: three checkers — two re-checked every §R row, one hunted new problems — 71
+findings, the highest found by all three (§R2). A scoped check of the second revision: 18
+(§R3). Build C (the label) is built; one change it made to §4.1 is in §R3. Every resolution
+is in the text below.
 Implements docs/TUI-DESIGN.md §9 ("a chat pane on the side, like Copilot") and
 docs/COCKPIT-WRAPPER-DESIGN.md §10. Sources:
 - the §15 spike (DECISIONS.md "Chat pane: §15 spike"), and a second live check of this
@@ -111,18 +113,31 @@ Claude Code or pass --chat-runtime"), and the rest of the cockpit is unchanged. 
 removes the pane.
 
 **Environment.** The spikes ran under an allowlist (`HOME PATH USER LOGNAME SHELL TMPDIR`,
-`TERM=dumb`); a cockpit started inside a Claude Code session carries dozens of that host's
-variables (MCP start-up modes, tool switches, host auth plumbing, its own `ANTHROPIC_BASE_URL`).
-The chat's environment is the cockpit's minus, by prefix: `CLAUDECODE`, `CLAUDE_PID`,
-`CLAUDE_EFFORT`, every `CLAUDE_CODE_*`, `CLAUDE_AGENT_*` and `MCP_*` — except a named pass-list
-of the person's own switches (`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
-`CLAUDE_CONFIG_DIR`); `TERM=dumb`. `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` pass (the
-person's choice); `ANTHROPIC_BASE_URL` passes only when `CLAUDECODE` is not set (inside a
-Claude Code session it is the host's proxy). What will be used is said **before the first
-message is sent**: the empty pane names the sign-in the environment implies ("your Claude
-subscription", or "the API key in ANTHROPIC_API_KEY — billed to that key") and any endpoint;
-after `init`, the title shows `apiKeySource`. The live test runs both from a plain terminal and
-from inside a Claude Code terminal (§9).
+`TERM=dumb`); a cockpit started inside a Claude Code session (`CLAUDECODE` set) carries dozens
+of that host's variables (MCP start-up modes, tool switches, host auth plumbing, and switches
+without a common prefix such as `DISABLE_AUTOUPDATER`). So:
+- **inside a Claude Code session**, the chat gets the spikes' allowlist (plus `LANG` and
+  `LC_*`, `TERM=dumb`) and a named **pass-list of the person's own sign-in and provider
+  variables**, passed together or not at all — never an endpoint without its credentials or
+  the reverse: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
+  `CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_SKIP_BEDROCK_AUTH`, `CLAUDE_CODE_SKIP_VERTEX_AUTH`,
+  `CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`, `CLAUDE_CONFIG_DIR`, `AWS_*`,
+  `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`, `GOOGLE_APPLICATION_CREDENTIALS`;
+- **outside one**, the cockpit's own environment minus any variable a Claude Code session sets
+  for its children (`CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_ENTRYPOINT`,
+  `CLAUDE_CODE_SESSION_*`, `CLAUDE_CODE_HOST_*`, `CLAUDE_CODE_MESSAGING_*`,
+  `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SDK_*`, `CLAUDE_CODE_OAUTH_SCOPES`,
+  `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_DESKTOP_*`, `CLAUDE_AGENT_*`, `MCP_*`), `TERM=dumb`.
+What will be used is said **before the first message is sent**, from the variables passed:
+"your Claude subscription", "Claude Code's OAuth token (CLAUDE_CODE_OAUTH_TOKEN)", "the API key
+in ANTHROPIC_API_KEY — billed to that key", "the token in ANTHROPIC_AUTH_TOKEN", "Amazon
+Bedrock", "Google Vertex AI", "Microsoft Foundry" — and the endpoint when `ANTHROPIC_BASE_URL`
+is set; after `init`, the title shows `apiKeySource`. The live test runs from a plain terminal
+and from inside a Claude Code terminal and asserts the child's environment (§9).
+
+The chat dir's name is `harness-tui-chat-<pid>-<8 hex>` so the inbox socket's path stays under
+the 104-byte `sun_path` limit; if the system temp dir is too long for it, `/tmp` is used.
 
 ### 1.2 The process
 
@@ -130,8 +145,10 @@ from inside a Claude Code terminal (§9).
 - Its own process group (harness-mcp, its child, shares it — verified). Not its own session:
   `std` offers no safe `setsid`, and the crates forbid `unsafe`. So the runtime keeps the
   terminal as its controlling tty: a write by it to `/dev/tty` would reach the screen, a read
-  would stop it (SIGTTIN). The live test asserts the real runtime does neither (§9); a turn with
-  no output for 60 s says so in the transcript and offers Stop and New chat, and the end
+  would stop it (SIGTTIN). The live test asserts the real runtime does neither (§9). A turn in
+  which the model owes output — no permission held, no chat act or Continue running — and
+  nothing arrives for 60 s says so in the transcript and offers Stop and New chat (a held
+  request or a running act is silent by design: the spike saw 150 s of silence); the end
   routine's SIGKILL also ends a stopped process. Revisit (a `setsid` helper) if the live test
   finds the runtime touching the terminal.
 - stdin a pipe; stdout and stderr drained by two reader threads into one channel (the `spawn`
@@ -151,8 +168,10 @@ from inside a Claude Code terminal (§9).
 - **Start-up**: no `init` within 30 s → the transcript says "the chat has not started — a
   sign-in or keychain prompt may be waiting; run `claude` in a terminal to check", and New chat
   is offered. `init` comes once per turn. On **every** `init` the cockpit requires:
-  `permissionMode` `default`; the MCP servers exactly `harness`; the tools a subset of
-  harness-mcp's cockpit tools (by exact name) — all of them once `harness` is `connected`. With
+  `permissionMode` `default`; the MCP servers exactly `harness`, `connected` or `pending`
+  (`failed` or `needs-auth` ends the chat: "the harness tools did not start: harness-mcp …");
+  the tools a subset of harness-mcp's cockpit tools (by exact name) — all of them once
+  `harness` is `connected`. With
   the parent's `MCP_*` stripped, `-p` waits for MCP servers before the first turn, so `pending`
   should not occur; if it does, the turn runs with the subset rule and the next `init` must show
   the full set. Anything else ends the chat, naming it: "Claude Code <version> offers a tool the
@@ -174,7 +193,7 @@ block**, several messages per turn, sharing a message id (spike logs: 49 of 49).
 | `stream_event` `content_block_delta` `text_delta` | appended to the block (message id, index) |
 | `assistant` | its one block replaces that block of its message's cell (text), or adds a tool line (tool_use); `thinking` is not shown; an `error` value (`authentication_failed`, `model_not_found`, …) becomes a translated cockpit line; a `<synthetic>` message is the runtime's own, shown as such |
 | `user` with `tool_result` | a read's line says "done" or "failed"; an act's outcome is already known |
-| `user` text "[Request interrupted by user…]" | the runtime's own marker after a Stop: shown as "stopped" |
+| `user` text "[Request interrupted by user…]" | the runtime's own marker after a Stop — accepted only between the cockpit's own `interrupt` and that turn's `result`: shown as "stopped"; any other is a foreign message |
 | any other `user` message the cockpit did not send | §1.1's inbox rule |
 | `control_request` `can_use_tool` | §2 |
 | `control_request` of any other subtype | answered at once with an error `control_response` (its `request_id`), and noted; a known one (a model-consent prompt) in words: "this model needs consent — give it in a normal `claude` session, or choose another with --chat-model" |
@@ -289,9 +308,9 @@ Quit (`Ctrl-C`), Cancel (`Ctrl-X`), New chat (`Ctrl-N`), a Continue that asks:
   `Esc`, `n` and `N` still take the safe choice at any time, and `j`, `k` and `Space` still
   scroll (all safe); any other letter is dropped ("use the buttons"); the ready line says
   "ready: → then Enter, or click";
-- **bursts do nothing**: a focus move or `Enter` read while more input is already pending (a
-  paste without bracketed paste, a key repeat) is dropped, as typed-ahead keys are before
-  arming.
+- **bursts do nothing**: keys read within 5 ms of each other are one burst (a paste without
+  bracketed paste, a key repeat) — its last key included; a focus move or `Enter` in a burst is
+  dropped, as typed-ahead keys are before arming.
 A person who opened one by mistake and keeps typing can never press Run.
 
 One request at a time: the model's turn waits on the one it made; parallel calls are shown one
@@ -303,8 +322,9 @@ the running command"; nothing opens when the command ends — Review becomes ava
 The act runs as any act: the activity panel narrates it ("(asked in chat)"), Cancel stops it,
 the ledger is re-read when it is reaped. The permission stays open meanwhile. The cockpit
 answers it **once the first read requested at or after the reap has finished** — landed or
-failed ("the ledger could not be re-read: …", and the gates of a later request refuse until a
-read lands) — with **deny + the outcome**: the tool itself never runs in the cockpit; the model
+failed ("the ledger could not be re-read: …"; the gates of a later request refuse until a read
+lands, the refusal says "press g", and while chat hand-offs are held the 2 s tick keeps asking
+for reads) — with **deny + the outcome**: the tool itself never runs in the cockpit; the model
 reads the message as the result (verified). The message, filled item by item as harness-mcp
 fills a result (the outcome first, whole items dropped, `omitted` naming what was cut,
 ≤ 8 KiB), opens with who ran it — "Ran by the cockpit after the person confirmed it", or, for a
@@ -353,16 +373,20 @@ The chat answers:
    in this generation.
 3. `harness_answer {attempt, request_key, text}` → **Continue**. The cockpit requires: the key
    is the one its table holds for that attempt, in this generation; the chat has read that key
-   (step 2) in this generation; the answering model is the attempt's. It writes the text
-   (≤ 512 KiB, UTF-8, non-empty) to a new file in the cockpit's own temp dir — owned by that
-   Continue command, removed at its reap — and runs the Continue argv of §3.1. The CLI writes
+   (step 2) in this generation — its last page (`omitted` null) returned as a successful tool
+   result, matched by `tool_use_id`; the answering model is the attempt's. It writes the text
+   (≤ 512 KiB, UTF-8, non-empty) to a new 0600 file in `harness-tui-<pid>-answers/` (0700; the
+   start-up sweep removes such dirs of dead pids, as it does chat dirs) — owned by that Continue
+   command, removed at its reap — and runs the Continue argv of §3.1. The CLI writes
    the response only after its own checks (§4.3). The outcome returns: green, red, or awaiting
    the next turn (a repair), until the attempt ends.
 
 **No key held** — an attempt of another chat, of an earlier cockpit session, or after a crash:
-the cockpit refuses the answer ("ask again for the migration: it resumes and names the request
-it waits on"); the chat repeats its posing act (Migrate, Modify or Retry), whose labelled id
-resumes the same attempt, re-poses the same request and reports its key.
+the cockpit refuses the answer and names, from the attempt's record, the act that resumes it
+and re-poses the same request (reporting its key): "ask for Migrate of u001 again" for an
+unseeded attempt; "ask for Retry of a-3f2c…" for a sample; "ask for Modify from a-19ab… with
+its recorded note" (the note given, fenced) for a steer attempt. The chat asks for exactly
+that (the brief says so); the person confirms it as any act.
 
 **The continuation permission.** When the person runs a Migrate, Modify or Retry the chat asked
 for, its dialog says: "The chat answers its model turns (up to N) here; each answer continues
@@ -373,18 +397,22 @@ model the dialog named. A Continue that matches it runs **without a dialog**, bu
   labelled, waiting on that key, no response yet); a refusal is answered fenced;
 - it shows as a line above the input — "Continues a-3f2c… turn 2 — [Hold Esc]" — and waits while
   a menu, an act dialog or a note is open, or the person pressed a key or a button in the last
-  second, and behind a running command (read-only overlays — Help, the details, the checks, the
-  diff — do not hold it); while it waits, the activity row says why ("the chat's migration
-  continues when you close the menu");
+  second, and behind a running command — and while **any** dialog is open (a Quit, New chat or
+  Cancel dialog too: one chosen because nothing was running must not see a command start
+  under it); read-only overlays — Help, the details, the checks, the diff — do not hold it;
+  while it waits, the activity row says why ("the chat's migration continues when you close
+  the menu");
 - once it runs, it is narrated in the activity panel and shown in the transcript ("continued, as
   you agreed when you ran the migration"); Cancel stops it.
 
 The permission **ends** — and every later Continue for that attempt asks — when the person holds
 (`Esc` on the waiting line) or declines a Continue, cancels a continuation, Stops the chat, a
 request of it is withdrawn, a message the cockpit did not send arrives (§1.1), New chat, or the
-chat ends. It is never granted under `--allow-unsandboxed`.
+chat ends. It is never granted under `--allow-unsandboxed`. **Hold** turns the waiting Continue
+into a Continue that asks — its request line, with the 1 s settle; the chat hears nothing until
+the person answers it.
 
-**A Continue that asks** (no permission: it ended, another generation, unsandboxed) is a
+**A Continue that asks** (no permission: it ended, or the cockpit runs unsandboxed) is a
 request (§3.2) whose dialog shows the answer's text whole — scrolled to its end before the
 dialog arms, as the argv is — so the person sees the code before it is built; declining it ends
 nothing further (the permission is already gone).
@@ -424,17 +452,22 @@ retry it — the chat answers its turns"; of a chat-labelled live record it runs
   NUL ‖ `requester:chat`). Without it, unchanged: the derivation stays frozen for unlabelled
   attempts (SCHEMAS.md, REPLAY-DESIGN.md and TUI-DESIGN.md say so, amended). A chat attempt
   never shares a directory with a blind one.
-- **Its own traces: one rule, `trace_dir(record)`** (harness-llm, used by the external adapter,
-  `recorded_pairs`, `--answer`, and — through its harness-core half — `harness_request`): a
-  chat-labelled attempt's hand-offs live in `migration/units/<u>/traces/<base id>/`, for the base
-  and every `.r<N>` sample, and **never** in the flat root (no fallback: a missing directory is
-  an integrity error); a live sample's in `traces/<sample id>/`; everything else in the root. So
-  an unlabelled run never reads a chat answer and a chat attempt never reads — or answers — a
-  blind one's (the request key alone would collide: the tractor ledger has 92 blind attempts on
-  the same haiku id a chat reports). The adapter is re-pointed inside `Job::run` once the id is
-  known.
-- Samples inherit the label; every argv the cockpit or harness-mcp builds from a record carries
-  the record's label. There is no "wrong label" refusal: another label is another id.
+- **Its own traces**: a chat-labelled attempt's `external` hand-offs live in
+  `migration/units/<u>/traces/chat/` — one directory per unit for all its chat attempts and
+  their samples (as the flat `traces/` is for blind ones) — its live samples in
+  `traces/chat/<id>/`. The CLI resolves a labelled run's provider there, so the executor,
+  `--answer`, replay and `harness_request` all read and write it and nothing else; an unlabelled
+  run reads the flat `traces/` (its live samples `traces/<id>/` when present, else the root, as
+  today) and never `traces/chat/`. So an unlabelled run never reads a chat answer and a chat
+  attempt never reads — or answers — a blind one's (the request key alone would collide: the
+  tractor ledger has 92 blind attempts on the same haiku id a chat reports). (Build C chose
+  one directory per unit over the second revision's `traces/<base id>/`: the provider's
+  directory is fixed before the id exists, and chat attempts that pose the same request are
+  the same attempt anyway — §R3.)
+- Samples inherit the label; every argv that re-runs a record's own run shape (Retry,
+  Continue, a resume) carries the record's label. Modify builds a new attempt from a seed: it
+  is labelled only when the chat asks for it. There is no "wrong label" refusal: another label
+  is another id.
 
 ### 4.2 Authorship, provenance, the benchmark
 
@@ -447,7 +480,7 @@ retry it — the chat answers its turns"; of a chat-labelled live record it runs
 - The benchmark (harness-cli `bench.rs`) scores unassisted pipeline output only: a verified
   crate of chat provenance is a PROBLEM ("promoted from chat-requested attempt … — not unassisted
   pipeline provenance"), and `--write` refuses it. `bench check --replay` **replays** chat
-  attempts like steer ones — the latest sample, from `trace_dir` — re-deriving the id and label,
+  attempts like steer ones — the latest sample, from `traces/chat/` — re-deriving the id and label,
   and reports them `(chat)`.
 - The cockpit says "asked in chat" beside "steered" and counts it in the migrated share as it
   counts steered code; harness-mcp's closed sets and views gain `chat` and `requester`.
@@ -460,7 +493,7 @@ retry it — the chat answers its turns"; of a chat-labelled live record it runs
     judge — unless all hold: the provider is of kind `external`; `--requester=chat`; `<KEY>` is 8
     lowercase hex; the file is ≤ 512 KiB, UTF-8, non-empty; the **latest sample of the derived
     base** (the base itself when it has no sample) has an **in-progress** record labelled `chat`
-    — `--answer` never creates an attempt or a sample; in that attempt's `trace_dir`,
+    — `--answer` never creates an attempt or a sample; in `traces/chat/`,
     `<KEY>.request.json` exists, names the record's model and re-serializes to `<KEY>`, and
     `<KEY>.response.json` does **not** exist;
   - then the resume runs as any resume (its own re-derivation writes: the reset and re-judge);
@@ -469,25 +502,30 @@ retry it — the chat answers its turns"; of a chat-labelled live record it runs
     stop_reason: "end_turn"}` (counts 0, never a guess);
   - the one refusal after the fact: the attempt asked for another key first (its inputs moved),
     or finished, without asking for `<KEY>` — typed `answer-unused`, exit 1, nothing written with
-    the answer.
+    the answer; when it now waits on another request, the `awaiting` event still names it, so
+    both clients hold the new key.
 - The `awaiting` event gains `request_key`; its `args` and `resume` hint carry `--requester` and
   never `--answer`/`--answer-key`.
 - SCHEMAS.md and CLI-HARDENING.md document all of it; exit codes otherwise unchanged.
 
 ### 4.4 harness-mcp
 
-Standalone (a Claude Code window) and in cockpit mode alike:
+Standalone (a Claude Code window), and — for the reads and the tool list — in cockpit mode:
 - `harness_steer` passes `--requester=chat`. **Upgrade note:** a steer posed before this change
   resumes only with the previous binary (the same arguments now derive the labelled id).
 - `harness_retry` refuses a record not labelled `chat`, and passes the label.
-- **`harness_answer {attempt, request_key, model, text}`** answers through the CLI: harness-mcp
-  writes the text to a file in its own temp dir (outside the ledger) and spawns the posing act's
-  argv with `--answer=<file> --answer-key=<key>` — refused unless the key is the one its own
-  posed hand-off reported; the CLI's checks (§4.3) apply. `write_response` is deleted:
-  **harness-mcp writes nothing in the ledger** (MCP-DESIGN §0's one exception is gone).
+- **`harness_answer {attempt, request_key, model, text}`** (standalone only — in cockpit mode
+  every act refuses, below) answers through the CLI: harness-mcp writes the text to a 0600 file
+  in its own `harness-mcp-answers-<pid>/` (0700, outside the ledger; removed when the act ends,
+  and at start any such dir of a dead pid is swept) and spawns the posing act's argv with
+  `--answer=<file> --answer-key=<key>` appended — the argv it keeps for a later turn is the
+  posing one, never with the answer flags, so a repair turn's answer is appended once —
+  refused unless the key is the one its own posed hand-off reported; the CLI's checks (§4.3)
+  apply. `write_response` is deleted: **harness-mcp writes nothing in the ledger** (MCP-DESIGN
+  §0's one exception is gone).
 - No fresh `harness_migrate` standalone (MCP-DESIGN §7 keeps it for live providers, later).
 - **`harness_request {attempt, request_key, page?}`** (read): only for an in-progress attempt
-  labelled `chat`, from its `trace_dir`, with `load_recorded`'s checks (8 hex; regular, non-link
+  labelled `chat`, from `traces/chat/`, with `load_recorded`'s checks (8 hex; regular, non-link
   files; the request re-serializes to its key; it names the record's model) and no response yet
   — `request_key` and the read-only checks move into harness-core (next to `CompletionRequest`,
   which is already there), so harness-mcp needs no harness-llm. Pages are measured after
@@ -675,8 +713,8 @@ and the brief is the text any other runtime can take. It says, briefly:
 
 | part | change |
 |---|---|
-| harness-core | `requester` in `AttemptRecord` (closed set; written v2 when present, read ≤ 2 — two constants); `attempt_id` mixes it in; `blind()`; `Authorship::Chat`, `Provenance::Chat`; `request_key` and the read-only trace checks (moved from harness-llm, beside `CompletionRequest`); the chat half of `trace_dir` (the path rule) |
-| harness-llm | `MigrateParams.requester`; `Stage::attempt_id` and both impls; both record literals (the trajectory's and the override's) with the written-version rule; `trace_dir(record)` used by `recorded_pairs` (no root fallback for chat) and by the adapter, re-pointed inside `Job::run`; `recorded_pairs`' re-derivation from `recorded.requester`; `find_recorded`'s order (requester in the key); the external adapter's one-key answer with a no-clobber write; `TraceAdapter::request_key` delegating to harness-core |
+| harness-core | `requester` in `AttemptRecord` (closed set; written v2 when present, read ≤ 2 — two constants); `attempt_id` mixes it in; `blind()`; `Authorship::Chat`, `Provenance::Chat`; `request_key`, the read-only trace checks and the no-clobber response writer (in a new `traces` module beside `CompletionRequest`); `CHAT_TRACES`; the typed `AnswerUnused` error |
+| harness-llm | `MigrateParams.requester`; `Stage::attempt_id` and both impls; both record literals (the trajectory's and the override's) with the written-version rule; `recorded_pairs`' re-derivation from `recorded.requester`; `find_recorded`'s order (requester in the key); the external adapter's one-key answer (`AnswerSlot`) with a no-clobber write; `--answer`'s read-only preconditions in `Job::run`; `TraceAdapter::request_key` delegating to harness-core |
 | harness-cli | `migrate --requester`, `--answer`, `--answer-key` (clap) and their up-front checks (listing and loading only; the latest sample's record); `resume_command` and the `awaiting` event's `args`/`request_key`; every `MigrateParams` literal (bench, gen-driver); `bench.rs`: chat provenance a problem, replay reporting `(chat)` |
 | harness-mcp | labels on its argvs; `harness_retry`'s refusal; `harness_answer` through `--answer` (with `request_key`), `write_response` deleted; `harness_request`; `blind()` in its reads; `ANSWERING_RULE`; `--cockpit` (Build D); the fence and `valid_model` moved out |
 | harness-tui library | `fence` and `valid_model` (moved from harness-mcp) and the act-result collector |
@@ -704,7 +742,7 @@ and the brief is the text any other runtime can take. It says, briefly:
   a chat `.r2` re-run and replay from `traces/<base>/` (id and label re-derived; a missing dir an
   integrity error, never the root); `--retry` of a chat attempt's sample with `--answer`; the
   `awaiting` event's `request_key`, `args` and `resume`.
-- **bench**: a chat fixture with a sample: replayed from its `trace_dir` and reported `(chat)`;
+- **bench**: a chat fixture with a sample: replayed from `traces/chat/` and reported `(chat)`;
   its crate a problem.
 - **harness-mcp**: labels on its argvs; `harness_retry` refuses unlabelled records;
   `harness_answer` spawns the CLI with `--answer` (a fake `harness` asserting the argv; the
@@ -748,7 +786,10 @@ and the brief is the text any other runtime can take. It says, briefly:
   on haiku with a full hand-off round (request, answer, continue); Stop mid-act and the outcome
   sent later; New chat; quit timing; the cockpit killed by TERM mid-turn (harness-mcp gone, the
   dir removed); an unknown `--chat-model`; the runtime writing and reading nothing on the
-  terminal; the content-array and `uuid` message shapes; the recorded `claude_code_version`. A
+  terminal; the content-array and `uuid` message shapes; the inbox socket in the chat dir and
+  nothing new in `cc-socks/`, under the design's environment (no `CLAUDE_CODE_MESSAGING_*`); a
+  `failed` harness server ending the chat; the runtime's own user messages seen in a long chat
+  (e.g. a compaction) recorded; the recorded `claude_code_version`. A
   signed-out runtime is checked once by hand (it needs a logout) and its lines recorded.
 
 ## 10. Order of work
@@ -759,7 +800,7 @@ mutation checks of the named rules.
 **Build C — the label** (standalone: its CLI and harness-mcp paths are testable without the pane)
 1. harness-core: the field, the two schema constants, the id, `blind()`, authorship,
    provenance, `request_key` and the trace checks; SCHEMAS.md.
-2. harness-llm and the CLI: threading the requester, `trace_dir`, `--answer`, `request_key`, the
+2. harness-llm and the CLI: threading the requester, `traces/chat/`, `--answer`, `request_key`, the
    bench changes.
 3. harness-mcp: labels, `harness_retry`'s refusal, `harness_answer` through the CLI,
    `harness_request`, `blind()`; the fence and `valid_model` moved into harness-tui's library;
@@ -798,7 +839,7 @@ Severities are the verifiers'.
 
 | finding (ids) | resolution |
 |---|---|
-| **high** — hand-off traces are shared: a chat attempt and a blind one of the same unit and model pose the same request key in the flat `traces/`, so a later blind run replays the chat's answers as pipeline output (scored), a chat answer can land on a pending blind hand-off, and a chat Migrate can consume a blind answer (SAFE-1, ENG-1, MAIN-1, A1) | chat-labelled attempts keep their hand-offs in `traces/<base id>/` (§4.1); tests both ways (§9) |
+| **high** — hand-off traces are shared: a chat attempt and a blind one of the same unit and model pose the same request key in the flat `traces/`, so a later blind run replays the chat's answers as pipeline output (scored), a chat answer can land on a pending blind hand-off, and a chat Migrate can consume a blind answer (SAFE-1, ENG-1, MAIN-1, A1) | chat-labelled attempts keep their hand-offs apart — `traces/<base id>/`, since built as one `traces/chat/` per unit (§R3) (§4.1); tests both ways (§9) |
 | **high** — Esc in the chat changes meaning by itself and "back" drops the typist into a pane of accelerators (`q` quits, `e` opens the editor with no dialog) (USE-1) | Esc never leaves the chat; the typing guard after a Tab out (§5.4) |
 | **high** — Ctrl-C quits at once and loses an unpersisted conversation (USE-2) | Ctrl-C in the chat: Stop / clear / Quit asked; Quit and New ask whenever a conversation exists (§5.4) |
 | **high** — at 80–149 the chat hid the View while the person browsed the tree (USE-3) | the chat shows at 80–155 only while focused; the tab strip (§5.1) |
@@ -863,7 +904,7 @@ The checkers' ids: CHK1-1…24, CHK2-1…21, NEW-1…26 (many the same; merged b
 | finding (ids) | resolution |
 |---|---|
 | **high** — standalone `harness_answer` wrote only into the flat `traces/`: every labelled steer hand-off unanswerable, and "a chat answer is written only by the CLI" false (NEW-1, CHK1-2, CHK2-1) | `harness_answer` answers through the CLI's `--answer` (with `request_key`) in both modes; `write_response` deleted — harness-mcp writes nothing in the ledger (§0, §4.4) |
-| **high** — chat `.r<N>` samples were looked up in `traces/<sample id>/`, then the flat root — integrity failures, or a blind pair loaded on a key collision (NEW-2, CHK1-1, CHK2-2) | one `trace_dir(record)`: chat → `traces/<base id>/` for base and samples, never the root (§4.1); tests of a chat `.r2` (§9) |
+| **high** — chat `.r<N>` samples were looked up in `traces/<sample id>/`, then the flat root — integrity failures, or a blind pair loaded on a key collision (NEW-2, CHK1-1, CHK2-2) | one directory for chat attempts, never the root — built as `traces/chat/` (§R3), samples included (§4.1); tests of a chat sample (§9) |
 | **high** — the design's environment was never run: a cockpit inside Claude Code would pass the host's MCP modes, tool switches, auth plumbing and `ANTHROPIC_BASE_URL` (NEW-3) | strip by prefix with a pass-list; `ANTHROPIC_BASE_URL` only outside a Claude Code session; live test from both terminals (§1.1, §9) |
 | med — an answer already on disk for the key was built instead of the one the person saw (NEW-10, CHK1-5, CHK2-3) | the CLI and the cockpit refuse when `<KEY>.response.json` exists; `answer_filed` in an interrupted Continue's outcome (§3.3, §3.4, §4.3) |
 | med — the cockpit's awaiting machinery (the `--steer=` guard, the Resume gate, "waiting for your answer", `R`) not adapted; no source for "the key held"; earlier-session and other-chat Continues unreachable; the person's `r` on a chat record posed a hand-off nobody owned (CHK1-3, CHK1-4, CHK2-4, NEW-14, NEW-15) | the chat hand-off table (§3.4); no key held → refusal, the chat re-asks its posing act; the person's `r` greyed on chat `external` records; chat Retry of an `external` record only with its model |
@@ -892,3 +933,33 @@ The checkers' ids: CHK1-1…24, CHK2-1…21, NEW-1…26 (many the same; merged b
 | low — in-stream error values, the consent prompt, `<synthetic>` advice (CHK1-23, CHK2-20) | translated and marked (§1.3) |
 | low — no live TERM of the cockpit; no test of the person's `r` on a chat record (CHK1-18, CHK2-18, CHK2-6) | in §9 |
 | low — §R bookkeeping (CHK1-24) | corrected (the USE-10 row added, citations fixed) |
+
+## R3. Scoped check of the second revision — 18 findings, resolved (2026-09-27)
+
+One checker over 150fca2: every §R2 row complete or partial, and 18 findings, no high. Build C
+(built meanwhile) had already resolved two — harness-mcp keeps the posing argv without the
+answer flags (S3-7), and the live-sample fallback is kept (S3-10) — and changed §4.1: one
+`traces/chat/` per unit instead of `traces/<base id>/`, because the external adapter's
+directory is chosen by the CLI before the attempt's id exists; chat attempts posing the same
+request are the same attempt, and their samples share the directory as blind samples share
+the root.
+
+| finding | resolution |
+|---|---|
+| med — the quiet-turn notice fired while a permission was held or a chat act ran (S3-1) | the quiet clock runs only while the model owes output (§1.2) |
+| med — a Continue could start under an open Quit, New chat or Cancel dialog (S3-2) | it waits while any dialog is open (§3.4) |
+| med — the environment rule missed host variables and stripped the person's own; the endpoint split from its credentials (S3-3, S3-4) | inside Claude Code: an allowlist plus the person's sign-in and provider variables, passed together; outside: minus the session's variables; the sign-in named before the first send (§1.1) |
+| low-med — "no key held → ask for the migration again" failed for samples and steer attempts (S3-6) | the refusal names the exact resuming act from the record (§3.4) |
+| low-med — harness-mcp's second answered turn (S3-7) | already in Build C: the posing argv kept without answer flags; the file's lifetime stated (§4.4) |
+| low — `answer-unused` vs `awaiting` (S3-8) | `answer-unused` still reports the request it now waits on (§4.3; built) |
+| low — "read" undefined for pages (S3-9) | the last page's successful result, by `tool_use_id` (§3.4) |
+| low — the live-sample fallback (S3-10) | kept (§4.1; built) |
+| low — Modify caught by "every argv from a record" (S3-11) | only argvs that re-run a record's own shape (§4.1) |
+| low — "another generation" asks; §4.4's heading (S3-12) | dropped; the answer bullet standalone only (§3.4, §4.4) |
+| low — Hold's fate (S3-13) | a Continue that asks, with its settle (§3.4) |
+| low — a `failed` server passed the subset rule (S3-14) | `connected` or `pending` required (§1.2) |
+| low — the burst rule's last key; Tab in a pasted burst (S3-15) | 5 ms bursts, the last key included (§3.2) |
+| low — no read after a failed post-reap read (S3-16) | the tick keeps asking while chat hand-offs are held; "press g" (§3.3) |
+| low — markers by text; runtime-added messages (S3-17) | markers only after the cockpit's own interrupt; the live test records the runtime's own messages (§1.3, §9) |
+| low — answer temp files outliving the process (S3-18) | pid-named dirs, swept at start (§3.4, §4.4) |
+| low — the socket verified with the variable set; path length (S3-5) | a live check without it; a bounded name (§1.1, §9) |

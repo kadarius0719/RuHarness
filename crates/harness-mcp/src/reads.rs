@@ -5,7 +5,6 @@
 //! outcome first.
 
 use crate::fence::{self, attempt as attempt_id, closed, short, untrusted};
-use harness_core::attempts::HUMAN_KIND;
 use harness_core::config::TargetConfig;
 use harness_core::status::{UnitReport, VerdictState};
 use harness_tui::model::{AttemptView, AuthorshipView, ProvenanceView, Snapshot, UnitView};
@@ -70,6 +69,7 @@ pub fn provenance(p: &ProvenanceView) -> Value {
             "count": ids.len(),
         }),
         ProvenanceView::Steered(a) => json!({"kind": "steered", "attempt": attempt_id(a)}),
+        ProvenanceView::Chat(a) => json!({"kind": "chat", "attempt": attempt_id(a)}),
         ProvenanceView::Human { attempt, origin } => json!({
             "kind": "human",
             "attempt": attempt_id(attempt),
@@ -83,18 +83,17 @@ pub fn authorship(a: &AuthorshipView) -> Value {
     match a {
         AuthorshipView::Pipeline => json!({"kind": "pipeline"}),
         AuthorshipView::Steered => json!({"kind": "steered"}),
+        AuthorshipView::Chat => json!({"kind": "chat"}),
         AuthorshipView::Human(origin) => json!({"kind": "human", "origin": attempt_id(origin)}),
     }
 }
 
-/// An unseeded `external` attempt still in progress: a pending hand-off of
-/// the blind, audited protocol — never answered in chat.
+/// A blind attempt ([`harness_core::attempts::blind`]: unseeded,
+/// `external`, no chat asked for it) still in progress: a pending hand-off of
+/// the blind, audited protocol — never answered in chat. A chat-requested
+/// hand-off is not blind (docs/CHAT-PANE-DESIGN.md §4.2).
 pub fn blind_hand_off_pending(a: &AttemptView) -> bool {
-    let r = &a.record;
-    r.outcome == "in-progress"
-        && (r.provider_kind == "external" || r.provider == "external")
-        && r.seeded_from.is_none()
-        && r.provider_kind != HUMAN_KIND
+    a.record.outcome == "in-progress" && harness_core::attempts::blind(&a.record)
 }
 
 /// One attempt, as the status lists it.
@@ -118,6 +117,10 @@ pub fn attempt_summary(a: &AttemptView) -> Value {
         "has_candidate": a.candidate.is_some(),
         "has_verdict": a.verdict.is_some(),
         "seeded_from": opt_attempt(r.seeded_from.as_deref()),
+        "requester": r
+            .requester
+            .as_deref()
+            .map_or(Value::Null, |q| closed("requester", q, fence::REQUESTERS)),
         "authorship": authorship(&a.authorship),
         "superseded_by": opt_attempt(a.superseded_by.as_deref()),
         "blind_hand_off_pending": blind_hand_off_pending(a),
@@ -477,9 +480,150 @@ pub fn unit(
     Ok(out)
 }
 
+/// The budget one `harness_request` page fills, measured after fencing (JSON
+/// escaping included), under the 48 KiB result budget with room for the
+/// envelope.
+pub const REQUEST_PAGE_BYTES: usize = 40 * 1024;
+
+/// The bounds of `text`'s pages: each the longest char-boundary slice whose
+/// fenced value fits `first` bytes (the first page, which shares the budget
+/// with the system prompt) or `rest` bytes — deterministic, so page `n` is
+/// the same slice on every call.
+fn request_pages(text: &str, first: usize, rest: usize) -> Vec<(usize, usize)> {
+    let fits = |slice: &str, budget: usize| {
+        fence::size(&untrusted("hand-off-user", slice, usize::MAX)) <= budget
+    };
+    let mut pages = Vec::new();
+    let mut start = 0;
+    loop {
+        let budget = if pages.is_empty() { first } else { rest };
+        let rest_text = &text[start..];
+        let end = if fits(rest_text, budget) {
+            text.len()
+        } else {
+            // The longest prefix that fits (at least one char, so paging
+            // always advances).
+            let (mut lo, mut hi) = (0usize, rest_text.len());
+            while lo < hi {
+                let mid = (lo + hi).div_ceil(2);
+                let mut m = mid;
+                while !rest_text.is_char_boundary(m) {
+                    m -= 1;
+                }
+                if m > lo && fits(&rest_text[..m], budget) {
+                    lo = m;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            let mut one = rest_text.len().min(lo.max(1));
+            while !rest_text.is_char_boundary(one) {
+                one += 1;
+            }
+            start + one
+        };
+        pages.push((start, end));
+        if end >= text.len() {
+            return pages;
+        }
+        start = end;
+    }
+}
+
+/// `harness_request` (docs/CHAT-PANE-DESIGN.md §4.4): the pending hand-off
+/// `key` of `attempt` — only an in-progress attempt labelled `requester:
+/// chat`, read from its `traces/chat/` with the recorded-trace checks (8 hex,
+/// real files of bounded size, the request re-serializing to its key) and no
+/// response yet, naming the attempt's model. Page `page` (1-based) of its
+/// user message, the system prompt with the first page; every text fenced.
+pub fn request(
+    target: &std::path::Path,
+    unit: &str,
+    attempt: &str,
+    key: &str,
+    page: u64,
+) -> Result<Value, String> {
+    use harness_core::attempts;
+    let ledger = harness_core::ledger::Ledger::new(target);
+    if !harness_core::plan::is_clean_segment(unit) {
+        return Err("`unit` must be a clean id".into());
+    }
+    let record = attempts::load_pinned(&ledger, unit, attempt)
+        .map_err(|e| e.to_string())?
+        .ok_or("no such attempt of this unit")?;
+    if record.requester.as_deref() != Some(attempts::REQUESTER_CHAT) {
+        return Err(
+            "this attempt was not asked for by a chat: its hand-offs are not read here (a \
+             pending unseeded one belongs to the blind protocol)"
+                .into(),
+        );
+    }
+    if record.outcome != "in-progress" {
+        return Err("the attempt is not in progress: it waits on no hand-off".into());
+    }
+    let dir = ledger
+        .unit_dir(unit)
+        .join("traces")
+        .join(attempts::CHAT_TRACES);
+    let request =
+        harness_core::traces::load_pending(&dir, key).map_err(|e| format!("request {key}: {e}"))?;
+    if request.model != record.model {
+        return Err(format!(
+            "request {key} names another model than the attempt: it is not this attempt's"
+        ));
+    }
+    let system = untrusted("hand-off-system", &request.system, usize::MAX);
+    let first = REQUEST_PAGE_BYTES
+        .saturating_sub(fence::size(&system))
+        .max(1024);
+    let pages = request_pages(&request.user, first, REQUEST_PAGE_BYTES);
+    let total = pages.len() as u64;
+    let Some(&(start, end)) = usize::try_from(page - 1).ok().and_then(|ix| pages.get(ix)) else {
+        return Err(format!("page {page} of {total}: there is no such page"));
+    };
+    Ok(json!({
+        "unit": short("unit", unit),
+        "attempt": attempt_id(attempt),
+        "request_key": key,
+        "model": short("model", &request.model),
+        "page": page,
+        "pages": total,
+        "system": if page == 1 { system } else { Value::Null },
+        "user": untrusted("hand-off-user", &request.user[start..end], usize::MAX),
+        "omitted": if page < total { json!({"next_page": page + 1}) } else { Value::Null },
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `harness_request`'s pages (docs/CHAT-PANE-DESIGN.md §4.4): each fits
+    /// its budget AFTER fencing (JSON escaping included), they tile the
+    /// text exactly, and page `n` is the same slice on every call.
+    #[test]
+    fn request_pages_fit_after_fencing_and_tile_the_text() {
+        // Escaping-heavy text: quotes, backslashes, newlines, tabs, a wide
+        // char — each byte can cost several in JSON.
+        let unit = "if (a[\"k\"] == '\\\\') {\n\t return \"é\";\n}\n";
+        let text = unit.repeat(3000);
+        let pages = request_pages(&text, 8 * 1024, 16 * 1024);
+        assert!(pages.len() > 2, "{}", pages.len());
+        assert_eq!(pages[0].0, 0);
+        assert_eq!(pages.last().unwrap().1, text.len());
+        for (k, w) in pages.windows(2).enumerate() {
+            assert_eq!(w[0].1, w[1].0, "page {k} ends where {} begins", k + 1);
+        }
+        for (k, &(a, b)) in pages.iter().enumerate() {
+            let budget = if k == 0 { 8 * 1024 } else { 16 * 1024 };
+            let size = fence::size(&untrusted("hand-off-user", &text[a..b], usize::MAX));
+            assert!(size <= budget, "page {k}: {size} > {budget}");
+            assert!(b > a);
+        }
+        assert_eq!(pages, request_pages(&text, 8 * 1024, 16 * 1024));
+        // A text that fits is one page.
+        assert_eq!(request_pages("short", 1024, 1024), vec![(0, 5)]);
+    }
     use harness_core::verdict::Verdict;
     use std::path::PathBuf;
 

@@ -739,13 +739,12 @@ pub fn response_present(path: &Path) -> bool {
         })
 }
 
-/// An unseeded attempt of the `external` provider: its retry would pose a
-/// BLIND hand-off, which only the audited protocol may answer (SAFE-3).
+/// An unseeded attempt of the `external` provider no chat asked for: its
+/// retry would pose a BLIND hand-off, which only the audited protocol may
+/// answer (SAFE-3) — harness-core's one predicate
+/// (docs/CHAT-PANE-DESIGN.md §4.2).
 pub fn blind(r: &AttemptRecord) -> bool {
-    r.seeded_from.is_none()
-        && r.steer_note.is_none()
-        && r.provider_kind != HUMAN_KIND
-        && (r.provider == EXTERNAL_PROVIDER || r.provider_kind == EXTERNAL_PROVIDER)
+    harness_core::attempts::blind(r)
 }
 
 /// Why Retry refuses `r` under `providers`, if it does: a hand edit, an
@@ -3803,6 +3802,7 @@ pub fn provenance_words(unit: &UnitView) -> String {
         ProvenanceView::Pipeline(id) => format!("from attempt {} (pipeline)", short_id(id)),
         ProvenanceView::Ambiguous(ids) => format!("ambiguous: {} attempts match", ids.len()),
         ProvenanceView::Steered(id) => format!("from attempt {} (steered)", short_id(id)),
+        ProvenanceView::Chat(id) => format!("from attempt {} (asked in chat)", short_id(id)),
         ProvenanceView::Human { attempt, origin } if attempt == origin => {
             format!("from hand edit {}", short_id(origin))
         }

@@ -13,6 +13,7 @@ mod report;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use harness_core::attempts;
 use harness_core::ledger::Ledger;
 use harness_core::ledger::WriterLock;
 use harness_core::traits::OracleStrategy;
@@ -134,6 +135,19 @@ enum Cmd {
         /// The finished attempt a --steer attempt is seeded from
         #[arg(long)]
         from: Option<String>,
+        /// Who asked for the attempt, when not the pipeline: `chat` (a chat
+        /// agent). Recorded, mixed into the attempt id; its hand-offs live
+        /// in the unit's `traces/chat/`; never scored as pipeline output
+        #[arg(long, value_parser = ["chat"])]
+        requester: Option<String>,
+        /// A file holding the answer to the pending hand-off named by
+        /// --answer-key (`external`, --requester=chat only): filed as its
+        /// response when the resumed attempt asks for exactly that request
+        #[arg(long, requires_all = ["answer_key", "requester"])]
+        answer: Option<PathBuf>,
+        /// The trace key (8 hex) of the hand-off --answer answers
+        #[arg(long, requires = "answer")]
+        answer_key: Option<String>,
     },
     /// Record a hand edit (exactly src/logic.rs and src/ffi.rs of DIR) as a
     /// labelled human attempt, judged by the oracle like a model reply; never
@@ -338,6 +352,9 @@ fn main() -> ExitCode {
             attempt,
             steer,
             from,
+            requester,
+            answer,
+            answer_key,
         } => cmd_migrate(MigrateArgs {
             unit,
             target,
@@ -350,6 +367,9 @@ fn main() -> ExitCode {
             attempt,
             steer,
             from,
+            requester,
+            answer,
+            answer_key,
         }),
         Cmd::Override {
             unit,
@@ -829,7 +849,8 @@ fn cmd_observe(target: PathBuf) -> Result<u8> {
                     attempt: None,
                     path: path.display().to_string(),
                     resume: observe_resume(&target),
-                    args: report::args(),
+                    args: report::args_without_answer(),
+                    request_key: report::request_key_of(path),
                 });
             }
             return Err(e.into());
@@ -1018,6 +1039,9 @@ struct MigrateArgs {
     attempt: Option<String>,
     steer: Option<String>,
     from: Option<String>,
+    requester: Option<String>,
+    answer: Option<PathBuf>,
+    answer_key: Option<String>,
 }
 
 impl MigrateArgs {
@@ -1025,9 +1049,10 @@ impl MigrateArgs {
     /// every value shell-quoted and ATTACHED (`--steer='- keep it'`: clap
     /// reads a separate word that starts with `-` as a flag, so a note like
     /// `- use iter()` would not survive the round trip), the promotion and
-    /// steer flags kept (the `awaiting` hint and event carry it). Global
-    /// flags (`--json`) are not repeated; a client re-runs its own argv
-    /// (the event's `args`).
+    /// steer flags kept (the `awaiting` hint and event carry it), the
+    /// requester too — never `--answer`/`--answer-key` (an answer is filed
+    /// once). Global flags (`--json`) are not repeated; a client re-runs its
+    /// own argv (the event's `args`).
     fn resume_command(&self) -> String {
         let q = report::shell_quote;
         let mut cmd = format!("harness migrate {}", q(&self.unit));
@@ -1059,8 +1084,35 @@ impl MigrateArgs {
         if let Some(note) = &self.steer {
             cmd.push_str(&format!(" --steer={}", q(note)));
         }
+        if let Some(requester) = &self.requester {
+            cmd.push_str(&format!(" --requester={}", q(requester)));
+        }
         cmd
     }
+}
+
+/// Largest `--answer` file (as harness-mcp's `harness_answer` took).
+const MAX_ANSWER_BYTES: u64 = 512 * 1024;
+
+/// `--answer FILE --answer-key KEY`, checked: KEY 8 lowercase hex; FILE a
+/// regular file of ≤ [`MAX_ANSWER_BYTES`], UTF-8, not blank.
+fn read_answer(file: &Path, key: &str) -> Result<(String, String)> {
+    if !harness_core::traces::is_trace_key(key) {
+        bail!("--answer-key {key:?} is not a trace key (8 lowercase hex digits)");
+    }
+    let meta = std::fs::metadata(file).with_context(|| format!("--answer {}", file.display()))?;
+    if !meta.is_file() || meta.len() > MAX_ANSWER_BYTES {
+        bail!(
+            "--answer {}: not a regular file of at most {MAX_ANSWER_BYTES} bytes",
+            file.display()
+        );
+    }
+    let text = std::fs::read_to_string(file)
+        .with_context(|| format!("--answer {} (it must be UTF-8)", file.display()))?;
+    if text.trim().is_empty() {
+        bail!("--answer {}: the answer is empty", file.display());
+    }
+    Ok((key.to_string(), text))
 }
 
 fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
@@ -1077,8 +1129,17 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         attempt,
         steer,
         from,
+        requester,
+        answer,
+        answer_key,
     } = args;
     require_sandbox(allow_unsandboxed, "harness migrate")?;
+    // `--answer`'s own checks, before the lock and anything written
+    // (docs/CHAT-PANE-DESIGN.md §4.3); the attempt's are the executor's.
+    let answer = match (&answer, &answer_key) {
+        (Some(file), Some(key)) => Some(read_answer(file, key)?),
+        _ => None,
+    };
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
     let _lock = lock_ledger(&ledger, &format!("migrate {unit_id}"))?;
@@ -1132,13 +1193,61 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     let max_repairs = stage.and_then(|m| m.max_repairs).unwrap_or(3);
     let promote_on_green = stage.and_then(|m| m.promote_on_green).unwrap_or(true);
 
-    let traces = safe_ledger_dir(&ctx.root, &["migration", "units", &unit_id, "traces"])?;
-    let resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
+    // A chat-requested attempt's hand-offs live apart from the blind
+    // protocol's: files keyed by the request alone would be shared with a
+    // blind attempt of the same model (docs/CHAT-PANE-DESIGN.md §4.1).
+    let traces = match (&requester, &answer) {
+        (Some(_), Some(_)) => {
+            // Never created by an answer: the hand-off was posed there.
+            let dir = safe_ledger_dir(&ctx.root, &["migration", "units", &unit_id, "traces"])?
+                .join(attempts::CHAT_TRACES);
+            match std::fs::symlink_metadata(&dir) {
+                Ok(meta) if meta.file_type().is_dir() => dir,
+                _ => bail!(
+                    "--answer refused: {} is not a real directory — no hand-off of a \
+                     chat-requested attempt of `{unit_id}` was posed",
+                    dir.display()
+                ),
+            }
+        }
+        (Some(_), None) => safe_ledger_dir(
+            &ctx.root,
+            &[
+                "migration",
+                "units",
+                &unit_id,
+                "traces",
+                attempts::CHAT_TRACES,
+            ],
+        )?,
+        (None, _) => safe_ledger_dir(&ctx.root, &["migration", "units", &unit_id, "traces"])?,
+    };
+    let mut resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
+    let slot = match answer {
+        Some((key, text)) => {
+            if resolved.kind != attempts::EXTERNAL_KIND {
+                bail!(
+                    "--answer refused: provider `{provider_name}` is of kind `{}`; only an \
+                     `external` run files an answer",
+                    resolved.kind
+                );
+            }
+            let slot = std::sync::Arc::new(harness_llm::adapters::AnswerSlot::new(key, text));
+            resolved.adapter = Box::new(harness_llm::adapters::TraceAdapter::with_answer(
+                &traces,
+                slot.clone(),
+            ));
+            Some(slot)
+        }
+        None => None,
+    };
 
     let hazards = confirmed_hazards(&ledger, &plan_doc, &facts, &unit_id)?;
 
     let oracle = harness_oracle::CAbiDifferential;
     let params = harness_llm::migrate::MigrateParams {
+        requester: requester.as_deref(),
+        answer_key: slot.as_ref().map(|s| s.key.as_str()),
         provider: &resolved,
         model: &model,
         max_tokens,
@@ -1151,9 +1260,39 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
             _ => None,
         },
     };
-    let outcome = match harness_llm::migrate::run_migration(
+    let run = harness_llm::migrate::run_migration(
         &params, &oracle, &ctx, &facts, &plan_doc, unit, &hazards,
-    ) {
+    );
+    // An answer the run never asked for is refused after the fact — the
+    // one refusal that cannot come first (its inputs moved, or it finished).
+    if let Some(slot) = slot.as_ref().filter(|s| !s.used()) {
+        // The request it waits on now is still reported: a client tracks
+        // the hand-off it can answer next (docs/CHAT-PANE-DESIGN.md §4.3).
+        if let Err(Error::Awaiting { path, attempt }) = &run {
+            report::event(&report::Awaiting {
+                k: "awaiting",
+                attempt: attempt.as_deref(),
+                path: path.display().to_string(),
+                resume: resume.clone(),
+                args: report::args_without_answer(),
+                request_key: report::request_key_of(path),
+            });
+        }
+        let why = match &run {
+            Ok(o) => format!("the attempt finished ({})", o.record.outcome),
+            Err(Error::Awaiting { path, .. }) => format!(
+                "the attempt asked for another request first ({})",
+                report::request_key_of(path).unwrap_or_else(|| path.display().to_string())
+            ),
+            Err(e) => format!("the run failed first: {e}"),
+        };
+        return Err(Error::AnswerUnused {
+            key: slot.key.clone(),
+            why,
+        }
+        .into());
+    }
+    let outcome = match run {
         Ok(o) => o,
         Err(e @ Error::Awaiting { .. }) => {
             eprintln!("{e:#}");
@@ -1168,7 +1307,8 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
                     attempt: attempt.as_deref(),
                     path: path.display().to_string(),
                     resume: resume.clone(),
-                    args: report::args(),
+                    args: report::args_without_answer(),
+                    request_key: report::request_key_of(path),
                 });
             }
             return Err(e.into());
@@ -1305,6 +1445,9 @@ mod tests {
             "Don't index twice; use \"iter()\" & keep $x.",
         ] {
             let args = MigrateArgs {
+                requester: None,
+                answer: None,
+                answer_key: None,
                 unit: "u-lib".into(),
                 target: PathBuf::from("/tmp/a target"),
                 provider: Some("external".into()),

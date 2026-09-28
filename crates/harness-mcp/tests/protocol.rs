@@ -43,7 +43,7 @@ fn a_scripted_session_over_stdio() {
     c.request(json!(2), "tools/list", json!({}));
     let (list, _) = c.response(&json!(2), 10);
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 6);
+    assert_eq!(tools.len(), 7);
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert_eq!(t["outputSchema"]["type"], "object", "{t}");

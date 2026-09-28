@@ -39,6 +39,9 @@ pub enum ProvenanceView {
     Ambiguous(Vec<String>),
     /// A steer attempt of model-only lineage (guided by a reviewer's note).
     Steered(String),
+    /// A chat-requested unseeded attempt (docs/CHAT-PANE-DESIGN.md §4.2):
+    /// never unassisted pipeline output.
+    Chat(String),
     /// A hand edit: the matched attempt, and the human attempt at the root
     /// of its seed chain (the same id when it is the human attempt itself).
     Human {
@@ -55,6 +58,7 @@ impl ProvenanceView {
         match self {
             ProvenanceView::Pipeline(id)
             | ProvenanceView::Steered(id)
+            | ProvenanceView::Chat(id)
             | ProvenanceView::Human { attempt: id, .. } => Some(id),
             ProvenanceView::None | ProvenanceView::Ambiguous(_) => None,
         }
@@ -68,6 +72,8 @@ pub enum AuthorshipView {
     Pipeline,
     /// A steer attempt of model-only lineage.
     Steered,
+    /// An unseeded model attempt a chat asked for.
+    Chat,
     /// A human attempt, or a steer attempt descending from the one named.
     Human(String),
 }
@@ -262,6 +268,7 @@ fn unit_view(
     let authorship = |r: &AttemptRecord| match attempts::authorship(&records, r) {
         Authorship::Pipeline => AuthorshipView::Pipeline,
         Authorship::Steered => AuthorshipView::Steered,
+        Authorship::Chat => AuthorshipView::Chat,
         Authorship::Human(origin) => AuthorshipView::Human(origin.id.clone()),
     };
     let provenance =
@@ -269,6 +276,7 @@ fn unit_view(
             Provenance::None => ProvenanceView::None,
             Provenance::Pipeline(r) => ProvenanceView::Pipeline(r.id.clone()),
             Provenance::Steered(r) => ProvenanceView::Steered(r.id.clone()),
+            Provenance::Chat(r) => ProvenanceView::Chat(r.id.clone()),
             Provenance::Human(r) => ProvenanceView::Human {
                 attempt: r.id.clone(),
                 origin: match authorship(r) {

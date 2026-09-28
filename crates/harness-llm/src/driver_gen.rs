@@ -322,7 +322,10 @@ impl Stage for DriverStage<'_> {
         provider_kind: &str,
         model: &str,
         first_key: &str,
+        _requester: Option<&str>,
     ) -> String {
+        // Driver attempts are never chat-requested: `Job::run` refuses a
+        // requester for this stage before any id is derived.
         attempts::driver_attempt_id(unit, unit_source, provider_kind, model, first_key)
     }
 
@@ -793,6 +796,8 @@ return 0;\n}\n";
         attempt: Option<&str>,
     ) -> Result<DriverOutcome, Error> {
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider,
             model: "test-model",
             max_tokens: 4096,
@@ -1530,6 +1535,8 @@ return 0;\n}\n";
         let plan = plan("");
         let (provider, seen) = scripted("anthropic", false, vec![good()]);
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider: &provider,
             model: "m",
             max_tokens: 4096,
@@ -1564,6 +1571,8 @@ return 0;\n}\n";
         facts.files[0].includes = vec!["src/unit.h".into(), "heldout/1.json".into()];
         let (provider, seen) = scripted("anthropic", false, vec![good()]);
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider: &provider,
             model: "m",
             max_tokens: 4096,
@@ -1626,6 +1635,8 @@ return 0;\n}\n";
         let text = format!("{}{END_SENTINEL}\n", emission::render_files(logic, ffi));
         let (provider, _) = scripted("external", false, vec![reply(text)]);
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider: &provider,
             model: "test-model",
             max_tokens: 4096,

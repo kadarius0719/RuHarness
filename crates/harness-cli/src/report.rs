@@ -163,6 +163,7 @@ pub fn error_kind(e: &anyhow::Error) -> &'static str {
         Some(harness_core::Error::Stale { .. }) => "stale",
         Some(harness_core::Error::Awaiting { .. }) => "awaiting",
         Some(harness_core::Error::Interrupted) => "interrupted",
+        Some(harness_core::Error::AnswerUnused { .. }) => "answer-unused",
         _ => "harness",
     }
 }
@@ -203,10 +204,45 @@ pub struct Awaiting<'a> {
     /// The command that resumes it, as a human would type it (shell-quoted;
     /// it omits global flags such as `--json`).
     pub resume: String,
-    /// This run's command line after the program name, verbatim and without
-    /// `--json` — what a client re-runs (with its own global flags) instead
-    /// of parsing `resume`.
-    pub args: &'a [String],
+    /// This run's command line after the program name, without `--json`
+    /// and without `--answer`/`--answer-key` (an answer is filed once) —
+    /// what a client re-runs (with its own global flags) instead of parsing
+    /// `resume`.
+    pub args: Vec<String>,
+    /// The pending request's trace key (`<key>.request.json` beside the
+    /// response file), when it names one — what `harness migrate
+    /// --answer-key` and harness-mcp's `harness_request` take.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_key: Option<String>,
+}
+
+/// [`args`] without `--answer`/`--answer-key` (attached `=value` or as the
+/// next word): the command line that resumes a run, answer or not.
+pub fn args_without_answer() -> Vec<String> {
+    let mut out = Vec::new();
+    let mut skip = false;
+    for arg in args() {
+        if skip {
+            skip = false;
+            continue;
+        }
+        if arg == "--answer" || arg == "--answer-key" {
+            skip = true;
+            continue;
+        }
+        if arg.starts_with("--answer=") || arg.starts_with("--answer-key=") {
+            continue;
+        }
+        out.push(arg.clone());
+    }
+    out
+}
+
+/// The trace key named by a hand-off's response path (`<key>.response.json`).
+pub fn request_key_of(path: &std::path::Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let key = name.strip_suffix(".response.json")?;
+    harness_core::traces::is_trace_key(key).then(|| key.to_string())
 }
 
 /// `check`: one oracle check of a verdict.

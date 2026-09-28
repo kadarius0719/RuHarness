@@ -94,6 +94,7 @@ fn main() {
             ""
         }
     ));
+    acts::sweep_answer_dirs();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let stdin = std::io::stdin();

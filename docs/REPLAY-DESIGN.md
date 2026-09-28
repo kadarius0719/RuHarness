@@ -94,7 +94,8 @@ excuses an older one. First entry: 014's `a-4adfe6d56ab0` (stdout-only oracle).
   attempts (display/grouping only).
 - R11 is amended: the attempt-ID DERIVATION stays frozen (test: every committed attempt's
   id re-derives from its recorded turn-1 key); prompt BYTES are locked by fixtures, not
-  frozen.
+  frozen. (2026-09-27: a chat-requested attempt's id also mixes in its `requester` —
+  docs/SCHEMAS.md "The requester label"; unlabelled ids are unchanged.)
 
 ## 7. Scores per prompt
 

@@ -260,6 +260,16 @@ pub struct MigrateParams<'a> {
     /// `replay` attempt is itself a steer attempt, whose first turn is then
     /// rendered from its record.
     pub steer: Option<SteerArgs<'a>>,
+    /// Who asked for the attempt, when not the pipeline itself
+    /// ([`harness_core::attempts::REQUESTER_CHAT`]): recorded, mixed into the
+    /// id, and — for a trace-backed provider — the caller routes its traces
+    /// to the unit's `traces/chat/` (docs/CHAT-PANE-DESIGN.md §4.1).
+    pub requester: Option<&'a str>,
+    /// `--answer-key`: the run files an answer for this one pending hand-off
+    /// (the adapter holds the text). Checked BEFORE anything is written: the
+    /// attempt it resumes must exist, be in progress and labelled, and wait
+    /// on this key with no response yet (docs/CHAT-PANE-DESIGN.md §4.3).
+    pub answer_key: Option<&'a str>,
 }
 
 /// The seed and note of a steer attempt.
@@ -673,7 +683,7 @@ pub fn record_human_attempt(
     remove_path(&work_dir.join(attempts::HUMAN_EDIT_DIR))?;
     let mut record = AttemptRecord {
         schema: attempts::ATTEMPT_SCHEMA_NAME.to_string(),
-        schema_version: attempts::ATTEMPT_SCHEMA_VERSION,
+        schema_version: attempts::schema_version_for(None),
         id: id.clone(),
         unit: unit.id.clone(),
         stage: None,
@@ -692,6 +702,7 @@ pub fn record_human_attempt(
         steer_note: None,
         seed_verdict: None,
         note: edit.note.map(str::to_string),
+        requester: None,
     };
     if let Err(e) = record.store(&work_dir) {
         let _ = remove_path(&work_dir);
@@ -792,8 +803,17 @@ impl Stage for MigrateStage<'_> {
         provider_kind: &str,
         model: &str,
         first_key: &str,
+        requester: Option<&str>,
     ) -> String {
-        attempts::attempt_id(unit, unit_source, driver, provider_kind, model, first_key)
+        attempts::attempt_id_with(
+            unit,
+            unit_source,
+            driver,
+            provider_kind,
+            model,
+            first_key,
+            requester,
+        )
     }
 
     fn judge(
@@ -1692,6 +1712,8 @@ int add(int a, int b) { return a + b; }\n";
         attempt: Option<&str>,
     ) -> Result<MigrationOutcome, Error> {
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider,
             model: "test-model",
             max_tokens: 4096,
@@ -3256,6 +3278,303 @@ int add(int a, int b) { return a + b; }\n";
         );
     }
 
+    /// A chat-requested run (docs/CHAT-PANE-DESIGN.md §4): `requester`, its
+    /// own traces dir (the CLI's `traces/chat/`), and — for `--answer` — the
+    /// external adapter holding one answer.
+    fn run_chat(
+        fx: &Fx,
+        provider: &ResolvedProvider,
+        oracle: &FakeOracle,
+        traces: &Path,
+        answer_key: Option<&str>,
+    ) -> Result<MigrationOutcome, Error> {
+        let params = MigrateParams {
+            requester: Some(attempts::REQUESTER_CHAT),
+            answer_key,
+            provider,
+            model: "test-model",
+            max_tokens: 4096,
+            max_repairs: 1,
+            traces_dir: traces,
+            retry: false,
+            attempt: None,
+            steer: None,
+        };
+        run_migration(
+            &params,
+            oracle,
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &[],
+        )
+    }
+
+    fn pending_keys(dir: &Path) -> Vec<String> {
+        let mut keys: Vec<String> = std::fs::read_dir(dir)
+            .map(|d| {
+                d.flatten()
+                    .filter_map(|e| {
+                        e.file_name()
+                            .to_string_lossy()
+                            .strip_suffix(".request.json")
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        keys.sort();
+        keys
+    }
+
+    /// §R SAFE-1 / ENG-1: a chat attempt and a blind one of the same unit and
+    /// model pose the same request key; they never share an answer, either
+    /// way, because a chat's hand-offs live in their own dir.
+    #[test]
+    fn a_chat_attempt_and_a_blind_one_never_share_an_answer() {
+        let fx = fixture("chatblind");
+        let chat_dir = fx.traces.join(attempts::CHAT_TRACES);
+        std::fs::create_dir_all(&chat_dir).unwrap();
+        let external =
+            |dir: &Path| resolved(Box::new(TraceAdapter::new(dir, true)), "external", false);
+        // The blind protocol poses its hand-off, and answers it.
+        let err = run_with(&fx, &external(&fx.traces), &oracle(vec![]), 1, &[]).unwrap_err();
+        assert!(err.to_string().starts_with("awaiting response: "), "{err}");
+        let blind_keys = pending_keys(&fx.traces);
+        assert_eq!(blind_keys.len(), 1);
+        let (request, _) = (
+            serde_json::from_str::<CompletionRequest>(
+                &std::fs::read_to_string(fx.traces.join(format!("{}.request.json", blind_keys[0])))
+                    .unwrap(),
+            )
+            .unwrap(),
+            (),
+        );
+        TraceAdapter::record(&fx.traces, &request, &good().unwrap()).unwrap();
+        // A chat Migrate of the same unit and model: the SAME request key,
+        // yet it awaits its own hand-off — it never reads the blind answer.
+        let err =
+            run_chat(&fx, &external(&chat_dir), &oracle(vec![]), &chat_dir, None).unwrap_err();
+        assert!(err.to_string().starts_with("awaiting response: "), "{err}");
+        assert_eq!(pending_keys(&chat_dir), blind_keys, "the same request");
+        assert!(!chat_dir
+            .join(format!("{}.response.json", blind_keys[0]))
+            .exists());
+        let ledger = Ledger::new(fx.target.root.clone());
+        let records = attempts::load_unit_attempts(&ledger, UNIT).unwrap();
+        let chat = records
+            .iter()
+            .find(|r| r.requester.is_some())
+            .expect("the chat attempt");
+        let blind = records.iter().find(|r| r.requester.is_none()).unwrap();
+        assert_ne!(
+            chat.id, blind.id,
+            "a chat attempt never shares a blind one's id"
+        );
+        assert_eq!(chat.schema_version, 2);
+        assert!(attempts::blind(blind) && !attempts::blind(chat));
+        // The chat answers its hand-off with --answer: filed, green.
+        let slot = std::sync::Arc::new(crate::adapters::AnswerSlot::new(
+            blind_keys[0].clone(),
+            good().unwrap().text,
+        ));
+        let answering = resolved(
+            Box::new(TraceAdapter::with_answer(&chat_dir, slot.clone())),
+            "external",
+            false,
+        );
+        let outcome = run_chat(
+            &fx,
+            &answering,
+            &oracle(vec![green()]),
+            &chat_dir,
+            Some(&blind_keys[0]),
+        )
+        .unwrap();
+        assert!(slot.used());
+        assert_eq!(outcome.record.id, chat.id);
+        assert_eq!(outcome.record.outcome, "green");
+        assert_eq!(outcome.record.requester.as_deref(), Some("chat"));
+        // The blind attempt finishes on ITS answer (the root's), untouched.
+        let blind_done =
+            run_with(&fx, &external(&fx.traces), &oracle(vec![green()]), 1, &[]).unwrap();
+        assert_eq!(blind_done.record.id, blind.id);
+        assert_eq!(blind_done.record.requester, None);
+        // Replay verifies each from its own traces, its label re-derived with
+        // its id; a pinned chat record replayed without the label is refused.
+        let replay =
+            |dir: &Path| resolved(Box::new(TraceAdapter::new(dir, false)), "replay", false);
+        let replayed = run_chat(
+            &fx,
+            &replay(&chat_dir),
+            &oracle(vec![green()]),
+            &chat_dir,
+            None,
+        )
+        .unwrap();
+        assert_eq!(replayed.record, outcome.record);
+        let replayed = run_with(&fx, &replay(&fx.traces), &oracle(vec![green()]), 1, &[]).unwrap();
+        assert_eq!(
+            replayed.record, blind_done.record,
+            "the unlabelled one, from the root"
+        );
+        let err = run_opts(
+            &fx,
+            &replay(&chat_dir),
+            &oracle(vec![green()]),
+            1,
+            &[],
+            false,
+            Some(&chat.id),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("requested by chat"), "{err}");
+    }
+
+    /// The other direction: a chat answered first; a later blind run of the
+    /// same unit and model poses its own hand-off (§R SAFE-1 (a)).
+    #[test]
+    fn a_blind_run_never_reads_a_chat_answer() {
+        let fx = fixture("blindafterchat");
+        let chat_dir = fx.traces.join(attempts::CHAT_TRACES);
+        std::fs::create_dir_all(&chat_dir).unwrap();
+        let external =
+            |dir: &Path| resolved(Box::new(TraceAdapter::new(dir, true)), "external", false);
+        run_chat(&fx, &external(&chat_dir), &oracle(vec![]), &chat_dir, None).unwrap_err();
+        let keys = pending_keys(&chat_dir);
+        let slot = std::sync::Arc::new(crate::adapters::AnswerSlot::new(
+            keys[0].clone(),
+            good().unwrap().text,
+        ));
+        let answering = resolved(
+            Box::new(TraceAdapter::with_answer(&chat_dir, slot.clone())),
+            "external",
+            false,
+        );
+        run_chat(
+            &fx,
+            &answering,
+            &oracle(vec![green()]),
+            &chat_dir,
+            Some(&keys[0]),
+        )
+        .unwrap();
+        let err = run_with(&fx, &external(&fx.traces), &oracle(vec![]), 1, &[]).unwrap_err();
+        assert!(err.to_string().starts_with("awaiting response: "), "{err}");
+        assert_eq!(
+            pending_keys(&fx.traces),
+            keys,
+            "its own hand-off, unanswered"
+        );
+        assert!(!fx
+            .traces
+            .join(format!("{}.response.json", keys[0]))
+            .exists());
+    }
+
+    /// `--answer`'s preconditions refuse before anything is written, by
+    /// listing and loading only (docs/CHAT-PANE-DESIGN.md §4.3); an answer
+    /// the attempt never asks for is left unused.
+    #[test]
+    fn an_answer_is_refused_first_unless_its_attempt_waits_on_it() {
+        let fx = fixture("answerchecks");
+        let chat_dir = fx.traces.join(attempts::CHAT_TRACES);
+        std::fs::create_dir_all(&chat_dir).unwrap();
+        let with_answer = |key: &str| {
+            let slot = std::sync::Arc::new(crate::adapters::AnswerSlot::new(
+                key.to_string(),
+                good().unwrap().text,
+            ));
+            (
+                resolved(
+                    Box::new(TraceAdapter::with_answer(&chat_dir, slot.clone())),
+                    "external",
+                    false,
+                ),
+                slot,
+            )
+        };
+        let refused = |r: Result<MigrationOutcome, Error>, why: &str| {
+            let err = r.unwrap_err().to_string();
+            assert!(
+                err.contains("--answer refused") && err.contains(why),
+                "{err}"
+            );
+        };
+        // No attempt yet: --answer never creates one.
+        let before = snapshot(&fx.unit_dir());
+        let (p, slot) = with_answer("0123abcd");
+        refused(
+            run_chat(&fx, &p, &oracle(vec![]), &chat_dir, Some("0123abcd")),
+            "has no record",
+        );
+        assert!(!slot.used());
+        assert_eq!(snapshot(&fx.unit_dir()), before, "nothing written");
+        // Posed: now the attempt waits on its key.
+        let external = resolved(
+            Box::new(TraceAdapter::new(&chat_dir, true)),
+            "external",
+            false,
+        );
+        run_chat(&fx, &external, &oracle(vec![]), &chat_dir, None).unwrap_err();
+        let key = pending_keys(&chat_dir).remove(0);
+        // Not a pending request of it: refused first, nothing written.
+        let before = snapshot(&fx.unit_dir());
+        let (p, _) = with_answer("fedcba98");
+        refused(
+            run_chat(&fx, &p, &oracle(vec![]), &chat_dir, Some("fedcba98")),
+            "the hand-off fedcba98",
+        );
+        assert_eq!(snapshot(&fx.unit_dir()), before, "nothing written");
+        // Without the label: refused.
+        let (p, _) = with_answer(&key);
+        let params = MigrateParams {
+            requester: None,
+            answer_key: Some(&key),
+            provider: &p,
+            model: "test-model",
+            max_tokens: 4096,
+            max_repairs: 1,
+            traces_dir: &chat_dir,
+            retry: false,
+            attempt: None,
+            steer: None,
+        };
+        let r = run_migration(
+            &params,
+            &oracle(vec![]),
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &[],
+        );
+        refused(r, "--requester=chat");
+        // A response already filed: refused (never answered twice).
+        let request: CompletionRequest = serde_json::from_str(
+            &std::fs::read_to_string(chat_dir.join(format!("{key}.request.json"))).unwrap(),
+        )
+        .unwrap();
+        TraceAdapter::record(&chat_dir, &request, &good().unwrap()).unwrap();
+        let before = snapshot(&fx.unit_dir());
+        let (p, slot) = with_answer(&key);
+        refused(
+            run_chat(&fx, &p, &oracle(vec![]), &chat_dir, Some(&key)),
+            "not pending",
+        );
+        assert!(!slot.used());
+        assert_eq!(snapshot(&fx.unit_dir()), before, "nothing written");
+        // Finished: refused.
+        run_chat(&fx, &external, &oracle(vec![green()]), &chat_dir, None).unwrap();
+        let (p, _) = with_answer(&key);
+        refused(
+            run_chat(&fx, &p, &oracle(vec![]), &chat_dir, Some(&key)),
+            "not in progress",
+        );
+    }
+
     #[test]
     fn a_finished_external_attempt_is_verified_not_rewritten() {
         let fx = fixture("promoted");
@@ -3515,6 +3834,8 @@ int add(int a, int b) { return a + b; }\n";
         attempt: Option<&str>,
     ) -> Result<MigrationOutcome, Error> {
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider,
             model: "test-model",
             max_tokens,
@@ -4083,6 +4404,8 @@ int add(int a, int b) { return a + b; }\n";
     ) -> Vec<CompletionRequest> {
         let (provider, seen) = scripted("anthropic", false, replies);
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider: &provider,
             model: "fixture-model",
             max_tokens: 4096,
@@ -4460,6 +4783,8 @@ int add(int a, int b) { return a + b; }\n";
         ];
         let (provider, seen) = scripted("anthropic", false, vec![good()]);
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider: &provider,
             model: "m",
             max_tokens: 4096,
@@ -4689,6 +5014,8 @@ int add(int a, int b) { return a + b; }\n";
             let plan = plan_with_oracle(oracle_table);
             let (provider, seen) = scripted("anthropic", false, vec![good()]);
             let params = MigrateParams {
+                requester: None,
+                answer_key: None,
                 provider: &provider,
                 model: "m",
                 max_tokens: 4096,
@@ -4722,6 +5049,8 @@ int add(int a, int b) { return a + b; }\n";
         let fx = fixture("plan-membership");
         let (provider, _) = scripted("anthropic", false, vec![good()]);
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider: &provider,
             model: "m",
             max_tokens: 4096,
@@ -4778,6 +5107,8 @@ int add(int a, int b) { return a + b; }\n";
         facts.files[0].includes = vec![format!("../{secret_name}")];
         let (provider, seen) = scripted("anthropic", false, vec![good()]);
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider: &provider,
             model: "m",
             max_tokens: 4096,
@@ -4930,6 +5261,8 @@ int add(int a, int b) { return a + b; }\n";
     fn translate_user_under(fx: &Fx, facts: &Facts, ffi: &str) -> (String, FakeOracle) {
         let (provider, seen) = scripted("anthropic", false, vec![reply(emit(LOGIC, ffi))]);
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider: &provider,
             model: "m",
             max_tokens: 4096,
@@ -5008,6 +5341,8 @@ int add(int a, int b) { return a + b; }\n";
         let (provider, seen) = scripted("anthropic", false, vec![good()]);
         let run = |facts: &Facts| {
             let params = MigrateParams {
+                requester: None,
+                answer_key: None,
                 provider: &provider,
                 model: "m",
                 max_tokens: 4096,
@@ -5112,6 +5447,8 @@ int add(int a, int b) { return a + b; }\n";
         steer: Option<SteerArgs>,
     ) -> Result<MigrationOutcome, Error> {
         let params = MigrateParams {
+            requester: None,
+            answer_key: None,
             provider,
             model: "test-model",
             max_tokens: 4096,

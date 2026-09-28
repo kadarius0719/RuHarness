@@ -287,8 +287,8 @@ No timestamps. Additive changes never bump the version.
 | `check` | `unit`, `name`, `passed`, `detail` | verify, promote, migrate's final verdict — one per check |
 | `verdict` | `unit`, `green`, `path` | only after a verdict is stored at `path` (verify; migrate's final judged turn, `attempt-verdict.json`; a green promotion) — never for a rolled-back promotion, whose verdict is not stored (its `check` lines are) |
 | `promote` | `unit`, `attempt`, `result` (`verified` / `rolled-back`) | migrate, promote |
-| `awaiting` | `attempt` (null for triage), `path`, `resume` (the exact re-run command) | the `external` hand-off |
-| `error` | `message`, `kind` (`locked` / `stale` / `awaiting` / `interrupted` / `harness`) | any command, before `result` |
+| `awaiting` | `attempt` (null for triage), `path`, `resume` (the exact re-run command), `request_key` (2026-09-27) | the `external` hand-off |
+| `error` | `message`, `kind` (`locked` / `stale` / `awaiting` / `interrupted` / `answer-unused` / `harness`) | any command, before `result` |
 
 **Typed errors (EVENTS-2).** The kinds come from `harness_core::Error` variants, not prose
 matching: `Locked { holder }`, `Stale { subject, hint }` (`#[error("{subject} is stale:

@@ -428,3 +428,140 @@ fn steer_and_override_on_zopfli() {
     let _ = std::fs::remove_dir_all(&edit);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// docs/CHAT-PANE-DESIGN.md §4: a chat-requested steer through the CLI —
+/// labelled, its hand-off in `traces/chat/` with the event's `request_key`,
+/// its resume hint and args carrying the label; answered with `--answer`
+/// (filed by the CLI, only for exactly that request), refused up front when
+/// the attempt does not wait on it, and `answer-unused` when it waits on
+/// another request.
+#[test]
+fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let tmp = std::env::temp_dir().join(format!("ruharness-chat-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    copy_dir(&repo_root.join("targets/zopfli"), &tmp);
+    // The CLI names canonical paths (/var → /private/var on macOS).
+    let tmp = tmp.canonicalize().unwrap();
+    let target = tmp.to_str().unwrap();
+    let unit = "u001-katajainen";
+    let unit_dir = tmp.join("migration/units").join(unit);
+    let traces = unit_dir.join("traces");
+    let _ = std::fs::remove_dir_all(&traces);
+    let _ = std::fs::remove_dir_all(unit_dir.join("attempts"));
+    let logic = include_str!("fixtures/katajainen_logic.rs");
+    let ffi = include_str!("fixtures/katajainen_ffi.rs");
+    for cmd in ["scan", "plan"] {
+        let r = harness(&[cmd, "--target", target]);
+        assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    }
+    let migrate = |extra: &[&str]| {
+        let mut args = vec![
+            "--json",
+            "migrate",
+            "--allow-unsandboxed",
+            unit,
+            "--target",
+            target,
+            "--no-promote",
+        ];
+        args.extend_from_slice(extra);
+        harness(&args)
+    };
+    // A blind seed, through the flat traces.
+    assert_eq!(migrate(&[]).code, 1);
+    write_response(&pending_request(&traces).unwrap(), &emission(logic, ffi));
+    let r = migrate(&[]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let seed = find(&events(&r), "attempt").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Two chat steers of the seed: each waits on its own request in
+    // traces/chat, the event naming its key; the hint keeps the label.
+    let chat_traces = traces.join("chat");
+    let pose = |note: &str| {
+        let r = migrate(&["--from", &seed, "--steer", note, "--requester=chat"]);
+        assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+        let evs = events(&r);
+        let aw = find(&evs, "awaiting").expect("awaiting event").clone();
+        let key = aw["request_key"].as_str().expect("request_key").to_string();
+        assert!(Path::new(aw["path"].as_str().unwrap()).starts_with(&chat_traces));
+        assert!(chat_traces.join(format!("{key}.request.json")).is_file());
+        assert!(aw["resume"].as_str().unwrap().contains("--requester=chat"));
+        assert!(aw["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a == "--requester=chat"));
+        (aw["attempt"].as_str().unwrap().to_string(), key)
+    };
+    let (first, first_key) = pose("keep the wrapping add explicit");
+    let (second, second_key) = pose("name the loop bounds");
+    assert_ne!(first_key, second_key);
+    let rec = record(&unit_dir, &first);
+    assert_eq!(rec["requester"], "chat");
+    assert_eq!(rec["schema_version"], 2);
+    assert!(
+        pending_request(&traces).is_none(),
+        "nothing chat-requested in the flat traces"
+    );
+
+    let answer_file = tmp.join("answer.txt");
+    let revised = logic.replacen("\n", "\n\n", 1);
+    std::fs::write(&answer_file, emission(&revised, ffi)).unwrap();
+    let answer = |key: &str, extra: &[&str]| {
+        let mut args = vec!["--from", &seed];
+        args.extend_from_slice(extra);
+        args.push("--requester=chat");
+        let a = format!("--answer={}", answer_file.display());
+        let k = format!("--answer-key={key}");
+        let mut all: Vec<&str> = args;
+        all.push(&a);
+        all.push(&k);
+        migrate(&all)
+    };
+    // The second steer's answer offered to the FIRST attempt: it passes the
+    // up-front checks (a pending chat request), but the attempt asks for
+    // its own request — answer-unused, the second hand-off untouched.
+    let r = answer(&second_key, &["--steer", "keep the wrapping add explicit"]);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    let evs = events(&r);
+    assert_eq!(find(&evs, "error").unwrap()["kind"], "answer-unused");
+    // What it waits on is still reported, without the answer flags.
+    let aw = find(&evs, "awaiting").expect("the request it waits on");
+    assert_eq!(aw["request_key"], first_key.as_str());
+    assert!(!aw["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a.as_str().unwrap().starts_with("--answer")));
+    assert!(!chat_traces
+        .join(format!("{second_key}.response.json"))
+        .exists());
+    // Its own key: filed by the CLI, the SAME attempt resumes to green.
+    let r = answer(&first_key, &["--steer", "keep the wrapping add explicit"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let done = find(&events(&r), "attempt").unwrap().clone();
+    assert_eq!(done["id"], first.as_str());
+    assert_eq!(done["outcome"], "green");
+    let filed: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(chat_traces.join(format!("{first_key}.response.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(filed["input_tokens"], 0);
+    assert_eq!(filed["stop_reason"], "end_turn");
+    // Answered once: again, refused up front (it is finished).
+    let r = answer(&first_key, &["--steer", "keep the wrapping add explicit"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("--answer refused"), "{}", r.stderr);
+    // Without the label, clap refuses --answer before anything runs.
+    let a = format!("--answer={}", answer_file.display());
+    let k = format!("--answer-key={second_key}");
+    let r = migrate(&["--from", &seed, "--steer", "name the loop bounds", &a, &k]);
+    assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
+    assert!(r.stderr.contains("--requester"), "{}", r.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = second;
+}

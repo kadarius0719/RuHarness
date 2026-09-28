@@ -146,6 +146,8 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
     )?;
     let resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
     let params = harness_llm::migrate::MigrateParams {
+        requester: None,
+        answer_key: None,
         provider: &resolved,
         model: &model,
         max_tokens,
@@ -172,7 +174,8 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
                         attempt: attempt.as_deref(),
                         path: path.display().to_string(),
                         resume: resume.clone(),
-                        args: report::args(),
+                        args: report::args_without_answer(),
+                        request_key: report::request_key_of(path),
                     });
                 }
                 return Err(e.into());
