@@ -1107,6 +1107,12 @@ mod tests {
         let target = make("elsewhere".into(), 0o700);
         let link = tmp.0.join(format!("{DIR_PREFIX}{dead}-0123abd0"));
         std::os::unix::fs::symlink(&target, &link).unwrap();
+        // The link itself 0700 (as a dir of ours would be): only its being
+        // a link keeps it from the sweep.
+        let _ = Command::new("/bin/chmod")
+            .args(["-h", "700"])
+            .arg(&link)
+            .status();
         assert_eq!(sweep(&tmp.0, uid, &own), 1);
         assert!(!stale.exists());
         for kept in [&open, &live, &own, &odd, &target, &other] {
