@@ -739,6 +739,11 @@ fn new_chat_after_an_ended_chat_starts_afresh() {
         1,
         "said at New chat"
     );
+    // A start that fails keeps it said (fix check 2, 9).
+    let bins = std::mem::replace(&mut c.bins, Err("no claude".into()));
+    assert!(c.send("again", None, Instant::now()).is_err());
+    assert!(c.send("again", None, Instant::now()).is_err());
+    c.bins = bins;
     let _ = c.send("again", None, Instant::now());
     let said = text(&mut c);
     assert_eq!(said.matches("a new chat").count(), 1, "{said}");
