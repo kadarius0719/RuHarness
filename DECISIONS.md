@@ -1984,3 +1984,136 @@ revisit triggers).
 border prompts should answer clicks; a user reports the 1 s settle as slow → measure the
 OS double-click interval instead of a constant; a terminal without SGR reports shows up →
 the X10 parser's coordinate limits (223) and `--no-mouse`.
+
+## 2026-09-27 — Chat pane: §15 spike (an embedded agent runtime; chat in ratatui)
+
+Time-boxed: three Sonnet subagents (Claude Code's headless mode from its docs, the Python
+Agent SDK's source and the installed binary; other runtimes and ACP; chat rendering in
+ratatui TUIs and the candidate crates), and the premise run end to end by the main session
+(a Python driver over pipes, Claude Code 2.1.274 on haiku, harness-mcp from `target/debug`
+attached to a zopfli copy, ~$0.30).
+
+**Verified by running it** (the driver's logs are the evidence):
+- `claude -p --input-format stream-json --output-format stream-json --verbose` stays up for
+  many turns, one JSON line per user message, until stdin EOF. Each turn opens with
+  `system/init` (the MCP servers and their status, the tools, the model, `apiKeySource`) and
+  ends with `result` (`success` / `error_during_execution`, `terminal_reason`,
+  `total_cost_usd` — cumulative for the process —, `permission_denials`). Lines seen up to
+  ~24 KB. No API key: the binary's own subscription login (`apiKeySource: none` under the
+  desktop host). `CLAUDECODE=1` (a cockpit started in a Claude Code terminal) changes nothing.
+- **Permission prompts reach the parent before the tool runs.** Without a handler, every tool
+  use not pre-allowed is denied. `--permission-prompt-tool stdio` sends `control_request`
+  `can_use_tool` (tool name, full input, `tool_use_id`) on stdout; the parent writes
+  `control_response` `allow` (+ `updatedInput`) or `deny` + message on stdin. **Held open for
+  150 s, it was answered normally** (no timeout). A deny whose message said "the cockpit ran
+  this after the user confirmed it; result: GREEN …" was read by the model as that outcome.
+- `control_request` `interrupt` ends the turn (`aborted_streaming`, or `aborted_tools` with a
+  `control_cancel_request` for a pending permission) and the process takes the next message.
+  A user message written mid-turn is folded into that turn. SIGINT to the group: the pending
+  permission cancelled, exit in ~1 s, harness-mcp gone with it. stdin EOF with a permission
+  pending: the request fails, the model may retry (fails too), the turn ends, exit 0 — EOF
+  alone lets a turn finish.
+- `--session-id <uuid>` then `--resume <uuid>` in a new process continues the conversation;
+  transcripts go to the runtime's `~/.claude/projects/<cwd slug>/` (outside the repo — §12.1:
+  they may hold the target's code); `--no-session-persistence` writes none.
+- Isolation: `--tools "Read,Grep,Glob" --restricted --setting-sources "" --strict-mcp-config
+  --mcp-config <json>` leaves exactly those three (confined to the working dirs) plus the
+  harness tools — no Bash/Edit/Write/Web, no deferred-tool search, no auto memory. The user's
+  own skills stay listed (usable only through the `Skill` tool); `--disable-slash-commands`
+  removes every skill. A harness-shipped skill loads with `--plugin-dir <dir>`
+  (`ruharness:migrate-this`) and was invoked and followed on "Please migrate the katajainen
+  unit."
+- **With every tool call auto-allowed, the model "migrated" a verified unit by calling
+  `harness_promote`, then again with `replace: true`, on its own initiative** (scratch copy).
+  Every chat act must be the person's armed confirmation, never the model's call.
+
+**From the sources** (docs agent; code.claude.com/docs/en/{headless,cli-reference,sessions,mcp,
+env-vars,legal-and-compliance}.md, agent-sdk/typescript.md; github.com/anthropics/
+claude-agent-sdk-python `types.py`, `_internal/query.py`):
+- The `stdio` value is **SDK-internal**: the Python SDK passes it for a `can_use_tool`
+  callback; the public docs name only the MCP-tool form. The protocol can change in any
+  release.
+- `--bare` (recommended for scripted runs) never reads OAuth or the keychain: it needs an
+  API key, so it is out. SIGTERM kills the process with no result and answers no pending
+  prompt; SIGINT ends only the turn. `result` subtypes also include `error_max_budget_usd`
+  and `error_max_structured_output_retries`; failed `--mcp-config` entries are reported in
+  `init.mcp_server_errors`. MCP `notifications/progress` do not reach the stream (only the
+  runtime's own `tool_progress` heartbeat). MCP output above 25k tokens is saved to a file.
+- **Policy** (legal-and-compliance.md, "Usage policy"): running the UNMODIFIED Claude Code
+  binary, each user signed in through its own flow with their own subscription or key, is
+  permitted, including inside other products (commercial terms apply to products);
+  developers may not offer claude.ai login in their own apps, nor collect, store or
+  intermediate credentials, nor pay for or resell usage for their users. The cockpit spawns
+  the user's installed `claude` and never touches a credential.
+
+**Other runtimes** (github.com/agentclientprotocol; openai.com/index/unlocking-the-codex-harness;
+geminicli.com/docs/cli/acp-mode; cursor.com/docs/cli/acp): the Agent Client Protocol (v1;
+a v2 schema in progress) has the same shape — prompt, streamed updates,
+`session/request_permission`, cancel, MCP servers passed in `session/new`. Gemini CLI and
+Cursor's CLI speak it natively; Claude Code only through `@agentclientprotocol/claude-agent-acp`
+(Node ≥ 22, wraps the Agent SDK, renamed twice in a year); Codex through its own app-server
+JSON-RPC (server-initiated approvals) or an adapter. The Rust `agent-client-protocol` 2.2
+crate is async (futures).
+
+**Rendering** (codex-rs/tui, the closest reference — Rust and ratatui): history cells, one
+mutable while streaming; markdown hand-rendered from pulldown-cmark; finished history
+written into the terminal's own scrollback; the approval as a list overlay whose Esc
+cancels; the composer hand-rolled; bracketed paste plus a burst heuristic; the model's
+control characters filtered before any escape of its own. Crates checked on crates.io and
+RustSec (none with advisories): `ratatui-textarea` 0.9.2 (the ratatui org's fork; the
+original `tui-textarea` is stalled before ratatui 0.30), `tui-markdown` 0.3.10
+(pulldown-cmark, itertools, tracing; optional syntect), `pulldown-cmark` 0.13.4, `textwrap`
+0.16.4, `tui-scrollview` 0.6.8.
+
+**Chosen defaults** (for the design to specify and its review to attack):
+1. **Claude Code headless, spoken directly** by a small sync module in harness-tui: the child
+   in its own process group, stdin a pipe (user messages, control responses), stdout NDJSON
+   read by a thread with a line bound, stderr drained — the pattern of `spawn`, zero new
+   crates. The adapter turns the stream into a narrow internal event set (text, tool call,
+   permission request, turn end, error), so an ACP adapter can be added later without the
+   pane knowing.
+2. **The cockpit is the only executor and the only approver.** The chat runs with
+   `--tools "Read,Grep,Glob" --restricted --setting-sources "" --strict-mcp-config` and
+   harness-mcp attached **without `--harness`** (read-only: its act tools refuse by
+   themselves — defence in depth). Every tool call arrives as `can_use_tool`: the reads are
+   allowed; a harness act is mapped onto the cockpit's OWN act (its argv builder and §4.3
+   gates) and shown in the same armed dialog, as the chat's request; the permission stays
+   open while the dialog and the command run, and is answered `deny` with the outcome — the
+   cockpit ran it. The activity panel, one command at a time, Cancel, the signal path and the
+   hand-edit rules apply unchanged.
+3. **Zero new crates for the pane**: plain text (no markdown), wrapped by display width with
+   the view's filter; an in-app transcript that follows new output unless scrolled up (the
+   cockpit owns the alternate screen — native scrollback does not fit); a hand-rolled input
+   box like the note input.
+
+**Rejected**: ACP via claude-agent-acp (Node and an adapter with churn, an async crate, for
+no capability Claude Code lacks); an Agent SDK (a Python or Node runtime inside a Rust
+tool); the raw Messages API (no API key here, and an agent loop of our own — briefing §7);
+`--bare` (no subscription login); the documented MCP-tool prompt form (the prompt would land
+in harness-mcp, a grandchild with no channel to the cockpit); letting harness-mcp run the
+acts (a second executor: no events in the panel, the one-at-a-time rule broken, a signal
+path three processes deep, the argv shown not provably the argv run); `tui-markdown`,
+`ratatui-textarea`, `tui-scrollview` (weight for what the cockpit already does).
+
+**Open for the design** (found by the spike): who writes the response when the chat answers
+an `external` hand-off (today harness-mcp writes only hand-offs it posed; the cockpit never
+writes the ledger); the requester label — attempt ids are content-derived (unit, source,
+driver, provider kind, model, request), so a chat-requested fresh attempt would share its id
+and directory with a blind one of the same inputs unless the requester is part of the id;
+the model named in a chat act's `--model` must be the model that answers (the chat's, from
+`init`), not the target's migrate model; session persistence (off by default: transcripts
+would leave the repo); where the skill lives (a `--plugin-dir` plugin, which also exposes the
+user's own skills through `Skill`, or the same text as `--append-system-prompt-file`).
+
+**Found in passing** (its own task): a `claude-code` provider for harness-llm — `claude -p`
+with no tools, no settings, an empty working dir and the system prompt replaced — would give
+blind translations through the user's subscription without an API key or a hand-off. Needs
+its own spike: what still leaks into the context (CLAUDE.md, memory, skills), token counts,
+and the policy above.
+
+**Revisit when**: a Claude Code release changes the stdio control protocol (the adapter's
+recorded-stream tests and a live smoke test catch it) → the documented MCP-tool form with a
+channel to the cockpit; a runtime cannot hold a permission open → harness-mcp in a
+request-only mode, the outcome sent later as a message; Claude Code speaks ACP natively, or a
+second runtime is wanted → an ACP adapter; `--bare` accepts the subscription login → use it;
+the transcript needs markdown → pulldown-cmark (vetted above).
