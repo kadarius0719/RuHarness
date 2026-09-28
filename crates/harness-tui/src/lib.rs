@@ -26,6 +26,8 @@ pub mod spawn;
 #[cfg(feature = "tui")]
 pub mod app;
 #[cfg(feature = "tui")]
+pub mod chat;
+#[cfg(feature = "tui")]
 pub mod dialog;
 #[cfg(feature = "tui")]
 pub mod handedit;

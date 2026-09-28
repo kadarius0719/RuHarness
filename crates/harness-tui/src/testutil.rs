@@ -38,3 +38,22 @@ pub fn scratch_target(rel: &str, tag: &str) -> PathBuf {
     copy(&repo().join(rel), &dst);
     dst.canonicalize().unwrap()
 }
+
+/// A scratch directory removed on drop — also when a test fails.
+pub struct TmpDir(pub PathBuf);
+
+impl TmpDir {
+    /// A fresh one, unique per `tag`.
+    pub fn new(tag: &str) -> TmpDir {
+        let dir = std::env::temp_dir().join(format!("harness-tui-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TmpDir(dir.canonicalize().unwrap())
+    }
+}
+
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
