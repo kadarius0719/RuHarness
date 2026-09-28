@@ -3,18 +3,23 @@
 //! (docs/MCP-DESIGN.md). Everything it knows it reads with
 //! `harness_tui::model`; everything it writes is a spawned `harness --json …`
 //! through `harness_tui::spawn`, so the writer lock, the sandbox, the oracle
-//! and the ledger's rules apply unchanged. The one file it writes is the
-//! response to a hand-off it posed (`harness_answer`), atomically.
+//! and the ledger's rules apply unchanged; it writes no file itself (an
+//! answer to a hand-off it posed goes to the CLI's stdin). With `--cockpit`
+//! it is the server of the cockpit's chat: no harness binary at all, reads,
+//! and act tools that only ask (docs/CHAT-PANE-DESIGN.md §4.4).
 
 #![forbid(unsafe_code)]
 
 mod acts;
-mod fence;
 mod policy;
 mod reads;
 mod rpc;
 mod server;
 mod tools;
+
+/// The fence lives in the read model's crate: one implementation for this
+/// server and the cockpit's chat (docs/CHAT-PANE-DESIGN.md §3.3).
+use harness_tui::fence;
 
 use harness_tui::spawn::ChildSlot;
 use server::{Gate, Input, Server};
@@ -83,11 +88,11 @@ fn main() {
         cfg.target.display(),
         cfg.target_roots.len(),
         cfg.providers.join(", "),
-        cfg.harness
-            .as_ref()
-            .map_or("none — read-only".to_string(), |h| h
-                .display()
-                .to_string()),
+        match (&cfg.harness, cfg.cockpit) {
+            (_, true) => "none — the cockpit's server: it runs no act".to_string(),
+            (None, false) => "none — read-only".to_string(),
+            (Some(h), false) => h.display().to_string(),
+        },
         if cfg.allow_unsandboxed {
             "; UNSANDBOXED"
         } else {

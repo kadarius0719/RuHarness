@@ -1,5 +1,7 @@
 //! Ledger text is untrusted — one channel, one posture (docs/MCP-DESIGN.md
-//! §4). Every string that comes from the target, a model or the harness's
+//! §4). One implementation for harness-mcp and the cockpit's chat, which
+//! fences every ledger- and CLI-derived string it sends its agent the same
+//! way (docs/CHAT-PANE-DESIGN.md §3.3). Every string that comes from the target, a model or the harness's
 //! own messages reaches the client as `{"untrusted": "<origin>", "text":
 //! "…"}` inside `structuredContent`; the text content is that same JSON, so
 //! both channels carry the label and JSON string encoding is the fence.
@@ -86,6 +88,19 @@ pub const ERROR_KINDS: &[&str] = &[
 pub const PROMOTION_RESULTS: &[&str] = &["verified", "rolled-back"];
 /// `requester` (docs/CHAT-PANE-DESIGN.md §4.1).
 pub const REQUESTERS: &[&str] = &["chat"];
+
+/// A model name as the `external` provider records it: printable, no
+/// spaces, at most 128 bytes — plain where it passes, fenced where not; the
+/// cockpit passes only such a name to `--model=` (docs/CHAT-PANE-DESIGN.md
+/// §3.1).
+pub fn valid_model(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= 128
+        && model.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._:/@+-[]".contains(c))
+}
 
 /// `text` cut to at most `cap` bytes on a char boundary.
 fn cut(text: &str, cap: usize) -> &str {

@@ -370,3 +370,19 @@ attempt's pending request; `blind_hand_off_pending` is harness-core's `blind()` 
 fail-closed (a half-seeded record counts; a chat hand-off is not blind), and every attempt
 view shows its `requester`. A fresh-translate tool
 stays later (§7): the cockpit's chat asks for Migrate through the cockpit.
+
+## R6. `--cockpit`: the server of the cockpit's chat (2026-09-28)
+
+docs/CHAT-PANE-DESIGN.md §4.4, built: `harness-mcp --cockpit --target DIR` is the server the
+cockpit attaches to its chat. It has **no harness binary at all** — none given, none looked
+for on PATH or next to itself (omitting `--harness` is not read-only in standalone mode, §R
+SAFE-9 of the chat design) — and refuses `--harness`, `--provider`, `--target-root` and
+`--allow-unsandboxed` beside it. Its tools: the three reads with no `target` argument (it
+serves its one target), and `harness_migrate {unit}`, `harness_steer {unit, from, steer}`,
+`harness_retry {unit, attempt}`, `harness_answer {unit, attempt, request_key, text}` — act
+tools that only ASK: the cockpit receives every tool call as a permission request, maps it
+onto its own act, asks the person, runs it, and answers the call with the outcome. An act
+call that reaches this server anyway is refused `cockpit`, nothing spawned. `harness_status`
+omits `act_in_flight` and `routing.steer_providers` (this server has no acts to describe).
+The fence and the model-name rule (`valid_model`) moved into harness-tui's library, one
+implementation for both.

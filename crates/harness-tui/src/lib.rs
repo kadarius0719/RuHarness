@@ -4,8 +4,8 @@
 //! Without the `tui` feature the crate is what any client of the CLI needs
 //! and nothing terminal-bound — the READ MODEL ([`model`], [`pairs`],
 //! [`display`]), the `ruharness-events` reader ([`events`]), the read
-//! preflight ([`preflight`]) and the child process a client spawns
-//! ([`spawn`]) — so other clients (harness-mcp)
+//! preflight ([`preflight`]), the untrusted-value fence ([`fence`]) and the
+//! child process a client spawns ([`spawn`]) — so other clients (harness-mcp)
 //! reuse it with `default-features = false`. The `tui` feature adds the
 //! terminal front end (`highlight`, `view`, `app`) and the `harness-tui`
 //! binary.
@@ -15,6 +15,7 @@
 
 pub mod display;
 pub mod events;
+pub mod fence;
 pub mod files;
 pub mod load;
 pub mod model;

@@ -22,10 +22,17 @@ pub struct Config {
     pub allow_unsandboxed: bool,
     /// `$HOME`, canonical, when set: it and its ancestors are never targets.
     pub home: Option<PathBuf>,
+    /// `--cockpit`: the server of the cockpit's chat (docs/CHAT-PANE-DESIGN.md
+    /// §4.4) — no harness binary at all (none is looked for), its one
+    /// target, the reads, and act tools that only ASK: the cockpit, which
+    /// holds every tool call as a permission request, runs the act itself;
+    /// this server refuses every act that reaches it.
+    pub cockpit: bool,
 }
 
 const USAGE: &str = "usage: harness-mcp --target DIR [--target-root DIR]... [--harness PATH] \
-                     [--provider NAME]... [--allow-unsandboxed]";
+                     [--provider NAME]... [--allow-unsandboxed]\n       harness-mcp --cockpit \
+                     --target DIR";
 
 /// The usage line.
 pub fn usage() -> &'static str {
@@ -40,6 +47,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
     let mut harness = None;
     let mut providers: Vec<String> = Vec::new();
     let mut allow_unsandboxed = false;
+    let mut cockpit = false;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -62,6 +70,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
             "--harness" => harness = Some(PathBuf::from(value()?)),
             "--provider" => providers.push(value()?),
             "--allow-unsandboxed" if attached.is_none() => allow_unsandboxed = true,
+            "--cockpit" if attached.is_none() => cockpit = true,
             "--help" | "-h" => {
                 let _ = writeln!(std::io::stderr(), "{USAGE}");
                 return Ok(None);
@@ -77,6 +86,22 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
             other => return Err(format!("unknown argument {other:?}\n{USAGE}")),
         }
         i += 1;
+    }
+    // The cockpit's server spawns nothing and serves one target: a flag
+    // that would give it a binary, a provider, another target or the
+    // sandbox switch is a mistake, never ignored (§4.4).
+    if cockpit {
+        let given = [
+            ("--harness", harness.is_some()),
+            ("--provider", !providers.is_empty()),
+            ("--target-root", !roots.is_empty()),
+            ("--allow-unsandboxed", allow_unsandboxed),
+        ];
+        if let Some((flag, _)) = given.iter().find(|(_, set)| *set) {
+            return Err(format!(
+                "--cockpit takes no {flag}: the cockpit runs every act itself\n{USAGE}"
+            ));
+        }
     }
     let target = target.ok_or_else(|| format!("--target is required\n{USAGE}"))?;
     let target = canonical_dir(&target, "--target")?;
@@ -102,6 +127,8 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
     let mut seen = std::collections::BTreeSet::new();
     providers.retain(|p| seen.insert(p.clone()));
     let harness = match harness {
+        // No binary at all — not "none given, look for one" (§R SAFE-9).
+        None if cockpit => None,
         Some(path) => Some(
             path.canonicalize()
                 .ok()
@@ -120,6 +147,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
         providers,
         allow_unsandboxed,
         home,
+        cockpit,
     }))
 }
 
@@ -225,6 +253,7 @@ pub(crate) mod tests {
             providers: vec!["external".into()],
             allow_unsandboxed: false,
             home,
+            cockpit: false,
         }
     }
 
@@ -345,6 +374,38 @@ pub(crate) mod tests {
             "/no/such/harness"
         ]))
         .is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `--cockpit` (docs/CHAT-PANE-DESIGN.md §4.4): no harness binary at
+    /// all — none is looked for — and every flag that would give it one, a
+    /// provider, another target or the sandbox switch is refused.
+    #[test]
+    fn cockpit_mode_has_no_binary_and_refuses_the_act_flags() {
+        let base = tmp("cockpit-args");
+        let t = target(&base.join("t"));
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let target = format!("--target={}", t.display());
+        let cfg = parse_args(&args(&["--cockpit", &target])).unwrap().unwrap();
+        assert!(cfg.cockpit);
+        assert_eq!(cfg.harness, None, "no binary, not even one found");
+        assert!(cfg.target_roots.is_empty());
+        assert!(!cfg.allow_unsandboxed);
+        for extra in [
+            vec!["--harness", "/bin/sh"],
+            vec!["--harness=/bin/sh"],
+            vec!["--provider", "external"],
+            vec!["--target-root", base.to_str().unwrap()],
+            vec!["--allow-unsandboxed"],
+        ] {
+            let mut v = vec!["--cockpit", target.as_str()];
+            v.extend(extra.iter().copied());
+            let err = parse_args(&args(&v)).unwrap_err();
+            assert!(err.contains("--cockpit takes no"), "{v:?}: {err}");
+        }
+        // The flag takes no value.
+        assert!(parse_args(&args(&["--cockpit=yes", &target])).is_err());
+        assert!(!parse_args(&args(&[&target])).unwrap().unwrap().cockpit);
         let _ = std::fs::remove_dir_all(&base);
     }
 

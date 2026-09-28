@@ -179,7 +179,16 @@ pub struct Client {
 
 impl Client {
     pub fn start(args: &[&str]) -> Client {
-        let mut child = Command::new(server_bin())
+        Client::start_bin(&server_bin(), args, None)
+    }
+
+    /// `bin` (a copy of the server) with `args`, and `PATH` set when given.
+    pub fn start_bin(bin: &Path, args: &[&str], path: Option<&str>) -> Client {
+        let mut command = Command::new(bin);
+        if let Some(path) = path {
+            command.env("PATH", path);
+        }
+        let mut child = command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

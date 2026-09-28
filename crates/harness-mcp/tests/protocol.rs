@@ -196,3 +196,69 @@ fn eof_interrupts_the_act_and_exits_0() {
     }
     let _ = std::fs::remove_dir_all(fake.parent().unwrap());
 }
+
+/// `--cockpit` (docs/CHAT-PANE-DESIGN.md §4.4): no harness binary at all —
+/// with a `harness` both on PATH and next to the server, every act is
+/// refused and neither is ever run; the reads answer.
+#[test]
+fn the_cockpit_server_runs_no_harness_found_anywhere() {
+    let tmp = TempDir::new("cockpit");
+    let (beside, on_path) = (tmp.0.join("bin"), tmp.0.join("path"));
+    std::fs::create_dir_all(&beside).unwrap();
+    std::fs::create_dir_all(&on_path).unwrap();
+    let server = beside.join("harness-mcp");
+    std::fs::copy(server_bin(), &server).unwrap();
+    let ran = tmp.0.join("ran");
+    for dir in [&beside, &on_path] {
+        let fake = dir.join("harness");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$0\" >> '{}'\nexit 1\n", ran.display()),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let zopfli = repo().join("targets/zopfli");
+    let path = format!("{}:/usr/bin:/bin", on_path.display());
+    let mut c = Client::start_bin(
+        &server,
+        &["--cockpit", "--target", zopfli.to_str().unwrap()],
+        Some(&path),
+    );
+    c.initialize();
+    let acts = [
+        ("harness_migrate", json!({"unit": "u001-katajainen"})),
+        (
+            "harness_steer",
+            json!({"unit": "u001-katajainen", "from": "a-000000000000", "steer": "x"}),
+        ),
+        (
+            "harness_retry",
+            json!({"unit": "u001-katajainen", "attempt": "a-000000000000"}),
+        ),
+        (
+            "harness_answer",
+            json!({"unit": "u001-katajainen", "attempt": "a-000000000000",
+                   "request_key": "0123abcd", "text": "x"}),
+        ),
+    ];
+    for (i, (tool, args)) in acts.into_iter().enumerate() {
+        let id = 10 + i as u64;
+        c.call(id, tool, args, None);
+        let (r, _) = c.response(&json!(id), 30);
+        assert!(is_error(&r), "{tool}: {r}");
+        assert_eq!(structured(&r)["error"]["kind"], "cockpit", "{tool}: {r}");
+    }
+    c.call(20, "harness_status", json!({}), None);
+    let (r, _) = c.response(&json!(20), 30);
+    assert!(!is_error(&r), "{r}");
+    c.close_stdin();
+    assert!(c.wait_exit(30).success());
+    assert!(
+        !ran.exists(),
+        "a harness ran: {}",
+        std::fs::read_to_string(&ran).unwrap_or_default()
+    );
+    assert!(c.stderr.lock().unwrap().contains("the cockpit's server"));
+}

@@ -68,16 +68,9 @@ fn clean(what: &str, value: &str) -> Result<(), Refusal> {
     }
 }
 
-/// A model name as the `external` provider records it: printable, no
-/// spaces, at most 128 bytes.
-pub fn valid_model(model: &str) -> bool {
-    !model.is_empty()
-        && model.len() <= 128
-        && model.starts_with(|c: char| c.is_ascii_alphanumeric())
-        && model
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._:/@+-[]".contains(c))
-}
+/// The model-name rule, shared with the cockpit's chat (harness-tui's
+/// library).
+pub use crate::fence::valid_model;
 
 /// `harness --json <rest…> [--allow-unsandboxed]`.
 fn harness_argv(cfg: &Config, rest: Vec<OsString>) -> Result<Vec<OsString>, Refusal> {
@@ -625,6 +618,7 @@ mod tests {
             providers: vec!["external".into()],
             allow_unsandboxed: false,
             home: None,
+            cockpit: false,
         }
     }
 

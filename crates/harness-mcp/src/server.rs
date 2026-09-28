@@ -203,7 +203,11 @@ fn progress_message(ev: &Event) -> Option<String> {
 impl<W: Write> Server<W> {
     /// A server writing protocol messages to `out`.
     pub fn new(cfg: Config, out: W, slot: ChildSlot, gate: Gate) -> Server<W> {
-        let tools = tools::tools(&cfg.providers);
+        let tools = if cfg.cockpit {
+            tools::cockpit_tools()
+        } else {
+            tools::tools(&cfg.providers)
+        };
         Server {
             cfg,
             tools,
@@ -279,6 +283,25 @@ impl<W: Write> Server<W> {
     fn request(&mut self, id: Value, method: &str, params: Option<Value>) -> std::io::Result<()> {
         match method {
             "initialize" => {
+                let instructions = if self.cfg.cockpit {
+                    format!(
+                        "The RuHarness migration ledger of a C→Rust migration, served to the \
+                         chat inside the cockpit. harness_status, harness_unit and \
+                         harness_request read; harness_migrate, harness_steer, harness_retry \
+                         and harness_answer ASK the person, and the cockpit runs what they \
+                         confirm. {} {} {UNTRUSTED_RULE}",
+                        tools::COCKPIT_RULE,
+                        tools::COCKPIT_ANSWERING_RULE
+                    )
+                } else {
+                    format!(
+                        "The RuHarness migration ledger of a C→Rust migration, and the review \
+                         acts that stay labelled. harness_status and harness_unit read; \
+                         harness_steer, harness_answer, harness_retry and harness_promote spawn \
+                         the `harness` CLI (one at a time; a second is refused `busy`). \
+                         {UNTRUSTED_RULE} {ANSWERING_RULE}"
+                    )
+                };
                 let result = json!({
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {"tools": {"listChanged": false}},
@@ -287,13 +310,7 @@ impl<W: Write> Server<W> {
                         "title": "RuHarness migration ledger",
                         "version": env!("CARGO_PKG_VERSION"),
                     },
-                    "instructions": format!(
-                        "The RuHarness migration ledger of a C→Rust migration, and the review \
-                         acts that stay labelled. harness_status and harness_unit read; \
-                         harness_steer, harness_answer, harness_retry and harness_promote spawn \
-                         the `harness` CLI (one at a time; a second is refused `busy`). \
-                         {UNTRUSTED_RULE} {ANSWERING_RULE}"
-                    ),
+                    "instructions": instructions,
                 });
                 self.send(&rpc::result(&id, result))
             }
@@ -337,6 +354,18 @@ impl<W: Write> Server<W> {
                 };
                 self.send(&rpc::result(&id, tool_result(structured, is_error)))
             }
+            // The cockpit's server never runs an act: the cockpit holds the
+            // call as a permission request and runs it itself (§4.4) — one
+            // that reaches here was let through by mistake.
+            _ if self.cfg.cockpit => {
+                let refusal = Refusal {
+                    kind: "cockpit",
+                    message: "this server runs no act: the cockpit asks the person and runs \
+                              it itself"
+                        .into(),
+                };
+                self.send(&rpc::result(&id, tool_result(refusal.to_value(), true)))
+            }
             _ => self.act(id, tool_name, args, token),
         }
     }
@@ -377,17 +406,30 @@ impl<W: Write> Server<W> {
             message: e.to_string(),
         })?;
         if tool == "harness_status" {
-            let routing = match TargetContext::load(&target) {
+            let mut routing = match TargetContext::load(&target) {
                 Ok(ctx) => reads::routing(&ctx.config, &self.cfg.providers),
                 Err(e) => json!({"error": short("config", &e.to_string())}),
             };
-            reads::status(
+            let mut status = reads::status(
                 &snapshot,
-                routing,
+                routing.clone(),
                 self.in_flight_value(),
                 arg(args, "after"),
             )
-            .map_err(Refusal::refused)
+            .map_err(Refusal::refused)?;
+            // The cockpit's server has no acts of its own to describe: the
+            // cockpit's providers and its running command are the cockpit's
+            // to say (§4.4).
+            if self.cfg.cockpit {
+                if let Some(r) = routing.as_object_mut() {
+                    r.remove("steer_providers");
+                }
+                if let Some(o) = status.as_object_mut() {
+                    o.remove("act_in_flight");
+                    o.insert("routing".into(), routing);
+                }
+            }
+            Ok(status)
         } else if tool == "harness_request" {
             let page = args
                 .get("page")
@@ -813,6 +855,7 @@ mod tests {
             providers: providers.iter().map(|p| p.to_string()).collect(),
             allow_unsandboxed: false,
             home: None,
+            cockpit: false,
         }
     }
 
@@ -908,6 +951,127 @@ mod tests {
         )
         .is_empty());
         assert!(say(&mut s, r#"{"jsonrpc":"2.0","id":9,"result":{}}"#).is_empty());
+    }
+
+    /// `--cockpit` (docs/CHAT-PANE-DESIGN.md §4.4): the reads and the four
+    /// acts the chat may ask for, with the arguments that name objects only
+    /// (no target, provider or model); the cockpit wording; every act
+    /// refused here and nothing spawned; the status without this server's
+    /// own acts.
+    #[test]
+    fn the_cockpit_server_asks_and_never_acts() {
+        let mut cfg = config(PathBuf::from("/bin/sh"), &["external"]);
+        cfg.cockpit = true;
+        cfg.harness = None;
+        cfg.target_roots.clear();
+        let slot = ChildSlot::default();
+        let mut s = Server::new(cfg, Vec::new(), slot.clone(), Gate::default());
+        let init = say(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#,
+        );
+        let instructions = init[0]["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains(tools::COCKPIT_RULE));
+        assert!(instructions.contains(UNTRUSTED_RULE));
+        assert!(
+            !instructions.contains(ANSWERING_RULE),
+            "the standalone rule"
+        );
+        let list = say(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":"l","method":"tools/list"}"#,
+        );
+        let listed = list[0]["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = listed.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "harness_status",
+                "harness_unit",
+                "harness_request",
+                "harness_migrate",
+                "harness_steer",
+                "harness_retry",
+                "harness_answer"
+            ]
+        );
+        let params = |name: &str| -> Vec<String> {
+            let t = listed.iter().find(|t| t["name"] == name).unwrap();
+            let mut v: Vec<String> = t["inputSchema"]["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(params("harness_migrate"), ["unit"]);
+        assert_eq!(params("harness_steer"), ["from", "steer", "unit"]);
+        assert_eq!(params("harness_retry"), ["attempt", "unit"]);
+        assert_eq!(
+            params("harness_answer"),
+            ["attempt", "request_key", "text", "unit"]
+        );
+        for t in listed {
+            let props = t["inputSchema"]["properties"].as_object().unwrap();
+            for gone in ["target", "provider", "model", "replace"] {
+                assert!(!props.contains_key(gone), "{}: {gone}", t["name"]);
+            }
+            if t["annotations"]["readOnlyHint"] == false {
+                let d = t["description"].as_str().unwrap();
+                assert!(d.starts_with("Asks the person in the cockpit to "), "{d}");
+                assert!(d.contains(tools::COCKPIT_ANSWERING_RULE));
+            }
+        }
+        // Every act is refused, whatever its arguments; nothing spawns.
+        for (i, (tool, args)) in [
+            ("harness_migrate", json!({"unit": "u001-katajainen"})),
+            (
+                "harness_steer",
+                json!({"unit": "u001-katajainen", "from": "a-000000000000", "steer": "x"}),
+            ),
+            (
+                "harness_retry",
+                json!({"unit": "u001-katajainen", "attempt": "a-000000000000"}),
+            ),
+            (
+                "harness_answer",
+                json!({"unit": "u001-katajainen", "attempt": "a-000000000000",
+                       "request_key": "0123abcd", "text": "fn f() {}"}),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let r = call(&mut s, 10 + i as u64, tool, args);
+            assert_eq!(r["result"]["isError"], true, "{tool}: {r}");
+            assert_eq!(structured(&r)["error"]["kind"], "cockpit", "{tool}");
+            assert!(s.in_flight.is_none(), "{tool} spawned");
+            assert!(slot.lock().unwrap().is_none(), "{tool} spawned");
+        }
+        // A tool of the standalone server is not there at all.
+        let code = |v: &Value| v["error"]["code"].as_i64().unwrap();
+        let r = call(
+            &mut s,
+            20,
+            "harness_promote",
+            json!({"unit": "u001-katajainen", "attempt": "a-000000000000"}),
+        );
+        assert_eq!(code(&r), -32602);
+        // The reads answer; the status names no act of this server's.
+        let r = call(&mut s, 21, "harness_status", json!({}));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        let st = structured(&r);
+        assert!(st.get("act_in_flight").is_none(), "{st}");
+        assert!(st["routing"].get("steer_providers").is_none(), "{st}");
+        assert_eq!(st["routing"]["migrate"]["class"], "external");
+        let all = s.tools.clone();
+        let schema = |name: &str| all.iter().find(|t| t.name == name).unwrap().output_schema();
+        tools::conforms(&schema("harness_status"), st).unwrap();
+        // A `target` argument is no argument of the cockpit's reads.
+        let r = call(&mut s, 22, "harness_status", json!({"target": "/"}));
+        assert_eq!(code(&r), -32602);
     }
 
     #[test]
