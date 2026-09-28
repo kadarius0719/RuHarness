@@ -423,7 +423,7 @@ impl<W: Write> Server<W> {
             target,
             answering_model: model.map(str::to_string),
             finished_before: None,
-            answer_file: None,
+            answer: None,
         };
         match tool {
             "harness_steer" => {
@@ -574,13 +574,12 @@ impl<W: Write> Server<W> {
                     .into());
                 }
                 Self::preflight(&h.posed.target)?;
-                // Filed by the CLI (`--answer`): harness-mcp writes nothing in
-                // the ledger (docs/CHAT-PANE-DESIGN.md §4.4).
-                let file = acts::answer_file(arg(args, "text").unwrap_or_default())?;
+                // Filed by the CLI (`--answer=-`, the reply on its stdin):
+                // harness-mcp writes nothing in the ledger, nor any file
+                // (docs/CHAT-PANE-DESIGN.md §4.4).
+                let input = acts::answer_input(arg(args, "text").unwrap_or_default())?;
                 let mut argv = acts::strip_answer(&h.argv);
-                let mut flag = OsString::from("--answer=");
-                flag.push(&file);
-                argv.push(flag);
+                argv.push(OsString::from("--answer=-"));
                 argv.push(OsString::from(format!(
                     "--answer-key={}",
                     key.unwrap_or_default()
@@ -588,9 +587,9 @@ impl<W: Write> Server<W> {
                 // The hand-off stays remembered until the answer is spent: a
                 // run that fails before filing it (locked, refused,
                 // interrupted, a failed spawn) leaves it answerable again
-                // (§R CR-4).
+                // (§R4 CR-4).
                 let mut posed = h.posed;
-                posed.answer_file = Some(file);
+                posed.answer = Some(input);
                 Ok((argv, posed))
             }
             _ => {
@@ -622,7 +621,7 @@ impl<W: Write> Server<W> {
             });
             return self.send(&rpc::result(&id, tool_result(busy, true)));
         }
-        let (argv, posed) = match self.prepare(tool, &args) {
+        let (argv, mut posed) = match self.prepare(tool, &args) {
             Ok(v) => v,
             Err(ActError::Params(why)) => {
                 return self.send(&rpc::error(&id, rpc::INVALID_PARAMS, &why))
@@ -636,15 +635,13 @@ impl<W: Write> Server<W> {
             if *guard {
                 Err("the server is shutting down".to_string())
             } else {
-                Running::spawn(argv.clone(), self.slot.clone()).map_err(|e| e.to_string())
+                Running::spawn_with_input(argv.clone(), self.slot.clone(), posed.answer.take())
+                    .map_err(|e| e.to_string())
             }
         };
         let running = match spawned {
             Ok(r) => r,
             Err(why) => {
-                if let Some(file) = &posed.answer_file {
-                    let _ = std::fs::remove_file(file);
-                }
                 let r = Refusal {
                     kind: "spawn-failed",
                     message: format!("{}: {why}", acts::shell_line(&argv)),
@@ -759,16 +756,15 @@ impl<W: Write> Server<W> {
                 ""
             }
         ));
-        // The hand-off it now awaits, if any, is this server's to answer.
-        if let Some(file) = &f.posed.answer_file {
-            let _ = std::fs::remove_file(file);
-        }
-        // A finished attempt spends its hand-off (an answer run that failed
-        // before filing leaves it answerable; a new `awaiting` replaces it,
-        // below).
+        // A finished attempt spends its hand-off, and so does a filed
+        // response whatever the run did after it (cancelled, interrupted
+        // while judging — §R5 N4); an answer run that failed before filing
+        // leaves it answerable. The hand-off it now awaits, if any, is this
+        // server's to answer (it replaces the attempt's, below).
         if let (Some(id), true) = (&f.collected.attempt_id, f.collected.finished()) {
             hand_offs.retain(|h| !(&h.attempt == id && h.posed.target == f.posed.target));
         }
+        hand_offs.retain(|h| std::fs::symlink_metadata(&h.response).is_err());
         if let Some((attempt, response)) = f.collected.awaited() {
             hand_offs.retain(|h| !(h.attempt == attempt && h.posed.target == f.posed.target));
             if hand_offs.len() == MAX_HAND_OFFS {
@@ -781,7 +777,7 @@ impl<W: Write> Server<W> {
                 // it, never repeated.
                 argv: acts::strip_answer(f.running.argv()),
                 posed: Posed {
-                    answer_file: None,
+                    answer: None,
                     ..f.posed.clone()
                 },
             });
@@ -1444,12 +1440,12 @@ echo '{"k":"result","exit":0}'"#;
 
     /// `harness_answer` end to end with a fake harness: the act awaits, the
     /// server remembers the hand-off it posed; another model or another key
-    /// is refused; the named model's answer goes to the CLI as `--answer`
-    /// (a private file outside the ledger, removed afterwards) with the
-    /// hand-off's `--answer-key`, appended to the SAME posing argv —
-    /// harness-mcp writes nothing under the target (docs/CHAT-PANE-DESIGN.md
-    /// §4.4). A run that fails before filing the answer (locked) keeps the
-    /// hand-off answerable and removes the file; a finished one forgets it.
+    /// is refused; the named model's answer goes to the CLI on its stdin
+    /// (`--answer=-`: never a file) with the hand-off's `--answer-key`,
+    /// appended to the SAME posing argv — harness-mcp writes nothing under
+    /// the target (docs/CHAT-PANE-DESIGN.md §4.4). A run that fails before
+    /// filing the answer (locked) keeps the hand-off answerable; a finished
+    /// one forgets it.
     #[test]
     fn a_posed_hand_off_is_answered_by_its_model_and_resumed() {
         let _guard = crate::policy::tests::TmpDir::new("ans");
@@ -1463,18 +1459,13 @@ echo '{"k":"result","exit":0}'"#;
             &format!(
                 r#"echo "$@" >> "$0.argv"
 if [ -e "$0.lock" ]; then
-  for a in "$@"; do
-    case "$a" in
-      --answer=*) echo "${{a#--answer=}}" > "$0.lockfile" ;;
-    esac
-  done
   rm "$0.lock"
   echo '{{"k":"error","kind":"locked","message":"the ledger is locked"}}'
   exit 1
 fi
 for a in "$@"; do
   case "$a" in
-    --answer=*) cp "${{a#--answer=}}" "$0.answered" ;;
+    --answer=-) cat > "$0.answered" ;;
   esac
 done
 if [ -e "$0.answered" ]; then
@@ -1554,8 +1545,8 @@ exit 1"#,
         assert_eq!(structured(&r)["error"]["kind"], "unreadable", "{r}");
         std::fs::remove_file(&linked).unwrap();
         std::fs::rename(&outside, &linked).unwrap();
-        // A run that fails before filing (the ledger locked): the file is
-        // removed and the hand-off stays answerable (§R CR-4).
+        // A run that fails before filing (the ledger locked): the hand-off
+        // stays answerable (§R4 CR-4).
         std::fs::write(format!("{}.lock", fake.display()), "").unwrap();
         assert!(say(
             &mut s,
@@ -1565,11 +1556,6 @@ exit 1"#,
         let seen = pump_until(&mut s, |m| response_to(m, 10).is_some());
         let r = response_to(&seen, 10).unwrap();
         assert_eq!(structured(r)["error"]["kind"], "locked", "{r}");
-        let locked_file = std::fs::read_to_string(format!("{}.lockfile", fake.display())).unwrap();
-        assert!(
-            !std::path::Path::new(locked_file.trim()).exists(),
-            "a failed run's answer file is removed"
-        );
         assert_eq!(s.hand_offs.len(), 1, "still answerable");
         // Its model and key: the CLI gets the answer, green.
         assert!(say(
@@ -1605,16 +1591,8 @@ exit 1"#,
             .unwrap_or_else(|| panic!("the resume is the posing argv plus the answer: {resume}"));
         let words: Vec<&str> = rest.split_whitespace().collect();
         assert_eq!(words.len(), 2, "{rest}");
-        let file = words[0].strip_prefix("--answer=").unwrap();
+        assert_eq!(words[0], "--answer=-", "on stdin, never a file");
         assert_eq!(words[1], "--answer-key=0123abcd");
-        assert!(
-            !std::path::Path::new(file).exists(),
-            "the answer file is removed once the act ends"
-        );
-        assert!(
-            !file.starts_with(&*t.to_string_lossy()),
-            "outside the target"
-        );
         assert!(s.hand_offs.is_empty(), "answered: forgotten");
         let r = call(&mut s, 4, "harness_answer", answer("claude-opus-5-5"));
         assert_eq!(r["result"]["isError"], true);
@@ -1622,11 +1600,12 @@ exit 1"#,
         let _ = std::fs::remove_dir_all(fake.parent().unwrap());
     }
 
-    /// A hand-off answered over several turns (§R CE-14): each answer run is
+    /// A hand-off answered over several turns (§R4 CE-14): each answer run is
     /// the posing argv plus THAT answer only (the flags stripped every time,
     /// never repeated); a run that ends `answer-unused` still reports the
     /// request it now waits on (`answer_unused: true`), and the hand-off
-    /// moves to it; the finished attempt forgets it.
+    /// moves to it; a run that files the response and is then interrupted
+    /// has spent it (§R5 N4).
     #[test]
     fn a_hand_off_is_answered_turn_after_turn_and_follows_an_unused_answer() {
         let _guard = crate::policy::tests::TmpDir::new("turns");
@@ -1660,11 +1639,13 @@ case $n in
 {}
 ;;
 esac
-echo '{{"k":"attempt","unit":"u","id":"a-00000000000a","outcome":"green","provider":"external","model":"m","promoted":false,"promotion":""}}'
-exit 0"#,
+echo '{{}}' > "{}"
+echo '{{"k":"error","kind":"interrupted","message":"m"}}'
+exit 1"#,
                 awaiting("awaiting", k1),
                 awaiting("awaiting", k2),
-                awaiting("answer-unused", k3)
+                awaiting("answer-unused", k3),
+                path(k3).display()
             ),
         );
         let mut cfg = config(fake.clone(), &["external"]);
@@ -1691,14 +1672,31 @@ exit 0"#,
         let r = run(&mut s, 3, "harness_answer", answer(&r));
         assert_eq!(structured(&r)["answer_unused"], true, "{r}");
         assert_eq!(
+            structured(&r)["error"]["kind"],
+            "answer-unused",
+            "a closed kind, plain (§R4 CE-3)"
+        );
+        let schema = crate::tools::tools(&["external".to_string()])
+            .into_iter()
+            .find(|t| t.name == "harness_answer")
+            .unwrap()
+            .output_schema();
+        crate::tools::conforms(&schema, structured(&r)).unwrap();
+        assert_eq!(
             structured(&r)["awaiting"]["request_key"],
             k3,
             "the request it now waits on: {r}"
         );
         assert_eq!(s.hand_offs.len(), 1);
-        let r = run(&mut s, 4, "harness_answer", answer(&r));
-        assert_eq!(structured(&r)["attempt"]["outcome"], "green", "{r}");
-        assert!(s.hand_offs.is_empty(), "finished: forgotten");
+        let again = answer(&r);
+        let r = run(&mut s, 4, "harness_answer", again.clone());
+        assert_eq!(structured(&r)["error"]["kind"], "interrupted", "{r}");
+        assert!(s.hand_offs.is_empty(), "filed: spent");
+        let r = call(&mut s, 5, "harness_answer", again);
+        assert!(structured(&r)["error"]["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("repeat the call that posed it"));
         let argvs = std::fs::read_to_string(format!("{}.argv", fake.display())).unwrap();
         let lines: Vec<&str> = argvs.lines().collect();
         assert_eq!(lines.len(), 4);
@@ -1706,7 +1704,7 @@ exit 0"#,
             let rest = line.strip_prefix(lines[0]).unwrap();
             let words: Vec<&str> = rest.split_whitespace().collect();
             assert_eq!(words.len(), 2, "one answer, never two: {rest}");
-            assert!(words[0].starts_with("--answer="), "{rest}");
+            assert_eq!(words[0], "--answer=-", "{rest}");
             assert_eq!(words[1], format!("--answer-key={key}"));
         }
         let _ = std::fs::remove_dir_all(&base);

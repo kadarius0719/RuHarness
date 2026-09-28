@@ -91,7 +91,7 @@ pub fn authorship(a: &AuthorshipView) -> Value {
 /// An unseeded `external` attempt no chat asked for, still in progress: a
 /// pending hand-off of the blind, audited protocol — never answered in chat.
 /// Fail-closed: wider than [`harness_core::attempts::blind`] (a record with a
-/// steer note but no seed — inconsistent — counts too, §R CE-12). A
+/// steer note but no seed — inconsistent — counts too, §R4 CE-12). A
 /// chat-requested hand-off is not blind (docs/CHAT-PANE-DESIGN.md §4.2).
 pub fn blind_hand_off_pending(a: &AttemptView) -> bool {
     use harness_core::attempts::EXTERNAL_KIND as EXTERNAL;
@@ -507,7 +507,7 @@ fn escaped_len(c: char) -> usize {
 /// The pages of a request (docs/CHAT-PANE-DESIGN.md §4.4): its system
 /// prompt, then its user message, each page the byte ranges of the parts it
 /// shows (an empty part on none) — as much as fits `budget` bytes AFTER
-/// fencing (JSON escaping included). One linear pass (§R CR-6),
+/// fencing (JSON escaping included). One linear pass (§R4 CR-6),
 /// deterministic, so page `n` is the same slices on every call; never zero
 /// pages, and every page advances (at least one char).
 fn request_pages(parts: [&str; 2], budget: usize) -> Vec<[Option<(usize, usize)>; 2]> {
@@ -560,7 +560,7 @@ fn request_pages(parts: [&str; 2], budget: usize) -> Vec<[Option<(usize, usize)>
 /// chat`, read from its `traces/chat/` with the recorded-trace checks (8 hex,
 /// real files of bounded size, the request re-serializing to its key) and no
 /// response yet, naming the attempt's model; for an attempt with no turn
-/// yet, the request its id was derived from (§R CE-6). Page `page`
+/// yet, the request its id was derived from (§R4 CE-6). Page `page`
 /// (1-based) of its system prompt, then its user message; every text
 /// fenced.
 pub fn request(
@@ -602,10 +602,14 @@ pub fn request(
             "request {key} names another model than the attempt: it is not this attempt's"
         ));
     }
-    // A later turn's request (a repair) is not re-derived here; the one the
-    // attempt was started with is (traces/chat/ is the unit's, shared by its
-    // chat attempts).
-    if record.turns.is_empty() && !attempts::first_request_of(&record, key) {
+    // traces/chat/ is the unit's, shared by its chat attempts: while the
+    // request the attempt's id was derived from is unanswered, it is the
+    // only one served under this attempt (§R4 CE-6); a later turn's request
+    // (a repair) is not re-derived here (§R5 NEW-1: nor is "no turn yet"
+    // taken for "the first request pending").
+    if !harness_core::traces::first_request_answered(&dir, &record)
+        && !attempts::first_request_of(&record, key)
+    {
         return Err(format!(
             "request {key} is not the one this attempt waits on: read the `request_key` its \
              act returned"
@@ -640,7 +644,7 @@ mod tests {
 
     /// `harness_request`'s pages (docs/CHAT-PANE-DESIGN.md §4.4): each fits
     /// its budget AFTER fencing (JSON escaping included), the system prompt
-    /// is paged like the user message (§R CE-7), the pages tile both texts
+    /// is paged like the user message (§R4 CE-7), the pages tile both texts
     /// exactly in order, and page `n` is the same slices on every call.
     #[test]
     fn request_pages_fit_after_fencing_and_tile_the_text() {
@@ -702,7 +706,7 @@ mod tests {
         assert_eq!(tiny.len(), 4);
     }
 
-    /// `harness_request` (docs/CHAT-PANE-DESIGN.md §4.4, §R CE-6/CE-7,
+    /// `harness_request` (docs/CHAT-PANE-DESIGN.md §4.4, §R4 CE-6/CE-7,
     /// CE-14): only the pending request a chat-labelled, in-progress attempt
     /// waits on — not another chat attempt's request in the shared
     /// `traces/chat/`, not another model's, not an answered one; its pages
@@ -756,6 +760,11 @@ mod tests {
         };
         store(&rec);
         let read = |key: &str, page: u64| request(&t, "u1", &id, key, page);
+        let schema = crate::tools::tools(&["external".to_string()])
+            .into_iter()
+            .find(|t| t.name == "harness_request")
+            .unwrap()
+            .output_schema();
         let first = read(&key, 1).unwrap();
         assert_eq!(first["request_key"], key.as_str());
         assert_eq!(first["system"]["text"], "sys");
@@ -765,6 +774,7 @@ mod tests {
         for n in 1..=total {
             let p = read(&key, n).unwrap();
             assert!(fence::size(&p) <= fence::RESULT_BUDGET, "page {n}");
+            crate::tools::conforms(&schema, &p).unwrap();
             assert_eq!(p["system"].is_null(), n > 1, "page {n}");
             assert_eq!(p["omitted"].is_null(), n == total, "page {n}");
             user.push_str(p["user"]["text"].as_str().unwrap());
@@ -783,7 +793,30 @@ mod tests {
         let answered = chat.join(format!("{key}.response.json"));
         std::fs::write(&answered, "{}").unwrap();
         assert!(read(&key, 1).is_err(), "answered: not pending");
+        // Its first request answered, a record with no turn (a resume
+        // stopped before re-recording turn 1) waits on a later request: that
+        // one is served (§R5 NEW-1).
+        assert!(read(&other, 1).is_ok());
         std::fs::remove_file(&answered).unwrap();
+        // A system prompt longer than a page: page 1 shows it alone (`user`
+        // null) and every page conforms to the outputSchema (§R5 N3).
+        let big = CompletionRequest {
+            system: "s".repeat(50_000),
+            user: "u".into(),
+            ..req.clone()
+        };
+        let big_key = file(&big);
+        let mut big_rec = rec.clone();
+        big_rec.id =
+            attempts::attempt_id_with("u1", "s", "d", "external", "m-1", &big_key, Some("chat"));
+        store(&big_rec);
+        let page = |n: u64| request(&t, "u1", &big_rec.id, &big_key, n).unwrap();
+        let p1 = page(1);
+        assert!(p1["user"].is_null(), "{}", p1["pages"]);
+        crate::tools::conforms(&schema, &p1).unwrap();
+        let last = page(p1["pages"].as_u64().unwrap());
+        assert_eq!(last["user"]["text"], "u");
+        crate::tools::conforms(&schema, &last).unwrap();
         rec.outcome = "green".into();
         store(&rec);
         assert!(read(&key, 1).unwrap_err().contains("not in progress"));
@@ -1471,7 +1504,7 @@ mod tests {
         a.record.steer_note = Some("a note with no seed".into());
         assert!(
             blind_hand_off_pending(&a),
-            "fail-closed: an inconsistent half-seeded record counts (§R CE-12)"
+            "fail-closed: an inconsistent half-seeded record counts (§R4 CE-12)"
         );
         a.record.steer_note = None;
         a.record.requester = Some("chat".into());

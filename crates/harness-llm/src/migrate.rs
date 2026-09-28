@@ -3564,7 +3564,7 @@ int add(int a, int b) { return a + b; }\n";
         );
         // The same model's pending request that the attempt's id was not
         // derived from (another chat attempt's, the dir being the unit's):
-        // refused (§R CE-6).
+        // refused (§R4 CE-6).
         let other = file_request(&CompletionRequest {
             user: format!("{} (another attempt)", posed.user),
             ..posed.clone()
@@ -3637,7 +3637,98 @@ int add(int a, int b) { return a + b; }\n";
         );
     }
 
-    /// §R CS-5/CE-5: `--answer` continues exactly the attempt the run
+    /// §R5 NEW-1: a resume stores its record with no turn until turn 1 is
+    /// re-judged; one stopped there (interrupted) still waits on its repair
+    /// request — answerable, since the first request is answered. An unknown
+    /// requester is refused before anything runs.
+    #[test]
+    fn an_interrupted_resume_still_waits_on_its_later_request() {
+        let fx = fixture("answerresume");
+        let chat_dir = fx.traces.join(attempts::CHAT_TRACES);
+        std::fs::create_dir_all(&chat_dir).unwrap();
+        let external = resolved(
+            Box::new(TraceAdapter::new(&chat_dir, true)),
+            "external",
+            false,
+        );
+        run_chat(&fx, &external, &oracle(vec![]), &chat_dir, None).unwrap_err();
+        let first = pending_keys(&chat_dir).remove(0);
+        let request: CompletionRequest = serde_json::from_str(
+            &std::fs::read_to_string(chat_dir.join(format!("{first}.request.json"))).unwrap(),
+        )
+        .unwrap();
+        TraceAdapter::record(&chat_dir, &request, &good().unwrap()).unwrap();
+        let err = run_chat(
+            &fx,
+            &external,
+            &oracle(vec![build_failure("E0308")]),
+            &chat_dir,
+            None,
+        )
+        .unwrap_err();
+        let Error::Awaiting { attempt, .. } = &err else {
+            panic!("{err}")
+        };
+        let id = attempt.clone().unwrap();
+        let repair = pending_keys(&chat_dir)
+            .into_iter()
+            .find(|k| !chat_dir.join(format!("{k}.response.json")).exists())
+            .unwrap();
+        // The resume that stopped before re-recording turn 1.
+        let dir = fx.attempts_dir().join(&id);
+        let mut rec = AttemptRecord::load(&dir).unwrap();
+        rec.turns.clear();
+        rec.store(&dir).unwrap();
+        let slot = std::sync::Arc::new(crate::adapters::AnswerSlot::new(
+            repair.clone(),
+            good().unwrap().text,
+        ));
+        let p = resolved(
+            Box::new(TraceAdapter::with_answer(&chat_dir, slot.clone())),
+            "external",
+            false,
+        );
+        let done = run_chat(
+            &fx,
+            &p,
+            &oracle(vec![build_failure("E0308"), green()]),
+            &chat_dir,
+            Some(&repair),
+        )
+        .unwrap();
+        assert!(slot.used());
+        assert_eq!(done.record.id, id);
+        assert_eq!(done.record.outcome, "green");
+        // A requester outside the closed set: refused first.
+        let params = MigrateParams {
+            requester: Some("robot"),
+            answer_key: None,
+            provider: &external,
+            model: "test-model",
+            max_tokens: 4096,
+            max_repairs: 1,
+            traces_dir: &chat_dir,
+            retry: false,
+            attempt: None,
+            steer: None,
+        };
+        let before = snapshot(&fx.unit_dir());
+        let err = run_migration(
+            &params,
+            &oracle(vec![]),
+            &fx.target,
+            &fx.facts,
+            &fx.plan,
+            fx.unit(),
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("robot"), "{err}");
+        assert_eq!(snapshot(&fx.unit_dir()), before, "nothing written");
+    }
+
+    /// §R4 CS-5/CE-5: `--answer` continues exactly the attempt the run
     /// resumes — a chat attempt's waiting SAMPLE only with `--retry`
     /// (refused without it: that run would not continue the sample), then
     /// answered as that same sample.

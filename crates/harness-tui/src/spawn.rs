@@ -1,7 +1,8 @@
 //! One spawned `harness --json …` command (docs/TUI-DESIGN.md §4 "Child
 //! process", §6): the child leads its own process group (a terminal hangup
 //! reaches only the client's group, never kills the harness by the default
-//! action), stdin is `/dev/null`, and stdout (the NDJSON events) and stderr
+//! action), stdin is `/dev/null` — or, for an answer (`--answer=-`), a pipe
+//! a writer thread fills and closes —, and stdout (the NDJSON events) and stderr
 //! are drained by two reader threads into one channel, so neither pipe can
 //! fill. A command is over only when BOTH readers hit EOF AND the child was
 //! reaped — never on its `result` event alone (on a signal the CLI emits
@@ -66,6 +67,20 @@ impl Running {
     /// Spawn `argv` (the program first) in its own process group, into
     /// `slot` (which must be empty: one command at a time).
     pub fn spawn(argv: Vec<OsString>, slot: ChildSlot) -> std::io::Result<Running> {
+        Running::spawn_with_input(argv, slot, None)
+    }
+
+    /// [`Running::spawn`] with `input` written to the child's stdin by a
+    /// thread, which then closes it (the CLI's `--answer=-`,
+    /// docs/CHAT-PANE-DESIGN.md §4.4): the text never lands in a file. A
+    /// child that exits without reading it all ends the write (a broken
+    /// pipe, ignored — the child's own result says what happened).
+    pub fn spawn_with_input(
+        argv: Vec<OsString>,
+        slot: ChildSlot,
+        input: Option<Vec<u8>>,
+    ) -> std::io::Result<Running> {
+        use std::io::Write;
         use std::os::unix::process::CommandExt;
         let Some((program, args)) = argv.split_first() else {
             return Err(std::io::Error::other("empty command line"));
@@ -76,7 +91,11 @@ impl Running {
         }
         let mut child = Command::new(program)
             .args(args)
-            .stdin(Stdio::null())
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0)
@@ -133,6 +152,14 @@ impl Running {
             }
         } else {
             let _ = tx.send(ChildMsg::Eof(Pipe::Stderr));
+        }
+        if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+            let spawned = std::thread::Builder::new().spawn(move || {
+                let _ = stdin.write_all(&input);
+            });
+            if let Err(e) = spawned {
+                return Err(fail(&mut child, e));
+            }
         }
         *guard = Some(child);
         drop(guard);
@@ -321,6 +348,33 @@ mod tests {
         assert!(msgs.contains(&ChildMsg::Stderr("oops".into())));
         assert!(lock(&slot).is_none(), "the reaped child left the slot");
         assert!(!running.interrupt().unwrap(), "nothing left to signal");
+    }
+
+    /// An answer reaches the child on stdin and is then closed — also one
+    /// larger than a pipe's buffer; a child that never reads it still ends
+    /// (the writer's broken pipe is ignored); without input stdin is empty.
+    #[test]
+    fn input_reaches_stdin_and_is_closed() {
+        let slot = ChildSlot::default();
+        let text = "ab\"c\n".repeat(40_000);
+        let mut running = Running::spawn_with_input(
+            sh("wc -c | tr -d ' ' >&2"),
+            slot.clone(),
+            Some(text.clone().into_bytes()),
+        )
+        .unwrap();
+        let (msgs, status) = run_to_end(&mut running);
+        assert_eq!(status.code(), Some(0));
+        assert!(
+            msgs.contains(&ChildMsg::Stderr(text.len().to_string())),
+            "{msgs:?}"
+        );
+        let mut running =
+            Running::spawn_with_input(sh("exit 4"), slot.clone(), Some(text.into_bytes())).unwrap();
+        assert_eq!(run_to_end(&mut running).1.code(), Some(4));
+        let mut running = Running::spawn(sh("wc -c | tr -d ' ' >&2"), slot).unwrap();
+        let (msgs, _) = run_to_end(&mut running);
+        assert!(msgs.contains(&ChildMsg::Stderr("0".into())), "{msgs:?}");
     }
 
     /// §4: the command is over after EOF AND reaping — a `result` event,

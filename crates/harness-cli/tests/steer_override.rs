@@ -44,6 +44,30 @@ fn harness(args: &[&str]) -> Run {
     }
 }
 
+/// [`harness`] with `input` on stdin (closed after it).
+fn harness_with_input(args: &[&str], input: &str) -> Run {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn harness");
+    let mut stdin = child.stdin.take().unwrap();
+    let text = input.to_string();
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(text.as_bytes());
+    });
+    let out = child.wait_with_output().expect("wait for harness");
+    writer.join().unwrap();
+    Run {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
 fn events(run: &Run) -> Vec<serde_json::Value> {
     run.stdout
         .lines()
@@ -525,7 +549,7 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
     let answer = |key: &str, extra: &[&str]| answer_from(&answer_file, key, extra);
     // The second steer's answer offered to the FIRST attempt: a pending
     // chat request of the same unit and model, but not the one the first
-    // attempt's id was derived from — refused up front (§R CE-6), the second
+    // attempt's id was derived from — refused up front (§R4 CE-6), the second
     // hand-off untouched.
     let r = answer(&second_key, &["--steer", "keep the wrapping add explicit"]);
     assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
@@ -541,8 +565,38 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
     assert!(!chat_traces
         .join(format!("{second_key}.response.json"))
         .exists());
-    // Its own key: filed by the CLI, the SAME attempt resumes to green.
-    let r = answer(&first_key, &["--steer", "keep the wrapping add explicit"]);
+    // Its own key, on stdin (`--answer=-`, as harness-mcp passes it):
+    // filed by the CLI, the SAME attempt resumes to green.
+    let stdin_answer = |key: &str, input: &str| {
+        let k = format!("--answer-key={key}");
+        harness_with_input(
+            &[
+                "--json",
+                "migrate",
+                "--allow-unsandboxed",
+                unit,
+                "--target",
+                target,
+                "--no-promote",
+                "--from",
+                &seed,
+                "--steer",
+                "keep the wrapping add explicit",
+                "--requester=chat",
+                "--answer=-",
+                &k,
+            ],
+            input,
+        )
+    };
+    let r = stdin_answer(&first_key, " \n");
+    assert_eq!(r.code, 1);
+    assert_eq!(
+        find(&events(&r), "error").unwrap()["kind"],
+        "answer-refused"
+    );
+    assert!(r.stderr.contains("the answer is empty"), "{}", r.stderr);
+    let r = stdin_answer(&first_key, &emission(&revised, ffi));
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     let done = find(&events(&r), "attempt").unwrap().clone();
     assert_eq!(done["id"], first.as_str());
@@ -560,7 +614,7 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
     assert_eq!(
         find(&events(&r), "error").unwrap()["kind"],
         "answer-refused",
-        "an up-front refusal is not answer-unused (§R CE-1)"
+        "an up-front refusal is not answer-unused (§R4 CE-1)"
     );
     // The answer file's and key's own checks, typed the same.
     let link = tmp.join("answer-link.txt");
@@ -606,7 +660,7 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
     assert_ne!(repair_key, second_key);
     // No repair allowed any more: the resume finishes red without asking
     // for the repair's answer — answer-unused, AFTER the run's own events
-    // (§R CE-4), nothing filed.
+    // (§R4 CE-4), nothing filed.
     let toml = tmp.join("harness.toml");
     let mut cfg = std::fs::read_to_string(&toml).unwrap();
     cfg.push_str("\n[llm.migrate]\nmax_repairs = 0\n");

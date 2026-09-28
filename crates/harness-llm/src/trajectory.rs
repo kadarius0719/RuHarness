@@ -399,7 +399,7 @@ impl<'a> Job<'a> {
             // Read-only: listing and loading, never a replay or a judge —
             // refused before anything is written (docs/CHAT-PANE-DESIGN.md
             // §4.3).
-            self.check_answer(&base_id, key)?;
+            self.check_answer(&base_id, &first_key, key)?;
         }
         let id = if provider.live {
             live_sample_id(&self.attempts_dir(), &base_id, params.retry)?
@@ -873,11 +873,12 @@ impl<'a> Job<'a> {
     /// exactly as the run chooses it (the base in progress; with `--retry`,
     /// a finished base's latest sample in progress; nothing else) — exists,
     /// is in progress and labelled; its traces dir holds `<key>.request.json`
-    /// naming its model and re-serializing to `key` (the attempt's own first
-    /// request when it has no turn yet), and no `<key>.response.json`.
+    /// naming its model and re-serializing to `key`, and no
+    /// `<key>.response.json`; and while the run's first request (the one the
+    /// id was derived from) has no response, `key` is that request.
     /// `--answer` never creates an attempt or a sample, replays nothing, and
     /// never files an answer over one.
-    fn check_answer(&self, base: &str, key: &str) -> Result<(), Error> {
+    fn check_answer(&self, base: &str, first_key: &str, key: &str) -> Result<(), Error> {
         let refuse = |why: String| Error::AnswerRefused { why };
         if self.params.requester.is_none() || self.params.provider.kind != EXTERNAL_KIND {
             return Err(refuse(
@@ -929,7 +930,17 @@ impl<'a> Job<'a> {
                 target.id
             )));
         }
-        if target.turns.is_empty() && !harness_core::attempts::first_request_of(&target, key) {
+        // The unit's traces/chat/ is shared by its chat attempts: while the
+        // first request is unanswered, the attempt waits on nothing else
+        // (§R4 CE-6). Not "a record with no turn": a resume stores the record
+        // turn-less until its first turn is re-judged, and one that stopped
+        // there still waits on its later request (§R5 NEW-1).
+        let first_answered = std::fs::symlink_metadata(harness_core::traces::response_path(
+            self.params.traces_dir,
+            first_key,
+        ))
+        .is_ok();
+        if !first_answered && key != first_key {
             return Err(refuse(format!(
                 "the hand-off {key} is not the request attempt {} waits on",
                 target.id
@@ -1006,7 +1017,7 @@ impl<'a> Job<'a> {
         let mut candidates: Vec<AttemptRecord> = Vec::new();
         let mut finished: Vec<String> = Vec::new();
         // HEAD's request, but another label: named, never a hint to pin it
-        // without the label (§R CE-10).
+        // without the label (§R4 CE-10).
         let mut other_label: Vec<AttemptRecord> = Vec::new();
         for entry in entries.into_iter().flatten() {
             let entry = entry.map_err(|e| Error::io(&attempts_dir, e))?;

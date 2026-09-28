@@ -140,9 +140,10 @@ enum Cmd {
         /// in the unit's `traces/chat/`; never scored as pipeline output
         #[arg(long, value_parser = ["chat"])]
         requester: Option<String>,
-        /// A file holding the answer to the pending hand-off named by
-        /// --answer-key (`external`, --requester=chat only): filed as its
-        /// response when the resumed attempt asks for exactly that request
+        /// A file (or `-`: stdin) holding the answer to the pending hand-off
+        /// named by --answer-key (`external`, --requester=chat only): filed
+        /// as its response when the resumed attempt asks for exactly that
+        /// request
         #[arg(long, requires_all = ["answer_key", "requester"])]
         answer: Option<PathBuf>,
         /// The trace key (8 hex) of the hand-off --answer answers
@@ -543,10 +544,6 @@ pub(crate) fn require_sandbox(allow_unsandboxed: bool, what: &str) -> Result<()>
     Ok(())
 }
 
-/// A ledger directory that is guaranteed not to be (or pass through) a
-/// symlink: created level by level under the canonical target root, refusing
-/// any component that is not a real directory. Target-owned trees are hostile
-/// — a committed `traces -> /elsewhere` must not redirect harness writes.
 /// [`safe_ledger_dir`] for a run that must create nothing: every component
 /// must already be a real directory (never a symlink).
 fn existing_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<PathBuf> {
@@ -561,6 +558,10 @@ fn existing_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<Pa
     Ok(cur)
 }
 
+/// A ledger directory that is guaranteed not to be (or pass through) a
+/// symlink: created level by level under the canonical target root, refusing
+/// any component that is not a real directory. Target-owned trees are hostile
+/// — a committed `traces -> /elsewhere` must not redirect harness writes.
 pub(crate) fn safe_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<PathBuf> {
     let mut cur = root.to_path_buf();
     for comp in components {
@@ -1108,12 +1109,12 @@ impl MigrateArgs {
 /// Largest `--answer` file (as harness-mcp's `harness_answer` took).
 const MAX_ANSWER_BYTES: u64 = 512 * 1024;
 
-/// `--answer FILE --answer-key KEY`, checked: KEY 8 lowercase hex; FILE a
-/// regular file of ≤ [`MAX_ANSWER_BYTES`], UTF-8, not blank. Every refusal
-/// is typed `answer-refused`.
+/// `--answer FILE --answer-key KEY`, checked: KEY 8 lowercase hex; FILE (or
+/// `-`: stdin, as harness-mcp passes it — the answer never lands in a file)
+/// a regular file of ≤ [`MAX_ANSWER_BYTES`], read through a checked handle,
+/// UTF-8, not blank. Every refusal is typed `answer-refused`.
 fn read_answer(file: &Path, key: &str) -> Result<(String, String)> {
     use std::io::Read;
-    use std::os::unix::fs::MetadataExt;
     let refuse = |why: String| {
         anyhow::Error::new(Error::AnswerRefused {
             why: format!("{}: {why}", file.display()),
@@ -1128,28 +1129,27 @@ fn read_answer(file: &Path, key: &str) -> Result<(String, String)> {
         }
         .into());
     }
-    // The path is looked at once (never through a symlink), then the file
-    // opened and its handle checked to be that same regular file, and read
-    // bounded (§R CS-6).
-    let seen = std::fs::symlink_metadata(file).map_err(|e| refuse(e.to_string()))?;
-    if !seen.file_type().is_file() || seen.len() > MAX_ANSWER_BYTES {
-        return Err(refuse(format!(
-            "not a regular file (symlinks are refused) of at most {MAX_ANSWER_BYTES} bytes"
-        )));
-    }
-    let mut opened = std::fs::File::open(file).map_err(|e| refuse(e.to_string()))?;
-    let meta = opened.metadata().map_err(|e| refuse(e.to_string()))?;
-    if !meta.is_file() || meta.dev() != seen.dev() || meta.ino() != seen.ino() {
-        return Err(refuse("the file changed while it was opened".into()));
-    }
-    let mut bytes = Vec::new();
-    (&mut opened)
-        .take(MAX_ANSWER_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| refuse(e.to_string()))?;
-    if bytes.len() as u64 > MAX_ANSWER_BYTES {
-        return Err(refuse(format!("longer than {MAX_ANSWER_BYTES} bytes")));
-    }
+    let bytes = if file == Path::new("-") {
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .lock()
+            .take(MAX_ANSWER_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| refuse(e.to_string()))?;
+        if bytes.len() as u64 > MAX_ANSWER_BYTES {
+            return Err(refuse(format!("longer than {MAX_ANSWER_BYTES} bytes")));
+        }
+        bytes
+    } else {
+        // Looked at once (never through a symlink), opened without
+        // blocking, the handle checked to be that file, read bounded (§R
+        // CS-6, CR-11).
+        harness_core::ledger::read_regular(file, MAX_ANSWER_BYTES).map_err(|e| {
+            anyhow::Error::new(Error::AnswerRefused {
+                why: format!("--answer {e}"),
+            })
+        })?
+    };
     let text = String::from_utf8(bytes).map_err(|_| refuse("it must be UTF-8".into()))?;
     if text.trim().is_empty() {
         return Err(refuse("the answer is empty".into()));
@@ -1239,7 +1239,7 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     // protocol's: files keyed by the request alone would be shared with a
     // blind attempt of the same model (docs/CHAT-PANE-DESIGN.md §4.1). An
     // answer or a replay creates no directory: the hand-off was posed there,
-    // or there is nothing to replay (§R CS-12).
+    // or there is nothing to replay (§R4 CS-12).
     let mut components = vec!["migration", "units", unit_id.as_str(), "traces"];
     if requester.is_some() {
         components.push(attempts::CHAT_TRACES);
@@ -1251,7 +1251,10 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
                     why: format!("no hand-off was posed there: {e}"),
                 })
             } else {
-                e
+                e.context(format!(
+                    "unit `{unit_id}` has no recorded attempt to replay: replay verifies \
+                     RECORDED attempts from their traces; it never starts a new attempt"
+                ))
             }
         })?
     } else {
@@ -1304,9 +1307,9 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     // An answer the run never asked for is refused after the fact — the
     // one refusal that cannot come first — and only when the run ended
     // awaiting another request or finished; any other error keeps its own
-    // kind (§R CE-1). Awaiting: the request it waits on now is reported
+    // kind (§R4 CE-1). Awaiting: the request it waits on now is reported
     // first, so a client tracks the hand-off it can answer next; finished:
-    // the outcome is reported in full first (§R CE-4).
+    // the outcome is reported in full first (§R4 CE-4).
     let mut unused = slot.as_ref().filter(|s| !s.used()).and_then(|slot| {
         let why = match &run {
             Ok(o) => format!(

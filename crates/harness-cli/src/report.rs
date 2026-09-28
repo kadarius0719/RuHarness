@@ -402,7 +402,7 @@ impl harness_llm::Progress for Progress {
 mod tests {
     use super::*;
 
-    /// An `awaiting` event's `args` never carry the answer (§R CE-14):
+    /// An `awaiting` event's `args` never carry the answer (§R4 CE-14):
     /// neither attached nor as the next word, whatever else is kept.
     #[test]
     fn the_answer_flags_are_dropped_in_both_spellings() {

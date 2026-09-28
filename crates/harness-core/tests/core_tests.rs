@@ -435,3 +435,24 @@ fn hostile_plan_paths_are_refused_at_load() {
         assert!(Plan::load(&path).is_err(), "accepted hostile plan: {bad}");
     }
 }
+
+/// §R4 CR-11 (docs/CHAT-PANE-DESIGN.md): a FIFO planted where a trace file
+/// is expected is refused without blocking (here, not in the lib's tests:
+/// making one forks, and a fork there can hold the lock tests' lock).
+#[test]
+fn read_regular_never_blocks_on_a_fifo() {
+    let dir = std::env::temp_dir().join(format!("ruharness-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fifo = dir.join("k.response.json");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let err = harness_core::ledger::read_regular(&fifo, 10)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not a regular file"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

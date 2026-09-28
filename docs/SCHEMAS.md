@@ -506,16 +506,19 @@ Committed evidence per attempt (source only; `attempts/**/target/` is gitignored
   attempts (reported `(chat)`). `blind` (harness-core): unseeded, `external`, no label —
   only the audited protocol answers or retries it.
 - `harness migrate … --requester=chat` records the label; `--answer=FILE
-  --answer-key=KEY` (`external` and `--requester=chat` only) files FILE as the response to
-  the pending request KEY: refused up front — typed `answer-refused` (exit 1), before the
+  --answer-key=KEY` (`external` and `--requester=chat` only; FILE `-` is stdin, as
+  harness-mcp passes it) files the answer as the response to the pending request KEY:
+  refused up front — typed `answer-refused` (exit 1), before the
   run writes anything of its own and without creating a directory (only an interrupted
-  promotion is recovered first, as by every migrate) — unless FILE is a regular UTF-8 file
-  of at most 512 KiB, not empty, the provider is `external`, the traces dir exists, and the
+  promotion is recovered first, as by every migrate) — unless the answer is UTF-8, at most
+  512 KiB, not empty (a FILE read as the regular file looked at, never a link or a FIFO), the
+  provider is `external`, the traces dir exists, and the
   attempt the run will resume (the base in progress; with `--retry`, the latest sample,
   n ≥ 2, in progress) is labelled, names the run's model, `KEY.request.json` exists there
-  (re-serializing to KEY, naming that model; for an attempt with no turn yet, the request
-  its id was derived from) and `KEY.response.json` does not; the adapter writes it (a new
-  file, never over one; counts 0) only when the attempt asks for exactly KEY; a run that
+  (re-serializing to KEY, naming that model; while the run's first request — the one the id
+  was derived from — has no response, KEY is that request) and `KEY.response.json` does not;
+  the adapter writes it (a new file, never over one; counts 0) only when the attempt asks for
+  exactly KEY; a run that
   finishes or waits on another request without asking for it ends `answer-unused` (exit 1)
   after its own events (the `awaiting` event naming the request it now waits on); any
   other failure keeps its own kind.

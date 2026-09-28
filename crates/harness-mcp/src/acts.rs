@@ -241,54 +241,12 @@ pub fn promote_argv(
 /// Largest reply `harness_answer` takes (the CLI's `--answer` limit).
 pub const MAX_ANSWER_BYTES: usize = 512 * 1024;
 
-/// This server's private answer dir, created once, fresh:
-/// `harness-mcp-answers-<pid>-<16 hex>` (0700) in the temp dir — never an
-/// existing directory adopted (on a shared `/tmp` another user could have
-/// made it; §R CR-1).
-static ANSWER_DIR: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
-
-/// The prefix of every answer dir's name.
-const ANSWER_DIR_PREFIX: &str = "harness-mcp-answers-";
-
-fn answer_dir() -> Result<PathBuf, Refusal> {
-    use std::os::unix::fs::DirBuilderExt;
-    ANSWER_DIR
-        .get_or_init(|| {
-            for _ in 0..8 {
-                let dir = std::env::temp_dir().join(format!(
-                    "{ANSWER_DIR_PREFIX}{}-{}",
-                    std::process::id(),
-                    harness_core::hash::random_hex(8)
-                ));
-                match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
-                    Ok(()) => return Ok(dir),
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(e) => return Err(format!("the answer dir: {e}")),
-                }
-            }
-            Err("the answer dir: no free name".into())
-        })
-        .clone()
-        .map_err(Refusal::refused)
-}
-
-/// Remove this server's answer dir (shutdown; best effort).
-pub fn remove_answer_dir() {
-    if let Some(Ok(dir)) = ANSWER_DIR.get() {
-        let _ = std::fs::remove_dir_all(dir);
-    }
-}
-
-/// The answer file of `harness_answer` (docs/CHAT-PANE-DESIGN.md §4.4):
-/// the reply written OUTSIDE the ledger, in this server's private answer
-/// dir (0700; the file 0600, created new), for the CLI to file with
-/// `--answer` — harness-mcp writes nothing in the ledger. Removed once the
-/// act that took it ends, or its spawn fails.
-pub fn answer_file(text: &str) -> Result<PathBuf, Refusal> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
+/// The reply of `harness_answer` as the CLI's stdin (`--answer=-`,
+/// docs/CHAT-PANE-DESIGN.md §4.4): this server writes it nowhere — not in
+/// the ledger, not in a temp file another process could read, swap or
+/// leave behind (§R5 S-NEW-1). Refused here when empty or over the CLI's
+/// limit, so the chat hears why before anything runs.
+pub fn answer_input(text: &str) -> Result<Vec<u8>, Refusal> {
     if text.trim().is_empty() {
         return Err(Refusal::refused("the reply is empty"));
     }
@@ -297,86 +255,7 @@ pub fn answer_file(text: &str) -> Result<PathBuf, Refusal> {
             "the reply is longer than {MAX_ANSWER_BYTES} bytes"
         )));
     }
-    let dir = answer_dir()?;
-    let path = dir.join(format!(
-        "answer-{}.txt",
-        NEXT.fetch_add(1, Ordering::SeqCst)
-    ));
-    let written = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()
-    })();
-    written.map_err(|e| Refusal::refused(format!("writing the answer file: {e}")))?;
-    Ok(path)
-}
-
-/// How many answer dirs one sweep probes, at most (a temp dir planted with
-/// thousands never runs thousands of probes; §R CR-2). Every entry's NAME is
-/// looked at — a busy temp dir holds tens of thousands, and a dir past a
-/// bound on entries would never be swept.
-const SWEEP_MAX: usize = 256;
-
-/// Remove the answer dirs ([`answer_file`]) of harness-mcp servers that are
-/// gone — a SIGKILLed server leaves the model's code in the temp dir
-/// otherwise (§R3 S3-18). Only dirs of this user (the owner of this
-/// server's own dir) with mode 0700; a pid counts as gone only when
-/// `/bin/kill -0` says "No such process" — a probe that cannot run, or any
-/// other answer, counts as alive (§R CR-2). Run on a background thread.
-pub fn sweep_answer_dirs() {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let Ok(mine) = answer_dir() else {
-        return;
-    };
-    let Ok(me) = std::fs::symlink_metadata(&mine).map(|m| m.uid()) else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
-        return;
-    };
-    let mut probed = 0;
-    for entry in entries.flatten() {
-        if probed == SWEEP_MAX {
-            return;
-        }
-        let path = entry.path();
-        if path == mine {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(pid) = name
-            .strip_prefix(ANSWER_DIR_PREFIX)
-            .and_then(|rest| rest.split('-').next())
-            .and_then(|p| p.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if !meta.file_type().is_dir() || meta.uid() != me || meta.permissions().mode() & 0o077 != 0
-        {
-            continue;
-        }
-        probed += 1;
-        let probe = std::process::Command::new("/bin/kill")
-            .args(["-0", &pid.to_string()])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output();
-        let gone = probe.is_ok_and(|out| {
-            !out.status.success()
-                && String::from_utf8_lossy(&out.stderr).contains("No such process")
-        });
-        if gone {
-            let _ = std::fs::remove_dir_all(&path);
-        }
-    }
+    Ok(text.as_bytes().to_vec())
 }
 
 /// `argv` without `--answer=…`/`--answer-key=…` (this server passes them
@@ -608,9 +487,9 @@ pub struct Posed {
     pub answering_model: Option<String>,
     /// Finished attempts of the unit before a retry ran (`recorded`).
     pub finished_before: Option<BTreeSet<String>>,
-    /// The answer file a `harness_answer` resume took ([`answer_file`]),
-    /// removed when the act ends.
-    pub answer_file: Option<PathBuf>,
+    /// The reply a `harness_answer` resume passes on stdin
+    /// ([`answer_input`]), taken when it is spawned.
+    pub answer: Option<Vec<u8>>,
 }
 
 /// The `harness_answer` arguments that answer `attempt` (its target named
@@ -668,7 +547,7 @@ pub fn act_result(
     let is_error = exit != Some(0) && awaiting.is_none();
     // The answer this act carried was not used: the run waits on another
     // request (the new `awaiting`) or finished without asking for it
-    // (§R CE-3).
+    // (§R4 CE-3).
     let answer_unused = c.error_kind.as_deref() == Some("answer-unused");
     let mut out = json!({
         "act": posed.tool,
@@ -776,7 +655,7 @@ mod tests {
             target: PathBuf::from("/t"),
             answering_model: Some("claude-opus-5-5".into()),
             finished_before: None,
-            answer_file: None,
+            answer: None,
         }
     }
 
@@ -1203,75 +1082,15 @@ mod tests {
         assert_eq!(v["omitted"]["dropped_by_the_server"]["messages"], 7);
     }
 
+    /// The reply goes to the CLI's stdin, never a file (§R5 S-NEW-1); an
+    /// empty or oversize one is refused before anything runs.
     #[test]
-    fn an_answer_is_a_private_file_outside_the_ledger() {
-        use std::os::unix::fs::PermissionsExt;
-        let path = answer_file("the reply").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "the reply");
-        let dir = path.parent().unwrap();
-        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(
-            name.starts_with(&format!("harness-mcp-answers-{}-", std::process::id())),
-            "{name}"
-        );
-        assert_eq!(dir.parent().unwrap(), std::env::temp_dir().as_path());
-        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&path), 0o600);
-        assert_eq!(mode(dir), 0o700);
-        // Each answer is a new file.
-        let other = answer_file("another").unwrap();
-        assert_ne!(other, path);
+    fn an_answer_is_the_cli_input_and_bounded() {
+        assert_eq!(answer_input("the reply").unwrap(), b"the reply");
         for bad in ["", "  \n", &"x".repeat(MAX_ANSWER_BYTES + 1)] {
-            assert!(answer_file(bad).is_err(), "{} bytes", bad.len());
+            assert!(answer_input(bad).is_err(), "{} bytes", bad.len());
         }
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(&other);
-    }
-
-    #[test]
-    fn answer_dirs_of_dead_servers_are_swept_and_only_those() {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        let mine = answer_file("mine").unwrap();
-        let tmp = std::env::temp_dir();
-        let make = |name: &str, mode: u32| {
-            let dir = tmp.join(name);
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
-            std::fs::write(dir.join("answer-0.txt"), "code").unwrap();
-            dir
-        };
-        // A pid that is gone: a child that ended and was reaped.
-        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
-        let gone = child.id();
-        child.wait().unwrap();
-        let dead = make(
-            &format!("harness-mcp-answers-{gone}-00000000000000aa"),
-            0o700,
-        );
-        // Ours by name but group/world-accessible: not a dir this server made.
-        let open = make(
-            &format!("harness-mcp-answers-{gone}-00000000000000bb"),
-            0o755,
-        );
-        // A pid `kill` cannot probe (out of range): counted alive.
-        let odd = make("harness-mcp-answers-4194303999-00000000000000dd", 0o700);
-        // A live pid's (this test process's parent is alive).
-        let parent = std::os::unix::process::parent_id();
-        let live = make(
-            &format!("harness-mcp-answers-{parent}-00000000000000cc"),
-            0o700,
-        );
-        sweep_answer_dirs();
-        assert!(!dead.exists(), "a dead server's answers are removed");
-        assert!(open.exists(), "a dir that is not private is left alone");
-        assert!(odd.exists(), "a probe that does not say gone: kept");
-        assert!(live.exists(), "a live server's answers are kept");
-        assert!(mine.exists(), "this server's are kept");
-        for d in [&open, &live, &odd] {
-            let _ = std::fs::remove_dir_all(d);
-        }
-        let _ = std::fs::remove_file(&mine);
+        assert!(answer_input(&"x".repeat(MAX_ANSWER_BYTES)).is_ok());
     }
 
     #[test]

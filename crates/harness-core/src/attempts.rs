@@ -241,7 +241,7 @@ pub fn sample_base(id: &str) -> &str {
 /// Whether `key` is the FIRST request of `record` — the only hand-off whose
 /// key the record binds (its id is derived from it): an in-progress record
 /// with no turn yet waits on exactly the request its id names. (A repair's
-/// key is not in the record; §R CE-6.)
+/// key is not in the record; §R4 CE-6.)
 pub fn first_request_of(record: &AttemptRecord, key: &str) -> bool {
     attempt_id_with(
         &record.unit,
@@ -256,8 +256,9 @@ pub fn first_request_of(record: &AttemptRecord, key: &str) -> bool {
 
 /// A BLIND hand-off's record (docs/CHAT-PANE-DESIGN.md §4.2): an unseeded
 /// model attempt of the `external` provider that no chat asked for — only
-/// the audited protocol may answer it (or retry it). The ONE predicate: the
-/// cockpit, harness-mcp and their refusals all use it.
+/// the audited protocol may answer it (or retry it). The cockpit, harness-mcp
+/// and their refusals use it; harness-mcp's `blind_hand_off_pending` flag
+/// counts wider (fail-closed: a half-seeded record too).
 pub fn blind(r: &AttemptRecord) -> bool {
     r.seeded_from.is_none()
         && r.steer_note.is_none()
@@ -307,7 +308,7 @@ impl AttemptRecord {
     /// Refuses a record no reader would accept: a `requester` outside the
     /// closed set, or a `schema_version` other than the one its `requester`
     /// implies ([`schema_version_for`]) — never a record that would make its
-    /// whole unit unreadable (§R CS-11).
+    /// whole unit unreadable (§R4 CS-11).
     pub fn store(&self, dir: &Path) -> Result<(), Error> {
         if let Some(other) = self.requester.as_deref().filter(|r| *r != REQUESTER_CHAT) {
             return Err(Error::Invariant(format!(

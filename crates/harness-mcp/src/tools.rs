@@ -103,6 +103,7 @@ const ACT_OUTPUT: &[(&str, &[&str])] = &[
     ("messages", &["array"]),
     ("stderr_tail", &["array"]),
     ("recorded", &["boolean", "null"]),
+    ("answer_unused", &["boolean"]),
     ("running", &["object"]),
     ("dropped", &["object"]),
     ("omitted", &["object"]),
@@ -121,7 +122,7 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
                 "The target's migration ledger: fact freshness; per unit its plan status, source \
                  freshness, verdict (state, colour, stale inputs), contradiction / write in \
                  flight / promotion interrupted, provenance of its crate (pipeline, ambiguous, \
-                 steered, asked in chat, human, none), and its attempts (outcome, provider, bound to the \
+                 steered, chat, human, none), and its attempts (outcome, provider, bound to the \
                  current inputs, promoted, last turn result, candidate, verdict, seed, \
                  authorship, requester, superseded by; `blind_hand_off_pending` marks an \
                  unseeded hand-off no chat asked for, which belongs to the blind protocol); the \
@@ -205,11 +206,12 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
             title: "Read a pending hand-off's request",
             description: format!(
                 "The request of a pending hand-off of an attempt a chat asked for \
-                 (`requester: chat`) — its system prompt and user message, fenced, in pages of \
-                 about 40 KiB (`page`, from 1; `omitted.next_page` names the next). Only the \
-                 request the attempt waits on (`request_key` from the act's `awaiting` \
-                 result), before it is answered. Read it whole before answering with \
-                 harness_answer. Read-only. {untrusted}"
+                 (`requester: chat`) — its system prompt, then its user message, fenced, in \
+                 pages of about 40 KiB (`page`, from 1; `omitted.next_page` names the next; \
+                 `system` or `user` is null on a page that shows none of it). The request named \
+                 by the act's `awaiting` result (`request_key`), before it is answered; while \
+                 the attempt's first request is unanswered, only that one. Read it whole before \
+                 answering with harness_answer. Read-only. {untrusted}"
             ),
             read_only: true,
             destructive: false,
@@ -239,7 +241,7 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
                 ("page", &["integer"]),
                 ("pages", &["integer"]),
                 ("system", &["object", "null"]),
-                ("user", &["object"]),
+                ("user", &["object", "null"]),
                 ("omitted", &["object", "null"]),
                 ERROR_FIELD,
             ],
@@ -298,8 +300,10 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
                 "Answer the `awaiting` hand-off of `attempt`, which an act of THIS server posed \
                  (harness_steer, or harness_retry of a steer attempt), for the request \
                  `request_key` you read with harness_request: the harness files the answer \
-                 (`harness migrate … --answer`) and resumes the attempt; the result is that \
-                 act's. `model` must be the model the attempt names — yours. Refused for any \
+                 (`harness migrate … --answer=-`, the text on its stdin) and resumes the \
+                 attempt; the result is that act's — `answer_unused: true` when the resumed \
+                 attempt never asked for that request (its `awaiting` names the one it waits on \
+                 now). `model` must be the model the attempt names — yours. Refused for any \
                  other hand-off or key. {} {untrusted}",
                 ANSWERING_RULE
             ),

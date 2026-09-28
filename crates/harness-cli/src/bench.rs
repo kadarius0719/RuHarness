@@ -1337,8 +1337,13 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                     {
                         skipped += 1;
                         out(format!(
-                            "bench replay: {} {stage} {shown} skipped ({why})",
-                            case.path
+                            "bench replay: {} {stage} {shown}{} skipped ({why})",
+                            case.path,
+                            if rec.requester.is_some() {
+                                " (chat)"
+                            } else {
+                                ""
+                            }
                         ));
                         results.insert(rec.id.clone(), ReplayResult::Skipped(why));
                         continue;
@@ -1437,10 +1442,15 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
                             excused.insert(old.id.as_str());
                             expected += 1;
                             out(format!(
-                                "bench replay: {} {stage} {} expected divergence (superseded by \
-                                 {}{}: {})",
+                                "bench replay: {} {stage} {}{} expected divergence (superseded \
+                                 by {}{}: {})",
                                 case.path,
                                 harness_llm::printable(&old.id, 64),
+                                if old.requester.is_some() {
+                                    " (chat)"
+                                } else {
+                                    ""
+                                },
                                 harness_llm::printable(&new.id, 64),
                                 if entry.loosening { ", LOOSENING" } else { "" },
                                 harness_llm::printable(&entry.reason, 400)

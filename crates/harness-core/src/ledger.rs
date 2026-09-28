@@ -22,7 +22,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         .unwrap_or_else(|| "ledger".into());
     // The temp file is created NEW (O_CREAT|O_EXCL: never through a planted
     // symlink or over an existing file) under an unpredictable name — the
-    // ledger's directories are target-owned (§R CR-3).
+    // ledger's directories are target-owned (§R4 CR-3).
     let (tmp, mut file) = new_temp_file(dir, &name)?;
     let written = file.write_all(bytes);
     drop(file);
@@ -61,6 +61,51 @@ pub fn new_temp_file(dir: &Path, name: &str) -> Result<(PathBuf, std::fs::File),
         dir,
         last.unwrap_or_else(|| std::io::Error::other("no free temp name")),
     ))
+}
+
+/// `O_NONBLOCK` for [`read_regular`]'s open: a FIFO planted in place of a
+/// file must never block it (the same bit on macOS and the common Linux
+/// targets).
+#[cfg(target_os = "macos")]
+const O_NONBLOCK: i32 = 0x0004;
+#[cfg(target_os = "linux")]
+const O_NONBLOCK: i32 = 0o4000;
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+const O_NONBLOCK: i32 = 0;
+
+/// The bytes of `path` — a regular file (never read through a symlink) of at
+/// most `max` bytes — read through a handle checked to be the very file
+/// looked at: the ledger is target-owned, so a swap between the look and the
+/// open is refused, a FIFO never blocks the open, and a file that grows is
+/// never read past `max` (§R4 CR-11).
+pub fn read_regular(path: &Path, max: u64) -> Result<Vec<u8>, Error> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let refuse = |why: String| Error::Invariant(format!("{}: {why}", path.display()));
+    let seen = std::fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
+    if !seen.file_type().is_file() {
+        return Err(refuse("not a regular file (symlinks are refused)".into()));
+    }
+    if seen.len() > max {
+        return Err(refuse(format!("longer than {max} bytes")));
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK)
+        .open(path)
+        .map_err(|e| Error::io(path, e))?;
+    let meta = file.metadata().map_err(|e| Error::io(path, e))?;
+    if !meta.is_file() || meta.dev() != seen.dev() || meta.ino() != seen.ino() {
+        return Err(refuse("the file changed while it was opened".into()));
+    }
+    let mut bytes = Vec::new();
+    file.take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| Error::io(path, e))?;
+    if bytes.len() as u64 > max {
+        return Err(refuse(format!("longer than {max} bytes")));
+    }
+    Ok(bytes)
 }
 
 /// Directory name of the ledger inside a target repo.
@@ -414,7 +459,27 @@ mod tests {
         root
     }
 
-    /// §R CR-3: the temp file is created new under an unpredictable name —
+    /// §R4 CR-11: a target-owned file is read only as the regular file
+    /// looked at, bounded — a symlink refused, a file over the bound refused
+    /// (a FIFO: tests/core_tests.rs, since making one forks, and a fork in
+    /// this binary can hold the lock tests' lock).
+    #[test]
+    fn read_regular_reads_only_a_bounded_regular_file() {
+        let root = scratch("readregular");
+        let file = root.join("f.json");
+        std::fs::write(&file, "0123456789").unwrap();
+        assert_eq!(read_regular(&file, 10).unwrap(), b"0123456789");
+        let err = read_regular(&file, 9).unwrap_err().to_string();
+        assert!(err.contains("longer than 9 bytes"), "{err}");
+        let link = root.join("link.json");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        let err = read_regular(&link, 10).unwrap_err().to_string();
+        assert!(err.contains("symlinks are refused"), "{err}");
+        assert!(read_regular(&root.join("missing"), 10).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// §R4 CR-3: the temp file is created new under an unpredictable name —
     /// a symlink planted at the old predictable name (or any name) is never
     /// written through — and nothing is left behind.
     #[test]

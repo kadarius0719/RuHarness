@@ -772,14 +772,21 @@ pub fn retry_refusal(r: &AttemptRecord, providers: &[String]) -> Option<String> 
         ));
     }
     // A chat asked for it and answers its turns: its retry is the chat's to
-    // ask for (docs/CHAT-PANE-DESIGN.md §3.4; §R CS-1).
+    // ask for (docs/CHAT-PANE-DESIGN.md §3.4; §R4 CS-1).
     if r.requester.is_some()
         && (r.provider == EXTERNAL_PROVIDER || r.provider_kind == EXTERNAL_PROVIDER)
     {
+        // harness-mcp retries only a steer attempt: an unseeded one is
+        // steered from instead (§R5 S-NEW-3).
         return Some(format!(
             "attempt {} was asked for in chat and the chat answers its turns — ask the chat \
-             to retry it",
-            r.id
+             {}",
+            r.id,
+            if r.seeded_from.is_some() {
+                "to retry it"
+            } else {
+                "for a steer attempt from it"
+            }
         ));
     }
     if !providers.contains(&r.provider) {
@@ -1783,7 +1790,7 @@ impl App {
                     rest.push(os(format!("--steer={note}")));
                 }
                 // Its own run shape carries its label: without it the CLI
-                // would derive another attempt's id (§R CS-1).
+                // would derive another attempt's id (§R4 CS-1).
                 if let Some(requester) = &r.requester {
                     rest.push(os(format!("--requester={requester}")));
                 }
@@ -4469,7 +4476,7 @@ pub(crate) mod tests {
         assert!(dialog_argv(&app).contains(&"--provider=anthropic-live".to_string()));
     }
 
-    /// §R CS-1/CS-13 (CE-14): Retry of an attempt a chat asked for — an
+    /// §R4 CS-1/CS-13 (CE-14): Retry of an attempt a chat asked for — an
     /// `external` one is the chat's (greyed, in the menu and at `r`); a live
     /// one keeps its label on its run shape (without it the CLI would derive
     /// another attempt's id); its tags say "asked in chat".
@@ -4499,7 +4506,8 @@ pub(crate) mod tests {
         assert_eq!(app.mode, Mode::Normal, "nothing armed");
         let tags = attempt_tags(app.unit_view().unwrap(), app.shown_attempt().unwrap());
         assert!(tags.iter().any(|t| t == "asked in chat"), "{tags:?}");
-        // Unseeded and asked in chat: not blind, still the chat's.
+        // Unseeded and asked in chat: not blind, still the chat's — as a
+        // steer attempt (harness-mcp retries only steer attempts).
         record(&mut app, PROVENANCE, |r| {
             r.seeded_from = None;
             r.steer_note = None;
@@ -4508,7 +4516,7 @@ pub(crate) mod tests {
             .expect("offered, greyed")
             .greyed
             .unwrap()
-            .contains("ask the chat"));
+            .contains("ask the chat for a steer attempt from it"));
         // A live provider's: its own run shape, label included.
         app.config.providers.push("anthropic-live".into());
         record(&mut app, PROVENANCE, |r| {

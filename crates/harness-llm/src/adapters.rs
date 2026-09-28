@@ -535,10 +535,11 @@ impl ProviderAdapter for TraceAdapter {
 
     fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse, Error> {
         let response_path = Self::response_path(&self.dir, req)?;
-        if response_path.exists() {
-            let text = std::fs::read_to_string(&response_path)
-                .map_err(|e| Error::io(&response_path, e))?;
-            return serde_json::from_str(&text)
+        // Present in any form (a symlink too): read only as a bounded
+        // regular file (the traces are target-owned, §R4 CR-11).
+        if std::fs::symlink_metadata(&response_path).is_ok() {
+            let bytes = harness_core::ledger::read_regular(&response_path, MAX_TRACE_BYTES)?;
+            return serde_json::from_slice(&bytes)
                 .map_err(|e| Error::parse(&response_path, e.to_string()));
         }
         if self.external {

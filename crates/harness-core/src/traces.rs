@@ -44,28 +44,10 @@ pub fn load_recorded(
             key.chars().take(16).collect::<String>()
         )));
     }
-    let regular = |path: &Path| -> Result<(), Error> {
-        let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
-        let is_dir = path == dir && meta.file_type().is_dir();
-        if !(meta.file_type().is_file() || is_dir) {
-            return Err(Error::Invariant(format!(
-                "{} is not a regular file or directory (symlinks are refused)",
-                path.display()
-            )));
-        }
-        if meta.file_type().is_file() && meta.len() > MAX_TRACE_BYTES {
-            return Err(Error::Invariant(format!(
-                "{} exceeds {MAX_TRACE_BYTES} bytes",
-                path.display()
-            )));
-        }
-        Ok(())
-    };
-    regular(dir)?;
+    real_dir(dir)?;
     let read = |ext: &str| -> Result<(PathBuf, String), Error> {
         let path = dir.join(format!("{key}.{ext}.json"));
-        regular(&path)?;
-        let text = std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
+        let text = read_text(&path)?;
         Ok((path, text))
     };
     let (req_path, req_text) = read("request")?;
@@ -82,6 +64,25 @@ pub fn load_recorded(
     let response: CompletionResponse =
         serde_json::from_str(&resp_text).map_err(|e| Error::parse(&resp_path, e.to_string()))?;
     Ok((request, response))
+}
+
+/// `dir` is a real directory (never a symlink).
+fn real_dir(dir: &Path) -> Result<(), Error> {
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| Error::io(dir, e))?;
+    if !meta.file_type().is_dir() {
+        return Err(Error::Invariant(format!(
+            "{} is not a regular directory (symlinks are refused)",
+            dir.display()
+        )));
+    }
+    Ok(())
+}
+
+/// A trace file's text: [`crate::ledger::read_regular`] with
+/// [`MAX_TRACE_BYTES`], UTF-8.
+fn read_text(path: &Path) -> Result<String, Error> {
+    let bytes = crate::ledger::read_regular(path, MAX_TRACE_BYTES)?;
+    String::from_utf8(bytes).map_err(|_| Error::parse(path, "not UTF-8".to_string()))
 }
 
 /// Whether `key` is a trace key: exactly 8 lowercase hex digits (checked
@@ -105,23 +106,7 @@ pub fn load_pending(dir: &Path, key: &str) -> Result<CompletionRequest, Error> {
             key.chars().take(16).collect::<String>()
         )));
     }
-    let regular = |path: &Path, want_dir: bool| -> Result<(), Error> {
-        let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
-        let ok = if want_dir {
-            meta.file_type().is_dir()
-        } else {
-            meta.file_type().is_file() && meta.len() <= MAX_TRACE_BYTES
-        };
-        if !ok {
-            return Err(Error::Invariant(format!(
-                "{} is not a regular {} of bounded size (symlinks are refused)",
-                path.display(),
-                if want_dir { "directory" } else { "file" }
-            )));
-        }
-        Ok(())
-    };
-    regular(dir, true)?;
+    real_dir(dir)?;
     let response = dir.join(format!("{key}.response.json"));
     match std::fs::symlink_metadata(&response) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -133,8 +118,7 @@ pub fn load_pending(dir: &Path, key: &str) -> Result<CompletionRequest, Error> {
         }
     }
     let path = dir.join(format!("{key}.request.json"));
-    regular(&path, false)?;
-    let text = std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
+    let text = read_text(&path)?;
     let request: CompletionRequest =
         serde_json::from_str(&text).map_err(|e| Error::parse(&path, e.to_string()))?;
     let actual = request_key(&request)?;
@@ -147,6 +131,29 @@ pub fn load_pending(dir: &Path, key: &str) -> Result<CompletionRequest, Error> {
     Ok(request)
 }
 
+/// How many entries of a traces dir [`first_request_answered`] looks at.
+const MAX_SCAN: usize = 65_536;
+
+/// Whether the request `record`'s id was derived from (see
+/// [`crate::attempts::first_request_of`]) has a response in `dir`: until it
+/// has, the attempt waits on that request and no other (§R4 CE-6); a record
+/// with a turn had it answered. Found by name among at most [`MAX_SCAN`]
+/// entries — not found is "not answered" (the narrower binding).
+pub fn first_request_answered(dir: &Path, record: &crate::attempts::AttemptRecord) -> bool {
+    if !record.turns.is_empty() {
+        return true;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().take(MAX_SCAN).any(|entry| {
+        let name = entry.file_name();
+        name.to_str()
+            .and_then(|n| n.strip_suffix(".response.json"))
+            .is_some_and(|k| is_trace_key(k) && crate::attempts::first_request_of(record, k))
+    })
+}
+
 /// `<dir>/<key>.response.json`.
 pub fn response_path(dir: &Path, key: &str) -> PathBuf {
     dir.join(format!("{key}.response.json"))
@@ -155,8 +162,9 @@ pub fn response_path(dir: &Path, key: &str) -> PathBuf {
 /// File `response` as `<dir>/<key>.response.json` — a NEW file, never over
 /// one (a hand-off answered once stays answered): pretty JSON written to a
 /// temp dotfile (no trace reader looks at it), synced, then hard-linked into
-/// place, so it is whole or absent. `AlreadyExists` is an error naming the
-/// hand-off.
+/// place, so it is whole or absent (where the filesystem has no hard links,
+/// created new in place under the ledger lock). `AlreadyExists` is an error
+/// naming the hand-off.
 pub fn write_new_response(
     dir: &Path,
     key: &str,
@@ -175,12 +183,28 @@ pub fn write_new_response(
     let name = format!("{key}.response.json");
     let target = dir.join(&name);
     // Created new under an unpredictable name (never through a planted
-    // symlink: the ledger is target-owned — §R CR-3), synced, linked.
+    // symlink: the ledger is target-owned — §R4 CR-3), synced, linked.
     let (tmp, mut file) = crate::ledger::new_temp_file(dir, &name)?;
     let written = (|| {
         file.write_all(&bytes)?;
         file.sync_all()?;
-        std::fs::hard_link(&tmp, &target)
+        match std::fs::hard_link(&tmp, &target) {
+            // A filesystem without hard links (exFAT, FAT, some network
+            // shares; §R4 CR-8): created new in place — the writer holds the
+            // ledger lock, so no reader sees it half written.
+            Err(e)
+                if e.kind() != std::io::ErrorKind::AlreadyExists
+                    && e.kind() != std::io::ErrorKind::NotFound =>
+            {
+                let mut direct = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)?;
+                direct.write_all(&bytes)?;
+                direct.sync_all()
+            }
+            linked => linked,
+        }
     })();
     let _ = std::fs::remove_file(&tmp);
     match written {
