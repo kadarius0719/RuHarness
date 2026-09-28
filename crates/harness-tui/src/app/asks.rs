@@ -1345,7 +1345,9 @@ impl App {
         };
         match key.code {
             KeyCode::Char('c') if ctrl => {
-                if self.chat.turn {
+                // Once a Stop is on its way, Ctrl-C moves on: a runtime
+                // that never answers it never keeps the person in.
+                if self.chat.turn && !self.chat.stopping() {
                     self.chat_stop();
                 } else if !self.chat.input.is_empty() {
                     self.chat.input.take();
@@ -1484,8 +1486,13 @@ impl App {
             self.say(why);
             return;
         }
+        // The end-to-end tests' panic (debug builds only, armed by the
+        // environment): a message sent while a chat runs panics the loop, so
+        // the panic hook must end the chat's group.
         #[cfg(debug_assertions)]
-        if std::env::var_os("HARNESS_TUI_TEST_PANIC").is_some_and(|v| v == "chat-send") {
+        if self.chat.alive()
+            && std::env::var_os("HARNESS_TUI_TEST_PANIC").is_some_and(|v| v == "chat-send")
+        {
             panic!("the test trigger: a panic while sending a chat message");
         }
         let text = self.chat.input.take();
@@ -1648,7 +1655,7 @@ impl App {
                 Command::None
             }
             "Ctrl-C" => {
-                if self.chat.turn {
+                if self.chat.turn && !self.chat.stopping() {
                     self.chat_stop();
                     Command::None
                 } else {

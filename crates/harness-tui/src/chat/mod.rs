@@ -317,6 +317,11 @@ impl Chat {
                 .any(|c| matches!(c.kind, transcript::Kind::You { .. }))
     }
 
+    /// A Stop was sent and the turn has not ended yet.
+    pub fn stopping(&self) -> bool {
+        self.stopping
+    }
+
     /// The model owes output: a turn runs and nothing is held for the
     /// person or the cockpit (a held request or a running act is silent by
     /// design).
@@ -339,12 +344,19 @@ impl Chat {
         let bins = self.bins.clone()?;
         let dir = runtime::create_dir(&self.temp)
             .map_err(|e| format!("the chat's directory could not be made: {e}"))?;
-        // Dead cockpits' directories go, off the loop (§1.1, §R5).
+        // Dead cockpits' directories go, off the loop (§1.1, §R5) — in the
+        // temp dir, and in /tmp where a long temp dir sends them.
         {
             use std::os::unix::fs::MetadataExt;
             let (temp, own) = (self.temp.clone(), dir.clone());
+            let parent = dir.parent().map(PathBuf::from);
             if let Ok(uid) = std::fs::metadata(&dir).map(|m| m.uid()) {
-                let _ = std::thread::Builder::new().spawn(move || runtime::sweep(&temp, uid, &own));
+                let _ = std::thread::Builder::new().spawn(move || {
+                    runtime::sweep(&temp, uid, &own);
+                    if let Some(p) = parent.filter(|p| *p != temp) {
+                        runtime::sweep(&p, uid, &own);
+                    }
+                });
             }
         }
         self.gen += 1;

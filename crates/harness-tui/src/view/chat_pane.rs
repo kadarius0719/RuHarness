@@ -345,7 +345,7 @@ pub fn chat_hint_tail(app: &App) -> Vec<(&'static str, &'static str)> {
         ("F1", "help"),
         (
             "Ctrl-C",
-            if app.chat.turn {
+            if app.chat.turn && !app.chat.stopping() {
                 "stop"
             } else if !app.chat.input.is_empty() {
                 "clear"
