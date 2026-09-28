@@ -593,37 +593,73 @@ fn a_stop_ends_with_its_result_whatever_is_queued() {
     end(&mut c);
 }
 
-/// Fix check N4: a Stop sent as its turn ended stops the turn queued
-/// behind it — that turn's marker is the Stop's own, never a message the
-/// cockpit did not send, and the turn that ended by itself is not "stopped".
+/// An echo of the cockpit's message `uuid` (the runtime's, at its turn's
+/// start), a Stop's marker, and a result.
+fn echo(uuid: &str) -> Value {
+    serde_json::json!({"dir": "out", "msg": {"type": "user", "uuid": uuid, "isReplay": true,
+        "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}}})
+}
+
+fn marker() -> Value {
+    serde_json::json!({"dir": "out", "msg": {"type": "user", "message": {"role": "user",
+        "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}})
+}
+
+fn result(subtype: &str, is_error: bool, reason: Option<&str>) -> Value {
+    let mut r = serde_json::json!({"type": "result", "subtype": subtype, "is_error": is_error,
+        "result": "done", "queued_turn_count": 0});
+    if let Some(t) = reason {
+        r["terminal_reason"] = serde_json::json!(t);
+    }
+    serde_json::json!({"dir": "out", "msg": r})
+}
+
+fn interrupt_in() -> Value {
+    serde_json::json!({"dir": "in", "msg": {"type": "control_request",
+        "request_id": "i1", "request": {"subtype": "interrupt"}}})
+}
+
+/// Fix check N4, and its check's finding 1: a Stop sent as its turn ended
+/// stops the turn queued behind it — known from the cockpit's own message
+/// not yet echoed, as Claude Code 2.1.274 says `queued_turn_count` 0 — its
+/// marker is the Stop's own, never a message the cockpit did not send, and
+/// the turn that ended by itself is not "stopped".
 #[test]
 fn a_stop_as_its_turn_ends_stops_the_next() {
     let tmp = TmpDir::new("chat-late-stop");
     let mut lines = start_lines();
     lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    lines.push(echo("old-uuid"));
     lines.push(
-        serde_json::json!({"dir": "in", "msg": {"type": "control_request",
-        "request_id": "i1", "request": {"subtype": "interrupt"}}}),
+        serde_json::json!({"dir": "in", "msg": {"type": "user", "uuid": "second-uuid",
+            "message": {"role": "user", "content": []}}}),
     );
-    lines.push(
-        serde_json::json!({"dir": "out", "msg": {"type": "result", "subtype": "success",
-        "is_error": false, "result": "done", "queued_turn_count": 1}}),
-    );
-    lines.push(
-        serde_json::json!({"dir": "out", "msg": {"type": "user", "message": {"role": "user",
-        "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}}),
-    );
-    lines.push(
-        serde_json::json!({"dir": "out", "msg": {"type": "result", "subtype":
-        "error_during_execution", "is_error": true, "terminal_reason": "aborted_streaming",
-        "queued_turn_count": 0}}),
-    );
+    lines.push(interrupt_in());
+    lines.push(result("success", false, Some("completed")));
+    lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    lines.push(echo("second-uuid"));
+    lines.push(marker());
+    lines.push(result(
+        "error_during_execution",
+        true,
+        Some("aborted_streaming"),
+    ));
     let rec = synthetic(&tmp, &lines);
     let mut c = chat(&tmp, &rec, "");
     c.send("hi", None, Instant::now()).unwrap();
-    pump_until(&mut c, |c, _| c.saw_init);
+    pump_until(&mut c, |c, _| c.saw_init && c.unechoed.is_empty());
+    c.send("and then", None, Instant::now()).unwrap();
     assert!(c.stop());
-    let events = pump_until(&mut c, |c, _| !c.turn);
+    let mut results = 0;
+    let events = pump_until(&mut c, |c, _| {
+        results = c
+            .transcript
+            .cells
+            .iter()
+            .filter(|x| x.text.starts_with("— "))
+            .count();
+        results == 2 && !c.turn
+    });
     assert!(
         !events.iter().any(|e| matches!(e, Event::Foreign { .. })),
         "{events:?}"
@@ -637,6 +673,50 @@ fn a_stop_as_its_turn_ends_stops_the_next() {
     );
     assert!(c.stopped_last);
     end(&mut c);
+}
+
+/// Fix check 2, finding 4: the rule of "stopped" branch by branch — a Stop
+/// whose turn ended by itself with nothing queued expects no marker (one
+/// later is a message the cockpit did not send); the marker alone makes a
+/// turn "stopped"; so does an error while stopping.
+#[test]
+fn stopped_is_said_by_its_rule() {
+    for case in ["idle", "marked", "error"] {
+        let tmp = TmpDir::new(&format!("chat-stopped-{case}"));
+        let mut lines = start_lines();
+        lines.push(init_line(COCKPIT_TOOLS, "connected"));
+        lines.push(echo("old-uuid"));
+        lines.push(interrupt_in());
+        match case {
+            "idle" => {
+                lines.push(result("success", false, Some("completed")));
+                lines.push(marker());
+            }
+            "marked" => {
+                lines.push(marker());
+                lines.push(result("success", false, Some("completed")));
+            }
+            _ => lines.push(result("error_during_execution", true, None)),
+        }
+        let rec = synthetic(&tmp, &lines);
+        let mut c = chat(&tmp, &rec, "");
+        c.send("hi", None, Instant::now()).unwrap();
+        pump_until(&mut c, |c, _| c.saw_init && c.unechoed.is_empty());
+        assert!(c.stop(), "{case}");
+        let events = pump_until(&mut c, |_, e| {
+            case != "idle" || e.iter().any(|e| matches!(e, Event::Foreign { .. }))
+        });
+        if case != "idle" {
+            pump_until(&mut c, |c, _| !c.turn);
+        }
+        assert_eq!(
+            events.iter().any(|e| matches!(e, Event::Foreign { .. })),
+            case == "idle",
+            "{case}: {events:?}"
+        );
+        assert_eq!(c.stopped_last, case != "idle", "{case}");
+        end(&mut c);
+    }
 }
 
 /// Fix check N3, N8: New chat after a chat that ended by itself starts
@@ -654,6 +734,11 @@ fn new_chat_after_an_ended_chat_starts_afresh() {
     assert!(c.ended_by_itself, "a failed start reads \"ended\"");
     assert!(c.new_chat(Instant::now()).is_none());
     assert!(!c.ended_by_itself);
+    assert_eq!(
+        text(&mut c).matches("a new chat").count(),
+        1,
+        "said at New chat"
+    );
     let _ = c.send("again", None, Instant::now());
     let said = text(&mut c);
     assert_eq!(said.matches("a new chat").count(), 1, "{said}");
@@ -747,7 +832,7 @@ fn a_dead_leader_is_seen_though_its_pipes_stay_open() {
 fn an_exited_leaders_pipes_are_read_first() {
     let tmp = TmpDir::new("chat-leader-grace");
     let rec = synthetic(&tmp, &start_lines()[..2]);
-    let mut c = chat(&tmp, &rec, "sleep 30 & exit 0");
+    let mut c = chat(&tmp, &rec, "echo 'the last words' >&2; sleep 30 & exit 0");
     c.send("hi", None, Instant::now()).unwrap();
     let pid = c.live.as_ref().unwrap().pid;
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -760,5 +845,11 @@ fn an_exited_leaders_pipes_are_read_first() {
     assert!(c.alive());
     let ev = c.pump(t + LEADER_GRACE);
     assert!(ev.contains(&Event::Ended { gen: 1 }), "{ev:?}");
+    // What it printed before it exited is read: the end says it.
+    assert!(
+        text(&mut c).contains("the chat ended: the last words"),
+        "{}",
+        text(&mut c)
+    );
     end(&mut c);
 }

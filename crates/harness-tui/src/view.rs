@@ -200,6 +200,18 @@ fn wrapped(raw: &str, width: usize, style: Style) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// A dialog's height for `rows` rows of words on a screen `screen` rows
+/// high: its rows and the two pinned at the bottom, within the screen —
+/// rows beyond a u16 (a long answer) never wrap the count (fix check 2,
+/// finding 7).
+fn dialog_height(rows: usize, screen: u16) -> u16 {
+    u16::try_from(rows)
+        .unwrap_or(u16::MAX)
+        .saturating_add(4)
+        .min(screen.saturating_sub(2))
+        .max(6)
+}
+
 /// A chat answer's rows in a dialog `width` columns wide (§3.2): every
 /// line whole — filtered, hard-wrapped, its indentation kept — behind a
 /// gutter only the cockpit writes: a line's first row carries its number,
@@ -211,7 +223,13 @@ pub(crate) fn answer_rows(text: &str, width: usize) -> Vec<String> {
     let body = width.saturating_sub(digits + 2).max(1);
     let mut rows = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        let line = Sanitizer::default().push(line);
+        // A CRLF line's `\r` shown as ␍, not as the filter's `?` (fix
+        // check 2, finding 7): the harness files it as it is.
+        let (line, cr) = match line.strip_suffix('\r') {
+            Some(l) => (l, "␍"),
+            None => (*line, ""),
+        };
+        let line = format!("{}{cr}", Sanitizer::default().push(line));
         for (j, row) in hard_wrap(&line, body).into_iter().enumerate() {
             rows.push(if j == 0 {
                 format!("{:>digits$}│ {row}", i + 1)
@@ -1859,9 +1877,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     // Two rows pinned at the bottom: the dialog's state, its buttons.
-    let height = (rows.len() as u16 + 4)
-        .min(area.height.saturating_sub(2))
-        .max(6);
+    let height = dialog_height(rows.len(), area.height);
     let rect = centered(area, width, height);
     let page = rect.height.saturating_sub(4) as usize;
     let total = rows.len();
@@ -2381,6 +2397,18 @@ mod tests {
         assert_eq!(rows[two + 2], "4│   ┆ x();");
         assert_eq!(rows[two + 3], "5│         done│");
         assert_eq!(rows.len(), two + 4);
+        // CRLF: the `\r` shown as ␍ (fix check 2, finding 7).
+        assert_eq!(answer_rows("a\r\nb", 60), ["1│ a␍", "2│ b"]);
+    }
+
+    /// Fix check 2, finding 7: a dialog of more rows than a u16 counts is
+    /// as high as the screen allows — never a wrapped count.
+    #[test]
+    fn a_dialog_of_many_rows_fills_the_screen() {
+        for rows in [65_532, 65_535, 70_000, 600_000] {
+            assert_eq!(dialog_height(rows, 30), 28, "{rows}");
+        }
+        assert_eq!(dialog_height(3, 30), 7);
     }
 
     fn render(app: &mut App, width: u16, height: u16) -> Buffer {

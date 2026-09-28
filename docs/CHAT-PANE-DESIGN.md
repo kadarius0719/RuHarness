@@ -1099,3 +1099,26 @@ fix pass made reachable. Fix pass 2 answered each; a test for each unless said:
 | nits — a failed start's title "not started" (N8); New chat after a chat that ended kept "ended" and said nothing, and the new-chat line came twice after a live New chat (row check N3); a hint click took the last key's burst flag (N10); the decline reason uncapped (N11); the cursor after a full row before a newline (N12); the strip showing View active over the files, and the title cut for a " Chat ● " not drawn (row check N6) | "ended"; afresh, the line once; a click is no burst; cut at 4 KiB; a row of its own; the strip marks the pane it is on, the title cut to the strip drawn |
 | USE-15 partial — "the permission ended" without the cause | the cause in words: a Stop, a withdrawal, a foreign message, the chat's end |
 | test gaps — Migrate waiting for a command, the quiet clock after a runtime's cancel, the provider list on a Continue, the view rows (settle clock, bottom-block priority, button priority, strip on Files, Help's reason, the Review label, state words, "or click" under the chat rules), a test waiting 5 s on a line never coming | each has a test; still untested: SAF-9's two `dying` checks in `main.rs` (a signal would have to land inside a waiting Continue's quiet second), PRO-9's kept ending and PRO-10 (a KILL that cannot be sent) |
+
+## R9. Scoped check of fix pass 2 — resolved (2026-09-28)
+
+One checker over 3ef8b5c, 32 mutations and three probe tests: every §R8 fix present and
+killed by its test (but for `kill_now`, declared untested), no path to a chat act without an
+armed dialog or a live permission, the answer's gutter unforgeable; three fixes partial, the
+rest low or nits. Fix pass 3, a test each (lows; each mutation-checked):
+
+| finding | resolution |
+|---|---|
+| low — the Stop-marker bookkeeping keyed on `queued_turn_count`, which Claude Code 2.1.274 reports as 0 with a turn queued (`fold.jsonl`): a Stop's marker for the queued turn still read as a message the cockpit did not send; the fix's test used a shape the runtime never sends (1) | a turn is queued while a message of the cockpit's is not yet echoed (its echo, `isReplay` with the cockpit's uuid, starts its turn; a cancelled one leaves); markers kept until the stopped turn ends aborted or the runtime is idle by both signs; tests on the recorded shape and for each branch of "stopped" (the idle reset, the marker alone, an error while stopping) (4) |
+| low — the person's Cancel of a grant act after its `awaiting` was read kept the permission it gave (2) | each permission records the request that gave it; the Cancel takes it back |
+| low — the cause of a permission's end came from one field never cleared: a waiting Continue could name another attempt's or an old cause (3) | kept per attempt until it is granted again: a Stop, a withdrawal, a foreign message, the chat's end, the person's decline, hold or Cancel |
+| low, trade-off — a two-key paste ("a⏎") across a slow frame is no longer one burst (5) | accepted: the price of "ok⏎" typed while the loop was busy sending; a terminal with bracketed paste (all current ones) sends pastes whole |
+| nit — the decline reason cut silently (6) | said in the transcript |
+| nit — a CRLF answer showed `?` at every line's end; a dialog of more rows than a u16 counts could overflow its height (debug panic) (7) | `␍`; the height saturates (`dialog_height`) |
+| nit — a phantom blank row while the cursor sits after a full row, before a newline (8) | accepted: the cursor wraps to a row of its own, as at the draft's end |
+| nit — the new-chat line said again after a failed start (9) | kept said until a start succeeds |
+| weak tests — the New chat line counted only after a send; the leader-grace test never read a line; the Migrate part's absence check at once | counted at New chat; the fake prints a last line the end must say; `no_denial` |
+
+**Found by the live run after fix pass 2**: the plain-environment round ended RED (haiku's
+translation, 5 of 8 checks) — the test waited for GREEN. The round is the cockpit's, the
+translation the model's: the live test takes either verdict.

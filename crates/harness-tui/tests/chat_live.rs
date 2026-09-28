@@ -301,9 +301,20 @@ impl Live {
     }
 
     fn wait(&self, what: &str, needle: &str, secs: u64) {
-        let needle: String = needle.chars().filter(|c| !c.is_whitespace()).collect();
+        self.wait_any(what, &[needle], secs);
+    }
+
+    /// Wait until one of `needles` shows: which one.
+    fn wait_any(&self, what: &str, needles: &[&str], secs: u64) -> usize {
+        let needles: Vec<String> = needles
+            .iter()
+            .map(|n| n.chars().filter(|c| !c.is_whitespace()).collect())
+            .collect();
         let deadline = Instant::now() + Duration::from_secs(secs);
-        while !self.shows(&needle) {
+        loop {
+            if let Some(i) = needles.iter().position(|n| self.shows(n)) {
+                return i;
+            }
             if Instant::now() >= deadline {
                 let s = self.squeezed();
                 let tail: String = s
@@ -416,7 +427,10 @@ fn a_live_migration_through_the_chat() {
     l.confirm();
     l.wait("the hand-off", "awaiting the chat's answer", 180);
     l.wait("the continuation", "continued, as you agreed", 600);
-    l.wait("the verdict", "GREEN", 600);
+    // A verdict, whichever: the translation is the model's, the round the
+    // cockpit's (a plain run on haiku ended RED, 5 of 8 checks).
+    let verdict = l.wait_any("a verdict", &["— GREEN", "— RED"], 600);
+    eprintln!("the verdict: {}", ["GREEN", "RED"][verdict]);
     l.wait("the turn's end", "of plan usage", 300);
     let added: Vec<String> = cc_socks()
         .into_iter()

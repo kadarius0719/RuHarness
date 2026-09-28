@@ -202,6 +202,10 @@ pub struct Chat {
     markers: u32,
     /// A marker came in this turn.
     marked: bool,
+    /// The cockpit's messages not yet echoed: a turn is queued while one is
+    /// (Claude Code 2.1.274 says `queued_turn_count` 0 all the same — fix
+    /// check 2, finding 1).
+    unechoed: BTreeSet<String>,
     /// The new chat's line was said (New chat, before its first message).
     announced: bool,
 }
@@ -313,6 +317,7 @@ impl Chat {
             stopped_last: false,
             markers: 0,
             marked: false,
+            unechoed: BTreeSet::new(),
             announced: false,
         }
     }
@@ -408,6 +413,7 @@ impl Chat {
         self.stopping = false;
         self.markers = 0;
         self.marked = false;
+        self.unechoed.clear();
         self.exited_at = None;
         self.held.clear();
         self.sent.clear();
@@ -428,10 +434,13 @@ impl Chat {
     /// starts if it is not running. `Err` says why nothing was sent.
     pub fn send(&mut self, text: &str, context: Option<&str>, now: Instant) -> Result<(), String> {
         if self.live.is_none() {
-            if self.gen > 0 && !std::mem::take(&mut self.announced) {
+            // Said once — kept said if the start fails (fix check 2, 9).
+            if self.gen > 0 && !self.announced {
                 self.say(Tone::Cockpit, NEW_CHAT);
+                self.announced = true;
             }
             self.start(now)?;
+            self.announced = false;
         }
         let uuid = fresh_uuid();
         let line = stream::user_message(&uuid, context, text);
@@ -442,6 +451,7 @@ impl Chat {
             return Err("the chat is not taking messages".into());
         }
         self.sent.insert(uuid.clone());
+        self.unechoed.insert(uuid.clone());
         self.transcript.you(&uuid, text);
         self.transcript.follow();
         if !self.turn {
@@ -805,6 +815,9 @@ impl Chat {
             In::UserText { uuid, replay, text } => {
                 let ours = replay && uuid.as_ref().is_some_and(|u| self.sent.contains(u));
                 if ours {
+                    if let Some(u) = &uuid {
+                        self.unechoed.remove(u);
+                    }
                     return;
                 }
                 // A Stop's own marker: the turn's result says "stopped".
@@ -867,6 +880,7 @@ impl Chat {
             } => {
                 if self.interrupts.remove(&request_id) {
                     for uuid in cancelled {
+                        self.unechoed.remove(&uuid);
                         self.transcript.undelivered(&uuid);
                     }
                 }
@@ -876,6 +890,7 @@ impl Chat {
                     self.started_uuids.insert(uuid);
                 }
                 "cancelled" if self.sent.contains(&uuid) && !self.started_uuids.contains(&uuid) => {
+                    self.unechoed.remove(&uuid);
                     self.transcript.undelivered(&uuid);
                 }
                 _ => {}
@@ -894,8 +909,9 @@ impl Chat {
                 let stopped =
                     aborted || std::mem::take(&mut self.marked) || (was_stopping && r.is_error);
                 // No marker comes after its stopped turn's end, nor once
-                // the runtime is idle.
-                if aborted || r.queued_turn_count == 0 {
+                // the runtime is idle: nothing queued by its count, and every
+                // message of the cockpit's echoed (its turn begun).
+                if aborted || (r.queued_turn_count == 0 && self.unechoed.is_empty()) {
                     self.markers = 0;
                 }
                 if r.queued_turn_count > 0 {

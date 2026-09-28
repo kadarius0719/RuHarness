@@ -595,6 +595,7 @@ fn the_continuation_permission_runs_waits_holds_and_ends() {
             Permit {
                 gen,
                 model: MODEL.into(),
+                from: "r0".into(),
             },
         );
     };
@@ -923,6 +924,7 @@ fn a_permission_ended_during_its_grant_act_is_never_granted() {
         "withdrawn",
         "foreign",
         "cancel",
+        "cancel-after-awaiting",
         "hold-elsewhere",
     ] {
         let tmp = TmpDir::new(&format!("asks-epoch-{cause}"));
@@ -950,14 +952,20 @@ fn a_permission_ended_during_its_grant_act_is_never_granted() {
                 a.chat.held.insert("r1".into());
             }
             "foreign" => a.on_chat_event(ChatEvent::Foreign { gen }, Instant::now()),
-            "cancel" => {
+            "cancel" | "cancel-after-awaiting" => {
+                // After its `awaiting` was read: the permission it gave is
+                // taken back (fix check 2, finding 2).
+                if cause == "cancel-after-awaiting" {
+                    awaiting_event(&mut a, "a-0123456789ab");
+                    assert!(a.asks.permits.contains_key("a-0123456789ab"));
+                }
                 a.open_dialog(Purpose::Cancel);
                 let Mode::Dialog(c) = std::mem::replace(&mut a.mode, Mode::Normal) else {
                     panic!("no Cancel dialog");
                 };
                 assert_eq!(a.close_dialog(*c, Choice::Stop), Command::Cancel);
             }
-            "hold-elsewhere" => a.asks.end_permit("a-ffffffffffff"),
+            "hold-elsewhere" => a.asks.end_permit("a-ffffffffffff", "a test"),
             _ => {}
         }
         awaiting_event(&mut a, "a-0123456789ab");
@@ -1162,7 +1170,7 @@ fn a_request_waits_for_the_running_command() {
     let (mut m, mlog) = chat_app(Some("targets/zopfli"), "asks-wait-m", &tmp_m);
     m.running = true;
     ask(&mut m, "m1", "harness_migrate", json!({"unit": "u-cache"}));
-    assert!(denial(&mlog, "m1").is_none(), "{:?}", denial(&mlog, "m1"));
+    assert!(no_denial(&mlog, "m1"), "{:?}", denial(&mlog, "m1"));
     assert_eq!(m.asks.requests.len(), 1);
     settle(&mut a);
     press(&mut a, KeyCode::Enter);
@@ -1202,6 +1210,7 @@ fn a_waiting_continue_is_never_dropped_or_run_unseen() {
         Permit {
             gen,
             model: MODEL.into(),
+            from: "r0".into(),
         },
     );
     let answer = json!({"unit": "u-lib", "attempt": RED, "request_key": "0123abcd", "text": "t"});
@@ -1247,49 +1256,72 @@ fn a_waiting_continue_is_never_dropped_or_run_unseen() {
     ));
 }
 
-/// Review USE-15: a waiting Continue whose permission ended asks — and says
-/// what ended it.
+/// Review USE-15, fix check 2 finding 3: a waiting Continue whose
+/// permission ended asks — and says what ended its own attempt's
+/// permission: a Stop; the person declining the chat's other answer for it
+/// (never a cause that ended another's).
 #[test]
 fn a_continue_that_asks_says_why() {
-    let tmp = TmpDir::new("asks-why");
-    let (mut a, _log) = chat_app(None, "asks-why", &tmp);
-    chat_record(&mut a, RED, "in-progress");
-    let gen = a.chat.gen;
-    a.asks.table.insert(
-        RED.into(),
-        HandOff {
-            key: "0123abcd".into(),
-            gen,
-            act: "Migrate".into(),
-            turn: Some(1),
-            unit: "u-lib".into(),
-        },
-    );
-    a.chat
-        .keys_read
-        .insert((gen, RED.into(), "0123abcd".into()));
-    a.asks.permits.insert(
-        RED.into(),
-        Permit {
-            gen,
-            model: MODEL.into(),
-        },
-    );
-    let answer = json!({"unit": "u-lib", "attempt": RED, "request_key": "0123abcd", "text": "t"});
-    ask(&mut a, "c1", "harness_answer", answer);
-    assert!(a.asks.waiting.is_some());
-    a.chat.turn = true;
-    a.chat_stop();
-    let later = Instant::now() + CONTINUE_QUIET * 2;
-    assert_eq!(a.chat_step(later), Command::None);
-    let r = a.asks.shown().expect("it asks");
-    assert!(r.continue_asks);
-    assert!(
-        r.words
-            .contains("the permission ended (you stopped the chat)"),
-        "{}",
-        r.words
-    );
+    for case in ["stop", "decline"] {
+        let tmp = TmpDir::new(&format!("asks-why-{case}"));
+        let (mut a, _log) = chat_app(None, &format!("asks-why-{case}"), &tmp);
+        chat_record(&mut a, RED, "in-progress");
+        let gen = a.chat.gen;
+        a.asks.table.insert(
+            RED.into(),
+            HandOff {
+                key: "0123abcd".into(),
+                gen,
+                act: "Migrate".into(),
+                turn: Some(1),
+                unit: "u-lib".into(),
+            },
+        );
+        a.chat
+            .keys_read
+            .insert((gen, RED.into(), "0123abcd".into()));
+        // Another attempt's permission ended by a foreign message: not
+        // this one's cause.
+        a.asks.permits.insert(
+            "a-ffffffffffff".into(),
+            Permit {
+                gen: gen + 1,
+                model: MODEL.into(),
+                from: "r0".into(),
+            },
+        );
+        a.on_chat_event(ChatEvent::Foreign { gen: gen + 1 }, Instant::now());
+        a.asks.permits.insert(
+            RED.into(),
+            Permit {
+                gen,
+                model: MODEL.into(),
+                from: "r0".into(),
+            },
+        );
+        let answer =
+            json!({"unit": "u-lib", "attempt": RED, "request_key": "0123abcd", "text": "t"});
+        ask(&mut a, "c1", "harness_answer", answer.clone());
+        assert!(a.asks.waiting.is_some());
+        let want = match case {
+            "stop" => {
+                a.chat.turn = true;
+                a.chat_stop();
+                "the permission ended (you stopped the chat)"
+            }
+            _ => {
+                ask(&mut a, "c2", "harness_answer", answer);
+                settle(&mut a);
+                a.chat_decline(Instant::now(), false);
+                "the permission ended (you declined another answer of the chat's for it)"
+            }
+        };
+        let later = Instant::now() + CONTINUE_QUIET * 2;
+        assert_eq!(a.chat_step(later), Command::None);
+        let r = a.asks.shown().expect("it asks");
+        assert!(r.continue_asks);
+        assert!(r.words.contains(want), "{case}: {}", r.words);
+    }
 }
 
 /// Review PRO-4, PRO-6: every owed outcome is delivered after the read;
@@ -1345,6 +1377,7 @@ fn decline_provider_reason_hints_and_quit_rules() {
         Permit {
             gen,
             model: MODEL.into(),
+            from: "r0".into(),
         },
     );
     a.asks.waiting = Some(Request {
@@ -1379,6 +1412,7 @@ fn decline_provider_reason_hints_and_quit_rules() {
         Permit {
             gen,
             model: MODEL.into(),
+            from: "r0".into(),
         },
     );
     a.config.allow_unsandboxed = true;
@@ -1432,6 +1466,14 @@ fn decline_provider_reason_hints_and_quit_rules() {
     a.chat_decline(Instant::now(), true);
     let m = wait_denial(&log, "d4b");
     assert!(m.contains("… (cut)"), "{}", m.len());
+    assert!(
+        a.chat
+            .transcript
+            .cells
+            .iter()
+            .any(|c| c.text.contains("your reason was cut")),
+        "the person is told"
+    );
     assert!(m.len() < crate::fence::MESSAGE_CAP + 512, "{}", m.len());
     // The provider list binds external records too (SAF-8).
     a.config.providers = vec!["local".into()];
@@ -1677,7 +1719,7 @@ fn a_burst_includes_its_last_key() {
 fn a_permission_follows_the_confirm_and_its_model() {
     let tmp = TmpDir::new("asks-epoch-before");
     let (mut a, _log) = chat_app(Some("targets/zopfli"), "asks-epoch-before", &tmp);
-    a.asks.end_permit("a-ffffffffffff");
+    a.asks.end_permit("a-ffffffffffff", "a test");
     let gen = a.chat.gen;
     a.asks.end_permits(gen, "a test");
     ask(&mut a, "r1", "harness_migrate", json!({"unit": "u-cache"}));
@@ -1710,6 +1752,7 @@ fn a_permission_follows_the_confirm_and_its_model() {
         Permit {
             gen,
             model: "claude-opus-5".into(),
+            from: "r0".into(),
         },
     );
     ask(

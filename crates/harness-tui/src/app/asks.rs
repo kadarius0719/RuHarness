@@ -171,6 +171,8 @@ pub struct Permit {
     pub gen: u64,
     /// The model the dialog named.
     pub model: String,
+    /// The request of the act that granted it.
+    pub from: String,
 }
 
 /// A chat act's outcome, waiting for the first read after its reap.
@@ -210,9 +212,9 @@ pub struct Asks {
     /// permissions (§3.4) and by the person's Cancel of a grant act: a
     /// grant act confirmed before a bump grants nothing.
     pub epoch: u64,
-    /// What last ended a generation's permissions, in words (review
-    /// USE-15).
-    pub ended_why: Option<&'static str>,
+    /// What ended each attempt's permission, in words (review USE-15;
+    /// fix check 2, finding 3) — until it is granted again.
+    pub ended: BTreeMap<String, &'static str>,
     /// Reads in a row, up to the last one, with more input pending.
     pending_run: u32,
     /// The typing guard is up.
@@ -285,17 +287,25 @@ impl Asks {
     /// grant act running now would give is never given (§3.4; review
     /// SAF-1).
     pub fn end_permits(&mut self, gen: u64, why: &'static str) {
-        self.permits.retain(|_, p| p.gen != gen);
+        let ended = &mut self.ended;
+        self.permits.retain(|a, p| {
+            let keep = p.gen != gen;
+            if !keep {
+                ended.insert(a.clone(), why);
+            }
+            keep
+        });
         self.epoch += 1;
-        self.ended_why = Some(why);
     }
 
     /// The permission for `attempt` ends (a hold, a declined or cancelled
     /// Continue). A grant act running now is another attempt's (one
     /// command runs at a time; its attempt is a new one): its grant stands
     /// (fix check N6).
-    pub fn end_permit(&mut self, attempt: &str) {
-        self.permits.remove(attempt);
+    pub fn end_permit(&mut self, attempt: &str, why: &'static str) {
+        if self.permits.remove(attempt).is_some() {
+            self.ended.insert(attempt.to_string(), why);
+        }
     }
 }
 
@@ -1017,8 +1027,8 @@ impl App {
             // The person's own words: never fenced as untrusted data (the
             // brief tells the model to follow nothing so fenced — review
             // USE-6).
-            // Cut at the message cap, as every message to the chat (fix
-            // check N11).
+            // Cut at the cap of the cockpit's messages to the chat — and
+            // said (fix check N11; its check, finding 6).
             let mut reason = self.chat.input.take();
             if reason.len() > fence::MESSAGE_CAP {
                 let mut end = fence::MESSAGE_CAP;
@@ -1027,6 +1037,13 @@ impl App {
                 }
                 reason.truncate(end);
                 reason.push_str(" … (cut)");
+                self.chat_line(
+                    T::Warn,
+                    format!(
+                        "your reason was cut to its first {} KiB for the chat",
+                        fence::MESSAGE_CAP / 1024
+                    ),
+                );
             }
             format!("{DECLINED}, who says: {}", json!(reason))
         } else {
@@ -1039,7 +1056,8 @@ impl App {
         // Declining a Continue ends the permission (§3.4) — its attempt
         // rides on the tag (review SAF-5).
         if let Some(a) = &tag.attempt {
-            self.asks.end_permit(a);
+            self.asks
+                .end_permit(a, "you declined another answer of the chat's for it");
         }
         self.chat.deny(&tag.request_id, message);
         self.chat_line(T::Bad, "✗ declined");
@@ -1061,7 +1079,7 @@ impl App {
             return;
         };
         if let Some(a) = r.pending.attempt.clone() {
-            self.asks.end_permit(&a);
+            self.asks.end_permit(&a, "you held a Continue of it");
         }
         if let Some(t) = r.pending.chat.as_mut() {
             t.permitted = false;
@@ -1181,11 +1199,13 @@ impl App {
                 && self.chat.held.contains(&t.request_id)
         };
         if let Some(t) = tag.filter(|t| t.grant && !self.config.allow_unsandboxed && live(t)) {
+            self.asks.ended.remove(&attempt);
             self.asks.permits.insert(
                 attempt,
                 Permit {
                     gen: t.gen,
                     model: t.model,
+                    from: t.request_id,
                 },
             );
         }
@@ -1263,9 +1283,21 @@ impl App {
             return;
         };
         // The grant act stopped by the person gives no permission — an
-        // `awaiting` still in its pipe included (fix check N1).
-        if run.pending.chat.as_ref().is_some_and(|t| t.grant) {
+        // `awaiting` still in its pipe included (fix check N1), and one it
+        // gave already is taken back (fix check 2, finding 2).
+        if let Some(t) = run.pending.chat.as_ref().filter(|t| t.grant) {
             self.asks.epoch += 1;
+            let (gen, from) = (t.gen, t.request_id.clone());
+            let taken: Vec<String> = self
+                .asks
+                .permits
+                .iter()
+                .filter(|(_, p)| p.gen == gen && p.from == from)
+                .map(|(a, _)| a.clone())
+                .collect();
+            for a in taken {
+                self.asks.end_permit(&a, "you stopped the act that gave it");
+            }
         }
         if let Some(a) = run
             .pending
@@ -1273,7 +1305,7 @@ impl App {
             .clone()
             .filter(|_| run.pending.act == Act::Continue)
         {
-            self.asks.end_permit(&a);
+            self.asks.end_permit(&a, "you stopped a Continue of it");
         }
     }
 
@@ -1298,14 +1330,16 @@ impl App {
         if !permitted {
             // The permission ended meanwhile: it asks instead, saying why
             // (review USE-15).
-            self.asks.waiting = Some(r);
-            let why = match self.asks.ended_why {
-                _ if self.config.allow_unsandboxed => {
-                    "no permission runs code without the sandbox".to_string()
-                }
+            let ended = r
+                .pending
+                .attempt
+                .as_ref()
+                .and_then(|a| self.asks.ended.get(a));
+            let why = match ended {
                 Some(w) => format!("the permission ended ({w})"),
                 None => "the permission ended".to_string(),
             };
+            self.asks.waiting = Some(r);
             self.chat_asks_instead(now, &why);
             return Command::None;
         }
