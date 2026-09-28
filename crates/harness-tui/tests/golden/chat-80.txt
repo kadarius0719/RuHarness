@@ -1,0 +1,24 @@
+┌ Files ───────────────┐┌ Chat — waiting for you · haiku-4-5 ───── View ─ Chat ┐
+│▾ harness-tui-ch… ✓1/1││› Please migrate u-lib.                               │
+│  ▾ test_case/    ✓1/1││                                                      │
+│    ▾ include/        ││I will ask to migrate u-lib.                          │
+│        · lib.h       ││                                                      │
+│    ▾ src/        ✓1/1││  · read the project's status — done                  │
+│      ▸ ✓ lib.c       ││                                                      │
+│  ▾ Units (1)         ││                                                      │
+│    ▸ ✓ u-lib         ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││Asks: Migrate u-lib — a model call, answered here in  │
+│                      ││chat                                                  │
+│                      ││[Review Enter]  [Decline Esc]                         │
+│                      ││About: the project                                    │
+│                      ││› type here — Enter sends                             │
+└──────────────────────┘└──────────────────────────────────────────────────────┘
+ Ready.
+
+ Enter review   Esc decline   Ctrl-J new line   F1 help   Ctrl-C quit

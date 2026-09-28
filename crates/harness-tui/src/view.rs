@@ -1280,6 +1280,24 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
             Style::default().fg(Color::Yellow),
         ));
     }
+    // A request of the chat's stays announced outside the chat until it is
+    // answered, naming the key back from the focused pane (§3.2).
+    if app.focus != Focus::Chat {
+        if let Some(r) = app.asks.shown() {
+            let key = if app.focus == Focus::Files {
+                "Shift-Tab"
+            } else {
+                "Tab"
+            };
+            return Line::from(Span::styled(
+                ellipsis(
+                    &format!(" The chat asks: {} — {key} to the chat", r.words),
+                    width,
+                ),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+    }
     if let Some(p) = &app.plan_notice {
         return Line::from(Span::styled(
             ellipsis(&format!(" {p}"), width),
@@ -1401,7 +1419,7 @@ fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(keys) => (keys, Vec::new()),
         // In the chat `?` and `q` are text: its own hints end in F1 and
         // Ctrl-C (docs/CHAT-PANE-DESIGN.md §5.4).
-        None if app.focus == Focus::Chat => (hints(app), Vec::new()),
+        None if app.focus == Focus::Chat => (hints(app), chat_pane::chat_hint_tail(app)),
         None => (hints(app), vec![("?", "help"), ("q", "quit")]),
     };
     let entry = |(k, v): &(&str, &str)| format!(" {k} {v} ");

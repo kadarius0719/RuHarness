@@ -183,6 +183,7 @@ pub struct Chat {
     turn_started: Option<Instant>,
     unparsed_said: bool,
     serial: u64,
+    last_error: Option<String>,
 }
 
 /// A fresh UUID (version 4) from the system's randomness.
@@ -282,6 +283,7 @@ impl Chat {
             turn_started: None,
             unparsed_said: false,
             serial: 0,
+            last_error: None,
         }
     }
 
@@ -512,11 +514,13 @@ impl Chat {
             }
         }
         if eof {
-            let why = self
-                .live
-                .as_ref()
-                .and_then(|rt| rt.stderr_tail.back().cloned())
-                .filter(|l| !l.trim().is_empty());
+            // Why: the last turn's error, else stderr's last line (§1.4).
+            let why = self.last_error.take().or_else(|| {
+                self.live
+                    .as_ref()
+                    .and_then(|rt| rt.stderr_tail.back().cloned())
+                    .filter(|l| !l.trim().is_empty())
+            });
             self.say(
                 Tone::Warn,
                 match why {
@@ -841,7 +845,9 @@ impl Chat {
                         .cloned()
                         .or(r.result.clone())
                         .unwrap_or_else(|| r.subtype.clone());
-                    self.say(Tone::Bad, result_words(&why, self.model_flag.as_deref()));
+                    let words = result_words(&why, self.model_flag.as_deref());
+                    self.last_error = Some(words.clone());
+                    self.say(Tone::Bad, words);
                 }
                 self.say(Tone::Dim, format!("— {}", words.join(" · ")));
             }
@@ -960,6 +966,36 @@ impl Chat {
             return;
         }
         deny_now(self, "not available in the cockpit");
+    }
+}
+
+#[cfg(test)]
+impl Chat {
+    /// A live chat whose runtime appends what the cockpit writes to
+    /// `dir/sent.jsonl` (a `cat`), its `init` seen with `model`: the app's
+    /// tests drive the chat's side through it. Returns the log's path.
+    pub(crate) fn test_live(&mut self, dir: &std::path::Path, model: &str) -> PathBuf {
+        let log = dir.join("sent.jsonl");
+        let argv: Vec<OsString> = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("exec cat >> '{}'", log.display()).into(),
+        ];
+        let chat_dir = runtime::create_dir(&self.temp).expect("a chat directory");
+        self.gen += 1;
+        let env = [(OsString::from("PATH"), OsString::from("/usr/bin:/bin"))];
+        let rt = Runtime::spawn(self.gen, argv, chat_dir, &env, &self.procs).expect("the sink");
+        self.live = Some(rt);
+        self.saw_init = true;
+        self.turn = true;
+        self.model = Some(model.to_string());
+        self.bins = Ok(Binaries {
+            claude: "/bin/sh".into(),
+            mcp: "/bin/sh".into(),
+        });
+        self.sent.clear();
+        self.held.clear();
+        log
     }
 }
 

@@ -123,12 +123,17 @@ pub fn tab_strip(frame: &mut Frame, app: &mut App, area: Rect) -> u16 {
 pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, strip: bool) {
     let focused =
         app.focus == Focus::Chat && matches!(app.mode, Mode::Normal | Mode::Details { .. });
-    let model = app
+    let mut model = app
         .chat
         .model
         .as_deref()
         .map(|m| format!(" · {}", short_model(m)))
         .unwrap_or_default();
+    // After `init`, what signed it in (§1.1) — said when it is not the
+    // subscription.
+    if let Some(src) = app.chat.api_key_source.as_deref().filter(|s| *s != "none") {
+        model.push_str(&format!(" · {src}"));
+    }
     let title = format!(" Chat — {}{model} ", state_word(app));
     let block = pane_block(display::line(&title), focused);
     let inner = block.inner(area);
@@ -330,16 +335,276 @@ pub fn chat_hints(app: &App) -> Vec<(&'static str, &'static str)> {
         h.push(("↑↓", "scroll"));
     }
     h.push(("Tab", "pane"));
-    h.push(("F1", "help"));
-    h.push((
-        "Ctrl-C",
-        if app.chat.turn {
-            "stop"
-        } else if !app.chat.input.is_empty() {
-            "clear"
-        } else {
-            "quit"
-        },
-    ));
     h
+}
+
+/// The chat's hint bar tail, never dropped (as `? help` and `q quit` in the
+/// panes): help, and what `Ctrl-C` means now.
+pub fn chat_hint_tail(app: &App) -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("F1", "help"),
+        (
+            "Ctrl-C",
+            if app.chat.turn {
+                "stop"
+            } else if !app.chat.input.is_empty() {
+                "clear"
+            } else {
+                "quit"
+            },
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::asks::{ChatTag, Request};
+    use crate::app::tests::app;
+    use crate::app::{Act, Pending};
+    use crate::testutil::TmpDir;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::Terminal;
+    use std::time::{Duration, Instant};
+
+    const MODEL: &str = "claude-haiku-4-5-20251001";
+
+    fn render(app: &mut App, width: u16, height: u16) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn text(buffer: &Buffer) -> String {
+        let area = buffer.area;
+        let mut out = String::new();
+        for y in 0..area.height {
+            let mut line = String::new();
+            for x in 0..area.width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            out.push_str(line.trim_end());
+            out.push('\n');
+        }
+        out
+    }
+
+    fn cells(buffer: &Buffer, r: Rect) -> String {
+        let mut s = String::new();
+        for x in r.x..r.x + r.width {
+            s.push_str(buffer[(x, r.y)].symbol());
+        }
+        s
+    }
+
+    /// The golden of `name`, the scratch copy's path masked (compare
+    /// `view::tests::golden`).
+    fn golden(name: &str, app: &App, buffer: &Buffer) {
+        let got = text(buffer).replace(&app.config.target.display().to_string(), "<target>");
+        let got: String = {
+            let mut out = String::new();
+            let mut rest = got.as_str();
+            while let Some(i) = rest.find("harness-tui-") {
+                out.push_str(&rest[..i + "harness-tui-".len()]);
+                rest = &rest[i + "harness-tui-".len()..];
+                let end = rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                    .unwrap_or(rest.len());
+                out.extend(
+                    rest[..end]
+                        .chars()
+                        .map(|c| if c.is_ascii_digit() { '0' } else { c }),
+                );
+                rest = &rest[end..];
+            }
+            out.push_str(rest);
+            out
+        };
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/golden")
+            .join(name);
+        if std::env::var("RUHARNESS_UPDATE_TUI_GOLDENS").as_deref() == Ok("1") {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, &got).unwrap();
+            return;
+        }
+        let want = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("missing golden {}", path.display()));
+        assert!(want == got, "golden {name} differs:\n{got}");
+    }
+
+    /// Every chat key drawn shows its words under it (§5.5) — the hits are
+    /// what the person sees.
+    fn hits_match(app: &App, buffer: &Buffer) {
+        for (r, h) in &app.hits {
+            if let Hit::Chat(k) = h {
+                let under = cells(buffer, *r);
+                let want: &[&str] = match *k {
+                    "review" => &["[Review Enter]", "[Review — after the running command]"],
+                    "decline" => &["[Decline Esc]"],
+                    "decline-draft" => &["[Decline with my draft]"],
+                    "hold" => &["[Hold Esc]"],
+                    "stop" => &["[Stop]"],
+                    "new" => &["[New]"],
+                    "help" => &["[?]"],
+                    "close" => &["[×]"],
+                    "tab-view" => &[" View "],
+                    "tab-chat" => &[" Chat ", " Chat ● "],
+                    other => panic!("an unknown chat key {other}"),
+                };
+                assert!(want.contains(&under.as_str()), "{k}: {under:?} at {r:?}");
+            }
+        }
+    }
+
+    fn chat_app(tag: &str, tmp: &TmpDir) -> App {
+        let mut a = app(tag);
+        a.chat_on = true;
+        a.chat.test_live(&tmp.0, MODEL);
+        a.chat.turn = false;
+        a.chat.transcript.you("u1", "Please migrate u-lib.");
+        a.chat.transcript.message_start("m1");
+        a.chat
+            .transcript
+            .block("m1", Some(0), "I will ask to migrate u-lib.");
+        a.chat.transcript.line(
+            crate::chat::transcript::Tone::Dim,
+            "· read the project's status — done",
+        );
+        a
+    }
+
+    fn request(a: &mut App, settled: bool) {
+        let tag = ChatTag {
+            gen: a.chat.gen,
+            request_id: "r1".into(),
+            tool: "harness_migrate".into(),
+            model: MODEL.into(),
+            grant: true,
+            answer: None,
+            key: None,
+            permitted: false,
+        };
+        a.asks.requests.push_back(Request {
+            pending: Pending {
+                act: Act::Migrate,
+                argv: Vec::new(),
+                label: "Migrate u-lib (asked in chat)".into(),
+                unit: Some("u-lib".into()),
+                attempt: None,
+                cleanup: None,
+                expect_attempt: None,
+                note: None,
+                shown_digest: None,
+                chat: Some(Box::new(tag)),
+            },
+            shown_at: Some(if settled {
+                Instant::now() - Duration::from_secs(2)
+            } else {
+                Instant::now()
+            }),
+            words: "Migrate u-lib — a model call, answered here in chat".into(),
+            continue_asks: false,
+        });
+        a.now = Instant::now();
+    }
+
+    /// §5.1 goldens: at 79 one pane at a time; 80–155 the right column shows
+    /// the chat only while it is focused, the tab strip always; from 156 a
+    /// column of its own (the View keeping 80), `[×]` closing it.
+    #[test]
+    fn goldens_of_the_chat_by_width() {
+        let tmp = TmpDir::new("chat-goldens");
+        let mut a = chat_app("chat-goldens", &tmp);
+        request(&mut a, true);
+        for w in [79u16, 80, 120, 155, 156, 200] {
+            a.chat_column = false;
+            a.focus = crate::app::Focus::Files;
+            let b = render(&mut a, w, 24);
+            hits_match(&a, &b);
+            let screen = text(&b);
+            if w >= 80 {
+                assert!(
+                    screen.lines().next().unwrap().contains(" View "),
+                    "{w}: {screen}"
+                );
+                assert!(
+                    screen.lines().next().unwrap().contains("Chat ●"),
+                    "{w}: a request waits"
+                );
+            }
+            a.focus = crate::app::Focus::Chat;
+            a.chat_column = true;
+            let b = render(&mut a, w, 24);
+            hits_match(&a, &b);
+            golden(&format!("chat-{w}.txt"), &a, &b);
+            let screen = text(&b);
+            assert!(screen.contains("Asks: Migrate u-lib"), "{w}");
+            assert!(screen.contains("[Review Enter]"), "{w}");
+            if w >= CHAT_COLUMN_FROM {
+                assert!(screen.contains("[×]"), "{w}: a column of its own");
+                assert!(screen.lines().next().unwrap().contains("Files"), "{w}");
+            } else {
+                assert!(!screen.contains("[×]"), "{w}");
+            }
+        }
+    }
+
+    /// The View keeps 80 columns beside the chat's column.
+    #[test]
+    fn the_view_keeps_eighty_columns() {
+        let tmp = TmpDir::new("chat-width");
+        let mut a = chat_app("chat-width", &tmp);
+        a.focus = crate::app::Focus::Chat;
+        a.chat_column = true;
+        for w in [156u16, 170, 200, 250] {
+            render(&mut a, w, 24);
+            let view = a
+                .hits
+                .iter()
+                .find(|(_, h)| *h == Hit::Pane(crate::app::Focus::View))
+                .map(|(r, _)| *r)
+                .unwrap();
+            let chat = a
+                .hits
+                .iter()
+                .find(|(_, h)| *h == Hit::Pane(crate::app::Focus::Chat))
+                .map(|(r, _)| *r)
+                .unwrap();
+            assert!(view.width >= VIEW_KEEPS, "{w}: {view:?}");
+            assert!(chat.width <= CHAT_COLUMN_MAX, "{w}: {chat:?}");
+        }
+    }
+
+    /// A request settling is shown greyed; a waiting Continue shows its
+    /// Hold; a long transcript follows its newest line.
+    #[test]
+    fn request_waiting_and_long_transcript() {
+        let tmp = TmpDir::new("chat-lines");
+        let mut a = chat_app("chat-lines", &tmp);
+        a.focus = crate::app::Focus::Chat;
+        request(&mut a, false);
+        let b = render(&mut a, 120, 24);
+        hits_match(&a, &b);
+        let r = a.asks.requests.pop_front().unwrap();
+        a.asks.waiting = Some(Request {
+            words: "Continues a-d2e5513c… turn 2".into(),
+            ..r
+        });
+        for i in 0..200 {
+            a.chat
+                .transcript
+                .line(crate::chat::transcript::Tone::Dim, format!("line {i}"));
+        }
+        let b = render(&mut a, 120, 24);
+        hits_match(&a, &b);
+        let screen = text(&b);
+        assert!(screen.contains("[Hold Esc]"), "{screen}");
+        assert!(
+            screen.contains("line 199"),
+            "follows the newest line: {screen}"
+        );
+        golden("chat-waiting-120.txt", &a, &b);
+    }
 }

@@ -1626,7 +1626,9 @@ impl App {
                 run.started.elapsed(),
             ));
             let ending = run.narrator.ending(status.code(), signal.as_deref());
-            if ending == Ending::Locked {
+            // A chat act is never offered again here: the chat asks again
+            // (docs/CHAT-PANE-DESIGN.md §3.3).
+            if ending == Ending::Locked && run.pending.chat.is_none() {
                 // The same command, whole: its unit, attempt, note and hand
                 // edit (review USE-2/ENG-1/SAFE-4). Its dialog re-checks
                 // everything again at confirm.
@@ -2186,6 +2188,19 @@ impl App {
                     body[1] = format!(
                         "Files the chat's answer to the request it read and resumes the attempt of \
                          {unit}; never promotes it. Can take minutes."
+                    );
+                }
+                // The person's own Modify on the hand-off provider is
+                // answered by hand, as ever (§3.4).
+                if p.act == Act::Modify
+                    && p.chat.is_none()
+                    && self.chat_on
+                    && p.argv.iter().any(|a| a == "--provider=external")
+                {
+                    body.push(
+                        "The hand-off is answered by hand — see Help — or ask the chat to modify \
+                         this attempt instead."
+                            .into(),
                     );
                 }
                 if p.act == Act::Modify {

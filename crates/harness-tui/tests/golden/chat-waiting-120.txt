@@ -1,0 +1,24 @@
+┌ Files ───────────────────────┐┌ Chat — waiting for you · haiku-4-5 ───────────────────────────[New]─[?]─ View ─ Chat ┐
+│▾ harness-tui-chat-lines… ✓1/1││  line 184                                                                            │
+│  ▾ test_case/            ✓1/1││  line 185                                                                            │
+│    ▾ include/                ││  line 186                                                                            │
+│        · lib.h         header││  line 187                                                                            │
+│    ▾ src/                ✓1/1││  line 188                                                                            │
+│      ▸ ✓ lib.c       migrated││  line 189                                                                            │
+│  ▾ Units (1)                 ││  line 190                                                                            │
+│    ▸ ✓ u-lib         migrated││  line 191                                                                            │
+│                              ││  line 192                                                                            │
+│                              ││  line 193                                                                            │
+│                              ││  line 194                                                                            │
+│                              ││  line 195                                                                            │
+│                              ││  line 196                                                                            │
+│                              ││  line 197                                                                            │
+│                              ││  line 198                                                                            │
+│                              ││  line 199                                                                            │
+│                              ││Continues a-d2e5513c… turn 2 — [Hold Esc]                                             │
+│                              ││About: the project                                                                    │
+│                              ││› type here — Enter sends                                                             │
+└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
+ Ready.
+
+ Esc hold   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit

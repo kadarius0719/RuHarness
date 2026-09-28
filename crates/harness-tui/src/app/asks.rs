@@ -448,6 +448,12 @@ impl App {
         model: Option<&str>,
     ) -> Result<Request, String> {
         let model = self.answering_model(model)?;
+        // Until a read lands after a failed one, the chat's acts wait (§3.3).
+        if let Some(e) = &self.last_load_error {
+            return Err(format!(
+                "the ledger could not be re-read ({e}) — the person presses g to read it again"
+            ));
+        }
         let tag = |grant: bool| ChatTag {
             gen,
             request_id: request_id.to_string(),
@@ -757,7 +763,10 @@ impl App {
             ));
         }
         if r.requester.as_deref() != Some(harness_core::attempts::REQUESTER_CHAT) {
-            return Err(format!("attempt {attempt} was not asked for in chat"));
+            return Err(format!(
+                "attempt {attempt} was not asked for in chat: its hand-off is answered by hand \
+                 (see Help), or ask for a steer attempt from it"
+            ));
         }
         if r.outcome != "in-progress" {
             return Err(format!("attempt {attempt} is no longer in progress"));
