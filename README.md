@@ -347,6 +347,9 @@ journaled for a child it killed). Writing commands hold a writer lock on
 ```bash
 cargo run -p harness-tui -- --target targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib
 ```
+New to it? [docs/COCKPIT-TUTORIAL.md](docs/COCKPIT-TUTORIAL.md) walks through the screen,
+every action and the chat in plain language, with a first migration step by step.
+
 A terminal UI for the migration, made for arrow keys — nothing to memorise. On the left,
 **Files**: a tree of the target's C files (and, under each, its functions), then its
 **Units** with each unit's crate and attempts. Every row shows its state as a glyph and a
