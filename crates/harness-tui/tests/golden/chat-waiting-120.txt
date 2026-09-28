@@ -1,4 +1,4 @@
-┌ Files ───────────────────────┐┌ Chat — waiting for you · haiku-4-5 ───────────────────────────[New]─[?]─ View ─ Chat ┐
+┌ Files ───────────────────────┐┌ Chat — continuing… · haiku-4-5 ───────────────────────────────[New]─[?]─ View ─ Chat ┐
 │▾ harness-tui-chat-lines… ✓1/1││  line 184                                                                            │
 │  ▾ test_case/            ✓1/1││  line 185                                                                            │
 │    ▾ include/                ││  line 186                                                                            │

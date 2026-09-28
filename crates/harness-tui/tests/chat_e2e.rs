@@ -156,6 +156,94 @@ fn idle_recording(path: &Path) {
     std::fs::write(path, lines.join("\n") + "\n").unwrap();
 }
 
+/// What a terminal would show after `bytes`: a small VT interpreter for the
+/// sequences the cockpit's backend writes (cursor moves, erases, text; the
+/// colours and modes are ignored), so a test reads the SCREEN — ratatui
+/// redraws only the cells that changed, so the byte stream alone does not
+/// hold the text a user sees.
+fn rendered(bytes: &str, rows: usize, cols: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    let mut grid = vec![vec![' '; cols]; rows];
+    let (mut r, mut c) = (0usize, 0usize);
+    let mut chars = bytes.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\u{1b}' => match chars.peek() {
+                Some('[') => {
+                    chars.next();
+                    let mut params = String::new();
+                    let mut fin = ' ';
+                    for p in chars.by_ref() {
+                        if p.is_ascii_alphabetic() || p == '~' || p == '@' {
+                            fin = p;
+                            break;
+                        }
+                        params.push(p);
+                    }
+                    let nums: Vec<usize> = params
+                        .trim_start_matches('?')
+                        .split(';')
+                        .map(|n| n.parse().unwrap_or(0))
+                        .collect();
+                    let n =
+                        |i: usize, d: usize| nums.get(i).copied().filter(|v| *v > 0).unwrap_or(d);
+                    match fin {
+                        'H' | 'f' => {
+                            r = n(0, 1).saturating_sub(1).min(rows - 1);
+                            c = n(1, 1).saturating_sub(1).min(cols - 1);
+                        }
+                        'A' => r = r.saturating_sub(n(0, 1)),
+                        'B' => r = (r + n(0, 1)).min(rows - 1),
+                        'C' => c = (c + n(0, 1)).min(cols - 1),
+                        'D' => c = c.saturating_sub(n(0, 1)),
+                        'G' => c = n(0, 1).saturating_sub(1).min(cols - 1),
+                        'J' if nums.first() == Some(&2) || nums.first() == Some(&3) => {
+                            grid = vec![vec![' '; cols]; rows];
+                        }
+                        'J' => {
+                            for cell in grid[r].iter_mut().skip(c) {
+                                *cell = ' ';
+                            }
+                            for row in grid.iter_mut().skip(r + 1) {
+                                *row = vec![' '; cols];
+                            }
+                        }
+                        'K' => {
+                            for cell in grid[r].iter_mut().skip(c) {
+                                *cell = ' ';
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            },
+            '\r' => c = 0,
+            '\n' => r = (r + 1).min(rows - 1),
+            ch if ch.is_control() => {}
+            ch => {
+                let w = ch.width().unwrap_or(0);
+                if w == 0 {
+                    continue;
+                }
+                if c < cols {
+                    grid[r][c] = ch;
+                    if w == 2 && c + 1 < cols {
+                        grid[r][c + 1] = ' ';
+                    }
+                }
+                c = (c + w).min(cols);
+            }
+        }
+    }
+    grid.into_iter()
+        .map(|row| row.into_iter().collect())
+        .collect()
+}
+
 impl Run {
     /// Start a cockpit over `target` (else a copy of zopfli) whose `claude`
     /// runs `extra` then replays `recording` (else [`idle_recording`]).
@@ -289,6 +377,9 @@ impl Run {
         }
     }
 
+    /// What was written, escapes and whitespace removed — ratatui redraws
+    /// only the cells that changed, so this may miss a letter already on
+    /// screen: [`Self::screen`] reads the rendered screen too (review PRO-7).
     fn squeezed(&self) -> String {
         let raw = self.screen.lock().unwrap().clone();
         let mut plain = String::new();
@@ -305,10 +396,25 @@ impl Run {
         plain
     }
 
+    /// The screen as a terminal shows it now, whitespace removed.
+    fn screen(&self) -> String {
+        rendered(&self.screen.lock().unwrap(), 40, 140)
+            .concat()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
+    /// On the screen now, or ever written whole.
+    fn shows(&self, needle: &str) -> bool {
+        let needle: String = needle.chars().filter(|c| !c.is_whitespace()).collect();
+        self.screen().contains(&needle) || self.squeezed().contains(&needle)
+    }
+
     fn wait_screen(&self, what: &str, needle: &str) {
         let needle: String = needle.chars().filter(|c| !c.is_whitespace()).collect();
         let deadline = Instant::now() + Duration::from_secs(30);
-        while !self.squeezed().contains(&needle) {
+        while !self.shows(&needle) {
             assert!(
                 Instant::now() < deadline,
                 "timed out waiting for {what}; the screen's tail: {}",
@@ -342,7 +448,7 @@ impl Run {
     /// its directory.
     fn chat(&mut self, text: &str) -> (u32, PathBuf) {
         let before = self.pids().len();
-        if !self.squeezed().contains("›type") {
+        if !self.shows("›type") {
             self.press(TAB);
             self.press(TAB);
         }
@@ -503,8 +609,10 @@ fn new_chat_twice_ends_both() {
     gone(&[p2], &[d2]);
 }
 
-/// §1.2, §1.4: a runtime that stops reading its stdin, and one stopped by
-/// reading the terminal, never hold up the quit: TERM, then KILL.
+/// §1.2, §1.4: a runtime that stops reading its stdin (its turn never
+/// ends: the first Ctrl-C Stops, the second — a Stop on its way — asks to
+/// quit) and one stopped reading the terminal never hold up the quit: TERM
+/// after 1.5 s, KILL 300 ms later.
 #[test]
 fn a_deaf_or_stopped_runtime_is_ended_on_quit() {
     for (tag, extra) in [
@@ -513,19 +621,32 @@ fn a_deaf_or_stopped_runtime_is_ended_on_quit() {
     ] {
         let mut r = Run::start(tag, None, extra, &[]);
         let (pid, dir) = r.chat("hi");
-        std::thread::sleep(Duration::from_millis(500));
-        let t0 = Instant::now();
-        r.press(CTRL_C);
-        // With a turn running Ctrl-C stops it first; then it asks.
-        if !r.squeezed().contains("conversationisnotkept") {
+        if tag == "tty" {
+            r.wait_screen("the turn's end", "of plan usage");
+            // Stopped (SIGTTIN) reading the terminal.
+            wait_for("the runtime stopped", 10, || {
+                let out = Command::new("ps")
+                    .args(["-o", "stat=", "-p", &pid.to_string()])
+                    .output()
+                    .unwrap();
+                String::from_utf8_lossy(&out.stdout)
+                    .trim()
+                    .starts_with('T')
+                    .then_some(())
+            });
+        } else {
+            std::thread::sleep(Duration::from_millis(500));
             r.press(CTRL_C);
+            r.wait_screen("the Stop", "stopping");
         }
+        r.press(CTRL_C);
         r.wait_screen("the quit dialog", "conversation is not kept");
         r.confirm();
+        let t0 = Instant::now();
         r.ended();
         gone(&[pid], &[dir]);
         assert!(
-            t0.elapsed() < Duration::from_secs(15),
+            t0.elapsed() < Duration::from_secs(6),
             "{tag}: {:?}",
             t0.elapsed()
         );
@@ -573,9 +694,7 @@ fn the_editors_term_ends_the_chat_too() {
     r.press(RIGHT);
     r.press(DOWN);
     r.press(b"e");
-    wait_for("the editor", 10, || {
-        r.squeezed().contains("EDITOR-RUNS").then_some(())
-    });
+    wait_for("the editor", 10, || r.shows("EDITOR-RUNS").then_some(()));
     let tui = r.tui_pid();
     assert!(Command::new("/bin/kill")
         .args(["-TERM", &tui.to_string()])

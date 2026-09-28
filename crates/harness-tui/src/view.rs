@@ -1065,7 +1065,14 @@ fn is_wide(app: &App, width: u16) -> bool {
 fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused =
         app.focus == Focus::View && matches!(app.mode, Mode::Normal | Mode::Details { .. });
-    let block = pane_block(view_title(app), focused);
+    // The chat's strip on this border: the title is cut before it (review
+    // USE-10).
+    let room = if app.chat_on && area.width >= 20 {
+        (area.width as usize).saturating_sub(20)
+    } else {
+        area.width as usize
+    };
+    let block = pane_block(ellipsis(&view_title(app), room.max(4)), focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     app.hits.push((area, Hit::Pane(Focus::View)));
@@ -1602,16 +1609,17 @@ const HELP_ROUTES: &[&str] = &[
 
 /// Help's rows, and which of them are the mouse on/off line (a click there
 /// is `m`).
+/// `chat`: the chat pane exists — `Some(why)` when it cannot be used.
 fn help_rows(
     width: usize,
     mouse: bool,
-    chat: bool,
+    chat: Option<Option<&str>>,
 ) -> (Vec<Line<'static>>, std::ops::Range<usize>) {
     let mut rows = Vec::new();
     for l in HELP_INTRO {
         rows.extend(wrapped(l, width, bold()));
     }
-    if chat {
+    if chat.is_some() {
         rows.extend(wrapped(
             "Tab moves Files → View → Chat; in the chat, ask for model work in plain words.",
             width,
@@ -1641,8 +1649,16 @@ fn help_rows(
         rows.extend(wrapped(&format!("{g:<3} {v}"), width, Style::default()));
     }
     rows.push(Line::from(""));
-    if chat {
+    if let Some(why) = chat {
         rows.push(Line::from(Span::styled("Chat", bold())));
+        // Unavailable: why, in words (§1.1).
+        if let Some(why) = why {
+            rows.extend(wrapped(
+                &format!("The chat is unavailable here: {why}."),
+                width,
+                Style::default().fg(Color::Yellow),
+            ));
+        }
         for l in HELP_CHAT {
             rows.extend(wrapped(l, width, Style::default()));
         }
@@ -1859,7 +1875,6 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let state = if !usable {
         "too small to show".into()
     } else if mouse
-        && !c.dialog.chat_rules
         && c.dialog.armed
         && !c.dialog.click_refused
         && c.dialog.opened.elapsed() >= crate::dialog::CLICK_SETTLE
@@ -1980,7 +1995,8 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
             let (rows, toggle) = help_rows(
                 rect.width.saturating_sub(2) as usize,
                 app.mouse,
-                app.chat_on,
+                app.chat_on
+                    .then(|| app.chat.bins.as_ref().err().map(String::as_str)),
             );
             let shown = overlay(
                 frame,
@@ -2198,7 +2214,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let chat = app.chat_on;
     if single {
         match app.focus {
-            Focus::Files => draw_files(frame, app, main),
+            // The strip on whichever pane shows: the chat is one click away
+            // at every width (review USE-11).
+            Focus::Files => {
+                draw_files(frame, app, main);
+                if chat {
+                    chat_pane::tab_strip(frame, app, main);
+                }
+            }
             Focus::View => {
                 draw_view(frame, app, main);
                 if chat {

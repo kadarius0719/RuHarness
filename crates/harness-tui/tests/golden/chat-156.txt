@@ -1,4 +1,4 @@
-┌ Files ───────────────────────┐┌ harness-tui-chat-goldens-0000000000 · ✓1/1 ──────────────────────────────────┐┌ Chat — waiting for you · haiku-4-5 ───[×]┐
+┌ Files ───────────────────────┐┌ harness-tui-chat-goldens-0000000000 · ✓1/1 ──────────────────────────────────┐┌ Chat — waiting for you · …──[New]─[?]─[×]┐
 │▾ harness-tui-chat-golde… ✓1/1││2 files scanned                                                               ││› Please migrate u-lib.                   │
 │  ▾ test_case/            ✓1/1││Units (1): 1 ✓ migrated                                                       ││                                          │
 │    ▾ include/                ││                                                                              ││I will ask to migrate u-lib.              │
@@ -17,7 +17,7 @@
 │                              ││                                                                              ││answered here in chat                     │
 │                              ││                                                                              ││[Review Enter]  [Decline Esc]             │
 │                              ││                                                                              ││About: the project                        │
-│                              ││                                                                              ││› type here — Enter sends                 │
+│                              ││                                                                              ││› Enter reviews the request — or type     │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────┘
  Ready.
 

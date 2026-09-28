@@ -741,8 +741,9 @@ fn run(
             app.tick();
             last_tick = Instant::now();
         }
-        // A Continue under the continuation permission, once nothing holds it.
-        if matches!(command, Command::None) && running.is_none() {
+        // A Continue under the continuation permission, once nothing holds it
+        // — never once the cockpit is dying (review SAF-9).
+        if matches!(command, Command::None) && running.is_none() && !GUARD.dying() {
             command = app.chat_step(Instant::now());
         }
         match command {
@@ -787,6 +788,8 @@ fn run(
                 app.mouse_may_report(Instant::now());
                 break;
             }
+            // Nothing starts once the signal path owns the process.
+            Command::Spawn(_) if GUARD.dying() => park(),
             Command::Spawn(pending) => match Running::spawn_with_input(
                 pending.argv.clone(),
                 slot.clone(),

@@ -3,7 +3,8 @@
 harness-mcp --cockpit, driven by a mini cockpit (this script) that answers every
 can_use_tool: reads allowed, acts run by the "cockpit" (the harness CLI here) and answered
 deny + outcome. Scenarios: round (a full hand-off round), stop (interrupt while a request is
-held), decline (the person declines), stream-stop (interrupt while text streams)."""
+held), decline (the person declines), stream-stop (interrupt while text streams),
+fold (a second message typed while the first turn streams)."""
 import json, os, subprocess, sys, tempfile, threading, time, queue, signal, uuid, secrets, shutil
 
 SCEN = sys.argv[1]
@@ -90,7 +91,8 @@ send({"type": "control_request", "request_id": "req_init_" + secrets.token_hex(4
       "request": {"subtype": "initialize", "hooks": None}})
 user({"round": "Please migrate this unit.", "stop": "Please migrate this unit.",
       "decline": "Please migrate this unit.",
-      "stream-stop": "Write three short paragraphs about why C to Rust migration is hard."}[SCEN])
+      "stream-stop": "Write three short paragraphs about why C to Rust migration is hard.",
+      "fold": "Write three short paragraphs about why C to Rust migration is hard."}[SCEN])
 followup = {"stop": "Never mind. What is the unit's status?", "stream-stop": "Just one line, please."}.get(SCEN)
 stopped = False
 deadline = time.time() + 900
@@ -114,6 +116,10 @@ while time.time() < deadline:
         model = msg.get("model")
     if t == "assistant":
         model = msg.get("message", {}).get("model") or model
+    if SCEN == "fold" and not stopped and t == "stream_event" and \
+            msg.get("event", {}).get("type") == "content_block_delta":
+        stopped = True
+        user("Also end with a one-line summary.")
     if SCEN == "stream-stop" and not stopped and t == "stream_event" and \
             msg.get("event", {}).get("type") == "content_block_delta":
         stopped = True

@@ -19,6 +19,10 @@ use std::collections::{BTreeMap, VecDeque};
 pub const REQUEST_SETTLE: Duration = crate::dialog::CLICK_SETTLE;
 /// Keys read within this long of each other are one burst (§3.2).
 pub const BURST: Duration = Duration::from_millis(5);
+/// The key read this soon after one read with input still pending closes
+/// that burst (a frame drawn between two reads can take longer than
+/// [`BURST`]).
+pub const BURST_TAIL: Duration = Duration::from_millis(100);
 /// Typing this recent guards the panes when the focus leaves the chat.
 pub const TYPED_RECENTLY: Duration = Duration::from_secs(2);
 /// A waiting Continue waits this long after the person's last key or press.
@@ -50,6 +54,11 @@ pub struct ChatTag {
     pub key: Option<String>,
     /// Continue under the continuation permission: no dialog.
     pub permitted: bool,
+    /// Continue: the attempt it answers.
+    pub attempt: Option<String>,
+    /// The permission epoch when the person confirmed it: an act whose
+    /// run saw any cause end a permission grants none (§3.4).
+    pub epoch: u64,
 }
 
 /// What a run reported, for the chat's outcome (§3.3).
@@ -195,8 +204,13 @@ pub struct Asks {
     /// Outcomes the chat was not told, by generation (sent with the next
     /// message to the same chat).
     pub unsent: Vec<(u64, String)>,
-    /// A chat act's outcome waiting for its read.
-    pub outcome: Option<Owed>,
+    /// Chat acts' outcomes waiting for the read after their reap, in order.
+    pub outcome: Vec<Owed>,
+    /// Bumped by every cause that ends a continuation permission (§3.4):
+    /// a grant act confirmed before a bump grants nothing.
+    pub epoch: u64,
+    /// The last key was read with more input pending.
+    last_pending: bool,
     /// The typing guard is up.
     pub guard: bool,
     /// When the person last typed into the chat's input.
@@ -218,11 +232,15 @@ impl Asks {
     /// it is part of a burst — keys within [`BURST`] of each other, the
     /// last one included.
     pub fn key_read(&mut self, now: Instant, pending: bool) {
+        // The key after one read with input pending is the same burst's
+        // last, even when a frame drawn between the reads took longer than
+        // 5 ms (review PRO-13).
+        let since = self.last_key.map(|t| now.saturating_duration_since(t));
         self.burst = pending
-            || self
-                .last_key
-                .is_some_and(|t| now.saturating_duration_since(t) < BURST);
+            || since.is_some_and(|d| d < BURST)
+            || (self.last_pending && since.is_some_and(|d| d < BURST_TAIL));
         self.last_key = Some(now);
+        self.last_pending = pending;
         self.last_press = Some(now);
     }
 
@@ -257,15 +275,29 @@ impl Asks {
         self.meaning += 1;
     }
 
-    /// Every permission of generation `gen` ends.
+    /// Every permission of generation `gen` ends — and one a grant act
+    /// running now would give is never given (§3.4; review SAF-1).
     pub fn end_permits(&mut self, gen: u64) {
         self.permits.retain(|_, p| p.gen != gen);
+        self.epoch += 1;
+    }
+
+    /// The permission for `attempt` ends (a hold, a declined or cancelled
+    /// Continue) — and a grant act running now gives none.
+    pub fn end_permit(&mut self, attempt: &str) {
+        self.permits.remove(attempt);
+        self.epoch += 1;
     }
 }
 
+/// Longest piece of an answer line put on one dialog row: the display
+/// filter cuts a line at 4 KiB, so a longer one is split, never cut —
+/// the person sees every byte the harness will build (review SAF-2).
+const ANSWER_PIECE: usize = 1024;
+
 /// The dialog's chat lines (§3.2): who asked, who answers the turns, and a
 /// Continue's answer, whole.
-pub fn chat_words(tag: &ChatTag, body: &mut Vec<String>) {
+pub fn chat_words(tag: &ChatTag, body: &mut Vec<String>, turns: u32) {
     body.insert(
         0,
         format!(
@@ -276,9 +308,10 @@ pub fn chat_words(tag: &ChatTag, body: &mut Vec<String>) {
     if tag.grant {
         body.insert(
             1,
-            "The chat answers its model turns here; each answer continues the run without asking \
-             again. Nothing is accepted without you."
-                .into(),
+            format!(
+                "The chat answers its model turns (up to {turns}) here; each answer continues the \
+                 run without asking again. Nothing is accepted without you."
+            ),
         );
     }
     if let Some(text) = &tag.answer {
@@ -286,7 +319,25 @@ pub fn chat_words(tag: &ChatTag, body: &mut Vec<String>) {
             "The chat's answer ({} bytes), as the harness will file it:",
             text.len()
         ));
-        body.extend(text.lines().map(|l| format!("  {l}")));
+        for line in text.split('\n') {
+            let mut rest = line;
+            loop {
+                let mut end = rest.len().min(ANSWER_PIECE);
+                while !rest.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let (piece, more) = rest.split_at(end);
+                body.push(if more.is_empty() {
+                    format!("  {piece}")
+                } else {
+                    format!("  {piece}↩")
+                });
+                if more.is_empty() {
+                    break;
+                }
+                rest = more;
+            }
+        }
         body.push("(end of the answer)".into());
     }
 }
@@ -301,6 +352,13 @@ fn arg<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
 }
 
 impl App {
+    /// A line of the cockpit's in the transcript — new output: "Chat ●"
+    /// outside the chat (review USE-12).
+    fn chat_line(&mut self, tone: T, text: impl Into<String>) {
+        self.chat.unseen = true;
+        self.chat.transcript.line(tone, text);
+    }
+
     // ----- the chat's events -------------------------------------------------
 
     /// One pass of the loop for the chat: what its runtime printed, and the
@@ -345,7 +403,7 @@ impl App {
             self.asks.unsent.drain(..).partition(|(g, _)| *g == gen);
         self.asks.unsent = rest;
         for (_, text) in theirs {
-            self.chat.transcript.line(
+            self.chat_line(
                 T::Dim,
                 format!("the chat that asked for it ended before it heard: {text}"),
             );
@@ -371,9 +429,7 @@ impl App {
         }
         let after = self.asks.requests.len() + usize::from(self.asks.waiting.is_some());
         if after < before || dialog {
-            self.chat
-                .transcript
-                .line(T::Dim, "the request was withdrawn");
+            self.chat_line(T::Dim, "the request was withdrawn");
             self.asks.show_next(now);
         }
     }
@@ -392,10 +448,24 @@ impl App {
         match self.chat_request(gen, &request_id, tool, input, model.as_deref()) {
             Err(why) => {
                 self.chat.deny(&request_id, &refused(&why));
-                self.chat.transcript.line(T::Bad, format!("refused: {why}"));
+                self.chat_line(T::Bad, format!("refused: {why}"));
+            }
+            // One waiting Continue at a time: another permitted one asks
+            // (review PRO-3) — never dropped unanswered.
+            Ok(mut r) if r.tag().permitted && self.asks.waiting.is_some() => {
+                if let Some(t) = r.pending.chat.as_deref_mut() {
+                    t.permitted = false;
+                }
+                r.continue_asks = true;
+                r.words = format!("{} — review the answer", r.words);
+                self.chat_line(T::Warn, format!("asks: {}", r.words));
+                self.asks.requests.push_back(r);
+                if self.asks.requests.len() == 1 {
+                    self.asks.show_next(now);
+                }
             }
             Ok(r) if r.tag().permitted => {
-                self.chat.transcript.line(
+                self.chat_line(
                     T::Warn,
                     format!("{} — waits for a quiet moment; Esc holds it", r.words),
                 );
@@ -403,9 +473,7 @@ impl App {
                 self.asks.meaning += 1;
             }
             Ok(r) => {
-                self.chat
-                    .transcript
-                    .line(T::Warn, format!("asks: {}", r.words));
+                self.chat_line(T::Warn, format!("asks: {}", r.words));
                 self.asks.requests.push_back(r);
                 if self.asks.requests.len() == 1 {
                     self.asks.show_next(now);
@@ -463,6 +531,8 @@ impl App {
             answer: None,
             key: None,
             permitted: false,
+            attempt: None,
+            epoch: 0,
         };
         let need = |key: &str| {
             arg(input, key)
@@ -500,12 +570,23 @@ impl App {
                 if let Some(why) = note_problem(&note, MAX_NOTE_BYTES) {
                     return Err(format!("the note: {why}"));
                 }
-                let mut p = self.act_argv(Act::Modify, Some(&unit), Some(&from), Some(&note))?;
+                // A request waits for a running command (§3.2): the
+                // running-command gate is Review's and confirm's.
+                let mut p =
+                    self.act_argv_unchecked(Act::Modify, Some(&unit), Some(&from), Some(&note))?;
                 chat_shape(&mut p.argv, &model, external);
                 p.label = format!("Modify {} (asked in chat)", short_id(&from));
                 p.chat = Some(Box::new(tag(grant)));
                 Ok(Request {
-                    words: format!("Modify {} with a note — a model call", short_id(&from)),
+                    words: format!(
+                        "Modify {} with a note — a model call{}",
+                        short_id(&from),
+                        if external {
+                            ", answered here in chat"
+                        } else {
+                            ""
+                        }
+                    ),
                     pending: p,
                     shown_at: None,
                     continue_asks: false,
@@ -517,7 +598,15 @@ impl App {
                 let external = p.argv.iter().any(|a| a == "--provider=external");
                 p.chat = Some(Box::new(tag(external && !self.config.allow_unsandboxed)));
                 Ok(Request {
-                    words: format!("Retry {} — a model call", short_id(&attempt)),
+                    words: format!(
+                        "Retry {} — a model call{}",
+                        short_id(&attempt),
+                        if external {
+                            ", answered here in chat"
+                        } else {
+                            ""
+                        }
+                    ),
                     pending: p,
                     shown_at: None,
                     continue_asks: false,
@@ -538,6 +627,7 @@ impl App {
                 t.answer = Some(text);
                 t.key = Some(key);
                 t.permitted = permitted;
+                t.attempt = Some(attempt.clone());
                 p.chat = Some(Box::new(t));
                 let turn = self.asks.table.get(&attempt).and_then(|h| h.turn);
                 let turn = turn.map_or_else(String::new, |n| format!(" turn {n}"));
@@ -565,9 +655,6 @@ impl App {
     /// chat answers), else the target's migrate model. Only a unit that is
     /// planned, tried or failing.
     fn chat_migrate_argv(&self, unit: &str, model: &str) -> Result<Pending, String> {
-        if self.running {
-            return Err("a command is running (one at a time); ask again when it ends".into());
-        }
         if !harness_core::plan::is_clean_segment(unit) {
             return Err(format!("{unit:?} is not a plain unit id"));
         }
@@ -653,7 +740,9 @@ impl App {
                 r.id
             ));
         }
-        if !external && !self.config.providers.contains(&r.provider) {
+        // The cockpit's own provider list binds the chat too, `external`
+        // included (review SAF-8).
+        if !self.config.providers.contains(&r.provider) {
             return Some(format!(
                 "provider `{}` is not allowed — start the cockpit with `--provider {}`",
                 r.provider, r.provider
@@ -663,9 +752,6 @@ impl App {
     }
 
     fn chat_retry_argv(&self, unit: &str, attempt: &str, model: &str) -> Result<Pending, String> {
-        if self.running {
-            return Err("a command is running (one at a time); ask again when it ends".into());
-        }
         for id in [unit, attempt] {
             if !harness_core::plan::is_clean_segment(id) {
                 return Err(format!("{id:?} is not a plain id"));
@@ -789,6 +875,12 @@ impl App {
         if response_present(&self.chat_response(unit, key)) {
             return Err(format!(
                 "request {key} already has a response — the harness files it on the next resume"
+            ));
+        }
+        if !self.config.providers.contains(&r.provider) {
+            return Err(format!(
+                "provider `{}` is not allowed — the person starts the cockpit with `--provider {}`",
+                r.provider, r.provider
             ));
         }
         let mut rest = vec![
@@ -922,7 +1014,7 @@ impl App {
             Err(why) => {
                 self.asks.requests.pop_front();
                 self.chat.deny(&tag.request_id, &refused(&why));
-                self.chat.transcript.line(T::Bad, format!("refused: {why}"));
+                self.chat_line(T::Bad, format!("refused: {why}"));
                 self.say(format!("the chat's request is refused: {why}"));
                 self.asks.show_next(now);
             }
@@ -941,11 +1033,11 @@ impl App {
         };
         let tag = r.tag().clone();
         let message = if with_draft && !self.chat.input.is_empty() {
+            // The person's own words: never fenced as untrusted data (the
+            // brief tells the model to follow nothing so fenced — review
+            // USE-6).
             let reason = self.chat.input.take();
-            format!(
-                "{DECLINED}; their reason: {}",
-                json!(fence::untrusted("person", &reason, fence::MESSAGE_CAP))
-            )
+            format!("{DECLINED}, who says: {}", json!(reason))
         } else {
             DECLINED.to_string()
         };
@@ -953,56 +1045,40 @@ impl App {
     }
 
     fn chat_declined(&mut self, tag: &ChatTag, message: &str, now: Instant) {
-        if tag.key.is_some() {
-            // Declining a Continue ends the permission (§3.4).
-            if let Some(a) = self.chat_attempt_of(tag) {
-                self.asks.permits.remove(&a);
-            }
+        // Declining a Continue ends the permission (§3.4) — its attempt
+        // rides on the tag (review SAF-5).
+        if let Some(a) = &tag.attempt {
+            self.asks.end_permit(a);
         }
         self.chat.deny(&tag.request_id, message);
-        self.chat.transcript.line(T::Bad, "✗ declined");
+        self.chat_line(T::Bad, "✗ declined");
         self.asks.show_next(now);
-    }
-
-    fn chat_attempt_of(&self, tag: &ChatTag) -> Option<String> {
-        self.asks
-            .requests
-            .iter()
-            .chain(self.asks.waiting.iter())
-            .find(|r| r.tag().request_id == tag.request_id)
-            .and_then(|r| r.pending.attempt.clone())
-            .or_else(|| {
-                self.run
-                    .as_ref()
-                    .filter(|run| {
-                        run.pending
-                            .chat
-                            .as_ref()
-                            .is_some_and(|t| t.request_id == tag.request_id)
-                    })
-                    .and_then(|run| run.pending.attempt.clone())
-            })
     }
 
     /// Hold the waiting Continue (`Esc` on its line, or `[Hold]`): the
     /// permission ends and it becomes a Continue that asks — its request
     /// line, settling anew (§3.4).
     pub(crate) fn chat_hold(&mut self, now: Instant) {
+        self.chat_asks_instead(now, "held");
+    }
+
+    /// The waiting Continue becomes a Continue that asks — `why` in words
+    /// ("held" when the person held it, else what ended the permission,
+    /// review USE-15).
+    fn chat_asks_instead(&mut self, now: Instant, why: &str) {
         let Some(mut r) = self.asks.waiting.take() else {
             return;
         };
         if let Some(a) = r.pending.attempt.clone() {
-            self.asks.permits.remove(&a);
+            self.asks.end_permit(&a);
         }
         if let Some(t) = r.pending.chat.as_mut() {
             t.permitted = false;
         }
         r.continue_asks = true;
-        r.words = format!("{} — held: review the answer", r.words);
+        r.words = format!("{} — {why}: review the answer", r.words);
         r.shown_at = None;
-        self.chat
-            .transcript
-            .line(T::Warn, format!("held: {}", r.words));
+        self.chat_line(T::Warn, format!("{why}: {}", r.words));
         self.asks.requests.push_front(r);
         self.asks.show_next(now);
     }
@@ -1022,12 +1098,16 @@ impl App {
                 Ok(()) => {
                     self.asks.requests.retain(|r| !ours(r));
                     self.asks.show_next(now);
+                    let mut p = p;
+                    if let Some(t) = p.chat.as_deref_mut() {
+                        t.epoch = self.asks.epoch;
+                    }
                     Command::Spawn(p)
                 }
                 Err(why) => {
                     self.asks.requests.retain(|r| !ours(r));
                     self.chat.deny(&tag.request_id, &refused(&why));
-                    self.chat.transcript.line(T::Bad, format!("refused: {why}"));
+                    self.chat_line(T::Bad, format!("refused: {why}"));
                     self.say(format!("{}: {why}", p.label));
                     self.asks.show_next(now);
                     Command::None
@@ -1050,7 +1130,7 @@ impl App {
         };
         if tag.permitted {
             self.asks.waiting = None;
-            self.chat.transcript.line(
+            self.chat_line(
                 T::Good,
                 format!(
                     "continued, as you agreed when you ran the migration: {}",
@@ -1058,9 +1138,7 @@ impl App {
                 ),
             );
         } else {
-            self.chat
-                .transcript
-                .line(T::Good, format!("you ran it: {}", p.label));
+            self.chat_line(T::Good, format!("you ran it: {}", p.label));
         }
     }
 
@@ -1072,7 +1150,7 @@ impl App {
             self.asks.waiting = None;
         }
         self.chat.deny(&tag.request_id, &refused(&why));
-        self.chat.transcript.line(T::Bad, format!("refused: {why}"));
+        self.chat_line(T::Bad, format!("refused: {why}"));
         self.say(format!("the chat's act: {why}"));
     }
 
@@ -1102,7 +1180,16 @@ impl App {
                 unit,
             },
         );
-        if let Some(t) = tag.filter(|t| t.grant && !self.config.allow_unsandboxed) {
+        // Granted only if nothing ended a permission since the person
+        // confirmed the act, its request is still held and its chat still
+        // runs (§3.4; review SAF-1).
+        let live = |t: &ChatTag| {
+            t.epoch == self.asks.epoch
+                && t.gen == self.chat.gen
+                && self.chat.alive()
+                && self.chat.held.contains(&t.request_id)
+        };
+        if let Some(t) = tag.filter(|t| t.grant && !self.config.allow_unsandboxed && live(t)) {
             self.asks.permits.insert(
                 attempt,
                 Permit {
@@ -1136,7 +1223,7 @@ impl App {
                 .as_ref()
                 .zip(run.pending.unit.as_ref())
                 .map(|(k, u)| self.chat_response(u, k));
-            self.asks.outcome = Some(Owed {
+            self.asks.outcome.push(Owed {
                 tag,
                 label: run.narrator.label.clone(),
                 collect: run.collect.clone(),
@@ -1151,22 +1238,27 @@ impl App {
     /// land): the owed outcome goes to the chat — or, its request gone, to
     /// the chat's next message, or to the transcript only (§3.3).
     pub(super) fn chat_after_read(&mut self, failed: Option<&str>) {
-        let Some(owed) = self.asks.outcome.take() else {
-            return;
-        };
+        for owed in std::mem::take(&mut self.asks.outcome) {
+            self.chat_owed(owed, failed);
+        }
+    }
+
+    fn chat_owed(&mut self, owed: Owed, failed: Option<&str>) {
         let (text, line, tone) = outcome_message(&owed, failed);
-        self.chat.transcript.line(tone, line);
-        if self.chat.deny(&owed.tag.request_id, &text) {
+        self.chat_line(tone, line);
+        // While a Stop is on its way the request is being cancelled: an
+        // answer now would be lost with it (review PRO-6).
+        if !self.chat.stopping() && self.chat.deny(&owed.tag.request_id, &text) {
             return;
         }
         if owed.tag.gen == self.chat.gen && self.chat.alive() {
             self.asks.unsent.push((owed.tag.gen, text));
-            self.chat.transcript.line(
+            self.chat_line(
                 T::Dim,
                 "the chat will hear the outcome with your next message",
             );
         } else {
-            self.chat.transcript.line(
+            self.chat_line(
                 T::Dim,
                 "the chat that asked for it has ended; it is not told",
             );
@@ -1182,7 +1274,7 @@ impl App {
             .filter(|r| self.running && r.pending.act == Act::Continue)
             .and_then(|r| r.pending.attempt.clone());
         if let Some(a) = attempt {
-            self.asks.permits.remove(&a);
+            self.asks.end_permit(&a);
         }
     }
 
@@ -1207,7 +1299,7 @@ impl App {
         if !permitted {
             // The permission ended meanwhile: it asks instead.
             self.asks.waiting = Some(r);
-            self.chat_hold(now);
+            self.chat_asks_instead(now, "the permission ended");
             return Command::None;
         }
         self.refresh_holder();
@@ -1221,7 +1313,7 @@ impl App {
             Ok(()) => Command::Spawn(r.pending),
             Err(why) => {
                 self.chat.deny(&tag.request_id, &refused(&why));
-                self.chat.transcript.line(T::Bad, format!("refused: {why}"));
+                self.chat_line(T::Bad, format!("refused: {why}"));
                 self.asks.meaning += 1;
                 Command::None
             }
@@ -1234,6 +1326,15 @@ impl App {
     /// not hold it.
     pub fn chat_waits_why(&self, now: Instant) -> Option<&'static str> {
         self.asks.waiting.as_ref()?;
+        // A request line shown owns Esc: the Continue waits behind it, so
+        // it is never run unseen (review SAF-6).
+        if self.asks.shown().is_some() {
+            return Some("the chat's migration continues when you answer its request");
+        }
+        // Earlier outcomes reach the chat first (review PRO-4).
+        if !self.asks.outcome.is_empty() {
+            return Some("the chat's migration continues in a moment");
+        }
         match &self.mode {
             Mode::Menu(_) => return Some("the chat's migration continues when you close the menu"),
             Mode::Dialog(_) => {
@@ -1365,7 +1466,10 @@ impl App {
                     self.chat.input.take();
                     self.say("the draft is cleared");
                 } else {
-                    return self.quit();
+                    // In the chat Ctrl-C's quit is always asked (§5.4): a
+                    // second press after a clear never quits at once
+                    // (review USE-16).
+                    self.open_dialog(Purpose::Quit);
                 }
             }
             KeyCode::Char('x') if ctrl => {
@@ -1403,6 +1507,8 @@ impl App {
                     self.chat_decline(now, false);
                 } else if self.asks.waiting.is_some() {
                     self.chat_hold(now);
+                } else if self.chat.turn && self.chat.stopping() {
+                    self.say("stopping… — the reply ends in a moment");
                 } else if self.chat.turn && !self.chat_act_running() {
                     self.chat_stop();
                 } else {
@@ -1456,6 +1562,7 @@ impl App {
     pub(crate) fn chat_paste(&mut self, text: &str, now: Instant) {
         let dropped = self.chat.input.paste(text);
         self.asks.typed_at = Some(now);
+        self.asks.last_press = Some(now);
         if dropped > 0 {
             self.say(format!("the paste did not fit: {dropped} bytes dropped"));
         }
@@ -1666,14 +1773,17 @@ impl App {
                 }
                 Command::None
             }
+            // What the key does now, a quit asked (review USE-7).
             "Ctrl-C" => {
                 if self.chat.turn && !self.chat.stopping() {
                     self.chat_stop();
-                    Command::None
+                } else if !self.chat.input.is_empty() {
+                    self.chat.input.take();
+                    self.say("the draft is cleared");
                 } else {
                     self.open_dialog(Purpose::Quit);
-                    Command::None
                 }
+                Command::None
             }
             "q" => {
                 self.open_dialog(Purpose::Quit);
@@ -1692,6 +1802,7 @@ impl App {
             "Tab" => self.chat_key(KeyEvent::from(KeyCode::Tab), now),
             "Ctrl-J" => {
                 self.chat.input.insert("\n");
+                self.asks.typed_at = Some(now);
                 Command::None
             }
             _ => Command::None,

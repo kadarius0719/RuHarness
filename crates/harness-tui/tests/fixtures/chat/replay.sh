@@ -17,7 +17,8 @@
 #
 # Also honoured, for the end-routine tests: REPLAY_IGNORE_TERM=1 (trap TERM),
 # REPLAY_GRANDCHILD=1 (a `sleep` in the group, its pid in LOGDIR/grandchild),
-# REPLAY_TTY=1 (read /dev/tty once the script is played — a stopped runtime).
+# REPLAY_TTY=1 (read /dev/tty once the script is played — a stopped runtime),
+# REPLAY_HOLD=1 (sleep instead of reading stdin to EOF).
 rec=$1
 log=$2
 shift 2
@@ -80,6 +81,9 @@ while IFS= read -r rec_line <&4; do
   esac
 done 4< "$rec"
 [ "$REPLAY_TTY" = 1 ] && read -r _ < /dev/tty
+# REPLAY_HOLD=1: hold on past the recording, deaf to stdin's EOF (and to
+# TERM when the caller ignored it: a disposition exec keeps).
+[ "$REPLAY_HOLD" = 1 ] && exec sleep 300
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$log/stdin"
 done

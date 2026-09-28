@@ -1045,3 +1045,36 @@ mutation-checked):
 | nit — hand-written `O_NONBLOCK` values (wrong on mips/sparc, 0 elsewhere) (F5) | `libc::O_NONBLOCK | libc::O_NOFOLLOW` (libc is already in the graph) |
 | nit — `--answer=-` from a terminal waited silently (F6) | refused |
 | nit — untested: replay without `traces/` (NEW-2), the cockpit on a symlinked response (F7) | tested; still untested by design: the swap race `O_NOFOLLOW`/dev-ino guard, the fallback (no such filesystem here), the bench `(chat)` tags |
+
+## R7. Code review of Build D — 45 findings, verified, resolved (2026-09-28)
+
+Three reviewers over 7c3e192 — safety & provenance (SAF-1..11), process & protocol (PRO-1..14),
+usability & conformance (USE-1..19) — merged into A–AN; two verifiers read the reviewed commit:
+every finding confirmed or partly, none refuted. Severities are the verifiers'. The core rule
+held in every path read: no chat act ran without an armed dialog or a live continuation
+permission; the defects gathered around that one exception, around the focus sitting on the
+chat while something else owned the keys, and in protocol state.
+
+| finding | resolution |
+|---|---|
+| **high** — the continuation permission was granted by its act's `awaiting` even when a Stop, a withdrawal or a foreign message had ended permissions while that act ran (SAF-1) | a permission epoch, bumped by every ending cause, captured in the act's tag at confirm; the grant needs the same epoch, the request still held, its chat live |
+| med (high unsandboxed) — a Continue that asks cut each answer line at 4 KiB on screen, silently, while the CLI got every byte (SAF-2) | the answer's lines split into 1 KiB rows marked `↩`, never cut |
+| med — Details opened from the chat left the focus on it and passed letters to the panes' accelerators (`e` opened the editor) (USE-1) | over the chat, the details take their scroll keys and Esc (Ctrl-X cancels); other keys are dropped with a word |
+| med — a dialog opened from the chat sent its own hint bar's clicks to the chat beneath (decline, Stop, send) (SAF-4 = USE-2) | the chat's hints only on the panes' screen; a dialog's or an overlay's hints press its own keys |
+| med — Migrate, Modify, Retry asked while a command ran were refused, not queued (USE-3 = PRO-5) | they wait (§3.2); Review and confirm keep one command at a time (`act_argv_unchecked`) |
+| med — the quiet-turn notice fired right after every act of a minute or more (PRO-1) | the quiet clock restarts when the last held request is answered or withdrawn |
+| med — a Stop's `stopping` outlived an aborted result with a queued turn behind it (PRO-2) | any result ends the Stop |
+| low-med — a Cancel dialog outliving its command left the permission (SAF-3); a second permitted Continue replaced the first (PRO-3); one owed-outcome slot (PRO-4); an outcome sent to a request a Stop was cancelling (PRO-6) | the Cancel dialog closes when its command ends; a second permitted Continue asks; outcomes queue and a waiting Continue waits for them; while a Stop is on its way an outcome goes with the next message |
+| low — declining a Continue never ended its permission (SAF-5 = PRO-12); a waiting Continue behind a shown request had no Hold (SAF-6); a paste did not hold it (SAF-7); `external` records bypassed `--provider` (SAF-8); `chat_step` could spawn once dying (SAF-9); Tab moved a chat dialog's focus (SAF-10) | the tag carries its attempt; it waits behind a request line; a paste is a press; the provider list binds `external` too; no spawn once dying; only ←/→ move a chat dialog's focus |
+| low — the process edges: reaped entries left in the registry (PRO-8), a `kill_now` timeout forgotten (PRO-9), a failed `/bin/kill` counted as sent (PRO-10), a leader's death seen only by EOF (PRO-11), a burst's last key lost to a slow frame (PRO-13) | entries leave when reaped; a timed-out ending is kept; `killed` only when sent; the leader looked at every 2 s (a zombie ends the chat); the key after one read with input pending closes the burst (100 ms) |
+| low — the view: request buttons greyed by a stale clock (USE-4), the request line cut first at small heights (USE-5), the strip over titles and `[?]`/`[Stop]` dropped (USE-10), no strip on Files below 80 (USE-11), state words and hints (USE-12), the cursor at a soft wrap (USE-17), cut buttons and the Review label (USE-18), Help silent when the chat is unavailable (USE-14) | drawn with the loop's clock; the bottom block by priority (the request's buttons first); titles cut with "…", `[Stop]` and `[?]` first; the strip on every single pane; "stopped", "stopping…", "continuing…", "not started" after New chat; the cursor after the wrap; buttons wrap to a second row, "[Review — later]"; Help says why |
+| low — words and keys: the decline reason fenced as untrusted (USE-6), "Ctrl-C clear" clicked quit (USE-7), "or click" with the mouse off (USE-8), the brief's no-fences rule vs the answer's format (USE-9), "Ask in chat…" bypassed the column (USE-13), "held" when a permission ended otherwise (USE-15), Ctrl-C quit at once after a clear (USE-16), no "(up to N)" (SAF-11) | the reason goes as the person's words; the click clears; the dialog's usual rule; the brief scopes the rule to the chat; `move_focus`; the cause in words; in the chat a quit is always asked; `1 + max_repairs` from the target's config |
+| as designed, recorded — the brief asks for Migrate before checking the driver (USE-19): `harness_unit` exposes no driver state, and the first live recording saw the model take "no verdict" for "no driver"; the migration's own refusal names `harness gen-driver` | kept |
+| test gaps (the reviewers' T lists): chat keys never clicked, the held press's meaning, New chat's generation end, the note holding a Continue, Esc not Stop during a chat act, Ctrl-C as Stop, the marker's own "stopped", `chat_gate`'s held check, a burst into a chat dialog, a Tick read after the reap, racy absence checks, New chat killing a still-ending chat, deaf/tty bounds, the pty tests reading raw bytes (the unexplained live quit failure, PRO-7: ratatui skips a cell already showing the letter) | each has a test now; absence checks wait 200 ms; the pty tests read a rendered screen; the deaf/tty quit asserts the stopped state and 6 s |
+
+**Found by the live runs, not the review**: haiku once wrote its answer into the chat instead of
+calling `harness_answer` — the brief now says the answer goes only there; and in Claude Code
+2.1.274 a message typed while a turn runs is **not** folded into it (§3.2 item 5, §3.5): it is
+queued as the next turn (its echo `isReplay` with the cockpit's `uuid`; the first turn's
+`result` says `queued_turn_count` 0 all the same) — the model still reads it after the tool
+result, so §3.2's behaviour holds; recorded as `fold.jsonl`.

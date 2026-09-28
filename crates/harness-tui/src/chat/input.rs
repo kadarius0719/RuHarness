@@ -160,10 +160,10 @@ impl Input {
         let mut col = 0;
         let mut cursor = (0, 0);
         for (i, c) in self.text.char_indices() {
-            if i == self.cursor {
-                cursor = (rows.len() - 1, col);
-            }
             if c == '\n' {
+                if i == self.cursor {
+                    cursor = (rows.len() - 1, col);
+                }
                 rows.push(String::new());
                 col = 0;
                 continue;
@@ -177,6 +177,11 @@ impl Input {
             if col + w > width {
                 rows.push(String::new());
                 col = 0;
+            }
+            // After the wrap: the cursor on a char that starts a row sits at
+            // that row's start (review USE-17).
+            if i == self.cursor {
+                cursor = (rows.len() - 1, col);
             }
             if let Some(r) = rows.last_mut() {
                 r.push(shown);
@@ -249,5 +254,15 @@ mod tests {
         assert_eq!(first, rows.len() - MAX_ROWS);
         i.insert("\u{7}");
         assert!(i.layout(10).0.last().unwrap().ends_with('?'));
+        // The cursor on the first char of a soft-wrapped row: that row's
+        // start, never past the width.
+        let mut w = Input::default();
+        w.insert("abcdefgh");
+        w.home();
+        for _ in 0..4 {
+            w.right();
+        }
+        let (_, cursor, _) = w.layout(4);
+        assert_eq!(cursor, (1, 0));
     }
 }

@@ -692,6 +692,8 @@ pub struct App {
     /// The target's effective migrate model, as the last read found it
     /// (named in the model acts' dialogs).
     pub migrate_model: String,
+    /// A migration's model turns at most, as the last read found it.
+    pub migrate_turns: u32,
     /// The C source the View shows (a file no unit owns, a header, an
     /// internal function's file).
     pub source: Option<SourceView>,
@@ -864,6 +866,7 @@ impl App {
         let target = config.target.clone();
         let holder = read.holder;
         let migrate_model = read.migrate_model;
+        let migrate_turns = read.migrate_turns;
         let mut app = App {
             config,
             snapshot: read.snapshot,
@@ -891,6 +894,7 @@ impl App {
             pairs_digest: None,
             pairs_unit: None,
             migrate_model,
+            migrate_turns,
             source: None,
             code_cols: 0,
             layout: Layout::default(),
@@ -1115,6 +1119,7 @@ impl App {
         self.holder = read.holder;
         self.holder_error = None;
         self.migrate_model = read.migrate_model;
+        self.migrate_turns = read.migrate_turns;
         self.files = files::build(&self.snapshot, &self.walk);
         self.selection = tree::surviving(&self.snapshot, &self.files, &self.selection);
         // A finished (or vanished) attempt no longer awaits anything.
@@ -1615,6 +1620,16 @@ impl App {
     pub fn on_child_exit(&mut self, status: ExitStatus) -> Option<PathBuf> {
         use std::os::unix::process::ExitStatusExt;
         self.running = false;
+        // A Cancel dialog of the command that ended has nothing left to
+        // stop: it closes, and its "Stop it" can never land on a later one
+        // (review SAF-3).
+        if matches!(&self.mode, Mode::Dialog(c) if c.purpose == Purpose::Cancel) {
+            let kind = self.mode_kind();
+            self.mode = Mode::Normal;
+            let now = self.now;
+            self.note_mode_change(kind, now);
+            self.notice = notice("the command ended; nothing to stop");
+        }
         let signal = status.signal().map(signal_name);
         if let Some(run) = self.run.as_mut() {
             let text = match (status.code(), &signal) {
@@ -1737,6 +1752,19 @@ impl App {
         if self.running {
             return Err("a command is running (x cancels it)".into());
         }
+        self.act_argv_unchecked(act, unit, attempt, note)
+    }
+
+    /// [`App::act_argv`] without its running-command gate: a chat's request
+    /// waits for the running command (docs/CHAT-PANE-DESIGN.md §3.2) —
+    /// Review and confirm keep one command at a time.
+    pub(crate) fn act_argv_unchecked(
+        &self,
+        act: Act,
+        unit: Option<&str>,
+        attempt: Option<&str>,
+        note: Option<&str>,
+    ) -> Result<Pending, String> {
         // Ids reach the argv as positionals: plain path segments only.
         for id in [unit, attempt].into_iter().flatten() {
             if !harness_core::plan::is_clean_segment(id) {
@@ -2219,7 +2247,7 @@ impl App {
                     }
                 }
                 if let Some(tag) = &p.chat {
-                    asks::chat_words(tag, &mut body);
+                    asks::chat_words(tag, &mut body, self.migrate_turns);
                 }
                 (title, body)
             }
@@ -2731,7 +2759,7 @@ impl App {
                 Command::None
             }
             Action::AskChat => {
-                self.focus = Focus::Chat;
+                self.move_focus(Focus::Chat);
                 Command::None
             }
         }
@@ -3237,7 +3265,12 @@ impl App {
                 }
                 Command::None
             }
-            Hit::Hint(k) | Hit::Activity(k) if self.focus == Focus::Chat => {
+            // The chat's own hints only on the panes' screen: under a dialog
+            // or an overlay the hint bar is that overlay's, and presses its
+            // keys (review SAF-4 / USE-2).
+            Hit::Hint(k) | Hit::Activity(k)
+                if self.focus == Focus::Chat && matches!(self.mode, Mode::Normal) =>
+            {
                 self.press_chat_hint(k, now)
             }
             Hit::Hint(k) | Hit::Activity(k) => self.press_hint(k, now),
@@ -3506,6 +3539,42 @@ impl App {
                     _ => {}
                 }
                 self.mode = Mode::Menu(m);
+                return Command::None;
+            }
+            // Opened from the chat, the details keep the chat's rule —
+            // letters are never the panes' accelerators (review USE-1): the
+            // scroll keys scroll, Esc closes, Ctrl-X cancels, the rest is
+            // dropped with a word.
+            Mode::Details { scroll } if self.focus == Focus::Chat => {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                self.mode = match key.code {
+                    KeyCode::Up => Mode::Details {
+                        scroll: scroll.saturating_sub(1),
+                    },
+                    KeyCode::Down => Mode::Details {
+                        scroll: scroll.saturating_add(1),
+                    },
+                    KeyCode::PageUp => Mode::Details {
+                        scroll: scroll.saturating_sub(10),
+                    },
+                    KeyCode::PageDown => Mode::Details {
+                        scroll: scroll.saturating_add(10),
+                    },
+                    KeyCode::Home => Mode::Details { scroll: 0 },
+                    KeyCode::End => Mode::Details {
+                        scroll: usize::MAX / 2,
+                    },
+                    KeyCode::Esc => Mode::Normal,
+                    KeyCode::Char('x') if ctrl && self.running => {
+                        self.mode = Mode::Details { scroll };
+                        self.open_dialog(Purpose::Cancel);
+                        return Command::None;
+                    }
+                    _ => {
+                        self.notice = notice("the details are open — Esc closes them");
+                        Mode::Details { scroll }
+                    }
+                };
                 return Command::None;
             }
             Mode::Details { scroll } => {

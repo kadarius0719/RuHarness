@@ -7,6 +7,7 @@
 use super::*;
 use crate::chat::transcript::Tone as T;
 use crate::chat::{short_model, Phase};
+use std::time::Instant;
 
 /// From this many columns the chat has a column of its own (§5.1).
 pub const CHAT_COLUMN_FROM: u16 = 156;
@@ -34,20 +35,37 @@ pub fn state_word(app: &App) -> &'static str {
     if app.chat.bins.is_err() {
         return "unavailable";
     }
-    if app.asks.shown().is_some() || app.asks.waiting.is_some() {
+    if app.asks.shown().is_some() {
         return "waiting for you";
+    }
+    if app.asks.waiting.is_some() {
+        return "continuing…";
     }
     let chat_act = app.running && app.run.as_ref().is_some_and(|r| r.pending.chat.is_some());
     if chat_act {
         return "running a command for the chat";
     }
     match app.chat.phase() {
-        Phase::Idle if app.chat.gen == 0 => "not started",
+        Phase::Idle if app.chat.gen == 0 || !app.chat.ended_by_itself => "not started",
         Phase::Idle => "ended",
         Phase::Starting => "starting…",
+        Phase::Thinking if app.chat.stopping() => "stopping…",
         Phase::Thinking => "thinking…",
+        Phase::Ready if app.chat.stopped_last => "stopped",
         Phase::Ready => "ready",
     }
+}
+
+/// A key drawn in a bottom row: its column, width and name.
+type KeyAt = (u16, u16, &'static str);
+
+/// The tab strip's width, its border gap included.
+fn strip_width() -> u16 {
+    [" View ", " Chat ● "]
+        .iter()
+        .map(|l| width_of(l) as u16 + 1)
+        .sum::<u16>()
+        + 1
 }
 
 /// Buttons laid on a border row from the right edge leftwards (`end`
@@ -134,64 +152,99 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     if let Some(src) = app.chat.api_key_source.as_deref().filter(|s| *s != "none") {
         model.push_str(&format!(" · {src}"));
     }
-    let title = format!(" Chat — {}{model} ", state_word(app));
-    let block = pane_block(display::line(&title), focused);
+    // The title's buttons — [Stop] and [?] first when room is short
+    // (review USE-10) — then the strip, from the right; the title is cut
+    // with "…" before them, never overwritten.
+    let right = area.x + area.width.saturating_sub(1);
+    let strip_w = if strip && area.width >= 20 {
+        strip_width()
+    } else {
+        0
+    };
+    let mut wanted: Vec<(u8, String, &'static str)> = Vec::new();
+    if app.chat.turn && !app.chat.stopping() {
+        wanted.push((0, "[Stop]".into(), "stop"));
+    }
+    wanted.push((1, "[?]".into(), "help"));
+    if column {
+        wanted.push((2, "[×]".into(), "close"));
+    }
+    if app.chat.has_conversation() {
+        wanted.push((3, "[New]".into(), "new"));
+    }
+    let min_title = 10u16;
+    let mut room = right
+        .saturating_sub(area.x + 1 + min_title)
+        .saturating_sub(strip_w);
+    let mut chosen: Vec<(u8, String, &'static str)> = Vec::new();
+    for w in wanted {
+        let need = width_of(&w.1) as u16 + 1;
+        if need <= room {
+            room -= need;
+            chosen.push(w);
+        }
+    }
+    // Shown in a steady order: [Stop] [New] [?] [×].
+    chosen.sort_by_key(|(p, ..)| match p {
+        0 => 0,
+        3 => 1,
+        1 => 2,
+        _ => 3,
+    });
+    let buttons_w: u16 = chosen.iter().map(|(_, l, _)| width_of(l) as u16 + 1).sum();
+    let title_room = (right.saturating_sub(area.x + 2 + strip_w + buttons_w)) as usize;
+    let title = ellipsis(
+        &format!(" Chat — {}{model} ", state_word(app)),
+        title_room.max(4),
+    );
+    let block = pane_block(title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     app.hits.push((area, Hit::Pane(Focus::Chat)));
-    // The title's buttons, then the strip, from the right.
-    let mut end = if strip {
+    let end = if strip {
         tab_strip(frame, app, area)
     } else {
-        area.x + area.width - 1
+        right
     };
-    let mut buttons: Vec<(String, &'static str, Style)> = Vec::new();
-    if app.chat.turn {
-        buttons.push(("[Stop]".into(), "stop", bold()));
-    }
-    if app.chat.has_conversation() {
-        buttons.push(("[New]".into(), "new", bold()));
-    }
-    buttons.push(("[?]".into(), "help", bold()));
-    if column {
-        buttons.push(("[×]".into(), "close", bold()));
-    }
-    let title_end = area.x + 2 + width_of(&display::line(&title)) as u16;
-    if end > title_end + 1 {
-        end = border_buttons(frame, app, area.y, title_end, end, &buttons);
-    }
-    let _ = end;
+    let styled: Vec<(String, &'static str, Style)> =
+        chosen.into_iter().map(|(_, l, k)| (l, k, bold())).collect();
+    border_buttons(frame, app, area.y, area.x + 1, end, &styled);
     if inner.width < 4 || inner.height < 3 {
         return;
     }
     let width = inner.width as usize;
-    // The bottom: the request or waiting line, the context line, the input.
-    let (input_rows, cursor, first) = app.chat.input.layout(width.saturating_sub(2));
+    // The bottom block, by priority when rows are short (review USE-5): the
+    // request's buttons (or the waiting line), the input's cursor row, the
+    // request's first words, the context line, more input rows, the rest
+    // of the words — the request is never the first thing cut.
+    let (input_rows, cursor, _) = app.chat.input.layout(width.saturating_sub(2));
     let shown_input = input_rows.len().clamp(1, crate::chat::input::MAX_ROWS);
-    let mut bottom: Vec<Line<'static>> = Vec::new();
-    let mut bottom_hits: Vec<(u16, u16, u16, &'static str)> = Vec::new();
-    let now = app.now;
+    let now = Instant::now();
+    let yellow = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let mut words: Vec<Line<'static>> = Vec::new();
+    let mut must: Vec<(Line<'static>, Vec<KeyAt>)> = Vec::new();
     if let Some(r) = app.asks.shown().cloned() {
         let settled = app.asks.settled(now);
-        let lead = format!("Asks: {}", r.words);
-        for l in wrapped(
-            &lead,
-            width,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
-        .into_iter()
-        .take(2)
-        {
-            bottom.push(l);
+        let all = wrapped(&format!("Asks: {}", r.words), width, yellow);
+        let cut = all.len() > 2;
+        words = all.into_iter().take(2).collect();
+        if cut {
+            if let Some(last) = words.pop() {
+                let text: String = last.spans.iter().map(|s| s.content.to_string()).collect();
+                words.push(Line::from(Span::styled(
+                    ellipsis(&format!("{text} …"), width),
+                    yellow,
+                )));
+            }
         }
         let review_ok = settled && !app.running;
         let style = |ok: bool| if ok { bold() } else { dim() };
         let mut labels: Vec<(String, &'static str, Style)> = vec![
             (
                 if app.running {
-                    "[Review — after the running command]".to_string()
+                    "[Review — later]".to_string()
                 } else {
                     "[Review Enter]".to_string()
                 },
@@ -207,50 +260,91 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
                 style(settled),
             ));
         }
-        let mut spans = Vec::new();
+        // The buttons wrap onto a second row rather than drop one.
+        let mut row: (Vec<Span<'static>>, Vec<KeyAt>) = (Vec::new(), Vec::new());
         let mut x = 0u16;
         for (label, key, st) in labels {
             let w = width_of(&label) as u16;
-            if x + w > inner.width {
-                break;
+            if x > 0 && x + w > inner.width {
+                must.push((
+                    Line::from(std::mem::take(&mut row.0)),
+                    std::mem::take(&mut row.1),
+                ));
+                x = 0;
             }
-            bottom_hits.push((bottom.len() as u16, x, w, key));
-            spans.push(Span::styled(label, st));
-            spans.push(Span::raw("  "));
+            if w > inner.width {
+                continue;
+            }
+            row.1.push((x, w, key));
+            row.0.push(Span::styled(label, st));
+            row.0.push(Span::raw("  "));
             x += w + 2;
         }
-        bottom.push(Line::from(spans));
+        must.push((Line::from(row.0), row.1));
     } else if let Some(w) = app.asks.waiting.clone() {
-        let lead = format!("{} — ", w.words);
-        let lead = ellipsis(&lead, width.saturating_sub(12));
+        let lead = ellipsis(&format!("{} — ", w.words), width.saturating_sub(12));
         let x = width_of(&lead) as u16;
-        bottom_hits.push((bottom.len() as u16, x, 10, "hold"));
-        bottom.push(Line::from(vec![
-            Span::styled(lead, Style::default().fg(Color::Yellow)),
-            Span::styled("[Hold Esc]", bold()),
-        ]));
+        must.push((
+            Line::from(vec![
+                Span::styled(lead, Style::default().fg(Color::Yellow)),
+                Span::styled("[Hold Esc]", bold()),
+            ]),
+            vec![(x, 10, "hold")],
+        ));
     }
-    bottom.push(Line::from(Span::styled(
+    let about = Line::from(Span::styled(
         ellipsis(&format!("About: {}", app.about()), width),
         dim(),
-    )));
-    let input_top = bottom.len();
-    for (i, row) in input_rows.iter().skip(first).take(shown_input).enumerate() {
-        let lead = if i == 0 && first == 0 { "› " } else { "  " };
-        bottom.push(Line::from(vec![
-            Span::styled(lead, bold()),
-            Span::raw(row.clone()),
-        ]));
+    ));
+    let avail = inner.height.saturating_sub(1) as usize;
+    let mut left = avail;
+    let mut take = |want: usize| {
+        let n = want.min(left);
+        left -= n;
+        n
+    };
+    let n_must = take(must.len());
+    let n_cursor = take(1);
+    let n_words1 = take(words.len().min(1));
+    let n_about = take(1);
+    let n_input_more = take(shown_input.saturating_sub(1));
+    let n_words2 = take(words.len().saturating_sub(1));
+    // The input's rows: a window ending at the cursor's row.
+    let n_input = n_cursor + n_input_more;
+    let start = (cursor.0 + 1).saturating_sub(n_input.max(1));
+    let mut bottom: Vec<Line<'static>> = Vec::new();
+    let mut hits: Vec<(usize, u16, u16, &'static str)> = Vec::new();
+    bottom.extend(words.iter().take(n_words1 + n_words2).cloned());
+    for (line, row_hits) in must.into_iter().take(n_must) {
+        for (x, w, k) in row_hits {
+            hits.push((bottom.len(), x, w, k));
+        }
+        bottom.push(line);
     }
-    if app.chat.input.is_empty() && focused {
-        if let Some(l) = bottom.last_mut() {
-            *l = Line::from(vec![
-                Span::styled("› ", bold()),
-                Span::styled("type here — Enter sends", dim()),
-            ]);
+    if n_about > 0 {
+        bottom.push(about);
+    }
+    let input_top = bottom.len();
+    let placeholder = if app.asks.shown().is_some() {
+        "Enter reviews the request — or type"
+    } else {
+        "type here — Enter sends"
+    };
+    for (i, row) in input_rows.iter().enumerate().skip(start).take(n_input) {
+        let lead = if i == 0 { "› " } else { "  " };
+        if app.chat.input.is_empty() && focused {
+            bottom.push(Line::from(vec![
+                Span::styled(lead, bold()),
+                Span::styled(placeholder, dim()),
+            ]));
+        } else {
+            bottom.push(Line::from(vec![
+                Span::styled(lead, bold()),
+                Span::raw(row.clone()),
+            ]));
         }
     }
-    let bottom_h = (bottom.len() as u16).min(inner.height.saturating_sub(1));
+    let bottom_h = bottom.len() as u16;
     let transcript_h = inner.height - bottom_h;
     let t_area = Rect::new(inner.x, inner.y, inner.width, transcript_h);
     let b_area = Rect::new(inner.x, inner.y + transcript_h, inner.width, bottom_h);
@@ -280,29 +374,20 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
             .collect()
     };
     frame.render_widget(Paragraph::new(lines), t_area);
-    let skip = bottom.len().saturating_sub(bottom_h as usize);
-    frame.render_widget(
-        Paragraph::new(bottom.into_iter().skip(skip).collect::<Vec<_>>()),
-        b_area,
-    );
-    for (row, x, w, key) in bottom_hits {
-        if (row as usize) < skip {
-            continue;
-        }
-        let y = b_area.y + row - skip as u16;
+    frame.render_widget(Paragraph::new(bottom), b_area);
+    for (row, x, w, key) in hits {
+        let y = b_area.y + row as u16;
         if y < b_area.y + b_area.height && x + w <= b_area.width {
             app.hits
                 .push((Rect::new(b_area.x + x, y, w, 1), Hit::Chat(key)));
         }
     }
-    if focused && matches!(app.mode, Mode::Normal) {
-        let row = input_top + cursor.0.saturating_sub(first);
-        if row >= skip {
-            let y = b_area.y + (row - skip) as u16;
-            let x = b_area.x + 2 + cursor.1 as u16;
-            if y < b_area.y + b_area.height && x < b_area.x + b_area.width {
-                frame.set_cursor_position((x, y));
-            }
+    if focused && matches!(app.mode, Mode::Normal) && n_input > 0 {
+        let row = input_top + cursor.0.saturating_sub(start);
+        let y = b_area.y + row as u16;
+        let x = b_area.x + 2 + cursor.1 as u16;
+        if y < b_area.y + b_area.height && x < b_area.x + b_area.width {
+            frame.set_cursor_position((x, y));
         }
     }
     if focused {
@@ -319,7 +404,7 @@ pub fn chat_hints(app: &App) -> Vec<(&'static str, &'static str)> {
     }
     if !app.chat.input.is_empty() {
         h.push(("Enter", "send"));
-    } else if app.asks.shown().is_some() {
+    } else if app.asks.shown().is_some() && !app.running {
         h.push(("Enter", "review"));
     }
     let chat_act = app.running && app.run.as_ref().is_some_and(|r| r.pending.chat.is_some());
@@ -327,7 +412,7 @@ pub fn chat_hints(app: &App) -> Vec<(&'static str, &'static str)> {
         h.push(("Esc", "decline"));
     } else if app.asks.waiting.is_some() {
         h.push(("Esc", "hold"));
-    } else if app.chat.turn && !chat_act {
+    } else if app.chat.turn && !chat_act && !app.chat.stopping() {
         h.push(("Esc", "stop"));
     }
     h.push(("Ctrl-J", "new line"));
@@ -485,6 +570,8 @@ mod tests {
             answer: None,
             key: None,
             permitted: false,
+            attempt: None,
+            epoch: 0,
         };
         a.asks.requests.push_back(Request {
             pending: Pending {

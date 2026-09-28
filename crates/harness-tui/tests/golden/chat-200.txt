@@ -17,7 +17,7 @@
 │                              ││                                                                                                      ││Asks: Migrate u-lib — a model call, answered here in chat     │
 │                              ││                                                                                                      ││[Review Enter]  [Decline Esc]                                 │
 │                              ││                                                                                                      ││About: the project                                            │
-│                              ││                                                                                                      ││› type here — Enter sends                                     │
+│                              ││                                                                                                      ││› Enter reviews the request — or type                         │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────┘
  Ready.
 

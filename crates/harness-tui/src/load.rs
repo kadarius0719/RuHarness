@@ -25,6 +25,9 @@ pub struct Read {
     /// The target's effective migrate model (`[llm.migrate]` over `[llm]`),
     /// named in the model acts' dialogs — read here, never on the UI thread.
     pub migrate_model: String,
+    /// A migration's model turns at most: the translate turn and its
+    /// repairs (the chat's grant says it, docs/CHAT-PANE-DESIGN.md §3.4).
+    pub migrate_turns: u32,
 }
 
 /// Read the target at `target`: the preflight, then the snapshot, the walk
@@ -67,11 +70,18 @@ pub fn read(target: &Path) -> Result<Read, String> {
         .as_ref()
         .and_then(|m| m.model.clone())
         .unwrap_or_else(|| llm.model.clone());
+    // The translate turn and its repairs (the CLI's default: 3 repairs).
+    let migrate_turns = 1 + llm
+        .migrate
+        .as_ref()
+        .and_then(|m| m.max_repairs)
+        .unwrap_or(3);
     Ok(Read {
         snapshot,
         walk,
         holder,
         migrate_model,
+        migrate_turns,
     })
 }
 

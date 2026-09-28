@@ -518,3 +518,125 @@ fn ids_models_and_pages() {
     assert!(!last_page("not json", "k"));
     assert_eq!(short_attempt("a-939463cb78bc"), "a-939463cb…");
 }
+
+/// Review PRO-1: the quiet clock restarts when the last held request is
+/// answered — an act that ran for minutes never raises "nothing from the
+/// model".
+#[test]
+fn the_quiet_clock_restarts_after_a_held_act() {
+    let tmp = TmpDir::new("chat-quiet-act");
+    let mut lines = start_lines();
+    lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    let rec = synthetic(&tmp, &lines);
+    let mut c = chat(&tmp, &rec, "");
+    c.send("hi", None, Instant::now()).unwrap();
+    pump_until(&mut c, |c, _| c.saw_init);
+    // A held act; its line long ago.
+    c.held.insert("act".into());
+    c.last_out = Instant::now() - QUIET * 3;
+    assert!(c.deny("act", "the outcome"));
+    c.pump(Instant::now());
+    assert!(!text(&mut c).contains("nothing from the model"));
+    end(&mut c);
+}
+
+/// Review PRO-2: a Stop ends with its turn's result even when a message is
+/// queued behind it — the next turn can be stopped again, and its marker is
+/// the runtime's own only after a Stop of its own.
+#[test]
+fn a_stop_ends_with_its_result_whatever_is_queued() {
+    let tmp = TmpDir::new("chat-queued");
+    let mut lines = start_lines();
+    lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    lines.push(
+        serde_json::json!({"dir": "in", "msg": {"type": "control_request",
+        "request_id": "i1", "request": {"subtype": "interrupt"}}}),
+    );
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "user", "message": {"role": "user",
+        "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}}),
+    );
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "result", "subtype":
+        "error_during_execution", "is_error": true, "terminal_reason": "aborted_streaming",
+        "queued_turn_count": 1}}),
+    );
+    lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    let rec = synthetic(&tmp, &lines);
+    let mut c = chat(&tmp, &rec, "");
+    c.send("hi", None, Instant::now()).unwrap();
+    pump_until(&mut c, |c, _| c.saw_init);
+    assert!(c.stop());
+    pump_until(&mut c, |c, _| !c.stopping());
+    assert!(c.turn, "the queued turn runs");
+    assert!(
+        text(&mut c).lines().any(|l| l.trim() == "stopped"),
+        "the marker's own line"
+    );
+    assert!(c.stop(), "the next turn can be stopped");
+    end(&mut c);
+}
+
+/// Review T4 (PRO): New chat while the older chat is still ending kills it
+/// at once — a runtime that ignores both stdin's EOF and TERM included.
+#[test]
+fn new_chat_kills_a_chat_still_ending() {
+    let tmp = TmpDir::new("chat-new-kill");
+    let rec = synthetic(&tmp, &start_lines()[..2]);
+    let mut c = chat(&tmp, &rec, "trap '' TERM");
+    std::fs::write(tmp.0.join("hold"), "").unwrap();
+    // The fake holds on after its recording: it ignores EOF and TERM.
+    let claude = tmp.0.join("claude");
+    let text = std::fs::read_to_string(&claude).unwrap();
+    std::fs::write(
+        &claude,
+        text.replace("exec /bin/sh", "REPLAY_HOLD=1 exec /bin/sh"),
+    )
+    .unwrap();
+    c.send("one", None, Instant::now()).unwrap();
+    let first = c.live.as_ref().unwrap().pid;
+    std::thread::sleep(Duration::from_millis(300));
+    c.new_chat(Instant::now());
+    assert!(!c.ending.is_empty());
+    c.send("two", None, Instant::now()).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    c.new_chat(Instant::now());
+    // The first was killed by the second New chat, long before its own
+    // TERM (2 s, ignored) and KILL (3 s).
+    assert!(
+        runtime::pid_gone(first) || runtime::leader_exited(first),
+        "the first still runs"
+    );
+    end(&mut c);
+}
+
+/// Review PRO-14: a message typed while a turn streams is queued as a new
+/// turn (Claude Code 2.1.274, recorded): its echo is the cockpit's own —
+/// never a foreign message — and both turns end.
+#[test]
+fn a_message_typed_mid_turn_is_its_own_next_turn() {
+    let tmp = TmpDir::new("chat-fold");
+    let mut c = chat(&tmp, &fixtures().join("fold.jsonl"), "");
+    c.send("Write three short paragraphs.", None, Instant::now())
+        .unwrap();
+    // The fake waits for the second message once the first turn streams.
+    pump_until(&mut c, |c, _| c.transcript.cells.len() > 3);
+    c.send("Also end with a one-line summary.", None, Instant::now())
+        .unwrap();
+    let mut results = 0;
+    let ev = pump_until(&mut c, |c, _| {
+        results = c
+            .transcript
+            .cells
+            .iter()
+            .filter(|x| x.text.contains("of plan usage"))
+            .count();
+        results == 2 && !c.turn
+    });
+    assert!(
+        !ev.iter().any(|e| matches!(e, Event::Foreign { .. })),
+        "{ev:?}"
+    );
+    assert!(!text(&mut c).contains("not delivered"));
+    end(&mut c);
+}

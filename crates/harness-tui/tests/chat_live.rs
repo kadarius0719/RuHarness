@@ -61,6 +61,94 @@ impl Drop for Live {
     }
 }
 
+/// What a terminal would show after `bytes`: a small VT interpreter for the
+/// sequences the cockpit's backend writes (cursor moves, erases, text; the
+/// colours and modes are ignored), so a test reads the SCREEN — ratatui
+/// redraws only the cells that changed, so the byte stream alone does not
+/// hold the text a user sees.
+fn rendered(bytes: &str, rows: usize, cols: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    let mut grid = vec![vec![' '; cols]; rows];
+    let (mut r, mut c) = (0usize, 0usize);
+    let mut chars = bytes.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\u{1b}' => match chars.peek() {
+                Some('[') => {
+                    chars.next();
+                    let mut params = String::new();
+                    let mut fin = ' ';
+                    for p in chars.by_ref() {
+                        if p.is_ascii_alphabetic() || p == '~' || p == '@' {
+                            fin = p;
+                            break;
+                        }
+                        params.push(p);
+                    }
+                    let nums: Vec<usize> = params
+                        .trim_start_matches('?')
+                        .split(';')
+                        .map(|n| n.parse().unwrap_or(0))
+                        .collect();
+                    let n =
+                        |i: usize, d: usize| nums.get(i).copied().filter(|v| *v > 0).unwrap_or(d);
+                    match fin {
+                        'H' | 'f' => {
+                            r = n(0, 1).saturating_sub(1).min(rows - 1);
+                            c = n(1, 1).saturating_sub(1).min(cols - 1);
+                        }
+                        'A' => r = r.saturating_sub(n(0, 1)),
+                        'B' => r = (r + n(0, 1)).min(rows - 1),
+                        'C' => c = (c + n(0, 1)).min(cols - 1),
+                        'D' => c = c.saturating_sub(n(0, 1)),
+                        'G' => c = n(0, 1).saturating_sub(1).min(cols - 1),
+                        'J' if nums.first() == Some(&2) || nums.first() == Some(&3) => {
+                            grid = vec![vec![' '; cols]; rows];
+                        }
+                        'J' => {
+                            for cell in grid[r].iter_mut().skip(c) {
+                                *cell = ' ';
+                            }
+                            for row in grid.iter_mut().skip(r + 1) {
+                                *row = vec![' '; cols];
+                            }
+                        }
+                        'K' => {
+                            for cell in grid[r].iter_mut().skip(c) {
+                                *cell = ' ';
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            },
+            '\r' => c = 0,
+            '\n' => r = (r + 1).min(rows - 1),
+            ch if ch.is_control() => {}
+            ch => {
+                let w = ch.width().unwrap_or(0);
+                if w == 0 {
+                    continue;
+                }
+                if c < cols {
+                    grid[r][c] = ch;
+                    if w == 2 && c + 1 < cols {
+                        grid[r][c + 1] = ' ';
+                    }
+                }
+                c = (c + w).min(cols);
+            }
+        }
+    }
+    grid.into_iter()
+        .map(|row| row.into_iter().collect())
+        .collect()
+}
+
 impl Live {
     fn start(tag: &str, extra_args: &str) -> Live {
         let tmp = std::env::temp_dir().join(format!("hl-{tag}-{}", std::process::id()));
@@ -178,6 +266,9 @@ impl Live {
         }
     }
 
+    /// What was written, escapes and whitespace removed — ratatui redraws
+    /// only the cells that changed, so this may miss a letter already on
+    /// screen: [`Self::screen`] reads the rendered screen too (review PRO-7).
     fn squeezed(&self) -> String {
         let raw = self.screen.lock().unwrap().clone();
         let mut plain = String::new();
@@ -194,10 +285,25 @@ impl Live {
         plain
     }
 
+    /// The screen as a terminal shows it now, whitespace removed.
+    fn screen(&self) -> String {
+        rendered(&self.screen.lock().unwrap(), 45, 150)
+            .concat()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
+    /// On the screen now, or ever written whole.
+    fn shows(&self, needle: &str) -> bool {
+        let needle: String = needle.chars().filter(|c| !c.is_whitespace()).collect();
+        self.screen().contains(&needle) || self.squeezed().contains(&needle)
+    }
+
     fn wait(&self, what: &str, needle: &str, secs: u64) {
         let needle: String = needle.chars().filter(|c| !c.is_whitespace()).collect();
         let deadline = Instant::now() + Duration::from_secs(secs);
-        while !self.squeezed().contains(&needle) {
+        while !self.shows(&needle) {
             if Instant::now() >= deadline {
                 let s = self.squeezed();
                 let tail: String = s
@@ -353,4 +459,102 @@ fn an_unknown_chat_model_is_said_in_words() {
     l.type_text("hi");
     l.press(b"\r");
     l.wait("the words", "unknown model no-such-model-xyz", 90);
+}
+
+/// A harness server that fails to start ends the chat, in words (§1.2).
+#[test]
+#[ignore = "live: RUHARNESS_LIVE_CHAT=1"]
+fn a_failed_harness_server_ends_the_chat() {
+    if !live() {
+        return;
+    }
+    let mut l = Live::start("failed", "--chat-model haiku --harness-mcp /usr/bin/false");
+    l.wait("the cockpit", "Files", 30);
+    l.press(b"\t");
+    l.press(b"\t");
+    l.type_text("hi");
+    l.press(b"\r");
+    l.wait("the words", "the harness tools did not start", 90);
+}
+
+/// TERM to the cockpit mid-turn: the runtime and harness-mcp gone, the
+/// chat's directory removed (§1.4, §9); New chat before it ends the older
+/// chat.
+#[test]
+#[ignore = "live: RUHARNESS_LIVE_CHAT=1"]
+fn new_chat_then_term_mid_turn() {
+    if !live() {
+        return;
+    }
+    let mut l = Live::start("term", "--chat-model haiku");
+    l.wait("the cockpit", "Files", 30);
+    l.press(b"\t");
+    l.press(b"\t");
+    l.type_text("Say hello in one short line.");
+    l.press(b"\r");
+    l.wait("the reply's end", "of plan usage", 120);
+    let first = l.runtime_pid().expect("the first runtime");
+    l.press(b"\x0e");
+    l.wait("the New chat dialog", "Start a new chat?", 10);
+    l.confirm();
+    std::thread::sleep(Duration::from_secs(4));
+    let alive = |pid: u32| {
+        Command::new("/bin/kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    assert!(!alive(first), "the first chat ended after New chat");
+    l.type_text("Write eight paragraphs about the history of compilers.");
+    l.press(b"\r");
+    l.wait("a second runtime", "thinking", 60);
+    let second = (0..100)
+        .find_map(|_| {
+            std::thread::sleep(Duration::from_millis(100));
+            l.runtime_pid().filter(|p| *p != first)
+        })
+        .expect("the second runtime");
+    let mcp: Vec<u32> = {
+        let out = Command::new("pgrep")
+            .args(["-P", &second.to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|x| x.trim().parse().ok())
+            .collect()
+    };
+    let socket_dir = {
+        let argv = std::fs::read_to_string(l.tmp.join("runtime-argv")).unwrap();
+        let args: Vec<&str> = argv.lines().collect();
+        let i = args
+            .iter()
+            .position(|a| *a == "--messaging-socket-path")
+            .unwrap();
+        PathBuf::from(args[i + 1]).parent().unwrap().to_path_buf()
+    };
+    std::thread::sleep(Duration::from_secs(3));
+    let tui = {
+        let out = Command::new("pgrep")
+            .args(["-P", &l.script.id().to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|x| x.trim().parse::<u32>().ok())
+            .unwrap()
+    };
+    assert!(Command::new("/bin/kill")
+        .args(["-TERM", &tui.to_string()])
+        .status()
+        .unwrap()
+        .success());
+    let _ = l.script.wait();
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(!alive(second), "the runtime outlived the cockpit");
+    for p in &mcp {
+        assert!(!alive(*p), "harness-mcp {p} outlived the cockpit");
+    }
+    assert!(!socket_dir.exists(), "the chat's directory is removed");
 }

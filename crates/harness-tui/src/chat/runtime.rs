@@ -461,14 +461,33 @@ fn lock(procs: &Procs) -> std::sync::MutexGuard<'_, Vec<Proc>> {
     procs.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// `/bin/kill -<sig> -- -<pid>`: the group of an unreaped leader.
-fn kill_group(pid: u32, sig: &str) {
-    let _ = Command::new("/bin/kill")
+/// `/bin/kill -<sig> -- -<pid>`: the group of an unreaped leader. `true`
+/// when the signal was sent (a group already empty counts: nothing left
+/// to end).
+fn kill_group(pid: u32, sig: &str) -> bool {
+    Command::new("/bin/kill")
         .args([format!("-{sig}"), "--".into(), format!("-{pid}")])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+        .is_ok()
+}
+
+/// Whether the leader `pid` has exited (a zombie, or gone): `ps` says so.
+/// A failed probe says nothing (alive).
+pub fn leader_exited(pid: u32) -> bool {
+    let Ok(out) = Command::new("/bin/ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    out.status.success() && stat.starts_with('Z')
 }
 
 /// Signal the group of chat `gen` with `sig` (`TERM`, `KILL`) — it is in
@@ -476,8 +495,8 @@ fn kill_group(pid: u32, sig: &str) {
 pub fn signal(procs: &Procs, gen: u64, sig: &str) {
     let mut list = lock(procs);
     if let Some(p) = list.iter_mut().find(|p| p.gen == gen) {
-        kill_group(p.pid, sig);
-        if sig == "KILL" {
+        // `killed` only once the KILL was really sent (review PRO-10).
+        if kill_group(p.pid, sig) && sig == "KILL" {
             p.killed = true;
         }
     }
@@ -491,7 +510,9 @@ pub fn reap(procs: &Procs, gen: u64) -> bool {
         return true;
     };
     if !list[i].killed {
-        kill_group(list[i].pid, "KILL");
+        if !kill_group(list[i].pid, "KILL") {
+            return false;
+        }
         list[i].killed = true;
     }
     match list[i].child.try_wait() {
@@ -517,8 +538,7 @@ pub fn term_all(procs: &Procs) {
 pub fn kill_all(procs: &Procs) {
     let mut list = lock(procs);
     for p in list.iter_mut() {
-        kill_group(p.pid, "KILL");
-        p.killed = true;
+        p.killed = kill_group(p.pid, "KILL");
     }
     let deadline = Instant::now() + Duration::from_millis(200);
     while !list.is_empty() {
@@ -567,12 +587,18 @@ pub fn try_kill_all(procs: &Procs) -> bool {
         Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
         Err(std::sync::TryLockError::WouldBlock) => return false,
     };
-    for p in list.iter_mut() {
-        kill_group(p.pid, "KILL");
-        p.killed = true;
-        let _ = p.child.try_wait();
-        let _ = std::fs::remove_dir_all(&p.dir);
-    }
+    // What is reaped here leaves the registry: a later end never signals
+    // a reaped leader's group (review PRO-8).
+    list.retain_mut(|p| {
+        p.killed = kill_group(p.pid, "KILL");
+        match p.child.try_wait() {
+            Ok(None) => true,
+            _ => {
+                let _ = std::fs::remove_dir_all(&p.dir);
+                false
+            }
+        }
+    });
     true
 }
 
@@ -1213,6 +1239,21 @@ mod tests {
         for p in pids {
             wait_until("gone", || !alive(p));
         }
+    }
+
+    /// Review PRO-8, PRO-11: what the panic path reaps leaves the registry;
+    /// a leader that exited is seen as such while it is a zombie.
+    #[test]
+    fn a_reaped_entry_leaves_and_a_zombie_leader_is_seen() {
+        let tmp = crate::testutil::TmpDir::new("chat-zombie");
+        let procs = Procs::default();
+        let env = vars(&[("PATH", "/usr/bin:/bin")]);
+        let rt =
+            Runtime::spawn(1, sh("exit 0"), create_dir(&tmp.0).unwrap(), &env, &procs).unwrap();
+        wait_until("a zombie", || leader_exited(rt.pid));
+        assert!(!leader_exited(std::process::id()));
+        assert!(try_kill_all(&procs));
+        assert!(lock(&procs).is_empty(), "reaped entries leave the registry");
     }
 
     /// A runtime that stops reading its stdin never blocks the sender.

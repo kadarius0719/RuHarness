@@ -36,6 +36,9 @@ pub const BRIEF: &str = include_str!("../chat_brief.md");
 pub const START_WAIT: Duration = Duration::from_secs(30);
 /// A turn that owes output and is silent this long: said, Stop offered.
 pub const QUIET: Duration = Duration::from_secs(60);
+/// How often a live runtime's leader is looked at (a death EOF may not
+/// report).
+const LEADER_PROBE: Duration = Duration::from_secs(2);
 /// The Claude Code release the protocol was verified with.
 pub const TESTED_VERSION: &str = "2.1.274";
 /// The tools harness-mcp's cockpit mode offers, by their runtime names.
@@ -184,6 +187,11 @@ pub struct Chat {
     unparsed_said: bool,
     serial: u64,
     last_error: Option<String>,
+    probed: Instant,
+    /// Why the last chat ended, for the title: by itself, or asked.
+    pub ended_by_itself: bool,
+    /// The last turn ended by a Stop (the title says "stopped").
+    pub stopped_last: bool,
 }
 
 /// A fresh UUID (version 4) from the system's randomness.
@@ -284,6 +292,9 @@ impl Chat {
             unparsed_said: false,
             serial: 0,
             last_error: None,
+            probed: Instant::now(),
+            ended_by_itself: false,
+            stopped_last: false,
         }
     }
 
@@ -418,6 +429,7 @@ impl Chat {
             self.turn = true;
             self.turn_started = Some(now);
         }
+        self.stopped_last = false;
         self.last_out = now;
         self.quiet_warned = false;
         Ok(())
@@ -430,9 +442,20 @@ impl Chat {
         if !self.held.remove(request_id) {
             return false;
         }
+        self.released();
         self.live
             .as_ref()
             .is_some_and(|rt| rt.send(stream::deny(request_id, message)))
+    }
+
+    /// The last held request was answered or withdrawn: the model owes
+    /// output from now — the quiet clock starts here, not at its last line
+    /// before the act (review PRO-1).
+    fn released(&mut self) {
+        if self.held.is_empty() {
+            self.last_out = Instant::now();
+            self.quiet_warned = false;
+        }
     }
 
     /// Stop the turn (`interrupt`).
@@ -459,10 +482,10 @@ impl Chat {
     /// for the app.
     pub fn end(&mut self, now: Instant, term: Duration, kill: Duration) -> Option<Event> {
         let rt = self.live.take()?;
-        for e in &mut self.ending {
-            e.kill_now();
-        }
-        self.ending.clear();
+        // An older chat still ending is killed first; one that could not be
+        // reaped in time stays to be stepped (review PRO-9).
+        self.ending.retain_mut(|e| !e.kill_now());
+        self.ended_by_itself = false;
         if self.turn {
             let id = self.next_id("interrupt");
             rt.send(stream::interrupt(&id));
@@ -495,7 +518,17 @@ impl Chat {
             return events;
         };
         let msgs = rt.drain();
-        let eof = rt.eof();
+        // A leader that died while something of its group still holds its
+        // pipes never brings EOF: every 2 s its state is looked at — it is
+        // a zombie until reaped, so its group is still ours to end
+        // (review PRO-11).
+        let gone = if now.saturating_duration_since(self.probed) >= LEADER_PROBE {
+            self.probed = now;
+            runtime::leader_exited(rt.pid)
+        } else {
+            false
+        };
+        let eof = rt.eof() || gone;
         for msg in msgs {
             match msg {
                 Out::Line(line) => {
@@ -543,6 +576,7 @@ impl Chat {
             if let Some(e) = self.end(now, Duration::ZERO, Duration::from_millis(300)) {
                 events.push(e);
             }
+            self.ended_by_itself = true;
             return events;
         }
         // The watchdogs.
@@ -791,6 +825,7 @@ impl Chat {
             }
             In::Cancel { request_id } => {
                 if self.held.remove(&request_id) {
+                    self.released();
                     events.push(Event::Withdrawn { gen, request_id });
                 }
             }
@@ -815,18 +850,23 @@ impl Chat {
                 _ => {}
             },
             In::Result(r) => {
+                // A turn's end ends its Stop, whatever is queued behind it:
+                // the next turn is a new one (review PRO-2).
+                let stopped = std::mem::take(&mut self.stopping)
+                    || r.terminal_reason
+                        .as_deref()
+                        .is_some_and(|t| t.starts_with("aborted"));
                 if r.queued_turn_count > 0 {
+                    if stopped {
+                        self.say(Tone::Dim, "stopped");
+                    }
                     return;
                 }
                 if let Some(m) = self.cur_msg.take() {
                     self.transcript.prune_empty(&m);
                 }
                 self.turn = false;
-                let stopped = self.stopping
-                    || r.terminal_reason
-                        .as_deref()
-                        .is_some_and(|t| t.starts_with("aborted"));
-                self.stopping = false;
+                self.stopped_last = stopped;
                 let spent = r.total_cost_usd.map(|c| {
                     let d = (c - self.cost).max(0.0);
                     self.cost = c;

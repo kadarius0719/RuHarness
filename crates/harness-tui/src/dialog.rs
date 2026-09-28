@@ -314,10 +314,14 @@ impl Dialog {
                     return Outcome::Stay;
                 }
             }
-            let moves = matches!(
-                key.code,
-                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter
-            );
+            // Tab is how a typist leaves the chat: it never moves a chat
+            // dialog's focus — only ← and → do (review SAF-10).
+            if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+                self.input(now);
+                self.use_buttons = true;
+                return Outcome::Stay;
+            }
+            let moves = matches!(key.code, KeyCode::Left | KeyCode::Right | KeyCode::Enter);
             if burst && moves {
                 self.input(now);
                 self.too_soon = true;
@@ -373,9 +377,9 @@ impl Dialog {
             // A click refused while it settles (review SAFE-B-2).
             "Too soon — click again".into()
         } else if self.armed && self.chat_rules && self.use_buttons {
-            "use the buttons: → then Enter, or click".into()
+            "use the buttons: → then Enter".into()
         } else if self.armed && self.chat_rules {
-            "ready: → then Enter, or click".into()
+            "ready: → then Enter".into()
         } else if self.armed {
             let letter = self.buttons.get(1).map_or("y", |b| b.key);
             format!("ready: → then Enter, or {letter}")
@@ -741,7 +745,13 @@ mod tests {
                 );
             }
             assert!(d.use_buttons);
-            assert_eq!(d.state_text(), "use the buttons: → then Enter, or click");
+            assert_eq!(d.state_text(), "use the buttons: → then Enter");
+            // Tab never moves the focus under the rules.
+            assert_eq!(
+                d.on_key_in(press(KeyCode::Tab), t0 + ms(550), false),
+                Outcome::Stay
+            );
+            assert_eq!(d.focus, 0);
             // A move and Enter in a burst: dropped; alone: they act.
             assert_eq!(
                 d.on_key_in(press(KeyCode::Right), t0 + ms(600), true),
@@ -785,7 +795,7 @@ mod tests {
         let mut d = drawn(Kind::Act, t0);
         d.chat_rules = true;
         assert!(d.arm(t0 + ms(400), false));
-        assert_eq!(d.state_text(), "ready: → then Enter, or click");
+        assert_eq!(d.state_text(), "ready: → then Enter");
     }
 
     #[test]

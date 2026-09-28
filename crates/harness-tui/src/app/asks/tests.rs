@@ -55,6 +55,13 @@ fn denial(log: &Path, request_id: &str) -> Option<String> {
     })
 }
 
+/// No denial of `request_id` — after the writer and `cat` had time to pass
+/// one on (an absence checked at once would pass for the wrong reason).
+fn no_denial(log: &Path, request_id: &str) -> bool {
+    std::thread::sleep(Duration::from_millis(200));
+    denial(log, request_id).is_none()
+}
+
 fn wait_denial(log: &Path, request_id: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -178,7 +185,7 @@ fn each_tool_maps_onto_its_act_and_argv() {
         matches!(a.mode, Mode::Normal),
         "a request never opens a dialog by itself"
     );
-    assert!(denial(&log, "r1").is_none(), "held");
+    assert!(no_denial(&log, "r1"), "held");
     // A unit that is not planned, tried or failing is refused, fenced.
     ask(&mut a, "r2", "harness_migrate", json!({"unit": "u-nope"}));
     let m = wait_denial(&log, "r2");
@@ -283,7 +290,7 @@ fn the_request_line_settles_sends_drafts_reviews_and_declines() {
     assert!(matches!(a.mode, Mode::Normal));
     assert_eq!(said(&a), "a request just arrived — look first");
     press(&mut a, KeyCode::Esc);
-    assert!(denial(&log, "r1").is_none());
+    assert!(no_denial(&log, "r1"));
     settle(&mut a);
     // A draft goes out whatever waits.
     for c in "wait".chars() {
@@ -314,7 +321,7 @@ fn the_request_line_settles_sends_drafts_reviews_and_declines() {
             assert!(c
                 .body
                 .iter()
-                .any(|l| l.contains("The chat answers its model turns here")));
+                .any(|l| l.contains("The chat answers its model turns (up to 4) here")));
         }
         other => panic!("no dialog: {other:?}"),
     }
@@ -373,7 +380,7 @@ fn the_outcome_waits_for_the_read_after_the_reap() {
         "the permission granted"
     );
     let _ = a.on_child_exit(ExitStatus::from_raw(1 << 8));
-    assert!(denial(&log, "r1").is_none(), "not before the read");
+    assert!(no_denial(&log, "r1"), "not before the read");
     assert!(a.load_now(), "the read after the reap");
     let m = wait_denial(&log, "r1");
     assert!(
@@ -618,7 +625,7 @@ fn the_continuation_permission_runs_waits_holds_and_ends() {
     let r = a.asks.shown().expect("held into a request").clone();
     assert!(r.continue_asks);
     assert!(!a.asks.settled(Instant::now()), "it settles anew");
-    assert!(denial(&log, "p2").is_none(), "the chat hears nothing yet");
+    assert!(no_denial(&log, "p2"), "the chat hears nothing yet");
     // Declining a Continue ends it too (already gone); each other cause:
     for cause in ["stop", "withdrawn", "foreign", "ended", "new"] {
         permit(&mut a);
@@ -663,6 +670,8 @@ fn the_continuation_permission_runs_waits_holds_and_ends() {
             answer: None,
             key: None,
             permitted: false,
+            attempt: None,
+            epoch: 0,
         }),
         Some(1),
         "u-lib".into(),
@@ -847,4 +856,604 @@ fn a_failed_start_answers_the_chat() {
     a.on_spawn_failed(p, "no such file");
     assert!(wait_denial(&log, "r1").contains("could not be started: no such file"));
     assert!(a.try_again.is_none());
+}
+
+/// Confirm the shown request's dialog: armed, then a move and Enter.
+fn run_shown(a: &mut App) -> Pending {
+    settle(a);
+    press(a, KeyCode::Enter);
+    arm(a);
+    press(a, KeyCode::Right);
+    match press(a, KeyCode::Enter) {
+        Command::Spawn(p) => p,
+        other => panic!("Run spawns: {other:?} ({})", said(a)),
+    }
+}
+
+fn awaiting_event(a: &mut App, attempt: &str) {
+    a.on_child_msg(ChildMsg::Event(crate::events::parse_line(&format!(
+        r#"{{"k":"awaiting","attempt":"{attempt}","path":"/t/traces/chat/0123abcd.response.json","resume":"r","request_key":"0123abcd"}}"#
+    ))));
+}
+
+/// Review SAF-1: a Stop, a withdrawal or a foreign message while the act
+/// that grants the continuation permission runs — the permission is never
+/// granted by its `awaiting`; with none of them it is.
+#[test]
+fn a_permission_ended_during_its_grant_act_is_never_granted() {
+    for cause in ["none", "stop", "withdrawn", "foreign", "hold-elsewhere"] {
+        let tmp = TmpDir::new(&format!("asks-epoch-{cause}"));
+        let (mut a, _log) = chat_app(Some("targets/zopfli"), &format!("asks-epoch-{cause}"), &tmp);
+        ask(&mut a, "r1", "harness_migrate", json!({"unit": "u-cache"}));
+        let p = run_shown(&mut a);
+        a.on_spawned(&p);
+        let gen = a.chat.gen;
+        match cause {
+            "stop" => {
+                a.chat.turn = true;
+                a.chat_stop();
+            }
+            "withdrawn" => {
+                a.chat.held.remove("r1");
+                a.on_chat_event(
+                    ChatEvent::Withdrawn {
+                        gen,
+                        request_id: "r1".into(),
+                    },
+                    Instant::now(),
+                );
+            }
+            "foreign" => a.on_chat_event(ChatEvent::Foreign { gen }, Instant::now()),
+            "hold-elsewhere" => a.asks.end_permit("a-ffffffffffff"),
+            _ => {}
+        }
+        awaiting_event(&mut a, "a-0123456789ab");
+        assert_eq!(
+            a.asks.permits.contains_key("a-0123456789ab"),
+            cause == "none",
+            "{cause}"
+        );
+    }
+}
+
+/// Review SAF-2: an answer line longer than the display's 4 KiB cut is
+/// split across rows, never cut — every byte is on screen.
+#[test]
+fn a_long_answer_line_is_shown_whole() {
+    let line = format!("pub fn f() {{}}{}HIDDEN();", " ".repeat(5000));
+    let tag = ChatTag {
+        gen: 1,
+        request_id: "r".into(),
+        tool: "harness_answer".into(),
+        model: MODEL.into(),
+        grant: false,
+        answer: Some(format!("{line}\nsecond")),
+        key: Some("0123abcd".into()),
+        permitted: false,
+        attempt: Some(RED.into()),
+        epoch: 0,
+    };
+    let mut body = Vec::new();
+    chat_words(&tag, &mut body, 4);
+    let start = body
+        .iter()
+        .position(|l| l.starts_with("The chat's answer"))
+        .unwrap()
+        + 1;
+    let end = body
+        .iter()
+        .position(|l| l == "(end of the answer)")
+        .unwrap();
+    let shown: String = body[start..end - 1]
+        .iter()
+        .map(|l| l.strip_prefix("  ").unwrap().trim_end_matches('↩'))
+        .collect();
+    assert_eq!(shown, line);
+    assert!(body[start..end]
+        .iter()
+        .all(|l| l.len() < crate::display::MAX_LINE_BYTES));
+    assert_eq!(body[end - 1], "  second");
+}
+
+/// Review USE-1: the details opened from the chat never pass a letter to
+/// the panes' accelerators.
+#[test]
+fn the_details_over_the_chat_take_no_accelerator() {
+    let tmp = TmpDir::new("asks-details");
+    let (mut a, _log) = chat_app(None, "asks-details", &tmp);
+    a.select(Selection::Unit("u-lib".into()));
+    a.mode = Mode::Details { scroll: 0 };
+    for c in ['e', 'm', 'q', 'x', 't', 'r'] {
+        assert_eq!(press(&mut a, KeyCode::Char(c)), Command::None, "{c}");
+        assert!(matches!(a.mode, Mode::Details { .. }), "{c}: {:?}", a.mode);
+    }
+    assert_eq!(press(&mut a, KeyCode::Enter), Command::None);
+    assert!(matches!(a.mode, Mode::Details { .. }));
+    assert!(said(&a).contains("Esc closes"));
+    press(&mut a, KeyCode::Esc);
+    assert!(matches!(a.mode, Mode::Normal));
+    assert_eq!(a.focus, Focus::Chat);
+}
+
+/// Review SAF-4 / USE-2: a dialog opened from the chat answers its own hint
+/// bar's clicks — "Esc cancel" closes it and never declines the chat's
+/// request underneath.
+#[test]
+fn a_dialogs_hints_are_its_own_under_the_chat() {
+    let tmp = TmpDir::new("asks-hints");
+    let (mut a, log) = chat_app(Some("targets/zopfli"), "asks-hints", &tmp);
+    ask(&mut a, "r1", "harness_migrate", json!({"unit": "u-cache"}));
+    settle(&mut a);
+    a.open_dialog(Purpose::Cancel);
+    a.mouse = true;
+    a.layout.frame = Rect::new(0, 0, 120, 40);
+    a.hits = vec![(Rect::new(0, 39, 12, 1), Hit::Hint("Esc"))];
+    let at = |kind| MouseEvent {
+        kind,
+        column: 3,
+        row: 39,
+        modifiers: KeyModifiers::NONE,
+    };
+    a.on_mouse(
+        at(MouseEventKind::Down(MouseButton::Left)),
+        Instant::now(),
+        Duration::ZERO,
+    );
+    a.on_mouse(
+        at(MouseEventKind::Up(MouseButton::Left)),
+        Instant::now(),
+        Duration::ZERO,
+    );
+    assert!(matches!(a.mode, Mode::Normal), "the dialog took its Esc");
+    assert!(no_denial(&log, "r1"), "the request underneath stays");
+    assert!(a.asks.shown().is_some());
+}
+
+/// Review SAF-3: the Cancel dialog of a command that ended closes — its
+/// "Stop it" never lands on what runs next.
+#[test]
+fn the_cancel_dialog_closes_when_its_command_ends() {
+    let mut a = app("asks-cancel");
+    a.running = true;
+    a.open_dialog(Purpose::Cancel);
+    let _ = a.on_child_exit(ExitStatus::from_raw(0));
+    assert!(matches!(a.mode, Mode::Normal));
+    assert!(said(&a).contains("nothing to stop"));
+}
+
+/// Review USE-3 / PRO-5: a request that arrives while a command runs waits
+/// (its Review later), never refused.
+#[test]
+fn a_request_waits_for_the_running_command() {
+    let tmp = TmpDir::new("asks-wait");
+    let (mut a, log) = chat_app(None, "asks-wait", &tmp);
+    chat_record(&mut a, RED, "red");
+    a.running = true;
+    ask(
+        &mut a,
+        "r1",
+        "harness_steer",
+        json!({"unit": "u-lib", "from": RED, "steer": "x"}),
+    );
+    ask(
+        &mut a,
+        "r2",
+        "harness_retry",
+        json!({"unit": "u-lib", "attempt": RED}),
+    );
+    assert!(no_denial(&log, "r1") && denial(&log, "r2").is_none());
+    assert_eq!(a.asks.requests.len(), 2);
+    settle(&mut a);
+    press(&mut a, KeyCode::Enter);
+    assert!(
+        matches!(a.mode, Mode::Normal),
+        "Review waits for the command"
+    );
+    a.running = false;
+    press(&mut a, KeyCode::Enter);
+    assert!(matches!(a.mode, Mode::Dialog(_)));
+}
+
+/// Review PRO-3, PRO-4, SAF-6, SAF-7: a second permitted Continue asks
+/// instead of replacing the first; a waiting Continue waits behind a shown
+/// request and behind an owed outcome, and a paste holds it a second.
+#[test]
+fn a_waiting_continue_is_never_dropped_or_run_unseen() {
+    let tmp = TmpDir::new("asks-waiting2");
+    let (mut a, log) = chat_app(None, "asks-waiting2", &tmp);
+    chat_record(&mut a, RED, "in-progress");
+    let gen = a.chat.gen;
+    a.asks.table.insert(
+        RED.into(),
+        HandOff {
+            key: "0123abcd".into(),
+            gen,
+            act: "Migrate".into(),
+            turn: Some(1),
+            unit: "u-lib".into(),
+        },
+    );
+    a.chat
+        .keys_read
+        .insert((gen, RED.into(), "0123abcd".into()));
+    a.asks.permits.insert(
+        RED.into(),
+        Permit {
+            gen,
+            model: MODEL.into(),
+        },
+    );
+    let answer = json!({"unit": "u-lib", "attempt": RED, "request_key": "0123abcd", "text": "t"});
+    ask(&mut a, "c1", "harness_answer", answer.clone());
+    ask(&mut a, "c2", "harness_answer", answer);
+    assert!(a.asks.waiting.is_some());
+    assert!(
+        a.asks.shown().is_some_and(|r| r.continue_asks),
+        "the second asks"
+    );
+    assert!(no_denial(&log, "c1") && denial(&log, "c2").is_none());
+    let quiet = Instant::now() + CONTINUE_QUIET + Duration::from_millis(10);
+    assert_eq!(a.chat_step(quiet), Command::None, "behind the request line");
+    assert!(a
+        .chat_waits_why(quiet)
+        .unwrap()
+        .contains("answer its request"));
+    a.asks.requests.clear();
+    a.asks.outcome.push(Owed {
+        tag: a
+            .asks
+            .waiting
+            .as_ref()
+            .unwrap()
+            .pending
+            .chat
+            .as_deref()
+            .unwrap()
+            .clone(),
+        label: "x".into(),
+        collect: Collected::default(),
+        exit: Some(0),
+        signal: None,
+        response: None,
+    });
+    assert_eq!(a.chat_step(quiet), Command::None, "behind an owed outcome");
+    a.asks.outcome.clear();
+    a.chat_paste("stop that", quiet - Duration::from_millis(200));
+    assert_eq!(a.chat_step(quiet), Command::None, "a paste is a press");
+    assert!(matches!(
+        a.chat_step(quiet + Duration::from_secs(1)),
+        Command::Spawn(_)
+    ));
+}
+
+/// Review PRO-4, PRO-6: every owed outcome is delivered after the read;
+/// one owed while a Stop is on its way goes with the next message.
+#[test]
+fn owed_outcomes_are_all_delivered_and_a_stop_keeps_them() {
+    let tmp = TmpDir::new("asks-owed");
+    let (mut a, log) = chat_app(Some("targets/zopfli"), "asks-owed", &tmp);
+    for rid in ["o1", "o2"] {
+        ask(&mut a, rid, "harness_migrate", json!({"unit": "u-cache"}));
+        let p = a.asks.requests.pop_front().unwrap().pending;
+        a.on_spawned(&p);
+        let _ = a.on_child_exit(ExitStatus::from_raw(0));
+    }
+    assert!(a.load_now());
+    wait_denial(&log, "o1");
+    wait_denial(&log, "o2");
+    // A Stop on its way: the outcome is kept for the next message.
+    ask(&mut a, "o3", "harness_migrate", json!({"unit": "u-cache"}));
+    let p = a.asks.requests.pop_front().unwrap().pending;
+    a.on_spawned(&p);
+    a.chat.turn = true;
+    a.chat_stop();
+    let _ = a.on_child_exit(ExitStatus::from_raw(0));
+    assert!(a.load_now());
+    assert!(no_denial(&log, "o3"));
+    assert_eq!(a.asks.unsent.len(), 1);
+}
+
+/// Review SAF-5, SAF-8, USE-6, USE-7, USE-13, USE-16.
+#[test]
+fn decline_provider_reason_hints_and_quit_rules() {
+    let tmp = TmpDir::new("asks-misc");
+    let (mut a, log) = chat_app(None, "asks-misc", &tmp);
+    chat_record(&mut a, RED, "in-progress");
+    let gen = a.chat.gen;
+    a.asks.table.insert(
+        RED.into(),
+        HandOff {
+            key: "0123abcd".into(),
+            gen,
+            act: "Migrate".into(),
+            turn: Some(1),
+            unit: "u-lib".into(),
+        },
+    );
+    a.chat
+        .keys_read
+        .insert((gen, RED.into(), "0123abcd".into()));
+    // A permit to another attempt must not be touched; this attempt's ends.
+    a.asks.permits.insert(
+        RED.into(),
+        Permit {
+            gen,
+            model: MODEL.into(),
+        },
+    );
+    a.asks.waiting = Some(Request {
+        pending: Pending {
+            act: Act::Continue,
+            argv: Vec::new(),
+            label: "l".into(),
+            unit: Some("u-lib".into()),
+            attempt: Some(RED.into()),
+            cleanup: None,
+            expect_attempt: None,
+            note: None,
+            shown_digest: None,
+            chat: None,
+        },
+        shown_at: None,
+        words: "w".into(),
+        continue_asks: false,
+    });
+    a.asks.waiting = None;
+    ask(
+        &mut a,
+        "d1",
+        "harness_answer",
+        json!({"unit": "u-lib", "attempt": RED, "request_key": "0123abcd", "text": "t"}),
+    );
+    // Permitted: it waits; hold it into a request, re-permit, decline it.
+    assert!(a.asks.waiting.is_some());
+    a.asks.waiting.take();
+    a.asks.permits.insert(
+        RED.into(),
+        Permit {
+            gen,
+            model: MODEL.into(),
+        },
+    );
+    a.config.allow_unsandboxed = true;
+    ask(
+        &mut a,
+        "d2",
+        "harness_answer",
+        json!({"unit": "u-lib", "attempt": RED, "request_key": "0123abcd", "text": "t"}),
+    );
+    a.config.allow_unsandboxed = false;
+    assert!(a.asks.shown().is_some_and(|r| r.continue_asks));
+    settle(&mut a);
+    press(&mut a, KeyCode::Esc);
+    assert!(wait_denial(&log, "d2").starts_with(DECLINED));
+    assert!(
+        !a.asks.permits.contains_key(RED),
+        "declining a Continue ends it (SAF-5)"
+    );
+    // The decline reason is the person's words, never fenced (USE-6).
+    ask(
+        &mut a,
+        "d3",
+        "harness_retry",
+        json!({"unit": "u-lib", "attempt": RED}),
+    );
+    let _ = denial(&log, "d3");
+    a.asks.requests.clear();
+    chat_record(&mut a, RED, "red");
+    ask(
+        &mut a,
+        "d4",
+        "harness_retry",
+        json!({"unit": "u-lib", "attempt": RED}),
+    );
+    settle(&mut a);
+    a.chat.input.insert("use u-cache instead");
+    a.chat_decline(Instant::now(), true);
+    let m = wait_denial(&log, "d4");
+    assert!(m.contains("who says: \"use u-cache instead\""), "{m}");
+    assert!(!m.contains("untrusted"), "{m}");
+    // The provider list binds external records too (SAF-8).
+    a.config.providers = vec!["local".into()];
+    ask(
+        &mut a,
+        "d5",
+        "harness_retry",
+        json!({"unit": "u-lib", "attempt": RED}),
+    );
+    assert!(wait_denial(&log, "d5").contains("not allowed"));
+    a.config.providers = vec!["external".into()];
+    // The "Ctrl-C clear" hint clears (USE-7); in the chat a quit is asked
+    // even with no conversation (USE-16).
+    a.chat.input.insert("draft");
+    a.chat.turn = false;
+    a.press_chat_hint("Ctrl-C", Instant::now());
+    assert!(a.chat.input.is_empty());
+    assert!(matches!(a.mode, Mode::Normal));
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    assert_eq!(a.on_key(ctrl_c, Instant::now()), Command::None);
+    assert!(matches!(&a.mode, Mode::Dialog(c) if c.purpose == Purpose::Quit));
+    a.mode = Mode::Normal;
+    // "Ask in chat…" opens the chat's column (USE-13).
+    a.focus = Focus::Files;
+    a.chat_column = false;
+    a.choose(&crate::menu::Item {
+        label: "Ask in chat…".into(),
+        action: crate::menu::Action::AskChat,
+        accel: None,
+        greyed: None,
+        model: true,
+        pending: None,
+    });
+    assert_eq!(a.focus, Focus::Chat);
+    assert!(a.chat_column);
+}
+
+/// The chat's keys by click (review USE T1): [New] asks first, [Review]
+/// opens the dialog under the chat rules, [Decline with my draft] gives the
+/// draft, [Hold] holds; a press held across a change in what the keys mean
+/// is dropped.
+#[test]
+fn the_chats_keys_by_click() {
+    let tmp = TmpDir::new("asks-clicks");
+    let (mut a, log) = chat_app(Some("targets/zopfli"), "asks-clicks", &tmp);
+    for c in "hi".chars() {
+        press(&mut a, KeyCode::Char(c));
+    }
+    press(&mut a, KeyCode::Enter);
+    a.press_chat("new", Instant::now());
+    assert!(
+        matches!(&a.mode, Mode::Dialog(c) if c.dialog.kind == Kind::NewChat),
+        "asked"
+    );
+    assert!(a.chat.alive());
+    a.mode = Mode::Normal;
+    ask(&mut a, "k1", "harness_migrate", json!({"unit": "u-cache"}));
+    settle(&mut a);
+    a.focus = Focus::Files;
+    a.press_chat("review", Instant::now());
+    assert!(
+        matches!(&a.mode, Mode::Dialog(c) if c.dialog.chat_rules),
+        "under the chat rules"
+    );
+    a.mode = Mode::Normal;
+    a.chat.input.insert("not this one");
+    a.press_chat("decline-draft", Instant::now());
+    assert!(wait_denial(&log, "k1").contains("not this one"));
+    // A held press dropped when the line's meaning changes.
+    ask(&mut a, "k2", "harness_migrate", json!({"unit": "u-cache"}));
+    settle(&mut a);
+    a.mouse = true;
+    a.layout.frame = Rect::new(0, 0, 120, 40);
+    a.hits = vec![(Rect::new(0, 30, 13, 1), Hit::Chat("decline"))];
+    let at = |kind| MouseEvent {
+        kind,
+        column: 2,
+        row: 30,
+        modifiers: KeyModifiers::NONE,
+    };
+    a.on_mouse(
+        at(MouseEventKind::Down(MouseButton::Left)),
+        Instant::now(),
+        Duration::ZERO,
+    );
+    a.asks.meaning += 1;
+    a.on_mouse(
+        at(MouseEventKind::Up(MouseButton::Left)),
+        Instant::now(),
+        Duration::ZERO,
+    );
+    assert!(no_denial(&log, "k2"), "the press was dropped");
+    a.on_mouse(
+        at(MouseEventKind::Down(MouseButton::Left)),
+        Instant::now(),
+        Duration::ZERO,
+    );
+    a.on_mouse(
+        at(MouseEventKind::Up(MouseButton::Left)),
+        Instant::now(),
+        Duration::ZERO,
+    );
+    assert_eq!(wait_denial(&log, "k2"), DECLINED);
+}
+
+/// Esc is not Stop while a chat act runs (§R PROC-1); Ctrl-C stops a turn
+/// (review T5, T6); New chat ends its generation's requests (T3/T4); the
+/// note holds a waiting Continue (T4/T5).
+#[test]
+fn esc_ctrl_c_new_chat_and_the_note() {
+    let tmp = TmpDir::new("asks-escc");
+    let (mut a, log) = chat_app(Some("targets/zopfli"), "asks-escc", &tmp);
+    for c in "hi".chars() {
+        press(&mut a, KeyCode::Char(c));
+    }
+    press(&mut a, KeyCode::Enter);
+    ask(&mut a, "e1", "harness_migrate", json!({"unit": "u-cache"}));
+    let p = a.asks.requests.pop_front().unwrap().pending;
+    a.on_spawned(&p);
+    a.running = true;
+    press(&mut a, KeyCode::Esc);
+    assert!(!sent(&log, 0)
+        .iter()
+        .any(|v| v["request"]["subtype"] == "interrupt"));
+    a.running = false;
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    a.on_key(ctrl_c, Instant::now());
+    assert!(sent(&log, 3)
+        .iter()
+        .any(|v| v["request"]["subtype"] == "interrupt"));
+    // New chat withdraws its generation's requests.
+    ask(&mut a, "e2", "harness_migrate", json!({"unit": "u-cache"}));
+    assert!(a.asks.shown().is_some());
+    a.chat_new_chat();
+    assert!(a.asks.shown().is_none());
+    // A note open holds a waiting Continue.
+    a.asks.waiting = Some(Request {
+        pending: p,
+        shown_at: None,
+        words: "w".into(),
+        continue_asks: false,
+    });
+    a.mode = Mode::Note {
+        input: String::new(),
+        unit: "u".into(),
+        attempt: "a".into(),
+    };
+    let quiet = Instant::now() + CONTINUE_QUIET + Duration::from_millis(10);
+    assert!(a.chat_waits_why(quiet).unwrap().contains("note"));
+}
+
+/// Review T1: a dialog left open after its request stopped being held (a
+/// decline, a withdrawal the dialog missed) never runs — chat_gate's own
+/// check.
+#[test]
+fn a_dialog_whose_request_is_gone_never_runs() {
+    let tmp = TmpDir::new("asks-gate-held");
+    let (mut a, log) = chat_app(Some("targets/zopfli"), "asks-gate-held", &tmp);
+    ask(&mut a, "g1", "harness_migrate", json!({"unit": "u-cache"}));
+    settle(&mut a);
+    press(&mut a, KeyCode::Enter);
+    assert!(matches!(a.mode, Mode::Dialog(_)));
+    a.chat.held.remove("g1");
+    arm(&mut a);
+    press(&mut a, KeyCode::Right);
+    assert_eq!(press(&mut a, KeyCode::Enter), Command::None);
+    assert!(said(&a).contains("withdrew"), "{}", said(&a));
+    let _ = log;
+}
+
+/// Review T2: a burst reaches a chat dialog through the app — its Enter
+/// is dropped, never a press of the focused button.
+#[test]
+fn a_burst_never_presses_a_chat_dialogs_button() {
+    let tmp = TmpDir::new("asks-burst");
+    let (mut a, _log) = chat_app(Some("targets/zopfli"), "asks-burst", &tmp);
+    ask(&mut a, "b1", "harness_migrate", json!({"unit": "u-cache"}));
+    settle(&mut a);
+    press(&mut a, KeyCode::Enter);
+    arm(&mut a);
+    press(&mut a, KeyCode::Right);
+    // Enter with more input pending: a burst.
+    let t = Instant::now() + Duration::from_secs(1);
+    a.input_pending = true;
+    assert_eq!(key_at(&mut a, KeyCode::Enter, t), Command::None);
+    assert!(matches!(a.mode, Mode::Dialog(_)), "the dialog stays");
+    a.input_pending = false;
+}
+
+/// Review T5: a read requested before the reap and landing after it is no
+/// read "after the reap" — the outcome waits for the reaped read.
+#[test]
+fn a_tick_read_before_the_reaped_one_answers_nothing() {
+    let tmp = TmpDir::new("asks-tick");
+    let (mut a, log) = chat_app(Some("targets/zopfli"), "asks-tick", &tmp);
+    ask(&mut a, "t1", "harness_migrate", json!({"unit": "u-cache"}));
+    let p = a.asks.requests.pop_front().unwrap().pending;
+    a.on_spawned(&p);
+    let _ = a.on_child_exit(ExitStatus::from_raw(0));
+    let read = crate::load::read(&a.config.target);
+    a.on_loaded(read, LoadWhy::Tick);
+    assert!(no_denial(&log, "t1"), "a Tick read answers nothing");
+    assert!(a.load_now());
+    wait_denial(&log, "t1");
 }

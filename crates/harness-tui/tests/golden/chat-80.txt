@@ -1,4 +1,4 @@
-┌ Files ───────────────┐┌ Chat — waiting for you · haiku-4-5 ───── View ─ Chat ┐
+┌ Files ───────────────┐┌ Chat — waiting for you ·…─────[New]─[?]─ View ─ Chat ┐
 │▾ harness-tui-ch… ✓1/1││› Please migrate u-lib.                               │
 │  ▾ test_case/    ✓1/1││                                                      │
 │    ▾ include/        ││I will ask to migrate u-lib.                          │
@@ -17,7 +17,7 @@
 │                      ││chat                                                  │
 │                      ││[Review Enter]  [Decline Esc]                         │
 │                      ││About: the project                                    │
-│                      ││› type here — Enter sends                             │
+│                      ││› Enter reviews the request — or type                 │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
  Ready.
 

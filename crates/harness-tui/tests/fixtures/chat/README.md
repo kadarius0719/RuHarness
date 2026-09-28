@@ -16,6 +16,9 @@ lines and tool-input deltas beyond the first three are dropped (the cockpit igno
   then a second message.
 - `decline.jsonl` — the same request, `harness_migrate` answered `deny` "declined by the
   person": the model says so and ends the turn.
+- `fold.jsonl` — a second message typed while the first turn streams: NOT folded into the
+  turn — the first turn ends (`result`, `queued_turn_count` 0 all the same), then a new turn
+  (`init`, the message's echo with `isReplay` and its `uuid`), then its `result`.
 - `stream-stop.jsonl` — interrupted at the first delta: `aborted_streaming`, the marker; then
   a second message.
 
