@@ -5,63 +5,62 @@ first, then this:
 
 ---
 
-Resume RuHarness — **the chat pane of the friendly-wrapper cockpit: spike first**. Everything
-is on `main` and pushed. The wrapper's two builds are done: Build A (the keyboard-complete
-navigator, 2026-09-25) and Build B (the mouse, 2026-09-27: built, reviewed — 48 findings, 0
-refuted — and fixed three times, §R6–§R8 of docs/COCKPIT-WRAPPER-DESIGN.md); 731 tests green;
-75 mutations of Build B's rules and fixes killed. Before doing anything else:
+Resume RuHarness — **the chat pane's Build D: the pane itself**. Everything is on `main` and
+pushed. The chat pane's §15 spike (Claude Code headless, verified end to end), its design
+(docs/CHAT-PANE-DESIGN.md: 87 → 71 → 18 findings, §R–§R3) and its Build C (the requester
+label — the harness side of chat: `requester: chat`, `traces/chat/`, the CLI's
+`--answer=- --answer-bytes=N --answer-key=K`, harness-mcp's labelled acts and
+`harness_request`) are done: Build C reviewed (38 findings, §R4) and fixed in three passes
+(§R5, §R6); 752 tests green; 44 mutations killed; the bench unchanged. Before doing anything
+else:
 
-1. Read `DECISIONS.md` from "Cockpit wrapper, Build B (the mouse)" to the end (and the Build A
-   entry before it if the cockpit is new to you), then docs/TUI-DESIGN.md §9 (the direction:
-   a chat pane like Copilot inside the cockpit, running an existing agent runtime headless
-   with harness-mcp as its tools), docs/COCKPIT-WRAPPER-DESIGN.md §10 (what the chat pane
-   must decide: how chat's acts reach the activity panel and the cockpit's confirmation, how
-   a chat-requested act is labelled, where chat sits in the focus order) and §R6–§R8 (the
-   mouse's rules the chat pane must keep: a click answers a dialog only once it is armed,
-   shown armed and a second old; a click outside a dialog does nothing), docs/MCP-DESIGN.md §7
-   (the requester label) and §4 (what chat may record).
-2. Read the code the chat pane plugs into: `crates/harness-tui/src/view.rs` `draw` (the right
-   side is NOT reserved from 150 columns today — §R3 USE-15: the View takes the width until
-   the chat exists; reserve it when the chat lands), `app.rs` (`Focus` is Files | View;
-   `on_event` is the loop's step; every act goes through an armed `Dialog`), `main.rs` (the
-   event loop, the terminal guard, the signal path — a headless agent child must be
-   interrupted and reaped on every way out like the spawned `harness`), and `crates/harness-mcp`
-   (its tools, `harness_answer`, the pending blind hand-off refusal).
-3. Confirm the tree is clean and green: `git status`, `cargo test --workspace` (~731 tests,
+1. Read `DECISIONS.md` from "Chat pane: §15 spike" to the end, then docs/CHAT-PANE-DESIGN.md
+   whole — §0–§11 are the spec; §R–§R6 govern where they changed it (above all: an answer
+   travels on the CLI's stdin, never in a file — `Running::spawn_with_input`, framed by
+   `--answer-bytes`). The Build B rules still hold (docs/COCKPIT-WRAPPER-DESIGN.md §R6–§R8: a
+   click answers a dialog only once it is armed, shown armed and a second old).
+2. Read the code Build D plugs into: `crates/harness-tui/src/{app,view,main,spawn,dialog}.rs`
+   (focus, the armed dialog, the loop, the signal path, the child slot), `crates/harness-mcp`
+   (`--cockpit` mode is Build D's first step), and the spike's recordings and drivers (the
+   design's §1 names them).
+3. Confirm the tree is clean and green: `git status`, `cargo test --workspace` (~752 tests,
    including the pty tests in `crates/harness-tui/tests/signals.rs`).
 4. Baseline only if the CLI or the scanner changes: the bench check needs the gitignored
    `targets/tractor/.scorer-vendor/` and `.bench/` (copy with `cp -cR` from another worktree)
    and a quiet machine; expect `198 reproduce (1 conformant, 197 drifted), 2 expected
-   divergence(s), 0 problem(s)` and `bench check: OK — no regression`.
+   divergence(s), 0 problem(s)` and `bench check: OK — no regression` (~29 min).
 
-Then, in order, each step committed when green:
+Then, in the design's order (§10), each step committed when green:
 
-1. **A §15 spike** (time-boxed, subagents, sources cited, verify its premise end to end): the
-   current headless/streaming mode of the agent runtime to embed (Claude Code first: its
-   non-interactive flags, stream-JSON output, permission handling inside a pane, session
-   resume, attaching harness-mcp, auth without an API key), and how comparable TUIs render a
-   chat stream in ratatui. Deliverable: DECISIONS entry with options, the chosen default,
-   rejected alternatives, and "revisit when".
-2. **The chat pane design** (docs/CHAT-PANE-DESIGN.md or a section of the wrapper design):
-   the pane, focus order, keys and mouse (the Build B rules hold), how a chat act is shown and
-   confirmed (the same armed dialog, the argv shown), the requester label in the ledger
-   (MCP-DESIGN §7), the "migrate this" skill. Adversarial design review from 3–4 lenses,
-   verify every finding, revise — then CHECK THE REVISION.
-3. Build it against the reviewed design; review, fix pass, VERIFY THE FIX PASS and check
-   each further pass (Build B: the check of the fix pass again found a medium all three
-   checkers agreed on); mutation checks of the named rules; DECISIONS handoff; commit, push.
+1. harness-mcp `--cockpit` (no harness binary at all; the fence and `valid_model` move into
+   harness-tui's library), then new recordings of Claude Code with the exact argv.
+2. The `chat` module: the runtime child (resolve, environment, its own process group, the
+   stale-dir sweep — own 0700 dirs only, "gone" only from `kill -0` under `LC_ALL=C`, §R5),
+   the stream parser and state, the end routine; a shell-script fake `claude` replaying the
+   recordings; pty tests.
+3. `app`: focus, input, the chat's requests mapped onto the cockpit's own acts (the armed
+   dialog, the argv shown), outcomes answered as `deny` + the outcome, the hand-off table
+   and Continue (the answer on stdin), the continuation permission, the typing guard, the
+   chat-dialog rules (a no-letters flag in dialog.rs).
+4. `view`: layout (three columns from 156; below, the chat only while focused), the tab strip,
+   the transcript, request and waiting lines, hits, Help; the brief
+   (`crates/harness-tui/src/chat_brief.md`, by `--append-system-prompt`); README.
+5. The live test by hand, from a plain terminal and from inside a Claude Code session.
 
-Separately suggested (their own tasks): the crate content hash skips files outside `src/`
-(SAFE-5 of the design review); harness-detect's walk follows symlinks out of `source_dir` (a
-one-line switch to `walk::confined`); `verify`'s R6 gate; the harness-core ledger test that a
-fork in the same test binary can fail (DECISIONS). After the chat pane: the feature-workflow
-view and the C-vs-Rust performance baselines, then the briefing's M5 (external detector
-plugin + `EXTENDING.md`). Carry-forwards: §16 escalation automation + `harness usage`; the
-`crash-timeout` classifier; a Linux sandbox; the two deferred replay items; driver-attempt
-Accept; queueing on lock contention; an async client for cooperative cancellation;
-per-function verdict dots; bounded reads in harness-core (MCP-DESIGN §R TRUST-4);
-harness-mcp's revisit triggers; Build B's accepted items (DECISIONS: hits are the last
-frame's; the notice row and border prompts are not clickable; TSTP).
+Then: an adversarial code review from 3 lenses, findings verified against the code; fix
+pass; VERIFY THE FIX PASS (Build C: the check found a low-medium and the reason to drop answer
+files altogether) and check each further pass; mutation checks of the named rules;
+DECISIONS handoff; commit, push.
+
+Separately suggested (their own tasks): confine the oracle build sandbox's temp dirs (a
+per-build temp dir — found in Build C's check, §R5 S-NEW-1); deflake the oracle's
+process-group timeout test; the crate content hash skips files outside `src/`;
+harness-detect's walk follows symlinks out of `source_dir` (`walk::confined`); `verify`'s R6
+gate; the harness-core ledger test that a fork in the same test binary can fail (keep forks
+out of harness-core's lib tests). After the chat pane: the feature-workflow view and the
+C-vs-Rust performance baselines, then the briefing's M5. Carry-forwards as in DECISIONS
+(Build C's accepted items: `harness_request` re-reads up to 16 MiB per call; the hard-link
+fallback, the bench `(chat)` tags and a chat `.r2` replay untested).
 
 Environment (re-check; don't assume):
 
@@ -104,7 +103,9 @@ Process that works (keep it):
 * Implement against the reviewed spec, then run an adversarial code review whose findings are
   verified against the code — then VERIFY THE FIX PASS the same way, and check each further
   pass (Build A: 12 then 7 new defects; Build B: ~15 then 9, one medium found by all three
-  checkers each time).
+  checkers each time; Build C: 38, then a low-medium and a design change, then three lows).
+* A reviewer's "only an unsandboxed process could race this" must be checked against the
+  sandbox profile (Build C: the build profile may write all of the temp dirs).
 * In the fix pass, add regression tests that fail without the fix, and mutation-check the
   rule-guarding ones with a script that reverts each fix and runs its test.
 * Real end-to-end tests find what reviews miss (Build B: a pty drive found the triple click
