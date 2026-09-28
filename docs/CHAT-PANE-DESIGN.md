@@ -4,8 +4,9 @@ Status: DESIGN, reviewed and revised three times (2026-09-27). The adversarial r
 lenses, 87 findings, four verifiers (two per finding) — 0 refuted (§R). The check of the
 revision: three checkers — two re-checked every §R row, one hunted new problems — 71
 findings, the highest found by all three (§R2). A scoped check of the second revision: 18
-(§R3). Build C (the label) is built; one change it made to §4.1 is in §R3. Every resolution
-is in the text below.
+(§R3). Build C (the label) is built, code-reviewed (§R4) and fixed in three passes (§R5,
+§R6) — the changes it made to §4 are in §R3–§R6; above all, answers now travel on the CLI's
+stdin, never in a file. Build D (the pane) is next. Every resolution is in the text below.
 Implements docs/TUI-DESIGN.md §9 ("a chat pane on the side, like Copilot") and
 docs/COCKPIT-WRAPPER-DESIGN.md §10. Sources:
 - the §15 spike (DECISIONS.md "Chat pane: §15 spike"), and a second live check of this

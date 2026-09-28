@@ -2118,3 +2118,117 @@ channel to the cockpit; a runtime cannot hold a permission open → harness-mcp 
 request-only mode, the outcome sent later as a message; Claude Code speaks ACP natively, or a
 second runtime is wanted → an ACP adapter; `--bare` accepts the subscription login → use it;
 the transcript needs markdown → pulldown-cmark (vetted above).
+
+## 2026-09-27 — Chat pane: the design (three reviews) and Build C (the requester label)
+
+docs/CHAT-PANE-DESIGN.md is written, reviewed three times, and its Build C — the requester
+label, the harness side of chat — is built, reviewed, and fixed in three passes, each checked
+or mutation-checked. Commits: 3aa8270 (the design), e14ecca (revised after its review),
+150fca2 (the second revision), fa2697e (Build C), 8e16be1 (its fix pass), 0ef2f73 + 100dcc4
+(fix pass 2), ddfe3ba (fix pass 3) and this handoff. Build D (the pane itself) is next.
+
+**The design** (§0–§11): the chat asks only for model work — Migrate, Modify, Retry and a new
+Continue (an answer to a hand-off) — each shown in the cockpit's own armed dialog with its
+argv, run by the cockpit (the only executor), its permission held and answered `deny` with the
+outcome; Scan, Plan, Re-check and Accept stay the person's. Claude Code headless, spoken
+directly (the §15 spike); harness-mcp attached in a `--cockpit` mode with no harness binary;
+`Read`/`Grep`/`Glob` only; the brief by `--append-system-prompt`; three columns from 156,
+the chat only while focused below that. Reviews: four lenses → 87 findings, 0 refuted (§R);
+the check of the revision → 71 (§R2); a scoped check of the second revision → 18, no high
+(§R3). The shared-traces hole — a chat hand-off and a blind one of the same inputs keyed by the
+request alone — was found by every reviewer and by the main session: chat attempts get their
+own `traces/chat/` and a label in the id.
+
+**Build C, as built** (§4):
+- `AttemptRecord.requester: Option<String>`, the closed set {"chat"}; written
+  `schema_version` 2 only when labelled (unlabelled records byte-identical, v1); ids mix
+  `\0requester:chat` in, so a chat attempt never shares a blind one's id; its hand-offs live
+  in the unit's `traces/chat/`. `blind()` = unseeded + `external` + no label.
+  `Authorship::Chat`, `Provenance::Chat` (buckets pipeline, steered, chat, human); the bench
+  reports a chat-provenance crate as a PROBLEM and replays chat attempts, tagged `(chat)`.
+- CLI: `migrate --requester=chat`; `--answer=FILE|- --answer-key=KEY` (stdin framed by
+  `--answer-bytes=N`) files an answer as the response to one pending request — refused up
+  front (`answer-refused`) unless the attempt the run resumes waits on it; `answer-unused` when the run never asked for it (after its own
+  events). The `awaiting` event gains `request_key`; its args and resume drop the answer flags.
+- harness-mcp: labelled steer and retry; `harness_answer` answers through the CLI (the text on
+  its stdin — harness-mcp writes no file at all); a new `harness_request` read pages a
+  labelled attempt's pending request.
+- The cockpit: "asked in chat" beside steered; Retry keeps a record's label, and a chat
+  `external` record's retry is the chat's.
+
+**Bench**: `bench check --replay` on fa2697e: no regression, identical totals (hidden
+16/17, public 70/77 strict-pass), 198 replays reproduce, 0 problems (29:52); again on fix pass
+2 (100dcc4), which changed how every recorded response is read: identical (28:32). Fix pass 3
+touched no replay path.
+
+**Review of Build C** (§R4): three reviewers (robustness, engine & contracts, provenance &
+safety) → 38 findings, many found twice or three times. Two high: the cockpit's Retry dropped
+the label — a chat record retried as a blind base or an unlabelled steer (all three found it);
+harness-mcp adopted an existing answer dir on a shared `/tmp` and the CLI followed symlinks.
+Mediums: every up-front `--answer` refusal typed `answer-unused` (its test passed for the
+wrong reason); `answer-unused` swallowing a finished run's events; `check_answer` validating
+another attempt than the run resumes; the sweep deleting live dirs; predictable temp names
+followed through committed symlinks (the same pattern was in `write_atomic` since M1); the
+hand-off dropped before its answer was spent; quadratic paging. Fix pass 8e16be1.
+
+**Check of the fix pass** (§R5): three checkers — every §R4 row fixed or partial, no high,
+one low-medium: the key binding keyed on "a record with no turn", which a resume produces
+until its first turn is re-judged, so an interrupted one refused its real repair. The safety
+checker found the reason to drop answer files altogether: the oracle's build sandbox may
+write all of the temp dirs, so a hostile build step could rewrite an answer file between
+harness-mcp's write and the CLI's read. Fix pass 2 (0ef2f73): **answers travel on the CLI's
+stdin** (`Running::spawn_with_input`, which the cockpit will use too) — the answer dir, the
+sweep and six findings about them are gone; the key is bound by the run's own first request;
+`ledger::read_regular` (non-blocking open, the handle checked, bounded) for every trace and
+answer file read; a hard-link fallback; the rest of §R5. A scoped check of fix pass 2 (§R6):
+no high, no medium; three lows — the hard-link fallback could leave a torn response, a stdin
+answer cut short (harness-mcp killed mid-write) would be filed as a prefix, the cockpit read a
+symlinked response the CLI refuses — and four nits. Fix pass 3: rename-into-place, stdin framed
+by `--answer-bytes`, the cockpit through `read_regular`, `libc`'s open flags (already in the
+graph via signal-hook, errno and getrandom; the Rust project's own crate, no advisories — no new
+code compiled), a terminal on stdin refused; not checked again (lows, each mutation-checked).
+
+**Mutation checks**: 24 mutations of Build C's named rules (the label on Retry, the answer's
+target and binding, the model and kind checks, `blind`, the store's closed set, the
+`traces/chat/` routing, the answer flags stripped, the hand-off lifecycle, paging, the sweep),
+13 of fix pass 2's and 7 of fix pass 3's — 44, all killed. The runner lives in the session
+scratchpad only.
+
+**Tests**: 731 → 752, clippy clean.
+
+**Decisions taken in the reviews** (the design's §R4/§R5 govern):
+- An answer goes on the CLI's stdin, never in a file — harness-mcp's and the cockpit's —
+  framed by `--answer-bytes`. `--answer=FILE` stays for a person.
+- `--answer`'s key is bound to the attempt only while the attempt's first request is
+  unanswered; after it, any pending request of the model passes the up-front check and the
+  run files only the key it asks for (`answer-unused` otherwise).
+- The ledger lock and promotion recovery come before `--answer`'s checks, as for every
+  migrate; nothing else is written before a refusal, and no directory is created.
+- The cockpit refuses to retry a chat-labelled `external` attempt: the chat answers its turns.
+
+**Accepted / later**: `harness_request` re-reads up to 16 MiB per call (linear now); the
+hard-link fallback is untested (no such filesystem here); the `(chat)` bench fixture, a chat
+`.r2` replay from `traces/chat/` and `request_key` in observe/gen-driver events are untested;
+the flaky harness-oracle process-group test under load (spawned as its own task).
+
+**Process notes**: the check of the fix pass found a low-medium again, as in Builds A and B —
+keep the scoped re-check after every pass. A reviewer's residual ("only an unsandboxed
+process could race this") must be checked against the sandbox profile: the build profile's
+temp-dir allowance made it reachable. Tests that fork (`mkfifo`) belong outside harness-core's
+lib test binary, where a fork can hold the lock tests' lock.
+
+**Next**: Build D, the pane (docs/CHAT-PANE-DESIGN.md §10): harness-mcp `--cockpit` and new
+recordings with the exact argv; the `chat` module (runtime child, stream, end routine; a
+shell-script fake `claude` replaying recordings; pty tests); `app` (focus, input, requests,
+mapping, outcomes, the hand-off table, the continuation permission, the typing guard, the
+chat-dialog rules); `view` (layout, tab strip, transcript, Help), the brief, README; the live
+test by hand from a plain terminal and from inside Claude Code. Then review, fix, verify,
+mutation checks, DECISIONS, push. The chat's stale-dir sweep inherits §R5's rule (own 0700
+dirs; "gone" only from `kill -0` under `LC_ALL=C`). Still separate: the crate hash skipping
+files outside `src/`; harness-detect's walk following symlinks; `verify`'s R6 gate; the
+harness-core lock test a fork can fail; the build sandbox's temp-dir allowance (a per-build
+temp dir, as the run profile has).
+
+**Revisit when**: Claude Code changes its stdio control protocol (§15 spike); a filesystem
+without hard links shows up (test the fallback there); `harness_request` is slow on a large
+unit (cache pages per file identity).
