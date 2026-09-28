@@ -12,7 +12,8 @@ cockpit is done: the wrapper (Builds A and B: keys, mouse) and the chat pane (th
 the design — docs/CHAT-PANE-DESIGN.md, §R–§R3 — Build C, the requester label, and Build D,
 the pane: harness-mcp `--cockpit`, the `chat` module, the app's and the view's chat side, the
 brief, the live test from both environments; reviewed from three lenses, 45 findings, §R7;
-three fix passes, each checked, §R8–§R9; 139 mutations killed). Before doing anything else:
+four fix passes, the first three checked, §R8–§R10; 148 mutations killed). Before doing
+anything else:
 
 1. Read `DECISIONS.md`'s last two entries (the chat pane) and the roadmap notes it points to
    (the M4 section's "roadmap notes", "Direction change (user)"), then

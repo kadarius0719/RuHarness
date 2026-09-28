@@ -2232,3 +2232,133 @@ temp dir, as the run profile has).
 **Revisit when**: Claude Code changes its stdio control protocol (§15 spike); a filesystem
 without hard links shows up (test the fallback there); `harness_request` is slow on a large
 unit (cache pages per file identity).
+
+## 2026-09-28 — Chat pane, Build D (the pane): built, live-tested, reviewed, four fix passes (three checked)
+
+The chat pane is built: the cockpit runs Claude Code headless as a child, speaks its stream-JSON
+protocol, and maps every tool call of the chat onto the cockpit's own acts. docs/CHAT-PANE-DESIGN.md
+§10's five steps, each committed when green: c765883 (harness-mcp `--cockpit`; the fence and
+`valid_model` into harness-tui's library), 7a38247 (recordings of Claude Code 2.1.274 with the
+exact argv; the brief), a78ed2e (the `chat` module), 3a91742 + 77e843b + b7c0c7b (app, view,
+main; their tests; the pty tests), 7c3e192 (the live test from both environments; README);
+the fix pass c1e6362 (§R7), tests 8eff10f + d67b441 + 4e37f89 (the mutation run's survivors),
+fix pass 2 3ef8b5c (§R8), fix pass 3 57eaa11 + 87d3563 (§R9), fix pass 4 45ff177 (§R10), and
+this handoff.
+
+**As built** (the design's §1–§9 hold; where the build decided):
+- harness-mcp `--cockpit`: no harness binary found or run at all (`--harness`, `--provider`,
+  `--target-root`, `--allow-unsandboxed` refused); the reads without a target parameter; the
+  act tools ask-only (`harness_migrate`, `harness_steer`, `harness_retry`, `harness_answer`),
+  answered by the cockpit's `deny` with the outcome; the banner says it runs no act.
+- `chat::runtime`: binaries resolved absolute; §1.1's environment (inside a Claude Code
+  session an allowlist plus the person's sign-in, the endpoint only with a credential; outside,
+  all but the session's variables; `TERM=dumb`); its own process group; a 0700 directory
+  (a `/tmp` fallback when the socket path would pass 103 bytes); the stale-dir sweep off the
+  loop (own 0700 dirs, not links; "gone" only from `kill -0` under `LC_ALL=C`); a registry
+  shared with the signal path and the panic hook; lines bounded at 2 MiB (a longer one is
+  reported, never truncated); the end: stdin closed, TERM at 2 s, KILL at 3 s, reaped only
+  after the group's KILL; the leader looked at every 2 s (a zombie ends the chat, its pipes read
+  for 500 ms more).
+- `chat` (stream, transcript, input): init checked on every init (permission mode, the one
+  server, the tools); a result ends a Stop; Stop markers counted per Stop; echoes matched by
+  the cockpit's uuids; a message the cockpit did not send withdraws the permissions; the quiet
+  and start-up watchdogs; a transcript bounded at 2 MiB with a wrap cache.
+- `app/asks.rs`: requests queue and settle a second before a key answers them; Review opens
+  the cockpit's own armed dialog with the argv rebuilt fresh and the gates re-checked at
+  confirm; the chat-dialog rules (no letters, bursts and Tab dropped); outcomes sent after the
+  first read at or after the reap, queued, per generation; the chat hand-off table; Continue
+  with the answer on the CLI's stdin (`--answer=- --answer-bytes --answer-key`), shown whole
+  behind a gutter only the cockpit writes; the continuation permission (granted by an act's
+  `awaiting` only under the same epoch, generation, model and held request; never under
+  `--allow-unsandboxed`; ended by a Stop, a withdrawal, a foreign message, New chat, the end,
+  a hold, a decline, a Cancel); the typing guard.
+- `view/chat_pane.rs`: three columns from 156 columns (the chat ≤ 64, the View ≥ 80), below
+  that the chat in the right column only while focused, a tab strip on every single pane;
+  the bottom block by priority; Help's chat section says why the chat is unavailable.
+
+**Live**: the whole round works with the real `claude` on haiku — Migrate asked in chat,
+confirmed, `awaiting`, `harness_request`, `harness_answer`, Continue under the permission,
+GREEN — from inside Claude Code and from a plain environment; the unknown-model,
+failed-server and New-chat-then-TERM tests pass in both, again after fix passes 3 and 4 (GREEN
+in both). After fix pass 2 the plain round ended RED (haiku's translation, 5 of 8 checks) with
+the whole chat flow working — the test had waited for GREEN; it now takes either verdict.
+Found by the live runs, not the review: the model once wrote its answer into the chat (the brief now says it goes only to
+`harness_answer`); a message typed mid-turn is queued as the next turn, not folded
+(`fold.jsonl`); the pty tests must read a rendered screen (ratatui skips cells already showing
+the letter — the one unexplained quit failure).
+
+**Review** (§R7): three lenses — safety & provenance, process & protocol, usability — 45
+findings, two verifiers, none refuted. One high: the continuation permission granted by an
+act's `awaiting` after a Stop, a withdrawal or a foreign message had ended permissions while
+the act ran (the epoch). Mediums: an answer line cut at 4 KiB on screen while the CLI got
+every byte; the details over the chat passing letters to the panes; a dialog's hint clicks
+reaching the chat beneath; requests refused rather than queued while a command ran; the quiet
+notice after every long act; a Stop outliving an aborted result. Fix pass c1e6362.
+
+**Checks of the fix pass** (§R8): a row-by-row check with 64 mutations (every fix present,
+every high and medium killed; ~20 rows without a killing test) and a regression hunt (no path
+to a chat act without an armed dialog or a live permission; the answer could forge the `↩`
+split mark; Cancel dead under the details; a late Stop marker taken for a foreign message; the
+epoch voiding an unrelated grant, and not voided by the grant act's own Cancel). Fix pass 2
+3ef8b5c answered each, with a test. Its scoped check (§R9): every fix present and killed, three
+partial — the Stop-marker bookkeeping keyed on `queued_turn_count`, which 2.1.274 reports as 0
+with a turn queued (so the fix was inert on the real runtime, its test built on a shape the
+runtime never sends); a Cancel after the grant act's `awaiting` kept the permission; the cause
+words from a field never cleared. Fix pass 3 57eaa11: a turn is queued while a message of the
+cockpit's is not yet echoed; each permission records the request that gave it; causes per
+attempt. Its scoped check (§R10): every row in place and killed; one low it made reachable
+— a message cancelled between its start and its echo stayed "not yet echoed" all generation,
+so the markers' idle reset stayed off and a marker-shaped message the cockpit did not send could
+be swallowed later — plus test gaps. Fix pass 4 45ff177: a message also leaves on its terminal
+lifecycle (the runtime's `command_uuid` is the cockpit's uuid); the markers matched exactly;
+the gaps tested. Lows and tests, each mutation-checked; not checked again (as Build C's pass 3).
+
+**Mutation checks**: 87 of Build D's named rules and the fix pass (after strengthening ten
+tests the first run passed, and one invalid mutant fixed), 38 of fix pass 2, 14 of fix pass 3,
+9 of fix pass 4 — 148, all killed. (Until fix pass 3's run the runner took a syntax error
+for a failing test; it now counts "could not compile" without a test result as invalid — no
+earlier log was one.)
+
+**Tests**: 752 → 843 (+4 live, ignored unless `RUHARNESS_LIVE_CHAT=1`), clippy clean. No new
+crate. The bench is untouched (neither the CLI nor the scanner changed).
+
+**Decisions taken in the build and the reviews**:
+- The answer a Continue files is shown whole in its dialog: every line hard-wrapped with its
+  indentation, behind a numbered gutter only the cockpit writes — never cut, never re-flowed.
+- The permission epoch is bumped by generation-wide causes and by the person's Cancel of a
+  grant act; one attempt's hold or decline does not void another's grant.
+- Requests queue while a command runs; Review and confirm keep one command at a time.
+- A turn is queued while a message of the cockpit's is neither echoed nor at its terminal
+  lifecycle — never from `queued_turn_count` alone (2.1.274 says 0 with a turn queued). A Stop
+  sent as its turn ended stops the turn queued behind it; "stopped" is said only for a turn
+  that ended aborted, brought the marker, or ended in error while stopping.
+- Burst: keys within 5 ms, and the key after two reads in a row with input pending (100 ms).
+- In the chat, a quit is always asked.
+
+**Accepted / later**: untested by design — SAF-9's two `dying` checks in main.rs (a signal
+inside a waiting Continue's quiet second), a timed-out `kill_now` kept (PRO-9), a KILL that
+cannot be sent (PRO-10: `/bin/kill` cannot be made to fail here; no `libc::killpg`, the crate
+forbids unsafe code); `ps` runs on the loop every 2 s while a chat lives (~1.6 ms); the
+protocol verified with Claude Code 2.1.274 only (`TESTED_VERSION`; a newer one is said, not
+refused); the §11 list stands.
+
+**Process notes**: the check of every fix pass found something again (Build D: a forged split
+mark and a dead Cancel the first fix pass made reachable) — keep it. The mutation run finds
+tests that pass for the wrong reason (a test whose fixture already made the rule true, a check
+of absence racing a writer thread, a guard doubled by the fix): run it before the check of the
+fix pass, not after. Live runs with the real model find protocol facts the recordings miss —
+and a fix of protocol handling must be tested on the recorded shape: fix pass 2's Stop rule
+was inert on the real runtime, its test built on a `queued_turn_count` it never sends. A
+subagent's report of a probe that flips against the parent's rule is the strongest evidence a
+check gives: ask for it.
+
+**Next**: the feature-workflow view (docs/NEXT-SESSION.md), then the C-vs-Rust performance
+baselines, then the briefing's M5. Still separate: confine the oracle build sandbox's temp
+dirs; deflake the oracle's process-group timeout test; the crate hash skipping files outside
+`src/`; harness-detect's walk following symlinks; `verify`'s R6 gate; the harness-core ledger
+test a fork can fail.
+
+**Revisit when**: Claude Code changes its stream-JSON control protocol or its init shape
+(re-record with `tests/fixtures/chat/record.py`; the recordings name the version); a peer
+inbox for Claude Code sessions becomes discoverable (the foreign-message rule); another
+runtime (ACP) is wanted.
