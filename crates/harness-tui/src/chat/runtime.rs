@@ -935,12 +935,16 @@ mod tests {
         // session's variables.
         let mut outside = host.clone();
         outside.retain(|(k, _)| k != "CLAUDECODE");
+        outside.push(("CLAUDE_PID".into(), "7".into()));
+        outside.push(("CLAUDE_CODE_ENTRYPOINT".into(), "sdk".into()));
         let env = environment(&outside);
         let n = names(&env);
         for gone in [
             "CLAUDE_CODE_SESSION_ID",
             "CLAUDE_CODE_MESSAGING_SOCKET",
             "MCP_CONNECTION_NONBLOCKING",
+            "CLAUDE_PID",
+            "CLAUDE_CODE_ENTRYPOINT",
         ] {
             assert!(!n.contains(&gone.to_string()), "{gone}");
         }
@@ -1097,13 +1101,15 @@ mod tests {
             0o700,
         );
         let own = make(format!("{DIR_PREFIX}{dead}-00000000"), 0o700);
+        // Another live pid (pid 1: its probe fails with EPERM — alive).
+        let other = make(format!("{DIR_PREFIX}1-0123abd2"), 0o700);
         let odd = make(format!("{DIR_PREFIX}{dead}-xyz"), 0o700);
         let target = make("elsewhere".into(), 0o700);
         let link = tmp.0.join(format!("{DIR_PREFIX}{dead}-0123abd0"));
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert_eq!(sweep(&tmp.0, uid, &own), 1);
         assert!(!stale.exists());
-        for kept in [&open, &live, &own, &odd, &target] {
+        for kept in [&open, &live, &own, &odd, &target, &other] {
             assert!(kept.exists(), "{}", kept.display());
         }
         assert!(

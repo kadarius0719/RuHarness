@@ -454,6 +454,11 @@ fn unsent_outcomes_go_with_the_next_message_of_their_chat_only() {
     assert!(a.asks.unsent.is_empty());
     assert!(transcript(&mut a).contains("OUTCOME-X"));
     assert!(!a.context_block().contains("OUTCOME-X"));
+    // Another generation's outcome, still listed, never reaches this chat.
+    let tmp2 = TmpDir::new("asks-unsent2");
+    let (mut b, _log2) = chat_app(Some("targets/zopfli"), "asks-unsent2", &tmp2);
+    b.asks.unsent.push((b.chat.gen + 7, "OUTCOME-Y".into()));
+    assert!(!b.context_block().contains("OUTCOME-Y"));
 }
 
 /// Mutation-checked rules (§3.4): a Continue needs the key the cockpit
@@ -658,6 +663,9 @@ fn the_continuation_permission_runs_waits_holds_and_ends() {
     ask(&mut a, "p3", "harness_answer", answer);
     assert!(a.asks.waiting.is_none());
     assert!(a.asks.shown().is_some_and(|r| r.continue_asks));
+    // A grant act otherwise live (held, this epoch): unsandboxed grants none.
+    a.chat.held.insert("x".into());
+    let epoch = a.asks.epoch;
     a.chat_hand_off(
         Some("a-000000000001".into()),
         Some("00000001".into()),
@@ -671,7 +679,7 @@ fn the_continuation_permission_runs_waits_holds_and_ends() {
             key: None,
             permitted: false,
             attempt: None,
-            epoch: 0,
+            epoch,
         }),
         Some(1),
         "u-lib".into(),
@@ -1373,9 +1381,13 @@ fn esc_ctrl_c_new_chat_and_the_note() {
     a.on_spawned(&p);
     a.running = true;
     press(&mut a, KeyCode::Esc);
-    assert!(!sent(&log, 0)
-        .iter()
-        .any(|v| v["request"]["subtype"] == "interrupt"));
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !sent(&log, 0)
+            .iter()
+            .any(|v| v["request"]["subtype"] == "interrupt"),
+        "Esc is not Stop while a chat act runs"
+    );
     a.running = false;
     let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
     a.on_key(ctrl_c, Instant::now());
@@ -1526,4 +1538,26 @@ fn a_permission_follows_the_confirm_and_its_model() {
     );
     assert!(b.asks.waiting.is_none(), "not permitted");
     assert!(b.asks.shown().is_some_and(|r| r.continue_asks));
+}
+
+/// Migrate only a unit that is planned, tried or failing (§3.1); in the
+/// chat a quit is asked even with no conversation (review USE-16); a line of
+/// the cockpit's while the chat is not looked at marks it "Chat ●".
+#[test]
+fn migrate_gate_quit_asked_and_unseen() {
+    let tmp = TmpDir::new("asks-gate-misc");
+    let (mut a, log) = chat_app(None, "asks-gate-misc", &tmp);
+    ask(&mut a, "m1", "harness_migrate", json!({"unit": "u-lib"}));
+    assert!(wait_denial(&log, "m1").contains("planned, tried or failing"));
+    a.focus = Focus::Files;
+    a.chat.unseen = false;
+    ask(&mut a, "m2", "harness_migrate", json!({"unit": "u-nope"}));
+    assert!(a.chat.unseen, "the refusal's line is new output");
+    let mut b = app("asks-quit-fresh");
+    b.chat_on = true;
+    b.focus = Focus::Chat;
+    assert!(!b.chat.has_conversation());
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    assert_eq!(b.on_key(ctrl_c, Instant::now()), Command::None);
+    assert!(matches!(&b.mode, Mode::Dialog(c) if c.purpose == Purpose::Quit));
 }
