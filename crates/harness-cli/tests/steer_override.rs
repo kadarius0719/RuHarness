@@ -596,6 +596,12 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
         "answer-refused"
     );
     assert!(r.stderr.contains("the answer is empty"), "{}", r.stderr);
+    let r = stdin_answer(&first_key, &"x".repeat(512 * 1024 + 1));
+    assert_eq!(
+        find(&events(&r), "error").unwrap()["kind"],
+        "answer-refused"
+    );
+    assert!(r.stderr.contains("longer than"), "{}", r.stderr);
     let r = stdin_answer(&first_key, &emission(&revised, ffi));
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     let done = find(&events(&r), "attempt").unwrap().clone();

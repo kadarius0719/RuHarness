@@ -789,6 +789,12 @@ mod tests {
             "another chat attempt's request, same unit and model"
         );
         assert!(read(&foreign, 1).unwrap_err().contains("another model"));
+        // Another attempt's answered request does not unbind this one: only
+        // the request its own id was derived from counts.
+        std::fs::write(chat.join(format!("{foreign}.response.json")), "{}").unwrap();
+        assert!(read(&other, 1)
+            .unwrap_err()
+            .contains("not the one this attempt waits on"));
         assert!(read("../../../x", 1).is_err());
         let answered = chat.join(format!("{key}.response.json"));
         std::fs::write(&answered, "{}").unwrap();

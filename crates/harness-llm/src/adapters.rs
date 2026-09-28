@@ -897,6 +897,17 @@ mod tests {
         let got = adapter.complete(&request).unwrap();
         assert_eq!(got.text, "[]");
         assert_eq!((got.input_tokens, got.output_tokens), (7, 3));
+
+        // A response the target made a symlink (to a file outside) is
+        // refused, never read through, never re-posed (§R4 CR-11).
+        let outside = dir
+            .join("..")
+            .join(format!("outside-{}.json", std::process::id()));
+        std::fs::rename(&response_path, &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &response_path).unwrap();
+        let err = adapter.complete(&request).unwrap_err().to_string();
+        assert!(err.contains("symlinks are refused"), "{err}");
+        let _ = std::fs::remove_file(&outside);
     }
 
     #[test]
