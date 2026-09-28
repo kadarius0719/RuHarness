@@ -559,8 +559,8 @@ fn request_pages(parts: [&str; 2], budget: usize) -> Vec<[Option<(usize, usize)>
 /// `key` of `attempt` — only an in-progress attempt labelled `requester:
 /// chat`, read from its `traces/chat/` with the recorded-trace checks (8 hex,
 /// real files of bounded size, the request re-serializing to its key) and no
-/// response yet, naming the attempt's model; for an attempt with no turn
-/// yet, the request its id was derived from (§R4 CE-6). Page `page`
+/// response yet, naming the attempt's model; while the request its id was
+/// derived from is unanswered, only that one (§R4 CE-6, §R5 NEW-1). Page `page`
 /// (1-based) of its system prompt, then its user message; every text
 /// fenced.
 pub fn request(
@@ -607,8 +607,8 @@ pub fn request(
     // only one served under this attempt (§R4 CE-6); a later turn's request
     // (a repair) is not re-derived here (§R5 NEW-1: nor is "no turn yet"
     // taken for "the first request pending").
-    if !harness_core::traces::first_request_answered(&dir, &record)
-        && !attempts::first_request_of(&record, key)
+    if !attempts::first_request_of(&record, key)
+        && !harness_core::traces::first_request_answered(&dir, &record)
     {
         return Err(format!(
             "request {key} is not the one this attempt waits on: read the `request_key` its \
@@ -804,6 +804,22 @@ mod tests {
         // one is served (§R5 NEW-1).
         assert!(read(&other, 1).is_ok());
         std::fs::remove_file(&answered).unwrap();
+        // A record whose first turn is recorded but whose response is gone
+        // still waits on that request, as `--answer` decides (§R6 F4).
+        rec.turns.push(harness_core::attempts::Turn {
+            kind: "steer".into(),
+            result: "build".into(),
+            request_key: key.clone(),
+            response_hash: String::new(),
+            input_tokens: None,
+            output_tokens: None,
+        });
+        store(&rec);
+        assert!(read(&other, 1)
+            .unwrap_err()
+            .contains("not the one this attempt waits on"));
+        rec.turns.clear();
+        store(&rec);
         // A system prompt longer than a page: page 1 shows it alone (`user`
         // null) and every page conforms to the outputSchema (§R5 N3).
         let big = CompletionRequest {

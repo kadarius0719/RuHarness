@@ -492,6 +492,16 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
         args.extend_from_slice(extra);
         harness(&args)
     };
+    // A replay with no traces yet: its own explanation, nothing created
+    // (§R5 NEW-2).
+    let r = migrate(&["--provider=replay"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains("has no recorded attempt to replay"),
+        "{}",
+        r.stderr
+    );
+    assert!(!traces.exists(), "replay creates no directory");
     // A blind seed, through the flat traces.
     assert_eq!(migrate(&[]).code, 1);
     write_response(&pending_request(&traces).unwrap(), &emission(logic, ffi));
@@ -567,28 +577,44 @@ fn a_chat_steer_is_labelled_and_answered_through_the_cli() {
         .exists());
     // Its own key, on stdin (`--answer=-`, as harness-mcp passes it):
     // filed by the CLI, the SAME attempt resumes to green.
-    let stdin_answer = |key: &str, input: &str| {
+    let stdin_answer_framed = |key: &str, input: &str, bytes: Option<usize>| {
         let k = format!("--answer-key={key}");
-        harness_with_input(
-            &[
-                "--json",
-                "migrate",
-                "--allow-unsandboxed",
-                unit,
-                "--target",
-                target,
-                "--no-promote",
-                "--from",
-                &seed,
-                "--steer",
-                "keep the wrapping add explicit",
-                "--requester=chat",
-                "--answer=-",
-                &k,
-            ],
-            input,
-        )
+        let n = bytes.map(|n| format!("--answer-bytes={n}"));
+        let mut args = vec![
+            "--json",
+            "migrate",
+            "--allow-unsandboxed",
+            unit,
+            "--target",
+            target,
+            "--no-promote",
+            "--from",
+            &seed,
+            "--steer",
+            "keep the wrapping add explicit",
+            "--requester=chat",
+            "--answer=-",
+            &k,
+        ];
+        if let Some(n) = &n {
+            args.push(n);
+        }
+        harness_with_input(&args, input)
     };
+    let stdin_answer = |key: &str, input: &str| stdin_answer_framed(key, input, Some(input.len()));
+    // Unframed, or cut short (its writer killed midway): refused.
+    let r = stdin_answer_framed(&first_key, "src/logic.rs", None);
+    assert_eq!(
+        find(&events(&r), "error").unwrap()["kind"],
+        "answer-refused"
+    );
+    assert!(r.stderr.contains("needs --answer-bytes"), "{}", r.stderr);
+    let r = stdin_answer_framed(&first_key, "src/logic.rs", Some(4096));
+    assert_eq!(
+        find(&events(&r), "error").unwrap()["kind"],
+        "answer-refused"
+    );
+    assert!(r.stderr.contains("cut short"), "{}", r.stderr);
     let r = stdin_answer(&first_key, " \n");
     assert_eq!(r.code, 1);
     assert_eq!(

@@ -506,15 +506,17 @@ Committed evidence per attempt (source only; `attempts/**/target/` is gitignored
   attempts (reported `(chat)`). `blind` (harness-core): unseeded, `external`, no label —
   only the audited protocol answers or retries it.
 - `harness migrate … --requester=chat` records the label; `--answer=FILE
-  --answer-key=KEY` (`external` and `--requester=chat` only; FILE `-` is stdin, as
-  harness-mcp passes it) files the answer as the response to the pending request KEY:
+  --answer-key=KEY [--answer-bytes=N]` (`external` and `--requester=chat` only; FILE `-` is
+  stdin, as harness-mcp passes it — then N is required and a read of another length refused,
+  so a writer killed midway never has a prefix filed; a terminal is refused) files the answer
+  as the response to the pending request KEY:
   refused up front — typed `answer-refused` (exit 1), before the
   run writes anything of its own and without creating a directory (only an interrupted
   promotion is recovered first, as by every migrate) — unless the answer is UTF-8, at most
   512 KiB, not empty (a FILE read as the regular file looked at, never a link or a FIFO), the
   provider is `external`, the traces dir exists, and the
   attempt the run will resume (the base in progress; with `--retry`, the latest sample,
-  n ≥ 2, in progress) is labelled, names the run's model, `KEY.request.json` exists there
+  n ≥ 2, in progress) is labelled (its model is the run's through the id), `KEY.request.json` exists there
   (re-serializing to KEY, naming that model; while the run's first request — the one the id
   was derived from — has no response, KEY is that request) and `KEY.response.json` does not;
   the adapter writes it (a new file, never over one; counts 0) only when the attempt asks for

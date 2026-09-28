@@ -408,9 +408,9 @@ impl<W: Write> Server<W> {
         }
     }
 
-    /// The argv and the act of a call — or why not. `harness_answer` writes
-    /// its answer file here (outside the ledger), for the resume's
-    /// `--answer`.
+    /// The argv and the act of a call — or why not. `harness_answer`'s reply
+    /// rides in the `Posed` for the spawn's stdin (`--answer=-`), never a
+    /// file.
     fn prepare(
         &mut self,
         tool: &'static str,
@@ -580,6 +580,9 @@ impl<W: Write> Server<W> {
                 let input = acts::answer_input(arg(args, "text").unwrap_or_default())?;
                 let mut argv = acts::strip_answer(&h.argv);
                 argv.push(OsString::from("--answer=-"));
+                // Its length frames it: a read cut short (this server killed
+                // mid-write) is refused, never filed (§R5 F2).
+                argv.push(OsString::from(format!("--answer-bytes={}", input.len())));
                 argv.push(OsString::from(format!(
                     "--answer-key={}",
                     key.unwrap_or_default()
@@ -1590,9 +1593,14 @@ exit 1"#,
             .strip_prefix(posing)
             .unwrap_or_else(|| panic!("the resume is the posing argv plus the answer: {resume}"));
         let words: Vec<&str> = rest.split_whitespace().collect();
-        assert_eq!(words.len(), 2, "{rest}");
+        assert_eq!(words.len(), 3, "{rest}");
         assert_eq!(words[0], "--answer=-", "on stdin, never a file");
-        assert_eq!(words[1], "--answer-key=0123abcd");
+        assert_eq!(
+            words[1],
+            format!("--answer-bytes={}", "src/logic.rs ...".len()),
+            "framed by its length"
+        );
+        assert_eq!(words[2], "--answer-key=0123abcd");
         assert!(s.hand_offs.is_empty(), "answered: forgotten");
         let r = call(&mut s, 4, "harness_answer", answer("claude-opus-5-5"));
         assert_eq!(r["result"]["isError"], true);
@@ -1703,9 +1711,10 @@ exit 1"#,
         for (line, key) in lines[1..].iter().zip([k1, k2, k3]) {
             let rest = line.strip_prefix(lines[0]).unwrap();
             let words: Vec<&str> = rest.split_whitespace().collect();
-            assert_eq!(words.len(), 2, "one answer, never two: {rest}");
+            assert_eq!(words.len(), 3, "one answer, never two: {rest}");
             assert_eq!(words[0], "--answer=-", "{rest}");
-            assert_eq!(words[1], format!("--answer-key={key}"));
+            assert!(words[1].starts_with("--answer-bytes="), "{rest}");
+            assert_eq!(words[2], format!("--answer-key={key}"));
         }
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(fake.parent().unwrap());

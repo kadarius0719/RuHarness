@@ -223,7 +223,8 @@ pub fn args_without_answer() -> Vec<String> {
     without_answer(args())
 }
 
-/// `args` without `--answer`/`--answer-key` (attached or as the next word).
+/// `args` without `--answer`/`--answer-key`/`--answer-bytes` (attached or as
+/// the next word).
 pub fn without_answer(args: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut skip = false;
@@ -232,11 +233,14 @@ pub fn without_answer(args: &[String]) -> Vec<String> {
             skip = false;
             continue;
         }
-        if arg == "--answer" || arg == "--answer-key" {
+        if arg == "--answer" || arg == "--answer-key" || arg == "--answer-bytes" {
             skip = true;
             continue;
         }
-        if arg.starts_with("--answer=") || arg.starts_with("--answer-key=") {
+        if arg.starts_with("--answer=")
+            || arg.starts_with("--answer-key=")
+            || arg.starts_with("--answer-bytes=")
+        {
             continue;
         }
         out.push(arg.clone());
@@ -418,6 +422,9 @@ mod tests {
             "0123abcd",
             "--answer=/tmp/b.txt",
             "--answer-key=fedcba98",
+            "--answer-bytes",
+            "12",
+            "--answer-bytes=34",
             "--steer=--answer",
         ]
         .iter()

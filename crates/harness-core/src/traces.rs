@@ -136,12 +136,16 @@ const MAX_SCAN: usize = 65_536;
 
 /// Whether the request `record`'s id was derived from (see
 /// [`crate::attempts::first_request_of`]) has a response in `dir`: until it
-/// has, the attempt waits on that request and no other (§R4 CE-6); a record
-/// with a turn had it answered. Found by name among at most [`MAX_SCAN`]
-/// entries — not found is "not answered" (the narrower binding).
+/// has, the attempt waits on that request and no other (§R4 CE-6). A record
+/// with a turn names that request; one without (a resume stores it so until
+/// turn 1 is re-judged, §R5 NEW-1) has it found by name among at most
+/// [`MAX_SCAN`] entries — not found is "not answered" (the narrower binding).
 pub fn first_request_answered(dir: &Path, record: &crate::attempts::AttemptRecord) -> bool {
-    if !record.turns.is_empty() {
-        return true;
+    // A recorded first turn names its key: answered when its response is
+    // there — as `check_answer` decides from the run's own first key.
+    if let Some(first) = record.turns.first() {
+        return is_trace_key(&first.request_key)
+            && std::fs::symlink_metadata(response_path(dir, &first.request_key)).is_ok();
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return false;
@@ -163,8 +167,8 @@ pub fn response_path(dir: &Path, key: &str) -> PathBuf {
 /// one (a hand-off answered once stays answered): pretty JSON written to a
 /// temp dotfile (no trace reader looks at it), synced, then hard-linked into
 /// place, so it is whole or absent (where the filesystem has no hard links,
-/// created new in place under the ledger lock). `AlreadyExists` is an error
-/// naming the hand-off.
+/// renamed into place once the name is seen free, under the ledger lock).
+/// `AlreadyExists` is an error naming the hand-off.
 pub fn write_new_response(
     dir: &Path,
     key: &str,
@@ -190,18 +194,20 @@ pub fn write_new_response(
         file.sync_all()?;
         match std::fs::hard_link(&tmp, &target) {
             // A filesystem without hard links (exFAT, FAT, some network
-            // shares; §R4 CR-8): created new in place — the writer holds the
-            // ledger lock, so no reader sees it half written.
+            // shares; §R4 CR-8): the synced temp renamed into place once the
+            // name is seen free — whole or absent still; the writer holds the
+            // ledger lock, so no other harness writer races the check.
             Err(e)
                 if e.kind() != std::io::ErrorKind::AlreadyExists
                     && e.kind() != std::io::ErrorKind::NotFound =>
             {
-                let mut direct = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&target)?;
-                direct.write_all(&bytes)?;
-                direct.sync_all()
+                match std::fs::symlink_metadata(&target) {
+                    Ok(_) => Err(std::io::ErrorKind::AlreadyExists.into()),
+                    Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {
+                        std::fs::rename(&tmp, &target)
+                    }
+                    Err(other) => Err(other),
+                }
             }
             linked => linked,
         }

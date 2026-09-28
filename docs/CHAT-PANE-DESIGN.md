@@ -263,7 +263,7 @@ the act's gates re-checked at confirm on a fresh read (wrapper §4.3):
 | `harness_migrate {unit}` | **Migrate** (new) | `migrate <unit> --no-promote --provider=<p> --model=<m> --requester=chat` | the unit planned, tried or failing; `<p>` the first `--provider`; `<m>` the chat's model when `<p>` is `external` (the chat answers, §3.4), else the target's migrate model (pinned like Modify) |
 | `harness_steer {unit, from, steer}` | Modify | `migrate <unit> --no-promote --provider=<p> --model=<m> --from=<from> --steer=<note> --requester=chat` | Modify's gates; the note rules; `<p>`, `<m>` as for Migrate; the dialog calls it "the chat's note" |
 | `harness_retry {unit, attempt}` | Retry | the record's run shape, `--requester=chat` | only a record labelled `chat` (a retry of any other would record unlabelled output at the chat's request — MCP-DESIGN §R2 TRUST-7); for an `external` record, only when its model is the chat's (the chat will answer its turns); Retry's refusals |
-| `harness_answer {attempt, request_key, text}` | **Continue** (new) | from the record: `migrate <unit> --no-promote --provider=<record> --model=<record> [--from --steer] [--retry for a sample] --requester=chat --answer=- --answer-key=<key>` (the text on the CLI's stdin) | §3.4 |
+| `harness_answer {attempt, request_key, text}` | **Continue** (new) | from the record: `migrate <unit> --no-promote --provider=<record> --model=<record> [--from --steer] [--retry for a sample] --requester=chat --answer=- --answer-bytes=<n> --answer-key=<key>` (the text on the CLI's stdin) | §3.4 |
 
 A tool argument reaches an argv only as: a unit or attempt id (a clean path segment, existing in
 the last read), the steer note (the note rules), the request key (8 lowercase hex, equal to the
@@ -376,7 +376,7 @@ The chat answers:
    (step 2) in this generation — its last page (`omitted` null) returned as a successful tool
    result, matched by `tool_use_id`; the answering model is the attempt's. It runs the Continue
    argv of §3.1 with the text (≤ 512 KiB, UTF-8, non-empty) on the command's stdin
-   (`--answer=-`; `Running::spawn_with_input`) — never a file: a temp file is readable, and
+   (`--answer=- --answer-bytes=<n>`; `Running::spawn_with_input`) — never a file: a temp file is readable, and
    writable, by the oracle's build steps (§R5 S-NEW-1), and would outlive a crash. The CLI writes
    the response only after its own checks (§4.3). The outcome returns: green, red, or awaiting
    the next turn (a repair), until the attempt ends.
@@ -423,8 +423,10 @@ refuses independently all but the answering model, which it cannot know — it b
 model through the id (§4.3). So the person's own Modify (`m`) with `external` stays answered by
 hand, as today; its dialog says so ("the hand-off is answered by hand — see Help — or ask the
 chat to modify this attempt instead"), and the chat's refusal of such an attempt says the same.
-The person's own Retry (`r`) of a chat-labelled `external` record is greyed: "ask the chat to
-retry it — the chat answers its turns"; of a chat-labelled live record it runs with the label.
+The person's own Retry (`r`) of a chat-labelled `external` record is greyed — "the chat answers
+its turns — ask the chat to retry it" for a steer attempt, "… for a steer attempt from it" for an
+unseeded one (standalone harness-mcp retries only steer attempts, §R5 S-NEW-3); of a
+chat-labelled live record it runs with the label.
 
 ### 3.5 Stop
 
@@ -489,8 +491,10 @@ retry it — the chat answers its turns"; of a chat-labelled live record it runs
 ### 4.3 The CLI
 
 - `harness migrate <UNIT> … --requester=chat` records the label (§4.1).
-- `harness migrate <UNIT> … --answer=<FILE> --answer-key=<KEY>` (`<FILE>` `-`: stdin, as
-  harness-mcp and the cockpit pass it):
+- `harness migrate <UNIT> … --answer=<FILE> --answer-key=<KEY> [--answer-bytes=<N>]` (`<FILE>`
+  `-`: stdin, as harness-mcp and the cockpit pass it — then `--answer-bytes` is required and a
+  read of another length refused: a writer killed midway never has a prefix filed, §R5 F2; a
+  terminal on stdin is refused):
   - refused **up front**, typed `answer-refused` — by listing and loading only, never a replay or
     a judge, before the run writes anything of its own and without creating a directory (as
     built: only an interrupted promotion is recovered first, as by every migrate, §R4 CS-12) —
@@ -499,7 +503,7 @@ retry it — the chat answers its turns"; of a chat-labelled live record it runs
     looked at (not a link, never a FIFO, through a checked handle, bounded);
     `traces/chat/` exists; the attempt **the run will resume** — the base when it is in progress;
     with `--retry` after a finished base, the latest sample (n ≥ 2) — has an **in-progress**
-    record labelled `chat` naming the run's model (a waiting sample without `--retry` is refused
+    record labelled `chat` (whose model is the run's through the id; a waiting sample without `--retry` is refused
     with "pass --retry") — `--answer` never creates an attempt or a sample; in `traces/chat/`,
     `<KEY>.request.json` exists, names the record's model and re-serializes to `<KEY>` — while
     the run's first request (the one the id was derived from) has no response, `<KEY>` is that
@@ -529,7 +533,8 @@ Standalone (a Claude Code window), and — for the reads and the tool list — i
 - `harness_retry` refuses a record not labelled `chat`, and passes the label.
 - **`harness_answer {attempt, request_key, model, text}`** (standalone only — in cockpit mode
   every act refuses, below) answers through the CLI: harness-mcp spawns the posing act's argv
-  with `--answer=- --answer-key=<key>` appended and the text on the CLI's stdin — never a file
+  with `--answer=- --answer-bytes=<n> --answer-key=<key>` appended and the text on the CLI's
+  stdin, framed by its length — never a file
   (as built after §R5: the private answer dir and its sweep are gone) — the argv it keeps for a later turn is the
   posing one, never with the answer flags, so a repair turn's answer is appended once —
   refused unless the key is the one its own posed hand-off reported; the CLI's checks (§4.3)
@@ -713,7 +718,8 @@ and the brief is the text any other runtime can take. It says, briefly:
    hooks, nor the parent session's environment; its inbox is off the shared listing and a
    foreign message ends the continuation permission (§1.1).
 3. **The chat's arguments** reach an argv only as existing clean ids, a checked note, a request
-   key equal to the one the cockpit holds, or an answer file the cockpit wrote (§3.1).
+   key equal to the one the cockpit holds, or the answer text on the CLI's stdin, framed by its
+   length (§3.1).
 4. **Untrusted text.** The model's text is filtered on screen. Everything the cockpit sends the
    chat — outcomes, refusals, the context block — fences ledger and CLI strings, with one fence
    implementation; the context carries harness-shaped values only.
@@ -1022,3 +1028,19 @@ one low-medium. Fix pass 2 answered each:
 | low — replay without `traces/` lost find_recorded's explanation (NEW-2); a doc comment moved (NEW-3); `(chat)` missing on skipped and expected-divergence lines (CE-11 rest); the cockpit sent an unseeded chat record to a retry harness-mcp refuses (S-NEW-3); docs (N6) | the explanation as context; moved back; tagged; "ask the chat for a steer attempt from it"; docs |
 | carried to Build D — the chat's own stale-dir sweep (§1.1, §9) has the answer sweep's hazards | only dirs of this user with mode 0700; a pid is gone only when `kill -0` says so under `LC_ALL=C` (a failed probe, EPERM or any other answer: alive); bounded, off the loop |
 | accepted — pid namespaces sharing `/tmp` (moot without the sweep); `harness_request` re-reads up to 16 MiB per call (linear); the lock and promotion recovery before `--answer`'s checks; after the first request, any pending request of the model served under the attempt (`harness_answer` still takes only the hand-off's key) | as stated in §4.3/§4.4 |
+
+## R6. Scoped check of fix pass 2 — resolved (2026-09-27)
+
+One checker over 8e16be1..0ef2f73: every §R5 row fixed or partial, no high, no medium; three
+lows and four nits (F1–F7), answered by fix pass 3 (not checked again: lows, each
+mutation-checked):
+
+| finding | resolution |
+|---|---|
+| low — the no-hard-link fallback created the response in place: a failed write or a crash left a torn response that blocks the hand-off for good (F1) | the synced temp renamed into place once the name is seen free — whole or absent |
+| low — a stdin answer cut short (harness-mcp killed mid-write past the pipe buffer) was filed as a prefix (F2) | `--answer=-` requires `--answer-bytes=<n>`; a read of another length is refused (`answer-refused`), never filed |
+| low — the cockpit's `response_present` followed symlinks and read by path: it offered Resume for a response the CLI refuses (F3) | `read_regular`, as the CLI |
+| nit — `harness_request` and `--answer` could disagree on a record with turns whose first response is missing (F4) | both ask whether the first request's response exists; the cheap key test first |
+| nit — hand-written `O_NONBLOCK` values (wrong on mips/sparc, 0 elsewhere) (F5) | `libc::O_NONBLOCK | libc::O_NOFOLLOW` (libc is already in the graph) |
+| nit — `--answer=-` from a terminal waited silently (F6) | refused |
+| nit — untested: replay without `traces/` (NEW-2), the cockpit on a symlinked response (F7) | tested; still untested by design: the swap race `O_NOFOLLOW`/dev-ino guard, the fallback (no such filesystem here), the bench `(chat)` tags |

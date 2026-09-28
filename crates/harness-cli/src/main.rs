@@ -149,6 +149,10 @@ enum Cmd {
         /// The trace key (8 hex) of the hand-off --answer answers
         #[arg(long, requires = "answer")]
         answer_key: Option<String>,
+        /// The answer's length in bytes (required with --answer=-): a read
+        /// cut short — its writer gone midway — is refused, never filed
+        #[arg(long, requires = "answer")]
+        answer_bytes: Option<u64>,
     },
     /// Record a hand edit (exactly src/logic.rs and src/ffi.rs of DIR) as a
     /// labelled human attempt, judged by the oracle like a model reply; never
@@ -356,6 +360,7 @@ fn main() -> ExitCode {
             requester,
             answer,
             answer_key,
+            answer_bytes,
         } => cmd_migrate(MigrateArgs {
             unit,
             target,
@@ -371,6 +376,7 @@ fn main() -> ExitCode {
             requester,
             answer,
             answer_key,
+            answer_bytes,
         }),
         Cmd::Override {
             unit,
@@ -1057,6 +1063,7 @@ struct MigrateArgs {
     requester: Option<String>,
     answer: Option<PathBuf>,
     answer_key: Option<String>,
+    answer_bytes: Option<u64>,
 }
 
 impl MigrateArgs {
@@ -1109,12 +1116,15 @@ impl MigrateArgs {
 /// Largest `--answer` file (as harness-mcp's `harness_answer` took).
 const MAX_ANSWER_BYTES: u64 = 512 * 1024;
 
-/// `--answer FILE --answer-key KEY`, checked: KEY 8 lowercase hex; FILE (or
-/// `-`: stdin, as harness-mcp passes it — the answer never lands in a file)
-/// a regular file of ≤ [`MAX_ANSWER_BYTES`], read through a checked handle,
-/// UTF-8, not blank. Every refusal is typed `answer-refused`.
-fn read_answer(file: &Path, key: &str) -> Result<(String, String)> {
-    use std::io::Read;
+/// `--answer FILE --answer-key KEY [--answer-bytes N]`, checked: KEY 8
+/// lowercase hex; FILE (or `-`: stdin, as harness-mcp passes it — the answer
+/// never lands in a file — never a terminal, and framed by N, so a writer
+/// killed midway leaves a short read that is refused, §R5 F2) a regular file
+/// of ≤ [`MAX_ANSWER_BYTES`], read through a checked handle; exactly N bytes
+/// when N is given; UTF-8, not blank. Every refusal is typed
+/// `answer-refused`.
+fn read_answer(file: &Path, key: &str, expected: Option<u64>) -> Result<(String, String)> {
+    use std::io::{IsTerminal, Read};
     let refuse = |why: String| {
         anyhow::Error::new(Error::AnswerRefused {
             why: format!("{}: {why}", file.display()),
@@ -1130,6 +1140,18 @@ fn read_answer(file: &Path, key: &str) -> Result<(String, String)> {
         .into());
     }
     let bytes = if file == Path::new("-") {
+        if std::io::stdin().is_terminal() {
+            return Err(refuse(
+                "stdin is a terminal: pipe the answer in, or pass a file".into(),
+            ));
+        }
+        if expected.is_none() {
+            return Err(refuse(
+                "--answer=- needs --answer-bytes (the answer's length: a read cut short is \
+                 refused)"
+                    .into(),
+            ));
+        }
         let mut bytes = Vec::new();
         std::io::stdin()
             .lock()
@@ -1150,6 +1172,12 @@ fn read_answer(file: &Path, key: &str) -> Result<(String, String)> {
             })
         })?
     };
+    if let Some(expected) = expected.filter(|&n| n != bytes.len() as u64) {
+        return Err(refuse(format!(
+            "{} bytes, not the {expected} --answer-bytes names: cut short or changed, not filed",
+            bytes.len()
+        )));
+    }
     let text = String::from_utf8(bytes).map_err(|_| refuse("it must be UTF-8".into()))?;
     if text.trim().is_empty() {
         return Err(refuse("the answer is empty".into()));
@@ -1174,12 +1202,13 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         requester,
         answer,
         answer_key,
+        answer_bytes,
     } = args;
     require_sandbox(allow_unsandboxed, "harness migrate")?;
     // `--answer`'s own checks, before the lock and anything written
     // (docs/CHAT-PANE-DESIGN.md §4.3); the attempt's are the executor's.
     let answer = match (&answer, &answer_key) {
-        (Some(file), Some(key)) => Some(read_answer(file, key)?),
+        (Some(file), Some(key)) => Some(read_answer(file, key, answer_bytes)?),
         _ => None,
     };
     let ctx = TargetContext::load(&target)?;
@@ -1503,6 +1532,7 @@ mod tests {
                 requester: None,
                 answer: None,
                 answer_key: None,
+                answer_bytes: None,
                 unit: "u-lib".into(),
                 target: PathBuf::from("/tmp/a target"),
                 provider: Some("external".into()),

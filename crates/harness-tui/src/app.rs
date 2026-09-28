@@ -727,16 +727,17 @@ pub fn shell_line(argv: &[OsString]) -> String {
 }
 
 /// Whether the awaited response file is there to resume from: a regular
-/// file within the ledger cap (never a FIFO, a device or a huge file read
-/// on the UI thread), non-empty, that parses as a JSON object.
+/// file within the ledger cap, read as the CLI reads it
+/// ([`harness_core::ledger::read_regular`]: never through a symlink, never
+/// a FIFO, a device or a huge file on the UI thread), non-empty, that parses
+/// as a JSON object.
 pub fn response_present(path: &Path) -> bool {
-    let regular = std::fs::metadata(path)
-        .is_ok_and(|m| m.is_file() && m.len() <= crate::preflight::MAX_LEDGER_FILE_BYTES);
-    regular
-        && std::fs::read(path).is_ok_and(|bytes| {
+    harness_core::ledger::read_regular(path, crate::preflight::MAX_LEDGER_FILE_BYTES).is_ok_and(
+        |bytes| {
             !bytes.is_empty()
                 && serde_json::from_slice::<serde_json::Value>(&bytes).is_ok_and(|v| v.is_object())
-        })
+        },
+    )
 }
 
 /// An unseeded attempt of the `external` provider no chat asked for: its
@@ -4754,6 +4755,16 @@ pub(crate) mod tests {
         app.tick();
         app.load_now();
         assert!(!app.awaiting[0].response_present);
+        // A symlink to a good response: refused, as the CLI refuses it
+        // (§R5 F3).
+        let elsewhere = response.with_extension("elsewhere");
+        std::fs::write(&elsewhere, "{\"text\": \"x\"}").unwrap();
+        std::fs::remove_file(&response).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &response).unwrap();
+        app.tick();
+        app.load_now();
+        assert!(!app.awaiting[0].response_present);
+        std::fs::remove_file(&response).unwrap();
         std::fs::write(&response, "{\"text\": \"x\"}").unwrap();
         app.tick();
         app.load_now();

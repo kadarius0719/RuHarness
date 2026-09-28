@@ -239,9 +239,10 @@ pub fn sample_base(id: &str) -> &str {
 }
 
 /// Whether `key` is the FIRST request of `record` — the only hand-off whose
-/// key the record binds (its id is derived from it): an in-progress record
-/// with no turn yet waits on exactly the request its id names. (A repair's
-/// key is not in the record; §R4 CE-6.)
+/// key the record binds (its id is derived from it): while that request is
+/// unanswered, the attempt waits on it and nothing else (§R4 CE-6; "no turn
+/// yet" is not the test — a resume stores its record turn-less, §R5 NEW-1).
+/// A repair's key is not in the record.
 pub fn first_request_of(record: &AttemptRecord, key: &str) -> bool {
     attempt_id_with(
         &record.unit,

@@ -258,14 +258,16 @@ pub fn answer_input(text: &str) -> Result<Vec<u8>, Refusal> {
     Ok(text.as_bytes().to_vec())
 }
 
-/// `argv` without `--answer=…`/`--answer-key=…` (this server passes them
-/// attached): the posing act's run shape, answer or not — a second answer
+/// `argv` without `--answer=…`/`--answer-bytes=…`/`--answer-key=…` (this
+/// server passes them attached): the posing act's run shape, answer or not — a second answer
 /// is appended to it, never repeated (clap refuses a repeated option).
 pub fn strip_answer(argv: &[OsString]) -> Vec<OsString> {
     argv.iter()
         .filter(|a| {
             let a = a.to_string_lossy();
-            !(a.starts_with("--answer=") || a.starts_with("--answer-key="))
+            !(a.starts_with("--answer=")
+                || a.starts_with("--answer-key=")
+                || a.starts_with("--answer-bytes="))
         })
         .cloned()
         .collect()
@@ -1101,6 +1103,7 @@ mod tests {
             os("--steer=note"),
             os("--answer=/tmp/a.txt"),
             os("--answer-key=0123abcd"),
+            os("--answer-bytes=9"),
             os("--requester=chat"),
         ];
         assert_eq!(

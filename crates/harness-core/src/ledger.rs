@@ -63,21 +63,12 @@ pub fn new_temp_file(dir: &Path, name: &str) -> Result<(PathBuf, std::fs::File),
     ))
 }
 
-/// `O_NONBLOCK` for [`read_regular`]'s open: a FIFO planted in place of a
-/// file must never block it (the same bit on macOS and the common Linux
-/// targets).
-#[cfg(target_os = "macos")]
-const O_NONBLOCK: i32 = 0x0004;
-#[cfg(target_os = "linux")]
-const O_NONBLOCK: i32 = 0o4000;
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-const O_NONBLOCK: i32 = 0;
-
 /// The bytes of `path` — a regular file (never read through a symlink) of at
 /// most `max` bytes — read through a handle checked to be the very file
 /// looked at: the ledger is target-owned, so a swap between the look and the
-/// open is refused, a FIFO never blocks the open, and a file that grows is
-/// never read past `max` (§R4 CR-11).
+/// open is refused (`O_NOFOLLOW`, then the handle's identity), a FIFO never
+/// blocks the open (`O_NONBLOCK`), and a file that grows is never read past
+/// `max` (§R4 CR-11).
 pub fn read_regular(path: &Path, max: u64) -> Result<Vec<u8>, Error> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -91,7 +82,7 @@ pub fn read_regular(path: &Path, max: u64) -> Result<Vec<u8>, Error> {
     }
     let file = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(O_NONBLOCK)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
         .open(path)
         .map_err(|e| Error::io(path, e))?;
     let meta = file.metadata().map_err(|e| Error::io(path, e))?;
