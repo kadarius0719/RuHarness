@@ -719,6 +719,80 @@ fn stopped_is_said_by_its_rule() {
     }
 }
 
+/// Fix check 3, F1/F3: a message at its end — cancelled between its start
+/// and its echo, or cancelled by the interrupt's answer — is queued no
+/// more: the runtime is idle after the result, and a marker-shaped message
+/// after it is one the cockpit did not send.
+#[test]
+fn a_message_ended_unechoed_is_queued_no_more() {
+    for case in ["lifecycle", "response"] {
+        let tmp = TmpDir::new(&format!("chat-unechoed-{case}"));
+        let mut lines = start_lines();
+        lines.push(init_line(COCKPIT_TOOLS, "connected"));
+        lines.push(echo("old-uuid"));
+        lines.push(
+            serde_json::json!({"dir": "in", "msg": {"type": "user", "uuid": "second-uuid",
+                "message": {"role": "user", "content": []}}}),
+        );
+        if case == "lifecycle" {
+            for state in ["started", "cancelled"] {
+                lines.push(
+                    serde_json::json!({"dir": "out", "msg": {"type": "command_lifecycle",
+                    "command_uuid": "second-uuid", "state": state, "uuid": "x"}}),
+                );
+            }
+        }
+        lines.push(interrupt_in());
+        if case == "response" {
+            lines.push(
+                serde_json::json!({"dir": "out", "msg": {"type": "control_response",
+                "response": {"subtype": "success", "request_id": "i1",
+                "response": {"cancelled": ["second-uuid"], "still_queued": []}}}}),
+            );
+        }
+        lines.push(result("success", false, Some("completed")));
+        lines.push(marker());
+        let rec = synthetic(&tmp, &lines);
+        let mut c = chat(&tmp, &rec, "");
+        c.send("hi", None, Instant::now()).unwrap();
+        pump_until(&mut c, |c, _| c.saw_init && c.unechoed.is_empty());
+        c.send("and then", None, Instant::now()).unwrap();
+        if case == "lifecycle" {
+            pump_until(&mut c, |c, _| c.unechoed.is_empty());
+        }
+        assert!(c.stop(), "{case}");
+        let events = pump_until(&mut c, |_, e| {
+            e.iter().any(|e| matches!(e, Event::Foreign { .. }))
+        });
+        assert!(
+            events.iter().any(|e| matches!(e, Event::Foreign { .. })),
+            "{case}: {events:?}"
+        );
+        end(&mut c);
+    }
+}
+
+/// Fix check 3, F5: a start that failed before any conversation is no
+/// conversation — the first message after it says no "new chat".
+#[test]
+fn a_first_failed_start_is_no_conversation() {
+    let tmp = TmpDir::new("chat-first-fail");
+    let rec = synthetic(&tmp, &start_lines());
+    let mut c = chat(&tmp, &rec, "");
+    let bins = std::mem::replace(
+        &mut c.bins,
+        Ok(Binaries {
+            claude: tmp.0.join("no-such-claude"),
+            mcp: PathBuf::from("/usr/bin/false"),
+        }),
+    );
+    assert!(c.send("hi", None, Instant::now()).is_err());
+    c.bins = bins;
+    c.send("hi", None, Instant::now()).unwrap();
+    assert!(!text(&mut c).contains("a new chat"), "{}", text(&mut c));
+    end(&mut c);
+}
+
 /// Fix check N3, N8: New chat after a chat that ended by itself starts
 /// afresh — the title leaves "ended", the new chat's line is said once
 /// (not again with its first message); a failed start reads "ended".
@@ -745,6 +819,9 @@ fn new_chat_after_an_ended_chat_starts_afresh() {
     assert!(c.send("again", None, Instant::now()).is_err());
     c.bins = bins;
     let _ = c.send("again", None, Instant::now());
+    // The new generation's queue holds its own message only (fix check 3,
+    // F3).
+    assert_eq!(c.unechoed.len(), 1);
     let said = text(&mut c);
     assert_eq!(said.matches("a new chat").count(), 1, "{said}");
     end(&mut c);
@@ -837,7 +914,12 @@ fn a_dead_leader_is_seen_though_its_pipes_stay_open() {
 fn an_exited_leaders_pipes_are_read_first() {
     let tmp = TmpDir::new("chat-leader-grace");
     let rec = synthetic(&tmp, &start_lines()[..2]);
-    let mut c = chat(&tmp, &rec, "echo 'the last words' >&2; sleep 30 & exit 0");
+    // Its group's last words come during the grace (fix check 3, T1).
+    let mut c = chat(
+        &tmp,
+        &rec,
+        "(sleep 0.5; echo 'the last words' >&2) & sleep 30 & exit 0",
+    );
     c.send("hi", None, Instant::now()).unwrap();
     let pid = c.live.as_ref().unwrap().pid;
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -848,6 +930,7 @@ fn an_exited_leaders_pipes_are_read_first() {
     let t = Instant::now() + LEADER_PROBE;
     assert!(c.pump(t).is_empty(), "seen exited, not yet ended");
     assert!(c.alive());
+    std::thread::sleep(Duration::from_millis(1000));
     let ev = c.pump(t + LEADER_GRACE);
     assert!(ev.contains(&Event::Ended { gen: 1 }), "{ev:?}");
     // What it printed before it exited is read: the end says it.

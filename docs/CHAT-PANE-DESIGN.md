@@ -1122,3 +1122,18 @@ rest low or nits. Fix pass 3, a test each (lows; each mutation-checked):
 **Found by the live run after fix pass 2**: the plain-environment round ended RED (haiku's
 translation, 5 of 8 checks) — the test waited for GREEN. The round is the cockpit's, the
 translation the model's: the live test takes either verdict.
+
+## R10. Scoped check of fix pass 3 — resolved (2026-09-28)
+
+One checker over 57eaa11, 21 mutations and three probe tests: every §R9 row in place, every
+fix with a stated test killed when reverted, no path to a chat act without an armed dialog or
+a live permission. One low the pass made reachable, test gaps, nits. Fix pass 4 (lows and
+tests; each mutation-checked, not checked again):
+
+| finding | resolution |
+|---|---|
+| low — a message cancelled between its start and its echo stayed "not yet echoed" for the whole generation: the idle reset of the Stop markers off, so after a later Stop racing its turn's end a marker-shaped message the cockpit did not send was swallowed (no withdrawal of the permission); the marker test was a prefix and suffix (F1) | a message leaves on its terminal lifecycle (`completed`, `cancelled` — the runtime's `command_uuid` is the cockpit's uuid) as on its echo; the two markers the runtime writes matched exactly |
+| low, test gaps — the take-back's over-reach (another act's permission, another generation's) (F2); the removals from the un-echoed set and its clear at a start (F3); the leader-grace test read its line before the grace (T1); the new-chat line across failed starts (T3) | each tested: the other permissions stand; a message cancelled by lifecycle or by the interrupt's answer leaves; a new generation's set holds its own message; the group's last line comes during the grace; two failed starts say the line once |
+| low — the live test takes a RED the cockpit could cause (a damaged answer) (F4) | accepted: the answer's bytes are framed by `--answer-bytes` (a short or long read is refused) and its stdin is unit-tested; the live test's job is the round |
+| nit — "a new chat" after a first start that failed before any conversation (F5) | said only after a conversation |
+| nit — `\r\r\n` shows `?␍`; a literal ␍ in the answer looks like a CR (F6) | accepted: the gutter is unaffected |

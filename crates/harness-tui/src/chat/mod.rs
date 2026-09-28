@@ -435,7 +435,9 @@ impl Chat {
     pub fn send(&mut self, text: &str, context: Option<&str>, now: Instant) -> Result<(), String> {
         if self.live.is_none() {
             // Said once — kept said if the start fails (fix check 2, 9).
-            if self.gen > 0 && !self.announced {
+            // Only after a conversation: never after a start that failed
+            // before one (fix check 3, F5).
+            if self.gen > 0 && !self.announced && self.has_conversation() {
                 self.say(Tone::Cockpit, NEW_CHAT);
                 self.announced = true;
             }
@@ -885,16 +887,25 @@ impl Chat {
                     }
                 }
             }
-            In::Lifecycle { uuid, state } => match state.as_str() {
-                "started" => {
-                    self.started_uuids.insert(uuid);
-                }
-                "cancelled" if self.sent.contains(&uuid) && !self.started_uuids.contains(&uuid) => {
+            In::Lifecycle { uuid, state } => {
+                // A message at its end is queued no more, echoed or not —
+                // one cancelled between its start and its echo included
+                // (fix check 3, F1).
+                if matches!(state.as_str(), "completed" | "cancelled") {
                     self.unechoed.remove(&uuid);
-                    self.transcript.undelivered(&uuid);
                 }
-                _ => {}
-            },
+                match state.as_str() {
+                    "started" => {
+                        self.started_uuids.insert(uuid);
+                    }
+                    "cancelled"
+                        if self.sent.contains(&uuid) && !self.started_uuids.contains(&uuid) =>
+                    {
+                        self.transcript.undelivered(&uuid);
+                    }
+                    _ => {}
+                }
+            }
             In::Result(r) => {
                 // A turn's end ends its Stop, whatever is queued behind it:
                 // the next turn is a new one, and can be stopped (review

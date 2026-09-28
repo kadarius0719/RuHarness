@@ -959,11 +959,27 @@ fn a_permission_ended_during_its_grant_act_is_never_granted() {
                     awaiting_event(&mut a, "a-0123456789ab");
                     assert!(a.asks.permits.contains_key("a-0123456789ab"));
                 }
+                // Another act's permission, and one of another generation
+                // given by a request of the same id, stand (fix check 3, F2).
+                let other = |gen, from: &str| Permit {
+                    gen,
+                    model: MODEL.into(),
+                    from: from.into(),
+                };
+                a.asks
+                    .permits
+                    .insert("a-111111111111".into(), other(gen, "r0"));
+                a.asks
+                    .permits
+                    .insert("a-222222222222".into(), other(gen + 1, "r1"));
                 a.open_dialog(Purpose::Cancel);
                 let Mode::Dialog(c) = std::mem::replace(&mut a.mode, Mode::Normal) else {
                     panic!("no Cancel dialog");
                 };
                 assert_eq!(a.close_dialog(*c, Choice::Stop), Command::Cancel);
+                for stands in ["a-111111111111", "a-222222222222"] {
+                    assert!(a.asks.permits.contains_key(stands), "{stands}");
+                }
             }
             "hold-elsewhere" => a.asks.end_permit("a-ffffffffffff", "a test"),
             _ => {}

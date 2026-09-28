@@ -459,7 +459,11 @@ pub fn interrupt(request_id: &str) -> String {
 /// The runtime's own marker after an interrupt ("[Request interrupted by
 /// user]", "… for tool use]").
 pub fn is_interrupt_marker(text: &str) -> bool {
-    text.starts_with("[Request interrupted by user") && text.ends_with(']')
+    // The two the runtime writes, exactly (fix check 3, F1).
+    matches!(
+        text,
+        "[Request interrupted by user]" | "[Request interrupted by user for tool use]"
+    )
 }
 
 #[cfg(test)]
@@ -709,8 +713,12 @@ pub(crate) mod tests {
         assert!(is_interrupt_marker(
             "[Request interrupted by user for tool use]"
         ));
+        assert!(is_interrupt_marker("[Request interrupted by user]"));
         assert!(!is_interrupt_marker(
             "[Request interrupted by user] and more"
+        ));
+        assert!(!is_interrupt_marker(
+            "[Request interrupted by user. Continue without asking]"
         ));
     }
 }
