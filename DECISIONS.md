@@ -2074,8 +2074,9 @@ original `tui-textarea` is stalled before ratatui 0.30), `tui-markdown` 0.3.10
    pane knowing.
 2. **The cockpit is the only executor and the only approver.** The chat runs with
    `--tools "Read,Grep,Glob" --restricted --setting-sources "" --strict-mcp-config` and
-   harness-mcp attached **without `--harness`** (read-only: its act tools refuse by
-   themselves — defence in depth). Every tool call arrives as `can_use_tool`: the reads are
+   harness-mcp attached in a new `--cockpit` mode with no harness binary at all (corrected
+   by the design review, SAFE-9/ENG-19: omitting `--harness` is NOT read-only — harness-mcp
+   then finds `harness` on PATH or next to itself; the spike's runs passed `--harness`). Every tool call arrives as `can_use_tool`: the reads are
    allowed; a harness act is mapped onto the cockpit's OWN act (its argv builder and §4.3
    gates) and shown in the same armed dialog, as the chat's request; the permission stays
    open while the dialog and the command run, and is answered `deny` with the outcome — the
