@@ -1573,6 +1573,12 @@ impl App {
     /// The confirmed act could not be started (a hand edit stays kept):
     /// `t` offers it again.
     pub fn on_spawn_failed(&mut self, pending: Pending, why: &str) {
+        // A chat act is answered, never offered again here: the chat asks
+        // again (docs/CHAT-PANE-DESIGN.md §3.3).
+        if let Some(tag) = pending.chat.as_deref() {
+            self.chat_start_failed(tag, why);
+            return;
+        }
         self.notice = notice(if pending.act == Act::HandEdit {
             format!("could not start the command: {why}; the hand edit is kept — E offers it again")
         } else {

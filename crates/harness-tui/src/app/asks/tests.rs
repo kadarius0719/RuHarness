@@ -836,3 +836,15 @@ fn the_context_block_is_harness_shaped() {
     assert!(a.context_block().starts_with("[cockpit context] About: "));
     let _ = dialog_argv;
 }
+
+/// A chat act whose command cannot start is answered, never offered again.
+#[test]
+fn a_failed_start_answers_the_chat() {
+    let tmp = TmpDir::new("asks-spawnfail");
+    let (mut a, log) = chat_app(Some("targets/zopfli"), "asks-spawnfail", &tmp);
+    ask(&mut a, "r1", "harness_migrate", json!({"unit": "u-cache"}));
+    let p = a.asks.requests.pop_front().unwrap().pending;
+    a.on_spawn_failed(p, "no such file");
+    assert!(wait_denial(&log, "r1").contains("could not be started: no such file"));
+    assert!(a.try_again.is_none());
+}

@@ -399,10 +399,40 @@ closed terminal cancels a running command cleanly. A plain `cargo build` at the 
 the cockpit; build it with `cargo build -p harness-tui` (CI builds everything). After a
 change made elsewhere (the CLI, or an act from chat — next section) press `g`.
 
-**Where it is going.** A chat pane inside the cockpit for model work (docs/TUI-DESIGN.md §9)
-comes next. Until then, a fresh
-translation is `harness migrate <unit>`, and chat happens in a separate agent session
-through `harness-mcp`.
+### The chat pane
+
+Model work happens in a chat inside the cockpit (docs/CHAT-PANE-DESIGN.md). `Tab` moves
+Files → View → **Chat**; at 156 columns and wider the chat gets a column of its own, below
+that it takes the right column while it has the focus, and a `View │ Chat` strip on the
+right column's border is always one click away (`Chat ●` when it has something for you).
+Ask in plain words — "migrate this", "why is u-lib red?" — or choose **Migrate — ask in
+chat** from a unit's menu. The chat is your own installed Claude Code (`claude`), run
+headless as a child of the cockpit, signed in its own way (it says which before the first
+message: your subscription, an API key, Bedrock, …). It reads the project through
+`harness-mcp --cockpit` and has no tool that writes; the cockpit never touches a
+credential.
+
+**The chat never runs anything.** When it wants model work — Migrate, Modify with a note,
+Retry, or its answer to a hand-off — the request waits on a line above the input, inert
+for a second; `Enter` (on an empty input) reviews it in the same armed dialog as every act,
+with the exact command, and `Esc` declines it. Scan, Refresh the plan, Re-check and Accept
+stay yours: the chat tells you which menu item to use. What the chat asked for is recorded
+`requester: chat` ("asked in chat"), keeps its hand-offs apart from the blind protocol's
+and is never scored. With the hand-off provider (`external`, the default) the chat also
+answers the model's turns: when you run a migration it asked for, each answer continues the
+run without asking again — until you hold one (`Esc` on its line), decline or cancel one,
+stop the chat or start a new one — and never when the cockpit runs `--allow-unsandboxed`.
+Nothing is accepted without you.
+
+In the chat letters are text: `Enter` sends, `Ctrl-J` (or `\` then `Enter`, or
+`Alt-Enter`) is a new line, `Esc` declines a request or stops the reply (it never leaves
+the chat — `Tab` does), `Ctrl-C` stops, clears the draft, or quits (asked), `Ctrl-X`
+cancels the running command, `Ctrl-N` starts a new chat (asked), `↑↓ PgUp PgDn` scroll,
+`F1` is help. After you leave the chat with a draft, letters in the panes are dropped until
+you press an arrow, `Tab` or `Esc` (they would be commands there). Quitting asks while a
+conversation exists; the conversation is not kept. Flags: `--no-chat`, `--chat-runtime
+PATH` (the `claude` to run), `--harness-mcp PATH` (default: the one next to the cockpit),
+`--chat-model NAME`.
 
 ## The ledger in chat (`harness-mcp`)
 
@@ -412,12 +442,12 @@ the ledger itself and every act is a spawned `harness --json …` command, so th
 lock, the sandbox and the oracle apply unchanged; it writes nothing in the ledger (an
 answer to a hand-off it posed goes to the CLI's `--answer`, which files it).
 
-It is the chat half of the review cockpit. Today you run it in its own agent session (for
-example Claude Code in a second terminal, with the `.mcp.json` entry below) beside the
-cockpit: both read the same ledger, the cockpit shows what an act from chat recorded once
-it re-reads (`g`), and if both start a writing command at once the CLI's writer lock
-refuses the second (`locked`, with the holder). A chat pane inside the cockpit, with this
-server as its tools, is being built (docs/CHAT-PANE-DESIGN.md). Every attempt a chat act
+The cockpit's chat pane runs it as `harness-mcp --cockpit`: no harness binary at all, the
+reads, and act tools that only ask — the cockpit runs what you confirm. You can also run it
+standalone in its own agent session (for example Claude Code in a second terminal, with the
+`.mcp.json` entry below) beside the cockpit: both read the same ledger, the cockpit shows
+what an act from chat recorded once it re-reads (`g`), and if both start a writing command
+at once the CLI's writer lock refuses the second (`locked`, with the holder). Every attempt a chat act
 creates is labelled `requester: chat` in the ledger — its own id, its hand-offs in the
 unit's `traces/chat/`, never scored as pipeline output; this server still poses no fresh
 translation.

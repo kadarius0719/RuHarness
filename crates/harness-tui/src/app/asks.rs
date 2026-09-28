@@ -1064,6 +1064,18 @@ impl App {
         }
     }
 
+    /// A chat act's command could not be started: the chat hears why (a
+    /// waiting Continue is gone with it).
+    pub(super) fn chat_start_failed(&mut self, tag: &ChatTag, why: &str) {
+        let why = format!("the command could not be started: {why}");
+        if tag.permitted {
+            self.asks.waiting = None;
+        }
+        self.chat.deny(&tag.request_id, &refused(&why));
+        self.chat.transcript.line(T::Bad, format!("refused: {why}"));
+        self.say(format!("the chat's act: {why}"));
+    }
+
     /// An `awaiting` event of a run for the chat: the hand-off table holds
     /// its key; a confirmed act that grants the continuation permission
     /// grants it for this attempt (§3.4).
