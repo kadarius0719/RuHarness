@@ -470,7 +470,11 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             // A closed stderr must not turn exit 1 into a panic (101).
-            let _ = writeln!(std::io::stderr(), "error: {e:#}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "error: {}",
+                report::terminal_safe(&format!("{e:#}"))
+            );
             report::error(&e);
             1
         }

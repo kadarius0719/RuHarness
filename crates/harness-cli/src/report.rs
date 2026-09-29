@@ -73,10 +73,27 @@ fn write_line(line: &str) {
     let _ = stdout.flush();
 }
 
-/// A human line: printed as is, or wrapped in a `message` event.
+/// `text` for a terminal: every control character but a newline or a tab
+/// shown as `?` (review T2) — target files (a features.toml key, a plan's
+/// parse error) reach human lines, and an escape sequence in them must not
+/// drive the person's terminal. The JSON mode escapes them already.
+pub fn terminal_safe(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// A human line: printed with [`terminal_safe`], or wrapped in a `message`
+/// event.
 pub fn line(text: String) {
     match mode() {
-        Mode::Human => write_line(&text),
+        Mode::Human => write_line(&terminal_safe(&text)),
         Mode::Json => event(&Message {
             k: "message",
             text: &text,
@@ -405,6 +422,15 @@ impl harness_llm::Progress for Progress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_human_line_never_carries_a_control_sequence() {
+        assert_eq!(
+            terminal_safe("key `a\u{7}b\u{1b}[31mRED\u{1b}]0;x\u{7}` \u{9b}2J\u{7f}"),
+            "key `a?b?[31mRED?]0;x?` ?2J?"
+        );
+        assert_eq!(terminal_safe("two\nlines\tand é"), "two\nlines\tand é");
+    }
 
     /// An `awaiting` event's `args` never carry the answer (§R4 CE-14):
     /// neither attached nor as the next word, whatever else is kept.

@@ -15,6 +15,10 @@ use crate::error::Error;
 use crate::hash;
 use std::path::{Path, PathBuf};
 
+/// The detail of every feature check when the mixed program did not link
+/// (§6.1 step 3).
+pub const MIXED_LINK_DETAIL: &str = "the mixed program did not link";
+
 /// Version of the features file this build reads.
 pub const FEATURES_SCHEMA_VERSION: i64 = 1;
 /// Directory of the features files, inside the ledger dir.
@@ -288,7 +292,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Features, Error> {
     for key in table.keys() {
         if !matches!(key.as_str(), "schema_version" | "feature" | "scenario") {
             return Err(invalid(format!(
-                "unknown key `{key}` (the keys are schema_version, [[feature]] and [[scenario]])"
+                "unknown key {key:?} (the keys are schema_version, [[feature]] and [[scenario]])"
             )));
         }
     }
@@ -398,7 +402,7 @@ fn parse_features(items: Vec<&toml::Table>) -> Result<Vec<Feature>, Error> {
         for key in t.keys() {
             if !matches!(key.as_str(), "id" | "name") {
                 return Err(invalid(format!(
-                    "{what}: unknown key `{key}` (a feature has id and name)"
+                    "{what}: unknown key {key:?} (a feature has id and name)"
                 )));
             }
         }
@@ -441,7 +445,7 @@ fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec
         for key in t.keys() {
             if !matches!(key.as_str(), "feature" | "id" | "args" | "input") {
                 return Err(invalid(format!(
-                    "{what}: unknown key `{key}` (a scenario has feature, id, args and input)"
+                    "{what}: unknown key {key:?} (a scenario has feature, id, args and input)"
                 )));
             }
         }
@@ -530,6 +534,22 @@ fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec
         });
     }
     Ok(out)
+}
+
+/// Whether the repo-relative `path` is a file directly in the repo-relative
+/// directory `dir`, compared lexically: `.` components are dropped, so a
+/// `source_dir` of `.` or `./src` names the same place as `` or `src`
+/// (review M1/O5). The oracle compares canonical paths; the readers, which
+/// hold only the facts and the plan, compare these.
+pub fn directly_in(dir: &str, path: &str) -> bool {
+    let norm = |s: &str| -> PathBuf {
+        Path::new(s)
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect()
+    };
+    let path = norm(path);
+    path.file_name().is_some() && path.parent() == Some(norm(dir).as_path())
 }
 
 /// The file name the program runs under in a scenario run (§4.1): the
@@ -754,7 +774,7 @@ impl FeatureMap {
         if self.inputs.features != now.features {
             why.push("your scenarios changed");
         }
-        if self.inputs.program != now.program {
+        if !same_program(&self.inputs.program, &now.program) {
             why.push("the program's C changed");
         }
         if self.inputs.platform != now.platform {
@@ -1088,7 +1108,7 @@ impl FeaturesNow {
         }
         Some(FeaturesNow {
             features: snapshot.digest().to_string(),
-            program: program_digest(&ctx.config, &program_files(ctx, facts)),
+            program: program_digest_now(ctx, facts),
         })
     }
 
@@ -1102,7 +1122,7 @@ impl FeaturesNow {
         } else if inputs.features != self.features {
             reasons.push("changed");
         }
-        if !inputs.features.is_empty() && inputs.program != self.program {
+        if !inputs.features.is_empty() && !same_program(&inputs.program, &self.program) {
             reasons.push("program");
         }
         if !inputs.features_skipped.is_empty() {
@@ -1117,29 +1137,14 @@ impl FeaturesNow {
 }
 
 /// Largest program file hashed for the program digest.
-const MAX_PROGRAM_FILE_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_PROGRAM_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
-/// The files the whole program is built from (§2.4), each with its current
-/// hash (`None` when missing, unreadable, or a symlink leaving the target):
-/// every top-level `.c` of `source_dir` — the set the whole-program build
-/// compiles, scanned or not; a symlink inside the target is hashed through
-/// its canonical path, as the build resolves it — and the include closure
-/// the facts record for them.
-pub fn program_files(
-    ctx: &crate::config::TargetContext,
-    facts: &crate::Facts,
-) -> Vec<(String, Option<String>)> {
-    let root = ctx.root.canonicalize().ok();
-    let hash_of = |rel: &str| {
-        let path = ctx.root.join(rel);
-        let canonical = path.canonicalize().ok()?;
-        if !root.as_ref().is_some_and(|r| canonical.starts_with(r)) {
-            return None;
-        }
-        crate::ledger::read_regular(&canonical, MAX_PROGRAM_FILE_BYTES)
-            .ok()
-            .map(|bytes| hash::bytes_hash(&bytes))
-    };
+/// The files the whole program is built from (§2.4), repo-relative, sorted,
+/// each once: every top-level `.c` of `source_dir` — the set the
+/// whole-program build compiles, scanned or not — and the include closure
+/// the facts record for them. What [`program_files`] hashes and what the
+/// read preflight budgets (review T1): one list for both.
+pub fn program_paths(ctx: &crate::config::TargetContext, facts: &crate::Facts) -> Vec<String> {
     let mut top: Vec<String> = Vec::new();
     let source_dir = ctx.root.join(&ctx.config.target.source_dir);
     if let Ok(entries) = std::fs::read_dir(&source_dir) {
@@ -1160,9 +1165,73 @@ pub fn program_files(
     paths.sort();
     paths.dedup();
     paths
+}
+
+/// Where a [`program_paths`] entry is read: its canonical path when that
+/// stays inside the (canonical) `root`, as the build resolves a symlink.
+pub fn program_file_at(root: &Path, rel: &str) -> Option<PathBuf> {
+    let canonical = root.join(rel).canonicalize().ok()?;
+    canonical.starts_with(root).then_some(canonical)
+}
+
+/// The program digest a verdict or a map records when the facts do not
+/// describe the program as it is (review O2): its include closure comes from
+/// the facts, so a program file they do not record, or one changed since the
+/// scan, may include what they never saw. Never "the same" as any digest —
+/// not even itself: coverage reads it as behind until a scan.
+pub const STALE_PROGRAM: &str = "facts-stale";
+
+/// Today's program digest ([`program_digest`] of [`program_files`]), or
+/// [`STALE_PROGRAM`] when a program file is unrecorded in the facts or its
+/// bytes differ from the facts' record of it. The one function the oracle,
+/// the map and every reader use.
+pub fn program_digest_now(ctx: &crate::config::TargetContext, facts: &crate::Facts) -> String {
+    let files = program_files(ctx, facts);
+    let recorded: std::collections::HashMap<&str, &str> = facts
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.hash.as_str()))
+        .collect();
+    let stale = files
+        .iter()
+        .any(|(path, hash)| recorded.get(path.as_str()).copied() != hash.as_deref());
+    if stale {
+        STALE_PROGRAM.to_string()
+    } else {
+        program_digest(&ctx.config, &files)
+    }
+}
+
+/// Two program digests describe the same program: equal, and neither
+/// [`STALE_PROGRAM`].
+pub fn same_program(a: &str, b: &str) -> bool {
+    a == b && a != STALE_PROGRAM
+}
+
+/// [`program_paths`], each with its current hash (`None` when missing,
+/// unreadable, larger than [`MAX_PROGRAM_FILE_BYTES`], or a symlink leaving
+/// the target). A file several paths reach is read once.
+pub fn program_files(
+    ctx: &crate::config::TargetContext,
+    facts: &crate::Facts,
+) -> Vec<(String, Option<String>)> {
+    let root = ctx.root.canonicalize().ok();
+    let mut read: std::collections::BTreeMap<PathBuf, Option<String>> = Default::default();
+    program_paths(ctx, facts)
         .into_iter()
         .map(|p| {
-            let h = hash_of(&p);
+            let h = root
+                .as_deref()
+                .and_then(|root| program_file_at(root, &p))
+                .and_then(|canonical| {
+                    read.entry(canonical.clone())
+                        .or_insert_with(|| {
+                            crate::ledger::read_regular(&canonical, MAX_PROGRAM_FILE_BYTES)
+                                .ok()
+                                .map(|bytes| hash::bytes_hash(&bytes))
+                        })
+                        .clone()
+                });
             (p, h)
         })
         .collect()
@@ -1235,6 +1304,31 @@ args = ["-h"]
 
     fn with_scenario(extra: &str) -> String {
         format!("{GOOD}\n[[scenario]]\nfeature = \"gzip\"\nid = \"x\"\n{extra}\n")
+    }
+
+    #[test]
+    fn directly_in_reads_dot_as_the_root() {
+        for (dir, path) in [
+            (".", "main.c"),
+            ("./", "./main.c"),
+            ("", "main.c"),
+            ("src", "src/a.c"),
+            ("./src", "src/a.c"),
+            ("src/", "./src/a.c"),
+            ("src/zopfli", "src/zopfli/katajainen.c"),
+        ] {
+            assert!(directly_in(dir, path), "{dir} {path}");
+        }
+        for (dir, path) in [
+            (".", "src/a.c"),
+            ("src", "a.c"),
+            ("src", "src/sub/a.c"),
+            ("src", "src"),
+            (".", "."),
+            ("src/zopfli", "src/zopflix/a.c"),
+        ] {
+            assert!(!directly_in(dir, path), "{dir} {path}");
+        }
     }
 
     #[test]
@@ -1315,13 +1409,13 @@ args = ["-h"]
 
     #[test]
     fn unknown_keys_types_and_ids_are_refused() {
-        assert!(refused(&format!("{GOOD}\nextra = 1\n")).contains("unknown key `extra`"));
+        assert!(refused(&format!("{GOOD}\nextra = 1\n")).contains("unknown key \"extra\""));
         assert!(refused(&GOOD.replace(
             "name = \"Show the help\"",
             "name = \"x\"\ndescription = \"y\""
         ))
-        .contains("unknown key `description`"));
-        assert!(refused(&with_scenario("env = []")).contains("unknown key `env`"));
+        .contains("unknown key \"description\""));
+        assert!(refused(&with_scenario("env = []")).contains("unknown key \"env\""));
         assert!(refused(&with_scenario("args = \"-c\"")).contains("must be an array"));
         assert!(refused(&with_scenario("args = [1]")).contains("args[0] must be a string"));
         assert!(
@@ -1566,7 +1660,7 @@ args = ["-h"]
         }
         std::fs::write(features_path(&dir), "schema_version = 1\nx = 1\n").expect("write");
         let invalid = FeatureSnapshot::load(&ctx);
-        assert!(matches!(&invalid, FeatureSnapshot::Invalid(m) if m.contains("unknown key `x`")));
+        assert!(matches!(&invalid, FeatureSnapshot::Invalid(m) if m.contains("unknown key \"x\"")));
         assert_eq!(invalid.digest(), INVALID_DIGEST);
         std::fs::write(features_path(&dir), "schema_version = 7\n").expect("write");
         assert!(matches!(FeatureSnapshot::load(&ctx),

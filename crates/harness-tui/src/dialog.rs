@@ -50,8 +50,8 @@ pub enum Choice {
 /// One button.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Button {
-    /// Its words.
-    pub label: &'static str,
+    /// Its words (the editor dialog names the editor: **[Open nano]**).
+    pub label: std::borrow::Cow<'static, str>,
     /// The key shown beside it (`Esc`, `y`, …).
     pub key: &'static str,
     /// The letters that press it once armed (none for the safe button,
@@ -68,7 +68,7 @@ const fn button(
     choice: Choice,
 ) -> Button {
     Button {
-        label,
+        label: std::borrow::Cow::Borrowed(label),
         key,
         letters,
         choice,
@@ -99,6 +99,10 @@ pub enum Kind {
     /// A features draft that does not validate: Keep for later, Edit again,
     /// Discard.
     EditAgain,
+    /// A save refused because the features file changed since the edit
+    /// started (docs/FEATURES-DESIGN.md §7.2 step 5): Keep for later, Edit
+    /// the new file, Discard my draft.
+    FeaturesChanged,
 }
 
 impl Kind {
@@ -139,6 +143,11 @@ impl Kind {
                 button("Keep for later", "Esc", &[], Choice::Safe),
                 button("Edit again", "y", &['y', 'Y'], Choice::Run),
                 button("Discard", "D", &['D'], Choice::Discard),
+            ],
+            Kind::FeaturesChanged => vec![
+                button("Keep for later", "Esc", &[], Choice::Safe),
+                button("Edit the new file", "y", &['y', 'Y'], Choice::Run),
+                button("Discard my draft", "D", &['D'], Choice::Discard),
             ],
         }
     }

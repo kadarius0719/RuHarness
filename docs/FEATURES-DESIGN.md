@@ -244,10 +244,17 @@ and in the map (§5.2):
   "missing")`, plus `[target] source_dir`, `include_dirs` and `[oracle] extra_link_args`. One
   core function computes it from such pairs, so the oracle and every reader agree on a
   missing file. Known gap, named in SCHEMAS.md: a non-C file a header includes (`.inc`,
-  `.def`) is not in it.
+  `.def`) is not in it. **When the facts do not describe the program** — a program file they
+  do not record, or whose bytes differ from their record of it (its includes may be ones the
+  scan never saw) — the digest is the sentinel `facts-stale`, which no comparison reads as the
+  same program, not even itself: coverage stays `program` ("the C changed since the scan: Scan
+  the project, then Re-check") until a scan (review O2). The oracle takes it **before** it
+  builds anything, the map before its builds (review O6, M10).
 
 Both are computed **once per read** — once per `verify`, once per `Snapshot::load`, once per
-`state status` — never per unit; nothing is hashed without a features file.
+`state status` — never per unit; nothing is hashed without a features file. A file several
+paths reach is read once, and the read preflight counts the program's files against its hash
+budget (§8.7; review T1).
 
 ## 3. Which verdicts cover the features: a marker, not staleness
 
@@ -314,9 +321,13 @@ So:
    `program`. So argv[0], the program's directory and its basename are the same bytes on the
    C side, the mixed side, and in the map's plain and probed runs.
 2. **A fresh temp dir** (as every confined run): the only place the run may write, removed
-   after. The sample, when the scenario has one, is written into it under its fixed file name
-   (`sample_text.txt`, `sample_rand.bin`, `sample_empty`) with a fixed modification time.
-3. The child runs with **cwd = the temp dir**, argv[0] = `<build>/f/<name>` (absolute), and
+   after; its name has a fixed width, so every run's has the same length (review O9). The
+   program's folder is `run/` inside it (review M8: `$TMPDIR`, where the map's notes go, is
+   not the folder a program lists). The sample, when the scenario has one, is written into
+   `run/` under its fixed file name (`sample_text.txt`, `sample_rand.bin`, `sample_empty`)
+   with a fixed modification time.
+3. The child runs with **cwd = `<temp dir>/run`** (it prints as `$TMPDIR/run`), `TMPDIR` = the
+   temp dir, argv[0] = `<build>/f/<name>` (absolute), and
    `{input}` = the bare file name; spawned by that absolute path (sandboxed, `sandbox-exec` is
    given it). Both raw streams (the confinement's `run_raw_with`, not `run_with`, whose own
    `$TMPDIR` replacement would be escaped twice) are rewritten one-to-one: every `$` becomes
@@ -336,7 +347,11 @@ So:
    scenario that "compares little", and Help says that programs which fork are checked only up
    to the fork. (Without the sandbox, the candidate's inability to spawn or signal rests on the
    deny scan and the capabilities check alone, as for every candidate run today; SCHEMAS.md
-   says so.)
+   says so. Nor, without the sandbox, is the build dir out of a candidate's reach: a candidate
+   run can write the C binary and the samples there. The feature step checks the C program's
+   bytes before every C run — changed, the scenario and every later one fail with "the C program
+   changed while the check ran", never a skip (review O3) — but the whole-program check has the
+   same gap, and nothing covers C reads elsewhere; SCHEMAS.md names the residual.)
 5. When the leader exits, its **process group is killed** (the `/bin/kill -KILL -- -<pgid>`
    the timeout path uses, called right after `try_wait` reports the exit and before the
    output drain's grace wait) — belt and braces behind the fork denial, and the only guard
@@ -359,9 +374,10 @@ nothing but time.)
 - **The C side is usable** when both C runs exited normally (any code), within the timeout,
   without overflowing, with identical results. Otherwise the scenario is **skipped** for this
   verdict with its `c-side-*` reason — a mistake in the scenario (or the C), not evidence
-  about any unit; no check is recorded for it, and nothing is fed to a model. The candidate
-  cannot cause it: a scenario run cannot signal or leave a process behind (§4.1), and the
-  candidate's code cannot spawn one (the deny scan, the capabilities check).
+  about any unit; no check is recorded for it, and nothing is fed to a model. Under the sandbox
+  the candidate cannot cause it: a scenario run cannot signal or leave a process behind
+  (§4.1), cannot write the build dir, and the candidate's code cannot spawn a process (the deny
+  scan, the capabilities check). Without the sandbox, see §4.1 step 4.
 - **The mixed side must match** the C runs: the same exit code and byte-identical stdout and
   stderr. A signal, a timeout, an overflow or an exec failure on the mixed side never passes —
   it is the candidate's crash, as everywhere else; a slow candidate meets the per-run
@@ -460,14 +476,20 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
 - **The mirror**: every regular file under the canonical `source_dir` — except `migration/`
   and `.git/` when `source_dir` is the target root — copied to
   `migration/build/.features/mirror/<repo-relative path>` by a new walk mode (all files, not
-  only `.c`/`.h`; contained; symlinks never followed; at most 20 000 files and 256 MiB — past
+  only `.c`/`.h`; contained: a symlink inside `source_dir` is copied as the file it names, as
+  the build resolves it, one leaving it is left out; `migration/` and `.git/` never entered,
+  so they count toward no limit (review M6); at most 20 000 files and 256 MiB — past
   either, the map refuses and says so), and each file the facts record that has a watched
   function replaced by its probed version. The compile uses `-I` the mirror's `source_dir`
   and `include_dirs`, `-fmacro-prefix-map=<mirror>=<canonical root>` (so `__FILE__` reads as
   in the plain build, which compiles canonical paths), `-include <build>/fnprobe.h`,
-  `-ffp-contract=off` and `extra_link_args`. An include that leaves `source_dir` (`../x.h`)
-  does not resolve in the mirror: the build fails and `features map` says so, naming the
-  file — it never maps a different program silently.
+  `-ffp-contract=off` and `extra_link_args`; every tool child has `SOURCE_DATE_EPOCH=0`, so the
+  plain and probed builds (and verify's all-C and mixed ones) print the same `__DATE__`,
+  `__TIME__` and `__TIMESTAMP__` (review M5). An include the facts resolved outside
+  `source_dir` is refused before any build, naming the file and the include — the mirror
+  holds `source_dir` only, and the compiler would fall through to a system header of the same
+  name: a different program, mapped silently (review M7). A probed copy that does not build
+  says so in neutral words.
 - **The insertion** — `harness_scan::probe_source(rel_path, source, index_of)`, pure, built on
   the scanner's own `collect_functions`/`canonical_id` (which, unlike mutate.rs, walk into
   preprocessor branches), with `FnDef` gaining the body's start byte:
@@ -478,10 +500,13 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   canonical id)` pair among the facts' distinct pairs (`#if` variants of one function share
   it).
 - **Unwatched** (listed in `unwatched`, never counted as "not run"): a definition under an
-  ERROR or MISSING node; a body whose first byte is not a real `{`; a definition with a
-  preprocessor directive between its declarator and its body (a brace inside `#if`, which
-  compiles on one branch only). A definition the facts do not record gets nothing — the facts
-  do not know it either.
+  ERROR node, or with a parse error in its head (one inside its body — a loop macro the parser
+  cannot read — is not in the note's way; review M9); a body whose first byte is not a real
+  `{`; a definition with a preprocessor directive between its declarator and its body (a line
+  that starts with `#` — a brace inside `#if`, which compiles on one branch only; a `#` in a
+  comment is none); a body whose first statement is a `#pragma` (STDC FENV_ACCESS, clang fp:
+  they must open the block), and a `naked` function (review M2). A definition the facts do not
+  record gets nothing — the facts do not know it either.
 
 ### 5.4 The probe runtime (harness-owned C)
 
@@ -495,7 +520,10 @@ count passed as `-DRUHARNESS_FNPROBE_N=<n>`:
   when that fails (a launchd-started process may have a soft limit of 256). Each hit writes
   its id as 4 bytes (little endian) — written at the first hit, so a crash, `_exit` or a
   timeout keeps what ran before. Two threads racing the first open may open twice; both
-  append whole records.
+  append whole records. A write that fails (the program closed its inherited descriptors)
+  reopens the path noted at the first open and writes once more; the probe saves and restores
+  `errno`, so a program never sees it there; a notes file opened but empty is "unavailable"
+  (review M3).
 - The run reads the file back with `Extras::collect` (a plain name, `lstat`, the same inode,
   capped at `4 × n × 64` bytes).
 
@@ -886,8 +914,12 @@ migration/features/ with your work".
 `preflight::check` gains nothing that can fail the read: the features file's problems are the
 snapshot's `Invalid` (§2.2), and the map's are its loader's value (§5.2). The cockpit reads
 `features.toml` (≤ 64 KiB) and `map.json` (≤ 16 MiB) only through `read_regular`, both counted in
-the preflight's byte budget when present. Nothing else is read (samples are generated in
-memory). Verdicts' `features_skipped` entries are parsed strictly (§2.3).
+the preflight's byte budget when present (a link or an oversize file is the loaders' value,
+never a refused read). The program digest (§2.4) reads the program's files: with a features
+file, the preflight counts them — each file once, however many paths reach it — against the
+hash budget, and refuses more than 50 000 of them (review T1: a thousand links to one large
+file made every read hash tens of GiB). Samples are generated in memory. Verdicts'
+`features_skipped` entries are parsed strictly (§2.3).
 
 ## 9. The chat and harness-mcp
 
@@ -1202,3 +1234,42 @@ passes; the build's own review follows).
 
 **What this changes in step 1 (5e4d1b9)**: `SkipReason::MainCount` goes.
 
+## R5. Code review of the build — 35 findings, resolved in the fix pass
+
+Four lenses on a38c2aa (trust, oracle, probe and map, cockpit and docs), each finding
+checked by an independent verifier against the code: 33 confirmed (some re-rated), 2 refuted
+as design-accepted (M4: a definition the facts do not name gets nothing, §5.3; O8: a
+candidate as slow as the timeout fails, §4.2). The rule text above is updated where it
+changed.
+
+| finding | resolution |
+|---|---|
+| C1 (high) — an unchanged editor return deleted a kept draft | the draft keeps the text it started from; only a draft equal to it is dropped; a kept draft that comes back unchanged is checked and offered again; an editor that returns at once keeps a changed draft |
+| C2 — a save refused because the file changed could never succeed | §7.2 step 5 built: **Edit the new file** (the old draft kept and named on quit, a new one from the file as it is) / **Discard my draft** / Esc |
+| C3 — "needs a re-check" named no unit | each feature carries its units to re-check (the F3 rule); its View lists them as links; rule 6 and the summary use the same list |
+| C4, C11 — hand-edit words for the features draft; "invalid plan" | the draft's own words in every notice and on quit; the loader's own message; "at that line" only with a line |
+| C5, C6 — negative claims from an incomplete, missing or out-of-date map | one `complete` flag (a current map, every scenario noted and agreeing): only then "run by none", "(n run this unit)", "no feature ran", "only this feature runs", "its functions are not in them"; else neutral words ("Fails on", "(map incomplete)", "not mapped") |
+| C7 — the result was cut at 80 columns | the result right after the unit's id |
+| C8, C13 — "not re-checked" for a C unit; grammar and counts | "still C"; per-state words ("2 need a re-check", "1 holds so far"); the real count of scenarios that cannot run; units outside the program counted apart |
+| C9 — Cancel kept an untouched draft; the draft items not greyed | an untouched draft is dropped on Cancel; both items greyed while a command runs; Discard asks first |
+| C10 — a crashed scenario "compares little" | "it did not exit (…) — it cannot be a check" first |
+| C12 — Help and the tutorial | the file's shape, the editors' keys, the "·" legend and §6.1's reasons in Help; two tutorial sentences corrected |
+| C14 — outside-the-program skips as "could not run"; an older verdict read with today's map | "not part of the program — nothing to do"; "(from an earlier features file)" on the chip and in the overlay |
+| §8.4/§8.5 gaps | the Retry/Modify/Resume/Continue sentence, the Scan sentence, the Re-check dialog's unit line, the Accept dialog's features, `recommended` for Write/Edit/Map, **[Open nano]** |
+| O1 — a dangling top-level `.c` link failed verify once features existed | a skip (`c-side-build-failed`) in the feature step; the shared program list unchanged |
+| O2 — the program digest follows the facts' closure only | the `facts-stale` sentinel when a program file is unrecorded or changed since the scan (§2.4) |
+| O3 — without the sandbox a candidate can rewrite the C binary | the C program's bytes checked before every C run (a change fails, never skips); the residual named for the whole-program check too (§4.1, SCHEMAS.md) |
+| O4 — a plan-caused link failure explained to the model as a behaviour difference | its own explanation: the plan's doing, keep the translation |
+| O5, M1 (high) — `source_dir = "."` made every unit outside and no `main()` | one lexical rule (`directly_in`) for the cockpit and the CLI; a current verdict decides inside or outside first |
+| O6, M10 — program digests taken after the builds | taken before |
+| O7 — a false "other C changed" after the features file was deleted | compared only when today has a program digest |
+| O9 — run dir names changed length | fixed width |
+| M2 — a leading `#pragma` or a naked function broke the probed build | unwatched; neutral build-failure words |
+| M3 — a closed notes descriptor lost notes and set `errno` | reopen once; `errno` saved; an empty notes file is unavailable |
+| M5 — `__DATE__`/`__TIME__` differed between separate compiles (verify too) | `SOURCE_DATE_EPOCH=0` for every tool child |
+| M6 — `migration/` and `.git/` counted toward the mirror's limit | pruned inside the walk |
+| M7 — an include outside `source_dir` resolved to a system header | refused before any build, named |
+| M8 — the notes file appeared in the program's folder | the program's cwd is `run/` inside the temp dir |
+| M9 — errors anywhere in a body, or a `#` in a comment, left a function unwatched | the head only; a line that starts with `#` |
+| T1 — the program digest outside the read budget | counted by the preflight, each file once, at most 50 000 files |
+| T2 — escape bytes from a hostile file on the terminal | unknown keys quoted; every human CLI line and error shown with control characters as `?` |

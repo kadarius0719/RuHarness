@@ -53,6 +53,14 @@ pub const ALL_FILES: &[&str] = &["*"];
 /// Walk `dir` for files whose extension is one of `exts` (without the dot;
 /// [`ALL_FILES`] for every file), within `limits`. See the module docs.
 pub fn confined(dir: &Path, exts: &[&str], limits: Limits) -> Walk {
+    confined_except(dir, exts, limits, &[])
+}
+
+/// [`confined`], never entering the directories `prune` names (paths as
+/// the walk joins them: under `dir` as given) — they count toward no limit
+/// and report no error (the features mirror leaves out `migration/` and
+/// `.git/`; review M6).
+pub fn confined_except(dir: &Path, exts: &[&str], limits: Limits, prune: &[PathBuf]) -> Walk {
     let mut walk = Walk::default();
     let canon = match dir.canonicalize() {
         Ok(c) => c,
@@ -62,8 +70,22 @@ pub fn confined(dir: &Path, exts: &[&str], limits: Limits) -> Walk {
         }
     };
     let mut visited = BTreeSet::new();
-    visit(dir, &canon, 0, exts, limits, &mut visited, &mut walk);
+    let ctx = Ctx {
+        root: &canon,
+        exts,
+        limits,
+        prune,
+    };
+    visit(dir, &ctx, 0, &mut visited, &mut walk);
     walk
+}
+
+/// What every level of a walk shares.
+struct Ctx<'a> {
+    root: &'a Path,
+    exts: &'a [&'a str],
+    limits: Limits,
+    prune: &'a [PathBuf],
 }
 
 fn full(walk: &Walk, limits: Limits) -> bool {
@@ -72,13 +94,12 @@ fn full(walk: &Walk, limits: Limits) -> bool {
 
 fn visit(
     dir: &Path,
-    root: &Path,
+    ctx: &Ctx<'_>,
     depth: usize,
-    exts: &[&str],
-    limits: Limits,
     visited: &mut BTreeSet<PathBuf>,
     walk: &mut Walk,
 ) {
+    let (root, exts, limits) = (ctx.root, ctx.exts, ctx.limits);
     let canon_dir = match dir.canonicalize() {
         Ok(c) => c,
         Err(e) => {
@@ -126,12 +147,15 @@ fn visit(
             }
         };
         if meta.is_dir() {
+            if ctx.prune.contains(&path) {
+                continue;
+            }
             if limits.max_depth.is_some_and(|max| depth >= max) {
                 // Not entered; its siblings still are.
                 walk.truncated = true;
                 continue;
             }
-            visit(&path, root, depth + 1, exts, limits, visited, walk);
+            visit(&path, ctx, depth + 1, visited, walk);
             continue;
         }
         let matches = exts.contains(&ALL_FILES[0])
@@ -274,6 +298,32 @@ mod tests {
         let walk = confined(&src, &["c"], Limits::default());
         assert_eq!(walk.files.len(), 11);
         assert!(!walk.truncated);
+    }
+
+    /// Review M6: a pruned directory is never entered — its files count
+    /// toward no limit.
+    #[test]
+    fn pruned_directories_are_not_walked() {
+        let t = Tmp::new("prune");
+        t.file("main.c");
+        for i in 0..10 {
+            t.file(&format!("migration/units/u/target/f{i}.o"));
+        }
+        t.file(".git/objects/aa/x");
+        let root = t.0.clone();
+        let limits = Limits {
+            max_files: Some(3),
+            max_depth: None,
+        };
+        let walk = confined_except(
+            &root,
+            ALL_FILES,
+            limits,
+            &[root.join("migration"), root.join(".git")],
+        );
+        assert_eq!(rel(&walk, &root), ["main.c"]);
+        assert!(!walk.truncated);
+        assert!(confined(&root, ALL_FILES, limits).truncated);
     }
 
     /// Errors are data: an unreadable directory is reported, the rest walked.

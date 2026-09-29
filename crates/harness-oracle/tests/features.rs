@@ -163,9 +163,11 @@ fn program(
     if let Some(text) = features {
         write(&root.join("migration/features/features.toml"), text);
     }
+    // The facts as a scan would write them: each file's hash, so the program
+    // digest reads them as describing the tree.
     let rec = |path: &str, includes: &[&str]| FileRecord {
         path: path.into(),
-        hash: String::new(),
+        hash: harness_core::hash::file_hash(&root.join(path)).expect("hashed"),
         includes: includes.iter().map(|s| s.to_string()).collect(),
     };
     Facts {
@@ -407,6 +409,58 @@ fn the_link_decides_the_program_and_a_unit_outside_it_skips() {
         .all(|s| s.ends_with(": not-in-program")));
 }
 
+/// Review O1: a top-level `.c` the build cannot take — an editor's dangling
+/// lock link — is the tree's doing: every scenario a C-side skip, and the
+/// verdict otherwise as without features.
+#[test]
+fn a_dangling_c_link_in_the_source_dir_is_a_skip_not_an_error() {
+    let tmp = TempDir::new("feat-dangling");
+    let (target, unit) = program(tmp.path(), GOOD, Some(FEATURES), "");
+    std::os::unix::fs::symlink(
+        "beaumorton@host.1234:1",
+        tmp.path().join("src/tool/.#main.c"),
+    )
+    .unwrap();
+    let verdict = CAbiDifferential
+        .verify(&target, &unit)
+        .expect("oracle runs");
+    assert!(verdict.green, "{}", describe(&verdict));
+    assert!(feature_names(&verdict).is_empty());
+    assert_eq!(verdict.inputs.features_skipped.len(), 6);
+    assert!(verdict
+        .inputs
+        .features_skipped
+        .iter()
+        .all(|s| s.ends_with(": c-side-build-failed")));
+}
+
+/// Review O2: a program file changed since the scan — its includes may be
+/// ones the facts never saw — records the stale-facts digest, which no
+/// status reads as current.
+#[test]
+fn a_program_changed_since_the_scan_is_never_current() {
+    let tmp = TempDir::new("feat-stale-facts");
+    let (target, unit) = program(tmp.path(), GOOD, Some(FEATURES), "");
+    let main = tmp.path().join("src/tool/main.c");
+    let text = std::fs::read_to_string(&main).unwrap();
+    std::fs::write(&main, format!("{text}\n/* edited after the scan */\n")).unwrap();
+    let verdict = CAbiDifferential
+        .verify(&target, &unit)
+        .expect("oracle runs");
+    assert_eq!(
+        verdict.inputs.program,
+        harness_core::features::STALE_PROGRAM
+    );
+    let facts = harness_core::Facts::load(&tmp.path().join("migration/facts.jsonl")).unwrap();
+    let snapshot = FeatureSnapshot::load(&target);
+    let now = harness_core::features::FeaturesNow::compute(&target, &facts, &snapshot).unwrap();
+    assert_eq!(now.program, harness_core::features::STALE_PROGRAM);
+    assert!(matches!(
+        now.coverage(&verdict.inputs),
+        harness_core::features::Coverage::Behind(r) if r.contains(&"program".to_string())
+    ));
+}
+
 #[test]
 fn a_mixed_program_that_does_not_link_fails_every_scenario() {
     // unit.c also defines a helper main.c needs; the unit's Rust exports only
@@ -557,6 +611,55 @@ fn the_map_says_which_functions_each_scenario_ran() {
     // The source tree is untouched: the probe works on a scratch copy.
     let main = std::fs::read_to_string(tmp.path().join("src/tool/main.c")).expect("main.c");
     assert!(!main.contains("__ruharness"));
+}
+
+/// Review M3: a program that closes every inherited descriptor (the notes'
+/// one too) keeps its notes, and never sees the probe in errno.
+#[test]
+fn a_program_that_closes_its_descriptors_keeps_its_notes_and_its_errno() {
+    let tmp = TempDir::new("feat-map-closefrom");
+    let features = "schema_version = 1\n[[feature]]\nid = \"closer\"\nname = \"Close all\"\n\
+                    [[scenario]]\nfeature = \"closer\"\nid = \"x\"\nargs = [\"-q\"]\n";
+    let (target, _) = program(tmp.path(), GOOD, Some(features), "");
+    write(
+        &tmp.path().join("src/tool/main.c"),
+        "#include <errno.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n\
+         #include \"unit.h\"\n#include \"mul.h\"\n\
+         static void report(void) { printf(\"%s\\n\", strerror(errno)); }\n\
+         int main(int argc, char **argv) {\n\
+           (void)argc; (void)argv;\n\
+           for (int fd = 3; fd < 4096; fd++) close(fd);\n\
+           FILE *f = fopen(\"nosuch\", \"rb\");\n\
+           if (!f) report();\n\
+           printf(\"%d %u\\n\", unit_add(1, 2), mul_step(0, 1));\n\
+           return 0;\n\
+         }\n",
+    );
+    let mut facts = with_symbols(tmp.path());
+    facts.symbols.push(harness_core::facts::SymbolRecord {
+        name: "src/tool/main.c::report".into(),
+        kind: "function".into(),
+        file: "src/tool/main.c".into(),
+        visibility: "static".into(),
+        signature: String::new(),
+        span: (1, 1),
+    });
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    let map =
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+            .expect("maps");
+    let r = &map.scenarios[0];
+    assert_eq!(r.end, "exit 0");
+    assert!(r.probe_agrees, "errno kept: {r:?}");
+    assert_eq!(r.noted, "complete");
+    let names: Vec<&str> = r.functions.iter().map(|(_, n)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        ["main", "src/tool/main.c::report", "mul_step", "unit_add"],
+        "notes after the close are kept"
+    );
 }
 
 #[test]

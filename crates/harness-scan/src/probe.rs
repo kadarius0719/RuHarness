@@ -130,9 +130,33 @@ mod tests {
         assert!(text(&p).contains("int ok(void) {if (!__ruharness_seen[1])"));
         assert!(!text(&p).contains("(__ruharness_probe)(0)"));
 
-        let broken = "int good(void) { return 1; }\nint bad(void) { return (; }\n";
+        // An error in the head is unwatched; one in the body (a loop macro
+        // the parser cannot read) is not in the note's way (review M9).
+        let broken = "int good(void) { return 1; }\nint bad(int x,) { return x; }\n";
         let p = probe_source("src/a.c", broken.as_bytes(), &|_: &str| Some(0)).expect("probes");
         assert!(p.unwatched.contains(&"bad".to_string()), "{p:?}");
+        let looped = "int total(int n) { int t = 0; FOREACH(i, n) { t += i; } return t; }\n";
+        let p = probe(looped, &["total"]);
+        assert!(p.unwatched.is_empty(), "{p:?}");
+        assert!(text(&p).contains("int total(int n) {if (!__ruharness_seen[0])"));
+        // A `#` in a comment between the head and the body is no directive.
+        let allman = "int allman(void) // fixes #42\n{\n  return 0;\n}\n";
+        let p = probe(allman, &["allman"]);
+        assert!(p.unwatched.is_empty(), "{}", text(&p));
+    }
+
+    /// Review M2: a body that must open with a `#pragma`, and a naked
+    /// function, take no note — unwatched, never a probed copy that fails
+    /// to build.
+    #[test]
+    fn a_leading_pragma_or_a_naked_function_is_unwatched() {
+        let src = "double f(double x) {\n#pragma STDC FENV_ACCESS ON\n  return x * 2; }\n\
+                   double g(double x) {\n  /* fast */\n#pragma clang fp contract(fast)\n  return x; }\n\
+                   __attribute__((naked)) void h(void) { __asm__(\"ret\"); }\n\
+                   int k(void) {\n  int a = 1;\n#pragma unroll\n  return a; }\n";
+        let p = probe(src, &["f", "g", "h", "k"]);
+        assert_eq!(p.unwatched, ["f", "g", "h"], "{}", text(&p));
+        assert!(text(&p).contains("int k(void) {if (!__ruharness_seen[3])"));
     }
 
     #[test]

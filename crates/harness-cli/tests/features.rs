@@ -138,7 +138,7 @@ fn init_writes_a_starter_once_and_save_guards_the_file() {
         Some(bad.as_bytes()),
     );
     assert_eq!(r.code, 1);
-    assert!(r.stderr.contains("unknown key `nope`"), "{}", r.stderr);
+    assert!(r.stderr.contains("unknown key \"nope\""), "{}", r.stderr);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), FEATURES);
 
     // A read cut short: refused.

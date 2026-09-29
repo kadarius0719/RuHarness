@@ -33,8 +33,24 @@ pub(crate) const TOOL_ENV: &[&str] = &[
     "RUSTUP_TOOLCHAIN",
 ];
 
+/// Variables every tool child gets with a fixed value: `SOURCE_DATE_EPOCH`
+/// pins `__DATE__`, `__TIME__` and `__TIMESTAMP__`, so two builds of the same
+/// C print the same whenever they ran (review M5: the all-C and the mixed
+/// whole programs, and the map's plain and probed copies, are separate
+/// compiles).
+pub(crate) const TOOL_FIXED_ENV: &[(&str, &str)] = &[("SOURCE_DATE_EPOCH", "0")];
+
 /// Variables copied from the parent (when set) into built binaries.
 pub(crate) const BUILT_ENV: &[&str] = &["PATH"];
+
+/// [`TOOL_FIXED_ENV`], then `extra` (which may override it).
+fn tool_env<'a>(extra: &[(&'a str, &'a std::ffi::OsStr)]) -> Vec<(&'a str, &'a std::ffi::OsStr)> {
+    TOOL_FIXED_ENV
+        .iter()
+        .map(|(k, v)| (*k, std::ffi::OsStr::new(*v)))
+        .chain(extra.iter().copied())
+        .collect()
+}
 
 /// Default `[oracle] timeout_secs`.
 pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -210,7 +226,8 @@ impl Runner {
             )));
         }
         let shown = argv.join(" ");
-        let out = self.spawn(argv, profile, TOOL_ENV, extra_env, &shown)?;
+        let env = tool_env(extra_env);
+        let out = self.spawn(argv, profile, TOOL_ENV, &env, &shown)?;
         match out.end {
             ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
             ChildEnd::Exited(status) => Err(Error::Invariant(format!(
@@ -244,7 +261,8 @@ impl Runner {
             )));
         }
         let shown = argv.join(" ");
-        let out = self.spawn(argv, self.tool_profile.as_deref(), TOOL_ENV, &[], &shown)?;
+        let env = tool_env(&[]);
+        let out = self.spawn(argv, self.tool_profile.as_deref(), TOOL_ENV, &env, &shown)?;
         Ok(match out.end {
             ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
             ChildEnd::Exited(status) => Err(format!(
@@ -685,8 +703,16 @@ mod tests {
         let keys = env_keys(&out);
         assert!(keys.iter().any(|k| k == "PATH"), "{keys:?}");
         for k in &keys {
-            assert!(TOOL_ENV.contains(&k.as_str()), "leaked variable {k}");
+            assert!(
+                TOOL_ENV.contains(&k.as_str()) || TOOL_FIXED_ENV.iter().any(|(f, _)| f == k),
+                "leaked variable {k}"
+            );
         }
+        let text = String::from_utf8_lossy(&out);
+        assert!(
+            text.lines().any(|l| l == "SOURCE_DATE_EPOCH=0"),
+            "builds are dated alike: {text}"
+        );
         assert!(!keys.iter().any(|k| k == "CARGO_MANIFEST_DIR"));
     }
 

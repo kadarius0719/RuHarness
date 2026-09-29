@@ -533,6 +533,12 @@ impl CAbiDifferential {
         // the observable streams.
         let boundary = boundary_opt_in(unit)?;
         let mut inputs = compute_inputs(target, unit, &facts)?;
+        // The program digest before the whole programs are built (review
+        // O6): a C edit during the check never reads as tested.
+        let program_now = match features {
+            harness_core::features::FeatureSnapshot::None => String::new(),
+            _ => harness_core::features::program_digest_now(target, &facts),
+        };
         inputs.toolchain = vec![
             rustc_version.clone(),
             cc_version,
@@ -742,13 +748,13 @@ impl CAbiDifferential {
         feature_step(&mut FeatureStepCtx {
             target,
             prep: &prep,
-            facts: &facts,
             unit,
             runner: &runner,
             confined: &confined,
             rust_lib: &rust_lib,
             whole: whole.as_ref(),
             features,
+            program: &program_now,
             inputs: &mut inputs,
             checks: &mut checks,
         })?;

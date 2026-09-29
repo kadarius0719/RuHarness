@@ -31,6 +31,8 @@ pub const MAX_UNIT_FACT_PAIRS: u64 = 50_000_000;
 /// Most (plan bytes × plan units) a read may parse: the status re-reads the
 /// plan for every unit that looks inconsistent.
 pub const MAX_PLAN_PARSE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// Most files the program digest may hash (docs/FEATURES-DESIGN.md §2.4).
+pub const MAX_PROGRAM_FILES: usize = 50_000;
 
 /// Checked BEFORE anything is read, so a hostile target cannot hang,
 /// exhaust or steer the server (docs/MCP-DESIGN.md §4 "Size", §R2 TRUST-2,
@@ -94,6 +96,15 @@ pub fn preflight(target: &Path) -> Result<(), String> {
             }
         }
     }
+    // The person's features and their map (§8.7): read by the loaders,
+    // which refuse a link or a file over their caps as a value — counted
+    // here, never refused here.
+    let features_dir = migration.join(harness_core::features::FEATURES_DIR);
+    let features_file = features_dir.join(harness_core::features::FEATURES_FILE);
+    let has_features = std::fs::symlink_metadata(&features_file).is_ok();
+    retained += regular_len(&features_file).min(harness_core::features::MAX_FEATURES_BYTES);
+    retained += regular_len(&harness_core::features::map_path(target))
+        .min(harness_core::features::MAX_MAP_BYTES);
     if retained > MAX_RETAINED_BYTES {
         return Err(format!(
             "the ledger holds {retained} bytes of records and verdicts (> \
@@ -129,6 +140,37 @@ pub fn preflight(target: &Path) -> Result<(), String> {
             return Err(too_much(&format!(
                 "hash more than {MAX_HASHED_BYTES} bytes"
             )));
+        }
+        // With a features file, the program digest hashes the program's
+        // files once per read (review T1): each file once, however many
+        // paths reach it, as the digest reads it.
+        if has_features {
+            if let Ok(ctx) = harness_core::TargetContext::load(target) {
+                let paths = harness_core::features::program_paths(&ctx, &facts);
+                if paths.len() > MAX_PROGRAM_FILES {
+                    return Err(too_much(&format!(
+                        "hash more than {MAX_PROGRAM_FILES} program files"
+                    )));
+                }
+                let root = ctx.root.canonicalize().map_err(|e| e.to_string())?;
+                let mut seen = std::collections::BTreeSet::new();
+                for rel in &paths {
+                    let Some(file) = harness_core::features::program_file_at(&root, rel) else {
+                        continue;
+                    };
+                    if seen.insert(file.clone()) {
+                        let n = regular_len(&file);
+                        if n <= harness_core::features::MAX_PROGRAM_FILE_BYTES {
+                            hashed += n;
+                        }
+                    }
+                }
+                if hashed > MAX_HASHED_BYTES {
+                    return Err(too_much(&format!(
+                        "hash more than {MAX_HASHED_BYTES} bytes"
+                    )));
+                }
+            }
         }
         Some(facts)
     } else {
@@ -184,6 +226,11 @@ pub fn preflight(target: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The length of `path` when it is a regular file (followed), else 0.
+fn regular_len(path: &Path) -> u64 {
+    std::fs::metadata(path).map_or(0, |m| if m.is_file() { m.len() } else { 0 })
 }
 
 /// The entries of `dir` (none when it is absent or vanished).
@@ -425,6 +472,34 @@ mod tests {
         {
             preflight(&case.path()).unwrap();
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Review T1: with a features file, the program digest's files count
+    /// against the hash budget — each file once, however many paths reach
+    /// it; without one, they are not read at all.
+    #[test]
+    fn the_program_digest_is_within_the_hash_budget() {
+        let _guard = TmpDir::new("preflight-program");
+        let base = _guard.0.canonicalize().unwrap();
+        let t = zopfli_copy(&base.join("zopfli"));
+        let src = t.join("src/zopfli");
+        // One large file, a thousand top-level `.c` links to it: once.
+        sparse(&src.join("zz_big.c"), 60 * 1024 * 1024);
+        for i in 0..1000 {
+            std::os::unix::fs::symlink("zz_big.c", src.join(format!("zz_{i}.c"))).unwrap();
+        }
+        preflight(&t).unwrap();
+        // Distinct files past the budget: refused, before anything is read.
+        let cap = harness_core::features::MAX_PROGRAM_FILE_BYTES;
+        for i in 0..=(MAX_HASHED_BYTES / cap) {
+            sparse(&src.join(format!("zz_distinct_{i}.c")), cap);
+        }
+        let err = preflight(&t).unwrap_err();
+        assert!(err.contains("hash more than"), "{err}");
+        // Without a features file the program is not hashed.
+        std::fs::remove_dir_all(t.join("migration/features")).unwrap();
+        preflight(&t).unwrap();
         let _ = std::fs::remove_dir_all(&base);
     }
 

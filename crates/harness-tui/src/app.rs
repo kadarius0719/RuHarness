@@ -348,6 +348,8 @@ pub enum Purpose {
     OpenEditor,
     /// A features draft that does not validate.
     EditAgain,
+    /// A save refused because the features file changed meanwhile.
+    FeaturesChanged,
 }
 
 /// An open dialog: its words and its latch.
@@ -751,6 +753,9 @@ pub struct App {
     pub kept_edits: Vec<KeptEdit>,
     /// The person's features draft, kept until saved or discarded.
     pub features_draft: Option<features_edit::FeaturesDraft>,
+    /// Earlier features drafts kept when the person chose to edit the file
+    /// as it is now (§7.2 step 5): named on quit, never removed here.
+    pub kept_drafts: Vec<PathBuf>,
     /// Temp dirs kept only for what an editor left in them.
     pub leftovers: Vec<PathBuf>,
     /// Modify's last note per attempt (cancelled, declined or refused).
@@ -940,6 +945,7 @@ impl App {
             view_follow: true,
             kept_edits: Vec::new(),
             features_draft: None,
+            kept_drafts: Vec::new(),
             leftovers: Vec::new(),
             notes: BTreeMap::new(),
             holder,
@@ -1649,7 +1655,8 @@ impl App {
             .iter()
             .map(|k| k.tmp.join("edit"))
             .chain(self.leftovers.iter().map(|t| t.join("edit")))
-            .chain(self.features_draft.iter().map(|d| d.tmp.clone()))
+            .chain(self.features_draft.iter().map(|d| d.file.clone()))
+            .chain(self.kept_drafts.iter().cloned())
             .collect()
     }
 
@@ -2185,13 +2192,21 @@ impl App {
         let routing = || self.migrate_model.clone();
         let (title, mut body) = match p.act {
             Act::SaveFeatures => self.save_features_words(p),
-            Act::Scan => (
-                "Scan the project?".to_string(),
-                vec![
-                    "Reads every C file and rewrites migration/facts.jsonl.".into(),
-                    "A changed C file makes the verdicts that used it out of date.".into(),
-                ],
-            ),
+            Act::Scan => {
+                (
+                    "Scan the project?".to_string(),
+                    vec![
+                        "Reads every C file and rewrites migration/facts.jsonl.".into(),
+                        "A changed C file makes the verdicts that used it out of date.".into(),
+                    ]
+                    .into_iter()
+                    // §8.5: the map is built from the facts.
+                    .chain(self.has_scenarios().then(|| {
+                        "A change in the C makes the features map out of date.".to_string()
+                    }))
+                    .collect(),
+                )
+            }
             Act::Plan => (
                 "Refresh the plan?".into(),
                 vec![
@@ -2248,6 +2263,12 @@ impl App {
                 ]
                 .into_iter()
                 .chain(self.features_sentence())
+                // §8.4: the Re-check dialog repeats the unit's features line.
+                .chain(
+                    p.unit
+                        .as_deref()
+                        .and_then(|u| crate::view::unit_features_line(self, u)),
+                )
                 .collect(),
             ),
             Act::Accept => {
@@ -2265,7 +2286,12 @@ impl App {
                              and marks the attempt promoted."
                         ),
                         "If it does not verify in place, the old crate is put back.".into(),
-                    ],
+                    ]
+                    .into_iter()
+                    // §8.4: which features run the unit, without marks —
+                    // the attempt's own verdict is what Accept judges.
+                    .chain(p.unit.as_deref().and_then(|u| self.features_running(u)))
+                    .collect(),
                 )
             }
             Act::Modify | Act::Retry | Act::Resume | Act::Migrate | Act::Continue => {
@@ -2347,6 +2373,24 @@ impl App {
                         });
                     }
                 }
+                // §8.5: every judged turn runs the person's features too.
+                match &self.snapshot.features {
+                    harness_core::features::FeatureSnapshot::Invalid(_) => body.push(
+                        "Your features file has an error: its judged turns will not check your \
+                         features."
+                            .into(),
+                    ),
+                    harness_core::features::FeatureSnapshot::Valid { features, .. }
+                        if !features.scenarios.is_empty() =>
+                    {
+                        let n = features.scenarios.len();
+                        body.push(format!(
+                            "Each judged turn also runs your {n} feature scenario{}.",
+                            if n == 1 { "" } else { "s" }
+                        ));
+                    }
+                    _ => {}
+                }
                 if let Some(tag) = &p.chat {
                     asks::chat_words(tag, &mut body, self.migrate_turns);
                 }
@@ -2412,7 +2456,7 @@ impl App {
                 "Start a new chat?".into(),
                 vec!["The chat forgets this conversation.".into()],
             ),
-            Purpose::OpenEditor | Purpose::EditAgain => (
+            Purpose::OpenEditor | Purpose::EditAgain | Purpose::FeaturesChanged => (
                 Kind::OpenEditor,
                 "Open the features file?".into(),
                 Vec::new(),
@@ -2650,7 +2694,10 @@ impl App {
     }
 
     fn close_dialog(&mut self, confirm: Confirm, choice: Choice) -> Command {
-        if matches!(confirm.purpose, Purpose::OpenEditor | Purpose::EditAgain) {
+        if matches!(
+            confirm.purpose,
+            Purpose::OpenEditor | Purpose::EditAgain | Purpose::FeaturesChanged
+        ) {
             return self.close_features_dialog(confirm.purpose, choice);
         }
         if let Purpose::Act(p) = &confirm.purpose {
@@ -2673,7 +2720,14 @@ impl App {
                 }
                 Err(why) => {
                     self.notice = notice(format!("{}: {why}", p.label));
-                    if let Some(tmp) = &p.cleanup {
+                    if let (Act::SaveFeatures, Some(d)) = (p.act, &self.features_draft) {
+                        self.notice = notice(format!(
+                            "{}: {why}; your features draft is kept in {} — the menu offers \
+                             Continue my features draft",
+                            p.label,
+                            d.file.display()
+                        ));
+                    } else if let Some(tmp) = &p.cleanup {
                         self.notice = notice(format!(
                             "{}: {why}; the hand edit is kept in {} — E offers it again",
                             p.label,
@@ -2688,6 +2742,18 @@ impl App {
                 self.forget_edit(&tmp);
                 self.notice = notice("hand edit discarded");
                 Command::Cleanup(tmp)
+            }
+            (Purpose::Act(p), _) if p.act == Act::SaveFeatures => {
+                self.notice = notice(match &self.features_draft {
+                    Some(d) => format!(
+                        "{}: not run; your features draft is kept in {} — the menu offers \
+                         Continue my features draft",
+                        p.label,
+                        d.file.display()
+                    ),
+                    None => format!("{}: not run", p.label),
+                });
+                Command::None
             }
             (Purpose::Act(p), _) => {
                 self.notice = notice(match p.cleanup {
@@ -2710,7 +2776,9 @@ impl App {
                 Command::None
             }
             (Purpose::Quit | Purpose::Cancel | Purpose::NewChat, _) => Command::None,
-            (Purpose::OpenEditor | Purpose::EditAgain, _) => Command::None,
+            (Purpose::OpenEditor | Purpose::EditAgain | Purpose::FeaturesChanged, _) => {
+                Command::None
+            }
         }
     }
 
@@ -2722,16 +2790,23 @@ impl App {
         self.refresh_holder();
         let items = self.menu_items();
         let next = self.next_step().and_then(|(_, act)| act);
-        let wants_map = match &self.selection {
-            Selection::Feature(id) => self.features.feature(id).is_some_and(|f| {
-                matches!(
-                    f.state,
-                    featmap::FeatureState::NotMapped | featmap::FeatureState::MapOutOfDate
-                )
+        let want = match &self.selection {
+            Selection::Features => match self.features.group {
+                featmap::Group::NoFile | featmap::Group::Invalid(_) => {
+                    Some(menu::Action::EditFeatures)
+                }
+                featmap::Group::Valid => None,
+            },
+            Selection::Feature(id) => self.features.feature(id).and_then(|f| match f.state {
+                featmap::FeatureState::NotMapped | featmap::FeatureState::MapOutOfDate => {
+                    Some(menu::Action::Act(Act::MapFeatures))
+                }
+                featmap::FeatureState::ScenarioCannotRun => Some(menu::Action::EditFeatures),
+                _ => None,
             }),
-            _ => false,
+            _ => None,
         };
-        let focus = menu::recommended(&items, &self.selection, next, wants_map);
+        let focus = menu::recommended(&items, &self.selection, next, want);
         self.mode = Mode::Menu(Menu {
             items,
             focus,
@@ -2882,7 +2957,7 @@ impl App {
                 Command::None
             }
             Action::EditFeatures => self.start_features_edit(),
-            Action::DiscardFeaturesDraft => self.discard_features_draft(),
+            Action::DiscardFeaturesDraft => self.ask_discard_features_draft(),
         }
     }
 
@@ -2964,26 +3039,11 @@ impl App {
                 Some(Act::MapFeatures),
             ));
         }
-        // 6. A unit with Rust whose verdict does not cover the features.
-        if let Some(u) = self.snapshot.units.iter().find(|u| {
-            matches!(
-                u.unit.status,
-                harness_core::plan::UnitStatus::Verified | harness_core::plan::UnitStatus::Merged
-            ) && self.features.features.iter().any(|f| {
-                f.units.iter().any(|r| {
-                    r.unit == u.unit.id
-                        && matches!(
-                            r.result,
-                            featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
-                        )
-                })
-            })
-        }) {
+        // 6. A unit with Rust whose verdict does not cover the features —
+        // the F3 rule's units (review C3).
+        if let Some(u) = self.features.recheck.first() {
             return Some((
-                format!(
-                    "Re-check {} — your features are not checked on it (open it: Units)",
-                    u.unit.id
-                ),
+                format!("Re-check {u} — your features are not checked on it (open it: Units)"),
                 None,
             ));
         }
@@ -4210,6 +4270,39 @@ impl App {
 
     /// What a judged run will do with the person's features, for the dialogs
     /// (docs/FEATURES-DESIGN.md §8.5): nothing without a file.
+    /// The features file is valid and holds a scenario.
+    fn has_scenarios(&self) -> bool {
+        matches!(
+            &self.snapshot.features,
+            harness_core::features::FeatureSnapshot::Valid { features, .. }
+                if !features.scenarios.is_empty()
+        )
+    }
+
+    /// Which of the person's features run `unit`, by name — from a current,
+    /// complete map only, without results (the Accept dialog, §8.4).
+    fn features_running(&self, unit: &str) -> Option<String> {
+        let model = &self.features;
+        if !model.complete {
+            return None;
+        }
+        let uf = model.by_unit.get(unit)?;
+        if uf.outside {
+            return None;
+        }
+        let names: Vec<String> = uf
+            .running
+            .iter()
+            .filter_map(|(fid, _)| model.feature(fid))
+            .map(|f| crate::display::line(&f.name))
+            .collect();
+        Some(if names.is_empty() {
+            "None of your features runs this unit's functions.".into()
+        } else {
+            format!("Your features that run it: {}.", names.join(", "))
+        })
+    }
+
     fn features_sentence(&self) -> Option<String> {
         use harness_core::features::FeatureSnapshot;
         match &self.snapshot.features {

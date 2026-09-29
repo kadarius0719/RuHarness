@@ -362,12 +362,12 @@ argument is a flag or a word, never a path.
 - **Map them.** *Map the features* runs each scenario on a scratch copy of the C in which every
   function notes that it ran. The Features view then shows, for each feature, which pieces of
   the program it runs, which of those are already in Rust, and whether its checks passed there
-  — and each piece shows which of your features run it. A piece that none of your features
-  runs is said plainly: its checks pass whatever its Rust does, so you may want a scenario that
-  reaches it.
+  — and each piece says how many of your features run it, and names any that failed on it. A
+  piece that none of your features runs is said plainly: its checks pass whatever its Rust
+  does, so you may want a scenario that reaches it.
 
-Each piece is still checked with only its own Rust swapped in; the Features view says so
-wherever a feature "holds so far". Commit `migration/features/` with your work.
+Each piece is still checked with only its own Rust swapped in: a feature's own view says so
+when it "holds so far". Commit `migration/features/` with your work.
 
 ## Your first migration, step by step
 

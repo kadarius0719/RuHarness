@@ -24,6 +24,10 @@ pub struct FeaturesDraft {
     /// What `--expect` names: the blake3 of the file's bytes when the edit
     /// started, or `none` when there was no file.
     pub expect: String,
+    /// The text the draft started from (the file, or the starter): a draft
+    /// that differs from it holds the person's work and is never dropped
+    /// unasked (review C1).
+    pub origin: String,
     /// The draft's text when it was last handed to the editor.
     pub before: String,
     /// The line of the last validation error, for the editor's `+N`.
@@ -167,6 +171,7 @@ impl App {
                 tmp,
                 file,
                 expect,
+                origin: text.clone(),
                 before: text,
                 error_line: None,
                 started: None,
@@ -190,6 +195,14 @@ impl App {
         ];
         let mut dialog = Dialog::new(Kind::OpenEditor, self.now);
         dialog.chat_rules = false;
+        // The button says what opens (§7.2 step 3).
+        if let Some(open) = dialog
+            .buttons
+            .iter_mut()
+            .find(|b| b.choice == crate::dialog::Choice::Run)
+        {
+            open.label = format!("Open {name}").into();
+        }
         self.mode = Mode::Dialog(Box::new(super::Confirm {
             dialog,
             title,
@@ -198,7 +211,8 @@ impl App {
         }));
     }
 
-    /// The editor dialog closed (or the edit-again one).
+    /// The editor dialog closed (or the edit-again, discard or changed-file
+    /// one).
     pub(super) fn close_features_dialog(&mut self, purpose: Purpose, choice: Choice) -> Command {
         match (purpose, choice) {
             (Purpose::OpenEditor | Purpose::EditAgain, Choice::Run) => {
@@ -212,17 +226,53 @@ impl App {
                     line: draft.error_line,
                 }
             }
-            (Purpose::EditAgain, Choice::Discard) => self.discard_features_draft(),
-            _ => {
-                if let Some(d) = &self.features_draft {
-                    self.notice = notice(format!(
-                        "your features draft is kept in {} — the menu offers it again",
-                        d.file.display()
-                    ));
+            // §7.2 step 5: the draft stays kept (named on quit); a fresh one
+            // starts from the file as it is now.
+            (Purpose::FeaturesChanged, Choice::Run) => {
+                if let Some(old) = self.features_draft.take() {
+                    self.kept_drafts.push(old.file);
                 }
+                self.start_features_edit()
+            }
+            (Purpose::EditAgain | Purpose::FeaturesChanged, Choice::Discard) => {
+                self.discard_features_draft()
+            }
+            _ => {
+                let Some(d) = &self.features_draft else {
+                    return Command::None;
+                };
+                // Nothing of the person's in it (a Cancel before the editor
+                // opened, say): nothing to keep (review C9).
+                if std::fs::read_to_string(&d.file).is_ok_and(|t| t == d.origin) {
+                    return self.discard_quietly();
+                }
+                self.notice = notice(format!(
+                    "your features draft is kept in {} — the menu offers Continue my features draft",
+                    d.file.display()
+                ));
                 Command::None
             }
         }
+    }
+
+    /// Menu: Discard my features draft — asked first, as a hand edit's
+    /// discard is (review C9).
+    pub fn ask_discard_features_draft(&mut self) -> Command {
+        let Some(d) = &self.features_draft else {
+            return Command::None;
+        };
+        let mut dialog = Dialog::new(Kind::EditAgain, self.now);
+        dialog.chat_rules = false;
+        self.mode = Mode::Dialog(Box::new(super::Confirm {
+            dialog,
+            title: "Discard your features draft?".into(),
+            body: vec![
+                format!("It is kept in {}.", d.file.display()),
+                "Discard deletes it; Edit again opens it; Esc keeps it for later.".into(),
+            ],
+            purpose: Purpose::EditAgain,
+        }));
+        Command::None
     }
 
     /// Discard the kept draft.
@@ -274,25 +324,38 @@ impl App {
             ));
             return Command::None;
         }
-        if text == draft.before {
-            self.notice = notice(if quick {
+        let untouched = text == draft.origin;
+        if quick && text == draft.before {
+            self.notice = notice(format!(
                 "The editor returned at once — if it opened a window, use its 'wait' option \
-                 (for VS Code: code -w)"
-                    .to_string()
+                 (for VS Code: code -w){}",
+                if untouched {
+                    String::new()
+                } else {
+                    format!("; your draft is kept in {}", draft.file.display())
+                }
+            ));
+            return if untouched {
+                self.discard_quietly()
             } else {
-                "No change.".to_string()
-            });
-            // Nothing new to keep unless an earlier return changed it.
-            if draft.error_line.is_none() {
-                return self.discard_quietly();
-            }
-            return Command::None;
+                Command::None
+            };
+        }
+        // Only a draft with nothing of the person's in it goes: a kept draft
+        // that came back unchanged is checked and offered again (review C1).
+        if untouched {
+            self.notice = notice("No change.");
+            return self.discard_quietly();
         }
         match features::parse(&text, &draft.file) {
             Err(e) => {
-                let message = e.to_string();
+                let message = match e {
+                    harness_core::Error::InvalidPlan(m) => m,
+                    other => other.to_string(),
+                };
+                let line = error_line(&message);
                 if let Some(d) = self.features_draft.as_mut() {
-                    d.error_line = error_line(&message);
+                    d.error_line = line;
                 }
                 let mut dialog = Dialog::new(Kind::EditAgain, self.now);
                 dialog.chat_rules = false;
@@ -301,9 +364,11 @@ impl App {
                     title: "Your features file has an error".into(),
                     body: vec![
                         message,
-                        "Edit again opens your draft at that line; Discard drops it; Esc keeps \
-                         it for later."
-                            .into(),
+                        format!(
+                            "Edit again opens your draft{}; Discard drops it; Esc keeps it for \
+                             later.",
+                            if line.is_some() { " at that line" } else { "" }
+                        ),
                     ],
                     purpose: Purpose::EditAgain,
                 }));
@@ -391,18 +456,56 @@ impl App {
         ("Save the features file?".into(), body)
     }
 
-    /// A save ended: saved → the draft goes; refused → it stays, said.
+    /// A save ended: saved → the draft goes; refused → it stays, said; refused
+    /// because the file changed since the edit started → §7.2 step 5's choice
+    /// (review C2: the same `--expect` could never succeed).
     pub(super) fn features_save_ended(&mut self, success: bool) -> Option<PathBuf> {
         if success {
             return self.features_draft.take().map(|d| d.tmp);
         }
-        if let Some(d) = &self.features_draft {
-            self.notice = notice(format!(
-                "not saved — your draft is kept in {} — the menu offers Continue my features draft",
-                d.file.display()
-            ));
+        let Some(d) = &self.features_draft else {
+            return None;
+        };
+        let changed = self
+            .features_file_digest()
+            .is_some_and(|now| now != d.expect);
+        if changed && matches!(self.mode, Mode::Normal) {
+            let mut dialog = Dialog::new(Kind::FeaturesChanged, self.now);
+            dialog.chat_rules = false;
+            self.mode = Mode::Dialog(Box::new(super::Confirm {
+                dialog,
+                title: "The features file changed since you started editing".into(),
+                body: vec![
+                    format!("Your draft is kept at {}.", d.file.display()),
+                    "Edit the new file opens the file as it is now — your draft stays kept, \
+                     named when you quit; Discard my draft drops it; Esc keeps it for later."
+                        .into(),
+                ],
+                purpose: Purpose::FeaturesChanged,
+            }));
+            return None;
         }
+        self.notice = notice(format!(
+            "not saved{} — your draft is kept in {} — the menu offers Continue my features draft",
+            if changed {
+                " (the features file changed since you started editing)"
+            } else {
+                ""
+            },
+            d.file.display()
+        ));
         None
+    }
+
+    /// The blake3 of the features file's bytes now, `none` when there is
+    /// none, `None` when it cannot be read.
+    fn features_file_digest(&self) -> Option<String> {
+        let path = features::features_path(&self.config.target);
+        match harness_core::ledger::read_regular(&path, features::MAX_FEATURES_BYTES + 1) {
+            Ok(bytes) => Some(harness_core::hash::bytes_hash(&bytes)),
+            Err(e) if e.is_not_found() => Some("none".into()),
+            Err(_) => None,
+        }
     }
 }
 
@@ -570,6 +673,148 @@ mod tests {
             "{:?}",
             app.notice
         );
+    }
+
+    /// Close the open dialog with `choice`.
+    fn close(app: &mut App, choice: Choice) -> Command {
+        let confirm = match std::mem::replace(&mut app.mode, Mode::Normal) {
+            Mode::Dialog(c) => *c,
+            other => panic!("no dialog: {other:?}"),
+        };
+        app.close_dialog(confirm, choice)
+    }
+
+    fn purpose(app: &App) -> Purpose {
+        match &app.mode {
+            Mode::Dialog(c) => c.purpose.clone(),
+            other => panic!("no dialog: {other:?}"),
+        }
+    }
+
+    /// Review C1: a kept draft that comes back from the editor unchanged is
+    /// the person's work — checked and offered again, never dropped.
+    #[test]
+    fn a_kept_draft_that_comes_back_unchanged_is_offered_again() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-kept");
+        let file = open_draft(&mut app);
+        std::fs::write(&file, GOOD).unwrap();
+        app.features_edited(ok());
+        assert!(matches!(purpose(&app), Purpose::Act(p) if p.act == Act::SaveFeatures));
+        // Esc on the save: kept, in the draft's own words.
+        assert_eq!(close(&mut app, Choice::Safe), Command::None);
+        let words = &app.notice.as_ref().unwrap().text;
+        assert!(words.contains("your features draft is kept in"), "{words}");
+        assert!(!words.contains("hand edit"), "{words}");
+        // Continue → the editor → nothing typed.
+        assert_eq!(app.start_features_edit(), Command::None);
+        assert!(matches!(
+            close(&mut app, Choice::Run),
+            Command::EditFeatures { .. }
+        ));
+        app.features_draft.as_mut().unwrap().started =
+            Some(Instant::now() - Duration::from_secs(5));
+        assert_eq!(app.features_edited(ok()), Command::None, "never a Cleanup");
+        assert!(matches!(purpose(&app), Purpose::Act(p) if p.act == Act::SaveFeatures));
+        assert!(app.features_draft.is_some());
+        // An editor that returns at once (a window): kept, said.
+        close(&mut app, Choice::Safe);
+        app.start_features_edit();
+        close(&mut app, Choice::Run);
+        assert_eq!(app.features_edited(ok()), Command::None);
+        assert!(app.features_draft.is_some());
+        let words = &app.notice.as_ref().unwrap().text;
+        assert!(
+            words.contains("returned at once") && words.contains("kept in"),
+            "{words}"
+        );
+    }
+
+    /// Review C9: a Cancel before the editor opened keeps nothing.
+    #[test]
+    fn a_cancel_before_the_editor_keeps_nothing() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-cancel");
+        assert_eq!(app.start_features_edit(), Command::None);
+        assert!(matches!(close(&mut app, Choice::Safe), Command::Cleanup(_)));
+        assert!(app.features_draft.is_none());
+        assert!(app.kept_paths().is_empty());
+    }
+
+    /// Review C2 / §7.2 step 5: the file changed while the person edited —
+    /// the same `--expect` could never succeed, so they choose.
+    #[test]
+    fn a_save_refused_because_the_file_changed_offers_the_new_file() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-changed");
+        let file = open_draft(&mut app);
+        std::fs::write(&file, GOOD).unwrap();
+        app.features_edited(ok());
+        close(&mut app, Choice::Run);
+        // Meanwhile, someone else wrote the file.
+        let path = harness_core::features::features_path(&app.config.target);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let theirs = GOOD.replace("Show the help", "Their help");
+        std::fs::write(&path, &theirs).unwrap();
+        assert_eq!(app.features_save_ended(false), None);
+        assert_eq!(purpose(&app), Purpose::FeaturesChanged);
+        // Edit the new file: the old draft is kept (named on quit), a new
+        // one starts from their file, with its digest as --expect.
+        close(&mut app, Choice::Run);
+        assert_eq!(app.kept_drafts, std::slice::from_ref(&file));
+        assert!(file.exists(), "the earlier draft stays");
+        let d = app.features_draft.as_ref().unwrap();
+        assert_ne!(d.file, file);
+        assert_eq!(d.origin, theirs);
+        assert_eq!(d.expect, harness_core::hash::bytes_hash(theirs.as_bytes()));
+        assert!(app.kept_paths().contains(&file));
+        assert_eq!(purpose(&app), Purpose::OpenEditor);
+        // Unchanged since the edit started: a plain refusal, said.
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-plain");
+        let file = open_draft(&mut app);
+        std::fs::write(&file, GOOD).unwrap();
+        app.features_edited(ok());
+        close(&mut app, Choice::Run);
+        assert_eq!(app.features_save_ended(false), None);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app
+            .notice
+            .as_ref()
+            .unwrap()
+            .text
+            .starts_with("not saved — "));
+    }
+
+    /// Review C11: the loader's own words, and a line only when it has one.
+    #[test]
+    fn a_draft_error_is_the_loaders_words() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-words");
+        let file = open_draft(&mut app);
+        std::fs::write(&file, GOOD.replace("[\"-h\"]", "[\"a/b\"]")).unwrap();
+        app.features_edited(ok());
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("{:?}", app.mode)
+        };
+        assert!(!c.body[0].starts_with("invalid plan"), "{:?}", c.body);
+        assert!(c.body[0].contains("is not allowed"), "{:?}", c.body);
+        assert!(!c.body[1].contains("at that line"), "{:?}", c.body);
+    }
+
+    /// Review C9: the menu's Discard asks first.
+    #[test]
+    fn discarding_the_draft_asks_first() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-discard");
+        let file = open_draft(&mut app);
+        std::fs::write(&file, GOOD).unwrap();
+        app.features_edited(ok());
+        close(&mut app, Choice::Safe);
+        assert_eq!(app.ask_discard_features_draft(), Command::None);
+        assert_eq!(purpose(&app), Purpose::EditAgain);
+        assert_eq!(close(&mut app, Choice::Safe), Command::None);
+        assert!(app.features_draft.is_some(), "Esc keeps it");
+        app.ask_discard_features_draft();
+        assert!(matches!(
+            close(&mut app, Choice::Discard),
+            Command::Cleanup(_)
+        ));
+        assert!(app.features_draft.is_none());
     }
 
     #[test]

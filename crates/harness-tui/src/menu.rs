@@ -83,20 +83,23 @@ fn item(label: impl Into<String>, action: Action, accel: Option<&'static str>) -
 pub const MODEL_SEPARATOR: &str = "Uses a model — can take minutes";
 
 /// The index of the recommended item (focus starts there).
+/// `features_want`: on the Features row or a feature, the item its state
+/// asks for (§8.5) — Write on `Features (none yet)`, Edit on `Features
+/// (error)` and on a feature in F2, Map on a feature in F4/F5.
 pub fn recommended(
     items: &[Item],
     sel: &Selection,
     next_step: Option<Act>,
-    feature_wants_map: bool,
+    features_want: Option<Action>,
 ) -> usize {
     let find = |f: &dyn Fn(&Item) -> bool| items.iter().position(f);
     let open = find(&|i: &Item| matches!(i.action, Action::Open | Action::Fold));
     let act = |act: Act| find(&|i: &Item| i.action == Action::Act(act) && i.greyed.is_none());
+    let wanted =
+        features_want.and_then(|want| find(&|i: &Item| i.action == want && i.greyed.is_none()));
     match sel {
         Selection::Project => next_step.and_then(act).or(open).unwrap_or(0),
-        // A feature that is not mapped, or whose map is out of date:
-        // Map the features (§8.5).
-        Selection::Feature(_) if feature_wants_map => act(Act::MapFeatures).or(open).unwrap_or(0),
+        Selection::Features | Selection::Feature(_) => wanted.or(open).unwrap_or(0),
         _ => open.unwrap_or(0),
     }
 }
@@ -382,8 +385,15 @@ impl App {
                     None,
                 ));
             }
-            if let Some(it) = items.last_mut() {
-                if matches!(it.action, Action::EditFeatures) && self.running {
+            // Both draft items too: a save or a discard must not race a
+            // running command (review C9).
+            for it in items.iter_mut().filter(|it| {
+                matches!(
+                    it.action,
+                    Action::EditFeatures | Action::DiscardFeaturesDraft
+                )
+            }) {
+                if self.running {
                     it.greyed = Some("a command is running (one at a time)".into());
                 }
             }

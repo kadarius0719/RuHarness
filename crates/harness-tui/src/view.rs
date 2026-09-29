@@ -860,7 +860,9 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
 /// Which of the person's features ran a function (§8.4), from a current map.
 fn function_features_line(app: &App, file: &str, name: &str) -> Option<String> {
     let model = &app.features;
-    if model.group != featmap::Group::Valid || model.features.is_empty() || !model.map.current() {
+    // Only from a current, complete map: "none" is a negative claim (the
+    // unit line says "not known" otherwise; review C5).
+    if model.group != featmap::Group::Valid || model.features.is_empty() || !model.complete {
         return None;
     }
     let pair = (file.to_string(), name.to_string());
@@ -898,13 +900,44 @@ fn coverage_marker(app: &App, unit: &UnitView) -> Option<String> {
                 "not checked — features.toml has an error (fix it first)".into()
             }
             "invalid" => "not checked — features.toml had an error then (Re-check it)".into(),
+            // The facts do not describe the C as it is (review O2): a scan
+            // comes first, or the Re-check records the same.
+            "program"
+                if app
+                    .snapshot
+                    .features_now
+                    .as_ref()
+                    .is_some_and(|n| n.program == harness_core::features::STALE_PROGRAM) =>
+            {
+                "not known — the C changed since the scan: Scan the project, then Re-check it"
+                    .into()
+            }
             "program" => "checked before other C changed — Re-check it".into(),
             "skipped" => {
-                let n = unit
+                // Not-in-program skips are the unit's place, not a scenario
+                // to fix: said apart (review C14).
+                let reasons: Vec<harness_core::features::SkipReason> = unit
                     .verdict
                     .as_ref()
-                    .map_or(0, |v| v.inputs.features_skipped.len());
-                format!("{n} scenario{} could not run — see Features", plural_s(n))
+                    .map(|v| {
+                        v.inputs
+                            .features_skipped
+                            .iter()
+                            .filter_map(|e| harness_core::features::parse_skip(e))
+                            .map(|(_, _, r)| r)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let outside = reasons
+                    .iter()
+                    .filter(|r| **r == harness_core::features::SkipReason::NotInProgram)
+                    .count();
+                let n = reasons.len() - outside;
+                match (n, outside) {
+                    (0, 0) => continue,
+                    (0, _) => "not part of the program — nothing to do".into(),
+                    (n, _) => format!("{n} scenario{} could not run — see Features", plural_s(n)),
+                }
             }
             _ => continue,
         });
@@ -914,7 +947,7 @@ fn coverage_marker(app: &App, unit: &UnitView) -> Option<String> {
 
 /// Which features run a unit's functions (§8.4) — only from a current,
 /// complete map; failures first.
-fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
+pub(crate) fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
     let model = &app.features;
     if model.group != featmap::Group::Valid || model.features.is_empty() {
         return None;
@@ -928,15 +961,7 @@ fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
             "Features need a program with one main() — this target's facts show none.".into(),
         );
     }
-    let complete = model.map.current()
-        && model.features.iter().all(|f| {
-            f.scenarios.iter().all(|s| {
-                s.record
-                    .as_ref()
-                    .is_some_and(|r| r.noted == "complete" && r.probe_agrees)
-            })
-        });
-    if !complete {
+    if !model.complete {
         return Some("Which features run it: not known — map the features.".into());
     }
     if uf.running.is_empty() {
@@ -966,12 +991,24 @@ fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
             .collect()
     };
     let failed = names(&|r| matches!(r, featmap::UnitResult::Failed(_)));
-    let pending = names(&|r| {
-        matches!(
-            r,
-            featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
-        )
+    // A unit that is still C is not "not re-checked" (review C8).
+    let has_rust = app.snapshot.units.iter().any(|u| {
+        u.unit.id == unit_id
+            && matches!(
+                u.unit.status,
+                harness_core::plan::UnitStatus::Verified | harness_core::plan::UnitStatus::Merged
+            )
     });
+    let pending = if has_rust {
+        names(&|r| {
+            matches!(
+                r,
+                featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
+            )
+        })
+    } else {
+        Vec::new()
+    };
     let n = uf.running.len();
     let mut text = format!(
         "{n} of your features run{} it",
@@ -987,6 +1024,8 @@ fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
         text.push_str(&format!(" · {} not re-checked", pending.len()));
     } else if names(&|r| *r == featmap::UnitResult::Passed).len() == n {
         text.push_str(" · all passed");
+    } else if !has_rust {
+        text.push_str(" · still C");
     }
     text.push_str(" — see Features");
     Some(text)
@@ -1115,7 +1154,18 @@ fn feature_check_note(app: &App, unit: &str, name: &str, passed: bool) -> Option
         app.snapshot.program_name,
         s.argv.join(" ")
     );
-    if app.features.map.current() {
+    // An older verdict ran an earlier features file: today's arguments and
+    // map may not be what it ran (review C14).
+    if app.shown_verdict().is_some_and(|v| {
+        app.snapshot
+            .features_now
+            .as_ref()
+            .is_some_and(|now| v.inputs.features != now.features)
+    }) {
+        text.push_str(" (from an earlier features file)");
+        return Some(text);
+    }
+    if app.features.complete {
         let runs = app
             .features
             .by_unit
@@ -1137,9 +1187,18 @@ fn feature_check_note(app: &App, unit: &str, name: &str, passed: bool) -> Option
 /// map; what the map cannot say, said (§8.4).
 fn features_reach_words(app: &App, v: &harness_core::Verdict) -> String {
     let model = &app.features;
+    if app
+        .snapshot
+        .features_now
+        .as_ref()
+        .is_some_and(|now| v.inputs.features != now.features)
+    {
+        return " (from an earlier features file)".into();
+    }
     match &model.map {
         featmap::MapStatus::None | featmap::MapStatus::Unreadable(_) => " (not mapped yet)".into(),
         featmap::MapStatus::OutOfDate(_) => " (map out of date)".into(),
+        featmap::MapStatus::Current if !model.complete => " (map incomplete)".into(),
         featmap::MapStatus::Current => {
             let Some(uf) = model.by_unit.get(&v.unit) else {
                 return String::new();
@@ -1275,23 +1334,19 @@ fn summary_features(
         featmap::Group::NoFile => "Features: none yet — see Features".to_string(),
         featmap::Group::Invalid(_) => "Features: features.toml has an error — see Features".into(),
         featmap::Group::Valid => {
-            let mut counts: Vec<(String, usize)> = Vec::new();
+            let mut counts: Vec<(&'static str, usize)> = Vec::new();
             let mut caveat = false;
             for f in &model.features {
-                let word = match &f.state {
-                    featmap::FeatureState::HoldsSoFar { .. } => {
-                        caveat = true;
-                        "hold so far".to_string()
-                    }
-                    featmap::FeatureState::AllMigrated => {
-                        caveat = true;
-                        "all units migrated".into()
-                    }
-                    other => other.word(),
-                };
-                match counts.iter_mut().find(|(w, _)| *w == word) {
+                if matches!(
+                    f.state,
+                    featmap::FeatureState::HoldsSoFar { .. } | featmap::FeatureState::AllMigrated
+                ) {
+                    caveat = true;
+                }
+                let key = summary_key(&f.state);
+                match counts.iter_mut().find(|(k, _)| *k == key) {
                     Some((_, n)) => *n += 1,
-                    None => counts.push((word, 1)),
+                    None => counts.push((key, 1)),
                 }
             }
             let mut text = format!(
@@ -1299,7 +1354,7 @@ fn summary_features(
                 model.features.len(),
                 counts
                     .iter()
-                    .map(|(w, n)| format!("{n} {w}"))
+                    .map(|(k, n)| summary_count(k, *n))
                     .collect::<Vec<_>>()
                     .join(", ")
             );
@@ -1309,26 +1364,7 @@ fn summary_features(
                     model.ran, model.watched
                 ));
             }
-            let behind = app
-                .snapshot
-                .units
-                .iter()
-                .filter(|u| {
-                    matches!(
-                        u.unit.status,
-                        harness_core::plan::UnitStatus::Verified
-                            | harness_core::plan::UnitStatus::Merged
-                    ) && model.features.iter().any(|f| {
-                        f.units.iter().any(|r| {
-                            r.unit == u.unit.id
-                                && matches!(
-                                    r.result,
-                                    featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
-                                )
-                        })
-                    })
-                })
-                .count();
+            let behind = model.recheck.len();
             if behind > 0 {
                 text.push_str(&format!(
                     " · {behind} unit{} not re-checked",
@@ -1494,7 +1530,20 @@ fn features_view(
         )));
         let count =
             |pick: fn(&featmap::UnitRow) -> bool| f.units.iter().filter(|r| pick(r)).count();
-        let mut parts = vec![format!("{} unit{}", f.units.len(), plural_s(f.units.len()))];
+        // The units in the program (what "k of n" counts), and apart the
+        // ones outside it; "not mapped" when the map has none of its
+        // scenarios (review C6/C13).
+        let outside = count(|r| r.result == featmap::UnitResult::Outside);
+        let inside = f.units.len() - outside;
+        let mapped = f.scenarios.iter().any(|s| s.record.is_some());
+        let mut parts = vec![if mapped {
+            format!("{inside} unit{}", plural_s(inside))
+        } else {
+            "not mapped".to_string()
+        }];
+        if outside > 0 {
+            parts.push(format!("{outside} outside the program"));
+        }
         for (n, what) in [
             (count(|r| r.result == featmap::UnitResult::Passed), "pass"),
             (
@@ -1528,8 +1577,14 @@ fn features_view(
     lines.push(Line::from(""));
     if model.watched > 0 || !model.unwatched.is_empty() {
         let mut text = format!(
-            "Your features ran {} of the {} functions the map watches",
-            model.ran, model.watched
+            "{}our features ran {} of the {} functions the map watches",
+            if model.map.current() {
+                "Y"
+            } else {
+                "In the last map, y"
+            },
+            model.ran,
+            model.watched
         );
         if !model.unwatched.is_empty() {
             text.push_str(&format!(
@@ -1540,7 +1595,7 @@ fn features_view(
         text.push('.');
         lines.extend(wrapped(&text, width, Style::default()));
     }
-    if model.map.current() {
+    if model.complete {
         let facts = app.snapshot.facts.as_ref();
         let never: Vec<(String, String)> = facts
             .map(|f| {
@@ -1588,6 +1643,47 @@ fn features_view(
         dim(),
     ));
     lines
+}
+
+/// A feature state's key in the summary's counts.
+fn summary_key(state: &featmap::FeatureState) -> &'static str {
+    use featmap::FeatureState as S;
+    match state {
+        S::Failing => "failing",
+        S::ScenarioCannotRun => "cannot-run",
+        S::NeedsRecheck => "recheck",
+        S::NotMapped => "not-mapped",
+        S::MapOutOfDate => "out-of-date",
+        S::MapIncomplete => "incomplete",
+        S::ReachesNoUnit => "no-unit",
+        S::AllMigrated => "migrated",
+        S::HoldsSoFar { .. } => "holds",
+        S::AllC => "all-c",
+        S::SeeUnits => "see",
+    }
+}
+
+/// "3 need a re-check", "1 holds so far": a count in words (review C13).
+fn summary_count(key: &str, n: usize) -> String {
+    let one = n == 1;
+    let words = match key {
+        "failing" => "failing",
+        "cannot-run" if one => "has a scenario that cannot run",
+        "cannot-run" => "have a scenario that cannot run",
+        "recheck" if one => "needs a re-check",
+        "recheck" => "need a re-check",
+        "not-mapped" => "not mapped yet",
+        "out-of-date" => "with the map out of date",
+        "incomplete" => "with the map incomplete",
+        "no-unit" if one => "reaches no unit",
+        "no-unit" => "reach no unit",
+        "migrated" => "with all units migrated",
+        "holds" if one => "holds so far",
+        "holds" => "hold so far",
+        "all-c" => "all C",
+        _ => "to see",
+    };
+    format!("{n} {words}")
 }
 
 fn plural_s(n: usize) -> &'static str {
@@ -1639,7 +1735,15 @@ fn feature_next(f: &featmap::FeatureView) -> Option<String> {
                     .into(),
             }
         }
-        S::NeedsRecheck => "Re-check the units below that are not re-checked.".into(),
+        S::NeedsRecheck => format!(
+            "Your features are not checked on {} yet — Re-check {}:",
+            if f.recheck.len() == 1 {
+                "this unit"
+            } else {
+                "these units"
+            },
+            if f.recheck.len() == 1 { "it" } else { "each" }
+        ),
         S::NotMapped | S::MapOutOfDate => "Map the features (press Enter).".into(),
         S::MapIncomplete => "A scenario's run left no usable notes, or behaved differently \
                              with them — see its line below."
@@ -1696,6 +1800,19 @@ fn feature_view(
     if let Some(next) = feature_next(f) {
         lines.extend(wrapped(&next, width, Style::default()));
     }
+    // F3's next step names its units, each a link (§8.2; review C3).
+    if matches!(f.state, featmap::FeatureState::NeedsRecheck) {
+        for u in &f.recheck {
+            links.push((lines.len(), Selection::Unit(u.clone())));
+            lines.push(Line::from(clipped(
+                vec![
+                    Span::raw(format!("  {u}")),
+                    Span::styled("  open it, then Re-check", dim()),
+                ],
+                width,
+            )));
+        }
+    }
     if app.features.no_single_main {
         lines.extend(wrapped(
             "Features need a program with one main() — this target's facts show none (a \
@@ -1731,6 +1848,13 @@ fn feature_view(
             ));
             let flag = if !r.stable {
                 Some("its output differs between runs — it cannot be a check".to_string())
+            } else if !r.end.starts_with("exit ") {
+                // Before "compares little": a run that crashed or timed out
+                // is no check at all (review C10).
+                Some(format!(
+                    "it did not exit ({}) — it cannot be a check",
+                    r.end
+                ))
             } else if !r.probe_agrees {
                 Some("the run with notes behaved differently — its map may be wrong".into())
             } else if r.noted != "complete" {
@@ -1769,7 +1893,7 @@ fn feature_view(
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("Where its code lives", bold())));
-    if f.units.is_empty() && f.outside_units == 0 {
+    if f.scenarios.iter().all(|s| s.record.is_none()) {
         lines.extend(wrapped("  (not known — map the features)", width, dim()));
     }
     for row in &f.units {
@@ -1783,15 +1907,17 @@ fn feature_view(
             .unwrap_or(("", String::new()));
         let (result, style) = result_words(row);
         links.push((lines.len(), Selection::Unit(row.unit.clone())));
+        // The feature's result right after the id: a narrow View cuts the
+        // unit's own word first, never the result (review C7).
         lines.push(Line::from(clipped(
             vec![
                 Span::styled(format!("  {glyph:<2} "), glyph_style(glyph)),
                 Span::raw(row.unit.clone()),
+                Span::styled(format!("  {result}"), style),
                 Span::styled(
-                    format!("  {uword} · runs {} of its {}", row.ran, row.of),
+                    format!("  · runs {} of its {} · {uword}", row.ran, row.of),
                     dim(),
                 ),
-                Span::styled(format!("  {result}"), style),
             ],
             width,
         )));
@@ -1808,8 +1934,13 @@ fn feature_view(
         ));
     }
     if !f.also_fails.is_empty() {
+        // "not in them" is a negative claim: only from a complete map.
         lines.push(Line::from(Span::styled(
-            "Also fails on (its functions are not in them)",
+            if app.features.complete {
+                "Also fails on (its functions are not in them)"
+            } else {
+                "Fails on"
+            },
             Style::default().fg(Color::Red),
         )));
         for u in &f.also_fails {
@@ -1817,7 +1948,7 @@ fn feature_view(
             lines.push(Line::from(Span::raw(format!("  {u}"))));
         }
     }
-    if app.features.features.len() >= 2 && app.features.map.current() {
+    if app.features.features.len() >= 2 && app.features.complete {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled("Only this feature runs", bold())));
         if f.specific.is_empty() {
@@ -2454,9 +2585,15 @@ const HELP_FEATURES: &[&str] = &[
      functions it could put a note in (\"watches\"). Changing a scenario makes verdicts made \
      before say \"not checked since you changed them\" until re-checked; renaming a feature does \
      not.",
+    "The file, migration/features/features.toml: schema_version = 1, then a [[feature]] table \
+     per feature (id = \"zlib\", name = \"Compress to zlib\") and a [[scenario]] table per \
+     run (feature = \"zlib\", id = \"text\", args = [\"--zlib\", \"-c\", \"{input}\"], \
+     input = \"sample:text\"). Ids are lowercase letters, digits and dashes; \"{input}\" \
+     stands for the sample's file name.",
     "Enter on Features: Write / Edit the features file (in your editor — the cockpit says how \
-     to save and leave), Map the features. Edited it outside the cockpit? Press g. Commit \
-     migration/features/ with your work.",
+     to save and leave: in nano, Ctrl-O then Enter saves and Ctrl-X leaves; in vi, press i to \
+     type, then Esc and :wq and Enter to save and leave), Map the features. Edited it outside \
+     the cockpit? Press g. Commit migration/features/ with your work.",
 ];
 
 const HELP_FEATURE_LEGEND: &[(&str, &str)] = &[
@@ -2476,6 +2613,7 @@ const HELP_FEATURE_LEGEND: &[(&str, &str)] = &[
     ("✓", "all its units migrated, each checked alone"),
     ("◉", "holds so far: its migrated units pass"),
     ("◌", "all its code is still C"),
+    ("·", "see its units: they differ"),
 ];
 
 const HELP_CHAT: &[&str] = &[
@@ -2551,6 +2689,19 @@ fn help_rows(
     }
     for (g, v) in HELP_FEATURE_LEGEND {
         rows.extend(wrapped(&format!("{g:<3} {v}"), width, Style::default()));
+    }
+    // Why a scenario cannot run, and what to do (§6.1's table).
+    rows.extend(wrapped(
+        "When a scenario cannot run, its line says why:",
+        width,
+        Style::default(),
+    ));
+    for reason in harness_core::features::SkipReason::ALL {
+        rows.extend(wrapped(
+            &format!("  {} — {}", reason.words(), reason.what_to_do()),
+            width,
+            dim(),
+        ));
     }
     rows.push(Line::from(""));
     if let Some(why) = chat {
@@ -5552,7 +5703,7 @@ mod tests {
                 &items,
                 &Selection::Project,
                 Some(crate::app::Act::MapFeatures),
-                false
+                None
             ),
             items
                 .iter()
@@ -5595,6 +5746,122 @@ mod tests {
         );
         assert!(screen.contains("1 unit · 1 still C"), "{screen}");
         assert!(screen.contains("Your features ran 2 of the"), "{screen}");
+        // Review C3: help touches only a C unit, yet needs the re-check of
+        // u001 — its View names it, a link; the summary counts it.
+        app.select(Selection::Feature("help".into()));
+        let mut links = Vec::new();
+        let lines = feature_view(&app, "help", 160, &mut links);
+        let screen: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        assert!(
+            screen.contains("Your features are not checked on this unit yet — Re-check it:"),
+            "{screen}"
+        );
+        assert!(
+            links
+                .iter()
+                .any(|(_, sel)| *sel == Selection::Unit("u001-katajainen".into())),
+            "{links:?}"
+        );
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("Features: 2 — 2 need a re-check"),
+            "{screen}"
+        );
+        assert!(screen.contains("1 unit not re-checked"), "{screen}");
+
+        // §8.4/§8.5: the dialogs say what the features do.
+        let words = |app: &App, act, unit, attempt| {
+            let p = app.act_argv(act, unit, attempt, None).expect("pending");
+            app.dialog_words(&p).1.join("\n")
+        };
+        let recheck = words(&app, crate::app::Act::Verify, Some("u001-katajainen"), None);
+        assert!(
+            recheck.contains("It also runs your 2 feature scenarios"),
+            "{recheck}"
+        );
+        assert!(
+            recheck.contains("1 of your features runs it · 1 not re-checked"),
+            "{recheck}"
+        );
+        let migrate = {
+            let p = app
+                .act_argv(
+                    crate::app::Act::Modify,
+                    Some("u001-katajainen"),
+                    Some("a-d6b377fb9257"),
+                    Some("keep it"),
+                )
+                .expect("pending");
+            app.dialog_words(&p).1.join("\n")
+        };
+        assert!(
+            migrate.contains("Each judged turn also runs your 2 feature scenarios."),
+            "{migrate}"
+        );
+        let accept = words(
+            &app,
+            crate::app::Act::Accept,
+            Some("u001-katajainen"),
+            Some("a-ef81857896e5"),
+        );
+        assert!(
+            accept.contains("Your features that run it: Compress to gzip."),
+            "{accept}"
+        );
+        let scan = words(&app, crate::app::Act::Scan, None, None);
+        assert!(
+            scan.contains("A change in the C makes the features map out of date."),
+            "{scan}"
+        );
+    }
+
+    /// §7.2 step 3 and §8.5: the editor dialog's button names the editor;
+    /// the menu focuses what the Features row's state asks for.
+    #[test]
+    fn the_features_menu_and_its_dialog_say_what_opens() {
+        let mut app =
+            crate::app::tests::app_of_without_features("targets/zopfli", "feat-openlabel");
+        app.select(Selection::Features);
+        app.open_menu();
+        let crate::app::Mode::Menu(menu) = &app.mode else {
+            panic!("{:?}", app.mode)
+        };
+        assert!(
+            menu.items[menu.focus]
+                .label
+                .starts_with("Write your features file"),
+            "{:?}",
+            menu.items[menu.focus]
+        );
+        app.mode = crate::app::Mode::Normal;
+        app.start_features_edit();
+        let crate::app::Mode::Dialog(c) = &app.mode else {
+            panic!("{:?}", app.mode)
+        };
+        let name = crate::app::features_edit::editor_name(&app.features_editor());
+        assert!(
+            c.dialog
+                .buttons
+                .iter()
+                .any(|b| b.label == format!("Open {name}")),
+            "{:?}",
+            c.dialog.buttons
+        );
+        // With an error, Edit is focused.
+        let mut app = zopfli_with_features("feat-focus-error", "schema_version = 1\nnope = 1\n");
+        app.select(Selection::Features);
+        app.open_menu();
+        let crate::app::Mode::Menu(menu) = &app.mode else {
+            panic!("{:?}", app.mode)
+        };
+        assert!(
+            menu.items[menu.focus]
+                .label
+                .starts_with("Edit the features file"),
+            "{:?}",
+            menu.items[menu.focus]
+        );
     }
 
     #[test]
@@ -5606,7 +5873,7 @@ mod tests {
         app.select(Selection::Features);
         let screen = text(&render(&mut app, 120, 30));
         assert!(screen.contains("Features (error)"), "{screen}");
-        assert!(screen.contains("unknown key `nope`"), "{screen}");
+        assert!(screen.contains("unknown key \"nope\""), "{screen}");
         assert!(screen.contains("Re-checks and"), "{screen}");
         assert!(
             !app.menu_items()

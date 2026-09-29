@@ -869,7 +869,12 @@ impl<'a> Job<'a> {
         if !differences.is_empty() {
             let recorded_features = !recorded.features.is_empty()
                 && recorded.features != harness_core::features::INVALID_DIGEST;
-            if !recorded.program.is_empty() && recorded.program != self.program {
+            // Today's program digest is empty without a features file: no
+            // program to compare, so nothing to say of it (review O7).
+            if !recorded.program.is_empty()
+                && !self.program.is_empty()
+                && recorded.program != self.program
+            {
                 differences.insert(0, "other C changed since it was recorded".into());
             }
             if recorded_features && recorded.features != self.features.digest() {

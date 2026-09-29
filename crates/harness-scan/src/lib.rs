@@ -370,11 +370,20 @@ fn collect_functions_in(
 
 /// Where a note can go in `def` (see [`FnDef::probe_at`]).
 fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<usize> {
-    if under_error || def.has_error() {
+    if under_error {
         return None;
     }
     let body = def.child_by_field_name("body")?;
     let declarator = def.child_by_field_name("declarator")?;
+    // A parse error in the head (not in the body: a loop macro there is
+    // harmless before the note; review M9).
+    let mut cursor = def.walk();
+    if def
+        .children(&mut cursor)
+        .any(|c| c.id() != body.id() && (c.is_error() || c.has_error()))
+    {
+        return None;
+    }
     if body.kind() != "compound_statement" || body.is_missing() {
         return None;
     }
@@ -383,8 +392,22 @@ fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<
         return None;
     }
     // A directive between the declarator and the body (a brace inside
-    // `#if`) compiles on one branch only.
-    if src[declarator.end_byte()..at].contains(&b'#') {
+    // `#if`) compiles on one branch only: a line that starts with `#` —
+    // not a `#` in a comment (review M9).
+    let head = String::from_utf8_lossy(&src[declarator.end_byte()..at]);
+    if head.lines().any(|l| l.trim_start().starts_with('#')) {
+        return None;
+    }
+    // A naked function takes no statement, and a body that opens with a
+    // `#pragma` (STDC FENV_ACCESS, clang fp) needs it first (review M2).
+    if String::from_utf8_lossy(&src[def.start_byte()..at]).contains("naked") {
+        return None;
+    }
+    let mut cursor = body.walk();
+    let first = body
+        .named_children(&mut cursor)
+        .find(|c| c.kind() != "comment");
+    if first.is_some_and(|c| c.kind() == "preproc_call" && text(c, src).starts_with("#pragma")) {
         return None;
     }
     Some(at)

@@ -1175,8 +1175,10 @@ the verdict, **never** part of `stale`, `fresh_green` or the contradiction rule.
 `features` = blake3 over each feature's scenarios by id (args, input bytes) + the program's run
 name + `[oracle] timeout_secs` (names excluded). `program` = blake3 over the top-level `.c` of
 `source_dir` (canonical when a contained symlink) and their facts include closure as
-`(path, hash | missing)`, + `source_dir`, `include_dirs`, `[oracle] extra_link_args`. Gap: non-C
-includes (`.inc`) are not in it.
+`(path, hash | missing)`, + `source_dir`, `include_dirs`, `[oracle] extra_link_args` — or the
+sentinel `facts-stale` when a program file is not in the facts or its bytes differ from their
+record (never the same program as any digest, itself included: a scan comes first). Taken
+before anything is built. Gap: non-C includes (`.inc`) are not in it.
 
 ## CLI
 
@@ -1194,12 +1196,21 @@ includes (`.inc`) are not in it.
 
 `features.toml`, `map.json` and verdicts' skip lists are target-owned: only ids and closed
 reasons reach checks, prompts, events or harness-mcp; everything shown is display-filtered.
-Scenario runs: cwd = their own empty temp dir; the binary at one path per scenario; streams
+Scenario runs: cwd = `run/` in their own temp dir (fixed-width name; `TMPDIR` the temp dir);
+the binary at one path per scenario; streams
 rewritten (`$`→`$$`, the temp dir → `$TMPDIR`, the program dir → `$PROGDIR`); the run profile
 plus `(deny signal)` `(allow signal (target self))` `(deny process-fork)`; the process group
 killed when the leader exits. Without the sandbox the candidate's inability to spawn or signal
-rests on the deny scan and the capabilities check alone. The map is shaped by the target's own
-C (it can write its notes file, interpose libc): it gates nothing.
+rests on the deny scan and the capabilities check alone, and **a candidate run can write the
+build dir** — the C binaries and the whole-program samples: the feature step checks the C
+program's bytes before every C run (a change fails every later scenario, never a skip), but the
+whole-program check compares against whatever is there, and C reads elsewhere are not covered
+(residual; the sandbox is the boundary). Every tool child (the compiler included) runs with
+`SOURCE_DATE_EPOCH=0`. The map is shaped by the target's own C (it can write its notes file,
+interpose libc): it gates nothing. The read preflight counts the program digest's files
+(each once; ≤ 50 000) against its hash budget. Human CLI lines and errors show control
+characters as `?` (a hostile file's key or a parse error's source line never drives the
+terminal); `--json` escapes them.
 
 ## Writer table additions
 

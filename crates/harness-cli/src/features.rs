@@ -233,12 +233,11 @@ fn unscanned_c(ctx: &TargetContext, facts: &Facts) -> Result<Option<String>> {
 /// How many distinct public `main`s the facts record among the top-level
 /// `.c` of `source_dir` — advisory only: the link decides (§5.1).
 fn main_count(ctx: &TargetContext, facts: &Facts) -> usize {
-    let dir = Path::new(&ctx.config.target.source_dir);
     let mut files: Vec<&str> = facts
         .symbols
         .iter()
         .filter(|s| s.name == "main")
-        .filter(|s| Path::new(&s.file).parent() == Some(dir))
+        .filter(|s| features::directly_in(&ctx.config.target.source_dir, &s.file))
         .map(|s| s.file.as_str())
         .collect();
     files.sort();

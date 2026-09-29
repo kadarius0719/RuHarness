@@ -186,6 +186,12 @@ pub struct FeatureView {
     pub specific: Vec<Pair>,
     /// Units it touches with a red verdict (Rust not verified).
     pub red_units: usize,
+    /// The units with Rust whose verdict does not cover it yet — what its
+    /// "needs a re-check" means (the F3 rule), in plan order (review C3).
+    pub recheck: Vec<String>,
+    /// How many of its scenarios cannot run (a C-side skip, or a map
+    /// record that did not exit or was unstable).
+    pub cannot_run: usize,
 }
 
 /// How the features touch one unit (§8.4's unit line).
@@ -233,6 +239,12 @@ pub struct FeatureModel {
     pub unknown: usize,
     /// The facts record no single `main()` among the program's files.
     pub no_single_main: bool,
+    /// The map is current and every scenario's record is complete (noted,
+    /// and the run with notes agreed): only then may a View say what the
+    /// features do NOT run (review C5/C6).
+    pub complete: bool,
+    /// Every unit with Rust some feature needs re-checked, in plan order.
+    pub recheck: Vec<String>,
 }
 
 impl FeatureModel {
@@ -249,12 +261,11 @@ fn has_rust(u: &UnitView) -> bool {
 
 /// The unit's `replaces` are not all top-level `.c` of `source_dir`.
 fn outside(u: &UnitView, source_dir: &str) -> bool {
-    let dir = Path::new(source_dir.trim_start_matches("./"));
     let replaces = u.unit.oracle_param_list("replaces");
     !replaces.is_empty()
         && !replaces.iter().all(|r| {
-            let p = Path::new(r.trim_start_matches("./"));
-            p.parent() == Some(dir) && p.extension().and_then(|e| e.to_str()) == Some("c")
+            features::directly_in(source_dir, r)
+                && Path::new(r).extension().and_then(|e| e.to_str()) == Some("c")
         })
 }
 
@@ -267,18 +278,25 @@ fn result(
     now_program: &str,
     source_dir: &str,
 ) -> UnitResult {
-    if outside(u, source_dir) {
-        return UnitResult::Outside;
-    }
+    // A current verdict says whether the oracle ran the unit in the program
+    // (it compares canonical paths); the plan's paths decide only without
+    // one (review O5).
+    let not_checked = || {
+        if outside(u, source_dir) {
+            UnitResult::Outside
+        } else {
+            UnitResult::NotChecked
+        }
+    };
     let Some(v) = &u.verdict else {
-        return UnitResult::NotChecked;
+        return not_checked();
     };
     if !u.report.verdict.stale.is_empty()
         || v.inputs.features != now_features
-        || v.inputs.program != now_program
+        || !features::same_program(&v.inputs.program, now_program)
         || now_features == features::INVALID_DIGEST
     {
-        return UnitResult::NotChecked;
+        return not_checked();
     }
     let prefix = format!("{}{id}/", features::CHECK_PREFIX);
     let mut failed: Vec<String> = v
@@ -313,6 +331,8 @@ fn result(
     });
     if all {
         UnitResult::Passed
+    } else if outside(u, source_dir) {
+        UnitResult::Outside
     } else {
         UnitResult::Absent
     }
@@ -337,6 +357,8 @@ pub fn build(
         unwatched: BTreeSet::new(),
         unknown: 0,
         no_single_main: no_single_main(snapshot),
+        complete: false,
+        recheck: Vec::new(),
     };
     let (list, now_features) = match &snapshot.features {
         FeatureSnapshot::None => return model,
@@ -423,7 +445,7 @@ pub fn build(
         let Some(v) = &u.verdict else { continue };
         if !u.report.verdict.stale.is_empty()
             || v.inputs.features != now_features
-            || v.inputs.program != now_program
+            || !features::same_program(&v.inputs.program, &now_program)
         {
             continue;
         }
@@ -456,8 +478,19 @@ pub fn build(
             ran_by.entry(p.clone()).or_default().push(f.id.clone());
         }
     }
-    if model.map.current() {
+    // What the last map says features ran — current or not (a View puts
+    // it under "From the last map"); the per-function answer only from a
+    // current one.
+    if loaded.is_some() {
         model.ran = ran_by.len();
+    }
+    model.complete = model.map.current()
+        && list.scenarios.iter().all(|s| {
+            records
+                .get(&(s.feature.clone(), s.id.clone()))
+                .is_some_and(|r| r.noted == "complete" && r.probe_agrees)
+        });
+    if model.map.current() {
         model.by_function = ran_by.clone();
     }
 
@@ -496,6 +529,8 @@ pub fn build(
                 has_rust: has_rust(&snapshot.units[u]),
             })
             .collect();
+        // Failing units the map does not show it touching (with no current,
+        // complete map: every failing unit — the View words it neutrally).
         let also_fails: Vec<String> = results
             .iter()
             .enumerate()
@@ -541,10 +576,26 @@ pub fn build(
                     .as_ref()
                     .is_some_and(|r| !r.stable || !r.end.starts_with("exit "))
             });
-        let recheck =
-            snapshot.units.iter().zip(&results).any(|(u, r)| {
+        let recheck_units: Vec<String> = snapshot
+            .units
+            .iter()
+            .zip(&results)
+            .filter(|(u, r)| {
                 has_rust(u) && matches!(r, UnitResult::NotChecked | UnitResult::Absent)
-            });
+            })
+            .map(|(u, _)| u.unit.id.clone())
+            .collect();
+        let recheck = !recheck_units.is_empty();
+        let cannot_run = scenarios
+            .iter()
+            .filter(|s| {
+                s.skipped.is_some_and(|r| r.is_c_side())
+                    || (model.map.current()
+                        && s.record
+                            .as_ref()
+                            .is_some_and(|r| !r.stable || !r.end.starts_with("exit ")))
+            })
+            .count();
         let feature_mapped = scenarios.iter().all(|s| s.record.is_some());
         let incomplete = scenarios.iter().any(|s| {
             s.record
@@ -591,9 +642,11 @@ pub fn build(
             FeatureState::SeeUnits
         };
         let also = match state {
-            FeatureState::Failing if c_side_skip || map_unusable => {
-                Some("1 scenario cannot run".to_string())
-            }
+            FeatureState::Failing if c_side_skip || map_unusable => Some(format!(
+                "{} scenario{} cannot run",
+                cannot_run.max(1),
+                plural(cannot_run.max(1))
+            )),
             FeatureState::HoldsSoFar { .. } | FeatureState::AllC if red_units > 0 => Some(format!(
                 "{red_units} unit{} with a red verdict",
                 plural(red_units)
@@ -611,7 +664,18 @@ pub fn build(
             also_fails,
             specific,
             red_units,
+            recheck: recheck_units,
+            cannot_run,
         });
+    }
+    for u in &snapshot.units {
+        if model
+            .features
+            .iter()
+            .any(|f| f.recheck.contains(&u.unit.id))
+        {
+            model.recheck.push(u.unit.id.clone());
+        }
     }
 
     // Per unit: which features run its functions.
@@ -642,11 +706,10 @@ fn no_single_main(snapshot: &Snapshot) -> bool {
     let Some(facts) = &snapshot.facts else {
         return false;
     };
-    let dir = Path::new(snapshot.source_dir.trim_start_matches("./"));
     let files: BTreeSet<&str> = facts
         .symbols
         .iter()
-        .filter(|s| s.name == "main" && Path::new(&s.file).parent() == Some(dir))
+        .filter(|s| s.name == "main" && features::directly_in(&snapshot.source_dir, &s.file))
         .map(|s| s.file.as_str())
         .collect();
     files.len() != 1
@@ -796,7 +859,7 @@ mod tests {
         assert_eq!(fx.model().group, Group::NoFile);
         fx.write_features("schema_version = 1\nnope = 1\n");
         let m = fx.model();
-        assert!(matches!(&m.group, Group::Invalid(why) if why.contains("unknown key `nope`")));
+        assert!(matches!(&m.group, Group::Invalid(why) if why.contains("unknown key \"nope\"")));
         assert!(m.features.is_empty());
     }
 
@@ -810,6 +873,57 @@ mod tests {
             assert_eq!(state(&m, id), FeatureState::NeedsRecheck, "{id}");
         }
         assert_eq!(m.map, MapStatus::None);
+    }
+
+    /// Review M1/O5: a `source_dir` of `.` is the root — every top-level
+    /// `.c` is in the program, and its `main` is the program's.
+    #[test]
+    fn a_source_dir_of_dot_is_the_root() {
+        let fx = zopfli("dot");
+        fx.write_features(FEATURES);
+        let read = fx.read();
+        let mut snap = read.snapshot.clone();
+        let strip = |s: &str| s.strip_prefix("src/zopfli/").unwrap_or(s).to_string();
+        snap.source_dir = ".".into();
+        for sym in &mut snap.facts.as_mut().unwrap().symbols {
+            sym.file = strip(&sym.file);
+        }
+        for u in &mut snap.units {
+            let replaces = u
+                .unit
+                .oracle
+                .as_mut()
+                .and_then(|t| t.get_mut("replaces"))
+                .and_then(|v| v.as_array_mut());
+            for v in replaces.into_iter().flatten() {
+                *v = strip(v.as_str().unwrap()).into();
+            }
+        }
+        assert!(!no_single_main(&snap));
+        let u001 = snap.units.iter().find(|u| u.unit.id == U001).unwrap();
+        assert_eq!(u001.unit.oracle_param_list("replaces"), ["katajainen.c"]);
+        assert!(!outside(u001, "."));
+        assert!(!outside(u001, "./"));
+        assert!(outside(u001, "src"));
+        let files = crate::files::build(&snap, &read.walk);
+        let m = build(&snap, &files, &read.map, read.map_now.as_ref());
+        assert_eq!(state(&m, "gzip"), FeatureState::NeedsRecheck, "u001 counts");
+    }
+
+    #[test]
+    fn a_current_verdict_says_whether_the_unit_ran_in_the_program() {
+        let fx = zopfli("verdict-inside");
+        fx.write_features(FEATURES);
+        standard_map(&fx);
+        fx.verdict(&[("feature:help/flag", false)], &[]);
+        let read = fx.read();
+        let mut snap = read.snapshot.clone();
+        // The plan's path no longer reads as a top-level `.c` (a symlinked
+        // one, say), but the oracle ran the unit: its failure shows.
+        snap.source_dir = "elsewhere".into();
+        let files = crate::files::build(&snap, &read.walk);
+        let m = build(&snap, &files, &read.map, read.map_now.as_ref());
+        assert_eq!(state(&m, "help"), FeatureState::Failing);
     }
 
     #[test]

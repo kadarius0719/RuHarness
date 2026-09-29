@@ -63,6 +63,15 @@ fn map_inner(
     digest: &str,
     progress: &mut dyn MapProgress,
 ) -> Result<FeatureMap, Error> {
+    // What the map describes, before anything is built (review M10): a C
+    // edit while the scenarios run makes the map out of date, never current
+    // for a program it did not run.
+    let inputs = MapInputs {
+        facts: features::facts_digest(facts)?,
+        features: digest.to_string(),
+        program: features::program_digest_now(target, facts),
+        platform: features::platform(),
+    };
     let link_args = extra_link_args(target)?;
     let base = Base::resolve(target, FEATURES_BUILD_DIR, &["cc"])?;
     let root = base.root.clone();
@@ -101,6 +110,16 @@ fn map_inner(
     let plain = build.join("plain");
     compile(&runner, &base.includes(), &[], &plain, &c_files, &link_args)
         .map_err(|e| build_failed("the C program does not build", e))?;
+
+    // The mirror holds `source_dir` only: an include the facts resolved
+    // outside it would fall through to a system header of the same name —
+    // a different program, mapped silently (review M7). Refused, named.
+    if let Some((file, include)) = include_leaving(facts, &target.config.target.source_dir) {
+        return Err(Error::Invariant(format!(
+            "{file} includes {include}, outside source_dir: the features map copies only \
+             source_dir, so it cannot build this program"
+        )));
+    }
 
     // The probed copy: the mirror, the notes, the runtime.
     progress.message("Building a scratch copy that notes each function it runs…");
@@ -146,13 +165,7 @@ fn map_inner(
         &probed_inputs,
         &link_args,
     )
-    .map_err(|e| {
-        build_failed(
-            "the probed copy does not build (an include that leaves source_dir does not \
-             resolve in it)",
-            e,
-        )
-    })?;
+    .map_err(|e| build_failed("the probed copy does not build", e))?;
 
     // The runs: plain, probed, plain — all at the one path of §4.1.
     let run_path = build.join("f").join(features::program_name(&target.config));
@@ -181,15 +194,7 @@ fn map_inner(
     Ok(FeatureMap {
         schema: features::MAP_SCHEMA_NAME.to_string(),
         schema_version: features::MAP_SCHEMA_VERSION,
-        inputs: MapInputs {
-            facts: features::facts_digest(facts)?,
-            features: digest.to_string(),
-            program: features::program_digest(
-                &target.config,
-                &features::program_files(target, facts),
-            ),
-            platform: features::platform(),
-        },
+        inputs,
         unwatched,
         scenarios: records,
     })
@@ -290,6 +295,28 @@ impl PairIndex {
     }
 }
 
+/// The first `(file, include)` of the facts where a file under `source_dir`
+/// includes a project file outside it, compared lexically.
+fn include_leaving(facts: &Facts, source_dir: &str) -> Option<(String, String)> {
+    let norm = |s: &str| -> PathBuf {
+        Path::new(s)
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect()
+    };
+    let dir = norm(source_dir);
+    facts
+        .files
+        .iter()
+        .filter(|f| norm(&f.path).starts_with(&dir))
+        .find_map(|f| {
+            f.includes
+                .iter()
+                .find(|inc| !norm(inc).starts_with(&dir))
+                .map(|inc| (f.path.clone(), inc.clone()))
+        })
+}
+
 /// Copy every regular file under `source_dir` (not `migration/` or `.git/`
 /// when it is the target root) into `mirror` at its repo-relative path, each
 /// file the facts give functions probed. Returns the unwatched pairs.
@@ -299,13 +326,15 @@ fn write_mirror(
     index: &PairIndex,
     mirror: &Path,
 ) -> Result<Vec<(String, String)>, Error> {
-    let walked = walk::confined(
+    let skipped_dirs = [base.root.join("migration"), base.root.join(".git")];
+    let walked = walk::confined_except(
         &base.source_dir,
         walk::ALL_FILES,
         walk::Limits {
             max_files: Some(MIRROR_MAX_FILES),
             max_depth: None,
         },
+        &skipped_dirs,
     );
     if let Some((path, why)) = walked.errors.first() {
         return Err(Error::io(path, std::io::Error::other(why.clone())));
@@ -318,7 +347,6 @@ fn write_mirror(
     }
     let with_functions: std::collections::BTreeSet<&str> =
         facts.symbols.iter().map(|s| s.file.as_str()).collect();
-    let skipped_dirs = [base.root.join("migration"), base.root.join(".git")];
     let mut total: u64 = 0;
     let mut unwatched: Vec<(String, String)> = Vec::new();
     for path in walked.files {
@@ -374,6 +402,10 @@ fn record(
 ) -> ScenarioRecord {
     let same = |a: &ScenarioRun, b: &ScenarioRun| a.same_result(b);
     let (noted_word, reason, functions) = match &noted.collected {
+        // Opened, never written: the notes were lost (review M3).
+        Some(Collected::Bytes(bytes)) if bytes.is_empty() => {
+            ("unavailable", Some("none written"), Vec::new())
+        }
         Some(Collected::Bytes(bytes)) => match decode_notes(bytes, index) {
             Some(functions) => ("complete", None, functions),
             None => ("unavailable", Some("unreadable"), Vec::new()),
@@ -419,7 +451,40 @@ fn decode_notes(bytes: &[u8], index: &PairIndex) -> Option<Vec<(String, String)>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_core::facts::SymbolRecord;
+    use harness_core::facts::{FileRecord, SymbolRecord};
+
+    /// Review M7: an include the facts resolved outside `source_dir` is
+    /// named; one inside, or any with `source_dir` the root, is not.
+    #[test]
+    fn an_include_that_leaves_the_source_dir_is_named() {
+        let rec = |path: &str, includes: &[&str]| FileRecord {
+            path: path.into(),
+            hash: String::new(),
+            includes: includes.iter().map(|s| s.to_string()).collect(),
+        };
+        let facts = Facts {
+            files: vec![
+                rec("src/a.c", &["src/a.h", "include/zlib.h"]),
+                rec("src/a.h", &[]),
+                rec("include/zlib.h", &["include/zconf.h"]),
+            ],
+            ..Facts::default()
+        };
+        assert_eq!(
+            include_leaving(&facts, "src"),
+            Some(("src/a.c".into(), "include/zlib.h".into()))
+        );
+        assert_eq!(
+            include_leaving(&facts, "./src/"),
+            include_leaving(&facts, "src")
+        );
+        assert_eq!(include_leaving(&facts, "."), None);
+        let inside = Facts {
+            files: vec![rec("src/a.c", &["src/a.h"])],
+            ..Facts::default()
+        };
+        assert_eq!(include_leaving(&inside, "src"), None);
+    }
 
     fn facts() -> Facts {
         let sym = |file: &str, name: &str| SymbolRecord {

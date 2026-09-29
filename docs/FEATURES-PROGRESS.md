@@ -19,12 +19,14 @@ rule text governs). Spike + user decision (scenarios + verify): DECISIONS.md 202
 | 4c | 26362d2 | Edit flow (draft, editor dialog, validation, `features save` on stdin, kept draft), Help, pty test Map end to end |
 | 5 | 9e62e29 | chat brief (feature checks apart, none ≠ passing, scenario ids, menu items), harness-mcp closed `features` field |
 | 7 | c5f6891 | SCHEMAS, TUTORIAL, README |
-| 6 | (this) | dogfood: zopfli features.toml (7 features, 8 scenarios) + map.json, u001 re-verified green with 8 feature checks; counts in the shown form (`$$` undone, paths as tokens — found by the dogfood: 206 for 205); `same_result` for run comparisons; zopfli-loading tests adjusted, a dogfood view test, MCP `features: current` |
+| 6 | a38c2aa | dogfood: zopfli features.toml (7 features, 8 scenarios) + map.json, u001 re-verified green with 8 feature checks; counts in the shown form (`$$` undone, paths as tokens — found by the dogfood: 206 for 205); `same_result` for run comparisons; zopfli-loading tests adjusted, a dogfood view test, MCP `features: current` |
 
 Verified on a copy of zopfli: `features map` (8 scenarios, 10 s) separates gzip/zlib/deflate/-v/--i1 as
 the spike found; `verify u001` runs 8 feature checks, green; `state status` shows features=current.
 
 ## Next (in order)
+| 8a review | — | 4 lenses → 35 findings, each verified independently: 33 confirmed, 2 refuted (M4, O8) — scratchpad code-review/<lens>/{findings,verdicts}.md; FEATURES-DESIGN §R5 |
+| 8b fix pass | (this) | every confirmed finding fixed or its residual named (§R5 table); 940 tests pass |
 
 Live chat tests after step 5: every failure was the `claude` sign-in expiring ("OAuth session
 expired and could not be refreshed" — the chat said so in words); re-run both after the person
@@ -39,7 +41,7 @@ signs in again (the fix pass changes nothing in the chat protocol, but the brief
    tests (zopfli_verify exact check list — run it on a copy without the file; others).
 7. (done) SCHEMAS.md (ruharness-features v1, ruharness-features-map v1, the new fields/events/CLI,
    trust boundaries), TUTORIAL "Features" section, README line.
-8. Adversarial code review (3–4 lenses) → verify findings → fix pass → check the fix pass →
+8. (review + fix pass done) check the fix pass →
    mutation checks of the named rules (§12 end) → bench check --replay again (CLI changed) →
    DECISIONS handoff → merge to main, push. Then memory update.
 

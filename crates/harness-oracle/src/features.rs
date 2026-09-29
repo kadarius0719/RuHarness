@@ -11,14 +11,13 @@ use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::features::{self, FeatureSnapshot, Scenario, SkipReason, INVALID_DIGEST};
 use harness_core::verdict::{Check, VerdictInputs};
-use harness_core::{Facts, Unit};
+use harness_core::Unit;
 use std::path::{Path, PathBuf};
 
 /// What the feature step needs from the verification in progress.
 pub(crate) struct FeatureStepCtx<'a> {
     pub target: &'a TargetContext,
     pub prep: &'a Prepared,
-    pub facts: &'a Facts,
     pub unit: &'a Unit,
     pub runner: &'a Runner,
     pub confined: &'a Confinement<'a>,
@@ -26,6 +25,8 @@ pub(crate) struct FeatureStepCtx<'a> {
     /// The programs the whole-program check built, when it ran.
     pub whole: Option<&'a WholePrograms>,
     pub features: &'a FeatureSnapshot,
+    /// The program digest, taken before anything was built (review O6).
+    pub program: &'a str,
     pub inputs: &'a mut VerdictInputs,
     pub checks: &'a mut Vec<Check>,
 }
@@ -36,12 +37,12 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
         FeatureSnapshot::None => return Ok(()),
         FeatureSnapshot::Invalid(_) => {
             ctx.inputs.features = INVALID_DIGEST.to_string();
-            ctx.inputs.program = program_digest(ctx);
+            ctx.inputs.program = ctx.program.to_string();
             return Ok(());
         }
         FeatureSnapshot::Valid { features, digest } => {
             ctx.inputs.features = digest.clone();
-            ctx.inputs.program = program_digest(ctx);
+            ctx.inputs.program = ctx.program.to_string();
             features
         }
     };
@@ -58,7 +59,17 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
 
     // 1. Not part of the program: the shared whole builds need every
     // `replaces` entry among the program's top-level `.c`.
-    let c_files = program_c_files(ctx.prep, ctx.unit)?;
+    // A top-level `.c` the build cannot take (a dangling link, one leaving
+    // the target): the tree's doing, never the candidate's — a skip, as
+    // nothing about features blocks work (review O1).
+    let c_files = match program_c_files(ctx.prep, ctx.unit) {
+        Ok(files) => files,
+        Err(Error::Interrupted) => return Err(Error::Interrupted),
+        Err(_) => {
+            skip_all(ctx, SkipReason::CSideBuildFailed);
+            return Ok(());
+        }
+    };
     if !ctx
         .prep
         .replaces
@@ -99,6 +110,12 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
         .build
         .join("f")
         .join(features::program_name(&ctx.target.config));
+    // The C program's bytes, checked before every C run (review O3): without
+    // the sandbox a candidate run can write the build dir, and a C side it
+    // changed must fail the check, never become a skip or a pass.
+    let c_digest = harness_core::hash::file_hash(&c_bin)?;
+    let c_changed = || harness_core::hash::file_hash(&c_bin).map_or(true, |now| now != c_digest);
+    let mut tampered = false;
     for scenario in &features.scenarios {
         let argv = scenario.argv();
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
@@ -114,10 +131,19 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
             ctx.checks.push(Check {
                 name: scenario.check_name(),
                 passed: false,
-                detail: "the mixed program did not link".into(),
+                detail: features::MIXED_LINK_DETAIL.into(),
             });
             continue;
         };
+        tampered = tampered || c_changed();
+        if tampered {
+            ctx.checks.push(Check {
+                name: scenario.check_name(),
+                passed: false,
+                detail: TAMPERED.into(),
+            });
+            continue;
+        }
         let c1 = run(&c_bin)?;
         // A first C run that did not exit decides the skip: the mixed side
         // and the second C run would add nothing but time.
@@ -128,6 +154,15 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
             continue;
         }
         let mixed = run(mixed_bin)?;
+        if c_changed() {
+            tampered = true;
+            ctx.checks.push(Check {
+                name: scenario.check_name(),
+                passed: false,
+                detail: TAMPERED.into(),
+            });
+            continue;
+        }
         let c2 = run(&c_bin)?;
         match c_side_problem(&c1, &c2) {
             Some(reason) => ctx
@@ -145,12 +180,9 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-fn program_digest(ctx: &FeatureStepCtx<'_>) -> String {
-    features::program_digest(
-        &ctx.target.config,
-        &features::program_files(ctx.target, ctx.facts),
-    )
-}
+/// The detail of a scenario whose C program changed while the check ran.
+const TAMPERED: &str = "the C program changed while the check ran (a run wrote the build \
+                        directory) — re-check under the sandbox";
 
 /// Copy `bin` to the one path every run of a scenario uses (§4.1 step 1).
 pub(crate) fn place(bin: &Path, run_path: &Path) -> Result<(), Error> {

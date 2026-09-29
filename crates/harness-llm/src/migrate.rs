@@ -1164,10 +1164,26 @@ fn verdict_explanation(class: &'static str, verdict: &Verdict) -> &'static str {
         CAPABILITIES_EXPLANATION
     } else if class == "oracle" && failed.iter().any(|c| is_boundary_footprint(c)) {
         BOUNDARY_EXPLANATION
+    } else if !failed.is_empty()
+        && failed
+            .iter()
+            .all(|c| is_c_side(c) || c.detail == harness_core::features::MIXED_LINK_DETAIL)
+    {
+        MIXED_LINK_EXPLANATION
     } else {
         class_explanation(class)
     }
 }
+
+/// Why the person's feature scenarios failed when only the whole program
+/// with the unit's Rust did not link (docs/FEATURES-DESIGN.md §6.1 step 3;
+/// review O4): the symbol-set check passed, so the crate exports exactly the
+/// unit's symbols — the rest of the C needs something the replaced file
+/// defines that the unit does not list, which no Rust change fixes.
+const MIXED_LINK_EXPLANATION: &str = "the candidate passed every check of the unit itself, but \
+the whole program with it swapped in did not link: the rest of the C needs something the \
+replaced C file defines that is not one of the unit's symbols. That is the plan's doing, not \
+your Rust's: keep the translation as it is";
 
 /// Why a `capabilities` failure stopped the oracle before linking.
 const CAPABILITIES_EXPLANATION: &str = "the candidate built, but its own code reaches \
@@ -2349,6 +2365,38 @@ int add(int a, int b) { return a + b; }\n";
         assert_eq!(
             verdict_explanation("oracle", &retained),
             BOUNDARY_EXPLANATION
+        );
+
+        // Review O4: a whole program that did not link is the plan's, said
+        // so; any other failure beside it keeps its own explanation.
+        let unlinked = verdict(&[
+            (
+                "feature:gzip/text",
+                false,
+                harness_core::features::MIXED_LINK_DETAIL,
+            ),
+            (
+                "feature:help/flag",
+                false,
+                harness_core::features::MIXED_LINK_DETAIL,
+            ),
+        ]);
+        assert_eq!(classify(&unlinked), "oracle");
+        assert_eq!(
+            verdict_explanation("oracle", &unlinked),
+            MIXED_LINK_EXPLANATION
+        );
+        let and_more = verdict(&[
+            (
+                "feature:gzip/text",
+                false,
+                harness_core::features::MIXED_LINK_DETAIL,
+            ),
+            ("differential-driver", false, "byte 3 differs"),
+        ]);
+        assert_eq!(
+            verdict_explanation("oracle", &and_more),
+            class_explanation("oracle")
         );
 
         let tamper = verdict(&[(
@@ -4546,6 +4594,18 @@ int add(int a, int b) { return a + b; }\n";
             explained < first_turn,
             "the explanation comes first: {message}"
         );
+
+        // The file deleted since: the features changed — and no C did
+        // (review O7: today's empty program digest is not a change).
+        std::fs::remove_dir_all(fx.target.root.join("migration/features")).unwrap();
+        let (replay, _) = scripted("replay", false, vec![]);
+        let err = run_with(&fx, &replay, &oracle(vec![green()]), 3, &[]).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("the features changed since it was recorded"),
+            "{message}"
+        );
+        assert!(!message.contains("other C changed"), "{message}");
 
         // Recorded without features: replayed without them, whatever the
         // file says now — which reproduces it exactly.

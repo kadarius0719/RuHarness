@@ -219,9 +219,10 @@ pub(crate) fn shown_len(rewritten: &[u8]) -> usize {
 impl Confinement<'_> {
     /// Run a scenario (docs/FEATURES-DESIGN.md §4.1): the binary at `bin` —
     /// the one path every run of a scenario uses, `<build>/f/<name>` — with
-    /// `args` (`{input}` already the bare file name), in a fresh temp dir that
-    /// holds only the input (`input`: its file name and bytes, written with a
-    /// fixed modification time), as its cwd; under the scenario profile; its
+    /// `args` (`{input}` already the bare file name), its cwd a folder
+    /// ([`SCENARIO_CWD`]) of a fresh temp dir (its `TMPDIR`) that holds only
+    /// the input (`input`: its file name and bytes, written with a fixed
+    /// modification time); under the scenario profile; its
     /// process group killed when it exits. Both streams are rewritten
     /// one-to-one: `$` → `$$`, then the temp dir → `$TMPDIR`, then `bin`'s
     /// directory → `$PROGDIR`.
@@ -233,13 +234,18 @@ impl Confinement<'_> {
         collect_file: Option<(&str, u64)>,
     ) -> Result<ScenarioRun, Error> {
         let tmp = RunTmp::create()?;
+        // The program's own folder, inside the run's temp dir: `$TMPDIR`
+        // (where the map's notes go) is not its cwd, so a program that lists
+        // its folder sees only its input (review M8).
+        let cwd = tmp.path().join(SCENARIO_CWD);
+        std::fs::create_dir(&cwd).map_err(|e| Error::io(&cwd, e))?;
         if let Some((name, bytes)) = input {
             if name.is_empty() || name.contains('/') || name.starts_with('.') {
                 return Err(Error::Invariant(format!(
                     "internal: a scenario input name {name:?} must be a plain file name"
                 )));
             }
-            let path = tmp.path().join(name);
+            let path = cwd.join(name);
             std::fs::write(&path, bytes).map_err(|e| Error::io(&path, e))?;
             let file = std::fs::File::options()
                 .write(true)
@@ -261,7 +267,7 @@ impl Confinement<'_> {
         let env: Vec<(&str, &std::ffi::OsStr)> = vec![("TMPDIR", tmp.path().as_os_str())];
         let out = match self
             .runner
-            .scenario(bin, args, profile.as_deref(), &env, tmp.path())
+            .scenario(bin, args, profile.as_deref(), &env, &cwd)
         {
             Ok(out) => out,
             Err(Error::Interrupted) => return Err(Error::Interrupted),
@@ -326,6 +332,9 @@ impl Confinement<'_> {
         // `tmp` is dropped (removed) here, after the child is gone.
     }
 }
+
+/// The scenario's working directory, inside its run's temp dir.
+pub(crate) const SCENARIO_CWD: &str = "run";
 
 /// What a scenario run's program directory is replaced with in its output.
 pub(crate) const PROGDIR_TOKEN: &[u8] = b"$PROGDIR";
@@ -452,8 +461,11 @@ impl RunTmp {
             .canonicalize()
             .map_err(|e| Error::io(&base_raw, e))?;
         for _ in 0..1000 {
+            // Fixed width (review O9): a run's temp dir has the same length
+            // as every other's, so a program that prints its cwd's length
+            // (or pads to it) does not change between the C runs.
             let dir = base.join(format!(
-                "ruharness-run-{}-{}",
+                "ruharness-run-{:010}-{:010}",
                 std::process::id(),
                 RUN_COUNTER.fetch_add(1, Ordering::SeqCst)
             ));
@@ -946,7 +958,7 @@ int main(int argc, char **argv) {
         assert_eq!(shown_len(&first.stderr), 5);
         let out = text(&first.stdout);
         assert!(out.contains("argv0 $PROGDIR/zopfli\n"), "{out}");
-        assert!(out.contains("cwd $TMPDIR\n"), "{out}");
+        assert!(out.contains("cwd $TMPDIR/run\n"), "{out}");
         assert!(out.contains("input 12 bytes mtime 0\n"), "{out}");
         assert!(
             out.contains("token $$TMPDIR $$PROGDIR\n"),
