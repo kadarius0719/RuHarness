@@ -865,6 +865,11 @@ mod tests {
         app.features_edited(ok());
         let p = save_pending(&app);
         app.mode = Mode::Normal;
+        // A save that could not start is not offered on `t` either (fix
+        // check 2 N6).
+        app.on_spawn_failed(p.clone(), "no such file");
+        assert!(app.try_again.is_none(), "{:?}", app.try_again);
+        assert!(app.notice.as_ref().unwrap().text.contains("draft is kept"));
         crate::app::tests::locked(&mut app, &p);
         assert!(app.try_again.is_none(), "{:?}", app.try_again);
         assert!(app.features_draft.is_some());
