@@ -163,9 +163,10 @@ mod tests {
                    double b(double x) {\n#ifdef FAST\n#pragma clang fp contract(fast)\n#endif\n  return x; }\n\
                    double c(double x) { _Pragma(\"clang fp contract(fast)\") return x; }\n\
                    double d(double x) { FP_FAST return x; }\n\
-                   int e(int n) { int t = 0; FOREACH(i, n) { t += i; } return t; }\n";
-        let p = probe(src, &["a", "b", "c", "d", "e"]);
-        assert_eq!(p.unwatched, ["a", "b", "c", "d"], "{}", text(&p));
+                   int e(int n) { int t = 0; FOREACH(i, n) { t += i; } return t; }\n\
+                   double g(double x) { _Pragma(\"STDC FENV_ACCESS ON\"); return x; }\n";
+        let p = probe(src, &["a", "b", "c", "d", "e", "g"]);
+        assert_eq!(p.unwatched, ["a", "b", "c", "d", "g"], "{}", text(&p));
         // Fix check N4: `naked` only as a word of the head.
         let src = "static int naked_count(struct naked_list *l) { return 0; }\n\
                    int snaked(int x) { return x; }\n";
