@@ -974,9 +974,45 @@ mod tests {
         let m = fx.model();
         assert_eq!(state(&m, "help"), FeatureState::Failing);
         assert_eq!(m.feature("help").unwrap().also_fails, [U001]);
+        // F1 before F2: a failure shows even when a scenario also cannot
+        // run (the map found it unstable), said beside it.
+        fx.write_map(
+            &[
+                ("gzip", "text", vec![main_fn(), kata()]),
+                ("help", "flag", vec![main_fn()]),
+                ("inline", "x", vec![inline()]),
+            ],
+            |m| m.scenarios[1].stable = false,
+        );
+        let m = fx.model();
+        assert_eq!(state(&m, "help"), FeatureState::Failing);
+        assert_eq!(
+            m.feature("help").unwrap().also.as_deref(),
+            Some("1 scenario cannot run")
+        );
         // Failing needs no map: the same with the map out of date.
         std::fs::remove_file(features::map_path(&fx.root)).unwrap();
         assert_eq!(state(&fx.model(), "help"), FeatureState::Failing);
+    }
+
+    /// A current verdict that ran none of a feature's scenarios on a unit
+    /// the plan's paths put outside the program: outside, not "absent" —
+    /// which would ask for a re-check that cannot help.
+    #[test]
+    fn a_verdict_without_the_features_checks_outside_the_program_is_outside() {
+        let fx = zopfli("verdict-outside");
+        fx.write_features(FEATURES);
+        standard_map(&fx);
+        fx.verdict(&[], &[]);
+        let read = fx.read();
+        let mut snap = read.snapshot.clone();
+        snap.source_dir = "elsewhere".into();
+        let files = crate::files::build(&snap, &read.walk);
+        let m = build(&snap, &files, &read.map, read.map_now.as_ref());
+        let gzip = m.feature("gzip").unwrap();
+        let row = gzip.units.iter().find(|r| r.unit == U001).unwrap();
+        assert_eq!(row.result, UnitResult::Outside);
+        assert!(gzip.recheck.is_empty(), "{:?}", gzip.recheck);
     }
 
     #[test]

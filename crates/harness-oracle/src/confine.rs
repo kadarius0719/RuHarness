@@ -891,6 +891,22 @@ int main(int argc, char **argv) {
         String::from_utf8_lossy(bytes).into_owned()
     }
 
+    /// Review O9: every run's temp dir has the same length, across a
+    /// counter's digit boundary too.
+    #[test]
+    fn run_dirs_have_one_length() {
+        RUN_COUNTER.store(9, Ordering::SeqCst);
+        let a = RunTmp::create().expect("a");
+        let b = RunTmp::create().expect("b");
+        assert_eq!(
+            a.path().as_os_str().len(),
+            b.path().as_os_str().len(),
+            "{} {}",
+            a.path().display(),
+            b.path().display()
+        );
+    }
+
     #[test]
     fn a_shown_offset_undoes_the_escape_and_keeps_the_tokens() {
         // The program printed "a$b<temp dir>c<program dir>".
@@ -981,6 +997,14 @@ int main(int argc, char **argv) {
         let c = scenario_confinement(&r, host.as_ref(), &root);
         let exit3 = c.run_scenario(&bin, &["exit:3"], None, None).expect("runs");
         assert_eq!(exit3.end, ScenarioEnd::Exited(3));
+        // sandbox-exec's own codes, from the program: its exit, not a
+        // refused exec — only sandbox-exec's words make that (§4.1 step 6).
+        for code in [65, 71] {
+            let run = c
+                .run_scenario(&bin, &[&format!("exit:{code}")], None, None)
+                .expect("runs");
+            assert_eq!(run.end, ScenarioEnd::Exited(code));
+        }
         assert!(
             text(&exit3.stdout).contains("argv0"),
             "streams kept on a non-zero exit"

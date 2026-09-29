@@ -287,6 +287,101 @@ pub(crate) fn scenario_check(
 mod tests {
     use super::*;
 
+    /// Review O3: without the sandbox a candidate run can write the build
+    /// dir. A C program that changed between its runs fails the scenario and
+    /// every later one — never a skip, never a pass against itself.
+    #[test]
+    fn a_c_program_changed_between_its_runs_fails_never_skips() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = crate::testutil::TempDir::new("feat-tamper");
+        let root = tmp.path().to_path_buf();
+        let write = |rel: &str, text: &str| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        write(
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"tool\"\nsource_dir = \"src\"\n\
+             [oracle]\nallowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n",
+        );
+        write("src/main.c", "int main(void) { return 0; }\n");
+        write("src/unit.c", "int unit(void) { return 1; }\n");
+        write("migration/units/u-unit/driver.c", "\n");
+        std::fs::create_dir_all(root.join("migration/units/u-unit/unit_rs")).unwrap();
+        let target = TargetContext::load(&root).unwrap();
+        let unit: Unit = toml::from_str(
+            "id = \"u-unit\"\nstatus = \"pending\"\nfiles = [\"src/unit.c\"]\n\
+             symbols = [\"unit\"]\n\n[oracle]\nkind = \"c-abi-differential\"\n\
+             driver = \"migration/units/u-unit/driver.c\"\nrust_crate = \"unit_rs\"\n\
+             replaces = [\"src/unit.c\"]\n",
+        )
+        .unwrap();
+        let prep = crate::Prepared::new(&target, &unit).unwrap();
+        // The C "program" says hi; the mixed one says hi too — and, as a
+        // candidate could unsandboxed, rewrites the C one (still saying hi).
+        let script = |path: &Path, text: &str| {
+            std::fs::write(path, text).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let c = prep.build.join("whole_c");
+        let mixed = prep.build.join("whole_mixed");
+        script(&c, "#!/bin/sh\necho hi\n");
+        script(
+            &mixed,
+            &format!(
+                "#!/bin/sh\nprintf '#!/bin/sh\\necho hi # changed\\n' > '{}'\necho hi\n",
+                c.display()
+            ),
+        );
+        let text = "schema_version = 1\n[[feature]]\nid = \"f\"\nname = \"F\"\n\
+                    [[scenario]]\nfeature = \"f\"\nid = \"a\"\nargs = [\"x\"]\n\
+                    [[scenario]]\nfeature = \"f\"\nid = \"b\"\nargs = [\"y\"]\n";
+        let parsed = features::parse(text, Path::new("features.toml")).unwrap();
+        let snapshot = FeatureSnapshot::Valid {
+            digest: features::features_digest(&parsed, &target.config),
+            features: parsed,
+        };
+        let runner = Runner {
+            cwd: root.clone(),
+            allowlist: Vec::new(),
+            timeout: std::time::Duration::from_secs(30),
+            max_output: crate::exec::DEFAULT_MAX_OUTPUT,
+            tool_profile: None,
+        };
+        let confined = Confinement {
+            runner: &runner,
+            host: None,
+            target_root: &root,
+        };
+        let whole = WholePrograms {
+            c: c.clone(),
+            mixed,
+        };
+        let (mut inputs, mut checks) = (VerdictInputs::default(), Vec::new());
+        feature_step(&mut FeatureStepCtx {
+            target: &target,
+            prep: &prep,
+            unit: &unit,
+            runner: &runner,
+            confined: &confined,
+            rust_lib: Path::new("/nonexistent"),
+            whole: Some(&whole),
+            features: &snapshot,
+            program: "",
+            inputs: &mut inputs,
+            checks: &mut checks,
+        })
+        .unwrap();
+        assert!(inputs.features_skipped.is_empty(), "{inputs:?}");
+        assert_eq!(checks.len(), 2, "{checks:?}");
+        for check in &checks {
+            assert!(!check.passed, "{check:?}");
+            assert_eq!(check.detail, TAMPERED);
+        }
+    }
+
     fn run(end: ScenarioEnd, stdout: &str, stderr: &str) -> ScenarioRun {
         ScenarioRun {
             end,

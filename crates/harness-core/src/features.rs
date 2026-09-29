@@ -1517,6 +1517,39 @@ args = ["-h"]
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
+    /// The digests are contracts: every recorded verdict and map compares
+    /// against them, so their rendering is pinned (a change here marks every
+    /// verdict behind — make it on purpose). Includes the samples' bytes.
+    #[test]
+    fn the_digests_are_pinned() {
+        assert_eq!(
+            features_digest(&p(GOOD).expect("valid"), &config()),
+            "blake3:d90e8319fd306c9c8f6519eca6bd83ab4dc18d520028fc2a393a3b373657bf96"
+        );
+        assert_eq!(
+            program_digest(
+                &config(),
+                &[
+                    ("src/a.c".to_string(), Some("blake3:aa".to_string())),
+                    ("src/b.h".to_string(), None),
+                ]
+            ),
+            "blake3:538b15472cb035bbb6d58ded77a1661d6191dc7922575139334c155c5f24d556"
+        );
+    }
+
+    /// Review mutation A2: an id holds no `/` — it would split a check name
+    /// (`feature:<feature>/<scenario>`) in the wrong place.
+    #[test]
+    fn an_id_never_holds_a_separator() {
+        for bad in ["a/b", "a b", "a:b", "A", "-a", "a_b", ""] {
+            assert!(!is_id(bad), "{bad:?}");
+        }
+        for good in ["a", "gzip", "no-file", "a1-2"] {
+            assert!(is_id(good), "{good:?}");
+        }
+    }
+
     #[test]
     fn the_features_digest_covers_what_runs_and_not_names() {
         let base = features_digest(&p(GOOD).expect("valid"), &config());
