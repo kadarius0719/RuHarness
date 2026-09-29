@@ -74,6 +74,9 @@ pub const PROVIDER_KINDS: &[&str] = &["anthropic", "openai-compat", "external", 
 pub const STATUSES: &[&str] = &["pending", "in-progress", "verified", "merged", "blocked"];
 /// A stale verdict input.
 pub const STALE_INPUTS: &[&str] = &["source", "rust-crate", "driver"];
+/// Why a verdict does not cover the person's features
+/// (docs/FEATURES-DESIGN.md §3).
+pub const COVERAGE_REASONS: &[&str] = &["not-yet", "changed", "invalid", "program", "skipped"];
 /// An `error` event's `kind`.
 pub const ERROR_KINDS: &[&str] = &[
     "locked",
