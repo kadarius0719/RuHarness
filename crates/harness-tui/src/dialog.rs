@@ -93,6 +93,12 @@ pub enum Kind {
     /// no letter presses it (it opens from the chat, under the chat-dialog
     /// rules).
     NewChat,
+    /// Before the features Edit hands the screen to an editor
+    /// (docs/FEATURES-DESIGN.md §7.2): Cancel, Open.
+    OpenEditor,
+    /// A features draft that does not validate: Keep for later, Edit again,
+    /// Discard.
+    EditAgain,
 }
 
 impl Kind {
@@ -124,6 +130,15 @@ impl Kind {
             Kind::NewChat => vec![
                 button("Stay", "Esc", &[], Choice::Safe),
                 button("Start a new chat", "Enter", &[], Choice::NewChat),
+            ],
+            Kind::OpenEditor => vec![
+                button("Cancel", "Esc", &[], Choice::Safe),
+                button("Open", "y", &['y', 'Y'], Choice::Run),
+            ],
+            Kind::EditAgain => vec![
+                button("Keep for later", "Esc", &[], Choice::Safe),
+                button("Edit again", "y", &['y', 'Y'], Choice::Run),
+                button("Discard", "D", &['D'], Choice::Discard),
             ],
         }
     }

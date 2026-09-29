@@ -67,9 +67,15 @@ pub fn editable(crate_dir: &Path) -> bool {
 /// A fresh private directory under `base` (mode 0700, never an existing
 /// path).
 fn fresh_dir(base: &Path) -> std::io::Result<PathBuf> {
+    private_dir(base, "harness-tui-edit")
+}
+
+/// A fresh private directory `<base>/<prefix>-<pid>-<n>` (mode 0700, never
+/// an existing path).
+pub fn private_dir(base: &Path, prefix: &str) -> std::io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     for n in 0..1000u32 {
-        let dir = base.join(format!("harness-tui-edit-{}-{n}", std::process::id()));
+        let dir = base.join(format!("{prefix}-{}-{n}", std::process::id()));
         match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,

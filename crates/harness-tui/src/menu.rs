@@ -44,6 +44,11 @@ pub enum Action {
     Migrate,
     /// Ask in chat…: the chat focused.
     AskChat,
+    /// Write or edit the person's features file (docs/FEATURES-DESIGN.md
+    /// §7.2), or continue the kept draft.
+    EditFeatures,
+    /// Discard the kept features draft.
+    DiscardFeaturesDraft,
 }
 
 /// One menu item.
@@ -347,6 +352,42 @@ impl App {
             }
             _ => 0,
         };
+        if on_features {
+            let name = crate::app::features_edit::editor_name(&self.features_editor());
+            let has_file = !matches!(
+                self.snapshot.features,
+                harness_core::features::FeatureSnapshot::None
+            );
+            if self.features_draft.is_some() {
+                items.push(item(
+                    "Continue my features draft",
+                    Action::EditFeatures,
+                    None,
+                ));
+                items.push(item(
+                    "Discard my features draft",
+                    Action::DiscardFeaturesDraft,
+                    None,
+                ));
+            } else if has_file {
+                items.push(item(
+                    format!("Edit the features file (in {name})"),
+                    Action::EditFeatures,
+                    None,
+                ));
+            } else if !self.features.no_single_main && self.snapshot.facts.is_some() {
+                items.push(item(
+                    format!("Write your features file (in {name})"),
+                    Action::EditFeatures,
+                    None,
+                ));
+            }
+            if let Some(it) = items.last_mut() {
+                if matches!(it.action, Action::EditFeatures) && self.running {
+                    it.greyed = Some("a command is running (one at a time)".into());
+                }
+            }
+        }
         if on_features && scenarios > 0 {
             let mut it = self.act_item("Map the features".into(), Act::MapFeatures, None, None);
             if it.greyed.is_none() {

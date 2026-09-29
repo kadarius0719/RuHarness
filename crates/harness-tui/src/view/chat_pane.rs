@@ -579,6 +579,7 @@ mod tests {
         };
         a.asks.requests.push_back(Request {
             pending: Pending {
+                stdin: None,
                 act: Act::Migrate,
                 argv: Vec::new(),
                 label: "Migrate u-lib (asked in chat)".into(),

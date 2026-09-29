@@ -1194,3 +1194,70 @@ fn every_fatal_signal_restores_the_terminal() {
     });
     drop(reaper);
 }
+
+/// docs/FEATURES-DESIGN.md §8.5: the features end to end — a program with a
+/// features file and no map: the Next step is Map the features, Enter opens
+/// the project's menu focused on it, the armed dialog runs it, and the map
+/// is written.
+#[test]
+fn the_keyboard_maps_the_features_end_to_end() {
+    let dir = std::env::temp_dir().join(format!("harness-tui-e2e-map-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    copy_dir(&repo().join("targets/zopfli"), &dir.join("zopfli"));
+    let _cleanup = TmpDir(dir.clone());
+    let target = dir.join("zopfli").canonicalize().unwrap();
+    let features = target.join("migration/features");
+    std::fs::create_dir_all(&features).unwrap();
+    std::fs::write(
+        features.join("features.toml"),
+        "schema_version = 1\n[[feature]]\nid = \"zlib\"\nname = \"Compress to zlib\"\n\
+         [[scenario]]\nfeature = \"zlib\"\nid = \"text\"\nargs = [\"--zlib\", \"-c\", \"{input}\"]\n\
+         input = \"sample:text\"\n",
+    )
+    .unwrap();
+    let (mut script, screen, mut keys) = cockpit(
+        &format!(
+            "--target '{}' --harness '{}'",
+            target.display(),
+            harness_bin().display()
+        ),
+        &[],
+    );
+    let mut reaper = Reaper::new(script.id());
+    let saw = |needle: &str| {
+        on_screen(&screen, 40, 140).contains(&needle.split_whitespace().collect::<String>())
+    };
+    let mut press = |bytes: &[u8]| {
+        keys.write_all(bytes).unwrap();
+        keys.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    wait_for("the cockpit to draw", 30, || {
+        saw("Next step: Map the features").then_some(())
+    });
+    let tui_pid = wait_for("the cockpit process", 10, || {
+        children_of(script.id()).into_iter().next()
+    });
+    reaper.push(tui_pid);
+    press(b"\r");
+    wait_for("the menu", 10, || {
+        saw("Enter choose · Esc close").then_some(())
+    });
+    press(b"\r");
+    wait_for("the armed Map dialog", 10, || {
+        (saw("Map the features?") && saw("ready: → then Enter, or y")).then_some(())
+    });
+    press(RIGHT);
+    press(b"\r");
+    wait_for("the map to finish", 120, || {
+        saw("Last: Map the features — Done").then_some(())
+    });
+    let map = std::fs::read_to_string(features.join("map.json")).expect("the map is written");
+    assert!(map.contains("ZopfliZlibCompress"), "{map}");
+    press(b"q");
+    wait_for("the cockpit to quit", 10, || {
+        (!alive(tui_pid)).then_some(())
+    });
+    assert!(script.wait().unwrap().success());
+    drop(reaper);
+}

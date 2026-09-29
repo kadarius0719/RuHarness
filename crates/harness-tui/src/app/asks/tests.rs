@@ -1398,6 +1398,7 @@ fn decline_provider_reason_hints_and_quit_rules() {
     );
     a.asks.waiting = Some(Request {
         pending: Pending {
+            stdin: None,
             act: Act::Continue,
             argv: Vec::new(),
             label: "l".into(),

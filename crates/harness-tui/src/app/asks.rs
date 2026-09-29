@@ -691,6 +691,7 @@ impl App {
             os("--requester=chat"),
         ];
         Ok(Pending {
+            stdin: None,
             act: Act::Migrate,
             argv: self.with_sandbox_flag(self.harness_argv(&rest)?),
             label: format!("Migrate {unit} (asked in chat)"),
@@ -760,6 +761,7 @@ impl App {
         }
         let rest = self.retry_rest(unit, &a.record);
         Ok(Pending {
+            stdin: None,
             act: Act::Retry,
             argv: self.with_sandbox_flag(self.harness_argv(&rest)?),
             label: format!("Retry {} (asked in chat)", short_id(attempt)),
@@ -894,6 +896,7 @@ impl App {
         rest.push(os(format!("--answer-bytes={}", text.len())));
         rest.push(os(format!("--answer-key={key}")));
         Ok(Pending {
+            stdin: None,
             act: Act::Continue,
             argv: self.with_sandbox_flag(self.harness_argv(&rest)?),
             label: format!("Continue {} (asked in chat)", short_id(attempt)),

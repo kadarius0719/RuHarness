@@ -14,6 +14,7 @@
 //! the cockpit's own acts, confirmed in the same armed dialog ([`asks`]).
 
 pub mod asks;
+pub mod features_edit;
 
 use crate::chat::{self, Chat};
 use crate::dialog::{Choice, Dialog, Kind, Outcome};
@@ -175,6 +176,9 @@ pub enum Act {
     /// `features map`: which functions each of the person's scenarios runs
     /// (docs/FEATURES-DESIGN.md §5).
     MapFeatures,
+    /// `features save`: the person's edited features file, its text on the
+    /// command's stdin (§7.2).
+    SaveFeatures,
 }
 
 impl Act {
@@ -193,6 +197,7 @@ impl Act {
             Act::Migrate => "Migrate",
             Act::Continue => "Continue",
             Act::MapFeatures => "Map the features",
+            Act::SaveFeatures => "Save the features file",
         }
     }
 
@@ -210,7 +215,8 @@ impl Act {
             | Act::Verify
             | Act::Migrate
             | Act::Continue
-            | Act::MapFeatures => None,
+            | Act::MapFeatures
+            | Act::SaveFeatures => None,
         }
     }
 
@@ -249,6 +255,8 @@ pub struct Pending {
     /// An act the chat asked for (docs/CHAT-PANE-DESIGN.md §3): its request,
     /// answered with the outcome.
     pub chat: Option<Box<asks::ChatTag>>,
+    /// Text the command reads on its stdin (the features Edit's save).
+    pub stdin: Option<String>,
 }
 
 /// What the event loop must do after a key.
@@ -275,6 +283,14 @@ pub enum Command {
     },
     /// Remove a temp dir nobody needs any more.
     Cleanup(PathBuf),
+    /// Suspend, run the editor on the features draft
+    /// (docs/FEATURES-DESIGN.md §7.2).
+    EditFeatures {
+        /// The draft file.
+        file: PathBuf,
+        /// The line to open at, when the editor takes `+N`.
+        line: Option<u32>,
+    },
 }
 
 /// Why a read of the ledger was asked for (the requests fold, the strongest
@@ -328,6 +344,10 @@ pub enum Purpose {
     Cancel,
     /// End the chat's conversation (docs/CHAT-PANE-DESIGN.md §5.4).
     NewChat,
+    /// Open the features draft in the editor (docs/FEATURES-DESIGN.md §7.2).
+    OpenEditor,
+    /// A features draft that does not validate.
+    EditAgain,
 }
 
 /// An open dialog: its words and its latch.
@@ -729,6 +749,8 @@ pub struct App {
     /// Every staged hand edit not yet recorded, oldest first; never removed
     /// unless the override recorded it or the user discarded it.
     pub kept_edits: Vec<KeptEdit>,
+    /// The person's features draft, kept until saved or discarded.
+    pub features_draft: Option<features_edit::FeaturesDraft>,
     /// Temp dirs kept only for what an editor left in them.
     pub leftovers: Vec<PathBuf>,
     /// Modify's last note per attempt (cancelled, declined or refused).
@@ -917,6 +939,7 @@ impl App {
             tree_follow: true,
             view_follow: true,
             kept_edits: Vec::new(),
+            features_draft: None,
             leftovers: Vec::new(),
             notes: BTreeMap::new(),
             holder,
@@ -1626,6 +1649,7 @@ impl App {
             .iter()
             .map(|k| k.tmp.join("edit"))
             .chain(self.leftovers.iter().map(|t| t.join("edit")))
+            .chain(self.features_draft.iter().map(|d| d.tmp.clone()))
             .collect()
     }
 
@@ -1699,6 +1723,14 @@ impl App {
         }
         self.chat_reaped(status);
         let mut remove = None;
+        // The features Edit's save: saved → its draft goes; refused → kept.
+        if self
+            .run
+            .as_ref()
+            .is_some_and(|r| r.act == Act::SaveFeatures)
+        {
+            remove = self.features_save_ended(status.success());
+        }
         if let Some(run) = self.run.as_mut() {
             if let (Act::HandEdit, Some(tmp)) = (run.act, run.cleanup.take()) {
                 if run.recorded {
@@ -1816,6 +1848,7 @@ impl App {
                 .ok_or_else(|| format!("attempt {id} is gone"))
         };
         let pending = |argv, label: String, unit: Option<&str>, attempt: Option<&str>| Pending {
+            stdin: None,
             act,
             argv,
             label,
@@ -1837,6 +1870,7 @@ impl App {
                 let argv = self.harness_argv(&[os(sub), self.target_arg()])?;
                 Ok(pending(argv, act.label().to_string(), None, None))
             }
+            Act::SaveFeatures => Err("saved from the features Edit only".into()),
             Act::MapFeatures => {
                 let argv = self.with_sandbox_flag(self.harness_argv(&[
                     os("features"),
@@ -2032,6 +2066,7 @@ impl App {
             rest.push(arg);
         }
         Ok(Pending {
+            stdin: None,
             act: Act::HandEdit,
             argv: self.with_sandbox_flag(self.harness_argv(&rest)?),
             label: format!("Record the hand edit of {unit}"),
@@ -2149,6 +2184,7 @@ impl App {
         let attempt = p.attempt.clone().unwrap_or_default();
         let routing = || self.migrate_model.clone();
         let (title, mut body) = match p.act {
+            Act::SaveFeatures => self.save_features_words(p),
             Act::Scan => (
                 "Scan the project?".to_string(),
                 vec![
@@ -2375,6 +2411,11 @@ impl App {
                 Kind::NewChat,
                 "Start a new chat?".into(),
                 vec!["The chat forgets this conversation.".into()],
+            ),
+            Purpose::OpenEditor | Purpose::EditAgain => (
+                Kind::OpenEditor,
+                "Open the features file?".into(),
+                Vec::new(),
             ),
             Purpose::Cancel => (
                 Kind::Cancel,
@@ -2609,6 +2650,9 @@ impl App {
     }
 
     fn close_dialog(&mut self, confirm: Confirm, choice: Choice) -> Command {
+        if matches!(confirm.purpose, Purpose::OpenEditor | Purpose::EditAgain) {
+            return self.close_features_dialog(confirm.purpose, choice);
+        }
         if let Purpose::Act(p) = &confirm.purpose {
             if p.chat.is_some() {
                 return self.close_chat_dialog(confirm, choice);
@@ -2666,6 +2710,7 @@ impl App {
                 Command::None
             }
             (Purpose::Quit | Purpose::Cancel | Purpose::NewChat, _) => Command::None,
+            (Purpose::OpenEditor | Purpose::EditAgain, _) => Command::None,
         }
     }
 
@@ -2836,6 +2881,8 @@ impl App {
                 self.move_focus(Focus::Chat);
                 Command::None
             }
+            Action::EditFeatures => self.start_features_edit(),
+            Action::DiscardFeaturesDraft => self.discard_features_draft(),
         }
     }
 
@@ -5184,6 +5231,7 @@ pub(crate) mod tests {
 
     fn pending(argv: Vec<OsString>, act: Act) -> Pending {
         Pending {
+            stdin: None,
             act,
             argv,
             label: act.label().into(),

@@ -540,6 +540,67 @@ fn hand_edit(
     })
 }
 
+/// The features Edit (docs/FEATURES-DESIGN.md §7.2): the terminal handed to
+/// the editor on the draft, taken back, and the draft judged by the app.
+fn features_edit(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    file: &Path,
+    line: Option<u32>,
+) -> Result<(), String> {
+    let mouse = app.mouse;
+    let drain = app.mouse_busy(Instant::now());
+    if let Err(e) = suspend(terminal, drain) {
+        let _ = resume(terminal, mouse);
+        return Err(format!("features edit: {e}"));
+    }
+    let editor = app.features_editor();
+    *guard(&EDITOR) = Some(Editing::default());
+    let status = match std::process::Command::new("/bin/sh")
+        .args(harness_tui::app::features_edit::editor_argv(
+            &editor, file, line,
+        ))
+        .spawn()
+    {
+        Ok(child) => {
+            if let Some(e) = guard(&EDITOR).as_mut() {
+                let child = e.child.insert(child);
+                if let Some(sig) = e.signal {
+                    forward(child, sig);
+                }
+            }
+            loop {
+                let done = match guard(&EDITOR).as_mut().and_then(|e| e.child.as_mut()) {
+                    Some(child) => child.try_wait(),
+                    None => Err(std::io::Error::other("the editor was lost")),
+                };
+                match done {
+                    Ok(Some(status)) => break Ok(status),
+                    Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                    Err(e) => break Err(e),
+                }
+            }
+        }
+        Err(e) => Err(e),
+    };
+    let signal = guard(&EDITOR).take().and_then(|e| e.signal);
+    if let Some(sig) = signal {
+        // The draft is kept (named on the way out); the cockpit dies by it.
+        die(sig, &ChildSlot::default());
+    }
+    let resumed = resume(terminal, mouse);
+    while event::poll(Duration::ZERO).unwrap_or(false) {
+        if event::read().is_err() {
+            break;
+        }
+    }
+    if let harness_tui::app::Command::Cleanup(tmp) = app.features_edited(status) {
+        *guard(&KEPT_EDITS) = app.kept_paths();
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+    resumed.map_err(|e| format!("the terminal did not come back cleanly ({e})"))
+}
+
 /// After the editor: what it saved, or left beside the files, joins the
 /// kept list the signal path prints BEFORE anything else happens — staging,
 /// or `resume`, which a signal may interrupt (SAFE-10, CHK-5) — then the
@@ -799,6 +860,7 @@ fn run(
                     .chat
                     .as_ref()
                     .and_then(|c| c.answer.clone())
+                    .or_else(|| pending.stdin.clone())
                     .map(String::into_bytes),
             ) {
                 Ok(r) => {
@@ -828,6 +890,15 @@ fn run(
             Command::Cleanup(tmp) => {
                 *guard(&KEPT_EDITS) = app.kept_paths();
                 let _ = std::fs::remove_dir_all(tmp);
+            }
+            Command::EditFeatures { file, line } => {
+                // The draft is named on any way out from now on.
+                *guard(&KEPT_EDITS) = app.kept_paths();
+                if let Err(why) = features_edit(terminal, app, &file, line) {
+                    app.say(why);
+                }
+                *guard(&KEPT_EDITS) = app.kept_paths();
+                mouse_on = None;
             }
         }
         // The mouse turned on or off (Help): the terminal follows, under the

@@ -2437,6 +2437,47 @@ const HELP_LEGEND: &[(&str, &str)] = &[
     ("○", "not in the plan"),
 ];
 
+const HELP_FEATURES: &[&str] = &[
+    "A feature is something a person does with the program and sees the result of — \
+     \"compress a file to zlib\", \"show the help\". Each is one or more scenarios: one run of \
+     the whole program with fixed arguments and, at most, one of three samples as its input \
+     (about 30 000 bytes of English text, 16 KiB of pseudo-random bytes, or an empty file). An \
+     argument is a flag or a word — never a path: the program runs in an empty folder of its \
+     own. Programs that fork are checked only up to the fork.",
+    "Every Re-check (and every judged turn of a migration) runs each scenario on the C program \
+     and on the program with that unit's Rust swapped in, and compares the exit status, stdout \
+     and stderr. Each unit is checked with only its own Rust swapped in. A scenario the C \
+     cannot run the same way twice is skipped and named — it never blocks a Re-check, and \
+     neither does a features file with an error.",
+    "Map the features runs each scenario on a scratch copy of the C in which every function \
+     notes that it ran: the map says which units each feature runs (\"runs\"), from the \
+     functions it could put a note in (\"watches\"). Changing a scenario makes verdicts made \
+     before say \"not checked since you changed them\" until re-checked; renaming a feature does \
+     not.",
+    "Enter on Features: Write / Edit the features file (in your editor — the cockpit says how \
+     to save and leave), Map the features. Edited it outside the cockpit? Press g. Commit \
+     migration/features/ with your work.",
+];
+
+const HELP_FEATURE_LEGEND: &[(&str, &str)] = &[
+    ("✗", "failing: a unit's check of it failed"),
+    (
+        "⚑",
+        "a scenario cannot run as written — change or remove it",
+    ),
+    (
+        "↻",
+        "needs a re-check: a unit with Rust was not checked on it",
+    ),
+    ("⋯", "not mapped yet"),
+    ("≃", "the map is out of date"),
+    ("◔", "the map is incomplete for it"),
+    ("∅", "reaches no unit"),
+    ("✓", "all its units migrated, each checked alone"),
+    ("◉", "holds so far: its migrated units pass"),
+    ("◌", "all its code is still C"),
+];
+
 const HELP_CHAT: &[&str] = &[
     "The chat (Tab, or click Chat): ask for model work in plain words — \"migrate this\". It \
      reads the project and ASKS: a request waits on a line above the input, still for a \
@@ -2501,6 +2542,14 @@ fn help_rows(
     rows.push(Line::from(""));
     rows.push(Line::from(Span::styled("States", bold())));
     for (g, v) in HELP_LEGEND {
+        rows.extend(wrapped(&format!("{g:<3} {v}"), width, Style::default()));
+    }
+    rows.push(Line::from(""));
+    rows.push(Line::from(Span::styled("Features", bold())));
+    for l in HELP_FEATURES {
+        rows.extend(wrapped(l, width, Style::default()));
+    }
+    for (g, v) in HELP_FEATURE_LEGEND {
         rows.extend(wrapped(&format!("{g:<3} {v}"), width, Style::default()));
     }
     rows.push(Line::from(""));
