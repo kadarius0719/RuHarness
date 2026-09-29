@@ -9,6 +9,7 @@
 use crate::config::TargetContext;
 use crate::error::Error;
 use crate::facts::Facts;
+use crate::features::FeatureSnapshot;
 use crate::plan::Unit;
 use crate::verdict::Verdict;
 
@@ -25,10 +26,23 @@ pub trait LanguageFrontend {
 pub trait OracleStrategy {
     /// The `[unit.oracle] kind` string this strategy handles.
     fn kind(&self) -> &'static str;
-    /// Run the oracle for `unit`. Implementations own every `[unit.oracle]`
-    /// key other than `kind`, and must compute verdict input digests from the
-    /// tree they actually tested.
-    fn verify(&self, target: &TargetContext, unit: &Unit) -> Result<Verdict, Error>;
+    /// Run the oracle for `unit` under the person's features as the caller
+    /// loaded them (docs/FEATURES-DESIGN.md §2.2: once per judged run, and a
+    /// replay's `None`). Implementations own every `[unit.oracle]` key other
+    /// than `kind`, and must compute verdict input digests from the tree they
+    /// actually tested.
+    fn verify_with(
+        &self,
+        target: &TargetContext,
+        unit: &Unit,
+        features: &FeatureSnapshot,
+    ) -> Result<Verdict, Error>;
+
+    /// [`OracleStrategy::verify_with`] under the features as they are now —
+    /// loaded here, so no caller can skip them by forgetting to pass them.
+    fn verify(&self, target: &TargetContext, unit: &Unit) -> Result<Verdict, Error> {
+        self.verify_with(target, unit, &FeatureSnapshot::load(target))
+    }
 }
 
 /// Flags hazards in the scanned source (M2, docs/SCHEMAS.md findings).

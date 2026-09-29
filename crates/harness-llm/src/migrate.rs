@@ -36,6 +36,7 @@ use harness_core::attempts::{self, AttemptRecord};
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::facts::Facts;
+use harness_core::features::{FeatureSnapshot, FeaturesNow};
 use harness_core::hash;
 use harness_core::ledger::Ledger;
 use harness_core::observer::Finding;
@@ -317,6 +318,9 @@ pub struct MigrationOutcome {
     /// attempt-verdict.json`) when the final turn was judged by the oracle
     /// in this run; `None` otherwise, and after a verification.
     pub verdict: Option<harness_core::Verdict>,
+    /// The person's features this command judged under (loaded once at its
+    /// start): what a promotion that follows re-judges under.
+    pub features: FeatureSnapshot,
     /// A human attempt's failure evidence when its judge stored no verdict
     /// (the deny scan): the violations, one `- …` line each, so the author
     /// learns why. `None` otherwise (a model's reaches its next repair turn).
@@ -429,6 +433,12 @@ pub fn run_migration(
             STDIO_OUTPUT_FNS.to_vec()
         },
     };
+    // The person's features, once for the whole command: every turn of a
+    // live run is judged under them (docs/FEATURES-DESIGN.md §2.2).
+    let features = FeatureSnapshot::load(target);
+    let program = FeaturesNow::compute(target, facts, &features)
+        .map(|now| now.program)
+        .unwrap_or_default();
     let outcome = Job {
         params,
         stage: &stage,
@@ -440,6 +450,8 @@ pub fn run_migration(
         unit_source,
         driver,
         first_turn: &first_turn,
+        features: &features,
+        program,
     }
     .run()?;
     Ok(MigrationOutcome {
@@ -449,6 +461,7 @@ pub fn run_migration(
         drifted: outcome.drifted,
         verdict: outcome.verdict,
         failure_evidence: None,
+        features,
     })
 }
 
@@ -681,9 +694,15 @@ pub fn record_human_attempt(
     // An override killed mid-judge (see above): start it over.
     reset_unfinished(&work_dir, &id)?;
     remove_path(&work_dir.join(attempts::HUMAN_EDIT_DIR))?;
+    // The person's features, once (docs/FEATURES-DESIGN.md §2.2): the edit
+    // is judged under them, and the record says which.
+    let features = FeatureSnapshot::load(target);
+    let program = FeaturesNow::compute(target, facts, &features)
+        .map(|now| now.program)
+        .unwrap_or_default();
     let mut record = AttemptRecord {
-        features: String::new(),
-        program: String::new(),
+        features: features.digest().to_string(),
+        program,
         schema: attempts::ATTEMPT_SCHEMA_NAME.to_string(),
         schema_version: attempts::schema_version_for(None),
         id: id.clone(),
@@ -723,6 +742,7 @@ pub fn record_human_attempt(
         work_rel: work_rel.join("/"),
         verifying: false,
         scrub: &scrub,
+        features: &features,
     };
     let files = [edit.logic.to_string(), edit.ffi.to_string()];
     let judged = match stage.judge(&ctx, &files, &mut record) {
@@ -763,6 +783,7 @@ pub fn record_human_attempt(
         attempt_dir: work_dir,
         drifted: None,
         verdict: judged.verdict,
+        features,
     })
 }
 
@@ -844,7 +865,7 @@ impl Stage for MigrateStage<'_> {
             });
         }
         let candidate = write_candidate(ctx.work_dir, self.crate_name, logic, ffi)?;
-        let verdict = self.verify(&format!("{}/candidate", ctx.work_rel))?;
+        let verdict = self.verify(&format!("{}/candidate", ctx.work_rel), ctx.features)?;
         // A red `driver-shape` indicts the unit's DRIVER, not the candidate:
         // it is never fed to the translator as evidence (and never journaled
         // as a model outcome) — the attempt stays resumable once the driver
@@ -908,7 +929,7 @@ impl Stage for MigrateStage<'_> {
 impl MigrateStage<'_> {
     /// Verify the candidate: the unit, with `rust_crate` pointed at
     /// `candidate_rel` (relative to the unit dir).
-    fn verify(&self, candidate_rel: &str) -> Result<Verdict, Error> {
+    fn verify(&self, candidate_rel: &str, features: &FeatureSnapshot) -> Result<Verdict, Error> {
         let mut unit = self.unit.clone();
         let table = unit.oracle.as_mut().ok_or_else(|| {
             Error::Invariant(format!(
@@ -920,7 +941,7 @@ impl MigrateStage<'_> {
             "rust_crate".to_string(),
             toml::Value::String(candidate_rel.to_string()),
         );
-        self.oracle.verify(self.target, &unit)
+        self.oracle.verify_with(self.target, &unit, features)
     }
 }
 
@@ -1546,6 +1567,8 @@ int add(int a, int b) { return a + b; }\n";
 
     /// What the fake oracle saw when asked to verify.
     struct OracleCall {
+        /// The features digest the call was judged under.
+        features: String,
         rust_crate: String,
         files: Vec<String>,
         manifest: String,
@@ -1589,7 +1612,12 @@ int add(int a, int b) { return a + b; }\n";
         fn kind(&self) -> &'static str {
             ORACLE_KIND
         }
-        fn verify(&self, target: &TargetContext, unit: &Unit) -> Result<Verdict, Error> {
+        fn verify_with(
+            &self,
+            target: &TargetContext,
+            unit: &Unit,
+            features: &harness_core::features::FeatureSnapshot,
+        ) -> Result<Verdict, Error> {
             let ledger = Ledger::new(target.root.clone());
             let rust_crate = unit.oracle_param_str("rust_crate").unwrap().to_string();
             let dir = ledger.unit_dir(&unit.id).join(&rust_crate);
@@ -1597,6 +1625,7 @@ int add(int a, int b) { return a + b; }\n";
             list_files(&dir, "", &mut files);
             let read = |rel: &str| std::fs::read_to_string(dir.join(rel)).unwrap();
             self.calls.borrow_mut().push(OracleCall {
+                features: features.digest().to_string(),
                 rust_crate,
                 files,
                 manifest: read("Cargo.toml"),
@@ -4453,6 +4482,111 @@ int add(int a, int b) { return a + b; }\n";
         assert_eq!(snapshot(&fx.unit_dir()), before, "evidence untouched");
     }
 
+    /// docs/FEATURES-DESIGN.md §2.2, §3: every turn of a live run is judged
+    /// under the snapshot the run loaded once, and the record says which; a
+    /// replay judges under the recorded features when it can — none recorded
+    /// is none now — and explains a divergence under changed ones.
+    #[test]
+    fn a_run_judges_under_its_features_and_a_replay_under_the_recorded_ones() {
+        let features = |args: &str| {
+            format!(
+                "schema_version = 1\n[[feature]]\nid = \"f\"\nname = \"F\"\n\
+                 [[scenario]]\nfeature = \"f\"\nid = \"s\"\nargs = [{args}]\n"
+            )
+        };
+        let write_features = |fx: &Fx, text: &str| {
+            let dir = fx.target.root.join("migration/features");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("features.toml"), text).unwrap();
+        };
+        let digest_now = |fx: &Fx| {
+            harness_core::features::FeatureSnapshot::load(&fx.target)
+                .digest()
+                .to_string()
+        };
+
+        // Recorded under features: every turn under them, the record says so.
+        let fx = fixture("features-recorded");
+        write_features(&fx, &features("\"-a\""));
+        let first = digest_now(&fx);
+        assert!(first.starts_with("blake3:"));
+        let broken = LOGIC.replace("add(b)", "sub(b)");
+        let (provider, _) = handoff(&fx, vec![reply(emit(&broken, FFI)), good()]);
+        let fake = oracle(vec![diff_failure(), green()]);
+        let recorded = run_with(&fx, &provider, &fake, 3, &[]).unwrap();
+        assert!(fake.calls.borrow().iter().all(|c| c.features == first));
+        assert_eq!(fake.calls.borrow().len(), 2);
+        assert_eq!(recorded.record.features, first);
+        assert!(recorded.record.program.starts_with("blake3:"));
+        assert_eq!(
+            recorded.features.digest(),
+            first,
+            "promotion re-judges under them"
+        );
+        let stored = AttemptRecord::load(&recorded.attempt_dir).unwrap();
+        assert_eq!(stored.features, first);
+
+        // The same features: the replay judges under them.
+        let (replay, _) = scripted("replay", false, vec![]);
+        let fake = oracle(vec![diff_failure(), green()]);
+        run_with(&fx, &replay, &fake, 3, &[]).unwrap();
+        assert!(fake.calls.borrow().iter().all(|c| c.features == first));
+
+        // Changed features: today's, and a divergence says why first.
+        write_features(&fx, &features("\"-b\""));
+        let (replay, _) = scripted("replay", false, vec![]);
+        let err = run_with(&fx, &replay, &oracle(vec![green()]), 3, &[]).unwrap_err();
+        assert!(matches!(err, Error::Diverged { .. }), "{err}");
+        let message = err.to_string();
+        let explained = message
+            .find("the features changed since it was recorded")
+            .expect("explained");
+        let first_turn = message.find("turn count").expect("the difference");
+        assert!(
+            explained < first_turn,
+            "the explanation comes first: {message}"
+        );
+
+        // Recorded without features: replayed without them, whatever the
+        // file says now — which reproduces it exactly.
+        let fx = fixture("features-none-recorded");
+        let (provider, _) = handoff(&fx, vec![good()]);
+        let plain = run_with(&fx, &provider, &oracle(vec![green()]), 3, &[]).unwrap();
+        assert_eq!(plain.record.features, "");
+        assert_eq!(plain.record.program, "");
+        write_features(&fx, &features("\"-a\""));
+        let (replay, _) = scripted("replay", false, vec![]);
+        let fake = oracle(vec![green()]);
+        run_with(&fx, &replay, &fake, 3, &[]).unwrap();
+        assert_eq!(fake.calls.borrow().len(), 1);
+        assert_eq!(
+            fake.calls.borrow()[0].features,
+            "",
+            "a replay's None is honoured"
+        );
+
+        // An invalid file: the record says `invalid`; its replay judges
+        // under none.
+        let fx = fixture("features-invalid-recorded");
+        write_features(&fx, "schema_version = 1\nnope = 1\n");
+        let (provider, _) = handoff(&fx, vec![good()]);
+        let fake = oracle(vec![green()]);
+        let invalid = run_with(&fx, &provider, &fake, 3, &[]).unwrap();
+        assert_eq!(
+            invalid.record.features,
+            harness_core::features::INVALID_DIGEST
+        );
+        assert_eq!(
+            fake.calls.borrow()[0].features,
+            harness_core::features::INVALID_DIGEST
+        );
+        write_features(&fx, &features("\"-a\""));
+        let (replay, _) = scripted("replay", false, vec![]);
+        let fake = oracle(vec![green()]);
+        run_with(&fx, &replay, &fake, 3, &[]).unwrap();
+        assert_eq!(fake.calls.borrow()[0].features, "");
+    }
+
     #[test]
     fn replay_uses_the_budget_of_the_record_not_max_repairs() {
         let fx = fixture("replay-budget");
@@ -5319,7 +5453,12 @@ int add(int a, int b) { return a + b; }\n";
             fn kind(&self) -> &'static str {
                 "proptest"
             }
-            fn verify(&self, _: &TargetContext, _: &Unit) -> Result<Verdict, Error> {
+            fn verify_with(
+                &self,
+                _: &TargetContext,
+                _: &Unit,
+                _: &harness_core::features::FeatureSnapshot,
+            ) -> Result<Verdict, Error> {
                 unreachable!("never called")
             }
         }

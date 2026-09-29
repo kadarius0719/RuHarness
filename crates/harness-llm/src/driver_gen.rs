@@ -254,6 +254,9 @@ pub fn run_driver_generation(
         unit_source,
         driver: String::new(),
         first_turn: &crate::trajectory::TRANSLATE_FIRST,
+        // The driver stage runs no oracle: no features.
+        features: &crate::trajectory::NO_FEATURES,
+        program: String::new(),
     }
     .run()?;
     Ok(DriverOutcome {
@@ -1600,7 +1603,12 @@ return 0;\n}\n";
             fn kind(&self) -> &'static str {
                 "c-abi-differential"
             }
-            fn verify(&self, _: &TargetContext, unit: &Unit) -> Result<Verdict, Error> {
+            fn verify_with(
+                &self,
+                _: &TargetContext,
+                unit: &Unit,
+                _: &harness_core::features::FeatureSnapshot,
+            ) -> Result<Verdict, Error> {
                 Ok(Verdict::new(
                     unit.id.clone(),
                     VerdictInputs {

@@ -250,6 +250,20 @@ pub(crate) fn render_run_profile(spec: &RunSpec<'_>) -> Result<String, Error> {
     Ok(out)
 }
 
+/// The scenario run's profile (docs/FEATURES-DESIGN.md §4.1 step 4): the run
+/// profile, plus no signal to any process but itself (`(target others)`
+/// alone would mean "outside the run's process group", which the run can
+/// change) and no fork — applied to the C side and the mixed side alike.
+pub(crate) fn render_scenario_profile(spec: &RunSpec<'_>) -> Result<String, Error> {
+    let mut out = render_run_profile(spec)?;
+    out.push_str(SCENARIO_PROFILE_TAIL);
+    Ok(out)
+}
+
+/// What a scenario run's profile adds to the run profile.
+pub(crate) const SCENARIO_PROFILE_TAIL: &str =
+    "(deny signal)\n(allow signal (target self))\n(deny process-fork)\n";
+
 /// Quote a path as an SBPL string literal. Paths must be absolute UTF-8 and
 /// free of `"`, `\` and control characters — such a path is refused outright
 /// (never escaped), so profile text cannot be injected through a directory

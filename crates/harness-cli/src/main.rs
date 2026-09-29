@@ -621,14 +621,19 @@ fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Resu
         .into());
     }
 
+    // The person's features, loaded once for this run (docs/FEATURES-DESIGN.md
+    // §2.2): a file with an error is said and never blocks the verify.
+    let features = harness_core::features::FeatureSnapshot::load(&ctx);
+    announce_features(&features);
     let verdict = match unit.oracle_kind() {
         Some("c-abi-differential") => {
             let strategy = harness_oracle::CAbiDifferential;
-            strategy.verify(&ctx, unit)?
+            strategy.verify_with(&ctx, unit, &features)?
         }
         Some(kind) => bail!("unknown oracle kind `{kind}` for unit `{unit_id}`"),
         None => bail!("unit `{unit_id}` has no [unit.oracle] configured"),
     };
+    announce_skips(&verdict);
 
     verdict.store(&ledger.verdict_latest_path(&unit_id))?;
     harness_core::ledger::write_atomic(
@@ -667,6 +672,41 @@ fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Resu
             _ => out(format!("verify: {unit_id} RED")),
         }
         Ok(EXIT_ORACLE_RED)
+    }
+}
+
+/// Say, before the oracle runs, what the person's features will do
+/// (docs/FEATURES-DESIGN.md §5.5).
+pub(crate) fn announce_features(features: &harness_core::features::FeatureSnapshot) {
+    use harness_core::features::FeatureSnapshot;
+    match features {
+        FeatureSnapshot::None => {}
+        FeatureSnapshot::Invalid(why) => out(format!(
+            "verify: your features file has an error — no feature scenario runs ({})",
+            harness_core::features::one_line(why)
+        )),
+        FeatureSnapshot::Valid { features, .. } if !features.scenarios.is_empty() => {
+            let n = features.scenarios.len();
+            out(format!(
+                "verify: running your {n} feature scenario{} after the other checks",
+                if n == 1 { "" } else { "s" }
+            ));
+        }
+        FeatureSnapshot::Valid { .. } => {}
+    }
+}
+
+/// Say which feature scenarios a verdict could not run, and why, in words
+/// (docs/FEATURES-DESIGN.md §6.1).
+pub(crate) fn announce_skips(verdict: &harness_core::Verdict) {
+    for entry in &verdict.inputs.features_skipped {
+        if let Some((feature, scenario, reason)) = harness_core::features::parse_skip(entry) {
+            out(format!(
+                "verify: skipped {feature}/{scenario}: {} — {}",
+                reason.words(),
+                reason.what_to_do()
+            ));
+        }
     }
 }
 
@@ -1483,7 +1523,15 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
             attempt_event(record.promoted, &format!("not promoted: {reason}"));
             return Ok(0);
         };
-        match promote::promote_attempt(&ctx, &ledger, &oracle, unit, record, candidate)? {
+        match promote::promote_attempt(
+            &ctx,
+            &ledger,
+            &oracle,
+            unit,
+            record,
+            candidate,
+            &outcome.features,
+        )? {
             promote::Promotion::Verified => {
                 out(format!(
                     "migrate: {unit_id} promoted and verified — status set to verified"

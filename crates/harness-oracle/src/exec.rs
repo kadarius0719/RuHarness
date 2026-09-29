@@ -361,15 +361,60 @@ impl Runner {
         extra_env: &[(&str, &std::ffi::OsStr)],
         shown: &str,
     ) -> Result<ChildOutput, Error> {
+        self.spawn_in(argv, profile, env_keys, extra_env, shown, &self.cwd, false)
+    }
+
+    /// [`Runner::spawn`] with its working directory given, and — for a
+    /// scenario run — the child's process group killed as soon as the child
+    /// itself has exited (docs/FEATURES-DESIGN.md §4.1 step 5).
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_in(
+        &self,
+        argv: &[String],
+        profile: Option<&str>,
+        env_keys: &[&str],
+        extra_env: &[(&str, &std::ffi::OsStr)],
+        shown: &str,
+        cwd: &Path,
+        kill_group_on_exit: bool,
+    ) -> Result<ChildOutput, Error> {
         let full: Vec<String> = match profile {
             Some(p) => sandbox::wrap(p, argv),
             None => argv.to_vec(),
         };
-        let mut cmd = scrubbed_command(&full, env_keys, &self.cwd)?;
+        let mut cmd = scrubbed_command(&full, env_keys, cwd)?;
         for (key, value) in extra_env {
             cmd.env(key, value);
         }
-        run_with_timeout(cmd, shown, self.timeout, self.max_output)
+        run_with_timeout(
+            cmd,
+            shown,
+            self.timeout,
+            self.max_output,
+            kill_group_on_exit,
+        )
+    }
+
+    /// Run a scenario (docs/FEATURES-DESIGN.md §4): the built binary `bin`
+    /// (absolute) with `args`, in `cwd`, with only `PATH` and `extra_env`,
+    /// under `profile`; its process group killed once it exits. How it ended
+    /// is data, whatever the exit code; the outer `Err` is only
+    /// [`Error::Interrupted`] or a spawn that could not happen at all.
+    pub(crate) fn scenario(
+        &self,
+        bin: &Path,
+        args: &[&str],
+        profile: Option<&str>,
+        extra_env: &[(&str, &std::ffi::OsStr)],
+        cwd: &Path,
+    ) -> Result<ChildOutput, Error> {
+        let bin_str = bin
+            .to_str()
+            .ok_or_else(|| Error::Invariant(format!("non-UTF-8 path: {}", bin.display())))?;
+        let mut argv: Vec<String> = vec![bin_str.to_string()];
+        argv.extend(args.iter().map(|a| (*a).to_string()));
+        let shown = argv.join(" ");
+        self.spawn_in(&argv, profile, BUILT_ENV, extra_env, &shown, cwd, true)
     }
 }
 
@@ -442,6 +487,7 @@ pub(crate) fn run_with_timeout(
     shown: &str,
     timeout: Duration,
     max_output: usize,
+    kill_group_on_exit: bool,
 ) -> Result<ChildOutput, Error> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     // Spawn under the registry lock: a cancellation either happened before
@@ -481,7 +527,16 @@ pub(crate) fn run_with_timeout(
     let deadline = Instant::now() + timeout;
     let end = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break ChildEnd::Exited(status),
+            Ok(Some(status)) => {
+                // A scenario run leaves nothing behind: whatever the child
+                // forked dies now, before the output is drained and before
+                // anything it wrote is read back.
+                #[cfg(unix)]
+                if kill_group_on_exit {
+                    kill_process_group(pgid);
+                }
+                break ChildEnd::Exited(status);
+            }
             Ok(None) => {}
             Err(e) => {
                 let _ = child.kill();
@@ -667,8 +722,14 @@ mod tests {
                       i=$((i+1)); done";
         let cmd = scrubbed_command(&sv(&["sh", "-c", script]), TOOL_ENV, &std::env::temp_dir())
             .expect("command");
-        let out =
-            run_with_timeout(cmd, "sh", Duration::from_secs(60), DEFAULT_MAX_OUTPUT).expect("runs");
+        let out = run_with_timeout(
+            cmd,
+            "sh",
+            Duration::from_secs(60),
+            DEFAULT_MAX_OUTPUT,
+            false,
+        )
+        .expect("runs");
         assert!(matches!(out.end, ChildEnd::Exited(s) if s.success()));
         assert_eq!(out.stdout.len(), 20000 * 65);
         assert_eq!(out.stderr.len(), 20000 * 65);
@@ -812,8 +873,14 @@ mod tests {
         let bin_str = bin.to_str().expect("utf-8 bin path");
         let cmd = scrubbed_command(&sv(&[bin_str]), BUILT_ENV, tmp.path()).expect("command");
         let started = Instant::now();
-        let out = run_with_timeout(cmd, "forker", Duration::from_secs(1), DEFAULT_MAX_OUTPUT)
-            .expect("runs");
+        let out = run_with_timeout(
+            cmd,
+            "forker",
+            Duration::from_secs(1),
+            DEFAULT_MAX_OUTPUT,
+            false,
+        )
+        .expect("runs");
         assert!(matches!(out.end, ChildEnd::TimedOut), "{:?}", out.end);
         assert!(started.elapsed() < Duration::from_secs(10));
 

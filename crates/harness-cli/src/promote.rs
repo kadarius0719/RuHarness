@@ -305,6 +305,7 @@ pub(crate) fn promote_attempt(
     unit: &Unit,
     record: &AttemptRecord,
     candidate: &Path,
+    features: &harness_core::features::FeatureSnapshot,
 ) -> Result<Promotion> {
     let crate_name = unit
         .oracle_param_str("rust_crate")
@@ -329,7 +330,7 @@ pub(crate) fn promote_attempt(
     }
     std::fs::rename(&staged, &p.crate_dir).context("swapping candidate in")?;
 
-    let in_place = oracle.verify(ctx, unit);
+    let in_place = oracle.verify_with(ctx, unit, features);
     let verdict = match in_place {
         Ok(v) if v.green => v,
         other => {
@@ -451,7 +452,11 @@ pub(crate) fn cmd_promote(
     }
 
     let oracle = harness_oracle::CAbiDifferential;
-    match promote_attempt(&ctx, &ledger, &oracle, unit, &record, &candidate)? {
+    // The person's features, once for this command (docs/FEATURES-DESIGN.md
+    // §2.2).
+    let features = harness_core::features::FeatureSnapshot::load(&ctx);
+    crate::announce_features(&features);
+    match promote_attempt(&ctx, &ledger, &oracle, unit, &record, &candidate, &features)? {
         Promotion::Verified => {
             out(format!(
                 "promote: {unit_id} attempt {attempt_id} promoted and verified — status set to \

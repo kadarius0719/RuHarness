@@ -13,7 +13,7 @@
 //! drv_c.out` and print it back. Nothing a C-side run writes survives it
 //! either — its temp dir is gone before the candidate side starts.
 
-use crate::exec::{RunFailure, RunOutput, Runner};
+use crate::exec::{ChildEnd, RunFailure, RunOutput, Runner};
 use crate::sandbox::{self, HostDirs, RunSpec};
 use harness_core::error::Error;
 use std::path::{Path, PathBuf};
@@ -137,6 +137,171 @@ impl Confinement<'_> {
         Ok((tmp.path().to_path_buf(), out, collected))
         // `tmp` is dropped (removed) here, after the child is gone.
     }
+}
+
+/// How a scenario run ended (docs/FEATURES-DESIGN.md §4.1 step 6) — data,
+/// never a failure of the harness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ScenarioEnd {
+    /// It exited with this code.
+    Exited(i32),
+    /// A signal ended it.
+    Signaled(i32),
+    /// It passed the timeout and was killed.
+    TimedOut,
+    /// It printed more than the output cap and was killed.
+    Overflow,
+    /// It could not be started (under the sandbox: `sandbox-exec` refused
+    /// the profile or the exec).
+    ExecFailed,
+}
+
+/// A scenario run: how it ended, and both streams (rewritten, §4.1 step 3)
+/// for a run that exited or was signalled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ScenarioRun {
+    /// How it ended.
+    pub end: ScenarioEnd,
+    /// Its stdout.
+    pub stdout: Vec<u8>,
+    /// Its stderr.
+    pub stderr: Vec<u8>,
+    /// What the run left for [`Extras::collect`], when asked.
+    pub collected: Option<Collected>,
+}
+
+impl Confinement<'_> {
+    /// Run a scenario (docs/FEATURES-DESIGN.md §4.1): the binary at `bin` —
+    /// the one path every run of a scenario uses, `<build>/f/<name>` — with
+    /// `args` (`{input}` already the bare file name), in a fresh temp dir that
+    /// holds only the input (`input`: its file name and bytes, written with a
+    /// fixed modification time), as its cwd; under the scenario profile; its
+    /// process group killed when it exits. Both streams are rewritten
+    /// one-to-one: `$` → `$$`, then the temp dir → `$TMPDIR`, then `bin`'s
+    /// directory → `$PROGDIR`.
+    pub(crate) fn run_scenario(
+        &self,
+        bin: &Path,
+        args: &[&str],
+        input: Option<(&str, &[u8])>,
+        collect_file: Option<(&str, u64)>,
+    ) -> Result<ScenarioRun, Error> {
+        let tmp = RunTmp::create()?;
+        if let Some((name, bytes)) = input {
+            if name.is_empty() || name.contains('/') || name.starts_with('.') {
+                return Err(Error::Invariant(format!(
+                    "internal: a scenario input name {name:?} must be a plain file name"
+                )));
+            }
+            let path = tmp.path().join(name);
+            std::fs::write(&path, bytes).map_err(|e| Error::io(&path, e))?;
+            let file = std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .map_err(|e| Error::io(&path, e))?;
+            file.set_modified(SCENARIO_INPUT_MTIME)
+                .map_err(|e| Error::io(&path, e))?;
+        }
+        let profile = match self.host {
+            Some(host) => Some(sandbox::render_scenario_profile(&RunSpec {
+                host,
+                target_root: self.target_root,
+                bin,
+                read_files: &[],
+                tmpdir: tmp.path(),
+            })?),
+            None => None,
+        };
+        let env: Vec<(&str, &std::ffi::OsStr)> = vec![("TMPDIR", tmp.path().as_os_str())];
+        let out = match self
+            .runner
+            .scenario(bin, args, profile.as_deref(), &env, tmp.path())
+        {
+            Ok(out) => out,
+            Err(Error::Interrupted) => return Err(Error::Interrupted),
+            // It could not be started at all (unsandboxed: a missing or
+            // non-executable binary): data, like sandbox-exec's refusal.
+            Err(_) => {
+                return Ok(ScenarioRun {
+                    end: ScenarioEnd::ExecFailed,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    collected: None,
+                })
+            }
+        };
+        let collected = collect_file.map(|(name, cap)| collect(&tmp.path().join(name), cap));
+        let rewrite = |raw: &[u8]| {
+            let escaped = replace_bytes(raw, b"$", b"$$");
+            let tmp_done = replace_bytes(
+                &escaped,
+                tmp.path().as_os_str().as_encoded_bytes(),
+                TMPDIR_TOKEN,
+            );
+            match bin.parent() {
+                Some(dir) => {
+                    replace_bytes(&tmp_done, dir.as_os_str().as_encoded_bytes(), PROGDIR_TOKEN)
+                }
+                None => tmp_done,
+            }
+        };
+        let sandboxed = profile.is_some();
+        let end = match out.end {
+            ChildEnd::Exited(status) => match (status.code(), exit_signal(&status)) {
+                (Some(code), _)
+                    if sandboxed
+                        && (code == SANDBOX_PROFILE_ERROR || code == SANDBOX_EXEC_FAILED)
+                        && out.stderr.starts_with(b"sandbox-exec: ") =>
+                {
+                    ScenarioEnd::ExecFailed
+                }
+                (Some(code), _) => ScenarioEnd::Exited(code),
+                (None, Some(signal)) => ScenarioEnd::Signaled(signal),
+                (None, None) => ScenarioEnd::Signaled(0),
+            },
+            ChildEnd::TimedOut => ScenarioEnd::TimedOut,
+            ChildEnd::OutputOverflow => ScenarioEnd::Overflow,
+        };
+        let keep = matches!(end, ScenarioEnd::Exited(_) | ScenarioEnd::Signaled(_));
+        Ok(ScenarioRun {
+            stdout: if keep {
+                rewrite(&out.stdout)
+            } else {
+                Vec::new()
+            },
+            stderr: if keep {
+                rewrite(&out.stderr)
+            } else {
+                Vec::new()
+            },
+            end,
+            collected,
+        })
+        // `tmp` is dropped (removed) here, after the child is gone.
+    }
+}
+
+/// What a scenario run's program directory is replaced with in its output.
+pub(crate) const PROGDIR_TOKEN: &[u8] = b"$PROGDIR";
+
+/// `sandbox-exec`'s exit when its profile does not parse.
+const SANDBOX_PROFILE_ERROR: i32 = 65;
+/// `sandbox-exec`'s exit when it may not exec the program.
+const SANDBOX_EXEC_FAILED: i32 = 71;
+
+/// The modification time of every scenario input: fixed, so a program that
+/// prints its input's time prints the same on every run.
+const SCENARIO_INPUT_MTIME: std::time::SystemTime = std::time::UNIX_EPOCH;
+
+#[cfg(unix)]
+fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_: &std::process::ExitStatus) -> Option<i32> {
+    None
 }
 
 /// A raw run's outcome: the (removed) temp dir, how the run ended, the
@@ -588,5 +753,222 @@ int main(int argc, char **argv) {
         assert_eq!(replace_bytes(b"aaa", b"aa", b"x"), b"xa");
         assert_eq!(replace_bytes(b"abc", b"", b"x"), b"abc");
         assert_eq!(replace_bytes(b"", b"a", b"x"), b"");
+    }
+
+    /// What a scenario run sees and prints: argv[0], its cwd, its input's
+    /// size and time, a literal token, and — on request — a fork, a signal to
+    /// its parent, an abort, a sleep, a late write by a forked child.
+    const SCENARIO_PROBE: &str = r#"
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+  char cwd[4096];
+  printf("argv0 %s\n", argv[0]);
+  printf("cwd %s\n", getcwd(cwd, sizeof cwd) ? cwd : "?");
+  printf("token $TMPDIR $PROGDIR\n");
+  for (int i = 1; i < argc; i++) {
+    const char *a = argv[i];
+    if (strncmp(a, "in:", 3) == 0) {
+      struct stat st;
+      if (stat(a + 3, &st) == 0) printf("input %lld bytes mtime %lld\n", (long long)st.st_size, (long long)st.st_mtime);
+      else printf("input missing\n");
+    } else if (strcmp(a, "fork") == 0) {
+      pid_t p = fork();
+      if (p == 0) _exit(0);
+      printf("fork %s\n", p > 0 ? "ALLOWED" : "denied");
+    } else if (strcmp(a, "signal") == 0) {
+      printf("signal %s\n", kill(getppid(), SIGCONT) == 0 ? "ALLOWED" : "denied");
+    } else if (strcmp(a, "abort") == 0) {
+      fflush(stdout);
+      abort();
+    } else if (strcmp(a, "sleep") == 0) {
+      sleep(30);
+    } else if (strncmp(a, "late:", 5) == 0) {
+      if (fork() == 0) { sleep(2); FILE *f = fopen(a + 5, "wb"); if (f) fclose(f); _exit(0); }
+    } else if (strncmp(a, "exit:", 5) == 0) {
+      fflush(stdout);
+      return atoi(a + 5);
+    }
+  }
+  fprintf(stderr, "done\n");
+  return 0;
+}
+"#;
+
+    /// The probe compiled at `<dir>/f/zopfli`, the one path every run of a
+    /// scenario uses.
+    fn build_scenario_probe(dir: &Path) -> PathBuf {
+        let src = dir.join("sprobe.c");
+        std::fs::write(&src, SCENARIO_PROBE).expect("probe source");
+        let f = dir.join("f");
+        std::fs::create_dir_all(&f).expect("f/");
+        let bin = f.join("zopfli");
+        let status = Command::new("cc")
+            .arg("-o")
+            .arg(&bin)
+            .arg(&src)
+            .status()
+            .expect("cc runs");
+        assert!(status.success(), "probe compiles");
+        bin.canonicalize().expect("canonical probe")
+    }
+
+    fn scenario_confinement<'a>(
+        runner: &'a Runner,
+        host: Option<&'a HostDirs>,
+        root: &'a Path,
+    ) -> Confinement<'a> {
+        Confinement {
+            runner,
+            host,
+            target_root: root,
+        }
+    }
+
+    fn text(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    #[test]
+    fn a_scenario_prints_the_same_bytes_wherever_it_runs() {
+        let tmp = TempDir::new("scenario-same");
+        let root = tmp.path().canonicalize().expect("root");
+        let build = root.join("migration/build/u1");
+        std::fs::create_dir_all(&build).expect("build dir");
+        let bin = build_scenario_probe(&build);
+        let r = runner(&root);
+        let host = (sandbox::sandbox_mode() == "sandbox-exec")
+            .then(|| HostDirs::from_env().expect("host dirs"));
+        let c = scenario_confinement(&r, host.as_ref(), &root);
+        let input = Some(("sample_text.txt", &b"twelve bytes"[..]));
+        let first = c
+            .run_scenario(&bin, &["in:sample_text.txt"], input, None)
+            .expect("runs");
+        let second = c
+            .run_scenario(&bin, &["in:sample_text.txt"], input, None)
+            .expect("runs");
+        assert_eq!(first.end, ScenarioEnd::Exited(0));
+        assert_eq!(first, second, "two runs, two temp dirs, the same bytes");
+        let out = text(&first.stdout);
+        assert!(out.contains("argv0 $PROGDIR/zopfli\n"), "{out}");
+        assert!(out.contains("cwd $TMPDIR\n"), "{out}");
+        assert!(out.contains("input 12 bytes mtime 0\n"), "{out}");
+        assert!(
+            out.contains("token $$TMPDIR $$PROGDIR\n"),
+            "a literal token cannot pass for a real path: {out}"
+        );
+        assert_eq!(text(&first.stderr), "done\n");
+    }
+
+    #[test]
+    fn a_scenario_run_ends_as_data() {
+        let tmp = TempDir::new("scenario-ends");
+        let root = tmp.path().canonicalize().expect("root");
+        let build = root.join("migration/build/u1");
+        std::fs::create_dir_all(&build).expect("build dir");
+        let bin = build_scenario_probe(&build);
+        let mut r = runner(&root);
+        r.timeout = Duration::from_secs(2);
+        let host = (sandbox::sandbox_mode() == "sandbox-exec")
+            .then(|| HostDirs::from_env().expect("host dirs"));
+        let c = scenario_confinement(&r, host.as_ref(), &root);
+        let exit3 = c.run_scenario(&bin, &["exit:3"], None, None).expect("runs");
+        assert_eq!(exit3.end, ScenarioEnd::Exited(3));
+        assert!(
+            text(&exit3.stdout).contains("argv0"),
+            "streams kept on a non-zero exit"
+        );
+        let aborted = c.run_scenario(&bin, &["abort"], None, None).expect("runs");
+        assert_eq!(
+            aborted.end,
+            ScenarioEnd::Signaled(6),
+            "abort works under the profile"
+        );
+        assert!(text(&aborted.stdout).contains("argv0"));
+        let slow = c.run_scenario(&bin, &["sleep"], None, None).expect("runs");
+        assert_eq!(slow.end, ScenarioEnd::TimedOut);
+        assert!(slow.stdout.is_empty());
+        let missing = build.join("f/missing");
+        let gone = c.run_scenario(&missing, &[], None, None).expect("data");
+        assert_eq!(gone.end, ScenarioEnd::ExecFailed);
+    }
+
+    #[test]
+    fn a_denied_exec_under_the_sandbox_is_exec_failed_not_an_exit() {
+        if sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let tmp = TempDir::new("scenario-execfail");
+        let root = tmp.path().canonicalize().expect("root");
+        let build = root.join("migration/build/u1");
+        std::fs::create_dir_all(&build).expect("build dir");
+        let bin = build_scenario_probe(&build);
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        let r = runner(&root);
+        let host = HostDirs::from_env().expect("host dirs");
+        let c = scenario_confinement(&r, Some(&host), &root);
+        let run = c.run_scenario(&bin, &[], None, None).expect("data");
+        assert_eq!(
+            run.end,
+            ScenarioEnd::ExecFailed,
+            "sandbox-exec's 71 is not the program's exit"
+        );
+    }
+
+    #[test]
+    fn a_scenario_run_cannot_fork_or_signal_another_process() {
+        if sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let tmp = TempDir::new("scenario-deny");
+        let root = tmp.path().canonicalize().expect("root");
+        let build = root.join("migration/build/u1");
+        std::fs::create_dir_all(&build).expect("build dir");
+        let bin = build_scenario_probe(&build);
+        let r = runner(&root);
+        // Unconfined, both work — so the denials below are real.
+        let open = scenario_confinement(&r, None, &root)
+            .run_scenario(&bin, &["fork", "signal"], None, None)
+            .expect("runs");
+        let open = text(&open.stdout);
+        assert!(
+            open.contains("fork ALLOWED") && open.contains("signal ALLOWED"),
+            "{open}"
+        );
+        let host = HostDirs::from_env().expect("host dirs");
+        let run = scenario_confinement(&r, Some(&host), &root)
+            .run_scenario(&bin, &["fork", "signal"], None, None)
+            .expect("runs");
+        let out = text(&run.stdout);
+        assert!(out.contains("fork denied"), "{out}");
+        assert!(out.contains("signal denied"), "{out}");
+    }
+
+    #[test]
+    fn nothing_a_scenario_forked_outlives_it() {
+        let tmp = TempDir::new("scenario-group");
+        let root = tmp.path().canonicalize().expect("root");
+        let build = root.join("migration/build/u1");
+        std::fs::create_dir_all(&build).expect("build dir");
+        let bin = build_scenario_probe(&build);
+        let marker = root.join("late-marker");
+        let r = runner(&root);
+        // Unsandboxed (the sandbox denies the fork outright): the group kill
+        // is the guard.
+        let arg = format!("late:{}", marker.display());
+        let run = scenario_confinement(&r, None, &root)
+            .run_scenario(&bin, &[arg.as_str()], None, None)
+            .expect("runs");
+        assert_eq!(run.end, ScenarioEnd::Exited(0));
+        std::thread::sleep(Duration::from_secs(3));
+        assert!(
+            !marker.exists(),
+            "the forked child was killed with the group"
+        );
     }
 }

@@ -98,6 +98,7 @@ use harness_core::attempts::{
 };
 use harness_core::error::Error;
 use harness_core::facts::Facts;
+use harness_core::features::FeatureSnapshot;
 use harness_core::hash;
 use harness_core::ledger::Ledger;
 use harness_core::plan::{is_clean_segment, Unit};
@@ -158,7 +159,15 @@ pub(crate) struct RunCtx<'a> {
     pub(crate) verifying: bool,
     /// Absolute paths replaced in quoted tool output ([`scrub_list`]).
     pub(crate) scrub: &'a [(String, String)],
+    /// The person's features this run judges under (docs/FEATURES-DESIGN.md
+    /// §2.2, §3): the command's snapshot for a live run; for a replay, the
+    /// ones the attempt was recorded under when it can.
+    pub(crate) features: &'a FeatureSnapshot,
 }
+
+/// "No features": what a replay of an attempt recorded without them (or
+/// while the file had an error) judges under.
+pub(crate) static NO_FEATURES: FeatureSnapshot = FeatureSnapshot::None;
 
 /// A stage's fixed texts and names. Every string is harness-authored.
 pub(crate) struct StageTexts {
@@ -296,6 +305,10 @@ pub(crate) struct Job<'a> {
     pub(crate) driver: String,
     /// How the first turn is posed.
     pub(crate) first_turn: &'a FirstTurn,
+    /// The person's features as the command loaded them, once.
+    pub(crate) features: &'a FeatureSnapshot,
+    /// Today's program digest (`""` without a features file).
+    pub(crate) program: String,
 }
 
 impl<'a> Job<'a> {
@@ -463,6 +476,8 @@ impl<'a> Job<'a> {
             note: None,
             requester: params.requester.map(str::to_string),
         };
+        record.features = self.features.digest().to_string();
+        record.program = self.program.clone();
         let work_rel = vec![texts.attempts_subdir.to_string(), id.clone()];
         let work_dir = prepare_dir(self.ledger, &self.unit.id, &work_rel)?;
         reset_unfinished(&work_dir, &id)?;
@@ -522,7 +537,21 @@ impl<'a> Job<'a> {
             Some((record, pairs)) => (Some(record), pairs),
             None => (None, Vec::new()),
         };
+        // A replay judges with the features its attempt was recorded under
+        // when it can (docs/FEATURES-DESIGN.md §3): none recorded, or an
+        // unusable file then — none now, which reproduces it exactly;
+        // otherwise today's (a mismatch is then explained, never superseded).
+        let features: &FeatureSnapshot = match verifying {
+            Some(record)
+                if record.features.is_empty()
+                    || record.features == harness_core::features::INVALID_DIGEST =>
+            {
+                &NO_FEATURES
+            }
+            _ => self.features,
+        };
         Run {
+            features,
             job: self,
             provider,
             work_dir,
@@ -834,6 +863,19 @@ impl<'a> Job<'a> {
                 index + 1
             )
         }));
+        // A divergence under changed features or other changed C is
+        // explained first (docs/FEATURES-DESIGN.md §3) — a changed judge,
+        // never superseded inputs, so `--retry` still records a new sample.
+        if !differences.is_empty() {
+            let recorded_features = !recorded.features.is_empty()
+                && recorded.features != harness_core::features::INVALID_DIGEST;
+            if !recorded.program.is_empty() && recorded.program != self.program {
+                differences.insert(0, "other C changed since it was recorded".into());
+            }
+            if recorded_features && recorded.features != self.features.digest() {
+                differences.insert(0, "the features changed since it was recorded".into());
+            }
+        }
         Ok(Replay {
             differences,
             drifted: drifted.into_iter().map(|(index, _)| index).collect(),
@@ -1393,6 +1435,8 @@ struct Run<'a> {
     max_turns: usize,
     /// Absolute paths replaced in quoted tool output ([`scrub_list`]).
     scrub: Vec<(String, String)>,
+    /// The features this run judges under.
+    features: &'a FeatureSnapshot,
 }
 
 impl Run<'_> {
@@ -1549,6 +1593,7 @@ impl Run<'_> {
                         work_rel: self.work_rel.clone(),
                         verifying: self.verifying.is_some(),
                         scrub: &self.scrub,
+                        features: self.features,
                     };
                     let judged = stage.judge(&ctx, &files, record)?;
                     wrote_candidate |= judged.wrote_candidate;

@@ -73,6 +73,7 @@ mod boundary_run;
 mod capabilities;
 mod confine;
 mod exec;
+mod features;
 mod sandbox;
 mod scrub;
 mod shape;
@@ -88,8 +89,10 @@ pub use validate::validate_driver;
 
 use confine::Confinement;
 use exec::{RunFailure, RunOutput, Runner};
+use features::{feature_step, FeatureStepCtx};
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
+use harness_core::features::{FeatureSnapshot, Sample};
 use harness_core::hash;
 use harness_core::ledger::Ledger;
 use harness_core::traits::OracleStrategy;
@@ -287,7 +290,7 @@ impl Base {
 /// subprocess runs: canonical, containment-checked paths plus the validated
 /// kind-owned config.
 #[derive(Debug)]
-struct Prepared {
+pub(crate) struct Prepared {
     /// Target-level resolution (root, source/include dirs, timeout, tools).
     base: Base,
     /// Canonical ledger build dir, inside `root`.
@@ -395,13 +398,18 @@ impl OracleStrategy for CAbiDifferential {
     /// The caller (the CLI) persists the verdict and updates plan status;
     /// this method writes nothing outside the ledger build dir and the unit
     /// crate's own `target/` (and `Cargo.lock`).
-    fn verify(&self, target: &TargetContext, unit: &Unit) -> Result<Verdict, Error> {
+    fn verify_with(
+        &self,
+        target: &TargetContext,
+        unit: &Unit,
+        features: &FeatureSnapshot,
+    ) -> Result<Verdict, Error> {
         // One scrubber for the whole run: every check detail and every error
         // that leaves this method is rewritten through it, so committed
         // evidence carries `<target>`/`<home>`/`<cargo>`/… placeholders, never
         // this machine's absolute paths.
         let scrubber = Scrubber::from_env(&target.root);
-        self.run_verify(target, unit, &scrubber)
+        self.run_verify(target, unit, features, &scrubber)
             .map_err(|e| scrubber.scrub_error(e))
     }
 }
@@ -414,6 +422,7 @@ impl CAbiDifferential {
         &self,
         target: &TargetContext,
         unit: &Unit,
+        features: &FeatureSnapshot,
         scrubber: &Scrubber,
     ) -> Result<Verdict, Error> {
         let prep = Prepared::new(target, unit)?;
@@ -662,6 +671,7 @@ impl CAbiDifferential {
         // 6. Whole-program (opt-in, R8): all C vs (all minus replaces) +
         // staticlib, run with the configured flags over the deterministic
         // samples.
+        let mut whole: Option<WholePrograms> = None;
         match &prep.whole_program {
             None => checks.push(Check {
                 name: "whole-program".into(),
@@ -669,7 +679,10 @@ impl CAbiDifferential {
                 detail: "not configured for this target".into(),
             }),
             Some(args) => {
-                checks.extend(self.whole_program(&prep, unit, &confined, args, &rust_lib)?);
+                let (wp_checks, built) =
+                    self.whole_program(&prep, unit, &confined, args, &rust_lib)?;
+                checks.extend(wp_checks);
+                whole = Some(built);
             }
         }
 
@@ -704,6 +717,24 @@ impl CAbiDifferential {
                 .0,
             );
         }
+
+        // 9. The person's features (docs/FEATURES-DESIGN.md §6): last, so a
+        // feature failure never suppresses the boundary check, and only when
+        // the run got this far — a verdict that stopped at a gate records no
+        // feature field at all.
+        feature_step(&mut FeatureStepCtx {
+            target,
+            prep: &prep,
+            facts: &facts,
+            unit,
+            runner: &runner,
+            confined: &confined,
+            rust_lib: &rust_lib,
+            whole: whole.as_ref(),
+            features,
+            inputs: &mut inputs,
+            checks: &mut checks,
+        })?;
 
         Ok(finish(inputs, checks))
     }
@@ -816,38 +847,13 @@ impl CAbiDifferential {
         confined: &Confinement<'_>,
         args: &[String],
         rust_lib: &Path,
-    ) -> Result<Vec<Check>, Error> {
+    ) -> Result<(Vec<Check>, WholePrograms), Error> {
         let source_dir = &prep.base.source_dir;
         let build = &prep.build;
-        let includes = prep.base.includes();
-        let cc = |out: &Path, inputs: &[PathBuf]| {
-            cc_compile(
-                confined.runner,
-                &CcInvocation {
-                    includes: &includes,
-                    cflags: &[],
-                    quiet: true,
-                    out,
-                    inputs,
-                    libs: &prep.link_args,
-                },
-            )
-        };
-        let mut c_files: Vec<PathBuf> = Vec::new();
-        for entry in std::fs::read_dir(source_dir).map_err(|e| Error::io(source_dir, e))? {
-            let path = entry.map_err(|e| Error::io(source_dir, e))?.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("c") {
-                // Canonical + contained, like every other compiler input: a
-                // symlinked .c must not pull in a file outside the target.
-                c_files.push(inside(&unit.id, "source file", &path, &prep.base.root)?);
-            }
-        }
-        c_files.sort();
-        c_files.dedup();
+        let c_files = program_c_files(prep, unit)?;
         // Every `replaces` entry must actually match a collected C file —
         // otherwise the mixed link silently degenerates to C-vs-C and the
         // check proves nothing.
-        let replace_paths: Vec<PathBuf> = prep.replaces.iter().map(|(_, p)| p.clone()).collect();
         for (rel, canon) in &prep.replaces {
             if !c_files.contains(canon) {
                 return Err(Error::InvalidPlan(format!(
@@ -857,14 +863,10 @@ impl CAbiDifferential {
                 )));
             }
         }
-        let mixed: Vec<PathBuf> = c_files
-            .iter()
-            .filter(|p| !replace_paths.contains(p))
-            .cloned()
-            .chain(std::iter::once(rust_lib.to_path_buf()))
-            .collect();
-        cc(&build.join("whole_c"), &c_files)?;
-        cc(&build.join("whole_mixed"), &mixed)?;
+        let built = WholePrograms {
+            c: build_whole_c(prep, confined.runner, &c_files)?,
+            mixed: build_whole_mixed(prep, confined.runner, &c_files, rust_lib)?,
+        };
         let mut checks = Vec::new();
         for sample in write_samples(build)? {
             let name = sample
@@ -878,8 +880,8 @@ impl CAbiDifferential {
             let check_name = format!("whole-program:{name}");
             let inputs = std::slice::from_ref(&sample);
             match (
-                confined.run(&build.join("whole_c"), &argv, inputs)?,
-                confined.run(&build.join("whole_mixed"), &argv, inputs)?,
+                confined.run(&built.c, &argv, inputs)?,
+                confined.run(&built.mixed, &argv, inputs)?,
             ) {
                 (Ok(gz_c), Ok(gz_mixed)) => {
                     checks.push(run_diff_check(&check_name, &gz_c, &gz_mixed));
@@ -887,8 +889,81 @@ impl CAbiDifferential {
                 (c, r) => checks.push(run_failure_check(&check_name, c, r)),
             }
         }
-        Ok(checks)
+        Ok((checks, built))
     }
+}
+
+/// The whole program built twice: all C, and all C minus the unit's
+/// `replaces` plus its staticlib (canonical paths in the unit build dir).
+pub(crate) struct WholePrograms {
+    /// All C.
+    pub c: PathBuf,
+    /// The mixed program.
+    pub mixed: PathBuf,
+}
+
+/// The whole program's C files: every top-level `*.c` of `source_dir`
+/// (non-recursive), canonical and contained, sorted.
+pub(crate) fn program_c_files(prep: &Prepared, unit: &Unit) -> Result<Vec<PathBuf>, Error> {
+    let source_dir = &prep.base.source_dir;
+    let mut c_files: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(source_dir).map_err(|e| Error::io(source_dir, e))? {
+        let path = entry.map_err(|e| Error::io(source_dir, e))?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("c") {
+            // Canonical + contained, like every other compiler input: a
+            // symlinked .c must not pull in a file outside the target.
+            c_files.push(inside(&unit.id, "source file", &path, &prep.base.root)?);
+        }
+    }
+    c_files.sort();
+    c_files.dedup();
+    Ok(c_files)
+}
+
+fn whole_cc(prep: &Prepared, runner: &Runner, out: &Path, inputs: &[PathBuf]) -> Result<(), Error> {
+    let includes = prep.base.includes();
+    cc_compile(
+        runner,
+        &CcInvocation {
+            includes: &includes,
+            cflags: &[],
+            quiet: true,
+            out,
+            inputs,
+            libs: &prep.link_args,
+        },
+    )
+}
+
+/// Build `whole_c` from `c_files`.
+pub(crate) fn build_whole_c(
+    prep: &Prepared,
+    runner: &Runner,
+    c_files: &[PathBuf],
+) -> Result<PathBuf, Error> {
+    let out = prep.build.join("whole_c");
+    whole_cc(prep, runner, &out, c_files)?;
+    Ok(out)
+}
+
+/// Build `whole_mixed`: `c_files` minus the unit's `replaces`, plus
+/// `rust_lib`.
+pub(crate) fn build_whole_mixed(
+    prep: &Prepared,
+    runner: &Runner,
+    c_files: &[PathBuf],
+    rust_lib: &Path,
+) -> Result<PathBuf, Error> {
+    let replace_paths: Vec<&PathBuf> = prep.replaces.iter().map(|(_, p)| p).collect();
+    let mixed: Vec<PathBuf> = c_files
+        .iter()
+        .filter(|p| !replace_paths.contains(p))
+        .cloned()
+        .chain(std::iter::once(rust_lib.to_path_buf()))
+        .collect();
+    let out = prep.build.join("whole_mixed");
+    whole_cc(prep, runner, &out, &mixed)?;
+    Ok(out)
 }
 
 /// The `sanitizers` check from the instrumented driver's run.
@@ -1082,7 +1157,7 @@ fn run_diff_check(name: &str, c_side: &RunOutput, candidate: &RunOutput) -> Chec
 }
 
 /// Index of the first differing byte (the shorter length on a prefix).
-fn first_diff(a: &[u8], b: &[u8]) -> usize {
+pub(crate) fn first_diff(a: &[u8], b: &[u8]) -> usize {
     a.iter()
         .zip(b.iter())
         .position(|(x, y)| x != y)
@@ -1417,24 +1492,10 @@ fn write_samples(build: &Path) -> Result<Vec<PathBuf>, Error> {
     let rand_path = build.join("sample_rand.bin");
     let empty_path = build.join("sample_empty");
 
-    let phrase =
-        b"the quick brown fox jumps over the lazy dog; pack my box with five dozen liquor jugs.\n";
-    let mut text = Vec::with_capacity(32 * 1024);
-    while text.len() < 30_000 {
-        text.extend_from_slice(phrase);
-    }
-    write_file(&text_path, &text)?;
-
-    let mut state: u64 = 0x2545F4914F6CDD1D;
-    let mut rand = Vec::with_capacity(16 * 1024);
-    while rand.len() < 16 * 1024 {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        rand.extend_from_slice(&state.to_le_bytes());
-    }
-    write_file(&rand_path, &rand)?;
-    write_file(&empty_path, b"")?;
+    // One generator for these and the features' samples (harness-core).
+    write_file(&text_path, &Sample::Text.bytes())?;
+    write_file(&rand_path, &Sample::Rand.bytes())?;
+    write_file(&empty_path, &Sample::Empty.bytes())?;
 
     Ok(vec![text_path, rand_path, empty_path])
 }

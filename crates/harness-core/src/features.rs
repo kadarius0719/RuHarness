@@ -343,7 +343,7 @@ fn line_column(text: &str, offset: usize) -> (usize, usize) {
 
 /// `text` on one line: every run of whitespace (newlines included) becomes
 /// one space.
-fn one_line(text: &str) -> String {
+pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
