@@ -1,7 +1,8 @@
 # Features: what a user does with the program, mapped to the code and checked — design
 
-Status: DESIGN, revised after its adversarial review (2026-09-29): four lenses, 88 findings
-(§R). The revision is not yet checked.
+Status: DESIGN, revised twice (2026-09-29): the adversarial review (four lenses, 84 findings,
+§R), then the check of that revision (three checkers, 58 more, §R2). The second revision is
+not yet checked.
 
 This implements the user's direction recorded 2026-09-23 ("feature workflows": user-facing
 behaviours mapped to the code that implements them, so a migration preserves what a user
@@ -27,35 +28,44 @@ arguments and at most one of the harness's sample files as input. What a person 
 of a run is its **exit status, stdout and stderr** — that is what is compared.
 
 The harness does three things with features, all deterministic (Tier 0, no model):
-1. **Check** — in `verify` (and so in every judged turn of `migrate` and every promotion):
-   every scenario runs on the all-C program and on the mixed program (all C minus the
-   unit's `replaces`, plus the unit's Rust); one check per scenario,
+1. **Check** — in `verify` (and so in every judged turn of `migrate`, every promotion and
+   every recorded hand edit): every scenario runs on the all-C program and on the mixed
+   program (all C minus the unit's `replaces`, plus the unit's Rust); one check per scenario,
    `feature:<feature>/<scenario>`, passes only when both exited normally with the same code
    and byte-identical streams.
-2. **Map** — `harness features map`: every scenario runs on a copy of the original C that
-   notes each function it runs (the **probe**), and the result — which of the scanner's
-   functions each scenario ran — is written to `migration/features/map.json`. Functions map
-   to files and to the plan's units at read time.
+2. **Map** — `harness features map`: every scenario runs on a scratch copy of the original C
+   in which each function notes, the first time it runs, that it ran (the **probe**); the
+   result — which of the scanner's functions each scenario ran — is written to
+   `migration/features/map.json`. Functions map to files and to the plan's units at read
+   time.
 3. **Show** — the cockpit: a **Features** group in the tree; each feature's View shows its
    scenarios and what they did, the units its functions live in with their states, and its
-   checks on each unit's verdict; each unit's View says which features run its code — or
-   that none does, when the map can say so.
+   checks on each unit's verdict; each unit's View says which features run its functions —
+   or that none does, when the map can say so.
 
 **Why both.** The spike found that zopfli's whole-program check runs `zopfli -c <sample>`
 only — the gzip path — so a unit on the zlib path passes it without the check ever running
 its code. Scenario checks make the person's behaviours part of every verdict; the map says
 which of those checks actually exercise a unit, and which units no behaviour reaches.
 
+**Nothing about features ever blocks work.** A features file with an error, a scenario the
+C program cannot run the same way twice, a unit whose files are not part of the program, a
+program without `main()`, a time budget used up: in each case `verify` still judges the unit
+on every other check, records in the verdict which feature checks did not run and why, and
+the cockpit shows it. The person's features file never stops a Re-check, a migration or a
+promotion; it only adds evidence, and says when it could not.
+
 **What stays true:**
 - The oracle is the definition of done; the map never gates anything. A green verdict still
-  means every check passed; features add checks, never waive one.
+  means every check it records passed; features add checks, never waive one.
 - The ledger is the truth; the cockpit never writes it; every write is a spawned
-  `harness --json …` command, confirmed first. (Editing `features.toml` in the person's
-  editor, §8.5, is the person writing it, as with any file.)
+  `harness --json …` command, confirmed first. Editing the features file happens in a
+  private copy; saving it is a confirmed `harness features save` (§7.2).
 - Target-owned files are hostile input (SCHEMAS.md "Trust boundaries"). `features.toml` and
-  `map.json` are target-owned: nothing in them reaches a model prompt except ids from a closed
-  alphabet (§2.3), everything shown passes the display filter, and every run they define is
-  confined like the whole-program check's — in an empty directory of its own (§4).
+  `map.json` are target-owned: nothing in them reaches a model prompt, a verdict, an event
+  or harness-mcp except ids from a closed alphabet (§2.3); everything shown passes the
+  display filter; every run they define is confined like the whole-program check's, in an
+  empty directory of its own (§4).
 - A command that builds and runs target code refuses under `sandbox: none` unless
   `--allow-unsandboxed` is given (the rule every such command follows).
 - No new crate. No new tool on the allowlist: the probe needs `cc` only.
@@ -65,42 +75,45 @@ which of those checks actually exercise a unit, and which units no behaviour rea
 
 **Not in this design** (each has a "revisit when", §13):
 - Features of a library without a `main` (all TRACTOR cases): a scenario runs a program.
-- Input files of the person's own (`inputs/`), stdin, environment variables, and a file the
-  program writes as the thing compared: v1 compares exit status and the two streams, with
-  the three samples as inputs.
+- Input files of the person's own, stdin, environment variables, and a file the program
+  writes as the thing compared: v1 compares exit status and the two streams, with the three
+  samples as inputs.
 - A cumulative mixed build (every verified unit in Rust at once): each verdict swaps in its
-  own unit only, as today — and the cockpit says so wherever it reports a feature.
+  own unit only, as today — and the cockpit says so wherever a feature is reported as
+  holding on migrated units (§8.2).
 - Line-level maps; features proposed from usage text or by a model; a read tool for the
-  chat.
+  chat; a "Re-check every unit" act.
 
 ## 1. Where it lives
 
 ```
 migration/features/
   features.toml        the person's features and scenarios (§2)
-  map.json             which functions each scenario ran (written by `harness features map` only; §5)
-migration/build/.features/   scratch of `features map` (gitignored; the leading dot cannot be a unit id)
+  map.json             which functions each scenario ran (§5)
+migration/build/.features/   scratch of `features map` (gitignored; a leading dot is never a unit id)
 ```
 
 Both files are committed. They are under `migration/`, so a bench case may hold them without
-breaking its corpus lock. `map.json` is derived and deterministic on one platform (§5.2
-records the platform); it is committed so the map shows on a cold start, like
+breaking its corpus lock. `map.json` is derived and deterministic for one platform and one
+set of inputs (§5.2); it is committed so the map shows on a cold start, like
 `observer/findings.jsonl`.
 
 Writer table additions (SCHEMAS.md):
 
 | File | Writer |
 |---|---|
-| `migration/features/features.toml` | a person; `harness features init` creates a starter (never overwrites) |
+| `migration/features/features.toml` | a person; `harness features init` (a starter, never over an existing file); `harness features save` (the cockpit's Edit) |
 | `migration/features/map.json` | `harness features map` |
-| `migration/build/.features/**`, `migration/build/<unit>/fx/**` (gitignored) | `features map`; `verify` (scratch) |
+| `migration/build/.features/**` (gitignored) | `features map` (scratch) |
+
+(`verify`'s feature runs use the unit's own build dir, `migration/build/<unit>/`, as the
+whole-program check does.)
 
 ## 2. `features.toml` (`ruharness-features`, v1)
 
 ### 2.1 Shape
 
-Flat tables — a scenario names its feature, so a scenario placed anywhere in the file
-belongs to the feature it says:
+Flat tables — a scenario names its feature:
 
 ```toml
 schema_version = 1
@@ -135,139 +148,184 @@ id = "flag"
 args = ["-h"]
 ```
 
+- `schema_version`: required, `1`.
 - `id` (feature and scenario): `^[a-z0-9][a-z0-9-]{0,23}$`; unique among features, and
   unique among one feature's scenarios. (`feature:` + 24 + `/` + 24 = 57 bytes: within the
   64 at which a repair prompt cuts check names.)
-- `name`: the person's words, 1–60 characters, no control characters. Shown in the cockpit
-  (display-filtered). **Never** in a check name, a verdict, an event, or a prompt. Help
-  advises names of 24 characters or fewer (the tree's narrow width).
+- `name`: the person's words, 1–60 characters, no control characters. Shown only in the
+  cockpit (display-filtered). Help advises short names (about 14 characters show in full in
+  the tree at 80 columns).
 - `feature` (a scenario's): the id of a `[[feature]]` in the file.
-- `args`: 0–8 entries, each 1–64 bytes, each one of:
-  - `{input}` — the input's file name (§4.2); exactly once when `input` is set, never
+- `args`: 0–8 entries (absent = none), each one of:
+  - `{input}` — the input's file name (§4.1); exactly once when `input` is set, never
     otherwise;
   - a flag: `^-{1,2}[A-Za-z0-9][A-Za-z0-9_.#+=:,-]*$` (`-c`, `--i5`, `--level=3`);
   - a word: `^[A-Za-z0-9][A-Za-z0-9_.#+=:,-]*$` (a sub-command or a value: `compress`, `9`,
     `nosuchfile`);
-  - and none may contain `..`.
-  No `/`: an argument cannot be an absolute path or reach a parent directory. A word or an
-  `=` value can still name a file **relative to the run's directory** — which is the run's
-  own fresh, empty temp dir (§4.1): nothing is there but the program and its input, and a
-  file the program writes there is discarded. (That makes "a file that does not exist" an
-  easy scenario to write.) The safety of the grammar rests on that directory and on the
-  sandbox, not on the syntax.
-- `input`: optional; `sample:text` (about 30 KB of English-like text), `sample:rand` (16 KiB
+  - 1–64 bytes, never containing `/` or `..`.
+  An argument cannot be an absolute path or reach a parent directory. A word or an `=` value
+  can still name a file **relative to the run's directory** — which is the run's own fresh
+  temp dir (§4.1), holding only the input: a name there either is the input or does not
+  exist, and a file the program writes there is discarded. (That makes "a file that does not
+  exist" an easy scenario to write.) The safety of the grammar rests on that directory and
+  on the sandbox, not on the syntax.
+- `input`: optional; `sample:text` (about 30 000 bytes of English text), `sample:rand` (16 KiB
   of pseudo-random bytes) or `sample:empty` — the whole-program check's deterministic
   samples, the same bytes. The cockpit describes them in words, never by the token alone.
 - Limits: ≤ 16 features; ≤ 8 scenarios per feature and ≤ 16 in all; the file ≤ 64 KiB; every
-  feature has at least one scenario.
+  feature has at least one scenario. A file with no features at all is valid (a starter).
 - **Strict**: an unknown key, a wrong type, a duplicate or unknown id, a limit passed is
   refused with the key's path and the rule, e.g. `features.toml: scenario "text" of feature
-  "zlib": args[2] "a/b" is not allowed — an argument cannot contain "/"`. The file is typed
-  by hand: a typo must fail loudly, not be passed over (§13.2 of the briefing). Consequence,
-  stated in SCHEMAS.md: **every new key bumps `schema_version`** (an exception to the
-  ledger's pass-over-unknown-fields rule), and a newer version is refused (`SchemaTooNew`).
+  "zlib": args[2] "a/b" is not allowed — an argument cannot contain "/"`; a TOML syntax error
+  names its line and column (the message flattened to one line). The file is typed by hand:
+  a typo must be caught, not passed over (§13.2 of the briefing). Consequence, stated in
+  SCHEMAS.md: **every new key bumps `schema_version`** (an exception to the ledger's
+  pass-over-unknown-fields rule).
 
-### 2.2 Loading: `harness_core::features`
+### 2.2 The snapshot: `harness_core::features`
 
-One loader, used by the oracle, the CLI and the cockpit:
+One loader, used by the oracle, the CLI and the cockpit, returning a value, never an error
+for a bad file:
 
-`features::load(root) -> Result<Option<Features>, Error>` — `Ok(None)` when
-`migration/features/features.toml` does not exist. It refuses a symlinked
-`migration/features/`, reads through `ledger::read_regular` (no symlink, the opened handle
-checked, bounded at 64 KiB), and validates §2.1.
+`FeatureSnapshot::load(ctx: &TargetContext) -> FeatureSnapshot` —
+- `None`: `migration/features/features.toml` does not exist;
+- `Invalid(message)`: the file (or `migration/features/`) is a symlink, not a regular file,
+  larger than 64 KiB, not UTF-8, does not validate, or has a newer `schema_version` (the
+  message then says a newer harness wrote it);
+- `Valid { features, digest }`: the validated features and the `features` digest (§2.4).
 
-Commands load it **at their start**, before anything else runs or is sent: `verify`,
-`migrate`, `promote` and `features map` refuse with the loader's message when the file does
-not validate (§6.4) — never after a paid model turn.
+It reads through `ledger::read_regular` (no symlink, the opened handle checked, bounded). An
+I/O error other than "not found" is `Invalid` too: a read path never fails because of the
+features file.
+
+**Loaded once per command** and passed to whatever judges: `verify`, `migrate` (every turn
+of the attempt is judged under the snapshot loaded at its start), `promote`, `override`, and
+`features map`. The oracle's entry point takes it:
+`OracleStrategy::verify_with(&ctx, &unit, &FeatureSnapshot)`; the existing
+`verify(&ctx, &unit)` stays and loads the snapshot itself (so a caller cannot silently skip
+features by forgetting to pass one).
 
 ### 2.3 Why ids have a closed alphabet
 
 Check names reach model prompts: a red verdict's failed checks are quoted to the repair turn
-(`oracle_evidence` quotes `check.name`). The features file is target-owned; a hostile target
-could write an instruction into a `name`. The check name is built from ids only
-(`feature:zlib/text`), an alphabet that cannot spell a sentence or a prompt section header.
-Details are the harness's own words (§6.2). No other feature text reaches a verdict, an event,
-harness-mcp or the chat.
+(`oracle_evidence` quotes `check.name`), and harness-mcp shows verdicts to the chat. The
+features file is target-owned; a hostile target could write an instruction into a `name` or
+into its arguments. So a check name is built from ids only (`feature:zlib/text`), an alphabet
+that cannot spell a sentence or a prompt section header, and a check's detail is the
+harness's own words with numbers (§6.2) — never the arguments, never the program's output.
+The same holds for the skip list (§3). The loader's error messages quote the file's text; they
+appear in the cockpit (display-filtered) and in `features save`'s refusal, never in a verdict
+or a prompt.
 
-### 2.4 The two digests
+### 2.4 The digests
 
-Recorded in every verdict and attempt made while a features file exists, and in the map
-(§5.2, §6.3):
+Recorded in every verdict and attempt made while a valid features file exists, and in the map
+(§5.2):
 - **`features`** — `blake3:` over a canonical rendering of what the scenarios run: for each
-  feature by id, each scenario by id: its args and its input, the sample by its **bytes**.
-  Names are not in it: rewording a feature changes nothing. The samples' bytes come from the
-  in-memory generator (`samples()`), so computing the digest reads no file but
-  `features.toml`.
-- **`program`** — `blake3:` over what the whole program is built from: the facts' file set
-  with each file's current hash (every scanned `.c`/`.h`), plus `[target] source_dir`,
-  `include_dirs` and `[oracle] extra_link_args`. A change to any unit's C changes it.
+  feature by id, each scenario by id: its args and its input's **bytes**; plus the program's
+  file name as it runs (§4.1) and `[oracle] timeout_secs` — both part of what is compared.
+  Names are not in it: rewording a feature changes nothing. Features and scenarios are sorted
+  by id in the digest (their order in the file is presentation) and run in file order. The
+  samples' bytes come from the in-memory generator (`Sample::bytes`), so computing the digest
+  reads no file but `features.toml`.
+- **`program`** — `blake3:` over what the whole program is built from: every file the facts
+  record and every top-level `.c` of `source_dir` (which the whole-program build compiles,
+  scanned or not), each as `(path, current hash or "missing")`, plus `[target] source_dir`,
+  `include_dirs` and `[oracle] extra_link_args`. One core function computes it from such
+  pairs, so the oracle and every reader agree on a missing file. A change to any unit's C
+  changes it. Known gap, named in SCHEMAS.md: a non-C file a header includes (`.inc`, `.def`)
+  is not in it.
 
 Both are computed **once per read** — once per `verify`, once per `Snapshot::load`, once per
-`state status` — never per unit, from hashes the reader already computes (the snapshot hashes
-every facts file for its stale paths), and passed to whoever needs them. An invalid
-`features.toml` yields the sentinel `invalid` for `features` (never an `Err` on a read path:
-the cockpit, `state status` and harness-mcp keep working, and say the file has an error).
+`state status` — from hashes the reader already computes (the snapshot hashes every facts
+file for its stale paths; the top-level `.c` listing is one `read_dir`), never per unit.
 
 ## 3. Which verdicts cover the features: a marker, not staleness
 
-A verdict made before a scenario was added (or before another unit's C changed) did not run
-the scenarios as they are now. That is **not** the same as the verdict being stale: every
-check it recorded is still true of the unit's own inputs. Treating it as stale would flip
-every verified unit to "needs attention", count none of them as migrated, and report a
-CONTRADICTION for each (status.rs's rule) — on every edit of the file, while the person is
-still writing it.
+A verdict made before a scenario was added (or before another unit's C changed, or while the
+file had an error) did not run the scenarios as they are now. That is **not** the verdict
+being stale: every check it recorded is still true of the unit's own inputs. Treating it as
+stale would flip every verified unit to "needs attention", count none as migrated, and report
+a CONTRADICTION for each (status.rs's rule) on every edit of the file.
 
 So:
-- `VerdictInputs` gains `features: String` and `program: String`, both
-  `#[serde(default, skip_serializing_if = "String::is_empty")]`, filled only when a features
-  file exists. The `stale` list, `fresh_green`, the contradiction rule, `verified_in_place`,
-  the bench's `fresh_green` and fence's `STALE_INPUTS` are **unchanged**.
-- `UnitReport` gains `features: FeatureCoverage` — `None` (no features file, and the verdict
-  records none), `Current`, or `Behind(reasons)` with reasons among `scenarios` (the verdict's
-  `features` differs from now — including a verdict that has none while a file exists),
-  `program` (its `program` differs) and `invalid` (the file does not validate). The `unit`
-  event gains `features: "current" | [reasons]` (additive; absent without a features file).
-- The cockpit shows it as a marker on the unit, not a state: **"your features: not checked
-  since they changed — Re-check"** (or "…since other C changed"). The unit keeps its state
-  (✓ migrated stays ✓). The feature states (§8.2) are where it counts.
-- `AttemptRecord` gains the `features` digest (skipped when empty). The trajectory replay
-  treats a mismatch as **superseded inputs**, not drift; a resumed attempt whose `features`
-  digest differs from now is refused ("the features changed since this attempt started —
-  start a new one"), so no attempt mixes turns judged under different scenario sets.
-  Promotion re-judges, so binding (`--from`, promote) is unchanged.
+- `VerdictInputs` gains three fields, all `#[serde(default, skip_serializing_if = …)]`
+  (empty = absent, so a verdict without features keeps today's bytes):
+  - `features: String` — the digest the verdict ran under, or `invalid` when the file did not
+    validate (no feature check ran);
+  - `program: String` — the program digest;
+  - `features_skipped: Vec<String>` — scenario checks that did not run, each
+    `<feature>/<scenario>: <reason>` with the reason from a closed set: `c-side-unstable`,
+    `c-side-crashed`, `c-side-timed-out`, `c-side-overflow`, `c-side-exec-failed`,
+    `budget`, `not-in-program`, `no-main` (§6).
+- The `stale` list, `fresh_green`, the contradiction rule, `verified_in_place`, the bench's
+  `fresh_green` and fence's `STALE_INPUTS` are **unchanged**.
+- `UnitReport` gains `features: Coverage` (`#[serde(skip_serializing_if)]` when `None`):
+  - `None` — no features file now (whatever the verdict recorded), or no verdict;
+  - `Current` — the verdict's `features` and `program` equal today's and nothing was skipped;
+  - `Behind(reasons)` — reasons among `not-yet` (the verdict records no features), `changed`
+    (its `features` digest differs from today's), `program` (its `program` differs),
+    `invalid` (it ran while the file had an error, or the file has one now), `skipped` (it
+    lists skipped scenarios; the list is in the verdict).
+  The `unit` event carries it (additive).
+- The cockpit shows it as a **marker on the verdict**, not a state: the unit keeps its state
+  (✓ migrated stays ✓), and its verdict line reads "verdict green, fresh · your features: not
+  checked on it yet — Re-check" (or "…not checked since your features changed", "…since
+  other C changed", "…your features file had an error", "…1 scenario could not run: zlib/text
+  (the C program's output differs between runs)"). The feature states (§8.2) and the summary
+  (§8.4) are where it counts.
+- `AttemptRecord` gains the `features` digest (skipped when empty). Nothing refuses a resume:
+  a resume already re-judges every turn under the current oracle, with the snapshot loaded at
+  its start. A **replay** of a finished attempt judges with the features the attempt was
+  recorded under when it can: no digest recorded → verify without feature checks; the
+  recorded digest equals today's → with them; otherwise with today's, and any divergence is
+  reported as a changed judge ("the features changed since it was recorded"), never as
+  superseded inputs — so `--retry` still records a new sample and a promoted attempt of a
+  target that gains a features file stays verifiable.
 
 ## 4. Running a scenario
 
 ### 4.1 The confined scenario run
 
-A new confined run, `Confinement::run_scenario`, used by `verify` and by `features map`. For
-each run:
-1. A fresh temp dir (as every confined run): the only place the run may write, removed after.
-2. The built binary is **copied into it** as `<name>` — the target's `[target] name` when it
-   matches `^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$`, else `program` — and the sample, when the
-   scenario has one, is written into it under its fixed file name (`sample_text.txt`,
-   `sample_rand.bin`, `sample_empty`).
-3. The child runs with **cwd = the temp dir** and **argv[0] = `./<name>`**; `{input}` is the
-   bare file name. So argv, every path the program prints about itself or its input, and the
-   files it writes are identical on both sides and on every machine; the temp dir's own
-   path is replaced by `$TMPDIR` in both streams, as for every confined run.
-4. The run profile allows reading and executing only the copy, reading the input, writing
-   only the temp dir — the whole-program check's profile, with the copy as the binary.
-5. When the leader exits, its **process group is killed** before anything is read back (a
-   forked child cannot outlive the run, race the read, or pile up across scenarios).
-6. The outcome is reported as data: `Exited(code)`, `Signaled(n)`, `TimedOut`, `Overflow`
-   (more output than the cap), `SpawnFailed`, with both streams (for the first two). This is
-   a new method beside `built_status`, which the bench keeps as it is.
+`Confinement::run_scenario`, used by `verify` and by `features map`:
+1. **The binary** is placed at `<dir>/<name>`, where `<dir>` is its own directory in the
+   build dir (one per side: `fc/`, `fm/` for verify; `plain/`, `probed/` for the map) and
+   `<name>` is the target's `[target] name` when it matches `^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$`,
+   else `program`. The run cannot write there.
+2. **A fresh temp dir** (as every confined run): the only place the run may write, removed
+   after. The sample, when the scenario has one, is written into it under its fixed file name
+   (`sample_text.txt`, `sample_rand.bin`, `sample_empty`) with a fixed modification time.
+3. The child runs with **cwd = the temp dir**, argv[0] = the binary's absolute path, and
+   `{input}` = the bare file name. Both streams have the temp dir's path replaced by `$TMPDIR`
+   (as every confined run) and the binary's directory replaced by `$PROGDIR` — so a program
+   that prints its own path, or its input's, prints the same bytes on both sides and on every
+   machine. Unsandboxed, the program is spawned by its absolute path with `current_dir` set;
+   sandboxed, `sandbox-exec` is given the absolute path.
+4. The run profile is the whole-program check's: exec only the binary, read only the binary
+   and the temp dir under the home dir and the target root (reads elsewhere allowed, as
+   today), write only the temp dir.
+5. When the leader exits, its **process group is killed** (the `/bin/kill -KILL -- -<pgid>`
+   the timeout path uses, called right after the leader is reaped and before the output
+   drain's grace wait), so a forked child cannot keep the pipes open or race the read-back.
+   Scenario runs opt in; every existing run is unchanged. Residual, stated: a grandchild that
+   calls `setsid`/`setpgid` leaves the group (it can still write only its own temp dir).
+6. The outcome is reported as data — `Exited(code)`, `Signaled(n)`, `TimedOut`, `Overflow`
+   (more output than the cap), `ExecFailed` — with both streams for the first two. Under the
+   sandbox, `sandbox-exec` failing to exec the binary exits 71 with stderr starting
+   `sandbox-exec: execvp()`: that is `ExecFailed`, never `Exited(71)`. A new method beside
+   `built_status`, which the bench keeps as it is.
 
-### 4.2 What each side must do
+### 4.2 The order of runs and what each side must do
 
-- **The C side must be usable**: it exits normally (any code), within the timeout, without
-  overflowing — and gives the same result twice. A scenario whose C side is not usable is a
-  mistake in `features.toml`, not evidence about any unit (§6.4).
-- **The mixed side must match**: the same exit code and byte-identical stdout and stderr. A
-  signal, a timeout or an overflow on the mixed side never passes — it is the candidate's
-  crash, as everywhere else (the migrate brief's "a crash, a panic, or a timeout is a
-  failure").
+Per scenario and unit: **C, mixed, C** — the two C runs around the mixed one, so a program
+whose output drifts with time or state shows it on the C side.
+- **The C side is usable** when both C runs exited normally (any code), within the timeout,
+  without overflowing, with identical results. Otherwise the scenario is **skipped** for this
+  verdict with its reason (§3's closed set) — it is a mistake in the scenario, not evidence
+  about any unit; no check is recorded for it, and nothing is fed to a model.
+- **The mixed side must match** the C runs: the same exit code and byte-identical stdout
+  and stderr. A signal, a timeout, an overflow or an exec failure on the mixed side never
+  passes — it is the candidate's crash, as everywhere else.
 
 ## 5. `harness features map`
 
@@ -279,22 +337,22 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
 - Takes the writer lock (holder `features map`). It touches no unit, so there is no
   promotion recovery.
 - Refuses, before building anything, with a message that says what to do, when: there is no
-  features file; it does not validate; the facts are missing, or stale for any file ("scan
-  again first" — the probe's ids come from the facts); a top-level `.c` in `source_dir` has no
-  facts record; the facts record no public `main` in a top-level `.c` of `source_dir`
-  ("features need a program with a main()"); `sandbox: none` without `--allow-unsandboxed`.
+  features file, it has no scenarios, or it does not validate (the loader's message); the
+  facts are missing, or stale for any file ("scan the project first" — the probe's ids come
+  from the facts); a top-level `.c` of `source_dir` has no facts record; the facts record no
+  public `main` in a top-level `.c` of `source_dir` ("features need a program with a
+  main()"); `sandbox: none` without `--allow-unsandboxed`.
 - Builds, in `migration/build/.features/` (recreated), with the allowlisted `cc` under the
-  tool profile:
+  tool profile, with progress messages ("Building the C program…", "Building a scratch copy
+  that notes each function it runs…"):
   - **`plain`** — the top-level `*.c` of `source_dir`, compiled exactly as the whole-program
     check compiles `whole_c`;
-  - **`probed`** — the same, from a mirror (§5.3), with the probe runtime (§5.4).
-  Messages say what is happening ("Building the C program…", "Building a copy that notes each
-  function it runs…").
-- For each scenario, in file order: `plain` twice, `probed` once, each a scenario run (§4.1).
+  - **`probed`** — the same, from the mirror (§5.3), with the probe runtime (§5.4).
+- For each scenario, in file order: `plain`, `probed`, `plain` — each a scenario run (§4.1).
 - Writes `map.json` atomically once every scenario has run. An interrupted run (cancel,
   signal) writes nothing and says so; the old file stays.
-- Exit 0 when `map.json` was written — even when some scenario needs a look (that is a
-  finding recorded in the file); 1 on a refusal or an error.
+- Exit 0 when `map.json` was written — even when some scenario needs a look (a finding
+  recorded in the file); 1 on a refusal or an error.
 
 ### 5.2 `map.json` (`ruharness-features-map`, v1)
 
@@ -304,7 +362,7 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   "schema_version": 1,
   "inputs": { "facts": "blake3:…", "features": "blake3:…", "program": "blake3:…",
               "platform": "macos-aarch64" },
-  "unprobed": [["src/zopfli/x.c", "src/zopfli/x.c::odd"]],
+  "unwatched": [["src/zopfli/x.c", "src/zopfli/x.c::odd"]],
   "scenarios": [
     {
       "feature": "zlib", "scenario": "text",
@@ -313,365 +371,423 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
       "stderr_head": "",
       "stable": true,
       "probe_agrees": true,
-      "slow": false,
-      "footprint": "complete",
+      "noted": "complete",
       "functions": [["src/zopfli/zlib_container.c", "ZopfliZlibCompress"], ["…", "…"]]
     }
   ]
 }
 ```
 
-- `inputs.facts`: the hash of the facts file's canonical bytes (a re-scan with a changed
-  scanner changes it); `features`, `program`: the digests (§2.4); `platform`: OS and
-  architecture — a map from another platform may reflect other `#if` branches, so it counts as
-  out of date there. No toolchain strings: they are machine-specific churn and not a staleness
-  input.
-- `unprobed`: definitions the probe could not watch (§5.3), as `[file, name]`.
+- `inputs`: `facts` — the hash of the facts file's canonical bytes (`Facts::to_canonical_bytes`;
+  a re-scan by a changed scanner changes it); `features`, `program` — the digests (§2.4);
+  `platform` — OS and architecture: a map made on another platform may reflect other `#if`
+  branches, so it is out of date there (shown, never discarded — §8.4). No timings, no
+  toolchain strings: the file is deterministic for its inputs.
+- `unwatched`: definitions the probe could not instrument (§5.3).
+- Function references are `[file, canonical id]` pairs — the facts' own `file` and `name`
+  (for a static function the id already carries its file: `src/x.c::helper`). The pair is
+  what makes two functions of one name in two files distinct.
 - Per scenario:
   - `end`: how the first plain run ended — `exit N`, `signal N`, `timed out`, `too much
     output`, `could not start`;
-  - `stdout_bytes`, `stderr_bytes`: numbers only; `stderr_head`: the first line of stderr, at
-    most 100 bytes, with every byte outside printable ASCII replaced by `?` at write time
-    (the person's own program's words, shown only in the cockpit, display-filtered again);
+  - `stdout_bytes`, `stderr_bytes`: numbers; `stderr_head`: the first line of stderr, at most
+    100 bytes, every byte outside printable ASCII replaced by `?` at write time (shown only in
+    the cockpit, display-filtered again, never in a verdict, an event or a prompt);
   - `stable`: the two plain runs ended the same way with identical streams;
   - `probe_agrees`: the probed run ended as the first plain run did, with identical streams —
-    when false, the map is of a program that behaved differently (it prints timings or
-    addresses, reads its own binary);
-  - `slow`: a plain run took longer than 10 s (every Re-check runs it three times);
-  - `footprint`: `complete` (the probe file was read) or `unavailable` with `reason` (`none
-    written` — the run hit no watched function; `unreadable` — not whole 4-byte records, an id
-    out of range, or not a regular file);
-  - `functions`: `[file, name]` pairs, sorted, each once; empty unless `complete`.
+    when false, the map is of a program that behaved differently with the notes in it;
+  - `noted`: `complete` (the note file was read) or `unavailable` with `reason` — `none
+    written` (the run hit no watched function) or `unreadable` (not whole 4-byte records, an
+    id out of range, not a regular file);
+  - `functions`: sorted, each once; empty unless `complete`.
 - Units are **not** stored: they are derived from today's plan at read time.
 - **Current** iff all four inputs equal today's; otherwise **out of date**, with which input
   changed.
 - **Hostile input**: the file is committed, so the loader (`features::load_map`) is strict —
-  shape, the §2.1 id alphabet, `end` from its closed grammar, sizes (≤ 16 MiB, `read_regular`),
-  every `[file, name]` present in today's facts (an unknown pair is counted, never shown). A
-  forged file with correct digests is still "current": the View says the map is what the
-  last `features map` recorded, and a person can always map again. It never gates anything.
+  shape, the §2.1 id alphabet, `end` from its closed grammar, sizes (≤ 16 MiB,
+  `read_regular`), every pair (in `functions` and `unwatched`) present in today's facts (an
+  unknown pair is counted, never shown). A forged file with correct digests still reads as
+  current: the View says the map is what the last `features map` recorded; a person can map
+  again; it never gates anything.
 
 ### 5.3 The probed copy
 
-- **The mirror**: every regular file under `source_dir` (the scanner's walk: contained, no
-  symlinks followed, bounded at 20 000 files and 256 MiB) copied to
-  `migration/build/.features/mirror/<repo-relative path>`; each file the facts record that has
-  a watched function replaced by its probed version. The compile uses `-I` the mirror's
-  `source_dir` and `include_dirs`, `-fmacro-prefix-map=<mirror>=<root>` (so `__FILE__` reads
-  as in the original build), `-include <build>/probe.h`, `-ffp-contract=off` and
-  `extra_link_args`. An include that leaves `source_dir` (`../x.h`) does not resolve in the
-  mirror: the build fails and `features map` says so, naming the file — it never maps a
-  different program silently.
-- **The insertion** — `harness_scan::probe_source(rel_path, source, id_of)`, pure, built on the
-  scanner's own `collect_functions`/`canonical_id` (not on mutate.rs, which skips preprocessor
-  branches): `(__ruharness_probe)(N);` right after the opening `{` of each watched function's
-  body, on the same line (parenthesised, so a function-like macro cannot capture it). Nothing
-  else changes: line numbers, `__LINE__`, `__func__`. `N` is the index of the definition's
-  `(file, name)` among the facts' distinct pairs (`#if` variants of one function share it; two
-  functions of one name in two files do not).
-- **Not watched** (listed in `unprobed`, never counted as "not run"): a definition under an
+- **The mirror**: every regular file under the canonical `source_dir` — except `migration/`
+  and `.git/` when `source_dir` is the target root — copied to
+  `migration/build/.features/mirror/<repo-relative path>` by a new walk mode (all files, not
+  only `.c`/`.h`; contained; symlinks never followed; at most 20 000 files and 256 MiB — past
+  either, the map refuses and says so), and each file the facts record that has a watched
+  function replaced by its probed version. The compile uses `-I` the mirror's `source_dir`
+  and `include_dirs`, `-fmacro-prefix-map=<mirror>=<canonical root>` (so `__FILE__` reads as
+  in the plain build, which compiles canonical paths), `-include <build>/fnprobe.h`,
+  `-ffp-contract=off` and `extra_link_args`. An include that leaves `source_dir` (`../x.h`)
+  does not resolve in the mirror: the build fails and `features map` says so, naming the
+  file — it never maps a different program silently.
+- **The insertion** — `harness_scan::probe_source(rel_path, source, index_of)`, pure, built on
+  the scanner's own `collect_functions`/`canonical_id` (which, unlike mutate.rs, walk into
+  preprocessor branches), with `FnDef` gaining the body's start byte:
+  `if (!__ruharness_seen[N]) (__ruharness_probe)(N);` right after the opening `{` of each
+  watched function's body, on the same line (the call parenthesised so a function-like macro
+  cannot capture it; the inline test keeps a hot function to one byte load). Nothing else
+  changes: line numbers, `__LINE__`, `__func__`. `N` is the index of the definition's `(file,
+  canonical id)` pair among the facts' distinct pairs (`#if` variants of one function share
+  it).
+- **Unwatched** (listed in `unwatched`, never counted as "not run"): a definition under an
   ERROR or MISSING node; a body whose first byte is not a real `{`; a definition with a
   preprocessor directive between its declarator and its body (a brace inside `#if`, which
-  compiles only on one branch). A definition the facts do not record gets nothing — the facts
+  compiles on one branch only). A definition the facts do not record gets nothing — the facts
   do not know it either.
 
 ### 5.4 The probe runtime (harness-owned C)
 
-`fnprobe.h` (declaration only) and `fnprobe.c`, embedded with `include_str!` like the boundary
-check's runtime, with the id count passed as `-DRUHARNESS_FNPROBE_N=<n>`:
-- `seen[n]` (at least one byte); an id is recorded the first time it is hit.
+`fnprobe.h` (declarations only: `extern unsigned char __ruharness_seen[];` and the function)
+and `fnprobe.c`, embedded with `include_str!` like the boundary check's runtime, with the id
+count passed as `-DRUHARNESS_FNPROBE_N=<n>`:
+- `__ruharness_seen[n]` (at least one byte); an id is noted the first time it is hit.
 - On the first hit the runtime opens `$TMPDIR/ruharness-fnprobe` with
-  `O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC|O_NOFOLLOW`, moves the descriptor to 900 or above
-  (`F_DUPFD_CLOEXEC`) and closes the original; each hit writes its id as 4 bytes (little
-  endian). A write-at-first-hit survives a crash, `_exit` or a timeout.
+  `O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC|O_NOFOLLOW` and moves the descriptor high —
+  `F_DUPFD_CLOEXEC` at `min(900, soft RLIMIT_NOFILE − 16)`, keeping the original descriptor
+  when that fails (a launchd-started process may have a soft limit of 256). Each hit writes
+  its id as 4 bytes (little endian) — written at the first hit, so a crash, `_exit` or a
+  timeout keeps what ran before. Two threads racing the first open may open twice; both
+  append whole records.
 - The run reads the file back with `Extras::collect` (a plain name, `lstat`, the same inode,
-  capped at `4 × n × 64` bytes; a program with more than 64 forked processes reads back as
-  `unreadable`).
+  capped at `4 × n × 64` bytes; a program with more than 64 processes writing notes reads
+  back as `unreadable`).
 
 **What a hostile target can do to its own map**: its C can write that file, redefine
-`open`/`write`/`getenv`, change `TMPDIR` before the first probe, or close descriptor 900.
-It can shape its map; it cannot shape a verdict — the map gates nothing (as design B's
-boundary map, §B.9). Said in SCHEMAS.md's trust boundaries.
+`open`/`write`/`getenv`, change `TMPDIR` before the first note, or close the descriptor. It
+can shape its map; it cannot shape a verdict — the map gates nothing (as design B's boundary
+map, §B.9). Said in SCHEMAS.md's trust boundaries.
 
 ### 5.5 Events
 
-Additive kinds (SCHEMAS.md "The events stream"):
+Additive kind (SCHEMAS.md "The events stream"):
 
 | `k` | fields |
 |---|---|
-| `scenario` | `feature`, `scenario`, `n`, `of`, `end`, `stable`, `probe_agrees`, `footprint`, `functions` (the count) — one per scenario, after its runs |
+| `scenario` | `feature`, `scenario`, `n`, `of`, `end`, `stable`, `probe_agrees`, `noted`, `functions` (the count) — one per scenario, after its runs |
 
-Plus `message` lines and the `header`/`result` frame.
+Plus `message` lines and the `header`/`result` frame. `verify` emits a `message` ("Running
+your 12 feature scenarios…") before its feature runs; its checks arrive as `check` events,
+as today.
 
 ## 6. Scenario checks in `verify`
 
 ### 6.1 When and where
 
-In `CAbiDifferential::verify`, **after every existing check** — after the sanitizers and the
-opt-in boundary check (so a feature failure never suppresses the boundary check, which runs
-only when every check before it passed) — when a features file exists:
-- builds `whole_c` and `whole_mixed` as the whole-program check does, once (shared with it
-  when both are configured; the shared "build the two programs" step is extracted from
-  `whole_program`);
-- for each scenario, in file order: runs the C side twice and the mixed side once (§4);
-- emits one check per scenario, `feature:<feature>/<scenario>`.
+In `CAbiDifferential::verify_with`, **after every existing check** — after the sanitizers and
+the opt-in boundary check (so a feature failure never suppresses the boundary check, which
+runs only when every check before it passed) — by the snapshot passed in:
+- `None` — nothing: no build, no check, no field, no event.
+- `Invalid` — no feature check; `features` = `invalid`; a `message`.
+- `Valid` with scenarios:
+  1. **Not part of the program**: when the unit's `replaces` are not all among the program's
+     top-level `.c` (the rule the shared whole builds impose), every scenario is skipped as
+     `not-in-program`. (A unit whose `replaces` names no file at all stays the refusal it is
+     today.)
+  2. **No `main`**: when the facts record no public `main` in a top-level `.c`, every scenario
+     is skipped as `no-main`; nothing is built.
+  3. Otherwise the oracle builds `whole_c` and `whole_mixed` as the whole-program check does
+     (once — the "build the two programs" step is extracted from `whole_program` and shared
+     when both are configured), and for each scenario in file order runs C, mixed, C (§4.2),
+     emitting `feature:<feature>/<scenario>` or recording the skip.
+  4. **Budget**: when the feature runs of this verify have used `4 × timeout_secs` of wall
+     time, the remaining scenarios are skipped as `budget`.
+  The verdict records `features`, `program` and `features_skipped` (§3).
 
-Without a features file: nothing — no build, no check, no field, no event.
-
-Every scenario runs for every unit, also a scenario whose map says it never runs the unit:
+Every scenario runs for every unit — also a scenario whose map says it never runs the unit:
 the map is advisory, and a verdict must not depend on it. The cockpit uses the map to say
 which checks exercise the unit (§8.4).
 
-Preconditions, checked when the features file is loaded (the command's start): the program
-has a `main` (as §5.1), and the unit's `replaces` are among the program's top-level `.c` (the
-whole-program check's rule, which the shared builds impose). Otherwise the command refuses,
-naming the unit and the rule.
-
 ### 6.2 The detail
 
-The harness's own words: lengths, offsets, exit codes — never the program's bytes (the
-verdict is committed and may be quoted to a model). And never through `RunFailure::Failed`,
-whose message embeds the argv and a stderr excerpt:
+The harness's own words: numbers, exit codes — never the arguments, never the program's bytes
+(the verdict is committed, quoted to a model and shown to the chat). And never through
+`RunFailure::Failed`, whose message embeds the argv and a stderr excerpt:
 - pass: `exit 0; stdout 18234 bytes identical; stderr empty`;
 - a mismatch: `exit 0 vs exit 1` / `stdout differs (lens 18234 vs 18230, first diff at byte
-  9)` / `stderr differs (…)`, joined with `; `, followed by the scenario's argv as the program
-  saw it — `(ran: ./zopfli --zlib -c sample_text.txt)` — built only from the grammar-checked
-  args and fixed names, so the repair turn knows what was run;
+  9)` / `stderr differs (…)`, joined with `; `;
 - the mixed side did not exit: `candidate run failed: signal 6` / `…: timed out after 120s` /
-  `…: more output than the cap` — the existing lead-in, which the migrate judge's `classify`
-  already reads as a crash or timeout.
+  `…: more output than the cap` / `…: could not start` — the existing lead-in, which the
+  migrate judge's `classify` already reads as a crash or timeout.
+The cockpit shows the scenario's arguments next to a failed check (it has the features file);
+the model and the chat get the id.
 
 ### 6.3 Verdict and attempt inputs
 
-`compute_inputs` fills `VerdictInputs.features` and `.program` (§2.4, §3) from the loaded
-file and the tree; `migrate` records the `features` digest in the attempt. `render_md` shows them.
+`compute_inputs` fills `VerdictInputs.features`, `.program` and `.features_skipped` (§3);
+`migrate` records the `features` digest in the attempt from the snapshot it judges under.
+`render_md` shows all three.
 
-### 6.4 An unusable scenario is an error, not a red verdict
+## 7. Writing the features file
 
-When a scenario's C side is not usable (§4.2 — it crashed, timed out, overflowed, or its two
-runs differ), `verify` **fails with an error**, writes no verdict and demotes nothing:
-`feature scenario zlib/text cannot be a check: the C program's two runs differ (stdout lens …)
-— change the scenario in migration/features/features.toml`. The same in a migrate turn: the
-judge returns the error, as it does for a boundary check's C side (migrate.rs), and the run
-stops — it never feeds a C-side problem to a model or spends the turn budget on it.
-
-This makes one bad scenario stop every Re-check until the file is fixed — by design: the
-person's features file, not a unit's Rust, is what is wrong, and the cockpit says so before
-anything is armed (§8.6). `features map` finds the same problems first (`stable`, `end`) and
-the feature's View names them.
-
-## 7. `harness features init`
+### 7.1 `harness features init`
 
 ```
 harness features init [--target DIR] [--json]
 ```
-Takes the writer lock; refuses when `migration/features/features.toml` exists (it never
-overwrites the person's file). Writes a commented starter that validates:
-- a header comment: what a feature and a scenario are, the samples in words, the argument
-  rule, "save, then press g in the cockpit";
-- when `[oracle.whole_program]` is configured: one feature, `whole-program`, "What the
-  whole-program check runs", with one scenario per sample using its args — so the person
-  starts from what the harness already runs;
-- otherwise: one feature, `run`, "Run it on a text file", with one scenario
-  `args = ["{input}"]`, `input = "sample:text"`, commented as "a guess — change it".
+Takes the writer lock; refuses when `migration/features/features.toml` exists (never
+overwrites). Writes a starter that validates and holds **no feature**: `schema_version = 1`
+and comments — what a feature and a scenario are, the samples in words, the argument rule,
+and a commented example (when `[oracle.whole_program]` is configured, the example uses its
+flags: "your whole-program check already runs `-c`; a feature can run other flags too").
+Nothing is guessed about the program.
+
+### 7.2 `harness features save` — the cockpit's Edit
+
+```
+harness features save --expect <digest-of-current-bytes|none> --bytes N [--target DIR] [--json]
+```
+The new text on stdin, framed by `--bytes`. Takes the writer lock; validates the text with the
+loader; refuses (exit 1, the loader's message) when it does not validate, or when the file on
+disk is no longer the one the edit started from (`--expect`: the blake3 of its bytes, or
+`none` when there was no file) — a concurrent change is never overwritten. Otherwise writes it
+atomically. The text travels on stdin, never through a file (the chat design's answer rule).
+
+**The cockpit's Edit the features file** (a flow, like the hand edit):
+1. Refused while a command runs, and when `migration/features` or the file is a symlink.
+2. The file (or the starter text, when there is none) is copied into a fresh private temp dir,
+   and its digest noted.
+3. The editor: `$VISUAL`, else `$EDITOR`, else `nano` when it is on `PATH`, else `vi` — named
+   in the menu item ("Edit the features file (in nano)"), with a line shown before the screen
+   is handed over: how to save and leave (nano: "Ctrl-O then Enter saves, Ctrl-X leaves"; vi:
+   "type :wq and Enter"; another editor: "save and close it to come back").
+4. On return: unchanged → "No change." Changed → the text is validated in-process:
+   - valid → the armed dialog **Save the features file** ("12 scenarios in 5 features. From now
+     on every Re-check runs them; verdicts made before show 'not checked since your features
+     changed'.") runs `harness --json features save …` with the text on stdin;
+   - not valid → the error (with its line and column) and two choices: **Edit again** (the
+     editor opens on the draft, at that line when the editor takes `+N`) and **Discard**.
+   The draft is kept until it is saved or discarded.
 
 ## 8. The cockpit
 
 ### 8.1 The model (un-gated, pure): `harness_tui::featmap`
 
-`FeatureMap::build(&Snapshot, &Files, &FeaturesState) -> FeatureMap`, computed on the load
-worker (`load::read`), where `FeaturesState` is `None` / `Invalid(message)` /
-`Valid { features, map: Option<(Map, Currency)> }`. `Snapshot::load` itself only computes the
-two digests (§2.4) for the units' coverage (§3). It holds, per feature:
-- its scenarios with the map's record of each (when current);
+`Snapshot::load` loads the `FeatureSnapshot` once and keeps it (the coverage of §3 needs its
+digest); `load::read` builds `FeatureMap::build(&Snapshot, &Files, Option<&Map>)` on the load
+worker from the same snapshot — one read of the file per refresh. harness-mcp's reads pay one
+≤ 64 KiB read and no map. The map holds, per feature:
+- its scenarios with the map's record of each;
 - its functions: the union of its scenarios' `functions`, each mapped to its file and that
   file's owning unit (`Files`' owner);
 - the functions outside every unit (headers, files with no exported functions), counted;
-- per unit of its functions: the unit's state, and this feature's checks on the unit's
-  verdict — `passed`, `failed`, `absent` — and the verdict's coverage (§3);
-- the verdicts that failed this feature's checks on units **outside** its functions (§6.1's
-  case) — listed, never hidden.
+- per unit its functions touch: the unit's state, how many of its watched functions the
+  feature ran of how many it has, and this feature's checks on the unit's verdict;
+- units outside it whose covering verdict failed its checks (§6.1's every-unit rule).
 
-And per unit: which features run its code; per function: which features run it; the project
-totals: functions some feature ran / functions the probe watched.
+And per unit: which features run its functions (and whether it has unwatched definitions);
+per function: which features ran it; the project totals: functions some feature ran /
+functions watched.
 
 ### 8.2 Feature states
 
-Glyph and word — the glyphs are the features' own, with their own section in Help's legend;
-colour is never the only signal. "Has Rust" means the unit's status is verified or merged.
-"Covering verdict" means the unit's verdict's coverage is `Current` (§3). First match wins:
+"Has Rust" means the unit's status is verified or merged. A **covering verdict** is a unit's
+latest verdict that is fresh (`stale` empty) and whose coverage is `Current` (§3). Glyph and
+word, first match wins; the glyphs are the features' own, each state its own glyph, with a
+section in Help's legend; colour is never the only signal:
 
 | # | word | glyph | rule |
 |---|---|---|---|
 | F1 | failing | `✗` | a covering verdict of any unit has a failed `feature:<id>/…` check |
-| F2 | fix its scenario | `⚠` | the current map says a scenario of it is not usable (`stable` false, or `end` not `exit N`) — verify will refuse it |
-| F3 | needs a re-check | `⚠` | a unit that has Rust has no covering verdict, or one without this feature's checks |
-| F4 | not mapped yet | `⋯` | no map, the map is out of date, or it lacks this feature |
-| F5 | map incomplete | `⋯` | a scenario's footprint is unavailable or its probe disagreed — its View names the scenario |
-| F6 | runs no unit's code | `∅` | its functions touch no unit |
-| F7 | all its units migrated | `✓` | every unit its functions touch has Rust, and every unit with Rust passes this feature's checks on a covering verdict |
-| F8 | holds so far | `◑` | some unit it touches has Rust (all passing, as F7); the word carries the count: "holds so far · 1 of 6 units" |
-| F9 | all C | `◌` | no unit it touches has Rust yet |
+| F2 | fix its scenario | `⚑` | a scenario of it was skipped for a `c-side-*` reason by a unit's latest fresh verdict, or the current map says it is not stable or did not exit — it can never be a check as written |
+| F3 | needs a re-check | `↻` | a unit that has Rust has no covering verdict, or one without this feature's checks |
+| F4 | not mapped yet | `⋯` | no map, or the map lacks this feature |
+| F5 | map out of date | `≈` | the map is out of date (the View says why) |
+| F6 | map incomplete | `◔` | a scenario's notes are unavailable, or its probe disagreed — the View names the scenario |
+| F7 | runs no watched code | `∅` | its functions touch no unit |
+| F8 | all its units migrated | `✓` | every unit its functions touch has Rust, and every unit with Rust passes this feature's checks on a covering verdict |
+| F9 | holds so far | `◈` | some unit it touches has Rust (all passing, as F8); the word carries the count: "holds so far · 1 of 6 units" |
+| F10 | all C | `◌` | no unit it touches has Rust yet (the word adds "· 1 unit has unverified Rust" when a unit it touches has a red verdict) |
 
-F1 needs no map and comes first: a failure is shown even while the map is out of date. F3
-considers every unit that has Rust, not only the feature's: a scenario can fail through a unit
-its map never touched.
+F1 needs no map and comes first: a failure shows even while the map is out of date. F3
+considers every unit that has Rust, not only the feature's. A red verdict that is stale counts
+as no covering verdict (F3, not F1): the Rust may have been fixed since.
 
-**Wording of F7 and F8, wherever they appear** (the View, Help, the summary): "each unit was
-checked with only its own Rust swapped in — no build has them all in Rust together yet".
+**F8 and F9, wherever they are shown** (the View, the summary's footnote, Help): "each unit
+was checked with only its own Rust swapped in — no build has them all in Rust together yet";
+F8 adds "n functions it runs are outside every unit and stay C" when there are any.
 
 ### 8.3 The tree
 
 After `Units (n)`, always, a group **Features**:
 - no file: `Features (none yet)`;
-- an invalid file: `Features (error)` — selectable; its View shows the error;
-- otherwise `Features (n)`, open by default, one row per feature in file order: glyph, name
-  (display-filtered, cut with `…`; when two cut names would read the same, the id is shown
-  after them), the state word when it fits.
+- an invalid file: `⚠ Features (error)` — selectable; its View shows the error;
+- a valid file: `Features (n)` (`Features (0)` for a starter), open by default, one row per
+  feature in file order: the glyph, then the name (display-filtered, cut with `…`; when two
+  cut names would read the same, the id replaces the tail), then the state word when it fits.
 
 New selections `Selection::Features` and `Selection::Feature(id)`; `parent()`,
-`open_by_default`, `exists`, `surviving` and every exhaustive match as for `Units`/`Unit`. No
-scenario rows (a feature has at most 8; its View lists them).
+`open_by_default`, `exists`, `surviving`, `glyph_style` (an arm per new glyph) and every
+exhaustive match as for `Units`/`Unit`. No scenario rows (a feature has at most 8; its View
+lists them).
 
 ### 8.4 The Views
 
 Every map-derived line depends on the map being current. When it is out of date, those lines
 are shown under **"From the last map — out of date (the scan changed / your scenarios changed
 / the program's C changed / made on another platform)"**, and no negative claim ("runs no
-unit", "no feature runs this unit") is made from it.
+watched code", "none of your features runs this unit") is made from it. Views put the state
+and the next step first, details after (54 columns at 80).
 
-**Features (none yet)**: one sentence on what a feature is; the zlib example in words ("the
-whole-program check runs only gzip; a 'zlib' feature would make every Re-check run zlib too");
-"Press Enter: Start a features file"; for a program without `main()`: "Features need a program
-with a main() — this target is a library; not supported yet" and no item.
+**Features (none yet)**: what a feature is in two sentences; when `[oracle.whole_program]` is
+configured, "Your whole-program check runs `<its flags>` on three samples; a feature can run
+other flags too, and the map shows which units each one reaches."; "Choose Start a features
+file (on the Features row, press Enter)". When the facts are missing: "Scan the project
+first." For a program without `main()`: "Features need a program with a main() — this target
+is a library; not supported yet." and no item.
 
-**Features (error)**: the loader's message, display-filtered; "Press Enter: Edit the features
-file"; "Re-checks and migrations are refused until it is fixed."
+**Features (error)**: the loader's message, display-filtered; "Choose Edit the features file
+(on this row, press Enter)"; "Until it is fixed, verdicts do not run your features — Re-checks
+and migrations still work, and say so."
 
-**Features (n)**:
-- one line per feature: glyph, name, state word, "runs through k units", its checks as
-  "k units pass · 1 fails · 2 not re-checked" — each line a link;
-- the totals: "Your features ran 104 of 111 watched functions (6 could not be watched)."
-  and, when the map is current, the count of functions no feature ran, with the first 20 as
-  links to their function rows;
-- "Edited features.toml? Press g to re-read." (there is no file watcher).
+**Features (0)** and **Features (n)**:
+- (0): "No features yet — choose Edit the features file to add yours.";
+- one line per feature: glyph, name, state word, then a dim second line "k units · k pass ·
+  1 fails · 2 not re-checked" — each a link;
+- the totals: "Your features ran 104 of 111 functions the map watches (6 could not be
+  watched)." and, when the map is current, the count of functions no feature ran, with up to
+  20 as links to their function rows;
+- "Edited features.toml outside the cockpit? Press g to re-read."
 
 **A feature**:
-- title: its name; under it its id and state in words, with the next step (F1: open the
-  failing unit; F2: fix the scenario, naming it; F3: Re-check u-…, as links; F4: Map the
-  features; F5: the scenario and why);
-- **Scenarios**: per scenario its argv as the program sees it (`./zopfli --zlib -c
+- title: its name; under it its id, its state in words, and the next step (F1: open the
+  failing unit; F2: "change or remove scenario zlib/text — its C output differs between runs"
+  and Edit; F3: the units to Re-check, as links; F4/F5: Map the features; F6: the scenario and
+  why);
+- **Scenarios**: per scenario its arguments as the program sees them (`zopfli --zlib -c
   sample_text.txt`, the sample described in words), and from the map: `exit 0 · stdout 18 234
-  bytes · stderr empty` (or its first line), and a flag with a one-line reason when it is
-  unstable, slow, its probe disagreed, its footprint is unavailable, or **it compares little**
-  (it exited non-zero, or printed nothing to stdout: "its check compares only the exit status
-  and an error message");
+  bytes · stderr empty` (or its first line), and a flag with a one-line reason when its
+  output differs between runs, the run with notes behaved differently, no notes were
+  recorded, or **it compares little** (it exited non-zero, or printed nothing to stdout: "its
+  check compares only the exit status and an error message");
 - **Where its code lives**: one row per unit its functions touch — the unit's glyph and word,
-  the number of this feature's functions in it, and this feature's checks on its verdict
-  (`✓ passed` / `✗ zlib/text` / `– not re-checked since the features changed` / `– no
-  verdict`) — each a link; then "Outside every unit: n functions (headers, files with no
-  exported functions)"; then, if any, **"Also fails on (its code is not in them)"**: units
-  outside it whose verdict failed its checks;
-- **Only this feature runs**: its specific functions (with ≥ 2 features), as links, or
-  "everything it runs is also run by another feature";
-- the F7/F8 sentence (§8.2) when either state applies.
+  "runs 3 of its 9 functions", and this feature's checks on its verdict (`✓ passed` / `✗
+  zlib/text` / `– not re-checked since your features changed` / `– no verdict`) — each a
+  link; then "Outside every unit: n functions (headers, files with no exported functions)";
+  then, if any, **"Also fails on (its functions are not in them)"**;
+- **Only this feature runs**: up to 20 of its specific functions (with ≥ 2 features), as
+  links, or "everything it runs is also run by another feature";
+- the F8/F9 sentence (§8.2) when either applies.
 
-**A unit** — one line in the unit header (cut with "+n — see Features"), when a features file
-exists:
-- map current and complete for every scenario: "Features that run its code: Compress to zlib
-  ✓, Compress to gzip ✓" — or **"None of your features runs this unit's watched functions, so
-  their checks pass whatever its Rust does."** — or, for a unit whose files are not among the
-  program's top-level `.c`: "Not part of the program your features run.";
+**A unit** — one line in the unit header, cut with "+n — see Features", when a valid features
+file exists:
+- the map current and complete for every scenario:
+  - "Features that run its code: Compress to zlib (runs 2 of its 9 functions) ✓, …" — the
+    mark is this feature's checks on this unit's covering verdict: `✓` all passed, `✗` one
+    failed, `–` not checked (no covering verdict);
+  - or, when no feature ran any of its functions and it has no unwatched definition: **"None
+    of your features runs this unit's functions, so their checks pass whatever its Rust
+    does."**; with unwatched definitions: "None of your features ran its watched functions; n
+    of its functions could not be watched, so this is not proof.";
+  - or, for a unit whose files are not among the program's top-level `.c`: "Not part of the
+    program your features run — its verdicts skip them.";
 - otherwise: "Which features run it: not known — map the features";
-- the coverage marker (§3) when its verdict is behind: "your features: not checked since they
-  changed — Re-check".
+- the coverage marker (§3) on its verdict line when it is `Behind`.
 The Re-check and Accept dialogs repeat the first line.
 
-**A function**: its header gains "run by: Compress to gzip, Compress to zlib" or "run by none of
-your features" (map current), or "not watched by the map" (`unprobed`).
+**A function**: its header gains "run by: Compress to gzip, Compress to zlib" or "run by none
+of your features" (map current), or "not watched by the map" (`unwatched`).
 
-**Checks** (the unit's checks strip and the verdict overlay): passing `feature:*` checks group
-into one chip, "your features ×16 (4 run this unit)"; each failure is its own chip. In the
-verdict overlay, a feature check whose feature does not run the unit says "(its feature does
-not run this unit's code)". `check_words` stays stateless: `feature:zlib/text` → "feature
-zlib/text".
+**Checks** (the unit's checks strip and the verdict overlay): failures first, each its own
+chip ("feature zlib/text"); then one chip for all passing feature checks, placed before the
+other passes: "features 16 ok · 4 reach it" (or "features 16 ok · map out of date"); the
+overlay lists each feature check with the feature's name and arguments, and "(its feature
+does not run this unit's functions)" — for a failed one, "…yet it failed: the map may be
+incomplete". `check_words` stays stateless (`feature:zlib/text` → "feature zlib/text").
 
-**The project summary**: a line "Features: 5 — 1 failing, 2 hold so far, 2 all C · they ran 104
-of 111 watched functions" (or "Features: none yet — see Features"), a link to the group; and a
-Next-step rule after rule 4: features exist and the map is missing or out of date → "Map the
-features — press Enter and choose Map the features".
+**The project summary**: a line "Features: 5 — 1 failing, 2 hold so far, 2 all C · they ran
+104 of 111 watched functions¹ · 2 units not checked on your features" (or "Features: none yet
+— see Features", or "Features: the file has an error — see Features"); ¹ the F8/F9 footnote.
+Next-step rules after rule 4, each only when its act is enabled:
+5. features exist and the map is missing or out of date → "Map the features — choose Map the
+   features on the Features row";
+6. a unit with Rust whose verdict is not covering → "Re-check u-… — your features are not
+   checked on it yet".
 
 ### 8.5 The menu and the acts
 
-| Where | Item | What it runs |
+| Where | Item | What it does |
 |---|---|---|
-| Project; Features (none yet) | **Start a features file** | `harness --json features init --target <root>` — confirmed: "Writes migration/features/features.toml with a starter you then edit. Never overwrites." |
-| Project; Features; a feature; Features (error) | **Edit the features file** | the person's editor on `migration/features/features.toml` — a small new flow that reuses `editor_command`/`editor_script` and the cockpit's suspend (the hand edit's copy-and-stage is for crate files only); refused when the file is a symlink or missing; the snapshot is re-read on return |
-| Project; Features; a feature | **Map the features** | `harness --json features map --target <root>` (+ `--allow-unsandboxed` through `with_sandbox_flag`, as every act that runs code) — confirmed: "Builds the C program twice — once as it is, once with a note at the start of every function — and runs each of your 12 scenarios three times. Records which functions each ran in migration/features/map.json. Changes no verdict." |
+| Project; Features (none yet) — only when there is no file | **Start a features file** | `harness --json features init --target <root>` — confirmed: "Writes migration/features/features.toml, a starter with no features and a commented example. Never overwrites." Result line: "Wrote a starter — choose Edit the features file to add yours." |
+| Project; Features; a feature; Features (error) — only when there is a file | **Edit the features file (in \<editor\>)** | the flow of §7.2; its save is the confirmed `features save` |
+| Project; Features; a feature — only with a valid file with scenarios | **Map the features** | `harness --json features map --target <root>` (+ `--allow-unsandboxed` through `with_sandbox_flag`, as every act that runs code) — confirmed: "Builds the C program twice in a scratch copy under migration/build/.features — once as it is, once with a note at the start of every function; your C is not changed — and runs each of your 12 scenarios three times. Records which functions each ran in migration/features/map.json. Changes no verdict." |
 
-"Map the features" is greyed, with the reason, and re-checked at confirm time like Refresh the
-plan: busy; no features file; the file has an error; the facts are missing or stale ("Scan the
-project first"); no `main()`. The project menu offers it too, so the Next step's act is where
-`recommended` looks for it. On a feature in state F4, it is focused first.
+"Map the features" is greyed with the reason, and re-checked at confirm time like Refresh the
+plan: busy; the facts are missing or stale ("Scan the project first"); no `main()`; no
+sandbox. `recommended` focuses Start on `Features (none yet)`, Edit on `Features (error)`,
+Map on a feature in F4/F5, and — on the project — the Next step's act (Map and Re-check are
+on the project menu).
 
-**Gates the features file adds elsewhere**: while it does not validate, Re-check, Accept,
-Retry, Modify and the chat's Migrate are greyed: "features.toml has an error — fix it first
-(see Features)". The Re-check dialog gains: "It also runs your 12 feature scenarios on the
-whole program." The Scan dialog gains: "A change in the C makes the features map out of date."
+**No other act is gated by features**: Re-check, Accept, Retry, Modify, hand edits and the
+chat's acts run with whatever snapshot the command loads; their verdicts carry the marker
+when the features could not all run. The Re-check dialog gains: "It also runs your 12 feature
+scenarios on the whole program." The Scan dialog gains: "A change in the C makes the features
+map out of date."
 
 Progress: the `scenario` events narrate in the activity panel ("Mapped zlib/text — exit 0, 104
 functions (3 of 12)"); the result line counts the scenarios that need a look ("Mapped 12
-scenarios — 2 need a look").
+scenarios — 2 need a look"). After a save or a map, the result line adds "commit
+migration/features/ with your work"; Help says it too.
 
 ### 8.6 Help
 
 A **Features** section: what a feature and a scenario are; the file's shape (the §2.1
 example); the samples in words; the argument rule (no `/`, runs in an empty folder); what the
-states and glyphs mean; that changing a scenario makes each verdict "not checked since the
-features changed" (renaming does not); that each unit is checked with only its own Rust; and
-"edit the file, then press g". Help's legend gains the feature glyphs.
+states and glyphs mean; that changing a scenario means verdicts made before show "not checked
+since your features changed" until re-checked (renaming does not); that each unit is checked
+with only its own Rust; that a features file with an error never blocks a Re-check; "Edit the
+features file" and "press g after editing outside". Help's legend gains the feature glyphs.
 
 ### 8.7 Reading the files in-process: the preflight
 
-`preflight::check` gains: `migration/features` a real directory when present (not a
-symlink); `features.toml` ≤ 64 KiB and `map.json` ≤ 16 MiB, each a regular file when present.
-Nothing else is read (samples are generated in memory).
+`preflight::check` gains nothing that can fail the read: the features file's problems are the
+snapshot's `Invalid` (§2.2), and the map's are its loader's (`load_map` returns a value the
+View shows: "the map could not be read: …"). The cockpit reads `features.toml` (≤ 64 KiB) and
+`map.json` (≤ 16 MiB) only through `read_regular`, both counted in the preflight's byte budget
+when present. Nothing else is read (samples are generated in memory).
 
 ## 9. The chat and harness-mcp
 
-The chat cannot read files (`--tools ""`; its tools are harness-mcp's reads) and harness-mcp
-gains nothing in v1, so the chat sees `feature:` check names in a unit's verdict and nothing
-else about features. Its brief gains: "A `feature:<id>/<scenario>` check runs one of the
-person's scenarios on the whole program. A passing one says nothing about a unit its feature
-does not run — the cockpit's Features view shows which do. You cannot see the features file;
-describe a scenario in words (the flags and which sample), never as TOML."
+The chat cannot read files (`--tools ""`; its tools are harness-mcp's reads), and harness-mcp
+gains nothing in v1: it renders a unit's report field by field and does not add coverage, so
+the chat sees `feature:` check names in a unit's verdict and nothing else about features. Its
+brief gains:
+- "A `feature:<feature>/<scenario>` check runs one of the person's scenarios on the whole
+  program. A passing one says nothing about a unit its feature does not run — the cockpit's
+  Features view shows which do. Report feature checks separately from the others."
+- "You cannot see the features file or the map. Name a scenario by its id; you do not know
+  its flags."
+- The list of the person's own menu items gains Start/Edit/Map the features.
 
 ## 10. Contracts and compatibility
 
 - **No features file → today's bytes**: verify's checks, the verdict JSON, attempt records,
   `state status` output and events, the migrate prompts, the bench's replays and scores.
   Proved by the mini-target and zopfli verify tests (exact check lists, run on copies without
-  the file) and by `bench check` after the core and oracle steps (§12).
+  the file) and by `bench check` after the core step and after the oracle step (§12).
 - New schemas in SCHEMAS.md: `ruharness-features` v1 (strict; every new key bumps the
-  version), `ruharness-features-map` v1; `VerdictInputs.features`/`.program`;
-  `AttemptRecord.features`; `UnitReport.features` and the `unit` event's
-  `features`; the `scenario` event; `features init`/`features map`, their flags and exit codes;
-  the writer table; the trust boundaries (both files hostile; the map shaped by its own C).
+  version), `ruharness-features-map` v1; `VerdictInputs.features`/`.program`/
+  `.features_skipped` and the closed reason set; `AttemptRecord.features`;
+  `UnitReport.features` and the `unit` event's field; the `scenario` event; `features init`,
+  `features save`, `features map`, their flags and exit codes; the writer table; the trust
+  boundaries (both files hostile; the map shaped by its own C; the `.inc` gap in the program
+  digest).
 - `feature:` checks join the check vocabulary. Readers keyed on names: the migrate judge (the
-  mixed side's lead-ins; the unusable-scenario error), the cockpit's chips and overlay, the
-  bench (generic).
+  mixed side's lead-ins), the cockpit's chips and overlay, the bench (generic).
 - docs/TUTORIAL.md gains a "Features" section; README a line.
 
 ## 11. Code: where each piece goes
 
 | Crate | Change |
 |---|---|
-| harness-core | `features`: types, strict loader, `load_map`, the digests, `samples()` (moved from the oracle); `facts::canonical_hash`; `VerdictInputs` and `AttemptRecord` fields; `UnitReport.features` (status takes the digests as a parameter); `Ledger` paths |
-| harness-scan | `probe_source` (pure); `FnDef` gains the body's start; the unwatchable cases |
-| harness-oracle | `Confinement::run_scenario` (copy, cwd, argv[0], group kill, status + streams); the shared whole builds; the scenario checks; `map_features` (mirror, builds, runs); the probe runtime; one shared confinement setup for verify, boundary and map |
-| harness-llm | the judge's unusable-scenario error; the attempt's digests; the replay's superseded rule; the brief's sentences |
-| harness-cli | `features init`, `features map`; features loaded at the start of verify/migrate/promote; the `unit` event's field |
-| harness-tui | `featmap` (un-gated); preflight; `load::read`; tree, Views, chips, menu, the three acts, gates, narrate, Help |
+| harness-core | `features`: types, strict parser (line/column), `FeatureSnapshot`, `load_map`, the digests, `Sample` (the oracle's samples move here); the `program` digest over `(path, Option<hash>)`; `VerdictInputs` and `AttemptRecord` fields; `UnitReport.features` (`unit_report` takes the snapshot and the program digest); `OracleStrategy::verify_with`; `walk` gains the all-files mode with a byte cap; `Ledger` paths |
+| harness-scan | `probe_source` (pure); `FnDef` gains the body's start; the unwatched cases |
+| harness-oracle | `Confinement::run_scenario` (per-side dirs, cwd, `$PROGDIR`, group kill, the status, exec failure); the shared whole builds; the scenario checks, skips and budget; `map_features` (mirror, builds, runs); the probe runtime; one confinement setup shared by verify, boundary and map |
+| harness-llm | the attempt's digest; the replay's rule (§3); the brief's sentences |
+| harness-cli | `features init`, `features save`, `features map`; the snapshot loaded once at the start of verify/migrate/promote/override; the `unit` event's field |
+| harness-tui | `featmap` (un-gated); `load::read`; tree, Views, chips, overlay, summary and Next step, menu (two acts and the Edit flow), `recommended`, narrate, Help |
 | docs | SCHEMAS.md, TUTORIAL.md, README, this file |
 | targets/zopfli | last: `migration/features/features.toml` (gzip, zlib, deflate, verbose, iterations, help, no file) and its `map.json`; u001 re-checked; the tests that load zopfli adjusted in the same commit |
 
@@ -680,36 +796,40 @@ describe a scenario in words (the flags and which sample), never as TOML."
 Each step committed when green (`cargo fmt --check`, `clippy -D warnings`, `cargo test
 --workspace`):
 
-1. **Core**: the loader (every §2.1 rule, one test each, with its message), the digests
-   (names excluded; sample bytes included; computed once), `load_map` (hostile shapes,
-   unknown pairs), coverage in `UnitReport` (no file → `None` and today's bytes; an invalid
-   file → `Behind(invalid)`, never an `Err`), the attempt's field; proptest round-trip of the
-   map.
-2. **Scenario checks** (closes the spike's gap by itself): `run_scenario` (argv[0], cwd, the
-   copy, the group kill, every end), the shared builds, the checks after boundary, the
-   details (no program bytes — a hostile program's stdout never appears), the unusable-
-   scenario error and no demotion, the judge's error, the command-start load; on the mini
+1. **Core**: the parser (every §2.1 rule, one test each, with its message; line and column),
+   the snapshot (no file, symlinks, oversize, non-UTF-8, too new — each a value, never an
+   `Err`), the digests (names excluded; sample bytes, the program's file name and the timeout
+   included; order-independent; computed once), the program digest (a missing file; an
+   unscanned top-level `.c`), coverage in `UnitReport` (every reason; no file → `None` and
+   today's bytes), the attempt's field. Then `bench check --replay`.
+2. **Scenario checks** (closes the spike's gap by itself): `run_scenario` (argv[0] and the
+   input's path printed the same on both sides; cwd; every end; `ExecFailed` from a denied
+   profile; the group kill), the shared builds, the checks after boundary, the details (a
+   hostile program's stdout and the scenario's arguments never appear), every skip reason and
+   no demotion from one, the budget, C–mixed–C, `verify_with` and the replay rule; on the mini
    target (a toy program with two behaviours, a usage line printing argv[0], a scenario that
-   writes a file, one that exits 1 on both sides, one unstable, one that times out) and on a
-   test-time copy of zopfli with features. Then `bench check --replay`.
+   writes a file, one that exits 1 on both sides, one unstable, one that times out, one in a
+   unit outside the program) and on a test-time copy of zopfli with features. Then `bench
+   check --replay`.
 3. **The map**: `probe_source` (lines unchanged, `#if` variants, a brace inside `#if`, ERROR
-   nodes, K&R, two functions of one name, macro-defined functions), the mirror (a `.inc`
-   file, `__FILE__`, `../` refused), the runtime (a crash keeps hits, a forged or torn file →
-   unavailable, fork), `features map` (every refusal, the events, interrupted → no file),
-   `features init` (never overwrites; the starter validates).
-4. **The cockpit**, three commits: (a) `featmap` over fixtures (every F-state and its order,
-   an incomplete map never yields F6 or "no feature runs this unit", outside-units failures,
-   specific functions) + tree + the Features and feature Views (goldens); (b) the unit,
-   function, chips, overlay and summary lines; (c) the acts, gates, Help, preflight, and a pty
-   test: Map from the menu, the map appears.
+   nodes, K&R, two functions of one name, macro-defined functions), the mirror (a `.inc` file,
+   `__FILE__`, `../` refused, `source_dir` = root excludes `migration/`), the runtime (a crash
+   keeps notes, a forged or torn file → unreadable, fork, `ulimit -n 256`), `features map`
+   (every refusal, the events, interrupted → no file), `features init` (never overwrites; the
+   starter validates), `features save` (refusals; `--expect`).
+4. **The cockpit**, three commits: (a) `featmap` over fixtures (every F-state and its order;
+   an incomplete or out-of-date map never yields F7 or a negative unit line; outside-units
+   failures; specific functions) + tree + the Features and feature Views (goldens); (b) the
+   unit, function, chips, overlay, summary and Next-step lines; (c) the acts, the Edit flow
+   (a fake editor), `recommended`, Help, and a pty test: Map from the menu, the map appears.
 5. **The chat brief**; the live chat tests (the brief changed).
 6. **Dogfood**: zopfli's features file and map, u001 re-checked, the zopfli-loading tests
    adjusted in the same commit; the cockpit driven headless on it.
 
 Then the adversarial code review (3–4 lenses), fix pass, its check, mutation checks of the
-named rules (the id alphabet in check names; the argument grammar; the digests' exclusions;
-the coverage marker never entering `stale`; `stable`, `probe_agrees`; the pass rule of §4.2;
-F1–F9 order; the unusable-scenario error never writing a verdict), and the DECISIONS handoff.
+named rules (the id alphabet in check names; the argument grammar; the digests' exclusions and
+inclusions; the coverage marker never entering `stale`; C–mixed–C and the skip rule; the pass
+rule of §4.2; `ExecFailed`; F1–F10 order; the budget), and the DECISIONS handoff.
 
 ## 13. Later, and decided separately
 
@@ -717,35 +837,37 @@ F1–F9 order; the unusable-scenario error never writing a verdict), and the DEC
   end-state guarantee a user cares about. Revisit when a second unit of one target is verified.
 - **Library features** (no `main`): a person-written scenario program under
   `migration/features/programs/`. Revisit when a library target wants features.
-- **Inputs of the person's own** (`inputs/`), stdin, environment, output files: revisit when a
-  target's behaviour needs a specific input format, reads stdin, or writes the result to a file
-  (zopfli without `-c` — the map already flags such a scenario as comparing little).
+- **Inputs of the person's own**, stdin, environment, output files: revisit when a target's
+  behaviour needs a specific input format, reads stdin, or writes the result to a file (zopfli
+  without `-c` — the map already flags such a scenario as comparing little).
 - **Folding `[oracle.whole_program]` into features** (its flags + the three samples are
-  scenarios): revisit when a second target adopts features; then the flag grammar, its
-  constant and its check go, with a migration note for recorded verdicts.
-- **Scenario cost**: every Re-check runs every scenario three times. Revisit when scenario runs
-  pass a quarter of a verify's time (cache the C side keyed by the program digest, the
-  features digest and the toolchain; or run only scenarios the map says reach the unit, as a
-  documented, non-default option).
-- **Per-scenario coverage digests**, so adding a scenario leaves the others' verdicts covering:
-  revisit when re-checking after an edit is the obstacle people hit; with it, a "Re-check every
-  unit with Rust" act.
+  scenarios; its comparison would then use §4.2's rule): revisit when a second target adopts
+  features; then the flag grammar, its constant and its check go, with a migration note for
+  recorded verdicts.
+- **Scenario cost**: every Re-check runs every scenario three times (bounded by the budget).
+  Revisit when scenario runs pass a quarter of a verify's time (cache the C side keyed by the
+  program digest, the features digest and the toolchain; or run only scenarios the map says
+  reach the unit, as a documented, non-default option).
+- **Per-scenario coverage digests**, so adding a scenario leaves the others' verdicts covering;
+  with it, a "Re-check every unit with Rust" act: revisit when re-checking after an edit is the
+  obstacle people hit.
 - **The limits** (16 features, 16 scenarios, 8 args): revisit when a real target hits one.
 - **Line-level maps**: revisit when two features' function maps are equal but they behave
   differently.
 - **Proposed features**: from `main`'s usage text (deterministic), or by a model in chat —
-  proposals only, the person accepts by writing the file. Revisit when writing the file is the
+  proposals only, the person accepts by saving the file. Revisit when writing the file is the
   obstacle.
 - **harness-mcp `harness_features`** (read, names fenced as untrusted): revisit with the chat's
   next change.
+- **Non-C includes in the program digest**: revisit when a target includes `.inc`/`.def` files.
 - **The scanner's gaps** the spike found (header `static inline` calls unresolved across files;
   function values without an edge; digraphs): separate tasks; the probe instruments
   definitions, not calls, so they do not affect the map.
 
-## R. Design review — 88 findings (four lenses), verified, resolved
+## R. Design review — 84 findings (four lenses), verified, resolved
 
 Four reviewers on the first draft (a618c34): safety & trust (SAF-1–15), engine & contracts
-(ENG-1–19 + 5 nits), usability & honesty (USE-1–28), scope & simplicity (SCO-1–17). Two
+(ENG-1–19 + 5 nits; 84 in all — the first draft of this section said 88), usability & honesty (USE-1–28), scope & simplicity (SCO-1–17). Two
 verifiers checked every factual claim against the code: none refuted; SAF-7, ENG-5, ENG-6,
 USE-1, USE-6, USE-18, USE-20, SCO-5, SCO-7, SCO-10, SCO-15 and SCO-17 partly (the part that
 held is resolved below); the rest of the opinions had their premises confirmed. One claim was
@@ -792,3 +914,66 @@ imagined file access (SAF-6, USE-2), the overclaiming states (SAF-1, USE-3/4/6).
 | SCO-9 — trim the map | toolchain strings dropped; `footprint` complete/unavailable + reason; `stable` kept — the map is where the person first learns a scenario is unusable (§5.2) |
 | SCO-10, SCO-11 — trim the cockpit | kept: specific functions and "run by" (the view's point: which behaviours touch which code); `description` dropped; `check_words` stateless (§8.4) |
 | Nits (ENG) | signal numbers kept; `render_md` shows the digests; `seen` at least one byte; the unusable-scenario error has its own words |
+
+(The §R rows name sections of the first revision; where the second revision moved a rule, §R2
+says where it went.)
+
+## R2. Check of the revision — 58 findings, resolved in the second revision
+
+Three checkers on the first revision (a4d806a): a row-by-row check of §R (62 resolved, 9
+partial, 8 declined — 6 holding, 2 weak — 1 nit unresolved, and 16 inconsistencies inside the
+document), an engine & safety check (CHK-E-1–15), a usability check (CHK-U-1–17). The engine
+checker ran probes in a scratchpad (sandbox-exec's exit on a failed exec, a binary rewritten
+in its own writable directory, `F_DUPFD_CLOEXEC` under `ulimit -n 256`); none was refuted on
+reading the code.
+
+The one decision that changed the shape: **nothing about features blocks work**. The first
+revision refused `verify` (and so every Re-check, migration, promotion and hand edit) on an
+invalid file and on a scenario whose C side is unusable, and then needed gates on every act,
+a persisted record of the refusal, a start-of-migrate C-side check, and still spent a paid
+turn (CHK-U-4/5, CHK-E-7, SAF-12). Now each such case is a **skip recorded in the verdict**
+with a closed-set reason, and the cockpit shows it (§0, §3, §6.1).
+
+| Finding(s) | Resolution in the second revision |
+|---|---|
+| CHK-E-1, CHK-E-2 — resume refusal strands attempts (and chat hand-offs); superseded breaks `--retry` and old attempts | no resume refusal (a resume re-judges every turn already); replay judges with the recorded features when it can, else reports a changed judge, never superseded (§3) |
+| CHK-E-3 — `sandbox-exec` exec failure exits 71 and passes vacuously | `ExecFailed` from exit 71 + `sandbox-exec: execvp()`; C side → skipped, mixed side → candidate failure (§4.1, §4.2) |
+| CHK-E-4 — the copied binary is writable by its own run | no copy into the temp dir: per-side build dirs, argv[0] absolute, `$PROGDIR` replaces the directory in both streams (§4.1) |
+| CHK-E-5, inconsistency 2 — argv in details reaches prompts and the chat | details carry numbers and exit codes only; the id names the scenario; the cockpit shows arguments (§2.3, §6.2) |
+| CHK-E-6, CHK-U-5, ENG-11 residual — units outside the program blocked | skipped as `not-in-program`; the unit line says so (§6.1, §8.4) |
+| CHK-E-7, CHK-U-4, SAF-12, SCO-13 — unusable scenarios after paid turns; C,C,mixed weak; no budget | C–mixed–C; an unusable C side is a skip, never an error or evidence; a `4 × timeout_secs` budget, the rest skipped as `budget` (§4.2, §6.1) |
+| CHK-E-8 — the group kill | where it runs, opt-in, the `setsid` residual (§4.1) |
+| CHK-E-9, inconsistency 11/12 — how the snapshot reaches the oracle; `override` | `FeatureSnapshot` loaded once per command, `verify_with`; `verify` loads its own; `override` listed; preconditions checked in verify (§2.2, §6.1) |
+| CHK-E-10 — program digest vs the build's file set; missing files | facts files + every top-level `.c`, `(path, hash or missing)` through one core function; the `.inc` gap named (§2.4) |
+| CHK-E-11 — argv[0] and the timeout not in the digest | added (§2.4) |
+| CHK-E-12, inconsistency 9 — the mirror's walk as described does not exist; `source_dir` = root | a new all-files walk mode with file and byte caps; `migration/` and `.git/` excluded; canonical paths (§5.3) |
+| CHK-E-13, SAF-10 residual — `F_DUPFD_CLOEXEC` ≥ 900 fails under a 256 soft limit | `min(900, soft limit − 16)`, else the original descriptor (§5.4) |
+| CHK-E-14 — relative program unsandboxed | absolute path always (§4.1) |
+| CHK-E-15 — a recorded digest with the file since deleted; harness-mcp's rendering | coverage `None` when there is no file now; §9 says harness-mcp adds no coverage |
+| CHK-U-1 — covering verdicts ignored freshness | covering = fresh and `Current`; a stale red counts as F3 (§8.2) |
+| CHK-U-2, SAF-1/USE-6 residual — the negative line vs unwatched definitions; granularity | "runs 2 of its 9 functions"; the unconditioned sentence only without unwatched definitions, else "not proof"; F7 "runs no watched code"; marks defined (§8.4, §8.2) |
+| CHK-U-3 — vi for a non-vim audience; editing the ledger in place; errors without lines | `nano` before `vi`, named, with how to leave; edit a private copy, validate, confirmed `features save` with `--expect`; Edit again / Discard; line and column (§7.2, §2.1) |
+| CHK-U-6 — preflight failures would break the whole read | the features files never fail preflight: problems are values (§8.7, §2.2) |
+| CHK-U-7 — the chip hidden, mis-nouned, undefined without a map | failures first, then one chip before other passes, "features 16 ok · 4 reach it" / "· map out of date" (§8.4) |
+| CHK-U-8, USE-13 residual — glyph collisions and room | one glyph per state (✗ ⚑ ↻ ⋯ ≈ ◔ ∅ ✓ ◈ ◌), `glyph_style` arms, name advice ~14, the id replaces the tail on collisions (§8.2, §8.3, §2.1) |
+| CHK-U-9 — "not mapped yet" for an out-of-date map | F4 not mapped yet / F5 map out of date; another platform shown, not discarded (§8.2, §5.2) |
+| CHK-U-10 — the marker's wording and reach | per reason wordings, on the verdict line; the summary counts units not checked on the features (§3, §8.4) |
+| CHK-U-11, USE-14 residual — summary silent; Next step without its act; `recommended` for the new nodes | summary states for none/error/counts; rules 5 and 6 only when enabled; `recommended` per node (§8.4, §8.5) |
+| CHK-U-12 — the starter guessed and duplicated; examples zopfli-only | a starter with no features and a commented example from the target's own flags; generic Views; only the applicable item (§7.1, §8.4, §8.5) |
+| CHK-U-13 — the brief | name scenarios by id, no flags; report feature checks separately; the menu items (§9) |
+| CHK-U-14 — 80 columns and jargon | state and next step first; plain words ("notes", "the run with notes"); caps of 20; the Map dialog wording (§8.4, §8.5) |
+| CHK-U-15 — bulk re-check | deferred with its trigger (§13) |
+| CHK-U-16 — a demoted unit reads "all C" | F10's word adds the unverified Rust (§8.2) |
+| CHK-U-17 — nits | `Features (0)` defined; `⚠` on the error row; the commit reminder; the overlay's "yet it failed"; verify's scenario message (§8.3–§8.5, §5.5) |
+| Row check: ENG-17 — the call on every entry; the first-open race | the inline `seen` test; the race stated (§5.3, §5.4) |
+| Row check: SCO-4, SCO-16 — reasons not stated | the comparison differs (§4.2's pass rule) and folding is §13's; the mirror copies every file because includes of non-C files must resolve (§5.3) |
+| Row check: SAF-7 residual — `SchemaTooNew` on a read path | `Invalid`, saying a newer harness wrote it (§2.2) |
+| Row check: SAF-9 nit — `unwatched` pairs not validated | validated like `functions` (§5.2) |
+| Inconsistency 1 — "88" | 84 (§R) |
+| Inconsistencies 3–5, 7, 10, 13 — §-references, `fx/`, "three acts", the caveat's reach | fixed; the writer table lists only real paths; two acts and a flow (§8.5); the caveat wherever F8/F9 are shown |
+| Inconsistency 6 — the judge's error vs verify's error | there is no unusable-scenario error any more (§6.1) |
+| Inconsistency 8 — `slow` in a deterministic file | dropped (§5.2) |
+| Inconsistency 14 — "footprint" clashes with the boundary check's | the field is `noted`; the words are "notes" and "functions it ran" |
+| Inconsistency 15 — `[file, name]` | defined as `[file, canonical id]` (§5.2) |
+| Inconsistency 16 — two reads per refresh | `Snapshot::load` keeps the snapshot; `load::read` uses it (§8.1) |
+| ENG nit — digest order vs run order | stated as intended (§2.4) |
