@@ -157,8 +157,9 @@ pub(crate) enum ScenarioEnd {
 }
 
 /// A scenario run: how it ended, and both streams (rewritten, §4.1 step 3)
-/// for a run that exited or was signalled.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// for a run that exited or was signalled. Compare runs with
+/// [`ScenarioRun::same_result`].
+#[derive(Debug, Clone)]
 pub(crate) struct ScenarioRun {
     /// How it ended.
     pub end: ScenarioEnd,
@@ -168,6 +169,51 @@ pub(crate) struct ScenarioRun {
     pub stderr: Vec<u8>,
     /// What the run left for [`Extras::collect`], when asked.
     pub collected: Option<Collected>,
+}
+
+impl ScenarioRun {
+    /// Whether two runs ended the same way with the same (rewritten)
+    /// streams — what "the same result" means for a scenario. What a run
+    /// left for [`Extras::collect`] is not part of it.
+    pub(crate) fn same_result(&self, other: &ScenarioRun) -> bool {
+        self.end == other.end && self.stdout == other.stdout && self.stderr == other.stderr
+    }
+}
+
+/// How many bytes a person reads for the first `upto` bytes of a rewritten
+/// stream (§4.1 step 3): the program's output with its temp dir and program
+/// dir written as `$TMPDIR` and `$PROGDIR`, and no `$$` escape. The same on
+/// every machine; for a program that prints no path, its own byte count. A
+/// `$$` or a token that `upto` cuts counts as not reached, so an offset is
+/// where the first differing byte, or the token holding it, starts.
+pub(crate) fn shown_offset(rewritten: &[u8], upto: usize) -> usize {
+    let upto = upto.min(rewritten.len());
+    let (mut shown, mut i) = (0, 0);
+    while i < upto {
+        let rest = &rewritten[i..];
+        // Left to right, `$$` first: every literal `$` was doubled before a
+        // path became a token, so a lone `$` starts a token.
+        let (len, reads_as) = if rest.starts_with(b"$$") {
+            (2, 1)
+        } else if rest.starts_with(TMPDIR_TOKEN) {
+            (TMPDIR_TOKEN.len(), TMPDIR_TOKEN.len())
+        } else if rest.starts_with(PROGDIR_TOKEN) {
+            (PROGDIR_TOKEN.len(), PROGDIR_TOKEN.len())
+        } else {
+            (1, 1)
+        };
+        if i + len > upto {
+            break;
+        }
+        shown += reads_as;
+        i += len;
+    }
+    shown
+}
+
+/// [`shown_offset`] of a whole stream: its length as a person reads it.
+pub(crate) fn shown_len(rewritten: &[u8]) -> usize {
+    shown_offset(rewritten, rewritten.len())
 }
 
 impl Confinement<'_> {
@@ -834,6 +880,47 @@ int main(int argc, char **argv) {
     }
 
     #[test]
+    fn a_shown_offset_undoes_the_escape_and_keeps_the_tokens() {
+        // The program printed "a$b<temp dir>c<program dir>".
+        let s = b"a$$b$TMPDIRc$PROGDIR";
+        assert_eq!(shown_offset(s, 0), 0);
+        assert_eq!(shown_offset(s, 1), 1);
+        assert_eq!(shown_offset(s, 2), 1, "a cut `$$` is not reached");
+        assert_eq!(shown_offset(s, 3), 2);
+        assert_eq!(shown_offset(s, 4), 3);
+        assert_eq!(shown_offset(s, 10), 3, "a cut token is not reached");
+        assert_eq!(shown_offset(s, 11), 10);
+        assert_eq!(shown_offset(s, 12), 11);
+        assert_eq!(shown_len(s), 19, "\"a$b$TMPDIRc$PROGDIR\"");
+        assert_eq!(shown_offset(s, 999), 19, "clamped");
+        assert_eq!(shown_len(b"$$TMPDIR"), 7, "a printed \"$TMPDIR\"");
+        assert_eq!(shown_len(b"$$$TMPDIR"), 8, "a `$`, then the temp dir");
+        assert_eq!(shown_len(b"plain"), 5);
+    }
+
+    #[test]
+    fn two_runs_are_the_same_on_their_end_and_streams() {
+        let run = ScenarioRun {
+            end: ScenarioEnd::Exited(0),
+            stdout: b"out".to_vec(),
+            stderr: b"err".to_vec(),
+            collected: None,
+        };
+        let mut collected = run.clone();
+        collected.collected = Some(Collected::Missing);
+        assert!(
+            run.same_result(&collected),
+            "what a run left is not its result"
+        );
+        let mut other = run.clone();
+        other.stdout.push(b'x');
+        assert!(!run.same_result(&other));
+        let mut ended = run.clone();
+        ended.end = ScenarioEnd::Exited(1);
+        assert!(!run.same_result(&ended));
+    }
+
+    #[test]
     fn a_scenario_prints_the_same_bytes_wherever_it_runs() {
         let tmp = TempDir::new("scenario-same");
         let root = tmp.path().canonicalize().expect("root");
@@ -852,7 +939,11 @@ int main(int argc, char **argv) {
             .run_scenario(&bin, &["in:sample_text.txt"], input, None)
             .expect("runs");
         assert_eq!(first.end, ScenarioEnd::Exited(0));
-        assert_eq!(first, second, "two runs, two temp dirs, the same bytes");
+        assert!(
+            first.same_result(&second),
+            "two runs, two temp dirs, the same bytes"
+        );
+        assert_eq!(shown_len(&first.stderr), 5);
         let out = text(&first.stdout);
         assert!(out.contains("argv0 $PROGDIR/zopfli\n"), "{out}");
         assert!(out.contains("cwd $TMPDIR\n"), "{out}");

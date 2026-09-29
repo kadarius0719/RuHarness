@@ -1,0 +1,79 @@
+# What a person does with zopfli and sees the result of. Every Re-check runs
+# each scenario on the C program and on the program with the unit's Rust
+# swapped in, and compares exit status, stdout and stderr.
+
+schema_version = 1
+
+[[feature]]
+id = "gzip"
+name = "Compress to gzip"
+
+[[feature]]
+id = "zlib"
+name = "Compress to zlib"
+
+[[feature]]
+id = "deflate"
+name = "Compress to raw deflate"
+
+[[feature]]
+id = "verbose"
+name = "Say what it does"
+
+[[feature]]
+id = "quick"
+name = "Compress quickly"
+
+[[feature]]
+id = "help"
+name = "Show the help"
+
+[[feature]]
+id = "no-file"
+name = "Report a missing file"
+
+[[scenario]]
+feature = "gzip"
+id = "text"
+args = ["-c", "{input}"]
+input = "sample:text"
+
+[[scenario]]
+feature = "gzip"
+id = "rand"
+args = ["-c", "{input}"]
+input = "sample:rand"
+
+[[scenario]]
+feature = "zlib"
+id = "text"
+args = ["--zlib", "-c", "{input}"]
+input = "sample:text"
+
+[[scenario]]
+feature = "deflate"
+id = "text"
+args = ["--deflate", "-c", "{input}"]
+input = "sample:text"
+
+[[scenario]]
+feature = "verbose"
+id = "text"
+args = ["-v", "-c", "{input}"]
+input = "sample:text"
+
+[[scenario]]
+feature = "quick"
+id = "text"
+args = ["--i1", "-c", "{input}"]
+input = "sample:text"
+
+[[scenario]]
+feature = "help"
+id = "flag"
+args = ["-h"]
+
+[[scenario]]
+feature = "no-file"
+id = "missing"
+args = ["-c", "nosuchfile"]

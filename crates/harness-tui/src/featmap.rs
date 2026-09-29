@@ -655,7 +655,7 @@ fn no_single_main(snapshot: &Snapshot) -> bool {
 #[cfg(all(test, feature = "tui"))]
 mod tests {
     use super::*;
-    use crate::testutil::{scratch_target, TmpDir};
+    use crate::testutil::{scratch_target_without_features, TmpDir};
     use harness_core::features::ScenarioRecord;
     use harness_core::verdict::{Check, Verdict};
 
@@ -675,7 +675,7 @@ mod tests {
     }
 
     fn zopfli(tag: &str) -> Fx {
-        let root = scratch_target("targets/zopfli", &format!("featmap-{tag}"));
+        let root = scratch_target_without_features("targets/zopfli", &format!("featmap-{tag}"));
         Fx {
             _dir: TmpDir(root.clone()),
             root,

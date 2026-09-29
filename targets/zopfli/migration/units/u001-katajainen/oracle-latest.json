@@ -14,8 +14,11 @@
       "rustc 1.94.1 (e408947bf 2026-03-25)",
       "Apple clang version 21.0.0 (clang-2100.1.1.101)",
       "sandbox: sandbox-exec",
-      "cflags: -ffp-contract=off"
-    ]
+      "cflags: -ffp-contract=off",
+      "observable: stdout+stderr"
+    ],
+    "features": "blake3:e613abcb485e3fb146c07b68374707d1f58f3b4feb36cb1baf768a5311417265",
+    "program": "blake3:d191be5c4b9a2380dc6a075da3c8dccc92216562d1103bc82c7dc6d8a9e75d64"
   },
   "checks": [
     {
@@ -57,6 +60,46 @@
       "name": "sanitizers",
       "passed": true,
       "detail": "asan+ubsan clean"
+    },
+    {
+      "name": "feature:gzip/text",
+      "passed": true,
+      "detail": "exit 0; stdout 205 bytes identical; stderr empty"
+    },
+    {
+      "name": "feature:gzip/rand",
+      "passed": true,
+      "detail": "exit 0; stdout 16407 bytes identical; stderr empty"
+    },
+    {
+      "name": "feature:zlib/text",
+      "passed": true,
+      "detail": "exit 0; stdout 193 bytes identical; stderr empty"
+    },
+    {
+      "name": "feature:deflate/text",
+      "passed": true,
+      "detail": "exit 0; stdout 187 bytes identical; stderr empty"
+    },
+    {
+      "name": "feature:verbose/text",
+      "passed": true,
+      "detail": "exit 0; stdout 205 bytes identical; stderr 425 bytes identical"
+    },
+    {
+      "name": "feature:quick/text",
+      "passed": true,
+      "detail": "exit 0; stdout 205 bytes identical; stderr empty"
+    },
+    {
+      "name": "feature:help/flag",
+      "passed": true,
+      "detail": "exit 0; stdout empty; stderr 492 bytes identical"
+    },
+    {
+      "name": "feature:no-file/missing",
+      "passed": true,
+      "detail": "exit 0; stdout empty; stderr 29 bytes identical"
     }
   ]
 }

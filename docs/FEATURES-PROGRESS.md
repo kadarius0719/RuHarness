@@ -17,20 +17,27 @@ rule text governs). Spike + user decision (scenarios + verify): DECISIONS.md 202
 | 4a | 0a9f19b | featmap model, Features tree group, Features + feature Views |
 | 4b | e29430c | verdict marker, unit/function feature lines, feature chip, overlay notes, summary line, Next-step rules 5-6, Map act |
 | 4c | 26362d2 | Edit flow (draft, editor dialog, validation, `features save` on stdin, kept draft), Help, pty test Map end to end |
+| 5 | 9e62e29 | chat brief (feature checks apart, none ≠ passing, scenario ids, menu items), harness-mcp closed `features` field |
+| 7 | c5f6891 | SCHEMAS, TUTORIAL, README |
+| 6 | (this) | dogfood: zopfli features.toml (7 features, 8 scenarios) + map.json, u001 re-verified green with 8 feature checks; counts in the shown form (`$$` undone, paths as tokens — found by the dogfood: 206 for 205); `same_result` for run comparisons; zopfli-loading tests adjusted, a dogfood view test, MCP `features: current` |
 
 Verified on a copy of zopfli: `features map` (8 scenarios, 10 s) separates gzip/zlib/deflate/-v/--i1 as
 the spike found; `verify u001` runs 8 feature checks, green; `state status` shows features=current.
 
 ## Next (in order)
 
-5. The chat brief (§9: feature checks reported separately; no feature checks ≠ passing; name
+Live chat tests after step 5: every failure was the `claude` sign-in expiring ("OAuth session
+expired and could not be refreshed" — the chat said so in words); re-run both after the person
+signs in again (the fix pass changes nothing in the chat protocol, but the brief changed).
+
+5. (done) The chat brief (§9: feature checks reported separately; no feature checks ≠ passing; name
    scenarios by id; menu items) + harness-mcp unit report's closed `features` field; then the
    live chat tests (`RUHARNESS_LIVE_CHAT=1 cargo test -p harness-tui --test chat_live -- --ignored
    --test-threads=1`, inside Claude Code and with `RUHARNESS_LIVE_CHAT_HOST=plain`).
-6. Dogfood: `targets/zopfli/migration/features/features.toml` (gzip text/rand, zlib, deflate,
+6. (done) Dogfood: `targets/zopfli/migration/features/features.toml` (gzip text/rand, zlib, deflate,
    verbose, quick --i1, help -h, no-file) + map.json; re-verify u001; adjust the zopfli-loading
    tests (zopfli_verify exact check list — run it on a copy without the file; others).
-7. SCHEMAS.md (ruharness-features v1, ruharness-features-map v1, the new fields/events/CLI,
+7. (done) SCHEMAS.md (ruharness-features v1, ruharness-features-map v1, the new fields/events/CLI,
    trust boundaries), TUTORIAL "Features" section, README line.
 8. Adversarial code review (3–4 lenses) → verify findings → fix pass → check the fix pass →
    mutation checks of the named rules (§12 end) → bench check --replay again (CLI changed) →

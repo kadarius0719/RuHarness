@@ -4,7 +4,7 @@
 //! usable; every other scenario is a recorded skip whose reason the C side,
 //! the file or the plan decides, never the candidate.
 
-use crate::confine::{Confinement, ScenarioEnd, ScenarioRun};
+use crate::confine::{shown_len, shown_offset, Confinement, ScenarioEnd, ScenarioRun};
 use crate::exec::Runner;
 use crate::{build_whole_c, build_whole_mixed, program_c_files, Prepared, WholePrograms};
 use harness_core::config::TargetContext;
@@ -174,7 +174,7 @@ pub(crate) fn c_side_problem(first: &ScenarioRun, second: &ScenarioRun) -> Optio
             ScenarioEnd::ExecFailed => return Some(SkipReason::CSideExecFailed),
         }
     }
-    (first != second).then_some(SkipReason::CSideUnstable)
+    (!first.same_result(second)).then_some(SkipReason::CSideUnstable)
 }
 
 /// The check of a scenario whose C side is usable (§4.2, §6.2): the mixed
@@ -214,6 +214,8 @@ pub(crate) fn scenario_check(
     if c_code != m_code {
         parts.push(format!("exit {c_code} vs exit {m_code}"));
     }
+    // Lengths and offsets as a person reads the streams (no `$$` escape),
+    // not the rewritten bytes'.
     for (stream, a, b) in [
         ("stdout", &c.stdout, &mixed.stdout),
         ("stderr", &c.stderr, &mixed.stderr),
@@ -221,9 +223,9 @@ pub(crate) fn scenario_check(
         if a != b {
             parts.push(format!(
                 "{stream} differs (lens {} vs {}, first diff at byte {})",
-                a.len(),
-                b.len(),
-                crate::first_diff(a, b)
+                shown_len(a),
+                shown_len(b),
+                shown_offset(a, crate::first_diff(a, b))
             ));
         }
     }
@@ -231,10 +233,11 @@ pub(crate) fn scenario_check(
         return failed(parts.join("; "));
     }
     let stream = |label: &str, bytes: &[u8]| {
-        if bytes.is_empty() {
+        let len = shown_len(bytes);
+        if len == 0 {
             format!("{label} empty")
         } else {
-            format!("{label} {} bytes identical", bytes.len())
+            format!("{label} {len} bytes identical")
         }
     };
     Check {
@@ -335,6 +338,20 @@ mod tests {
             out.detail,
             "stdout differs (lens 5 vs 4, first diff at byte 3); stderr differs (lens 0 vs 1, \
              first diff at byte 0)"
+        );
+        // Lengths and the offset as a person reads the streams: the C side
+        // printed "a$b<temp dir>c", the mixed side the same with "d" — each
+        // its own temp dir, both `$TMPDIR`.
+        let dollar = |last: &str| run(ScenarioEnd::Exited(0), &format!("a$$b$TMPDIR{last}"), "");
+        let same = scenario_check(&s, &dollar("c"), &dollar("c"), 120);
+        assert_eq!(
+            same.detail,
+            "exit 0; stdout 11 bytes identical; stderr empty"
+        );
+        let differs = scenario_check(&s, &dollar("c"), &dollar("dd"), 120);
+        assert_eq!(
+            differs.detail,
+            "stdout differs (lens 11 vs 12, first diff at byte 10)"
         );
         for (end, detail) in [
             (ScenarioEnd::Signaled(6), "candidate run failed: signal 6"),

@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn writing_a_features_file_saves_through_the_cli_with_the_text_on_stdin() {
-        let mut app = crate::app::tests::app_of("targets/zopfli", "feat-write");
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-write");
         let file = open_draft(&mut app);
         let starter = std::fs::read_to_string(&file).unwrap();
         assert!(
@@ -517,7 +517,8 @@ mod tests {
 
     #[test]
     fn a_draft_with_an_error_is_kept_and_offered_again_at_its_line() {
-        let mut app = crate::app::tests::app_of("targets/zopfli", "feat-invalid-draft");
+        let mut app =
+            crate::app::tests::app_of_without_features("targets/zopfli", "feat-invalid-draft");
         let file = open_draft(&mut app);
         std::fs::write(&file, "schema_version = 1\n[[feature]]\nid = \n").unwrap();
         app.features_edited(ok());
@@ -547,7 +548,7 @@ mod tests {
 
     #[test]
     fn no_change_and_a_refused_save_say_so_and_keep_what_matters() {
-        let mut app = crate::app::tests::app_of("targets/zopfli", "feat-nochange");
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-nochange");
         let _file = open_draft(&mut app);
         assert!(
             matches!(app.features_edited(ok()), Command::Cleanup(_)),
@@ -573,7 +574,7 @@ mod tests {
 
     #[test]
     fn a_symlinked_features_dir_is_refused_before_anything() {
-        let mut app = crate::app::tests::app_of("targets/zopfli", "feat-symlink");
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-symlink");
         let elsewhere = app.config.target.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
         std::os::unix::fs::symlink(&elsewhere, app.config.target.join("migration/features"))

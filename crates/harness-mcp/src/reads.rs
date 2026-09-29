@@ -1041,6 +1041,8 @@ mod tests {
         assert_eq!(u["id"]["text"], "u001-katajainen");
         assert_eq!(u["provenance"], json!({"kind": "none"}));
         assert_eq!(u["status"], "verified");
+        // The committed features ran on u001's verdict (the dogfood).
+        assert_eq!(u["features"], "current");
         let v = unit(&snap, "u001-katajainen", None, None).unwrap();
         assert!(!v["pairs"].as_array().unwrap().is_empty());
         assert!(v.get("omitted").is_none(), "{}", v["omitted"]);

@@ -584,6 +584,13 @@ bytes (the verdict is committed, quoted to a model and shown to the chat). And n
   `…: more output than the cap` / `…: could not start` — the existing lead-in, which the
   migrate judge's `classify` already reads as a crash or timeout; and `the mixed program did
   not link` (§6.1).
+Lengths and offsets count the streams as a person reads them — the program's output with its temp
+dir and program dir written as `$TMPDIR` and `$PROGDIR`, and no `$$` escape (§4.1 step 3) — so
+they are the same on every machine and, for a program that prints no path, its own byte count.
+An offset is the C side's, at the start of the first differing byte or of the token holding it.
+(Dogfood on zopfli found the escaped counts: gzip output with one `$` byte read 206 bytes for
+the program's 205. The program's raw counts would carry the temp dir's length, which changes
+from run to run.) Two runs are "the same" on their end and rewritten streams only.
 The cockpit shows the scenario's arguments next to a failed check (it has the features file);
 the model and the chat get the id.
 

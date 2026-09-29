@@ -5410,8 +5410,21 @@ mod tests {
 [[scenario]]\nfeature = \"gzip\"\nid = \"text\"\nargs = [\"-c\", \"{input}\"]\ninput = \"sample:text\"\n\
 [[scenario]]\nfeature = \"help\"\nid = \"flag\"\nargs = [\"-h\"]\n";
 
+    /// zopfli with `text` as its features, and u001's verdicts from before
+    /// it had any (their features inputs dropped).
     fn zopfli_with_features(tag: &str, text: &str) -> App {
-        let app = crate::app::tests::app_of("targets/zopfli", tag);
+        let app = crate::app::tests::app_of_without_features("targets/zopfli", tag);
+        let unit = app.config.target.join("migration/units/u001-katajainen");
+        for name in ["oracle-latest.json", "oracle-last-green.json"] {
+            let path = unit.join(name);
+            let mut v: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let inputs = v["inputs"].as_object_mut().unwrap();
+            for key in ["features", "program", "features_skipped"] {
+                inputs.remove(key);
+            }
+            std::fs::write(&path, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+        }
         let dir = app.config.target.join("migration/features");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("features.toml"), text).unwrap();
@@ -5461,6 +5474,54 @@ mod tests {
             map.to_bytes().unwrap(),
         )
         .unwrap();
+    }
+
+    /// The committed zopfli (the dogfood): its features, its map, u001
+    /// verified on them.
+    #[test]
+    fn the_committed_zopfli_features_are_mapped_and_hold() {
+        let mut app = crate::app::tests::app_of("targets/zopfli", "feat-dogfood");
+        app.select(Selection::Features);
+        let screen = text(&render(&mut app, 160, 40));
+        if harness_core::features::platform() != "macos-aarch64" {
+            // The committed map was made on macOS (aarch64).
+            assert!(screen.contains("made on another platform"), "{screen}");
+            return;
+        }
+        assert!(app.features.map.current());
+        for line in [
+            "◉ Compress to gzip  holds so far · 1 of 10 units",
+            "◉ Compress to raw deflate  holds so far · 1 of 9 units",
+            "◌ Show the help  all C",
+            "◌ Report a missing file  all C",
+            "Your features ran 108 of the 111 functions the map watches.",
+        ] {
+            assert!(screen.contains(line), "{line}\n{screen}");
+        }
+        app.select(Selection::Unit("u001-katajainen".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("verdict green, fresh\u{20}"),
+            "no marker on a verdict that covers today's features: {screen}"
+        );
+        assert!(!screen.contains("your features:"), "{screen}");
+        assert!(
+            screen.contains("5 of your features run it · all passed — see Features"),
+            "{screen}"
+        );
+
+        // A changed scenario: the verdict is behind, and so is the map.
+        let path = harness_core::features::features_path(&app.config.target);
+        let text_now = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text_now.replace("\"--i1\"", "\"--i2\"")).unwrap();
+        let mut app = crate::app::tests::app_of_path(&app.config.target);
+        assert!(!app.features.map.current());
+        app.select(Selection::Unit("u001-katajainen".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("your features: not checked since you changed them — Re-check it"),
+            "{screen}"
+        );
     }
 
     #[test]

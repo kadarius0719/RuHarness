@@ -62,6 +62,9 @@ fn zopfli(tag: &str) -> PathBuf {
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../targets/zopfli"),
         &dst,
     );
+    // These tests start from a target without features (the committed
+    // zopfli has its own; the oracle's tests run them).
+    std::fs::remove_dir_all(dst.join("migration/features")).unwrap();
     dst
 }
 

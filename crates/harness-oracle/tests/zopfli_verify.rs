@@ -40,7 +40,9 @@ fn u001_katajainen_is_green_with_the_m3_trust_boundaries() {
     assert!(verdict.green, "u001 must be green:\n{}", summary.join("\n"));
 
     // Check order: the three gating checks right after the build, then the
-    // M0 checks (zopfli opts into the whole-program check with `-c`).
+    // M0 checks (zopfli opts into the whole-program check with `-c`), then
+    // the person's features (migration/features/features.toml), in file
+    // order, none skipped.
     let names: Vec<&str> = verdict.checks.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(
         names,
@@ -53,7 +55,31 @@ fn u001_katajainen_is_green_with_the_m3_trust_boundaries() {
             "whole-program:sample_rand.bin",
             "whole-program:sample_empty",
             "sanitizers",
+            "feature:gzip/text",
+            "feature:gzip/rand",
+            "feature:zlib/text",
+            "feature:deflate/text",
+            "feature:verbose/text",
+            "feature:quick/text",
+            "feature:help/flag",
+            "feature:no-file/missing",
         ]
+    );
+    assert!(
+        verdict.inputs.features_skipped.is_empty(),
+        "{:?}",
+        verdict.inputs.features_skipped
+    );
+    assert!(verdict.inputs.features.starts_with("blake3:"));
+    assert!(verdict.inputs.program.starts_with("blake3:"));
+    // The same sample, the same count: the feature reads the program's own
+    // bytes, as the whole-program check does.
+    let whole_text = &verdict.checks[4].detail;
+    let gzip_text = &verdict.checks[8].detail;
+    assert_eq!(
+        gzip_text,
+        &format!("exit 0; stdout {whole_text}; stderr empty"),
+        "{whole_text} / {gzip_text}"
     );
     // The C unit calls only malloc/free/qsort: no capability class at all.
     assert_eq!(

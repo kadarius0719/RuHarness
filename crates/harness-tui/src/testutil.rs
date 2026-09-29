@@ -39,6 +39,16 @@ pub fn scratch_target(rel: &str, tag: &str) -> PathBuf {
     dst.canonicalize().unwrap()
 }
 
+/// Like [`scratch_target`], without the person's features
+/// (`migration/features`): the target before `features init`.
+pub fn scratch_target_without_features(rel: &str, tag: &str) -> PathBuf {
+    let dst = scratch_target(rel, tag);
+    match std::fs::remove_dir_all(dst.join("migration/features")) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => panic!("{e}"),
+        _ => dst,
+    }
+}
+
 /// A scratch directory removed on drop — also when a test fails.
 pub struct TmpDir(pub PathBuf);
 

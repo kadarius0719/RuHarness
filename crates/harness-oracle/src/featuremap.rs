@@ -372,9 +372,7 @@ fn record(
     second: &ScenarioRun,
     index: &PairIndex,
 ) -> ScenarioRecord {
-    let same = |a: &ScenarioRun, b: &ScenarioRun| {
-        a.end == b.end && a.stdout == b.stdout && a.stderr == b.stderr
-    };
+    let same = |a: &ScenarioRun, b: &ScenarioRun| a.same_result(b);
     let (noted_word, reason, functions) = match &noted.collected {
         Some(Collected::Bytes(bytes)) => match decode_notes(bytes, index) {
             Some(functions) => ("complete", None, functions),
@@ -387,8 +385,8 @@ fn record(
         feature: scenario.feature.clone(),
         scenario: scenario.id.clone(),
         end: end_words(&first.end),
-        stdout_bytes: first.stdout.len() as u64,
-        stderr_bytes: first.stderr.len() as u64,
+        stdout_bytes: crate::confine::shown_len(&first.stdout) as u64,
+        stderr_bytes: crate::confine::shown_len(&first.stderr) as u64,
         stderr_head: features::stderr_head(&first.stderr),
         stable: same(first, second),
         probe_agrees: same(first, noted),

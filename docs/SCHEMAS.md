@@ -1149,7 +1149,9 @@ used is a value on every read path (the snapshot's `Invalid`), never an error.
 scenarios [{feature, scenario, end, stdout_bytes, stderr_bytes, stderr_head, stable,
 probe_agrees, noted, reason?, functions [[file, id]]}]}`. `end` ∈ `exit N | signal N | timed out |
 too much output | could not start`; `noted` ∈ `complete | unavailable` (`reason`: `none written |
-unreadable`); `stderr_head` printable ASCII, ≤ 100 bytes. Current iff all four inputs equal
+unreadable`); `stdout_bytes`/`stderr_bytes` count the first run's streams with paths as `$TMPDIR`/`$PROGDIR`
+and no `$$` escape (for a program that prints no path, its own bytes);
+`stderr_head` printable ASCII, ≤ 100 bytes, from the rewritten stream (`$TMPDIR`, `$PROGDIR`, `$$`). Current iff all four inputs equal
 today's. Read strictly (hostile, committed); pairs today's facts do not know are dropped.
 
 ## Verdict and attempt additions

@@ -4661,6 +4661,11 @@ pub(crate) mod tests {
         app_of(READ_SCALEFACTORS, tag)
     }
 
+    /// [`app_of`] on a copy without the person's features.
+    pub(crate) fn app_of_without_features(rel: &str, tag: &str) -> App {
+        app_of_path(&crate::testutil::scratch_target_without_features(rel, tag))
+    }
+
     /// An app over the target already at `target` (re-read).
     pub(crate) fn app_of_path(target: &Path) -> App {
         let read = crate::load::read(target).unwrap();
