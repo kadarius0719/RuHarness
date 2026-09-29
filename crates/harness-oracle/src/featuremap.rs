@@ -105,21 +105,24 @@ fn map_inner(
     };
 
     // The plain program: the whole-program check's build of `whole_c`.
+    // The mirror holds `source_dir` only: an include that resolves outside
+    // it would fall through, in the mirror, to a system header of the same
+    // name — a different program, mapped silently (review M7). The facts
+    // never record such an include (the scan stays in `source_dir`), so the
+    // program's own lines are read, as the compiler resolves them. Refused,
+    // named, before anything is built.
+    if let Some((file, include)) = include_leaving(&base)? {
+        return Err(Error::Invariant(format!(
+            "{file} includes {include}, which is outside source_dir: the features map copies \
+             only source_dir, so it cannot build this program"
+        )));
+    }
+
     progress.message("Building the C program…");
     let c_files = program_c_files_in(&base, FEATURES_BUILD_DIR)?;
     let plain = build.join("plain");
     compile(&runner, &base.includes(), &[], &plain, &c_files, &link_args)
         .map_err(|e| build_failed("the C program does not build", e))?;
-
-    // The mirror holds `source_dir` only: an include the facts resolved
-    // outside it would fall through to a system header of the same name —
-    // a different program, mapped silently (review M7). Refused, named.
-    if let Some((file, include)) = include_leaving(facts, &target.config.target.source_dir) {
-        return Err(Error::Invariant(format!(
-            "{file} includes {include}, outside source_dir: the features map copies only \
-             source_dir, so it cannot build this program"
-        )));
-    }
 
     // The probed copy: the mirror, the notes, the runtime.
     progress.message("Building a scratch copy that notes each function it runs…");
@@ -295,26 +298,60 @@ impl PairIndex {
     }
 }
 
-/// The first `(file, include)` of the facts where a file under `source_dir`
-/// includes a project file outside it, compared lexically.
-fn include_leaving(facts: &Facts, source_dir: &str) -> Option<(String, String)> {
-    let norm = |s: &str| -> PathBuf {
-        Path::new(s)
-            .components()
-            .filter(|c| !matches!(c, std::path::Component::CurDir))
-            .collect()
+/// The first `(file, include)` where a `.c` or `.h` under `source_dir`
+/// includes a file that exists outside it, found as the compiler finds it: a
+/// quoted include from the including file's folder, then the include path
+/// (`source_dir`, then `include_dirs`); an angle include from the include
+/// path. One no candidate reaches is a system header. Lines are read with a
+/// plain `#include` parse; a macro-named include is not seen.
+fn include_leaving(base: &Base) -> Result<Option<(String, String)>, Error> {
+    let walked = walk::confined_except(
+        &base.source_dir,
+        &["c", "h"],
+        walk::Limits {
+            max_files: Some(MIRROR_MAX_FILES),
+            max_depth: None,
+        },
+        &[base.root.join("migration"), base.root.join(".git")],
+    );
+    let search = base.includes();
+    for file in walked.files {
+        let bytes = std::fs::read(&file).map_err(|e| Error::io(&file, e))?;
+        let text = String::from_utf8_lossy(&bytes);
+        for line in text.lines() {
+            let Some((include, quoted)) = include_of(line) else {
+                continue;
+            };
+            let own = file.parent().map(Path::to_path_buf);
+            let found = own
+                .filter(|_| quoted)
+                .into_iter()
+                .chain(search.iter().cloned())
+                .map(|dir| dir.join(include))
+                .find(|p| p.is_file());
+            let Some(found) = found else { continue };
+            let canonical = found.canonicalize().map_err(|e| Error::io(&found, e))?;
+            if !canonical.starts_with(&base.source_dir) {
+                let rel = file.strip_prefix(&base.root).unwrap_or(&file);
+                return Ok(Some((rel.display().to_string(), include.to_string())));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// `#include "x"` → `("x", true)`, `#include <x>` → `("x", false)`.
+fn include_of(line: &str) -> Option<(&str, bool)> {
+    let rest = line.trim_start().strip_prefix('#')?.trim_start();
+    let rest = rest.strip_prefix("include")?.trim_start();
+    let (close, quoted) = match rest.chars().next()? {
+        '"' => ('"', true),
+        '<' => ('>', false),
+        _ => return None,
     };
-    let dir = norm(source_dir);
-    facts
-        .files
-        .iter()
-        .filter(|f| norm(&f.path).starts_with(&dir))
-        .find_map(|f| {
-            f.includes
-                .iter()
-                .find(|inc| !norm(inc).starts_with(&dir))
-                .map(|inc| (f.path.clone(), inc.clone()))
-        })
+    let inner = &rest[1..];
+    let end = inner.find(close)?;
+    Some((&inner[..end], quoted)).filter(|(p, _)| !p.is_empty())
 }
 
 /// Copy every regular file under `source_dir` (not `migration/` or `.git/`
@@ -451,39 +488,63 @@ fn decode_notes(bytes: &[u8], index: &PairIndex) -> Option<Vec<(String, String)>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_core::facts::{FileRecord, SymbolRecord};
+    use harness_core::facts::SymbolRecord;
 
-    /// Review M7: an include the facts resolved outside `source_dir` is
-    /// named; one inside, or any with `source_dir` the root, is not.
+    /// Review M7 (fixed after the fix check): an include that resolves
+    /// outside `source_dir` — from the file's folder or the include path —
+    /// is named; one inside, or a system header, is not.
     #[test]
     fn an_include_that_leaves_the_source_dir_is_named() {
-        let rec = |path: &str, includes: &[&str]| FileRecord {
-            path: path.into(),
-            hash: String::new(),
-            includes: includes.iter().map(|s| s.to_string()).collect(),
+        let tmp = crate::testutil::TempDir::new("include-leaving");
+        let root = tmp.path().to_path_buf();
+        let put = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
         };
-        let facts = Facts {
-            files: vec![
-                rec("src/a.c", &["src/a.h", "include/zlib.h"]),
-                rec("src/a.h", &[]),
-                rec("include/zlib.h", &["include/zconf.h"]),
-            ],
-            ..Facts::default()
+        put(
+            "src/a.c",
+            "#include \"a.h\"\n#include <stdio.h>\n  #  include \"sub/b.h\"\n",
+        );
+        put("src/a.h", "int a;\n");
+        put("src/sub/b.h", "int b;\n");
+        put("include/zlib.h", "int z;\n");
+        let base = |source_dir: &Path| Base {
+            root: root.clone(),
+            source_dir: source_dir.to_path_buf(),
+            include_dirs: Vec::new(),
+            timeout: std::time::Duration::from_secs(1),
+            allowlist: Vec::new(),
         };
+        let src = root.join("src");
+        assert_eq!(include_leaving(&base(&src)).unwrap(), None);
+        put("src/c.c", "#include \"../include/zlib.h\"\n");
         assert_eq!(
-            include_leaving(&facts, "src"),
-            Some(("src/a.c".into(), "include/zlib.h".into()))
+            include_leaving(&base(&src)).unwrap(),
+            Some(("src/c.c".into(), "../include/zlib.h".into()))
         );
         assert_eq!(
-            include_leaving(&facts, "./src/"),
-            include_leaving(&facts, "src")
+            include_leaving(&base(&root)).unwrap(),
+            None,
+            "the root holds it"
         );
-        assert_eq!(include_leaving(&facts, "."), None);
-        let inside = Facts {
-            files: vec![rec("src/a.c", &["src/a.h"])],
-            ..Facts::default()
-        };
-        assert_eq!(include_leaving(&inside, "src"), None);
+        std::fs::remove_file(root.join("src/c.c")).unwrap();
+        // From a nested folder, the file's own folder decides first.
+        put("src/sub/e.c", "#include \"../../include/zlib.h\"\n");
+        assert_eq!(
+            include_leaving(&base(&src)).unwrap(),
+            Some(("src/sub/e.c".into(), "../../include/zlib.h".into()))
+        );
+        std::fs::remove_file(root.join("src/sub/e.c")).unwrap();
+        put("src/d.c", "#include <../include/zlib.h>\n");
+        assert_eq!(
+            include_leaving(&base(&src)).unwrap(),
+            Some(("src/d.c".into(), "../include/zlib.h".into()))
+        );
+        assert_eq!(include_of("#include \"x.h\" // c"), Some(("x.h", true)));
+        assert_eq!(include_of("# include <y.h>"), Some(("y.h", false)));
+        assert_eq!(include_of("#include MACRO"), None);
+        assert_eq!(include_of("int include;"), None);
     }
 
     fn facts() -> Facts {

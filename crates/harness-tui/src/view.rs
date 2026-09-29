@@ -1536,10 +1536,17 @@ fn features_view(
         let outside = count(|r| r.result == featmap::UnitResult::Outside);
         let inside = f.units.len() - outside;
         let mapped = f.scenarios.iter().any(|s| s.record.is_some());
-        let mut parts = vec![if mapped {
-            format!("{inside} unit{}", plural_s(inside))
-        } else {
+        let noted = f.scenarios.iter().all(|s| {
+            s.record
+                .as_ref()
+                .is_some_and(|r| r.noted == "complete" && r.probe_agrees)
+        });
+        let mut parts = vec![if !mapped {
             "not mapped".to_string()
+        } else if !noted && inside == 0 {
+            "its units not known (map incomplete)".to_string()
+        } else {
+            format!("{inside} unit{}", plural_s(inside))
         }];
         if outside > 0 {
             parts.push(format!("{outside} outside the program"));
@@ -1561,7 +1568,13 @@ fn features_view(
                 "not re-checked",
             ),
             (
-                count(|r| !r.has_rust && r.result == featmap::UnitResult::NotChecked),
+                count(|r| {
+                    !r.has_rust
+                        && matches!(
+                            r.result,
+                            featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
+                        )
+                }),
                 "still C",
             ),
         ] {
@@ -1696,7 +1709,12 @@ fn plural_s(n: usize) -> &'static str {
 
 /// A unit result in words (§8.4's "Where its code lives").
 fn result_words(row: &featmap::UnitRow) -> (String, Style) {
-    if !row.has_rust && row.result == featmap::UnitResult::NotChecked {
+    if !row.has_rust
+        && matches!(
+            row.result,
+            featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
+        )
+    {
         return ("– still C".into(), dim());
     }
     match &row.result {
@@ -1895,6 +1913,13 @@ fn feature_view(
     lines.push(Line::from(Span::styled("Where its code lives", bold())));
     if f.scenarios.iter().all(|s| s.record.is_none()) {
         lines.extend(wrapped("  (not known — map the features)", width, dim()));
+    } else if f.units.is_empty() && f.outside_units == 0 && !app.features.complete {
+        // Records without notes (fix check N5): not "nowhere".
+        lines.extend(wrapped(
+            "  (not known — the map has no usable notes for it)",
+            width,
+            dim(),
+        ));
     }
     for row in &f.units {
         let (glyph, uword) = app
@@ -5660,8 +5685,18 @@ mod tests {
             screen.contains("5 of your features run it · all passed — see Features"),
             "{screen}"
         );
-
-        // A changed scenario: the verdict is behind, and so is the map.
+        // Review C7: a narrow View keeps the result, right after the id.
+        app.select(Selection::Feature("gzip".into()));
+        let screen = text(&render(&mut app, 80, 40));
+        assert!(screen.contains("u001-katajainen  ✓ passed"), "{screen}");
+        // Review C8: a unit still in C is not "not re-checked".
+        app.select(Selection::Unit("u-zopfli_bin".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("of your features run it · still C"),
+            "{screen}"
+        );
+        assert!(!screen.contains("not re-checked"), "{screen}");
         let path = harness_core::features::features_path(&app.config.target);
         let text_now = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, text_now.replace("\"--i1\"", "\"--i2\"")).unwrap();
@@ -5673,6 +5708,113 @@ mod tests {
             screen.contains("your features: not checked since you changed them — Re-check it"),
             "{screen}"
         );
+        // Review C14: its feature checks ran an earlier features file.
+        assert!(
+            screen.contains("(from an earlier features file)"),
+            "{screen}"
+        );
+        // Review C6: what the last map says, said as the last map's.
+        app.select(Selection::Features);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("In the last map, your features ran 108 of the 111 functions"),
+            "{screen}"
+        );
+        assert!(!screen.contains("functions no feature ran"), "{screen}");
+    }
+
+    /// Review C5/C6/C10/C12/C14 and fix check N5: an incomplete map makes no
+    /// negative claim, a crashed scenario is no check, Help says the rest.
+    #[test]
+    fn an_incomplete_map_makes_no_negative_claim() {
+        let mut app = zopfli_with_features("feat-incomplete", FEATURES_TOML);
+        let read = crate::load::read(&app.config.target).unwrap();
+        let now = read.map_now.expect("today's inputs");
+        let record = |f: &str, s: &str, end: &str, noted: &str, funcs: Vec<(&str, &str)>| {
+            harness_core::features::ScenarioRecord {
+                feature: f.into(),
+                scenario: s.into(),
+                end: end.into(),
+                stdout_bytes: 1,
+                stderr_bytes: 0,
+                stderr_head: String::new(),
+                stable: true,
+                probe_agrees: true,
+                noted: noted.into(),
+                reason: (noted != "complete").then(|| "none written".to_string()),
+                functions: funcs
+                    .into_iter()
+                    .map(|(a, b)| (a.into(), b.into()))
+                    .collect(),
+            }
+        };
+        let map = harness_core::features::FeatureMap {
+            schema: harness_core::features::MAP_SCHEMA_NAME.into(),
+            schema_version: 1,
+            inputs: now,
+            unwatched: vec![],
+            scenarios: vec![
+                record("gzip", "text", "exit 0", "unavailable", vec![]),
+                record(
+                    "help",
+                    "flag",
+                    "signal 11",
+                    "complete",
+                    vec![("src/zopfli/zopfli_bin.c", "main")],
+                ),
+            ],
+        };
+        std::fs::write(
+            harness_core::features::map_path(&app.config.target),
+            map.to_bytes().unwrap(),
+        )
+        .unwrap();
+        app = crate::app::tests::app_of_path(&app.config.target);
+        assert!(app.features.map.current() && !app.features.complete);
+        app.select(Selection::Features);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(!screen.contains("functions no feature ran"), "{screen}");
+        assert!(
+            screen.contains("its units not known (map incomplete)"),
+            "{screen}"
+        );
+        app.select(Selection::Feature("gzip".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("(not known — the map has no usable notes for it)"),
+            "{screen}"
+        );
+        assert!(!screen.contains("Only this feature runs"), "{screen}");
+        app.select(Selection::Feature("help".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("it did not exit (signal 11) — it cannot be a check"),
+            "{screen}"
+        );
+        assert!(!screen.contains("compares little"), "{screen}");
+        app.select(Selection::Function(
+            "src/zopfli/katajainen.c".into(),
+            "ZopfliLengthLimitedCodeLengths".into(),
+        ));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(!screen.contains("Run by none"), "{screen}");
+        let (help, _) = help_rows(160, false, None);
+        // Wrapped lines, read as one text.
+        let help: String = help
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for words in [
+            "see its units: they differ",
+            harness_core::features::SkipReason::CSideUnstable.words(),
+            "[[scenario]] table per",
+        ] {
+            assert!(help.contains(words), "{words}\n{help}");
+        }
     }
 
     #[test]

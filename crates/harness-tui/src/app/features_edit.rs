@@ -36,6 +36,9 @@ pub struct FeaturesDraft {
     pub started: Option<Instant>,
 }
 
+/// The name every draft's private dir starts with (named on quit).
+pub const DRAFT_DIR_PREFIX: &str = "harness-tui-features";
+
 /// Editors that take `+N` to open at a line.
 const LINE_EDITORS: [&str; 7] = ["nano", "pico", "vi", "vim", "nvim", "emacs", "micro"];
 
@@ -154,7 +157,7 @@ impl App {
                         return Command::None;
                     }
                 };
-            let tmp = match handedit::private_dir(&std::env::temp_dir(), "harness-tui-features") {
+            let tmp = match handedit::private_dir(&std::env::temp_dir(), DRAFT_DIR_PREFIX) {
                 Ok(t) => t,
                 Err(e) => {
                     self.notice = notice(format!("no private draft directory: {e}"));
@@ -229,21 +232,32 @@ impl App {
             // §7.2 step 5: the draft stays kept (named on quit); a fresh one
             // starts from the file as it is now.
             (Purpose::FeaturesChanged, Choice::Run) => {
-                if let Some(old) = self.features_draft.take() {
-                    self.kept_drafts.push(old.file);
+                let Some(old) = self.features_draft.take() else {
+                    return Command::None;
+                };
+                let command = self.start_features_edit();
+                if self.features_draft.is_some() {
+                    self.kept_drafts.push(old.tmp);
+                } else {
+                    // The new edit could not start (its notice says why):
+                    // the old draft stays the one the menu offers (N1).
+                    self.features_draft = Some(old);
                 }
-                self.start_features_edit()
+                command
             }
             (Purpose::EditAgain | Purpose::FeaturesChanged, Choice::Discard) => {
                 self.discard_features_draft()
             }
-            _ => {
+            (purpose, _) => {
                 let Some(d) = &self.features_draft else {
                     return Command::None;
                 };
-                // Nothing of the person's in it (a Cancel before the editor
-                // opened, say): nothing to keep (review C9).
-                if std::fs::read_to_string(&d.file).is_ok_and(|t| t == d.origin) {
+                // A Cancel before the editor opened, with nothing of the
+                // person's in the draft: nothing to keep (review C9). Any
+                // other Esc keeps it, as its dialog says (N2).
+                if purpose == Purpose::OpenEditor
+                    && std::fs::read_to_string(&d.file).is_ok_and(|t| t == d.origin)
+                {
                     return self.discard_quietly();
                 }
                 self.notice = notice(format!(
@@ -459,9 +473,20 @@ impl App {
     /// A save ended: saved → the draft goes; refused → it stays, said; refused
     /// because the file changed since the edit started → §7.2 step 5's choice
     /// (review C2: the same `--expect` could never succeed).
-    pub(super) fn features_save_ended(&mut self, success: bool) -> Option<PathBuf> {
+    /// `saved`: the text the save wrote — the draft goes only when it still
+    /// holds exactly that (fix check P1: it may have moved on meanwhile).
+    pub(super) fn features_save_ended(&mut self, success: bool, saved: &str) -> Option<PathBuf> {
         if success {
-            return self.features_draft.take().map(|d| d.tmp);
+            let d = self.features_draft.as_ref()?;
+            if std::fs::read_to_string(&d.file).is_ok_and(|now| now == saved) {
+                return self.features_draft.take().map(|d| d.tmp);
+            }
+            self.notice = notice(format!(
+                "saved — your draft has changed since, and is kept in {} — the menu offers \
+                 Continue my features draft",
+                d.file.display()
+            ));
+            return None;
         }
         let Some(d) = &self.features_draft else {
             return None;
@@ -614,7 +639,7 @@ mod tests {
         assert!(!harness_core::features::features_path(&app.config.target).exists());
         // Saved: the draft goes.
         let tmp = app.features_draft.as_ref().unwrap().tmp.clone();
-        assert_eq!(app.features_save_ended(true), Some(tmp));
+        assert_eq!(app.features_save_ended(true, GOOD), Some(tmp));
         assert!(app.features_draft.is_none());
     }
 
@@ -663,7 +688,7 @@ mod tests {
         app.features_edited(ok());
         app.mode = Mode::Normal;
         assert_eq!(
-            app.features_save_ended(false),
+            app.features_save_ended(false, GOOD),
             None,
             "a refused save keeps the draft"
         );
@@ -753,18 +778,19 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let theirs = GOOD.replace("Show the help", "Their help");
         std::fs::write(&path, &theirs).unwrap();
-        assert_eq!(app.features_save_ended(false), None);
+        assert_eq!(app.features_save_ended(false, GOOD), None);
         assert_eq!(purpose(&app), Purpose::FeaturesChanged);
         // Edit the new file: the old draft is kept (named on quit), a new
         // one starts from their file, with its digest as --expect.
         close(&mut app, Choice::Run);
-        assert_eq!(app.kept_drafts, std::slice::from_ref(&file));
+        let old_dir = file.parent().unwrap().to_path_buf();
+        assert_eq!(app.kept_drafts, std::slice::from_ref(&old_dir));
         assert!(file.exists(), "the earlier draft stays");
         let d = app.features_draft.as_ref().unwrap();
         assert_ne!(d.file, file);
         assert_eq!(d.origin, theirs);
         assert_eq!(d.expect, harness_core::hash::bytes_hash(theirs.as_bytes()));
-        assert!(app.kept_paths().contains(&file));
+        assert!(app.kept_paths().contains(&old_dir));
         assert_eq!(purpose(&app), Purpose::OpenEditor);
         // Unchanged since the edit started: a plain refusal, said.
         let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-plain");
@@ -772,7 +798,7 @@ mod tests {
         std::fs::write(&file, GOOD).unwrap();
         app.features_edited(ok());
         close(&mut app, Choice::Run);
-        assert_eq!(app.features_save_ended(false), None);
+        assert_eq!(app.features_save_ended(false, GOOD), None);
         assert!(matches!(app.mode, Mode::Normal));
         assert!(app
             .notice
@@ -815,6 +841,77 @@ mod tests {
             Command::Cleanup(_)
         ));
         assert!(app.features_draft.is_none());
+    }
+
+    fn save_pending(app: &App) -> Pending {
+        match &app.mode {
+            Mode::Dialog(c) => match &c.purpose {
+                Purpose::Act(p) if p.act == Act::SaveFeatures => p.clone(),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Fix check P1: a save the busy ledger refused is no `t` retry (its
+    /// text is the draft's as it was); and a save of older text never
+    /// removes a draft that moved on.
+    #[test]
+    fn a_busy_ledger_never_turns_a_features_save_into_a_retry() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "feat-locked");
+        let file = open_draft(&mut app);
+        std::fs::write(&file, GOOD).unwrap();
+        app.features_edited(ok());
+        let p = save_pending(&app);
+        app.mode = Mode::Normal;
+        crate::app::tests::locked(&mut app, &p);
+        assert!(app.try_again.is_none(), "{:?}", app.try_again);
+        assert!(app.features_draft.is_some());
+        std::fs::write(&file, GOOD.replace("Show the help", "Help me")).unwrap();
+        assert_eq!(app.features_save_ended(true, GOOD), None);
+        assert!(app.features_draft.is_some(), "the newer text is kept");
+        assert!(app.notice.as_ref().unwrap().text.contains("changed since"));
+    }
+
+    /// Fix check N1: Edit the new file that cannot start keeps the old
+    /// draft as the one the menu offers.
+    #[test]
+    fn edit_the_new_file_that_cannot_start_keeps_the_old_draft() {
+        let mut app =
+            crate::app::tests::app_of_without_features("targets/zopfli", "feat-changed-fail");
+        let file = open_draft(&mut app);
+        std::fs::write(&file, GOOD).unwrap();
+        app.features_edited(ok());
+        close(&mut app, Choice::Run);
+        let path = harness_core::features::features_path(&app.config.target);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, GOOD.replace("Show the help", "Theirs")).unwrap();
+        app.features_save_ended(false, GOOD);
+        assert_eq!(purpose(&app), Purpose::FeaturesChanged);
+        // Before the choice, the file becomes a link: the new edit cannot
+        // start.
+        let elsewhere = app.config.target.join("elsewhere.toml");
+        std::fs::rename(&path, &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+        close(&mut app, Choice::Run);
+        assert_eq!(app.features_draft.as_ref().unwrap().file, file);
+        assert!(app.kept_drafts.is_empty());
+    }
+
+    /// Fix check N2: Esc on the Discard question keeps the draft — even one
+    /// that equals where it started.
+    #[test]
+    fn esc_on_the_discard_question_keeps_the_draft() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut app =
+            crate::app::tests::app_of_without_features("targets/zopfli", "feat-discard-esc");
+        let _file = open_draft(&mut app);
+        // The editor failed: the untouched draft is kept.
+        app.features_edited(Ok(std::process::ExitStatus::from_raw(1 << 8)));
+        assert!(app.features_draft.is_some());
+        app.ask_discard_features_draft();
+        assert_eq!(close(&mut app, Choice::Safe), Command::None);
+        assert!(app.features_draft.is_some());
     }
 
     #[test]

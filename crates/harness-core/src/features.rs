@@ -1139,32 +1139,67 @@ impl FeaturesNow {
 /// Largest program file hashed for the program digest.
 pub const MAX_PROGRAM_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
-/// The files the whole program is built from (§2.4), repo-relative, sorted,
-/// each once: every top-level `.c` of `source_dir` — the set the
-/// whole-program build compiles, scanned or not — and the include closure
-/// the facts record for them. What [`program_files`] hashes and what the
-/// read preflight budgets (review T1): one list for both.
+/// The files the whole program is built from (§2.4), repo-relative (as the
+/// facts write paths), sorted, each once: every top-level `.c` of
+/// `source_dir` — the set the whole-program build compiles, scanned or not
+/// — the include closure the facts record for them, and every `.h` under
+/// `source_dir` and the `include_dirs` (the build's include path: a header
+/// reached with `<…>` is in no closure; fix check O2). What
+/// [`program_files`] hashes and what the read preflight budgets (review
+/// T1): one list for both.
 pub fn program_paths(ctx: &crate::config::TargetContext, facts: &crate::Facts) -> Vec<String> {
+    let source_dir = &ctx.config.target.source_dir;
     let mut top: Vec<String> = Vec::new();
-    let source_dir = ctx.root.join(&ctx.config.target.source_dir);
-    if let Ok(entries) = std::fs::read_dir(&source_dir) {
+    if let Ok(entries) = std::fs::read_dir(ctx.root.join(source_dir)) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
             if name.ends_with(".c") {
-                let rel = Path::new(&ctx.config.target.source_dir).join(name);
-                if let Some(rel) = rel.to_str() {
-                    top.push(rel.trim_start_matches("./").to_string());
-                }
+                top.extend(repo_relative(&Path::new(source_dir).join(name)));
             }
         }
     }
     top.sort();
     let mut paths = facts.include_closure(&top);
     paths.extend(top);
+    let prune = [ctx.root.join("migration"), ctx.root.join(".git")];
+    for dir in std::iter::once(source_dir).chain(&ctx.config.target.include_dirs) {
+        let walked = crate::walk::confined_except(
+            &ctx.root.join(dir),
+            &["h"],
+            crate::walk::Limits {
+                max_files: Some(MAX_PROGRAM_HEADERS),
+                max_depth: None,
+            },
+            &prune,
+        );
+        paths.extend(
+            walked
+                .files
+                .iter()
+                .filter_map(|p| p.strip_prefix(&ctx.root).ok())
+                .filter_map(repo_relative),
+        );
+    }
     paths.sort();
     paths.dedup();
     paths
+}
+
+/// Most headers one directory adds to the program's files.
+const MAX_PROGRAM_HEADERS: usize = 50_000;
+
+/// `path` as the facts write it: its normal components joined by `/` (no
+/// `.`, no empty segment — `src//a.c` is `src/a.c`; fix check N2).
+fn repo_relative(path: &Path) -> Option<String> {
+    let parts: Vec<&str> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(p) => p.to_str(),
+            _ => None,
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// Where a [`program_paths`] entry is read: its canonical path when that
@@ -1192,9 +1227,30 @@ pub fn program_digest_now(ctx: &crate::config::TargetContext, facts: &crate::Fac
         .iter()
         .map(|f| (f.path.as_str(), f.hash.as_str()))
         .collect();
+    // Stale only where a scan would record otherwise, so a scan always
+    // clears it (fix check N2): a recorded file changed or gone; a file the
+    // scan walks (under `source_dir`, followed as it follows links) that it
+    // has no record of. A file too large to hash, or one only reached from
+    // outside `source_dir`, is no sign of stale facts.
+    let root = ctx.root.canonicalize().ok();
+    let scanned_dir = ctx
+        .root
+        .join(&ctx.config.target.source_dir)
+        .canonicalize()
+        .ok();
     let stale = files
         .iter()
-        .any(|(path, hash)| recorded.get(path.as_str()).copied() != hash.as_deref());
+        .any(|(path, hash)| match recorded.get(path.as_str()) {
+            Some(record) => match hash {
+                Some(now) => now != record,
+                None => !ctx.root.join(path).exists(),
+            },
+            None => root
+                .as_deref()
+                .and_then(|root| program_file_at(root, path))
+                .zip(scanned_dir.as_deref())
+                .is_some_and(|(file, dir)| file.starts_with(dir)),
+        });
     if stale {
         STALE_PROGRAM.to_string()
     } else {
@@ -1818,9 +1874,11 @@ args = ["-h"]
                 "src/escape.c",
                 "src/gone.h",
                 "src/linked.c",
-                "src/new.c"
+                "src/new.c",
+                "src/unused.h"
             ],
-            "top-level .c (scanned or not) and their closure; not deep.c or unused.h"
+            "top-level .c (scanned or not), their closure, every header on the include \
+             path; not deep.c"
         );
         let hash = |p: &str| {
             files
@@ -1841,6 +1899,84 @@ args = ["-h"]
             "a symlink leaving the target is None"
         );
         std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    /// Fix check O2/N2: a header reached with `<…>` through `include_dirs`
+    /// is part of the program; the facts are stale only where a scan would
+    /// record otherwise — so a scan always clears it.
+    #[test]
+    fn the_facts_are_stale_only_where_a_scan_would_change_them() {
+        let dir = std::env::temp_dir().join(format!("rh-stale-{}", hash::random_hex(6)));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        std::fs::create_dir_all(dir.join("inc")).unwrap();
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("src/main.c"), "#include <greet.h>\nint main;").unwrap();
+        std::fs::write(dir.join("inc/greet.h"), "int g;").unwrap();
+        std::fs::write(dir.join("lib/shared.c"), "int s;").unwrap();
+        std::os::unix::fs::symlink(dir.join("lib/shared.c"), dir.join("src/shared.c")).unwrap();
+        let ctx = |source_dir: &str| crate::config::TargetContext {
+            root: dir.clone(),
+            config: config_from(&format!(
+                "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"{source_dir}\"\n\
+                 include_dirs = [\"inc\"]\n"
+            )),
+        };
+        let rec = |path: &str| crate::facts::FileRecord {
+            path: path.into(),
+            hash: hash::file_hash(&dir.join(path)).unwrap(),
+            includes: Vec::new(),
+        };
+        // The scan saw src/main.c; src/shared.c leads out of src (the scan
+        // never records it), inc/ is not scanned.
+        let facts = crate::Facts {
+            files: vec![rec("src/main.c")],
+            ..crate::Facts::default()
+        };
+        let paths = program_paths(&ctx("src"), &facts);
+        assert_eq!(paths, ["inc/greet.h", "src/main.c", "src/shared.c"]);
+        let before = program_digest_now(&ctx("src"), &facts);
+        assert!(before.starts_with("blake3:"), "not stale: {before}");
+        assert_eq!(program_paths(&ctx("src//"), &facts), paths, "src// is src");
+        assert!(
+            program_digest_now(&ctx("./src/"), &facts).starts_with("blake3:"),
+            "./src/ is src: not stale (the digest names source_dir as written)"
+        );
+        // A header only `<…>` reaches: its change is the program's.
+        std::fs::write(dir.join("inc/greet.h"), "int g2;").unwrap();
+        let after = program_digest_now(&ctx("src"), &facts);
+        assert!(after.starts_with("blake3:") && after != before);
+        // A recorded file changed since the scan: stale; a new file the
+        // scan walks: stale.
+        std::fs::write(dir.join("src/main.c"), "int main2;").unwrap();
+        assert_eq!(program_digest_now(&ctx("src"), &facts), STALE_PROGRAM);
+        let facts = crate::Facts {
+            files: vec![rec("src/main.c")],
+            ..crate::Facts::default()
+        };
+        assert!(program_digest_now(&ctx("src"), &facts).starts_with("blake3:"));
+        std::fs::write(dir.join("src/new.h"), "int n;").unwrap();
+        assert_eq!(program_digest_now(&ctx("src"), &facts), STALE_PROGRAM);
+        std::fs::remove_file(dir.join("src/new.h")).unwrap();
+        // A recorded file too large to hash is no sign of stale facts.
+        let big = dir.join("src/big.h");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(MAX_PROGRAM_FILE_BYTES + 1)
+            .unwrap();
+        let facts = crate::Facts {
+            files: vec![
+                rec("src/main.c"),
+                crate::facts::FileRecord {
+                    path: "src/big.h".into(),
+                    hash: "blake3:whatever-the-scan-saw".into(),
+                    includes: Vec::new(),
+                },
+            ],
+            ..crate::Facts::default()
+        };
+        assert!(program_digest_now(&ctx("src"), &facts).starts_with("blake3:"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -753,8 +753,9 @@ pub struct App {
     pub kept_edits: Vec<KeptEdit>,
     /// The person's features draft, kept until saved or discarded.
     pub features_draft: Option<features_edit::FeaturesDraft>,
-    /// Earlier features drafts kept when the person chose to edit the file
-    /// as it is now (§7.2 step 5): named on quit, never removed here.
+    /// Earlier features drafts (their private dirs) kept when the person
+    /// chose to edit the file as it is now (§7.2 step 5): named on quit,
+    /// never removed here.
     pub kept_drafts: Vec<PathBuf>,
     /// Temp dirs kept only for what an editor left in them.
     pub leftovers: Vec<PathBuf>,
@@ -1655,7 +1656,9 @@ impl App {
             .iter()
             .map(|k| k.tmp.join("edit"))
             .chain(self.leftovers.iter().map(|t| t.join("edit")))
-            .chain(self.features_draft.iter().map(|d| d.file.clone()))
+            // A features draft is its private dir: an editor's recovery
+            // file (nano's .save, vim's swap) lands beside the draft (N3).
+            .chain(self.features_draft.iter().map(|d| d.tmp.clone()))
             .chain(self.kept_drafts.iter().cloned())
             .collect()
     }
@@ -1711,7 +1714,13 @@ impl App {
             let ending = run.narrator.ending(status.code(), signal.as_deref());
             // A chat act is never offered again here: the chat asks again
             // (docs/CHAT-PANE-DESIGN.md §3.3).
-            if ending == Ending::Locked && run.pending.chat.is_none() {
+            // Nor a features save: its text and --expect are the draft's as
+            // it was; the draft moves on, and Continue offers the save again
+            // from what it holds (fix check P1).
+            if ending == Ending::Locked
+                && run.pending.chat.is_none()
+                && run.act != Act::SaveFeatures
+            {
                 // The same command, whole: its unit, attempt, note and hand
                 // edit (review USE-2/ENG-1/SAFE-4). Its dialog re-checks
                 // everything again at confirm.
@@ -1731,12 +1740,13 @@ impl App {
         self.chat_reaped(status);
         let mut remove = None;
         // The features Edit's save: saved → its draft goes; refused → kept.
-        if self
+        if let Some(saved) = self
             .run
             .as_ref()
-            .is_some_and(|r| r.act == Act::SaveFeatures)
+            .filter(|r| r.act == Act::SaveFeatures)
+            .map(|r| r.pending.stdin.clone().unwrap_or_default())
         {
-            remove = self.features_save_ended(status.success());
+            remove = self.features_save_ended(status.success(), &saved);
         }
         if let Some(run) = self.run.as_mut() {
             if let (Act::HandEdit, Some(tmp)) = (run.act, run.cleanup.take()) {
@@ -6019,7 +6029,7 @@ pub(crate) mod tests {
         assert!(title.contains(PROVENANCE));
     }
 
-    fn locked(app: &mut App, p: &Pending) {
+    pub(crate) fn locked(app: &mut App, p: &Pending) {
         app.on_spawned(p);
         app.on_child_msg(ChildMsg::Event(Event::Error {
             kind: "locked".into(),

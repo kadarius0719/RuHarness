@@ -269,6 +269,32 @@ fn outside(u: &UnitView, source_dir: &str) -> bool {
         })
 }
 
+/// What a unit's current verdict says of its place in the program: `Some(
+/// false)` when it ran feature checks, `Some(true)` when it skipped them as
+/// not in the program, `None` without a verdict that says (then the plan's
+/// paths decide).
+fn verdict_outside(u: &UnitView, now_features: &str, now_program: &str) -> Option<bool> {
+    let v = u.verdict.as_ref()?;
+    if !u.report.verdict.stale.is_empty()
+        || v.inputs.features != now_features
+        || !features::same_program(&v.inputs.program, now_program)
+    {
+        return None;
+    }
+    if v.checks
+        .iter()
+        .any(|c| c.name.starts_with(features::CHECK_PREFIX))
+    {
+        return Some(false);
+    }
+    v.inputs
+        .features_skipped
+        .iter()
+        .filter_map(|e| features::parse_skip(e))
+        .any(|(_, _, r)| r == SkipReason::NotInProgram)
+        .then_some(true)
+}
+
 /// The unit's result for feature `id` with scenarios `scenarios` (§8.1).
 fn result(
     u: &UnitView,
@@ -680,8 +706,10 @@ pub fn build(
 
     // Per unit: which features run its functions.
     for (i, u) in snapshot.units.iter().enumerate() {
+        // The verdict first, as for the results (fix check N4).
         let mut entry = UnitFeatures {
-            outside: outside(u, source_dir),
+            outside: verdict_outside(u, &now_features, &now_program)
+                .unwrap_or_else(|| outside(u, source_dir)),
             ..UnitFeatures::default()
         };
         for (f, funcs) in list.features.iter().zip(&per_feature_functions) {
@@ -924,6 +952,8 @@ mod tests {
         let files = crate::files::build(&snap, &read.walk);
         let m = build(&snap, &files, &read.map, read.map_now.as_ref());
         assert_eq!(state(&m, "help"), FeatureState::Failing);
+        // The unit's own line says the same (fix check N4).
+        assert!(!m.by_unit[U001].outside);
     }
 
     #[test]

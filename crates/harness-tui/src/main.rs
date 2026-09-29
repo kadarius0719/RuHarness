@@ -295,14 +295,20 @@ fn say(line: String) {
     });
 }
 
+/// The name every features draft's private dir starts with.
+const FEATURES_DRAFT_PREFIX: &str = harness_tui::app::features_edit::DRAFT_DIR_PREFIX;
+
 /// Tell the user where every kept hand edit is (stderr, after the
 /// terminal is restored) — bounded.
 fn announce_kept_edits() {
     let dirs = guard(&KEPT_EDITS).clone();
     bounded(WRITE_WAIT, move || {
         for dir in dirs {
-            // A features draft is its file; a hand edit its `edit` dir.
-            let what = if dir.file_name() == Some(std::ffi::OsStr::new("features.toml")) {
+            // A features draft is its private dir; a hand edit its `edit`.
+            let what = if dir
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(FEATURES_DRAFT_PREFIX))
+            {
                 "your features draft, not saved,"
             } else {
                 "a hand edit that was not recorded"

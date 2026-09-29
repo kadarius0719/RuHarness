@@ -873,7 +873,7 @@ impl<'a> Job<'a> {
             // program to compare, so nothing to say of it (review O7).
             if !recorded.program.is_empty()
                 && !self.program.is_empty()
-                && recorded.program != self.program
+                && !harness_core::features::same_program(&recorded.program, &self.program)
             {
                 differences.insert(0, "other C changed since it was recorded".into());
             }

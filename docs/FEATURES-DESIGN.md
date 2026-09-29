@@ -239,14 +239,16 @@ and in the map (§5.2):
   reads no file but `features.toml`.
 - **`program`** — `blake3:` over what the whole program is built from: every top-level `.c` of
   `source_dir` (which the whole-program build compiles, scanned or not — through its
-  canonical path when it is a symlink inside the target, as the build resolves it) and the
-  include closure the facts record for those files, each as `(path, current hash or
-  "missing")`, plus `[target] source_dir`, `include_dirs` and `[oracle] extra_link_args`. One
+  canonical path when it is a symlink inside the target, as the build resolves it), the
+  include closure the facts record for those files, and every `.h` under `source_dir` and the
+  `include_dirs` (the build's include path: a header reached with `<…>` is in no closure),
+  each as `(path, current hash or "missing")` (a file over 64 MiB reads as missing), plus `[target] source_dir`, `include_dirs` and `[oracle] extra_link_args`. One
   core function computes it from such pairs, so the oracle and every reader agree on a
   missing file. Known gap, named in SCHEMAS.md: a non-C file a header includes (`.inc`,
-  `.def`) is not in it. **When the facts do not describe the program** — a program file they
-  do not record, or whose bytes differ from their record of it (its includes may be ones the
-  scan never saw) — the digest is the sentinel `facts-stale`, which no comparison reads as the
+  `.def`) is not in it. **When the facts do not describe the program** — a file they record
+  whose bytes differ or which is gone, or a file under `source_dir` (followed as the scan
+  follows links) they have no record of: exactly what a scan would change, so a scan always
+  clears it — the digest is the sentinel `facts-stale`, which no comparison reads as the
   same program, not even itself: coverage stays `program` ("the C changed since the scan: Scan
   the project, then Re-check") until a scan (review O2). The oracle takes it **before** it
   builds anything, the map before its builds (review O6, M10).
@@ -348,10 +350,12 @@ So:
    to the fork. (Without the sandbox, the candidate's inability to spawn or signal rests on the
    deny scan and the capabilities check alone, as for every candidate run today; SCHEMAS.md
    says so. Nor, without the sandbox, is the build dir out of a candidate's reach: a candidate
-   run can write the C binary and the samples there. The feature step checks the C program's
-   bytes before every C run — changed, the scenario and every later one fail with "the C program
-   changed while the check ran", never a skip (review O3) — but the whole-program check has the
-   same gap, and nothing covers C reads elsewhere; SCHEMAS.md names the residual.)
+   run can write the C binary and the samples there. The C program's bytes are noted when it is
+   built and checked before every C run, in the whole-program check and the feature step alike
+   — changed, the check and every later one fail with "the C program changed while the check
+   ran", never a skip (review O3; the fix check found the first pass noting them only after the
+   whole-program check's candidate runs). A sample a candidate rewrites is read by both sides
+   alike; C reads elsewhere are not covered; SCHEMAS.md names the residual.)
 5. When the leader exits, its **process group is killed** (the `/bin/kill -KILL -- -<pgid>`
    the timeout path uses, called right after `try_wait` reports the exit and before the
    output drain's grace wait) — belt and braces behind the fork denial, and the only guard
@@ -485,11 +489,14 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   in the plain build, which compiles canonical paths), `-include <build>/fnprobe.h`,
   `-ffp-contract=off` and `extra_link_args`; every tool child has `SOURCE_DATE_EPOCH=0`, so the
   plain and probed builds (and verify's all-C and mixed ones) print the same `__DATE__`,
-  `__TIME__` and `__TIMESTAMP__` (review M5). An include the facts resolved outside
-  `source_dir` is refused before any build, naming the file and the include — the mirror
-  holds `source_dir` only, and the compiler would fall through to a system header of the same
-  name: a different program, mapped silently (review M7). A probed copy that does not build
-  says so in neutral words.
+  `__TIME__` and `__TIMESTAMP__` (review M5; not recorded in a verdict's evidence — a C unit
+  that returns those macros is compared against 1970's). An include that resolves outside
+  `source_dir` — read from the program's own `#include` lines and found as the compiler finds
+  it (the facts never record one: the scan stays in `source_dir`) — is refused before any
+  build, naming the file and the include: the mirror holds `source_dir` only, and the compiler
+  would fall through to a system header of the same name, a different program mapped silently
+  (review M7, fixed after the fix check). A probed copy that does not build says so in neutral
+  words.
 - **The insertion** — `harness_scan::probe_source(rel_path, source, index_of)`, pure, built on
   the scanner's own `collect_functions`/`canonical_id` (which, unlike mutate.rs, walk into
   preprocessor branches), with `FnDef` gaining the body's start byte:
@@ -504,8 +511,11 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   cannot read — is not in the note's way; review M9); a body whose first byte is not a real
   `{`; a definition with a preprocessor directive between its declarator and its body (a line
   that starts with `#` — a brace inside `#if`, which compiles on one branch only; a `#` in a
-  comment is none); a body whose first statement is a `#pragma` (STDC FENV_ACCESS, clang fp:
-  they must open the block), and a `naked` function (review M2). A definition the facts do not
+  comment is none); a body that opens with a pragma in any spelling (`#pragma`, `# pragma`,
+  `_Pragma`, one inside a leading `#if`) or with what the parser cannot read (a macro that may
+  expand to one), and a function with `naked` as a word of its head (review M2, fix check
+  N1/N4). Residual: `naked` given only on an earlier declaration — the probed build fails and
+  the map says so with the compiler's words, never silently. A definition the facts do not
   record gets nothing — the facts do not know it either.
 
 ### 5.4 The probe runtime (harness-owned C)
@@ -1273,3 +1283,14 @@ changed.
 | M9 — errors anywhere in a body, or a `#` in a comment, left a function unwatched | the head only; a line that starts with `#` |
 | T1 — the program digest outside the read budget | counted by the preflight, each file once, at most 50 000 files |
 | T2 — escape bytes from a hostile file on the terminal | unknown keys quoted; every human CLI line and error shown with control characters as `?` |
+
+**The check of the fix pass** (two checkers on 71d9e1a) found M7 not fixed (the facts-based
+check could never fire), O3 partial (with the whole-program check configured the C program's
+bytes were noted after its candidate runs), O2 partial (headers reached with `<…>`), and new
+issues — the features draft (P1: a busy ledger's `t` retry resent old text and could remove a
+newer draft; N1–N3 of the draft: a failed "Edit the new file", Esc on the Discard question, the
+draft's dir not named), the cockpit (N4: a unit's own line followed the plan's paths; N5: no
+words for a map without notes), the digest (N2: `facts-stale` that no scan cleared; N3: two
+sentinels equal in the replay), the probe (N1: a leading `_Pragma` or unreadable code, N4:
+`naked` inside a name). All fixed in the second pass, each with a test; the rule text above
+says the result. Mutation checks: 60 mutants of the named rules and the fixes, all killed.

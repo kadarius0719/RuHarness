@@ -84,8 +84,15 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
     // failure there already ended verify, as today), else built here — a
     // failure is the C side's (the link decides one `main`), never the
     // candidate's.
-    let (c_bin, mixed_bin) = match ctx.whole {
-        Some(built) => (built.c.clone(), Ok(built.mixed.clone())),
+    // The C program's bytes as built — taken at the build, before any
+    // candidate run (fix check O3: the whole-program check's runs come
+    // first when it is configured).
+    let (c_bin, c_digest, mixed_bin) = match ctx.whole {
+        Some(built) => (
+            built.c.clone(),
+            built.c_digest.clone(),
+            Ok(built.mixed.clone()),
+        ),
         None => match build_whole_c(ctx.prep, ctx.runner, &c_files) {
             Err(Error::Interrupted) => return Err(Error::Interrupted),
             Err(_) => {
@@ -93,7 +100,8 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
                 return Ok(());
             }
             Ok(c) => (
-                c,
+                c.clone(),
+                harness_core::hash::file_hash(&c)?,
                 build_whole_mixed(ctx.prep, ctx.runner, &c_files, ctx.rust_lib),
             ),
         },
@@ -113,7 +121,6 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
     // The C program's bytes, checked before every C run (review O3): without
     // the sandbox a candidate run can write the build dir, and a C side it
     // changed must fail the check, never become a skip or a pass.
-    let c_digest = harness_core::hash::file_hash(&c_bin)?;
     let c_changed = || harness_core::hash::file_hash(&c_bin).map_or(true, |now| now != c_digest);
     let mut tampered = false;
     for scenario in &features.scenarios {
@@ -140,7 +147,7 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
             ctx.checks.push(Check {
                 name: scenario.check_name(),
                 passed: false,
-                detail: TAMPERED.into(),
+                detail: crate::C_PROGRAM_CHANGED.into(),
             });
             continue;
         }
@@ -159,7 +166,7 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
             ctx.checks.push(Check {
                 name: scenario.check_name(),
                 passed: false,
-                detail: TAMPERED.into(),
+                detail: crate::C_PROGRAM_CHANGED.into(),
             });
             continue;
         }
@@ -179,10 +186,6 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
     }
     Ok(())
 }
-
-/// The detail of a scenario whose C program changed while the check ran.
-const TAMPERED: &str = "the C program changed while the check ran (a run wrote the build \
-                        directory) — re-check under the sandbox";
 
 /// Copy `bin` to the one path every run of a scenario uses (§4.1 step 1).
 pub(crate) fn place(bin: &Path, run_path: &Path) -> Result<(), Error> {
@@ -356,6 +359,7 @@ mod tests {
             target_root: &root,
         };
         let whole = WholePrograms {
+            c_digest: harness_core::hash::file_hash(&c).unwrap(),
             c: c.clone(),
             mixed,
         };
@@ -378,8 +382,40 @@ mod tests {
         assert_eq!(checks.len(), 2, "{checks:?}");
         for check in &checks {
             assert!(!check.passed, "{check:?}");
-            assert_eq!(check.detail, TAMPERED);
+            assert_eq!(check.detail, crate::C_PROGRAM_CHANGED);
         }
+
+        // Rewritten before the feature step (by the whole-program check's
+        // candidate runs): the reference is the build's, so every scenario
+        // fails from the first (fix check O3).
+        script(&c, "#!/bin/sh\necho hi\n");
+        let built_digest = harness_core::hash::file_hash(&c).unwrap();
+        script(&c, "#!/bin/sh\necho hi # rewritten\n");
+        script(&whole.mixed, "#!/bin/sh\necho hi\n");
+        let whole = WholePrograms {
+            c_digest: built_digest,
+            c: c.clone(),
+            mixed: whole.mixed.clone(),
+        };
+        let (mut inputs, mut checks) = (VerdictInputs::default(), Vec::new());
+        feature_step(&mut FeatureStepCtx {
+            target: &target,
+            prep: &prep,
+            unit: &unit,
+            runner: &runner,
+            confined: &confined,
+            rust_lib: Path::new("/nonexistent"),
+            whole: Some(&whole),
+            features: &snapshot,
+            program: "",
+            inputs: &mut inputs,
+            checks: &mut checks,
+        })
+        .unwrap();
+        assert_eq!(checks.len(), 2, "{checks:?}");
+        assert!(checks
+            .iter()
+            .all(|c| !c.passed && c.detail == crate::C_PROGRAM_CHANGED));
     }
 
     fn run(end: ScenarioEnd, stdout: &str, stderr: &str) -> ScenarioRun {

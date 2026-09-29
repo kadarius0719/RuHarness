@@ -398,17 +398,33 @@ fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<
     if head.lines().any(|l| l.trim_start().starts_with('#')) {
         return None;
     }
-    // A naked function takes no statement, and a body that opens with a
-    // `#pragma` (STDC FENV_ACCESS, clang fp) needs it first (review M2).
-    if String::from_utf8_lossy(&src[def.start_byte()..at]).contains("naked") {
+    // A naked function takes no statement (review M2) — `naked` as a word
+    // of its head, not inside a name (fix check N4).
+    let head = String::from_utf8_lossy(&src[def.start_byte()..at]);
+    if head
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|word| word == "naked")
+    {
         return None;
     }
+    // What opens the body must allow a statement before it: not a pragma in
+    // any spelling (`#pragma`, `# pragma`, `_Pragma`, one inside `#if` —
+    // STDC FENV_ACCESS and clang fp must open the block; review M2), and
+    // not what the parser could not read (a macro that may expand to one;
+    // fix check N1). An error further in is not in the note's way (M9).
     let mut cursor = body.walk();
     let first = body
         .named_children(&mut cursor)
         .find(|c| c.kind() != "comment");
-    if first.is_some_and(|c| c.kind() == "preproc_call" && text(c, src).starts_with("#pragma")) {
-        return None;
+    if let Some(first) = first {
+        let words = text(first, src);
+        if first.is_error()
+            || first.has_error()
+            || words.trim_start().starts_with("_Pragma")
+            || (first.kind().starts_with("preproc") && words.contains("pragma"))
+        {
+            return None;
+        }
     }
     Some(at)
 }

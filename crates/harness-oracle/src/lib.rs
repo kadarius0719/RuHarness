@@ -886,11 +886,18 @@ impl CAbiDifferential {
                 )));
             }
         }
+        let c = build_whole_c(prep, confined.runner, &c_files)?;
+        // Its bytes right after the build: without the sandbox a candidate
+        // run can rewrite it, and every C run after that must fail, never
+        // compare the candidate with itself (fix check O3).
+        let c_digest = hash::file_hash(&c)?;
         let built = WholePrograms {
-            c: build_whole_c(prep, confined.runner, &c_files)?,
+            c,
             mixed: build_whole_mixed(prep, confined.runner, &c_files, rust_lib)?,
+            c_digest,
         };
         let mut checks = Vec::new();
+        let mut tampered = false;
         for sample in write_samples(build)? {
             let name = sample
                 .file_name()
@@ -902,6 +909,15 @@ impl CAbiDifferential {
             argv.push(&sample_str);
             let check_name = format!("whole-program:{name}");
             let inputs = std::slice::from_ref(&sample);
+            tampered = tampered || !built.c_unchanged();
+            if tampered {
+                checks.push(Check {
+                    name: check_name,
+                    passed: false,
+                    detail: C_PROGRAM_CHANGED.into(),
+                });
+                continue;
+            }
             match (
                 confined.run(&built.c, &argv, inputs)?,
                 confined.run(&built.mixed, &argv, inputs)?,
@@ -923,6 +939,8 @@ pub(crate) struct WholePrograms {
     pub c: PathBuf,
     /// The mixed program.
     pub mixed: PathBuf,
+    /// `c`'s bytes (blake3) right after it was built.
+    pub c_digest: String,
 }
 
 /// The whole program's C files: every top-level `*.c` of `source_dir`
@@ -962,6 +980,18 @@ fn whole_cc(prep: &Prepared, runner: &Runner, out: &Path, inputs: &[PathBuf]) ->
         },
     )
 }
+
+impl WholePrograms {
+    /// The all-C program still has the bytes it was built with.
+    pub(crate) fn c_unchanged(&self) -> bool {
+        hash::file_hash(&self.c).is_ok_and(|now| now == self.c_digest)
+    }
+}
+
+/// The detail of a check whose C program changed while the check ran.
+pub(crate) const C_PROGRAM_CHANGED: &str = "the C program changed while the check ran (a run \
+                                            wrote the build directory) — re-check under the \
+                                            sandbox";
 
 /// Build `whole_c` from `c_files`.
 pub(crate) fn build_whole_c(
@@ -1541,6 +1571,89 @@ fn path_str(p: &Path) -> Result<&str, Error> {
 mod tests {
     use super::*;
     use harness_core::TargetContext;
+
+    /// Fix check O3: without the sandbox a candidate run can rewrite the
+    /// all-C program (here, with a copy of itself: the check would compare
+    /// the candidate with itself and pass). Its bytes are noted at the build:
+    /// every whole-program check after the rewrite fails.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_c_program_rewritten_by_a_candidate_run_fails_the_whole_program_check() {
+        let tmp = crate::testutil::TempDir::new("wp-tamper");
+        let root = tmp.path().to_path_buf();
+        let put = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, text).unwrap();
+            p
+        };
+        put(
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"tool\"\nsource_dir = \"src\"\n\
+             [oracle]\nallowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n\
+             [oracle.whole_program]\nargs = []\n",
+        );
+        put(
+            "src/main.c",
+            "#include <stdio.h>\nint unit(void);\nint main(void) { printf(\"%d\\n\", unit()); return 0; }\n",
+        );
+        put("src/unit.c", "int unit(void) { return 1; }\n");
+        put("migration/units/u-unit/driver.c", "\n");
+        std::fs::create_dir_all(root.join("migration/units/u-unit/unit_rs")).unwrap();
+        let target = TargetContext::load(&root).unwrap();
+        let unit: Unit = toml::from_str(
+            "id = \"u-unit\"\nstatus = \"pending\"\nfiles = [\"src/unit.c\"]\n\
+             symbols = [\"unit\"]\n\n[oracle]\nkind = \"c-abi-differential\"\n\
+             driver = \"migration/units/u-unit/driver.c\"\nrust_crate = \"unit_rs\"\n\
+             replaces = [\"src/unit.c\"]\n",
+        )
+        .unwrap();
+        let prep = Prepared::new(&target, &unit).unwrap();
+        // The "candidate": the same answer, and a copy of its own program
+        // over the all-C one.
+        let whole_c = prep.build.join("whole_c");
+        let candidate = put(
+            "alt/unit.c",
+            &format!(
+                "#include <stdio.h>\n#include <stdint.h>\n#include <mach-o/dyld.h>\n\
+                 int unit(void) {{\n\
+                   char self[4096]; uint32_t n = sizeof self;\n\
+                   if (_NSGetExecutablePath(self, &n) == 0) {{\n\
+                     FILE *in = fopen(self, \"rb\"), *out = fopen(\"{}\", \"wb\");\n\
+                     char buf[65536]; size_t k;\n\
+                     if (in && out) while ((k = fread(buf, 1, sizeof buf, in)) > 0) fwrite(buf, 1, k, out);\n\
+                     if (in) fclose(in); if (out) fclose(out);\n\
+                   }}\n\
+                   return 1;\n\
+                 }}\n",
+                whole_c.display()
+            ),
+        );
+        let runner = exec::Runner {
+            cwd: root.clone(),
+            allowlist: vec!["cc".into()],
+            timeout: Duration::from_secs(60),
+            max_output: exec::DEFAULT_MAX_OUTPUT,
+            tool_profile: None,
+        };
+        let confined = Confinement {
+            runner: &runner,
+            host: None,
+            target_root: &root,
+        };
+        let (checks, _) = CAbiDifferential
+            .whole_program(&prep, &unit, &confined, &[], &candidate)
+            .unwrap();
+        let summary: Vec<(bool, &str)> = checks
+            .iter()
+            .map(|c| (c.passed, c.detail.as_str()))
+            .collect();
+        assert!(checks[0].passed, "{summary:?}");
+        for c in &checks[1..] {
+            assert!(!c.passed, "{summary:?}");
+            assert_eq!(c.detail, C_PROGRAM_CHANGED);
+        }
+    }
 
     fn zopfli_unit() -> Unit {
         toml::from_str(
