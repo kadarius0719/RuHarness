@@ -1,0 +1,1302 @@
+//! The person's features and scenarios (docs/FEATURES-DESIGN.md §2):
+//! `migration/features/features.toml` (`ruharness-features` v1), its strict
+//! loader, the built-in samples, and the two digests every verdict made while
+//! the file exists records (§2.4).
+//!
+//! The file is target-owned and typed by hand: it is read through
+//! [`crate::ledger::read_regular`] (no symlink, bounded) and validated
+//! strictly — an unknown key, a wrong type, a duplicate or unknown id, a
+//! limit passed is refused with the key's path and the rule. Only ids from a
+//! closed alphabet ever leave this module toward a check name (§2.3); a
+//! feature's `name` is display-only.
+
+use crate::config::TargetConfig;
+use crate::error::Error;
+use crate::hash;
+use std::path::{Path, PathBuf};
+
+/// Version of the features file this build reads.
+pub const FEATURES_SCHEMA_VERSION: i64 = 1;
+/// Directory of the features files, inside the ledger dir.
+pub const FEATURES_DIR: &str = "features";
+/// File name of the person's features.
+pub const FEATURES_FILE: &str = "features.toml";
+/// Largest features file read.
+pub const MAX_FEATURES_BYTES: u64 = 64 * 1024;
+/// Most features in one file.
+pub const MAX_FEATURES: usize = 16;
+/// Most scenarios of one feature.
+pub const MAX_SCENARIOS_PER_FEATURE: usize = 8;
+/// Most scenarios in one file.
+pub const MAX_SCENARIOS: usize = 16;
+/// Most arguments of one scenario.
+pub const MAX_ARGS: usize = 8;
+/// Longest argument, in bytes.
+pub const MAX_ARG_BYTES: usize = 64;
+/// Longest id (feature or scenario), in bytes: `feature:` + 24 + `/` + 24
+/// stays within the 64 bytes at which a repair prompt cuts a check name.
+pub const MAX_ID_BYTES: usize = 24;
+/// Longest feature name, in characters.
+pub const MAX_NAME_CHARS: usize = 60;
+/// The argument that stands for the scenario's input file.
+pub const INPUT_ARG: &str = "{input}";
+/// Prefix of every scenario check's name.
+pub const CHECK_PREFIX: &str = "feature:";
+/// The digest recorded when the features file does not validate.
+pub const INVALID_DIGEST: &str = "invalid";
+
+/// `migration/features/` under `root`.
+pub fn features_dir(root: &Path) -> PathBuf {
+    root.join(crate::ledger::MIGRATION_DIR).join(FEATURES_DIR)
+}
+
+/// `migration/features/features.toml` under `root`.
+pub fn features_path(root: &Path) -> PathBuf {
+    features_dir(root).join(FEATURES_FILE)
+}
+
+/// One of the harness's deterministic samples (the whole-program check's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Sample {
+    /// About 30 KB of a repeated English pangram.
+    Text,
+    /// 16 KiB of xorshift64 pseudo-random bytes.
+    Rand,
+    /// An empty file.
+    Empty,
+}
+
+impl Sample {
+    /// Every sample, in the whole-program check's order.
+    pub const ALL: [Sample; 3] = [Sample::Text, Sample::Rand, Sample::Empty];
+
+    /// The token that names it in `features.toml`.
+    pub fn token(self) -> &'static str {
+        match self {
+            Sample::Text => "sample:text",
+            Sample::Rand => "sample:rand",
+            Sample::Empty => "sample:empty",
+        }
+    }
+
+    /// The file name a run sees it under.
+    pub fn file_name(self) -> &'static str {
+        match self {
+            Sample::Text => "sample_text.txt",
+            Sample::Rand => "sample_rand.bin",
+            Sample::Empty => "sample_empty",
+        }
+    }
+
+    /// The sample in words, for people.
+    pub fn words(self) -> &'static str {
+        match self {
+            Sample::Text => "about 30 000 bytes of repeated English text",
+            Sample::Rand => "16 KiB of pseudo-random bytes",
+            Sample::Empty => "an empty file",
+        }
+    }
+
+    fn from_token(token: &str) -> Option<Sample> {
+        Sample::ALL.into_iter().find(|s| s.token() == token)
+    }
+
+    /// Its bytes — generated, identical on every run and machine.
+    pub fn bytes(self) -> Vec<u8> {
+        match self {
+            Sample::Text => {
+                let phrase = b"the quick brown fox jumps over the lazy dog; pack my box with five \
+dozen liquor jugs.\n";
+                let mut text = Vec::with_capacity(32 * 1024);
+                while text.len() < 30_000 {
+                    text.extend_from_slice(phrase);
+                }
+                text
+            }
+            Sample::Rand => {
+                let mut state: u64 = 0x2545F4914F6CDD1D;
+                let mut rand = Vec::with_capacity(16 * 1024);
+                while rand.len() < 16 * 1024 {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    rand.extend_from_slice(&state.to_le_bytes());
+                }
+                rand
+            }
+            Sample::Empty => Vec::new(),
+        }
+    }
+}
+
+/// A feature: the person's name for something a user does with the program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Feature {
+    /// `^[a-z0-9][a-z0-9-]{0,23}$`.
+    pub id: String,
+    /// The person's words (display-only; never in a check, a verdict, an
+    /// event or a prompt).
+    pub name: String,
+}
+
+/// A scenario: one run of the whole program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scenario {
+    /// The id of the feature it belongs to.
+    pub feature: String,
+    /// `^[a-z0-9][a-z0-9-]{0,23}$`, unique within its feature.
+    pub id: String,
+    /// The arguments, `{input}` standing for the input's file name.
+    pub args: Vec<String>,
+    /// The input, when it has one.
+    pub input: Option<Sample>,
+}
+
+impl Scenario {
+    /// Its check's name: `feature:<feature>/<scenario>` (ids only).
+    pub fn check_name(&self) -> String {
+        format!("{CHECK_PREFIX}{}/{}", self.feature, self.id)
+    }
+
+    /// The arguments as the program receives them: `{input}` replaced by the
+    /// input's file name (a bare name in the run's own directory).
+    pub fn argv(&self) -> Vec<String> {
+        self.args
+            .iter()
+            .map(|a| match (a.as_str(), self.input) {
+                (INPUT_ARG, Some(sample)) => sample.file_name().to_string(),
+                _ => a.clone(),
+            })
+            .collect()
+    }
+}
+
+/// A validated features file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Features {
+    /// Features, in file order.
+    pub features: Vec<Feature>,
+    /// Scenarios, in file order.
+    pub scenarios: Vec<Scenario>,
+}
+
+impl Features {
+    /// The feature with `id`.
+    pub fn feature(&self, id: &str) -> Option<&Feature> {
+        self.features.iter().find(|f| f.id == id)
+    }
+
+    /// The scenarios of feature `id`, in file order.
+    pub fn scenarios_of<'a>(&'a self, id: &'a str) -> impl Iterator<Item = &'a Scenario> + 'a {
+        self.scenarios.iter().filter(move |s| s.feature == id)
+    }
+}
+
+/// Whether `s` is a feature or scenario id: `^[a-z0-9][a-z0-9-]{0,23}$`.
+pub fn is_id(s: &str) -> bool {
+    let mut bytes = s.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z' | b'0'..=b'9'))
+        && s.len() <= MAX_ID_BYTES
+        && bytes.all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+}
+
+/// Why `arg` is not an allowed scenario argument, or `None` when it is
+/// (§2.1): `{input}`, a flag `^-{1,2}[A-Za-z0-9][A-Za-z0-9_.#+=:,-]*$` or a
+/// word `^[A-Za-z0-9][A-Za-z0-9_.#+=:,-]*$`, 1–64 bytes, never containing
+/// `/` or `..`.
+pub fn arg_problem(arg: &str) -> Option<&'static str> {
+    if arg == INPUT_ARG {
+        return None;
+    }
+    if arg.is_empty() {
+        return Some("an argument cannot be empty");
+    }
+    if arg.len() > MAX_ARG_BYTES {
+        return Some("an argument is at most 64 bytes");
+    }
+    if arg.contains('/') {
+        return Some("an argument cannot contain \"/\"");
+    }
+    if arg.contains("..") {
+        return Some("an argument cannot contain \"..\"");
+    }
+    let body = arg
+        .strip_prefix("--")
+        .or_else(|| arg.strip_prefix('-'))
+        .unwrap_or(arg);
+    let mut bytes = body.bytes();
+    let first_ok = matches!(bytes.next(), Some(b) if b.is_ascii_alphanumeric());
+    let rest_ok = bytes.all(|b| b.is_ascii_alphanumeric() || b"_.#+=:,-".contains(&b));
+    if first_ok && rest_ok {
+        None
+    } else {
+        Some(
+            "an argument is a flag (-x, --name, --name=value) or a word of letters, digits and \
+             _.#+=:,- starting with a letter or digit",
+        )
+    }
+}
+
+fn invalid(message: String) -> Error {
+    Error::InvalidPlan(format!(
+        "{}/{FEATURES_DIR}/{FEATURES_FILE}: {message}",
+        crate::ledger::MIGRATION_DIR
+    ))
+}
+
+/// Load and validate `migration/features/features.toml` under `root`.
+/// `Ok(None)` when the file does not exist. Everything in
+/// docs/FEATURES-DESIGN.md §2.1 is checked; a violation is an
+/// [`Error::InvalidPlan`] naming the key and the rule, a newer
+/// `schema_version` an [`Error::SchemaTooNew`].
+pub fn load(root: &Path) -> Result<Option<Features>, Error> {
+    let dir = features_dir(root);
+    match std::fs::symlink_metadata(&dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::io(&dir, e)),
+        Ok(m) if !m.file_type().is_dir() => {
+            return Err(invalid(
+                "migration/features must be a directory (a symlink is refused)".into(),
+            ))
+        }
+        Ok(_) => {}
+    }
+    let path = features_path(root);
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::io(&path, e)),
+        Ok(_) => {}
+    }
+    let bytes = crate::ledger::read_regular(&path, MAX_FEATURES_BYTES)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| invalid("not UTF-8 text".into()))?;
+    parse(text, &path).map(Some)
+}
+
+/// Validate the text of a features file (see [`load`]); `path` names it in a
+/// too-new error.
+pub fn parse(text: &str, path: &Path) -> Result<Features, Error> {
+    let table: toml::Table = text.parse().map_err(|e: toml::de::Error| {
+        let at = e
+            .span()
+            .map(|span| {
+                let (line, column) = line_column(text, span.start);
+                format!(" at line {line}, column {column}")
+            })
+            .unwrap_or_default();
+        invalid(format!("not valid TOML{at}: {}", one_line(e.message())))
+    })?;
+    for key in table.keys() {
+        if !matches!(key.as_str(), "schema_version" | "feature" | "scenario") {
+            return Err(invalid(format!(
+                "unknown key `{key}` (the keys are schema_version, [[feature]] and [[scenario]])"
+            )));
+        }
+    }
+    match table.get("schema_version") {
+        None => return Err(invalid("`schema_version = 1` is missing".into())),
+        Some(toml::Value::Integer(v)) if *v == FEATURES_SCHEMA_VERSION => {}
+        Some(toml::Value::Integer(v)) if *v > FEATURES_SCHEMA_VERSION => {
+            return Err(Error::SchemaTooNew {
+                path: path.to_path_buf(),
+                found: *v as u64,
+                supported: FEATURES_SCHEMA_VERSION as u64,
+            })
+        }
+        Some(v) => return Err(invalid(format!("schema_version must be 1, got {v}"))),
+    }
+    let features = parse_features(tables(&table, "feature")?)?;
+    let scenarios = parse_scenarios(tables(&table, "scenario")?, &features)?;
+    for f in &features {
+        match scenarios.iter().filter(|s| s.feature == f.id).count() {
+            0 => {
+                return Err(invalid(format!(
+                    "feature \"{}\" has no [[scenario]] (every feature needs at least one)",
+                    f.id
+                )))
+            }
+            n if n > MAX_SCENARIOS_PER_FEATURE => {
+                return Err(invalid(format!(
+                    "feature \"{}\" has {n} scenarios; at most {MAX_SCENARIOS_PER_FEATURE}",
+                    f.id
+                )))
+            }
+            _ => {}
+        }
+    }
+    Ok(Features {
+        features,
+        scenarios,
+    })
+}
+
+/// 1-based line and column (in characters) of byte `offset` in `text`.
+fn line_column(text: &str, offset: usize) -> (usize, usize) {
+    let mut end = offset.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let before = &text[..end];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    (line, column)
+}
+
+/// `text` on one line: every run of whitespace (newlines included) becomes
+/// one space.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn tables<'a>(table: &'a toml::Table, key: &str) -> Result<Vec<&'a toml::Table>, Error> {
+    match table.get(key) {
+        None => Ok(Vec::new()),
+        Some(toml::Value::Array(items)) => items
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                v.as_table()
+                    .ok_or_else(|| invalid(format!("{key}[{i}] must be a table ([[{key}]])")))
+            })
+            .collect(),
+        Some(_) => Err(invalid(format!(
+            "`{key}` must be written as [[{key}]] tables"
+        ))),
+    }
+}
+
+fn string_key<'a>(t: &'a toml::Table, key: &str, what: &str) -> Result<&'a str, Error> {
+    match t.get(key) {
+        None => Err(invalid(format!("{what}: `{key}` is missing"))),
+        Some(toml::Value::String(s)) => Ok(s),
+        Some(v) => Err(invalid(format!(
+            "{what}: `{key}` must be a string, got {v}"
+        ))),
+    }
+}
+
+fn check_id(id: &str, what: &str) -> Result<(), Error> {
+    if is_id(id) {
+        Ok(())
+    } else {
+        Err(invalid(format!(
+            "{what}: id {id:?} is not allowed — 1 to 24 of a-z, 0-9 and -, starting with a letter \
+             or digit"
+        )))
+    }
+}
+
+fn parse_features(items: Vec<&toml::Table>) -> Result<Vec<Feature>, Error> {
+    if items.len() > MAX_FEATURES {
+        return Err(invalid(format!(
+            "{} features; at most {MAX_FEATURES}",
+            items.len()
+        )));
+    }
+    let mut out: Vec<Feature> = Vec::with_capacity(items.len());
+    for (i, t) in items.into_iter().enumerate() {
+        let what = format!("feature[{i}]");
+        for key in t.keys() {
+            if !matches!(key.as_str(), "id" | "name") {
+                return Err(invalid(format!(
+                    "{what}: unknown key `{key}` (a feature has id and name)"
+                )));
+            }
+        }
+        let id = string_key(t, "id", &what)?;
+        check_id(id, &what)?;
+        let what = format!("feature \"{id}\"");
+        let name = string_key(t, "name", &what)?;
+        let chars = name.chars().count();
+        if chars == 0 || chars > MAX_NAME_CHARS {
+            return Err(invalid(format!(
+                "{what}: name must be 1 to {MAX_NAME_CHARS} characters, got {chars}"
+            )));
+        }
+        if name.chars().any(char::is_control) {
+            return Err(invalid(format!(
+                "{what}: name cannot hold control characters"
+            )));
+        }
+        if out.iter().any(|f| f.id == id) {
+            return Err(invalid(format!("{what}: the id is used twice")));
+        }
+        out.push(Feature {
+            id: id.to_string(),
+            name: name.to_string(),
+        });
+    }
+    Ok(out)
+}
+
+fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec<Scenario>, Error> {
+    if items.len() > MAX_SCENARIOS {
+        return Err(invalid(format!(
+            "{} scenarios; at most {MAX_SCENARIOS}",
+            items.len()
+        )));
+    }
+    let mut out: Vec<Scenario> = Vec::with_capacity(items.len());
+    for (i, t) in items.into_iter().enumerate() {
+        let what = format!("scenario[{i}]");
+        for key in t.keys() {
+            if !matches!(key.as_str(), "feature" | "id" | "args" | "input") {
+                return Err(invalid(format!(
+                    "{what}: unknown key `{key}` (a scenario has feature, id, args and input)"
+                )));
+            }
+        }
+        let feature = string_key(t, "feature", &what)?;
+        if !features.iter().any(|f| f.id == feature) {
+            return Err(invalid(format!(
+                "{what}: feature {feature:?} is not a [[feature]] id in this file"
+            )));
+        }
+        let id = string_key(t, "id", &what)?;
+        check_id(id, &format!("{what} of feature \"{feature}\""))?;
+        let what = format!("scenario \"{id}\" of feature \"{feature}\"");
+        if out.iter().any(|s| s.feature == feature && s.id == id) {
+            return Err(invalid(format!("{what}: the id is used twice")));
+        }
+        let input = match t.get("input") {
+            None => None,
+            Some(toml::Value::String(token)) => {
+                Some(Sample::from_token(token).ok_or_else(|| {
+                    invalid(format!(
+                        "{what}: input {token:?} is not one of sample:text, sample:rand, \
+                     sample:empty"
+                    ))
+                })?)
+            }
+            Some(v) => {
+                return Err(invalid(format!(
+                    "{what}: `input` must be a string, got {v}"
+                )))
+            }
+        };
+        let args: Vec<String> = match t.get("args") {
+            None => Vec::new(),
+            Some(toml::Value::Array(items)) => items
+                .iter()
+                .enumerate()
+                .map(|(j, v)| {
+                    v.as_str().map(str::to_string).ok_or_else(|| {
+                        invalid(format!("{what}: args[{j}] must be a string, got {v}"))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+            Some(v) => {
+                return Err(invalid(format!(
+                    "{what}: `args` must be an array of strings, got {v}"
+                )))
+            }
+        };
+        if args.len() > MAX_ARGS {
+            return Err(invalid(format!(
+                "{what}: {} arguments; at most {MAX_ARGS}",
+                args.len()
+            )));
+        }
+        for (j, arg) in args.iter().enumerate() {
+            if let Some(why) = arg_problem(arg) {
+                return Err(invalid(format!(
+                    "{what}: args[{j}] {arg:?} is not allowed — {why}"
+                )));
+            }
+        }
+        let uses = args.iter().filter(|a| a.as_str() == INPUT_ARG).count();
+        match (input, uses) {
+            (Some(_), 1) | (None, 0) => {}
+            (Some(_), 0) => {
+                return Err(invalid(format!(
+                    "{what}: it has an input, so one argument must be \"{INPUT_ARG}\""
+                )))
+            }
+            (Some(_), _) => {
+                return Err(invalid(format!(
+                    "{what}: \"{INPUT_ARG}\" may appear only once"
+                )))
+            }
+            (None, _) => {
+                return Err(invalid(format!(
+                    "{what}: \"{INPUT_ARG}\" needs an input (input = \"sample:text\", …)"
+                )))
+            }
+        }
+        out.push(Scenario {
+            feature: feature.to_string(),
+            id: id.to_string(),
+            args,
+            input,
+        });
+    }
+    Ok(out)
+}
+
+/// The file name the program runs under in a scenario run (§4.1): the
+/// target's `[target] name` when it is a plain file name
+/// (`^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$`), else `program`.
+pub fn program_name(config: &TargetConfig) -> String {
+    let name = config.target.name.as_str();
+    let mut bytes = name.bytes();
+    let ok = matches!(bytes.next(), Some(b) if b.is_ascii_alphanumeric())
+        && name.len() <= 32
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'));
+    if ok {
+        name.to_string()
+    } else {
+        "program".to_string()
+    }
+}
+
+/// The `features` digest (§2.4): what the scenarios run — for each feature
+/// by id, each scenario by id, its args and its input's bytes — plus the
+/// program's file name as it runs and `[oracle] timeout_secs` as written.
+/// Names are not in it; neither is the order of the file.
+pub fn features_digest(features: &Features, config: &TargetConfig) -> String {
+    let mut ids: Vec<&Feature> = features.features.iter().collect();
+    ids.sort_by(|a, b| a.id.cmp(&b.id));
+    let rendered: Vec<serde_json::Value> = ids
+        .into_iter()
+        .map(|f| {
+            let mut scenarios: Vec<&Scenario> = features.scenarios_of(&f.id).collect();
+            scenarios.sort_by(|a, b| a.id.cmp(&b.id));
+            serde_json::json!({
+                "id": f.id,
+                "scenarios": scenarios.into_iter().map(|s| serde_json::json!({
+                    "id": s.id,
+                    "args": s.args,
+                    "input": s.input.map(|i| serde_json::json!({
+                        "name": i.file_name(),
+                        "hash": hash::bytes_hash(&i.bytes()),
+                    })),
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "v": 1,
+        "features": rendered,
+        "program_name": program_name(config),
+        "timeout_secs": config.oracle.get("timeout_secs").map(|v| v.to_string()),
+    });
+    hash::bytes_hash(doc.to_string().as_bytes())
+}
+
+/// The `program` digest (§2.4): what the whole program is built from — each
+/// `(repo-relative path, current file hash)` pair, `None` for a file that is
+/// missing or unreadable (the facts' files and every top-level `.c` of
+/// `source_dir`), plus `[target] source_dir`, `include_dirs` and `[oracle]
+/// extra_link_args` as written. The one function the oracle and every
+/// reader use, so they agree on a missing file.
+pub fn program_digest(config: &TargetConfig, files: &[(String, Option<String>)]) -> String {
+    let mut pairs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, h)| (path.as_str(), h.as_deref().unwrap_or("missing")))
+        .collect();
+    pairs.sort();
+    pairs.dedup();
+    let doc = serde_json::json!({
+        "v": 1,
+        "files": pairs,
+        "source_dir": config.target.source_dir,
+        "include_dirs": config.target.include_dirs,
+        "extra_link_args": config.oracle.get("extra_link_args").map(|v| v.to_string()),
+    });
+    hash::bytes_hash(doc.to_string().as_bytes())
+}
+
+/// The features as one command sees them (§2.2): loaded once, passed to
+/// whatever judges. A bad file is a value, never an error: a read path never
+/// fails because of it, and a verdict records that it could not run the
+/// features.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FeatureSnapshot {
+    /// There is no `migration/features/features.toml`.
+    None,
+    /// The file is there but cannot be used; the message says why.
+    Invalid(String),
+    /// The validated features and their `features` digest.
+    Valid {
+        /// The features.
+        features: Features,
+        /// [`features_digest`] of them under the target's config.
+        digest: String,
+    },
+}
+
+impl FeatureSnapshot {
+    /// Load the features of `ctx`'s target (see [`load`]).
+    pub fn load(ctx: &crate::config::TargetContext) -> FeatureSnapshot {
+        match load(&ctx.root) {
+            Ok(None) => FeatureSnapshot::None,
+            Ok(Some(features)) => FeatureSnapshot::Valid {
+                digest: features_digest(&features, &ctx.config),
+                features,
+            },
+            Err(Error::SchemaTooNew {
+                found, supported, ..
+            }) => FeatureSnapshot::Invalid(format!(
+                "{}/{FEATURES_DIR}/{FEATURES_FILE} was written by a newer harness \
+                 (schema_version {found}; this one reads {supported}) — update the harness",
+                crate::ledger::MIGRATION_DIR
+            )),
+            Err(Error::InvalidPlan(message)) => FeatureSnapshot::Invalid(message),
+            Err(e) => FeatureSnapshot::Invalid(format!(
+                "{}/{FEATURES_DIR}/{FEATURES_FILE} cannot be read: {}",
+                crate::ledger::MIGRATION_DIR,
+                one_line(&e.to_string())
+            )),
+        }
+    }
+
+    /// The digest a verdict records: empty without a file, [`INVALID_DIGEST`]
+    /// for an unusable one.
+    pub fn digest(&self) -> &str {
+        match self {
+            FeatureSnapshot::None => "",
+            FeatureSnapshot::Invalid(_) => INVALID_DIGEST,
+            FeatureSnapshot::Valid { digest, .. } => digest,
+        }
+    }
+}
+
+/// Today's digests, computed once per read (§2.4) and handed to every
+/// unit's report; `None` stands for "no features file".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeaturesNow {
+    /// The snapshot's digest ([`FeatureSnapshot::digest`]; never empty).
+    pub features: String,
+    /// The program digest of the tree as it is.
+    pub program: String,
+}
+
+impl FeaturesNow {
+    /// Today's digests for `snapshot`, or `None` when there is no features
+    /// file (nothing is hashed then). The program's files are hashed through
+    /// [`crate::ledger::read_regular`] (bounded, no symlink, no FIFO): a file
+    /// that cannot be read counts as missing.
+    pub fn compute(
+        ctx: &crate::config::TargetContext,
+        facts: &crate::Facts,
+        snapshot: &FeatureSnapshot,
+    ) -> Option<FeaturesNow> {
+        if *snapshot == FeatureSnapshot::None {
+            return None;
+        }
+        Some(FeaturesNow {
+            features: snapshot.digest().to_string(),
+            program: program_digest(&ctx.config, &program_files(ctx, facts)),
+        })
+    }
+
+    /// How a verdict with `inputs` covers the features as they are now.
+    pub fn coverage(&self, inputs: &crate::verdict::VerdictInputs) -> Coverage {
+        let mut reasons: Vec<&'static str> = Vec::new();
+        if inputs.features.is_empty() {
+            reasons.push("not-yet");
+        } else if inputs.features == INVALID_DIGEST || self.features == INVALID_DIGEST {
+            reasons.push("invalid");
+        } else if inputs.features != self.features {
+            reasons.push("changed");
+        }
+        if !inputs.features.is_empty() && inputs.program != self.program {
+            reasons.push("program");
+        }
+        if !inputs.features_skipped.is_empty() {
+            reasons.push("skipped");
+        }
+        if reasons.is_empty() {
+            Coverage::Current
+        } else {
+            Coverage::Behind(reasons.into_iter().map(str::to_string).collect())
+        }
+    }
+}
+
+/// Largest program file hashed for the program digest.
+const MAX_PROGRAM_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The files the whole program is built from, each with its current hash
+/// (`None` when missing or unreadable): every file the facts record and
+/// every top-level `.c` of `source_dir`.
+pub fn program_files(
+    ctx: &crate::config::TargetContext,
+    facts: &crate::Facts,
+) -> Vec<(String, Option<String>)> {
+    let hash_of = |rel: &str| {
+        crate::ledger::read_regular(&ctx.root.join(rel), MAX_PROGRAM_FILE_BYTES)
+            .ok()
+            .map(|bytes| hash::bytes_hash(&bytes))
+    };
+    let mut paths: Vec<String> = facts.files.iter().map(|f| f.path.clone()).collect();
+    let source_dir = ctx.root.join(&ctx.config.target.source_dir);
+    if let Ok(entries) = std::fs::read_dir(&source_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.ends_with(".c") {
+                let rel = Path::new(&ctx.config.target.source_dir).join(name);
+                if let Some(rel) = rel.to_str() {
+                    paths.push(rel.trim_start_matches("./").to_string());
+                }
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+        .into_iter()
+        .map(|p| (hash_of(&p), p))
+        .map(|(h, p)| (p, h))
+        .collect()
+}
+
+/// How a unit's verdict covers today's features (docs/FEATURES-DESIGN.md §3):
+/// a marker beside the verdict, never part of its staleness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Coverage {
+    /// It ran today's scenarios on today's program, none skipped.
+    Current,
+    /// Why not, from `not-yet`, `changed`, `invalid`, `program`, `skipped`.
+    Behind(Vec<String>),
+}
+
+impl serde::Serialize for Coverage {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Coverage::Current => s.serialize_str("current"),
+            Coverage::Behind(reasons) => reasons.serialize(s),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GOOD: &str = r#"
+schema_version = 1
+
+[[feature]]
+id = "gzip"
+name = "Compress to gzip"
+
+[[feature]]
+id = "help"
+name = "Show the help"
+
+[[scenario]]
+feature = "gzip"
+id = "text"
+args = ["-c", "{input}"]
+input = "sample:text"
+
+[[scenario]]
+feature = "help"
+id = "flag"
+args = ["-h"]
+"#;
+
+    fn config_from(text: &str) -> TargetConfig {
+        toml::from_str(text).expect("config")
+    }
+
+    fn config() -> TargetConfig {
+        config_from(
+            "schema_version = 1\n[target]\nname = \"zopfli\"\nsource_dir = \"src\"\n\
+             [oracle]\nextra_link_args = [\"-lm\"]\n",
+        )
+    }
+
+    fn p(text: &str) -> Result<Features, Error> {
+        parse(text, Path::new("features.toml"))
+    }
+
+    fn refused(text: &str) -> String {
+        p(text).expect_err("refused").to_string()
+    }
+
+    fn with_scenario(extra: &str) -> String {
+        format!("{GOOD}\n[[scenario]]\nfeature = \"gzip\"\nid = \"x\"\n{extra}\n")
+    }
+
+    #[test]
+    fn a_good_file_loads_in_file_order() {
+        let f = p(GOOD).expect("valid");
+        assert_eq!(f.features.len(), 2);
+        assert_eq!(f.features[0].id, "gzip");
+        assert_eq!(f.scenarios[0].check_name(), "feature:gzip/text");
+        assert_eq!(f.scenarios[0].argv(), vec!["-c", "sample_text.txt"]);
+        assert_eq!(f.scenarios[1].input, None);
+    }
+
+    #[test]
+    fn ids_are_a_closed_alphabet_of_at_most_24() {
+        assert!(is_id("a"));
+        assert!(is_id("zlib-2"));
+        assert!(is_id(&"a".repeat(24)));
+        assert!(!is_id(&"a".repeat(25)));
+        assert!(!is_id("-a"));
+        assert!(!is_id("A"));
+        assert!(!is_id("a b"));
+        assert!(!is_id("a_b"));
+        assert!(!is_id(""));
+        assert!(refused(&GOOD.replace("id = \"gzip\"", "id = \"Gzip\""))
+            .contains("is not allowed — 1 to 24"));
+    }
+
+    #[test]
+    fn arguments_follow_the_grammar() {
+        for ok in [
+            "-c",
+            "--i5",
+            "--level=3",
+            "9",
+            "compress",
+            "nosuchfile",
+            "a.b",
+            "{input}",
+        ] {
+            assert_eq!(arg_problem(ok), None, "{ok}");
+        }
+        assert!(arg_problem("a/b").expect("slash").contains("\"/\""));
+        assert!(arg_problem("/etc/passwd").expect("abs").contains("\"/\""));
+        assert!(arg_problem("--x=..").expect("dots").contains("\"..\""));
+        assert!(arg_problem("a..b").expect("dots").contains("\"..\""));
+        assert!(arg_problem("").is_some());
+        assert!(arg_problem("-").is_some());
+        assert!(arg_problem("---x").is_some());
+        assert!(arg_problem(".hidden").is_some());
+        assert!(arg_problem("a b").is_some());
+        assert!(arg_problem("$(x)").is_some());
+        assert!(arg_problem(&"a".repeat(65)).is_some());
+        assert_eq!(arg_problem(&"a".repeat(64)), None);
+        let msg = refused(&with_scenario("args = [\"a/b\"]"));
+        assert!(
+            msg.contains("scenario \"x\" of feature \"gzip\": args[0] \"a/b\" is not allowed"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn input_and_its_placeholder_go_together() {
+        assert!(refused(&with_scenario("input = \"sample:text\"")).contains("must be \"{input}\""));
+        assert!(refused(&with_scenario("args = [\"{input}\"]")).contains("needs an input"));
+        assert!(refused(&with_scenario(
+            "args = [\"{input}\", \"{input}\"]\ninput = \"sample:rand\""
+        ))
+        .contains("only once"));
+        assert!(
+            refused(&with_scenario("args = [\"{input}\"]\ninput = \"inputs/x\""))
+                .contains("is not one of sample:text")
+        );
+        assert!(p(&with_scenario(
+            "args = [\"{input}\"]\ninput = \"sample:empty\""
+        ))
+        .is_ok());
+    }
+
+    #[test]
+    fn unknown_keys_types_and_ids_are_refused() {
+        assert!(refused(&format!("{GOOD}\nextra = 1\n")).contains("unknown key `extra`"));
+        assert!(refused(&GOOD.replace(
+            "name = \"Show the help\"",
+            "name = \"x\"\ndescription = \"y\""
+        ))
+        .contains("unknown key `description`"));
+        assert!(refused(&with_scenario("env = []")).contains("unknown key `env`"));
+        assert!(refused(&with_scenario("args = \"-c\"")).contains("must be an array"));
+        assert!(refused(&with_scenario("args = [1]")).contains("args[0] must be a string"));
+        assert!(
+            refused(&GOOD.replace("feature = \"help\"", "feature = \"nope\""))
+                .contains("\"nope\" is not a [[feature]] id")
+        );
+        assert!(refused(&GOOD.replace("id = \"help\"", "id = \"gzip\"")).contains("used twice"));
+        assert!(
+            refused(&with_scenario("").replace("id = \"x\"", "id = \"text\""))
+                .contains("used twice")
+        );
+        assert!(refused("schema_version = 1\nfeature = 3\n").contains("[[feature]] tables"));
+        assert!(refused("x = [").contains("not valid TOML"));
+    }
+
+    #[test]
+    fn schema_version_is_required_and_newer_is_too_new() {
+        assert!(refused(&GOOD.replace("schema_version = 1", "")).contains("is missing"));
+        assert!(
+            refused(&GOOD.replace("schema_version = 1", "schema_version = \"1\""))
+                .contains("must be 1")
+        );
+        assert!(matches!(
+            p(&GOOD.replace("schema_version = 1", "schema_version = 2")),
+            Err(Error::SchemaTooNew { found: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn names_are_bounded_and_printable() {
+        assert!(refused(&GOOD.replace("Show the help", "")).contains("1 to 60"));
+        assert!(refused(&GOOD.replace("Show the help", &"x".repeat(61))).contains("1 to 60"));
+        assert!(p(&GOOD.replace("Show the help", &"é".repeat(60))).is_ok());
+        assert!(refused(&GOOD.replace("Show the help", "a\\u001bb")).contains("control"));
+    }
+
+    #[test]
+    fn limits_are_enforced() {
+        let mut many = String::from("schema_version = 1\n");
+        for i in 0..17 {
+            many.push_str(&format!("[[feature]]\nid = \"f{i}\"\nname = \"n\"\n"));
+        }
+        assert!(refused(&many).contains("17 features; at most 16"));
+        assert!(refused(&GOOD.replace(
+            "[[scenario]]\nfeature = \"help\"",
+            "[[feature]]\nid = \"lonely\"\nname = \"n\"\n[[scenario]]\nfeature = \"help\""
+        ))
+        .contains("\"lonely\" has no [[scenario]]"));
+        let mut nine = String::from(GOOD);
+        for i in 0..8 {
+            nine.push_str(&format!(
+                "[[scenario]]\nfeature = \"gzip\"\nid = \"s{i}\"\n"
+            ));
+        }
+        assert!(refused(&nine).contains("\"gzip\" has 9 scenarios; at most 8"));
+        let args: Vec<String> = (0..9).map(|i| format!("\"-{i}\"")).collect();
+        assert!(
+            refused(&with_scenario(&format!("args = [{}]", args.join(","))))
+                .contains("9 arguments; at most 8")
+        );
+        let mut seventeen = String::from("schema_version = 1\n");
+        for f in 0..3 {
+            seventeen.push_str(&format!("[[feature]]\nid = \"f{f}\"\nname = \"n\"\n"));
+        }
+        for i in 0..17 {
+            seventeen.push_str(&format!(
+                "[[scenario]]\nfeature = \"f{}\"\nid = \"s{i}\"\n",
+                i % 3
+            ));
+        }
+        assert!(refused(&seventeen).contains("17 scenarios; at most 16"));
+    }
+
+    #[test]
+    fn the_file_is_found_read_regularly_and_optional() {
+        let dir = std::env::temp_dir().join(format!("rh-features-{}", hash::random_hex(6)));
+        std::fs::create_dir_all(dir.join("migration")).expect("mkdir");
+        assert_eq!(load(&dir).expect("no dir"), None);
+        std::fs::create_dir_all(features_dir(&dir)).expect("mkdir");
+        assert_eq!(load(&dir).expect("no file"), None);
+        std::fs::write(features_path(&dir), GOOD).expect("write");
+        assert_eq!(load(&dir).expect("ok").expect("some").features.len(), 2);
+        std::fs::remove_file(features_path(&dir)).expect("rm");
+        std::os::unix::fs::symlink("/etc/hosts", features_path(&dir)).expect("link");
+        assert!(load(&dir).is_err(), "a symlinked file is refused");
+        std::fs::remove_file(features_path(&dir)).expect("rm");
+        std::fs::write(features_path(&dir), "x".repeat(64 * 1024 + 1)).expect("write");
+        assert!(load(&dir)
+            .expect_err("too big")
+            .to_string()
+            .contains("longer than"));
+        std::fs::remove_dir_all(features_dir(&dir)).expect("rm");
+        std::fs::create_dir_all(dir.join("elsewhere")).expect("mkdir");
+        std::os::unix::fs::symlink(dir.join("elsewhere"), features_dir(&dir)).expect("link");
+        assert!(load(&dir)
+            .expect_err("dir link")
+            .to_string()
+            .contains("symlink is refused"));
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn the_features_digest_covers_what_runs_and_not_names() {
+        let base = features_digest(&p(GOOD).expect("valid"), &config());
+        let renamed = features_digest(
+            &p(&GOOD.replace("Compress to gzip", "Gzip it")).expect("ok"),
+            &config(),
+        );
+        assert_eq!(base, renamed, "rewording a feature changes nothing");
+        let reordered = GOOD.replace(
+            "[[feature]]\nid = \"gzip\"\nname = \"Compress to gzip\"\n\n[[feature]]\nid = \"help\"\nname = \"Show the help\"",
+            "[[feature]]\nid = \"help\"\nname = \"Show the help\"\n\n[[feature]]\nid = \"gzip\"\nname = \"Compress to gzip\"",
+        );
+        assert_ne!(reordered, GOOD);
+        assert_eq!(
+            base,
+            features_digest(&p(&reordered).expect("ok"), &config()),
+            "order is not content"
+        );
+        for changed in [
+            GOOD.replace("[\"-h\"]", "[\"-v\"]"),
+            GOOD.replace("sample:text", "sample:rand"),
+            GOOD.replace("id = \"flag\"", "id = \"flag2\""),
+            GOOD.replace("id = \"help\"", "id = \"helps\"")
+                .replace("feature = \"help\"", "feature = \"helps\""),
+        ] {
+            assert_ne!(
+                base,
+                features_digest(&p(&changed).expect("ok"), &config()),
+                "{changed}"
+            );
+        }
+    }
+
+    #[test]
+    fn toml_errors_name_their_line_and_column_on_one_line() {
+        let msg = refused("schema_version = 1\n[[feature]]\nid = \"a\"\nname = \n");
+        assert!(msg.contains("not valid TOML at line 4, column"), "{msg}");
+        assert!(!msg.contains('\n'), "{msg:?}");
+        assert_eq!(line_column("ab\ncd", 4), (2, 2));
+        assert_eq!(
+            line_column("é\nx", 1),
+            (1, 1),
+            "inside a character: its start"
+        );
+        assert_eq!(line_column("x", 99), (1, 2));
+    }
+
+    #[test]
+    fn a_starter_with_no_features_is_valid() {
+        let f = p("schema_version = 1\n# a comment\n").expect("valid");
+        assert!(f.features.is_empty() && f.scenarios.is_empty());
+    }
+
+    #[test]
+    fn the_program_runs_under_the_targets_name_when_it_is_a_file_name() {
+        assert_eq!(program_name(&config()), "zopfli");
+        for bad in ["a b", "../x", ".x", "", &"a".repeat(33)] {
+            let c = config_from(&format!(
+                "schema_version = 1\n[target]\nname = {bad:?}\nsource_dir = \"src\"\n"
+            ));
+            assert_eq!(program_name(&c), "program", "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_features_digest_covers_the_program_name_and_the_timeout() {
+        let f = p(GOOD).expect("valid");
+        let base = features_digest(&f, &config());
+        let renamed = config_from(
+            "schema_version = 1\n[target]\nname = \"zop\"\nsource_dir = \"src\"\n\
+             [oracle]\nextra_link_args = [\"-lm\"]\n",
+        );
+        assert_ne!(base, features_digest(&f, &renamed));
+        let timed = config_from(
+            "schema_version = 1\n[target]\nname = \"zopfli\"\nsource_dir = \"src\"\n\
+             [oracle]\nextra_link_args = [\"-lm\"]\ntimeout_secs = 30\n",
+        );
+        assert_ne!(base, features_digest(&f, &timed));
+        let linked =
+            config_from("schema_version = 1\n[target]\nname = \"zopfli\"\nsource_dir = \"src\"\n");
+        assert_eq!(
+            base,
+            features_digest(&f, &linked),
+            "link args are the program's, not the features'"
+        );
+    }
+
+    #[test]
+    fn the_program_digest_covers_files_missing_files_and_the_build_config() {
+        let c = config();
+        let files = vec![
+            ("src/a.c".to_string(), Some("blake3:aa".to_string())),
+            ("src/b.h".to_string(), Some("blake3:bb".to_string())),
+        ];
+        let base = program_digest(&c, &files);
+        let mut reversed = files.clone();
+        reversed.reverse();
+        assert_eq!(base, program_digest(&c, &reversed), "order is not content");
+        let mut changed = files.clone();
+        changed[0].1 = Some("blake3:ab".into());
+        assert_ne!(base, program_digest(&c, &changed));
+        let mut missing = files.clone();
+        missing[0].1 = None;
+        assert_ne!(base, program_digest(&c, &missing));
+        let mut more = files.clone();
+        more.push(("src/new.c".into(), Some("blake3:cc".into())));
+        assert_ne!(base, program_digest(&c, &more));
+        for other in [
+            "schema_version = 1\n[target]\nname = \"zopfli\"\nsource_dir = \"src2\"\n[oracle]\nextra_link_args = [\"-lm\"]\n",
+            "schema_version = 1\n[target]\nname = \"zopfli\"\nsource_dir = \"src\"\ninclude_dirs = [\"src/i\"]\n[oracle]\nextra_link_args = [\"-lm\"]\n",
+            "schema_version = 1\n[target]\nname = \"zopfli\"\nsource_dir = \"src\"\n",
+        ] {
+            assert_ne!(base, program_digest(&config_from(other), &files), "{other}");
+        }
+        let renamed = config_from(
+            "schema_version = 1\n[target]\nname = \"other\"\nsource_dir = \"src\"\n[oracle]\nextra_link_args = [\"-lm\"]\n",
+        );
+        assert_eq!(
+            base,
+            program_digest(&renamed, &files),
+            "the name is the features' input"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_is_a_value_whatever_the_file_holds() {
+        let dir = std::env::temp_dir().join(format!("rh-snap-{}", hash::random_hex(6)));
+        std::fs::create_dir_all(features_dir(&dir)).expect("mkdir");
+        let ctx = crate::config::TargetContext {
+            root: dir.clone(),
+            config: config(),
+        };
+        assert_eq!(FeatureSnapshot::load(&ctx), FeatureSnapshot::None);
+        assert_eq!(FeatureSnapshot::None.digest(), "");
+        std::fs::write(features_path(&dir), GOOD).expect("write");
+        match FeatureSnapshot::load(&ctx) {
+            FeatureSnapshot::Valid { features, digest } => {
+                assert_eq!(digest, features_digest(&features, &ctx.config));
+            }
+            other => panic!("{other:?}"),
+        }
+        std::fs::write(features_path(&dir), "schema_version = 1\nx = 1\n").expect("write");
+        let invalid = FeatureSnapshot::load(&ctx);
+        assert!(matches!(&invalid, FeatureSnapshot::Invalid(m) if m.contains("unknown key `x`")));
+        assert_eq!(invalid.digest(), INVALID_DIGEST);
+        std::fs::write(features_path(&dir), "schema_version = 7\n").expect("write");
+        assert!(matches!(FeatureSnapshot::load(&ctx),
+            FeatureSnapshot::Invalid(m) if m.contains("newer harness") && m.contains("schema_version 7")));
+        std::fs::write(features_path(&dir), [0xff, 0xfe]).expect("write");
+        assert!(
+            matches!(FeatureSnapshot::load(&ctx), FeatureSnapshot::Invalid(m) if m.contains("not UTF-8"))
+        );
+        std::fs::remove_file(features_path(&dir)).expect("rm");
+        std::fs::create_dir(features_path(&dir)).expect("a directory where the file goes");
+        assert!(
+            matches!(FeatureSnapshot::load(&ctx), FeatureSnapshot::Invalid(m) if m.contains("cannot be read"))
+        );
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn coverage_names_every_reason_a_verdict_is_behind() {
+        use crate::verdict::VerdictInputs;
+        let now = FeaturesNow {
+            features: "blake3:f".into(),
+            program: "blake3:p".into(),
+        };
+        let inputs = |features: &str, program: &str, skipped: &[&str]| VerdictInputs {
+            features: features.into(),
+            program: program.into(),
+            features_skipped: skipped.iter().map(|s| s.to_string()).collect(),
+            ..VerdictInputs::default()
+        };
+        let behind = |r: &[&str]| Coverage::Behind(r.iter().map(|s| s.to_string()).collect());
+        assert_eq!(
+            now.coverage(&inputs("blake3:f", "blake3:p", &[])),
+            Coverage::Current
+        );
+        assert_eq!(now.coverage(&inputs("", "", &[])), behind(&["not-yet"]));
+        assert_eq!(
+            now.coverage(&inputs("blake3:g", "blake3:p", &[])),
+            behind(&["changed"])
+        );
+        assert_eq!(
+            now.coverage(&inputs("blake3:f", "blake3:q", &[])),
+            behind(&["program"])
+        );
+        assert_eq!(
+            now.coverage(&inputs("blake3:f", "blake3:p", &["zlib/text: budget"])),
+            behind(&["skipped"])
+        );
+        assert_eq!(
+            now.coverage(&inputs(INVALID_DIGEST, "blake3:p", &[])),
+            behind(&["invalid"])
+        );
+        let broken = FeaturesNow {
+            features: INVALID_DIGEST.into(),
+            program: "blake3:p".into(),
+        };
+        assert_eq!(
+            broken.coverage(&inputs("blake3:f", "blake3:p", &[])),
+            behind(&["invalid"])
+        );
+        assert_eq!(
+            now.coverage(&inputs("blake3:g", "blake3:q", &["a/b: budget"])),
+            behind(&["changed", "program", "skipped"])
+        );
+    }
+
+    #[test]
+    fn nothing_is_hashed_without_a_features_file() {
+        let ctx = crate::config::TargetContext {
+            root: std::env::temp_dir().join("rh-no-such-target"),
+            config: config(),
+        };
+        assert_eq!(
+            FeaturesNow::compute(&ctx, &crate::Facts::default(), &FeatureSnapshot::None),
+            None
+        );
+        let now = FeaturesNow::compute(
+            &ctx,
+            &crate::Facts::default(),
+            &FeatureSnapshot::Invalid("x".into()),
+        )
+        .expect("a file exists");
+        assert_eq!(now.features, INVALID_DIGEST);
+    }
+
+    #[test]
+    fn program_files_are_the_facts_files_and_every_top_level_c() {
+        let dir = std::env::temp_dir().join(format!("rh-prog-{}", hash::random_hex(6)));
+        std::fs::create_dir_all(dir.join("src/sub")).expect("mkdir");
+        std::fs::write(dir.join("src/a.c"), "int a;").expect("w");
+        std::fs::write(dir.join("src/new.c"), "int n;").expect("w");
+        std::fs::write(dir.join("src/sub/deep.c"), "int d;").expect("w");
+        std::fs::write(dir.join("src/notes.txt"), "x").expect("w");
+        let ctx = crate::config::TargetContext {
+            root: dir.clone(),
+            config: config(),
+        };
+        let facts = crate::Facts {
+            files: vec![
+                crate::facts::FileRecord {
+                    path: "src/a.c".into(),
+                    hash: String::new(),
+                    includes: vec![],
+                },
+                crate::facts::FileRecord {
+                    path: "src/gone.h".into(),
+                    hash: String::new(),
+                    includes: vec![],
+                },
+            ],
+            ..crate::Facts::default()
+        };
+        let files = program_files(&ctx, &facts);
+        let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(paths, ["src/a.c", "src/gone.h", "src/new.c"]);
+        assert_eq!(
+            files[0].1.as_deref(),
+            Some(hash::bytes_hash(b"int a;").as_str())
+        );
+        assert_eq!(files[1].1, None, "a missing file is None");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    const SAMPLE_TEXT_HASH: &str =
+        "blake3:4cea91382b6dd35ac6975436d497165f0ac5dfb268b0c814332ed8870476e770";
+    const SAMPLE_RAND_HASH: &str =
+        "blake3:54b5e1bad3aef2184d1690cd2e422e71a8b91dadb810a2a96321df4bd3982610";
+
+    #[test]
+    fn samples_are_the_whole_program_checks_bytes() {
+        let text = Sample::Text.bytes();
+        let phrase: &[u8] =
+            b"the quick brown fox jumps over the lazy dog; pack my box with five dozen liquor jugs.\n";
+        assert_eq!(&text[..phrase.len()], phrase);
+        assert_eq!(text.len() % phrase.len(), 0);
+        assert!(text.len() >= 30_000 && text.len() < 30_000 + phrase.len());
+        assert_eq!(Sample::Rand.bytes().len(), 16 * 1024);
+        // Pinned: a change to a sample changes every verdict's `features`
+        // digest and must be deliberate.
+        assert_eq!(hash::bytes_hash(&text), SAMPLE_TEXT_HASH);
+        let rand = Sample::Rand.bytes();
+        // Computed independently (a Python xorshift64 with the same seed).
+        assert_eq!(&rand[..8], &[231, 227, 168, 234, 11, 40, 108, 127]);
+        assert_eq!(
+            &rand[rand.len() - 8..],
+            &[29, 100, 205, 68, 100, 20, 13, 128]
+        );
+        assert_eq!(hash::bytes_hash(&rand), SAMPLE_RAND_HASH);
+        assert!(Sample::Empty.bytes().is_empty());
+    }
+}

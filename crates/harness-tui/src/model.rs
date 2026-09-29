@@ -8,6 +8,7 @@ use crate::pairs::{self, FunctionPair};
 use harness_core::attempts::{self, AttemptRecord, Authorship, Provenance, Supersession};
 use harness_core::error::Error;
 use harness_core::facts::Facts;
+use harness_core::features::{FeatureSnapshot, FeaturesNow};
 use harness_core::hash;
 use harness_core::ledger::Ledger;
 use harness_core::plan::{Plan, Unit};
@@ -159,6 +160,9 @@ pub struct Snapshot {
     pub units: Vec<UnitView>,
     /// Why there are no units, when there are none.
     pub note: Option<String>,
+    /// The person's features, read once per load (docs/FEATURES-DESIGN.md
+    /// §2.2, §8.1): a bad file is a value, never a failed read.
+    pub features: FeatureSnapshot,
 }
 
 impl Snapshot {
@@ -172,6 +176,7 @@ impl Snapshot {
             facts_state: None,
             units: Vec::new(),
             note: None,
+            features: FeatureSnapshot::load(&ctx),
         };
         let facts = match Facts::load(&ledger.facts_path()) {
             Ok(f) => f,
@@ -205,8 +210,11 @@ impl Snapshot {
             }
             Err(e) => return Err(e),
         };
+        let now = FeaturesNow::compute(&ctx, &facts, &snapshot.features);
         for unit in &plan.units {
-            snapshot.units.push(unit_view(&ctx, &ledger, &facts, unit)?);
+            snapshot
+                .units
+                .push(unit_view(&ctx, &ledger, &facts, unit, now.as_ref())?);
         }
         snapshot.facts = Some(facts);
         Ok(snapshot)
@@ -249,8 +257,9 @@ fn unit_view(
     ledger: &Ledger,
     facts: &Facts,
     unit: &Unit,
+    features: Option<&FeaturesNow>,
 ) -> Result<UnitView, Error> {
-    let report = status::unit_report(ctx, ledger, facts, unit)?;
+    let report = status::unit_report(ctx, ledger, facts, unit, features)?;
     let records = attempts::load_unit_attempts(ledger, &unit.id)?;
     // A source or driver deleted since the scan binds nothing — as `state
     // status` reads it ("unreadable") — rather than making the whole ledger

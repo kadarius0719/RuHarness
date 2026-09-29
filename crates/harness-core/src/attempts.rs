@@ -172,6 +172,11 @@ pub struct AttemptRecord {
     /// scored as unassisted pipeline output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester: Option<String>,
+    /// The `features` digest its turns were judged under
+    /// (docs/FEATURES-DESIGN.md §3); absent without a features file. Not a
+    /// binding input: a replay judges with it when it can.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub features: String,
 }
 
 /// Content-derived attempt id: `a-` + 12 hex of blake3(unit ‖ NUL ‖ unit_source
@@ -835,6 +840,7 @@ mod tests {
     #[test]
     fn migrate_records_omit_stage() {
         let rec = AttemptRecord {
+            features: String::new(),
             requester: None,
             schema: ATTEMPT_SCHEMA_NAME.into(),
             schema_version: 1,
@@ -886,6 +892,7 @@ mod tests {
 
     fn prov_rec(id: &str, kind: &str, outcome: &str, digest: &str) -> AttemptRecord {
         AttemptRecord {
+            features: String::new(),
             requester: None,
             schema: ATTEMPT_SCHEMA_NAME.into(),
             schema_version: 1,

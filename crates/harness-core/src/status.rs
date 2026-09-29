@@ -81,6 +81,11 @@ pub struct UnitReport {
     pub promotion_interrupted: Option<String>,
     /// The unit's recorded migrate attempts.
     pub attempts: Vec<AttemptSummary>,
+    /// How its verdict covers today's features (docs/FEATURES-DESIGN.md §3):
+    /// absent without a features file or without a verdict. A marker, never
+    /// part of `stale` or `contradiction`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub features: Option<crate::features::Coverage>,
 }
 
 impl UnitReport {
@@ -124,6 +129,13 @@ impl UnitReport {
                 None => String::new(),
             },
         };
+        let desc = match &self.features {
+            Some(crate::features::Coverage::Behind(reasons)) => {
+                format!("{desc} features=behind({})", reasons.join(", "))
+            }
+            Some(crate::features::Coverage::Current) => format!("{desc} features=current"),
+            None => desc,
+        };
         format!(
             "status: {} [{}] plan={} verdict={desc}{tail}",
             self.id,
@@ -162,18 +174,22 @@ impl UnitReport {
 /// re-checked once from fresh reads; if it holds and a writer holds the
 /// ledger, the unit is reported `write_in_flight` instead
 /// (docs/CLI-HARDENING.md §1 "What a lock-free reader can see").
+///
+/// `features` is today's digests ([`crate::features::FeaturesNow::compute`],
+/// once per read), `None` without a features file.
 pub fn unit_report(
     ctx: &TargetContext,
     ledger: &Ledger,
     facts: &crate::Facts,
     unit: &Unit,
+    features: Option<&crate::features::FeaturesNow>,
 ) -> Result<UnitReport, Error> {
-    let mut report = compute(ctx, ledger, facts, unit)?;
+    let mut report = compute(ctx, ledger, facts, unit, features)?;
     if report.contradiction || !report.verdict.stale.is_empty() {
         // Phase two: the plan entry and the verdict, re-read.
         let plan = Plan::load(&ledger.plan_path())?;
         let again = match plan.units.iter().find(|u| u.id == unit.id) {
-            Some(fresh_unit) => compute(ctx, ledger, facts, fresh_unit)?,
+            Some(fresh_unit) => compute(ctx, ledger, facts, fresh_unit, features)?,
             None => report.clone(),
         };
         report = again;
@@ -257,14 +273,17 @@ fn compute(
     ledger: &Ledger,
     facts: &crate::Facts,
     unit: &Unit,
+    features: Option<&crate::features::FeaturesNow>,
 ) -> Result<UnitReport, Error> {
     let closure = facts.include_closure(&unit.files);
     let source_now = hash::file_set_hash_on_disk(&ctx.root, &closure)
         .unwrap_or_else(|_| "blake3:unreadable".into());
     let source_fresh = source_now == unit.source_hash;
 
+    let mut coverage = None;
     let verdict = match Verdict::load(&ledger.verdict_latest_path(&unit.id)) {
         Ok(v) => {
+            coverage = features.map(|now| now.coverage(&v.inputs));
             let mut stale: Vec<String> = Vec::new();
             if v.inputs.unit_source != source_now {
                 stale.push("source".into());
@@ -341,6 +360,7 @@ fn compute(
         write_in_flight: None,
         promotion_interrupted: None,
         attempts,
+        features: coverage,
     })
 }
 
@@ -362,6 +382,7 @@ mod tests {
             write_in_flight: None,
             promotion_interrupted: None,
             attempts: Vec::new(),
+            features: None,
         }
     }
 
@@ -434,5 +455,29 @@ mod tests {
         assert!(serde_json::to_string(&missing)
             .unwrap()
             .contains("\"verdict\":{\"state\":\"missing\",\"stale\":[]}"));
+    }
+
+    #[test]
+    fn feature_coverage_is_a_marker_beside_the_verdict() {
+        use crate::features::Coverage;
+        let mut r = report(VerdictState::Present, Some(true), &[]);
+        r.features = Some(Coverage::Behind(vec!["changed".into(), "program".into()]));
+        assert!(r.fresh_green(), "coverage never enters freshness");
+        assert_eq!(
+            r.render_line(),
+            "status: u1 [verified] plan=fresh verdict=green (fresh) features=behind(changed, program)"
+        );
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(
+            json.ends_with(",\"features\":[\"changed\",\"program\"]}"),
+            "{json}"
+        );
+        r.features = Some(Coverage::Current);
+        assert!(serde_json::to_string(&r)
+            .unwrap()
+            .ends_with(",\"features\":\"current\"}"));
+        assert!(r
+            .render_line()
+            .ends_with("verdict=green (fresh) features=current"));
     }
 }

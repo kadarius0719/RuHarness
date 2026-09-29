@@ -29,7 +29,7 @@ pub struct Check {
 
 /// Digests of everything the oracle consumed, computed from the tree it
 /// actually tested.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VerdictInputs {
     /// File-set hash of the unit's files plus transitive project includes.
     pub unit_source: String,
@@ -45,6 +45,18 @@ pub struct VerdictInputs {
     /// Toolchain identifiers (e.g. `rustc -V`, `cc --version` first lines).
     #[serde(default)]
     pub toolchain: Vec<String>,
+    /// The `features` digest the scenario checks ran under
+    /// (docs/FEATURES-DESIGN.md §3), `invalid` when the features file could
+    /// not be used; absent without a features file.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub features: String,
+    /// The `program` digest (§2.4); absent without a features file.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub program: String,
+    /// Scenario checks that did not run, each `<feature>/<scenario>:
+    /// <reason>` with the reason from a closed set (§3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features_skipped: Vec<String>,
 }
 
 /// A complete oracle verdict for one unit.
@@ -109,7 +121,7 @@ impl Verdict {
     /// wall-clock time belong in the gitignored build dir).
     pub fn render_md(&self) -> String {
         let mut md = format!(
-            "# Oracle verdict — {}\n\nVerdict: **{}**\n\nInputs tested:\n- unit_source: `{}`\n- rust_crate: `{}`\n- driver: `{}`\n- toolchain: {}\n\nChecks:\n",
+            "# Oracle verdict — {}\n\nVerdict: **{}**\n\nInputs tested:\n- unit_source: `{}`\n- rust_crate: `{}`\n- driver: `{}`\n- toolchain: {}\n",
             self.unit,
             if self.green { "GREEN" } else { "RED" },
             self.inputs.unit_source,
@@ -117,6 +129,16 @@ impl Verdict {
             self.inputs.driver,
             self.inputs.toolchain.join("; "),
         );
+        if !self.inputs.features.is_empty() {
+            md.push_str(&format!(
+                "- features: `{}`\n- program: `{}`\n",
+                self.inputs.features, self.inputs.program
+            ));
+            for skipped in &self.inputs.features_skipped {
+                md.push_str(&format!("- feature scenario skipped: {skipped}\n"));
+            }
+        }
+        md.push_str("\nChecks:\n");
         for c in &self.checks {
             md.push_str(&format!(
                 "- **{}**: {} — {}\n",

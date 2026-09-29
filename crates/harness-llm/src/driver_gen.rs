@@ -1608,7 +1608,7 @@ return 0;\n}\n";
                         driver: "blake3:d".into(),
                         rust_crate: "blake3:c".into(),
                         replaces: vec![],
-                        toolchain: vec![],
+                        ..VerdictInputs::default()
                     },
                     vec![Check {
                         name: "differential-driver".into(),

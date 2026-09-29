@@ -682,6 +682,7 @@ pub fn record_human_attempt(
     reset_unfinished(&work_dir, &id)?;
     remove_path(&work_dir.join(attempts::HUMAN_EDIT_DIR))?;
     let mut record = AttemptRecord {
+        features: String::new(),
         schema: attempts::ATTEMPT_SCHEMA_NAME.to_string(),
         schema_version: attempts::schema_version_for(None),
         id: id.clone(),
@@ -1657,6 +1658,7 @@ int add(int a, int b) { return a + b; }\n";
                 rust_crate: "blake3:crate".into(),
                 replaces: vec![],
                 toolchain: vec!["rustc 1.85.0".into(), "sandbox: test".into()],
+                ..VerdictInputs::default()
             },
             checks
                 .iter()

@@ -439,6 +439,7 @@ impl<'a> Job<'a> {
 
         // From here on the attempt dir is a new or a never-finished one.
         let mut record = AttemptRecord {
+            features: String::new(),
             schema: ATTEMPT_SCHEMA_NAME.to_string(),
             schema_version: schema_version_for(params.requester),
             id: id.clone(),

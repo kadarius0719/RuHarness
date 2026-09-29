@@ -722,9 +722,17 @@ fn cmd_status(target: PathBuf) -> Result<u8> {
         #[serde(flatten)]
         report: &'a harness_core::status::UnitReport,
     }
+    // Today's feature digests, once for every unit (docs/FEATURES-DESIGN.md
+    // §2.4); nothing is hashed without a features file.
+    let features_now = harness_core::features::FeaturesNow::compute(
+        &ctx,
+        &facts,
+        &harness_core::features::FeatureSnapshot::load(&ctx),
+    );
     for unit in &plan_doc.units {
         // One computation renders both surfaces (docs/CLI-HARDENING.md §4).
-        let r = harness_core::status::unit_report(&ctx, &ledger, &facts, unit)?;
+        let r =
+            harness_core::status::unit_report(&ctx, &ledger, &facts, unit, features_now.as_ref())?;
         out(r.render_line());
         if let Some(line) = r.render_attempts_line() {
             out(line);

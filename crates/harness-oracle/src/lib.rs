@@ -189,7 +189,7 @@ pub fn compute_inputs(
         driver,
         rust_crate,
         replaces: unit.oracle_param_list("replaces"),
-        toolchain: Vec::new(),
+        ..VerdictInputs::default()
     })
 }
 
