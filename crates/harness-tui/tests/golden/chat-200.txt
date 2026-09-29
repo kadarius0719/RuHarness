@@ -7,7 +7,7 @@
 │      ▸ ✓ lib.c       migrated││                                                                                                      ││                                                              │
 │  ▾ Units (1)                 ││                                                                                                      ││                                                              │
 │    ▸ ✓ u-lib         migrated││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
+│    Features (none yet)       ││                                                                                                      ││                                                              │
 │                              ││                                                                                                      ││                                                              │
 │                              ││                                                                                                      ││                                                              │
 │                              ││                                                                                                      ││                                                              │

@@ -18,6 +18,7 @@ pub mod asks;
 use crate::chat::{self, Chat};
 use crate::dialog::{Choice, Dialog, Kind, Outcome};
 use crate::events::{Event, EVENTS_SCHEMA, EVENTS_SCHEMA_VERSION};
+use crate::featmap;
 use crate::files::{self, FileState, Files, TreeWalk, UnitState};
 use crate::handedit;
 use crate::highlight::{Highlighter, Lang, Pieces};
@@ -643,6 +644,9 @@ pub struct App {
     pub walk: TreeWalk,
     /// The states of files, functions and units.
     pub files: Files,
+    /// The person's features as the cockpit shows them
+    /// (docs/FEATURES-DESIGN.md §8.1).
+    pub features: featmap::FeatureModel,
     /// What is selected.
     pub selection: Selection,
     /// Which nodes are folded or opened.
@@ -863,6 +867,7 @@ impl App {
     /// A cockpit over what the first read found.
     pub fn new(config: Config, read: Read) -> App {
         let files = files::build(&read.snapshot, &read.walk);
+        let features = featmap::build(&read.snapshot, &files, &read.map, read.map_now.as_ref());
         let target = config.target.clone();
         let holder = read.holder;
         let migrate_model = read.migrate_model;
@@ -872,6 +877,7 @@ impl App {
             snapshot: read.snapshot,
             walk: read.walk,
             files,
+            features,
             selection: Selection::Project,
             expansion: Expansion::default(),
             rows: Vec::new(),
@@ -981,7 +987,13 @@ impl App {
     }
 
     fn rebuild_rows(&mut self) {
-        self.rows = tree::rows(&self.snapshot, &self.files, &self.walk, &self.expansion);
+        self.rows = tree::rows(
+            &self.snapshot,
+            &self.files,
+            &self.features,
+            &self.walk,
+            &self.expansion,
+        );
     }
 
     /// Select `sel` (revealing it), re-reading the View when it changed.
@@ -1019,7 +1031,7 @@ impl App {
 
     fn go_back(&mut self) -> bool {
         while let Some(prev) = self.back.pop() {
-            if tree::exists(&self.snapshot, &self.files, &prev) {
+            if tree::exists(&self.snapshot, &self.files, &self.features, &prev) {
                 self.select(prev);
                 return true;
             }
@@ -1121,7 +1133,14 @@ impl App {
         self.migrate_model = read.migrate_model;
         self.migrate_turns = read.migrate_turns;
         self.files = files::build(&self.snapshot, &self.walk);
-        self.selection = tree::surviving(&self.snapshot, &self.files, &self.selection);
+        self.features = featmap::build(
+            &self.snapshot,
+            &self.files,
+            &read.map,
+            read.map_now.as_ref(),
+        );
+        self.selection =
+            tree::surviving(&self.snapshot, &self.files, &self.features, &self.selection);
         // A finished (or vanished) attempt no longer awaits anything.
         let units = &self.snapshot.units;
         self.awaiting.retain(|aw| match &aw.attempt {
@@ -4059,6 +4078,20 @@ impl App {
     pub fn node_label(&self, sel: &Selection) -> (&'static str, String) {
         match sel {
             Selection::Project | Selection::Dir(_) | Selection::Units => ("", String::new()),
+            Selection::Features => match &self.features.group {
+                featmap::Group::Invalid(_) => ("⚠", "error".into()),
+                _ => ("", String::new()),
+            },
+            Selection::Feature(id) => match self.features.feature(id) {
+                Some(f) => (
+                    f.state.glyph(),
+                    match &f.also {
+                        Some(also) => format!("{} · {also}", f.state.word()),
+                        None => f.state.word(),
+                    },
+                ),
+                None => ("", String::new()),
+            },
             Selection::File(p) => match self.files.file(p) {
                 Some(f) => files::file_label(&self.files, &f.state),
                 None => ("", String::new()),

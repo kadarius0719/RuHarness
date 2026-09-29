@@ -7,7 +7,7 @@
 │      ▸ ✓ lib.c       migrated││  line 189                                                                            │
 │  ▾ Units (1)                 ││  line 190                                                                            │
 │    ▸ ✓ u-lib         migrated││  line 191                                                                            │
-│                              ││  line 192                                                                            │
+│    Features (none yet)       ││  line 192                                                                            │
 │                              ││  line 193                                                                            │
 │                              ││  line 194                                                                            │
 │                              ││  line 195                                                                            │

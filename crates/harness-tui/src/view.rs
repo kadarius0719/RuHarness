@@ -12,6 +12,7 @@ use crate::app::{
     LayoutMode, Menu, Mode, PairView, Tone,
 };
 use crate::display::{self, Sanitizer};
+use crate::featmap;
 use crate::files::{self, FileState, UnitState};
 use crate::highlight::{Class, Pieces};
 use crate::menu::MODEL_SEPARATOR;
@@ -82,8 +83,8 @@ fn class_style(class: Class) -> Style {
 fn glyph_style(glyph: &str) -> Style {
     match glyph {
         "✗" | "?" => Style::default().fg(Color::Red),
-        "⚠" | "!" | "◐" => Style::default().fg(Color::Yellow),
-        "✓" => Style::default().fg(Color::Green),
+        "⚠" | "!" | "◐" | "⚑" | "↻" => Style::default().fg(Color::Yellow),
+        "✓" | "◉" => Style::default().fg(Color::Green),
         "✓?" => Style::default().fg(Color::Cyan),
         "+" => Style::default().fg(Color::Cyan),
         _ => dim(),
@@ -509,15 +510,49 @@ fn node_name(app: &App, sel: &Selection) -> String {
         Selection::Unit(id) => id.clone(),
         Selection::Crate(_) => "crate".into(),
         Selection::Attempt(_, id) => short_id(id),
+        Selection::Features => match &app.features.group {
+            featmap::Group::NoFile => "Features (none yet)".into(),
+            featmap::Group::Invalid(_) => "Features (error)".into(),
+            featmap::Group::Valid => format!("Features ({})", app.features.features.len()),
+        },
+        Selection::Feature(id) => feature_row_name(app, id),
     }
 }
+
+/// A feature's name in the tree: the person's words, filtered; when two
+/// cut names would read the same, the id replaces the tail (§8.3).
+fn feature_row_name(app: &App, id: &str) -> String {
+    let name_of = |f: &featmap::FeatureView| display::line(&f.name);
+    let Some(f) = app.features.feature(id) else {
+        return id.to_string();
+    };
+    let name = name_of(f);
+    let cut: String = name.chars().take(FEATURE_NAME_ROOM).collect();
+    let collides = app.features.features.iter().any(|g| {
+        g.id != f.id
+            && name_of(g)
+                .chars()
+                .take(FEATURE_NAME_ROOM)
+                .collect::<String>()
+                == cut
+    });
+    if collides && name.chars().count() > FEATURE_NAME_ROOM.saturating_sub(id.len() + 2) {
+        let keep = FEATURE_NAME_ROOM.saturating_sub(id.len() + 2);
+        format!("{} ·{id}", name.chars().take(keep).collect::<String>())
+    } else {
+        name
+    }
+}
+
+/// The room a feature's name has in the tree at 80 columns (§8.3).
+const FEATURE_NAME_ROOM: usize = 14;
 
 /// A row's glyph and state word (a rollup for the project and directories).
 fn row_label(app: &App, sel: &Selection) -> (&'static str, String) {
     match sel {
         Selection::Project => ("", app.files.rollup("").text()),
         Selection::Dir(d) => ("", app.files.rollup(d).text()),
-        Selection::Units => ("", String::new()),
+        Selection::Units | Selection::Features => app.node_label(sel),
         Selection::Attempt(u, a) => {
             let (_, word) = app.node_label(sel);
             let glyph = match app
@@ -590,7 +625,10 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         (ellipsis(&name, room), 0, String::new())
     };
     let mut name_style = if internal { dim() } else { Style::default() };
-    if matches!(sel, Selection::Project | Selection::Units) {
+    if matches!(
+        sel,
+        Selection::Project | Selection::Units | Selection::Features
+    ) {
         name_style = name_style.add_modifier(Modifier::BOLD);
     }
     let mut spans = vec![
@@ -1048,6 +1086,460 @@ fn dir_view(
     lines
 }
 
+/// "From the last map" preface when the map is out of date or unreadable
+/// (§8.4): every map-derived line below it is the last map's, and no
+/// negative claim is made from it.
+fn map_preface(app: &App, width: usize) -> Vec<Line<'static>> {
+    match &app.features.map {
+        featmap::MapStatus::OutOfDate(why) => wrapped(
+            &format!("From the last map — out of date ({})", why.join(", ")),
+            width,
+            Style::default().fg(Color::Yellow),
+        ),
+        featmap::MapStatus::Unreadable(why) => wrapped(
+            &format!("The map could not be read: {why}"),
+            width,
+            Style::default().fg(Color::Yellow),
+        ),
+        _ => Vec::new(),
+    }
+}
+
+/// The Features group's View (§8.4).
+fn features_view(
+    app: &App,
+    width: usize,
+    links: &mut Vec<(usize, Selection)>,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let model = &app.features;
+    match &model.group {
+        featmap::Group::NoFile => {
+            lines.extend(wrapped(
+                "A feature is something a person does with the program and can see the \
+                 result of. Each is one or more runs of the whole program; every Re-check \
+                 then runs them on the C and on the program with the unit's Rust.",
+                width,
+                Style::default(),
+            ));
+            lines.push(Line::from(""));
+            if app.snapshot.facts.is_none() {
+                lines.extend(wrapped("Scan the project first.", width, bold()));
+            } else if model.no_single_main {
+                lines.extend(wrapped(
+                    "Features need a program with one main() — this target has none (a \
+                     library?); not supported yet.",
+                    width,
+                    dim(),
+                ));
+            } else {
+                lines.extend(wrapped(
+                    "On this row, press Enter and choose Write your features file.",
+                    width,
+                    bold(),
+                ));
+            }
+            return lines;
+        }
+        featmap::Group::Invalid(why) => {
+            lines.extend(wrapped(
+                &format!("features.toml has an error: {why}"),
+                width,
+                Style::default().fg(Color::Yellow),
+            ));
+            lines.push(Line::from(""));
+            let next = if why.contains("symlink") {
+                "Replace the symlink with a regular file outside the cockpit."
+            } else if why.contains("newer harness") {
+                "Update the harness."
+            } else {
+                "On this row, press Enter and choose Edit the features file."
+            };
+            lines.extend(wrapped(next, width, bold()));
+            lines.extend(wrapped(
+                "Until it is fixed, verdicts do not run your features — Re-checks and \
+                 migrations still work, and say so.",
+                width,
+                dim(),
+            ));
+            return lines;
+        }
+        featmap::Group::Valid => {}
+    }
+    if model.features.is_empty() {
+        lines.extend(wrapped(
+            "No features yet — choose Edit the features file to add yours.",
+            width,
+            bold(),
+        ));
+        return lines;
+    }
+    if model.no_single_main {
+        lines.extend(wrapped(
+            "Features need a program with one main() — this target's facts show none (a \
+             library?); not supported yet.",
+            width,
+            dim(),
+        ));
+    }
+    lines.extend(map_preface(app, width));
+    for f in &model.features {
+        links.push((lines.len(), Selection::Feature(f.id.clone())));
+        let glyph = f.state.glyph();
+        let mut word = f.state.word();
+        if let Some(also) = &f.also {
+            word.push_str(&format!(" · {also}"));
+        }
+        lines.push(Line::from(clipped(
+            vec![
+                Span::styled(format!("{glyph} "), glyph_style(glyph)),
+                Span::raw(display::line(&f.name)),
+                Span::styled(format!("  {word}"), dim()),
+            ],
+            width,
+        )));
+        let count = |pick: fn(&featmap::UnitResult) -> bool| {
+            f.units.iter().filter(|r| pick(&r.result)).count()
+        };
+        let mut parts = vec![format!("{} unit{}", f.units.len(), plural_s(f.units.len()))];
+        for (n, what) in [
+            (count(|r| *r == featmap::UnitResult::Passed), "pass"),
+            (
+                count(|r| matches!(r, featmap::UnitResult::Failed(_))),
+                "fail",
+            ),
+            (
+                count(|r| {
+                    matches!(
+                        r,
+                        featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
+                    )
+                }),
+                "not re-checked",
+            ),
+        ] {
+            if n > 0 {
+                parts.push(format!("{n} {what}"));
+            }
+        }
+        lines.push(Line::from(Span::styled(
+            clip(&format!("    {}", parts.join(" · ")), width),
+            dim(),
+        )));
+    }
+    lines.push(Line::from(""));
+    if model.watched > 0 || !model.unwatched.is_empty() {
+        let mut text = format!(
+            "Your features ran {} of the {} functions the map watches",
+            model.ran, model.watched
+        );
+        if !model.unwatched.is_empty() {
+            text.push_str(&format!(
+                " ({} more could not be watched)",
+                model.unwatched.len()
+            ));
+        }
+        text.push('.');
+        lines.extend(wrapped(&text, width, Style::default()));
+    }
+    if model.map.current() {
+        let facts = app.snapshot.facts.as_ref();
+        let never: Vec<(String, String)> = facts
+            .map(|f| {
+                let mut seen = std::collections::BTreeSet::new();
+                f.symbols
+                    .iter()
+                    .map(|s| (s.file.clone(), s.name.clone()))
+                    .filter(|p| seen.insert(p.clone()))
+                    .filter(|p| !model.by_function.contains_key(p) && !model.unwatched.contains(p))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !never.is_empty() {
+            lines.extend(wrapped(
+                &format!(
+                    "{} function{} no feature ran:",
+                    never.len(),
+                    plural_s(never.len())
+                ),
+                width,
+                bold(),
+            ));
+            for (file, name) in never.iter().take(20) {
+                links.push((lines.len(), Selection::Function(file.clone(), name.clone())));
+                lines.push(Line::from(clipped(
+                    vec![
+                        Span::raw(format!("  {}()", short_symbol(name))),
+                        Span::styled(format!("  {file}"), dim()),
+                    ],
+                    width,
+                )));
+            }
+            if never.len() > 20 {
+                lines.push(Line::from(Span::styled(
+                    format!("  … {} more", never.len() - 20),
+                    dim(),
+                )));
+            }
+        }
+    }
+    lines.push(Line::from(""));
+    lines.extend(wrapped(
+        "Edited features.toml outside the cockpit? Press g to re-read.",
+        width,
+        dim(),
+    ));
+    lines
+}
+
+fn plural_s(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
+/// A unit result in words (§8.4's "Where its code lives").
+fn result_words(r: &featmap::UnitResult) -> (String, Style) {
+    match r {
+        featmap::UnitResult::Passed => ("✓ passed".into(), Style::default().fg(Color::Green)),
+        featmap::UnitResult::Failed(ids) => (
+            format!("✗ failed: {}", ids.join(", ")),
+            Style::default().fg(Color::Red),
+        ),
+        featmap::UnitResult::CouldNotRun(reason) => {
+            (format!("– could not run: {}", reason.words()), dim())
+        }
+        featmap::UnitResult::Absent => ("– not re-checked".into(), dim()),
+        featmap::UnitResult::NotChecked => ("– not re-checked".into(), dim()),
+        featmap::UnitResult::Outside => ("– outside the program".into(), dim()),
+    }
+}
+
+/// The next step of a feature's state, in words (§8.2).
+fn feature_next(f: &featmap::FeatureView) -> Option<String> {
+    use featmap::FeatureState as S;
+    Some(match &f.state {
+        S::Failing => "Open the failing unit below and its verdict.".into(),
+        S::ScenarioCannotRun => {
+            let why = f
+                .scenarios
+                .iter()
+                .find_map(|s| s.skipped.map(|r| (s.id.clone(), r)));
+            match why {
+                Some((id, reason)) => format!(
+                    "Scenario {id}: {} — {}. Choose Edit the features file.",
+                    reason.words(),
+                    reason.what_to_do()
+                ),
+                None => "A scenario's C output differs between runs, or it did not exit — \
+                         change or remove it (Edit the features file)."
+                    .into(),
+            }
+        }
+        S::NeedsRecheck => "Re-check the units below that are not re-checked.".into(),
+        S::NotMapped | S::MapOutOfDate => "Map the features (press Enter).".into(),
+        S::MapIncomplete => "A scenario's run left no usable notes, or behaved differently \
+                             with them — see its line below."
+            .into(),
+        S::ReachesNoUnit => format!(
+            "Its code is outside every unit ({} function{}), or the map could not watch it. \
+             Nothing to do — or add a scenario that reaches a unit.",
+            f.outside_units,
+            plural_s(f.outside_units)
+        ),
+        S::AllMigrated | S::HoldsSoFar { .. } => {
+            let mut text = "Each unit was checked with only its own Rust swapped in — no build \
+                            has them all in Rust together yet."
+                .to_string();
+            if matches!(f.state, S::AllMigrated) && f.outside_units > 0 {
+                text.push_str(&format!(
+                    " {} function{} it runs {} outside every unit and stay C.",
+                    f.outside_units,
+                    plural_s(f.outside_units),
+                    if f.outside_units == 1 { "is" } else { "are" }
+                ));
+            }
+            text
+        }
+        S::AllC => return None,
+        S::SeeUnits => "See its units below.".into(),
+    })
+}
+
+/// A feature's View (§8.4).
+fn feature_view(
+    app: &App,
+    id: &str,
+    width: usize,
+    links: &mut Vec<(usize, Selection)>,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let Some(f) = app.features.feature(id) else {
+        return lines;
+    };
+    let glyph = f.state.glyph();
+    let mut word = f.state.word();
+    if let Some(also) = &f.also {
+        word.push_str(&format!(" · {also}"));
+    }
+    lines.push(Line::from(clipped(
+        vec![
+            Span::styled(format!("{glyph} "), glyph_style(glyph)),
+            Span::styled(word, bold()),
+            Span::styled(format!("  · id {}", f.id), dim()),
+        ],
+        width,
+    )));
+    if let Some(next) = feature_next(f) {
+        lines.extend(wrapped(&next, width, Style::default()));
+    }
+    if app.features.no_single_main {
+        lines.extend(wrapped(
+            "Features need a program with one main() — this target's facts show none (a \
+             library?); not supported yet.",
+            width,
+            dim(),
+        ));
+    }
+    lines.push(Line::from(""));
+    lines.extend(map_preface(app, width));
+    lines.push(Line::from(Span::styled("Scenarios", bold())));
+    let program = app.snapshot.program_name.clone();
+    for s in &f.scenarios {
+        let mut argv = vec![program.clone()];
+        argv.extend(s.argv.iter().cloned());
+        let mut text = format!("  {} · {}", s.id, argv.join(" "));
+        if let Some(input) = s.input {
+            text.push_str(&format!(" (the sample: {input})"));
+        }
+        lines.extend(wrapped(&text, width, Style::default()));
+        if let Some(r) = &s.record {
+            let stderr = if r.stderr_bytes == 0 {
+                "stderr empty".to_string()
+            } else if r.stderr_head.is_empty() {
+                format!("stderr {} bytes", r.stderr_bytes)
+            } else {
+                format!("stderr: {}", r.stderr_head)
+            };
+            lines.extend(wrapped(
+                &format!("    {} · stdout {} bytes · {stderr}", r.end, r.stdout_bytes),
+                width,
+                dim(),
+            ));
+            let flag = if !r.stable {
+                Some("its output differs between runs — it cannot be a check".to_string())
+            } else if !r.probe_agrees {
+                Some("the run with notes behaved differently — its map may be wrong".into())
+            } else if r.noted != "complete" {
+                Some(format!(
+                    "no notes were recorded ({})",
+                    r.reason.as_deref().unwrap_or("unreadable")
+                ))
+            } else if !r.end.starts_with("exit 0") || r.stdout_bytes == 0 {
+                Some(
+                    "it compares little: only the exit status and stderr (it exited non-zero \
+                     or printed nothing to stdout)"
+                        .into(),
+                )
+            } else {
+                None
+            };
+            if let Some(flag) = flag {
+                lines.extend(wrapped(
+                    &format!("    ⚑ {flag}"),
+                    width,
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+        }
+        if let Some(reason) = s.skipped {
+            lines.extend(wrapped(
+                &format!(
+                    "    ⚑ could not run: {} — {}",
+                    reason.words(),
+                    reason.what_to_do()
+                ),
+                width,
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Where its code lives", bold())));
+    if f.units.is_empty() && f.outside_units == 0 {
+        lines.extend(wrapped("  (not known — map the features)", width, dim()));
+    }
+    for row in &f.units {
+        let (glyph, uword) = app
+            .snapshot
+            .units
+            .iter()
+            .position(|u| u.unit.id == row.unit)
+            .and_then(|i| app.files.units.get(i))
+            .map(|i| (i.state.glyph(), i.state.word()))
+            .unwrap_or(("", String::new()));
+        let (result, style) = result_words(&row.result);
+        links.push((lines.len(), Selection::Unit(row.unit.clone())));
+        lines.push(Line::from(clipped(
+            vec![
+                Span::styled(format!("  {glyph:<2} "), glyph_style(glyph)),
+                Span::raw(row.unit.clone()),
+                Span::styled(
+                    format!("  {uword} · runs {} of its {}", row.ran, row.of),
+                    dim(),
+                ),
+                Span::styled(format!("  {result}"), style),
+            ],
+            width,
+        )));
+    }
+    if f.outside_units > 0 {
+        lines.extend(wrapped(
+            &format!(
+                "  Outside every unit: {} function{} (headers, files with no exported functions)",
+                f.outside_units,
+                plural_s(f.outside_units)
+            ),
+            width,
+            dim(),
+        ));
+    }
+    if !f.also_fails.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Also fails on (its functions are not in them)",
+            Style::default().fg(Color::Red),
+        )));
+        for u in &f.also_fails {
+            links.push((lines.len(), Selection::Unit(u.clone())));
+            lines.push(Line::from(Span::raw(format!("  {u}"))));
+        }
+    }
+    if app.features.features.len() >= 2 && app.features.map.current() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("Only this feature runs", bold())));
+        if f.specific.is_empty() {
+            lines.extend(wrapped(
+                "  everything it runs is also run by another feature",
+                width,
+                dim(),
+            ));
+        }
+        for (file, name) in &f.specific {
+            links.push((lines.len(), Selection::Function(file.clone(), name.clone())));
+            lines.push(Line::from(clipped(
+                vec![
+                    Span::raw(format!("  {}()", short_symbol(name))),
+                    Span::styled(format!("  {file}"), dim()),
+                ],
+                width,
+            )));
+        }
+    }
+    lines
+}
+
 /// Draw `lines` (a list with links) scrolled, the link cursor shown.
 fn draw_list(
     frame: &mut Frame,
@@ -1142,6 +1634,8 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             Some(lines)
         }
+        Selection::Features => Some(features_view(app, width, &mut links)),
+        Selection::Feature(id) => Some(feature_view(app, id, width, &mut links)),
         _ => None,
     };
     if let Some(lines) = list {
@@ -2573,7 +3067,13 @@ mod tests {
             });
         }
         app.files.files.sort_by(|a, b| a.path.cmp(&b.path));
-        app.rows = crate::tree::rows(&app.snapshot, &app.files, &app.walk, &app.expansion);
+        app.rows = crate::tree::rows(
+            &app.snapshot,
+            &app.files,
+            &app.features,
+            &app.walk,
+            &app.expansion,
+        );
         // The directory's View lists every file with its glyph and word; the
         // units group's View every unit.
         app.select(Selection::Dir("src/zopfli".into()));

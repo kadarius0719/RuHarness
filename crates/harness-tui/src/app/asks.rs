@@ -1716,6 +1716,13 @@ impl App {
             Selection::File(p) => format!("the C file {}", path(p)),
             Selection::Function(p, _) => format!("a function in {}", path(p)),
             Selection::Units => "the list of units".into(),
+            Selection::Features => "the list of the person's features".into(),
+            // Ids only: a feature's name is the person's text, never the
+            // chat's (docs/FEATURES-DESIGN.md §2.3).
+            Selection::Feature(id) if harness_core::features::is_id(id) => {
+                format!("the feature {id}")
+            }
+            Selection::Feature(_) => "a feature".into(),
             Selection::Unit(id) => unit_word(id),
             Selection::Crate(id) => format!("the crate of {}", unit_word(id)),
             Selection::Attempt(u, a) => {

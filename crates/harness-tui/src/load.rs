@@ -9,6 +9,7 @@
 use crate::files::{self, TreeWalk};
 use crate::model::Snapshot;
 use crate::preflight;
+use harness_core::features::{self, FeatureSnapshot, MapInputs, MapState};
 use harness_core::ledger::{Holder, Ledger};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -28,6 +29,11 @@ pub struct Read {
     /// A migration's model turns at most: the translate turn and its
     /// repairs (the chat's grant says it, docs/CHAT-PANE-DESIGN.md §3.4).
     pub migrate_turns: u32,
+    /// The features map as read (docs/FEATURES-DESIGN.md §5.2) — nothing is
+    /// read without a features file.
+    pub map: MapState,
+    /// Today's map inputs, to tell whether the map is current.
+    pub map_now: Option<MapInputs>,
 }
 
 /// Read the target at `target`: the preflight, then the snapshot, the walk
@@ -76,12 +82,29 @@ pub fn read(target: &Path) -> Result<Read, String> {
         .as_ref()
         .and_then(|m| m.max_repairs)
         .unwrap_or(3);
+    let (map, map_now) = match (&snapshot.features, &snapshot.facts, &snapshot.features_now) {
+        (FeatureSnapshot::None, _, _) | (_, None, _) => (MapState::None, None),
+        (_, Some(facts), now) => (
+            features::load_map(&snapshot.root, facts),
+            match (features::facts_digest(facts), now) {
+                (Ok(facts_digest), Some(now)) => Some(MapInputs {
+                    facts: facts_digest,
+                    features: now.features.clone(),
+                    program: now.program.clone(),
+                    platform: features::platform(),
+                }),
+                _ => None,
+            },
+        ),
+    };
     Ok(Read {
         snapshot,
         walk,
         holder,
         migrate_model,
         migrate_turns,
+        map,
+        map_now,
     })
 }
 

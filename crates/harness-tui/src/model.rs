@@ -163,6 +163,12 @@ pub struct Snapshot {
     /// The person's features, read once per load (docs/FEATURES-DESIGN.md
     /// §2.2, §8.1): a bad file is a value, never a failed read.
     pub features: FeatureSnapshot,
+    /// Today's feature digests (`None` without a features file).
+    pub features_now: Option<FeaturesNow>,
+    /// `[target] source_dir` as configured.
+    pub source_dir: String,
+    /// The file name the program runs under in a scenario.
+    pub program_name: String,
 }
 
 impl Snapshot {
@@ -177,6 +183,9 @@ impl Snapshot {
             units: Vec::new(),
             note: None,
             features: FeatureSnapshot::load(&ctx),
+            features_now: None,
+            source_dir: ctx.config.target.source_dir.clone(),
+            program_name: harness_core::features::program_name(&ctx.config),
         };
         let facts = match Facts::load(&ledger.facts_path()) {
             Ok(f) => f,
@@ -216,6 +225,7 @@ impl Snapshot {
                 .units
                 .push(unit_view(&ctx, &ledger, &facts, unit, now.as_ref())?);
         }
+        snapshot.features_now = now;
         snapshot.facts = Some(facts);
         Ok(snapshot)
     }

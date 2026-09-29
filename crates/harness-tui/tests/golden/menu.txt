@@ -7,7 +7,7 @@
 │      ▸ ! lib.c               ││Changed since the scan:                                                               │
 │  ▾ Units (1)                 ││  ! test_case/src/lib.c  changed since scan                                           │
 │    ▸ ⚠ u-lib  needs attention││                                                                                      │
-│                              ││                                                                                      │
+│    Features (none yet)       ││                                                                                      │
 │                              ││                                                                                      │
 │                           ┌ harness-tui-gmenu-0000000000 ────────────────────────────────┐                           │
 │                           │  Open                                                        │                           │

@@ -8,6 +8,7 @@
 //! after the source tree the group **Units (n)**, and under each unit its
 //! crate node, then its attempts in the defined order (TUI-DESIGN §2).
 
+use crate::featmap::FeatureModel;
 use crate::files::{Files, TreeWalk};
 use crate::model::Snapshot;
 use harness_core::walk::Skip;
@@ -32,6 +33,10 @@ pub enum Selection {
     Crate(String),
     /// An attempt: its unit, its id.
     Attempt(String, String),
+    /// The group of the person's features (docs/FEATURES-DESIGN.md §8.3).
+    Features,
+    /// A feature, by id.
+    Feature(String),
 }
 
 impl Selection {
@@ -50,6 +55,8 @@ impl Selection {
             Selection::Units => Some(Selection::Project),
             Selection::Unit(_) => Some(Selection::Units),
             Selection::Crate(u) | Selection::Attempt(u, _) => Some(Selection::Unit(u.clone())),
+            Selection::Features => Some(Selection::Project),
+            Selection::Feature(_) => Some(Selection::Features),
         }
     }
 
@@ -58,7 +65,7 @@ impl Selection {
     fn open_by_default(&self) -> bool {
         matches!(
             self,
-            Selection::Project | Selection::Dir(_) | Selection::Units
+            Selection::Project | Selection::Dir(_) | Selection::Units | Selection::Features
         )
     }
 }
@@ -187,6 +194,7 @@ fn dir_rows(
 pub fn rows(
     snapshot: &Snapshot,
     files: &Files,
+    features: &FeatureModel,
     walk: &TreeWalk,
     expansion: &Expansion,
 ) -> Vec<Row> {
@@ -249,6 +257,15 @@ pub fn rows(
             }
         }
     }
+    // The person's features, always: the group says when there are none.
+    let open = expansion.is_open(&Selection::Features);
+    let expandable = !features.features.is_empty();
+    push_node(&mut rows, 1, Selection::Features, expandable, open);
+    if open {
+        for f in &features.features {
+            push_node(&mut rows, 2, Selection::Feature(f.id.clone()), false, false);
+        }
+    }
     rows
 }
 
@@ -259,7 +276,12 @@ pub fn row_of(rows: &[Row], sel: &Selection) -> Option<usize> {
 
 /// Whether `sel` names a node that exists in this snapshot and tree
 /// (shown or folded away).
-pub fn exists(snapshot: &Snapshot, files: &Files, sel: &Selection) -> bool {
+pub fn exists(
+    snapshot: &Snapshot,
+    files: &Files,
+    features: &FeatureModel,
+    sel: &Selection,
+) -> bool {
     match sel {
         Selection::Project => true,
         Selection::Dir(d) => {
@@ -273,13 +295,20 @@ pub fn exists(snapshot: &Snapshot, files: &Files, sel: &Selection) -> bool {
         Selection::Units => !snapshot.units.is_empty(),
         Selection::Unit(id) | Selection::Crate(id) => snapshot.unit(id).is_some(),
         Selection::Attempt(u, a) => snapshot.unit(u).and_then(|u| u.attempt(a)).is_some(),
+        Selection::Features => true,
+        Selection::Feature(id) => features.feature(id).is_some(),
     }
 }
 
 /// `sel` if it still exists, else its nearest existing ancestor.
-pub fn surviving(snapshot: &Snapshot, files: &Files, sel: &Selection) -> Selection {
+pub fn surviving(
+    snapshot: &Snapshot,
+    files: &Files,
+    features: &FeatureModel,
+    sel: &Selection,
+) -> Selection {
     let mut at = sel.clone();
-    while !exists(snapshot, files, &at) {
+    while !exists(snapshot, files, features, &at) {
         match at.parent() {
             Some(p) => at = p,
             None => return Selection::Project,

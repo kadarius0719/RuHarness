@@ -521,7 +521,13 @@ mod tests {
             }
             app.select(Selection::Units);
             app.select(Selection::Project);
-            app.rows = crate::tree::rows(&app.snapshot, &app.files, &app.walk, &app.expansion);
+            app.rows = crate::tree::rows(
+                &app.snapshot,
+                &app.files,
+                &app.features,
+                &app.walk,
+                &app.expansion,
+            );
         }
         seen
     }

@@ -15,6 +15,7 @@
 
 pub mod display;
 pub mod events;
+pub mod featmap;
 pub mod fence;
 pub mod files;
 pub mod load;
