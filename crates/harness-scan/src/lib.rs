@@ -28,12 +28,14 @@
 mod interface;
 mod lint;
 mod mutate;
+mod probe;
 
 pub use interface::{
     is_c_identifier, parse_interface, InterfaceParam, InterfaceSig, MAX_INTERFACE_LINE,
 };
 pub use lint::{lint_driver, DRIVER_SYSTEM_INCLUDES};
 pub use mutate::mutants;
+pub use probe::{probe_source, Probed};
 
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
@@ -67,6 +69,11 @@ struct FnDef {
     span: (u32, u32),
     /// Names appearing as direct callees inside this definition.
     calls: BTreeSet<String>,
+    /// Byte offset of the body's opening `{`, when the features probe can
+    /// put a note right after it (docs/FEATURES-DESIGN.md §5.3): the body is
+    /// a real `{`-block, nothing on the way is an ERROR or MISSING node, and
+    /// no preprocessor directive stands between the declarator and the body.
+    probe_at: Option<usize>,
 }
 
 impl FnDef {
@@ -319,6 +326,17 @@ fn collect_includes(node: tree_sitter::Node, src: &[u8], out: &mut BTreeSet<Stri
 /// Recursively collect function definitions with their storage class,
 /// signature, span, and direct-call names.
 fn collect_functions(node: tree_sitter::Node, src: &[u8], file: &str, defs: &mut Vec<FnDef>) {
+    collect_functions_in(node, src, file, false, defs);
+}
+
+/// [`collect_functions`], knowing whether an ERROR node encloses `node`.
+fn collect_functions_in(
+    node: tree_sitter::Node,
+    src: &[u8],
+    file: &str,
+    under_error: bool,
+    defs: &mut Vec<FnDef>,
+) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "function_definition" {
@@ -340,12 +358,36 @@ fn collect_functions(node: tree_sitter::Node, src: &[u8], file: &str, defs: &mut
                         (child.end_position().row + 1) as u32,
                     ),
                     calls,
+                    probe_at: probe_point(child, src, under_error),
                 });
             }
         } else {
-            collect_functions(child, src, file, defs);
+            let error = under_error || child.is_error();
+            collect_functions_in(child, src, file, error, defs);
         }
     }
+}
+
+/// Where a note can go in `def` (see [`FnDef::probe_at`]).
+fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<usize> {
+    if under_error || def.has_error() {
+        return None;
+    }
+    let body = def.child_by_field_name("body")?;
+    let declarator = def.child_by_field_name("declarator")?;
+    if body.kind() != "compound_statement" || body.is_missing() {
+        return None;
+    }
+    let at = body.start_byte();
+    if src.get(at) != Some(&b'{') {
+        return None;
+    }
+    // A directive between the declarator and the body (a brace inside
+    // `#if`) compiles on one branch only.
+    if src[declarator.end_byte()..at].contains(&b'#') {
+        return None;
+    }
+    Some(at)
 }
 
 /// The definition's source text from its start to the start of its body

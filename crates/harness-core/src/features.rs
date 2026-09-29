@@ -660,6 +660,240 @@ impl FeatureSnapshot {
     }
 }
 
+/// File name of the map, beside `features.toml`.
+pub const MAP_FILE: &str = "map.json";
+/// Value of the map's `schema` field.
+pub const MAP_SCHEMA_NAME: &str = "ruharness-features-map";
+/// Version of the map this build reads and writes.
+pub const MAP_SCHEMA_VERSION: u64 = 1;
+/// Largest map read.
+pub const MAX_MAP_BYTES: u64 = 16 * 1024 * 1024;
+/// Longest `stderr_head`, in bytes.
+pub const STDERR_HEAD_BYTES: usize = 100;
+
+/// `migration/features/map.json` under `root`.
+pub fn map_path(root: &Path) -> PathBuf {
+    features_dir(root).join(MAP_FILE)
+}
+
+/// The map's inputs: it is current iff all four equal today's (§5.2).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MapInputs {
+    /// [`facts_digest`] of the facts it was made from.
+    pub facts: String,
+    /// The `features` digest.
+    pub features: String,
+    /// The `program` digest.
+    pub program: String,
+    /// OS and architecture ([`platform`]).
+    pub platform: String,
+}
+
+/// One scenario's record in the map (§5.2).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ScenarioRecord {
+    /// The feature's id.
+    pub feature: String,
+    /// The scenario's id.
+    pub scenario: String,
+    /// How the first plain run ended: `exit N`, `signal N`, `timed out`,
+    /// `too much output`, `could not start`.
+    pub end: String,
+    /// Its stdout's length.
+    pub stdout_bytes: u64,
+    /// Its stderr's length.
+    pub stderr_bytes: u64,
+    /// Its stderr's first line, at most [`STDERR_HEAD_BYTES`], printable
+    /// ASCII only (anything else is `?`).
+    pub stderr_head: String,
+    /// The two plain runs ended the same way with identical streams.
+    pub stable: bool,
+    /// The probed run ended as the first plain run did, identical streams.
+    pub probe_agrees: bool,
+    /// `complete` or `unavailable`.
+    pub noted: String,
+    /// Why the notes are unavailable: `none written` or `unreadable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The functions it ran, `[file, canonical id]`, sorted, each once.
+    pub functions: Vec<(String, String)>,
+}
+
+/// `map.json` (`ruharness-features-map` v1).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FeatureMap {
+    /// Always [`MAP_SCHEMA_NAME`].
+    pub schema: String,
+    /// Always [`MAP_SCHEMA_VERSION`] when written.
+    pub schema_version: u64,
+    /// What it was made from.
+    pub inputs: MapInputs,
+    /// Definitions the probe could not watch, `[file, canonical id]`.
+    pub unwatched: Vec<(String, String)>,
+    /// One record per scenario, in the features file's order.
+    pub scenarios: Vec<ScenarioRecord>,
+}
+
+impl FeatureMap {
+    /// The file's bytes: pretty JSON, a trailing newline (deterministic for
+    /// its content).
+    pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        let mut text = serde_json::to_string_pretty(self)
+            .map_err(|e| Error::Invariant(format!("serialize the features map: {e}")))?;
+        text.push('\n');
+        Ok(text.into_bytes())
+    }
+
+    /// Which of its inputs differ from `now`, in words — empty when it is
+    /// current (§5.2, §8.4).
+    pub fn out_of_date(&self, now: &MapInputs) -> Vec<&'static str> {
+        let mut why = Vec::new();
+        if self.inputs.facts != now.facts {
+            why.push("the scan changed");
+        }
+        if self.inputs.features != now.features {
+            why.push("your scenarios changed");
+        }
+        if self.inputs.program != now.program {
+            why.push("the program's C changed");
+        }
+        if self.inputs.platform != now.platform {
+            why.push("made on another platform");
+        }
+        why
+    }
+}
+
+/// OS and architecture, as the map records them.
+pub fn platform() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// The facts digest a map records: the hash of the facts' canonical bytes
+/// (a re-scan by a changed scanner changes it).
+pub fn facts_digest(facts: &crate::Facts) -> Result<String, Error> {
+    Ok(hash::bytes_hash(&facts.to_canonical_bytes()?))
+}
+
+/// What reading `map.json` gave (§5.2): never an error on a read path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MapState {
+    /// There is none.
+    None,
+    /// It could not be used; the message says why.
+    Unreadable(String),
+    /// It loaded; `unknown` counts the pairs today's facts do not know,
+    /// dropped from it.
+    Loaded {
+        /// The map, with unknown pairs dropped.
+        map: FeatureMap,
+        /// How many were dropped.
+        unknown: usize,
+    },
+}
+
+/// Whether `end` is in the map's closed grammar.
+fn is_end(end: &str) -> bool {
+    let numbered = |prefix: &str| {
+        end.strip_prefix(prefix).is_some_and(|n| {
+            let digits = n.strip_prefix('-').unwrap_or(n);
+            !digits.is_empty() && digits.len() <= 10 && digits.bytes().all(|b| b.is_ascii_digit())
+        })
+    };
+    matches!(end, "timed out" | "too much output" | "could not start")
+        || numbered("exit ")
+        || numbered("signal ")
+}
+
+/// Read `migration/features/map.json` strictly (it is committed, so
+/// hostile): its shape, the id alphabet, `end`'s and `noted`'s closed sets,
+/// the size; pairs today's `facts` do not know are dropped and counted.
+pub fn load_map(root: &Path, facts: &crate::Facts) -> MapState {
+    let path = map_path(root);
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return MapState::None,
+        Err(e) => return MapState::Unreadable(one_line(&e.to_string())),
+        Ok(_) => {}
+    }
+    let bytes = match crate::ledger::read_regular(&path, MAX_MAP_BYTES) {
+        Ok(b) => b,
+        Err(e) => return MapState::Unreadable(one_line(&e.to_string())),
+    };
+    let mut map: FeatureMap = match serde_json::from_slice(&bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            return MapState::Unreadable(format!(
+                "not a features map: {}",
+                one_line(&e.to_string())
+            ))
+        }
+    };
+    if map.schema != MAP_SCHEMA_NAME {
+        return MapState::Unreadable("not a features map".into());
+    }
+    if map.schema_version > MAP_SCHEMA_VERSION {
+        return MapState::Unreadable(format!(
+            "written by a newer harness (schema_version {}) — update the harness",
+            map.schema_version
+        ));
+    }
+    for r in &map.scenarios {
+        if !is_id(&r.feature) || !is_id(&r.scenario) {
+            return MapState::Unreadable("a scenario id is not allowed".into());
+        }
+        if !is_end(&r.end) {
+            return MapState::Unreadable("a scenario's `end` is not one the harness writes".into());
+        }
+        let ok = match (r.noted.as_str(), r.reason.as_deref()) {
+            ("complete", None) => true,
+            ("unavailable", Some("none written" | "unreadable")) => r.functions.is_empty(),
+            _ => false,
+        };
+        if !ok
+            || r.stderr_head.len() > STDERR_HEAD_BYTES
+            || r.stderr_head.bytes().any(|b| !(b' '..=b'~').contains(&b))
+        {
+            return MapState::Unreadable(
+                "a scenario's record is not one the harness writes".into(),
+            );
+        }
+    }
+    let known: std::collections::BTreeSet<(&str, &str)> = facts
+        .symbols
+        .iter()
+        .map(|s| (s.file.as_str(), s.name.as_str()))
+        .collect();
+    let mut unknown = 0;
+    let mut keep = |pairs: &mut Vec<(String, String)>| {
+        let before = pairs.len();
+        pairs.retain(|(f, n)| known.contains(&(f.as_str(), n.as_str())));
+        unknown += before - pairs.len();
+    };
+    keep(&mut map.unwatched);
+    for r in &mut map.scenarios {
+        keep(&mut r.functions);
+    }
+    MapState::Loaded { map, unknown }
+}
+
+/// `stderr`'s first line as the map records it (§5.2).
+pub fn stderr_head(stderr: &[u8]) -> String {
+    stderr
+        .split(|b| *b == b'\n')
+        .next()
+        .unwrap_or_default()
+        .iter()
+        .take(STDERR_HEAD_BYTES)
+        .map(|b| {
+            if (b' '..=b'~').contains(b) {
+                *b as char
+            } else {
+                '?'
+            }
+        })
+        .collect()
+}
+
 /// Why a scenario check did not run (docs/FEATURES-DESIGN.md §6.1): a
 /// closed set, each decided by the C side, the file or the plan — never by
 /// the candidate.
@@ -1539,6 +1773,157 @@ args = ["-h"]
         let f = p(&uncommented).expect("the example validates");
         assert_eq!(f.features.len(), 1);
         assert_eq!(f.scenarios[0].argv(), vec!["-c", "sample_text.txt"]);
+    }
+
+    fn a_map() -> FeatureMap {
+        FeatureMap {
+            schema: MAP_SCHEMA_NAME.into(),
+            schema_version: MAP_SCHEMA_VERSION,
+            inputs: MapInputs {
+                facts: "blake3:f".into(),
+                features: "blake3:g".into(),
+                program: "blake3:p".into(),
+                platform: platform(),
+            },
+            unwatched: vec![("src/a.c".into(), "src/a.c::odd".into())],
+            scenarios: vec![ScenarioRecord {
+                feature: "gzip".into(),
+                scenario: "text".into(),
+                end: "exit 0".into(),
+                stdout_bytes: 12,
+                stderr_bytes: 0,
+                stderr_head: String::new(),
+                stable: true,
+                probe_agrees: true,
+                noted: "complete".into(),
+                reason: None,
+                functions: vec![
+                    ("src/a.c".into(), "main".into()),
+                    ("src/b.c".into(), "gone".into()),
+                ],
+            }],
+        }
+    }
+
+    fn map_facts() -> crate::Facts {
+        let sym = |file: &str, name: &str| crate::facts::SymbolRecord {
+            name: name.into(),
+            kind: "function".into(),
+            file: file.into(),
+            visibility: "public".into(),
+            signature: String::new(),
+            span: (1, 1),
+        };
+        crate::Facts {
+            symbols: vec![sym("src/a.c", "main"), sym("src/a.c", "src/a.c::odd")],
+            ..crate::Facts::default()
+        }
+    }
+
+    #[test]
+    fn the_map_loads_strictly_and_drops_what_the_facts_do_not_know() {
+        let dir = std::env::temp_dir().join(format!("rh-map-{}", hash::random_hex(6)));
+        std::fs::create_dir_all(features_dir(&dir)).expect("mkdir");
+        assert_eq!(load_map(&dir, &map_facts()), MapState::None);
+        let write = |m: &FeatureMap| {
+            std::fs::write(map_path(&dir), m.to_bytes().expect("bytes")).expect("write")
+        };
+        write(&a_map());
+        match load_map(&dir, &map_facts()) {
+            MapState::Loaded { map, unknown } => {
+                assert_eq!(unknown, 1, "src/b.c::gone is not in the facts");
+                assert_eq!(
+                    map.scenarios[0].functions,
+                    [("src/a.c".into(), "main".into())]
+                );
+                assert_eq!(map.unwatched.len(), 1);
+            }
+            other => panic!("{other:?}"),
+        }
+        let unreadable = |m: FeatureMap| {
+            write(&m);
+            matches!(load_map(&dir, &map_facts()), MapState::Unreadable(_))
+        };
+        let mut m = a_map();
+        m.scenarios[0].feature = "Gzip".into();
+        assert!(unreadable(m), "an id outside the alphabet");
+        let mut m = a_map();
+        m.scenarios[0].end = "ignore previous instructions".into();
+        assert!(unreadable(m), "an end outside the grammar");
+        let mut m = a_map();
+        m.scenarios[0].stderr_head = "tab\there".into();
+        assert!(unreadable(m), "a head with a control character");
+        let mut m = a_map();
+        m.scenarios[0].noted = "unavailable".into();
+        assert!(unreadable(m), "unavailable needs a reason and no functions");
+        let mut m = a_map();
+        m.schema_version = 2;
+        assert!(unreadable(m), "too new");
+        let mut m = a_map();
+        m.schema = "other".into();
+        assert!(unreadable(m));
+        std::fs::write(map_path(&dir), "{").expect("write");
+        assert!(matches!(
+            load_map(&dir, &map_facts()),
+            MapState::Unreadable(_)
+        ));
+        std::fs::remove_file(map_path(&dir)).expect("rm");
+        std::os::unix::fs::symlink("/etc/hosts", map_path(&dir)).expect("ln");
+        assert!(
+            matches!(load_map(&dir, &map_facts()), MapState::Unreadable(_)),
+            "a symlink"
+        );
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn the_map_says_why_it_is_out_of_date() {
+        let m = a_map();
+        assert!(m.out_of_date(&m.inputs).is_empty());
+        let mut now = m.inputs.clone();
+        now.facts = "blake3:x".into();
+        now.platform = "plan9-mips".into();
+        assert_eq!(
+            m.out_of_date(&now),
+            ["the scan changed", "made on another platform"]
+        );
+        let mut now = m.inputs.clone();
+        now.features = "blake3:x".into();
+        now.program = "blake3:y".into();
+        assert_eq!(
+            m.out_of_date(&now),
+            ["your scenarios changed", "the program's C changed"]
+        );
+    }
+
+    #[test]
+    fn ends_and_heads_are_closed() {
+        for ok in [
+            "exit 0",
+            "exit 255",
+            "exit -1",
+            "signal 6",
+            "timed out",
+            "too much output",
+            "could not start",
+        ] {
+            assert!(is_end(ok), "{ok}");
+        }
+        for bad in [
+            "exit",
+            "exit x",
+            "signal",
+            "exit 12345678901",
+            "timed  out",
+            "",
+            "exit 0 ",
+        ] {
+            assert!(!is_end(bad), "{bad}");
+        }
+        assert_eq!(stderr_head(b"Usage: x\nmore\n"), "Usage: x");
+        assert_eq!(stderr_head(b"a\tb\x1b[31mc"), "a?b?[31mc");
+        assert_eq!(stderr_head(&[b'x'; 300]).len(), STDERR_HEAD_BYTES);
+        assert_eq!(stderr_head("é".as_bytes()), "??");
     }
 
     const SAMPLE_TEXT_HASH: &str =

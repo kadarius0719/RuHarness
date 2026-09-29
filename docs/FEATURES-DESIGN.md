@@ -353,7 +353,9 @@ So:
 ### 4.2 The order of runs and what each side must do
 
 Per scenario and unit: **C, mixed, C** — the two C runs around the mixed one, so a program
-whose output drifts with time or state shows it on the C side.
+whose output drifts with time or state shows it on the C side. (As built: a first C run that
+did not exit normally decides the skip at once; the mixed side and the second C run would add
+nothing but time.)
 - **The C side is usable** when both C runs exited normally (any code), within the timeout,
   without overflowing, with identical results. Otherwise the scenario is **skipped** for this
   verdict with its `c-side-*` reason — a mistake in the scenario (or the C), not evidence
@@ -510,8 +512,9 @@ Additive kind (SCHEMAS.md "The events stream"):
 |---|---|
 | `scenario` | `feature`, `scenario`, `n`, `of`, `end`, `stable`, `probe_agrees`, `noted`, `functions` (the count) — one per scenario of `features map`, after its runs |
 
-Plus `message` lines and the `header`/`result` frame. `verify` emits `message` lines around
-its feature step: "Running your 12 feature scenarios…" before; one per skip, in §6.1's words
+Plus `message` lines and the `header`/`result` frame. `verify` and `promote` emit `message`
+lines around their feature step (a migrate turn's verdict carries its skips; the cockpit's
+marker says them): "Running your 12 feature scenarios…" before; one per skip, in §6.1's words
 ("Skipped zlib/text: the C program's output differs between runs"); and "Your features file
 has an error — no feature scenario ran" for `Invalid`. Its checks arrive as `check` events, as
 today.
@@ -533,9 +536,10 @@ that stopped at a gate records no feature field at all). By the snapshot passed 
      today.)
   2. **The C program does not build** — `whole_c` fails to compile or link (a library with no
      `main()`, two `main()`s, a missing library): every scenario is skipped as
-     `c-side-build-failed` (the compiler's first lines go to the message line and the
-     terminal, never into the verdict; when the facts do not record exactly one `main` among
-     the top-level `.c`, the message says "features need a program with one main()"). The link
+     `c-side-build-failed` (never the compiler's text in the verdict; the reason's words send
+     the person to `harness features map`, whose refusal shows the compiler's first lines and,
+     when the facts do not record exactly one `main` among the top-level `.c`, "features need a
+     program with one main()"). The link
      decides, not the facts: the scanner also counts a `main` behind `#ifdef` and misses one
      made by a macro.
   3. Otherwise `whole_mixed` is built — a failure to link it is a failed check for every

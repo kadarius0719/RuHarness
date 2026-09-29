@@ -463,3 +463,126 @@ fn verify_with_uses_the_snapshot_it_is_given() {
     );
     assert!(verdict.inputs.features.is_empty());
 }
+
+/// The map (docs/FEATURES-DESIGN.md §5): each scenario on a probed copy of
+/// the C — which functions it ran, how it ended, whether it is stable.
+struct Quiet(Vec<(String, usize, usize)>);
+
+impl harness_oracle::MapProgress for Quiet {
+    fn message(&mut self, _: &str) {}
+    fn scenario(&mut self, r: &harness_core::features::ScenarioRecord, n: usize, of: usize) {
+        self.0
+            .push((format!("{}/{}", r.feature, r.scenario), n, of));
+    }
+}
+
+fn with_symbols(root: &Path) -> Facts {
+    // The facts of `program` plus its functions, as the scanner records them.
+    let mut facts = Facts::load(&root.join("migration/facts.jsonl")).expect("facts");
+    let sym = |file: &str, name: &str| harness_core::facts::SymbolRecord {
+        name: name.into(),
+        kind: "function".into(),
+        file: file.into(),
+        visibility: "public".into(),
+        signature: String::new(),
+        span: (1, 1),
+    };
+    facts.symbols = vec![
+        sym("src/tool/main.c", "main"),
+        sym("src/tool/mul.c", "mul_step"),
+        sym("src/tool/unit.c", "unit_add"),
+    ];
+    facts
+}
+
+#[test]
+fn the_map_says_which_functions_each_scenario_ran() {
+    let tmp = TempDir::new("feat-map");
+    let (target, _) = program(tmp.path(), GOOD, Some(FEATURES), "");
+    let facts = with_symbols(tmp.path());
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    let mut progress = Quiet(Vec::new());
+    let map = harness_oracle::map_features(&target, &facts, &features, &digest, &mut progress)
+        .expect("maps");
+    assert_eq!(progress.0.len(), 6);
+    assert_eq!(progress.0[0], ("sum/text".to_string(), 1, 6));
+    let by = |id: &str| {
+        map.scenarios
+            .iter()
+            .find(|r| format!("{}/{}", r.feature, r.scenario) == id)
+            .unwrap_or_else(|| panic!("{id}"))
+    };
+    let names =
+        |id: &str| -> Vec<String> { by(id).functions.iter().map(|(_, n)| n.clone()).collect() };
+    assert_eq!(names("sum/text"), ["main", "unit_add"]);
+    assert_eq!(names("product/rand"), ["main", "mul_step"]);
+    assert_eq!(names("usage/none"), ["main"]);
+    let sum = by("sum/text");
+    assert_eq!(sum.end, "exit 0");
+    assert!(sum.stable && sum.probe_agrees, "{sum:?}");
+    assert_eq!(sum.noted, "complete");
+    let usage = by("usage/none");
+    assert_eq!(usage.end, "exit 1");
+    assert_eq!(
+        usage.stderr_head,
+        "usage: $PROGDIR/tool -a|-m|-w|-t|-s FILE"
+    );
+    assert!(
+        usage.probe_agrees,
+        "argv[0] is the same path for plain and probed"
+    );
+    let clock = by("clock/now");
+    assert!(
+        !clock.stable,
+        "the clock scenario's output differs between runs"
+    );
+    assert_eq!(map.inputs.features, digest);
+    assert_eq!(map.inputs.platform, harness_core::features::platform());
+    assert!(map.unwatched.is_empty());
+    // Deterministic for its inputs, apart from the unstable scenario.
+    let again =
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+            .expect("maps again");
+    let stable =
+        |m: &harness_core::features::FeatureMap| -> Vec<harness_core::features::ScenarioRecord> {
+            m.scenarios
+                .iter()
+                .filter(|r| r.feature != "clock")
+                .cloned()
+                .collect()
+        };
+    assert_eq!(stable(&map), stable(&again));
+    // The source tree is untouched: the probe works on a scratch copy.
+    let main = std::fs::read_to_string(tmp.path().join("src/tool/main.c")).expect("main.c");
+    assert!(!main.contains("__ruharness"));
+}
+
+#[test]
+fn a_crash_keeps_the_notes_before_it() {
+    let tmp = TempDir::new("feat-map-crash");
+    let features = "schema_version = 1\n[[feature]]\nid = \"boom\"\nname = \"Crash\"\n\
+                    [[scenario]]\nfeature = \"boom\"\nid = \"z\"\nargs = [\"-a\", \"{input}\"]\n\
+                    input = \"sample:text\"\n";
+    let (target, _) = program(tmp.path(), GOOD, Some(features), "");
+    // unit_add aborts once it sees a 'z': the C side crashes after main and
+    // unit_add have both run.
+    write(
+        &tmp.path().join("src/tool/unit.c"),
+        "#include <stdlib.h>\n#include \"unit.h\"\n\
+         int unit_add(int a, int b) { if (b == 122) abort(); return (int)((unsigned)a + (unsigned)b); }\n",
+    );
+    let facts = with_symbols(tmp.path());
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    let map =
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+            .expect("maps");
+    let r = &map.scenarios[0];
+    assert_eq!(r.end, "signal 6");
+    assert_eq!(r.noted, "complete");
+    let names: Vec<&str> = r.functions.iter().map(|(_, n)| n.as_str()).collect();
+    assert_eq!(names, ["main", "unit_add"]);
+}

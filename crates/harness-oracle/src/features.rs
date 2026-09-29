@@ -153,7 +153,7 @@ fn program_digest(ctx: &FeatureStepCtx<'_>) -> String {
 }
 
 /// Copy `bin` to the one path every run of a scenario uses (§4.1 step 1).
-fn place(bin: &Path, run_path: &Path) -> Result<(), Error> {
+pub(crate) fn place(bin: &Path, run_path: &Path) -> Result<(), Error> {
     if let Some(dir) = run_path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
     }

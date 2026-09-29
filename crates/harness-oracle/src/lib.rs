@@ -73,6 +73,7 @@ mod boundary_run;
 mod capabilities;
 mod confine;
 mod exec;
+mod featuremap;
 mod features;
 mod sandbox;
 mod scrub;
@@ -84,6 +85,7 @@ mod validate;
 
 pub use boundary::{BoundaryReport, ParamFigures};
 pub use exec::{cancelled, kill_live_process_groups};
+pub use featuremap::{map_features, MapProgress, FEATURES_BUILD_DIR};
 pub use sandbox::sandbox_mode;
 pub use validate::validate_driver;
 
@@ -217,6 +219,23 @@ impl Base {
     /// Validate the tool allowlist (`tools` must all be on it), the timeout,
     /// the unit id, and resolve the source/include dirs.
     pub(crate) fn new(target: &TargetContext, unit: &Unit, tools: &[&str]) -> Result<Base, Error> {
+        // The id becomes a path segment under both units/ and build/.
+        if !harness_core::plan::is_clean_segment(&unit.id) || unit.id == symbols::BASELINE_DIR {
+            return Err(Error::InvalidPlan(format!(
+                "unit id {:?} cannot be used as a directory name by the oracle",
+                unit.id
+            )));
+        }
+        Base::resolve(target, &unit.id, tools)
+    }
+
+    /// [`Base::new`] without a unit: `who` names the caller in messages (the
+    /// features map, docs/FEATURES-DESIGN.md §5).
+    pub(crate) fn resolve(
+        target: &TargetContext,
+        who: &str,
+        tools: &[&str],
+    ) -> Result<Base, Error> {
         let timeout = timeout_secs(target)?;
         let allowlist = target.config.oracle_allowlist();
         for tool in tools {
@@ -228,19 +247,12 @@ impl Base {
                 )));
             }
         }
-        // The id becomes a path segment under both units/ and build/.
-        if !harness_core::plan::is_clean_segment(&unit.id) || unit.id == symbols::BASELINE_DIR {
-            return Err(Error::InvalidPlan(format!(
-                "unit id {:?} cannot be used as a directory name by the oracle",
-                unit.id
-            )));
-        }
         let root = target
             .root
             .canonicalize()
             .map_err(|e| Error::io(&target.root, e))?;
         let source_dir = inside(
-            &unit.id,
+            who,
             "[target] source_dir",
             &root.join(&target.config.target.source_dir),
             &root,
@@ -250,7 +262,7 @@ impl Base {
         let mut include_dirs = Vec::new();
         for dir in &target.config.target.include_dirs {
             include_dirs.push(inside(
-                &unit.id,
+                who,
                 "[target] include_dirs entry",
                 &root.join(dir),
                 &source_dir,
@@ -369,7 +381,12 @@ impl Prepared {
 /// Canonicalize `path` and require the result to be inside `base` (itself
 /// canonical): defense in depth behind the plan-load path validation — a
 /// symlink committed to the target cannot redirect the oracle elsewhere.
-fn inside(unit_id: &str, what: &str, path: &Path, base: &Path) -> Result<PathBuf, Error> {
+pub(crate) fn inside(
+    unit_id: &str,
+    what: &str,
+    path: &Path,
+    base: &Path,
+) -> Result<PathBuf, Error> {
     let canon = path.canonicalize().map_err(|e| Error::io(path, e))?;
     if !canon.starts_with(base) {
         return Err(Error::InvalidPlan(format!(
@@ -905,14 +922,19 @@ pub(crate) struct WholePrograms {
 /// The whole program's C files: every top-level `*.c` of `source_dir`
 /// (non-recursive), canonical and contained, sorted.
 pub(crate) fn program_c_files(prep: &Prepared, unit: &Unit) -> Result<Vec<PathBuf>, Error> {
-    let source_dir = &prep.base.source_dir;
+    program_c_files_in(&prep.base, &unit.id)
+}
+
+/// [`program_c_files`] for `base`; `who` names the caller in messages.
+pub(crate) fn program_c_files_in(base: &Base, who: &str) -> Result<Vec<PathBuf>, Error> {
+    let source_dir = &base.source_dir;
     let mut c_files: Vec<PathBuf> = Vec::new();
     for entry in std::fs::read_dir(source_dir).map_err(|e| Error::io(source_dir, e))? {
         let path = entry.map_err(|e| Error::io(source_dir, e))?.path();
         if path.extension().and_then(|e| e.to_str()) == Some("c") {
             // Canonical + contained, like every other compiler input: a
             // symlinked .c must not pull in a file outside the target.
-            c_files.push(inside(&unit.id, "source file", &path, &prep.base.root)?);
+            c_files.push(inside(who, "source file", &path, &base.root)?);
         }
     }
     c_files.sort();
@@ -1078,7 +1100,7 @@ fn is_allowed_link_arg(arg: &str) -> bool {
 /// `harness.toml` is target-owned, hostile input: anything but `-l<name>`
 /// (`-Wl,…`, `-fplugin=…`, `@file`, a path, a non-string) is refused with an
 /// error naming the offending entry.
-fn extra_link_args(target: &TargetContext) -> Result<Vec<String>, Error> {
+pub(crate) fn extra_link_args(target: &TargetContext) -> Result<Vec<String>, Error> {
     let Some(value) = target.config.oracle.get("extra_link_args") else {
         return Ok(Vec::new());
     };

@@ -46,8 +46,12 @@ pub struct Walk {
     pub truncated: bool,
 }
 
-/// Walk `dir` for files whose extension is one of `exts` (without the dot),
-/// within `limits`. See the module docs.
+/// The `exts` that matches every regular file, whatever its name (the
+/// features probe's mirror, docs/FEATURES-DESIGN.md §5.3).
+pub const ALL_FILES: &[&str] = &["*"];
+
+/// Walk `dir` for files whose extension is one of `exts` (without the dot;
+/// [`ALL_FILES`] for every file), within `limits`. See the module docs.
 pub fn confined(dir: &Path, exts: &[&str], limits: Limits) -> Walk {
     let mut walk = Walk::default();
     let canon = match dir.canonicalize() {
@@ -130,10 +134,11 @@ fn visit(
             visit(&path, root, depth + 1, exts, limits, visited, walk);
             continue;
         }
-        let matches = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| exts.contains(&e));
+        let matches = exts.contains(&ALL_FILES[0])
+            || path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| exts.contains(&e));
         if !matches {
             continue;
         }

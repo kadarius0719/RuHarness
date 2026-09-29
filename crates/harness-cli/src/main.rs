@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod bench;
+mod features;
 mod gen_driver;
 mod hand_edit;
 mod promote;
@@ -69,6 +70,12 @@ enum Cmd {
     State {
         #[command(subcommand)]
         cmd: StateCmd,
+    },
+    /// The person's features: scenarios checked on every verify, and the map
+    /// of which functions each runs (docs/FEATURES-DESIGN.md)
+    Features {
+        #[command(subcommand)]
+        cmd: FeaturesCmd,
     },
     /// Run the hazard detectors and regenerate observer findings
     Detect {
@@ -234,6 +241,39 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum FeaturesCmd {
+    /// Write a starter migration/features/features.toml (never over one)
+    Init {
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+    },
+    /// Save a new features.toml read from stdin, when it validates and the
+    /// file is still the one --expect names
+    Save {
+        /// The blake3 of the file's current bytes, or `none` when there is none
+        #[arg(long)]
+        expect: String,
+        /// The new file's length in bytes (a read cut short is refused)
+        #[arg(long)]
+        bytes: u64,
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+    },
+    /// Run every scenario on a probed copy of the C and record which
+    /// functions each ran (migration/features/map.json)
+    Map {
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Run target code even though no sandbox is available
+        #[arg(long)]
+        allow_unsandboxed: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum StateCmd {
     /// Staleness report: facts vs tree, plan vs tree, verdicts vs tree
     Status {
@@ -336,6 +376,18 @@ fn main() -> ExitCode {
         Cmd::State {
             cmd: StateCmd::Status { target },
         } => cmd_status(target),
+        Cmd::Features { cmd } => match cmd {
+            FeaturesCmd::Init { target } => features::cmd_init(target),
+            FeaturesCmd::Save {
+                expect,
+                bytes,
+                target,
+            } => features::cmd_save(target, expect, bytes),
+            FeaturesCmd::Map {
+                target,
+                allow_unsandboxed,
+            } => features::cmd_map(target, allow_unsandboxed),
+        },
         Cmd::Detect { target } => cmd_detect(target),
         Cmd::Observe { target } => cmd_observe(target),
         Cmd::Review {
@@ -467,7 +519,7 @@ fn facts_stale(stale: usize) -> Error {
 }
 
 /// Count facts file records whose hash no longer matches the working tree.
-fn stale_fact_files(ctx: &TargetContext, facts: &Facts) -> usize {
+pub(crate) fn stale_fact_files(ctx: &TargetContext, facts: &Facts) -> usize {
     facts
         .files
         .iter()
