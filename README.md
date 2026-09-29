@@ -69,6 +69,9 @@ platform and scoring harness). See `targets/tractor/README.md` for what a score 
 
 ## How it works, in plain English
 
+For a full guide written for non-technical readers — how it works, the cockpit, the chat
+and the commands — see [docs/TUTORIAL.md](docs/TUTORIAL.md).
+
 **The problem.** You have C code you want in Rust. An AI model can write the Rust,
 but you can't trust it: it may compile and still behave differently. So the question
 this project answers is not "can a model translate C?" but **"how do we *know* a
@@ -347,8 +350,8 @@ journaled for a child it killed). Writing commands hold a writer lock on
 ```bash
 cargo run -p harness-tui -- --target targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib
 ```
-New to it? [docs/COCKPIT-TUTORIAL.md](docs/COCKPIT-TUTORIAL.md) walks through the screen,
-every action and the chat in plain language, with a first migration step by step.
+New to it? [docs/TUTORIAL.md](docs/TUTORIAL.md) walks through the screen, every action and
+the chat in plain language, with a first migration step by step.
 
 A terminal UI for the migration, made for arrow keys — nothing to memorise. On the left,
 **Files**: a tree of the target's C files (and, under each, its functions), then its
