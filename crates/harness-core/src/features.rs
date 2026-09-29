@@ -677,23 +677,19 @@ pub enum SkipReason {
     CSideExecFailed,
     /// The whole C program does not build.
     CSideBuildFailed,
-    /// The facts do not record exactly one public `main` among the
-    /// top-level `.c` files.
-    MainCount,
     /// The unit's `replaces` are not all top-level `.c` files of the program.
     NotInProgram,
 }
 
 impl SkipReason {
     /// Every reason.
-    pub const ALL: [SkipReason; 8] = [
+    pub const ALL: [SkipReason; 7] = [
         SkipReason::CSideUnstable,
         SkipReason::CSideCrashed,
         SkipReason::CSideTimedOut,
         SkipReason::CSideOverflow,
         SkipReason::CSideExecFailed,
         SkipReason::CSideBuildFailed,
-        SkipReason::MainCount,
         SkipReason::NotInProgram,
     ];
 
@@ -706,7 +702,6 @@ impl SkipReason {
             SkipReason::CSideOverflow => "c-side-overflow",
             SkipReason::CSideExecFailed => "c-side-exec-failed",
             SkipReason::CSideBuildFailed => "c-side-build-failed",
-            SkipReason::MainCount => "main-count",
             SkipReason::NotInProgram => "not-in-program",
         }
     }
@@ -720,7 +715,6 @@ impl SkipReason {
             SkipReason::CSideOverflow => "the C program printed more than the output cap",
             SkipReason::CSideExecFailed => "the C program could not be started",
             SkipReason::CSideBuildFailed => "the whole C program does not build",
-            SkipReason::MainCount => "the program has no single main()",
             SkipReason::NotInProgram => "this unit's files are not part of the program",
         }
     }
@@ -735,7 +729,6 @@ impl SkipReason {
             SkipReason::CSideTimedOut => "shorten the scenario, or raise [oracle] timeout_secs",
             SkipReason::CSideExecFailed => "a sandbox or harness problem — see the details",
             SkipReason::CSideBuildFailed => "fix the build (the details show the compiler's words)",
-            SkipReason::MainCount => "features need a program with one main()",
             SkipReason::NotInProgram => "nothing to do: its verdicts skip the features",
         }
     }
@@ -1502,9 +1495,10 @@ args = ["-h"]
             assert!(!reason.words().is_empty() && !reason.what_to_do().is_empty());
         }
         assert!(SkipReason::CSideUnstable.is_c_side());
-        assert!(!SkipReason::NotInProgram.is_c_side() && !SkipReason::MainCount.is_c_side());
+        assert!(!SkipReason::NotInProgram.is_c_side());
         for hostile in [
             "gzip/text: budget",
+            "gzip/text: main-count",
             "gzip/text:c-side-crashed",
             "Gzip/text: c-side-crashed",
             "gzip text: c-side-crashed",

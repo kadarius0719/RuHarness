@@ -1,9 +1,10 @@
 # Features: what a user does with the program, mapped to the code and checked — design
 
-Status: DESIGN, revised three times (2026-09-29): the adversarial review (four lenses, 84
-findings, §R), the check of that revision (three checkers, 58, §R2), and a scoped check of the
-second revision (two checkers, 37, §R3). Step 1 (core) is built on the second revision; §R3
-says what it changes there.
+Status: DESIGN, revised four times (2026-09-29): the adversarial review (four lenses, 84
+findings, §R), the check of that revision (three checkers, 58, §R2), a scoped check of the
+second revision (two checkers, 37, §R3), and a scoped check of the third (one checker, 11 —
+no high, five medium, each resolved locally as proposed, §R4). Step 1 (core) is built; §R3
+and §R4 say what they changed there.
 
 This implements the user's direction recorded 2026-09-23 ("feature workflows": user-facing
 behaviours mapped to the code that implements them, so a migration preserves what a user
@@ -267,7 +268,7 @@ So:
   - `features_skipped: Vec<String>` — scenario checks that did not run, each
     `<feature>/<scenario>: <reason>`, the reason from the closed set of §6.1:
     `c-side-unstable`, `c-side-crashed`, `c-side-timed-out`, `c-side-overflow`,
-    `c-side-exec-failed`, `c-side-build-failed`, `main-count`, `not-in-program`.
+    `c-side-exec-failed`, `c-side-build-failed`, `not-in-program`.
 - The `stale` list, `fresh_green`, the contradiction rule, `verified_in_place`, the bench's
   `fresh_green` and fence's `STALE_INPUTS` are **unchanged**.
 - `UnitReport` gains `features: Coverage` (`#[serde(skip_serializing_if)]` when `None`):
@@ -276,16 +277,18 @@ So:
   - `Behind(reasons)` — reasons among `not-yet` (the verdict records no features), `changed`
     (its `features` digest differs), `invalid` (it ran while the file could not be used, or
     the file cannot be used now), `program` (its `program` differs), `skipped` (it lists
-    skipped scenarios; the list is in the verdict). The first four are **re-checkable** — a
-    Re-check changes them; `skipped` is not, unless the file or the program changes.
+    skipped scenarios; the list is in the verdict). `not-yet`, `changed`, `program` and
+    `invalid` (while the file is valid now) are **re-checkable** — a Re-check changes them;
+    `skipped` is not, unless the file or the program changes. The first three are exclusive
+    and come first, then `program`, then `skipped`.
   The `unit` event and harness-mcp's unit report carry it (a closed set of strings, §9).
 - The cockpit shows it as a **marker on the verdict line**, not a state: the unit keeps its
   state (✓ migrated stays ✓). Its words, one per reason, in this order when several apply:
   | reason | words on the verdict line |
   |---|---|
-  | `not-yet` | your features: not checked on this unit yet — Re-check it |
+  | `not-yet` | your features: not checked on this unit yet — Re-check it (for a red verdict: "…the verdict stopped before them") |
   | `changed` | your features: not checked since you changed them — Re-check it |
-  | `invalid` | your features: not checked — features.toml had an error then (or has one now) |
+  | `invalid` | your features: not checked — features.toml had an error then (Re-check it) or has one now (fix it first) |
   | `program` | your features: checked before other C changed — Re-check it |
   | `skipped` | your features: n scenarios could not run — see Features (the reasons in §6.1's words) |
 - `AttemptRecord` gains `features` and `program` (both skipped when empty). Nothing refuses a
@@ -315,18 +318,25 @@ So:
    (`sample_text.txt`, `sample_rand.bin`, `sample_empty`) with a fixed modification time.
 3. The child runs with **cwd = the temp dir**, argv[0] = `<build>/f/<name>` (absolute), and
    `{input}` = the bare file name; spawned by that absolute path (sandboxed, `sandbox-exec` is
-   given it). Both streams are rewritten one-to-one: every `$` becomes `$$`, then the temp
+   given it). Both raw streams (the confinement's `run_raw_with`, not `run_with`, whose own
+   `$TMPDIR` replacement would be escaped twice) are rewritten one-to-one: every `$` becomes
+   `$$`, then the temp
    dir's path becomes `$TMPDIR` and `<build>/f` becomes `$PROGDIR` (neither contains the
    other: the temp dir is a fresh leaf under the system temp dir, `<build>` is under the
    target) — so the details' lengths are the same on every machine, and a candidate that
    prints the literal token cannot match a C side that printed its real path.
 4. The run profile is the whole-program check's — exec only the binary, read only the binary
    and the temp dir under the home dir and the target root (reads elsewhere allowed, as
-   today), write only the temp dir — plus `(deny signal (target others))` and
+   today), write only the temp dir — plus `(deny signal)` `(allow signal (target self))` and
    `(deny process-fork)`, both applied to both sides alike: a scenario run cannot signal
-   another process or leave a child behind. (Without the sandbox, the candidate's inability to
-   spawn or signal rests on the deny scan and the capabilities check alone, as for every
-   candidate run today; SCHEMAS.md says so.)
+   another process (`(target others)` alone is not enough: it means "outside the run's process
+   group", which the run can change) or leave a child behind; `abort`, `raise` and signals to
+   itself still work. A program that forks for its own work (workers, daemonizing) takes its
+   error path on both sides: its scenario then compares that error path — the map flags a
+   scenario that "compares little", and Help says that programs which fork are checked only up
+   to the fork. (Without the sandbox, the candidate's inability to spawn or signal rests on the
+   deny scan and the capabilities check alone, as for every candidate run today; SCHEMAS.md
+   says so.)
 5. When the leader exits, its **process group is killed** (the `/bin/kill -KILL -- -<pgid>`
    the timeout path uses, called right after `try_wait` reports the exit and before the
    output drain's grace wait) — belt and braces behind the fork denial, and the only guard
@@ -367,9 +377,11 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
 - Refuses, before building anything, with a message that says what to do, when: there is no
   features file, it has no scenarios, or it does not validate (the loader's message); the
   facts are missing, or stale for any file ("scan the project first" — the probe's ids come
-  from the facts); a top-level `.c` of `source_dir` has no facts record; the facts do not
-  record exactly one public `main` among the top-level `.c` of `source_dir` ("features need a
-  program with one main()"); `sandbox: none` without `--allow-unsandboxed`.
+  from the facts); a top-level `.c` of `source_dir` has no facts record; `sandbox: none`
+  without `--allow-unsandboxed`. Whether the program has one `main()` is the link's to say:
+  a failed `plain` build is refused with the compiler's first lines and, when the facts do not
+  record exactly one `main` (distinct file and id) among the top-level `.c`, "features need a
+  program with one main()".
 - Builds, in `migration/build/.features/` (recreated), with the allowlisted `cc` under the
   tool profile, with progress messages ("Building the C program…", "Building a scratch copy
   that notes each function it runs…"):
@@ -519,18 +531,24 @@ that stopped at a gate records no feature field at all). By the snapshot passed 
      top-level `.c` (the rule the shared whole builds impose): every scenario is skipped as
      `not-in-program`. (A unit whose `replaces` names no file at all stays the refusal it is
      today.)
-  2. **Not one `main`** — the facts do not record exactly one public `main` among the
-     top-level `.c`: every scenario is skipped as `main-count`; nothing is built.
-  3. **The C program does not build** — `whole_c` fails to compile or link: every scenario is
-     skipped as `c-side-build-failed` (the compiler's text goes to the message line and the
-     terminal, never into the verdict).
-  4. Otherwise `whole_mixed` is built (a failure to link it is the candidate's: every scenario
-     is a failed check, `candidate run failed: the mixed program did not link`) and each
+  2. **The C program does not build** — `whole_c` fails to compile or link (a library with no
+     `main()`, two `main()`s, a missing library): every scenario is skipped as
+     `c-side-build-failed` (the compiler's first lines go to the message line and the
+     terminal, never into the verdict; when the facts do not record exactly one `main` among
+     the top-level `.c`, the message says "features need a program with one main()"). The link
+     decides, not the facts: the scanner also counts a `main` behind `#ifdef` and misses one
+     made by a macro.
+  3. Otherwise `whole_mixed` is built — a failure to link it is a failed check for every
+     scenario, fail closed, worded without blame: `the mixed program did not link` (the
+     candidate, or a plan whose replaced file defines something the rest needs) — and each
      scenario runs C, mixed, C (§4.2), emitting `feature:<feature>/<scenario>` or recording its
      `c-side-*` skip.
   The two builds are the whole-program check's, built once when both are configured (the
-  "build the two programs" step is extracted from `whole_program`). The verdict records
-  `features`, `program` and `features_skipped` (§3).
+  "build the two programs" step is extracted from `whole_program`, returning its outcome as
+  data). **When `[oracle.whole_program]` is configured**, it runs first and a failed whole
+  build stays the error it is today (a target without features keeps today's behaviour); the
+  skip and the failed-check wording apply when only the features need the builds. The verdict
+  records `features`, `program` and `features_skipped` (§3).
 
 The reasons in words (the marker, the messages, the feature View, F2's next step):
 
@@ -542,7 +560,6 @@ The reasons in words (the marker, the messages, the feature View, F2's next step
 | `c-side-overflow` | the C program printed more than the output cap | change the scenario |
 | `c-side-exec-failed` | the C program could not be started | a sandbox or harness problem — see the details |
 | `c-side-build-failed` | the whole C program does not build | fix the build (the details show the compiler's words) |
-| `main-count` | the program has no single main() | features need a program with one main() |
 | `not-in-program` | this unit's files are not part of the program | nothing to do: its verdicts skip the features |
 
 Every scenario runs for every unit — also a scenario whose map says it never runs the unit:
@@ -560,9 +577,9 @@ bytes (the verdict is committed, quoted to a model and shown to the chat). And n
 - a mismatch: `exit 0 vs exit 1` / `stdout differs (lens 18234 vs 18230, first diff at byte
   9)` / `stderr differs (…)`, joined with `; `;
 - the mixed side did not exit: `candidate run failed: signal 6` / `…: timed out after 120s` /
-  `…: more output than the cap` / `…: could not start` / `…: the mixed program did not link`
-  — the existing lead-in, which the migrate judge's `classify` already reads as a crash or
-  timeout.
+  `…: more output than the cap` / `…: could not start` — the existing lead-in, which the
+  migrate judge's `classify` already reads as a crash or timeout; and `the mixed program did
+  not link` (§6.1).
 The cockpit shows the scenario's arguments next to a failed check (it has the features file);
 the model and the chat get the id.
 
@@ -611,10 +628,11 @@ features file":
 2. The file (or the starter, when there is none) is copied into a fresh private temp dir, and
    its digest noted (`none` when there was no file).
 3. **Before the screen is handed over**, a dialog in the cockpit says which editor opens and
-   how to use it, with **[Open nano]** and **Cancel**:
-   - the editor: `$VISUAL`, else `$EDITOR`, else `nano` when it is on `PATH`, else `vi` — one
-     choice shared with the hand edit (which gains the same dialog and the same default); the
-     label is the basename of the command's first word ("Edit the features file (in nano)");
+   how to use it, with **[Open \<editor\>]** and **Cancel**:
+   - the editor: `$VISUAL`, else `$EDITOR`, else `nano` when it is on `PATH`, else `vi`; the
+     label is the basename of the command's first word ("Edit the features file (in nano)"),
+     and the button says it (**[Open nano]**). The hand edit keeps its own default and flow: it
+     opens two files, which macOS's `nano` (pico) cannot, and its test pins `vi`;
    - nano: "Type your changes. Ctrl-O then Enter saves; Ctrl-X leaves.";
    - vi: "Press i to type. To save and leave: Esc, then :wq, then Enter. To leave without
      saving: Esc, then :q!, then Enter.";
@@ -639,8 +657,9 @@ features file":
    quit with its path, never removed by the cockpit), and the menu offers **Continue my
    features draft** and **Discard my features draft** while it exists.
 
-The hand-edit code (`handedit::Session`, two fixed files) is generalized to a one-file session
-with a default-editor parameter; `KEPT_EDITS` and the signal path cover the draft.
+The hand edit's pieces are reused, not changed: `editor_script` for the command, the suspend
+path, `KEPT_EDITS` and the signal path for the draft; a one-file session sits beside the
+hand edit's two-file one.
 
 ## 8. The cockpit
 
@@ -658,7 +677,9 @@ feature** from the unit's latest verdict:
   them has a passing check, else `absent`;
 - **not checked** — no verdict, a stale one, or one whose `features` or `program` differs
   from today's (or is empty or `invalid`);
-- **outside** — the verdict skipped this feature's scenarios as `not-in-program`.
+- **outside** — decided from the plan, first: the unit's `replaces` are not all top-level `.c`
+  of `source_dir` (its verdicts skip the features as `not-in-program`). An outside unit takes
+  no part in F3, F8, F9 or F10.
 
 It also holds, per feature: its scenarios with the map's record of each; its functions (the
 union of its scenarios' `functions`) each mapped to its file and that file's owning unit
@@ -686,6 +707,7 @@ dim for the rest) and is never the only signal:
 | F8 | all its units migrated | `✓` | every unit its functions touch has Rust, and each one's result is `passed` | the caveat below |
 | F9 | holds so far | `◉` | some unit it touches has Rust, and each such unit's result is `passed`; the word carries the count: "holds so far · 1 of 6 units" | the caveat below |
 | F10 | all C | `◌` | no unit it touches has Rust yet | none |
+| F11 | see its units | `·` | none of the above (e.g. every unit it touches is outside) | the units, as links |
 
 - F1 needs no map and comes first: a failure shows even while the map is out of date, and
   whatever else the verdict skipped. A stale red verdict is `not checked` (F3), not `failed`:
@@ -694,15 +716,16 @@ dim for the rest) and is never the only signal:
   unit its map never touched) — except units `outside` the features. A skip is never a reason
   for F3: a Re-check could not clear it.
 - The state word carries a second condition when one applies below it: "failing · 1 scenario
-  cannot run". F9's and F10's words add "· 1 unit has Rust not yet verified" when a unit it
-  touches has a red verdict.
+  cannot run". F9's and F10's words add "· 1 unit has a red verdict" when a unit it touches
+  has one.
 - **F8 and F9, wherever they are shown** (the View, the summary's footnote on "hold so far",
   Help): "each unit was checked with only its own Rust swapped in — no build has them all in
   Rust together yet"; F8 adds "n functions it runs are outside every unit and stay C" when
   there are any.
-- **A valid file in a target with no single `main()`**: every feature's View and the Features
-  View say "Features need a program with one main() — this target has none (a library?); not
-  supported yet", and the states stop at F4 (Map is greyed with the same words).
+- **A valid file in a target whose facts record no single `main()`**: every feature's View,
+  the Features View and each unit's features line say "Features need a program with one
+  main() — this target has none (a library?); not supported yet" (advisory, from the facts;
+  the link decides in verify).
 
 ### 8.3 The tree
 
@@ -796,13 +819,14 @@ zlib/text").
 
 **The project summary**: a line "Features: 5 — 1 failing, 2 hold so far¹, 2 all C · 1 unit not
 re-checked · 1 scenario cannot run" (only the non-zero counts, each named by its state word;
-"not re-checked" counts units with Rust whose result for some feature is `not checked`) — or
+"not re-checked" counts units with Rust whose result for some feature is `not checked` or
+`absent`) — or
 "Features: none yet — see Features", or "Features: features.toml has an error — see Features";
 ¹ the F8/F9 caveat, only when F8 or F9 occurs. Next-step rules after rule 4, each only when its
 act is enabled:
 5. a valid file with scenarios, and the map is missing or out of date → "Map the features —
    press Enter and choose Map the features";
-6. a unit with Rust whose result for some feature is `not checked` → "Re-check u-… — your
+6. a unit with Rust whose result for some feature is `not checked` or `absent` → "Re-check u-… — your
    features are not checked on it" (the project menu gains **Re-check u-…** for exactly this
    unit while the rule applies, so the Next step's act is where `recommended` looks).
 
@@ -816,8 +840,8 @@ act is enabled:
 | Project; Features; a feature — only with a valid file with scenarios | **Map the features** | `harness --json features map --target <root>` (+ `--allow-unsandboxed` through `with_sandbox_flag`, as every act that runs code) — confirmed: "Builds the C program twice in a scratch copy under migration/build/.features — once as it is, once with a note at the start of every function; your C is not changed — and runs each of your 12 scenarios three times. Records which functions each ran in migration/features/map.json. Changes no verdict." |
 
 "Map the features" is greyed with the reason, and re-checked at confirm time like Refresh the
-plan: busy; the facts are missing or stale ("Scan the project first"); not one `main()`; no
-sandbox. `recommended` focuses Write on `Features (none yet)`, Edit on `Features (error)`, Map
+plan: busy; the facts are missing or stale ("Scan the project first"); no sandbox. (No
+single `main()` in the facts is said beside it, not a grey-out: the link decides.) `recommended` focuses Write on `Features (none yet)`, Edit on `Features (error)`, Map
 on a feature in F4/F5, Edit on a feature in F2, and — on the project — the Next step's act.
 
 **No other act is gated by features**: Re-check, Accept, Retry, Modify, hand edits and the
@@ -899,7 +923,7 @@ the skip list's text. Its brief gains:
 | harness-llm | `verify_with` in the judge under the run's snapshot; the attempt's digests; the replay's rule (§3); the brief's sentences |
 | harness-cli | `features init`, `features save`, `features map`; the snapshot per run for verify/migrate/promote/override; the `unit` event's field |
 | harness-mcp | the unit report's `features` field |
-| harness-tui | `featmap` (un-gated); `load::read`; tree, Views, chips, overlay, summary and Next step, menu (the Edit flow for write and edit, Map, the kept draft), the editor dialog shared with the hand edit (`handedit` generalized), `recommended`, narrate, Help |
+| harness-tui | `featmap` (un-gated); `load::read`; tree, Views, chips, overlay, summary and Next step, menu (the Edit flow for write and edit, Map, the kept draft), the editor dialog (a one-file session beside the hand edit's), `recommended`, narrate, Help |
 | docs | SCHEMAS.md, TUTORIAL.md, README, this file |
 | targets/zopfli | last: `migration/features/features.toml` (gzip, zlib, deflate, verbose, iterations, help, no file) and its `map.json`; u001 re-checked; the tests that load zopfli adjusted in the same commit |
 
@@ -1143,3 +1167,27 @@ top-level `.c` and their include closure, canonical for symlinks — not every f
 `AttemptRecord.program`; the replay rule's `invalid`; `features::starter`; the reason set
 (`budget` and `no-main` gone; `c-side-build-failed` and `main-count` new). The coverage enum
 and its reasons stay; the per-feature results are the cockpit's (§8.1).
+
+## R4. Scoped check of the third revision — 11 findings, resolved in the fourth
+
+One checker on 0e8e7b4 (both lenses; harmless `sandbox-exec` probes of fork, spawn, signals,
+abort and copy-over; pico and vim driven through a pty). No high; five medium, each resolved
+as the checker proposed, with local edits — not checked again (as Build C's and D's last
+passes; the build's own review follows).
+
+| Finding | Resolution |
+|---|---|
+| R3-1 — `(deny signal (target others))` means "outside the run's process group", which the run can change | `(deny signal)` `(allow signal (target self))` (§4.1); a test that a run cannot signal its parent (§12 step 2) |
+| R3-2 — `(deny process-fork)` turns a forking program's run into its error path on both sides | said in §4.1 and Help; such scenarios are flagged as comparing little |
+| R3-3 — with `[oracle.whole_program]` configured a failed whole build is an error before the features run | stated: it stays today's error then; the skip and the failed-check wording apply when only the features need the builds (§6.1) |
+| R3-4 — `main-count` from the facts miscounts `#ifdef` and macro `main`s, and is redundant with the link | removed from the reason set: the link decides (`c-side-build-failed`, with the one-`main` hint); the facts' count is advisory in the cockpit and in the map's refusal message (§5.1, §6.1, §8.2) |
+| R3-5 — the hand edit opens two files; macOS nano (pico) takes one; vim's `:wq` stops on the first of two | the hand edit keeps its default and flow; the features Edit alone defaults to nano (§7.2) |
+| R3-6 — a mixed link failure blamed on the candidate | worded without blame, still a failed check (§6.1) |
+| R3-7 — an outside unit touched by a feature matched no state; its precedence | `outside` decided from the plan first; excluded from F3/F8–F10; a catch-all F11 (§8.1, §8.2) |
+| R3-8 — "Re-check it" for `invalid` now and for a gate-stopped verdict | the wording depends on the case (§3) |
+| R3-9 — the unit line under no single `main()` | the library sentence there too (§8.2) |
+| R3-10 — `$$` through `run_with` would double-escape | `run_raw_with` (§4.1) |
+| R3-11 — nits: `absent` in rule 6; "has Rust not yet verified"; the hard-coded button; the marker order | fixed (§8.4, §8.2, §7.2, §3) |
+
+**What this changes in step 1 (5e4d1b9)**: `SkipReason::MainCount` goes.
+
