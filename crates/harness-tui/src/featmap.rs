@@ -159,6 +159,8 @@ pub struct UnitRow {
     pub of: usize,
     /// The feature's result on it.
     pub result: UnitResult,
+    /// The unit has Rust (verified or merged).
+    pub has_rust: bool,
 }
 
 /// One feature, derived.
@@ -491,6 +493,7 @@ pub fn build(
                 ran,
                 of: unit_size[u],
                 result: results[u].clone(),
+                has_rust: has_rust(&snapshot.units[u]),
             })
             .collect();
         let also_fails: Vec<String> = results

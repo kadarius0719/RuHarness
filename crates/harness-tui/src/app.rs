@@ -172,6 +172,9 @@ pub enum Act {
     /// The chat's answer to a hand-off: the attempt resumed with it on the
     /// command's stdin (§3.4).
     Continue,
+    /// `features map`: which functions each of the person's scenarios runs
+    /// (docs/FEATURES-DESIGN.md §5).
+    MapFeatures,
 }
 
 impl Act {
@@ -189,6 +192,7 @@ impl Act {
             Act::Resume => "Resume",
             Act::Migrate => "Migrate",
             Act::Continue => "Continue",
+            Act::MapFeatures => "Map the features",
         }
     }
 
@@ -200,9 +204,13 @@ impl Act {
             Act::HandEdit => Some("e"),
             Act::Retry => Some("r"),
             Act::Resume => Some("R"),
-            Act::Scan | Act::Plan | Act::Detect | Act::Verify | Act::Migrate | Act::Continue => {
-                None
-            }
+            Act::Scan
+            | Act::Plan
+            | Act::Detect
+            | Act::Verify
+            | Act::Migrate
+            | Act::Continue
+            | Act::MapFeatures => None,
         }
     }
 
@@ -1829,6 +1837,14 @@ impl App {
                 let argv = self.harness_argv(&[os(sub), self.target_arg()])?;
                 Ok(pending(argv, act.label().to_string(), None, None))
             }
+            Act::MapFeatures => {
+                let argv = self.with_sandbox_flag(self.harness_argv(&[
+                    os("features"),
+                    os("map"),
+                    self.target_arg(),
+                ])?);
+                Ok(pending(argv, act.label().to_string(), None, None))
+            }
             Act::Verify => {
                 let u = find_unit()?;
                 let argv = self.with_sandbox_flag(self.harness_argv(&[
@@ -2154,6 +2170,29 @@ impl App {
                 "Find hazards in the project?".into(),
                 vec!["Runs the detectors and rewrites the observer findings.".into()],
             ),
+            Act::MapFeatures => {
+                let n = match &self.snapshot.features {
+                    harness_core::features::FeatureSnapshot::Valid { features, .. } => {
+                        features.scenarios.len()
+                    }
+                    _ => 0,
+                };
+                (
+                    "Map the features?".to_string(),
+                    vec![
+                        "Builds the C program twice in a scratch copy under \
+                         migration/build/.features — once as it is, once with a note at the \
+                         start of every function; your C is not changed."
+                            .into(),
+                        format!(
+                            "Runs each of your {n} scenario{} three times and records which \
+                             functions each ran in migration/features/map.json.",
+                            if n == 1 { "" } else { "s" }
+                        ),
+                        "Changes no verdict.".into(),
+                    ],
+                )
+            }
             Act::Verify => (
                 format!("Re-check {unit} with the oracle?"),
                 vec![
@@ -2170,7 +2209,10 @@ impl App {
                     ),
                     "Changes no code. The crate is unchanged since the cockpit last showed it."
                         .into(),
-                ],
+                ]
+                .into_iter()
+                .chain(self.features_sentence())
+                .collect(),
             ),
             Act::Accept => {
                 let replace = p.argv.iter().any(|a| a == "--replace");
@@ -2635,7 +2677,16 @@ impl App {
         self.refresh_holder();
         let items = self.menu_items();
         let next = self.next_step().and_then(|(_, act)| act);
-        let focus = menu::recommended(&items, &self.selection, next);
+        let wants_map = match &self.selection {
+            Selection::Feature(id) => self.features.feature(id).is_some_and(|f| {
+                matches!(
+                    f.state,
+                    featmap::FeatureState::NotMapped | featmap::FeatureState::MapOutOfDate
+                )
+            }),
+            _ => false,
+        };
+        let focus = menu::recommended(&items, &self.selection, next, wants_map);
         self.mode = Mode::Menu(Menu {
             items,
             focus,
@@ -2851,6 +2902,42 @@ impl App {
                     u.unit.id
                 ),
                 Some(Act::Plan),
+            ));
+        }
+        // 5. The person's features, not mapped (or the map out of date).
+        let scenarios = match &self.snapshot.features {
+            harness_core::features::FeatureSnapshot::Valid { features, .. } => {
+                features.scenarios.len()
+            }
+            _ => 0,
+        };
+        if scenarios > 0 && !self.features.map.current() && !self.features.no_single_main {
+            return Some((
+                "Map the features — press Enter and choose Map the features".into(),
+                Some(Act::MapFeatures),
+            ));
+        }
+        // 6. A unit with Rust whose verdict does not cover the features.
+        if let Some(u) = self.snapshot.units.iter().find(|u| {
+            matches!(
+                u.unit.status,
+                harness_core::plan::UnitStatus::Verified | harness_core::plan::UnitStatus::Merged
+            ) && self.features.features.iter().any(|f| {
+                f.units.iter().any(|r| {
+                    r.unit == u.unit.id
+                        && matches!(
+                            r.result,
+                            featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
+                        )
+                })
+            })
+        }) {
+            return Some((
+                format!(
+                    "Re-check {} — your features are not checked on it (open it: Units)",
+                    u.unit.id
+                ),
+                None,
             ));
         }
         None
@@ -4074,6 +4161,49 @@ impl App {
         };
     }
 
+    /// What a judged run will do with the person's features, for the dialogs
+    /// (docs/FEATURES-DESIGN.md §8.5): nothing without a file.
+    fn features_sentence(&self) -> Option<String> {
+        use harness_core::features::FeatureSnapshot;
+        match &self.snapshot.features {
+            FeatureSnapshot::None => None,
+            FeatureSnapshot::Invalid(_) => Some(
+                "Your features file has an error: this run will not check your features.".into(),
+            ),
+            FeatureSnapshot::Valid { features, .. } if features.scenarios.is_empty() => None,
+            FeatureSnapshot::Valid { features, .. } => {
+                let n = features.scenarios.len();
+                let mut text = format!(
+                    "It also runs your {n} feature scenario{} on the whole program.",
+                    if n == 1 { "" } else { "s" }
+                );
+                let cannot: Vec<String> = self
+                    .features
+                    .features
+                    .iter()
+                    .flat_map(|f| {
+                        f.scenarios.iter().filter_map(move |s| {
+                            let unstable = s
+                                .record
+                                .as_ref()
+                                .is_some_and(|r| !r.stable || !r.end.starts_with("exit "));
+                            (s.skipped.is_some_and(|r| r.is_c_side()) || unstable)
+                                .then(|| format!("{}/{}", f.id, s.id))
+                        })
+                    })
+                    .collect();
+                if !cannot.is_empty() {
+                    text.push_str(&format!(
+                        " {} cannot run and will be skipped: {}.",
+                        cannot.len(),
+                        cannot.join(", ")
+                    ));
+                }
+                Some(text)
+            }
+        }
+    }
+
     /// The glyph and word of the node `sel` (for rows, titles and tests).
     pub fn node_label(&self, sel: &Selection) -> (&'static str, String) {
         match sel {
@@ -4482,6 +4612,21 @@ pub(crate) mod tests {
 
     pub(crate) fn app(tag: &str) -> App {
         app_of(READ_SCALEFACTORS, tag)
+    }
+
+    /// An app over the target already at `target` (re-read).
+    pub(crate) fn app_of_path(target: &Path) -> App {
+        let read = crate::load::read(target).unwrap();
+        App::new(
+            Config {
+                target: target.to_path_buf(),
+                harness: Some(PathBuf::from(HARNESS)),
+                allow_unsandboxed: false,
+                layout: LayoutMode::Auto,
+                providers: vec!["external".into()],
+            },
+            read,
+        )
     }
 
     pub(crate) fn key(app: &mut App, c: char) -> Command {

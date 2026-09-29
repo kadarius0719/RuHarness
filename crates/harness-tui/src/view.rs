@@ -840,15 +840,156 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 ),
                 (None, _) => "no verdict yet".to_string(),
             };
-            let origin = if unit.crate_dir.is_some() {
+            let mut origin = if unit.crate_dir.is_some() {
                 format!("Crate {} · {verdict}", provenance_words(unit))
             } else {
                 "No crate yet".to_string()
             };
+            if let Some(marker) = coverage_marker(app, unit) {
+                origin.push_str(&format!(" · {marker}"));
+            }
             lines.extend(wrapped(&origin, width, dim()));
         }
     }
+    if let Some(line) = unit_features_line(app, &unit.unit.id) {
+        lines.extend(wrapped(&line, width, Style::default().fg(Color::Cyan)));
+    }
     lines
+}
+
+/// Which of the person's features ran a function (§8.4), from a current map.
+fn function_features_line(app: &App, file: &str, name: &str) -> Option<String> {
+    let model = &app.features;
+    if model.group != featmap::Group::Valid || model.features.is_empty() || !model.map.current() {
+        return None;
+    }
+    let pair = (file.to_string(), name.to_string());
+    if model.unwatched.contains(&pair) {
+        return Some("Not watched by the map (the probe could not put a note in it).".into());
+    }
+    Some(match model.by_function.get(&pair) {
+        Some(ids) => format!(
+            "Run by: {}",
+            ids.iter()
+                .filter_map(|id| model.feature(id).map(|f| display::line(&f.name)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        None => "Run by none of your features.".into(),
+    })
+}
+
+/// How the unit's verdict covers today's features, in words (§3): a marker
+/// beside the verdict, never its state.
+fn coverage_marker(app: &App, unit: &UnitView) -> Option<String> {
+    use harness_core::features::Coverage;
+    let Some(Coverage::Behind(reasons)) = &unit.report.features else {
+        return None;
+    };
+    let red = unit.verdict.as_ref().is_some_and(|v| !v.green);
+    let invalid_now = matches!(app.features.group, featmap::Group::Invalid(_));
+    let mut words: Vec<String> = Vec::new();
+    for reason in reasons {
+        words.push(match reason.as_str() {
+            "not-yet" if red => "not checked — the verdict stopped before them".into(),
+            "not-yet" => "not checked on this unit yet — Re-check it".into(),
+            "changed" => "not checked since you changed them — Re-check it".into(),
+            "invalid" if invalid_now => {
+                "not checked — features.toml has an error (fix it first)".into()
+            }
+            "invalid" => "not checked — features.toml had an error then (Re-check it)".into(),
+            "program" => "checked before other C changed — Re-check it".into(),
+            "skipped" => {
+                let n = unit
+                    .verdict
+                    .as_ref()
+                    .map_or(0, |v| v.inputs.features_skipped.len());
+                format!("{n} scenario{} could not run — see Features", plural_s(n))
+            }
+            _ => continue,
+        });
+    }
+    (!words.is_empty()).then(|| format!("your features: {}", words.join("; ")))
+}
+
+/// Which features run a unit's functions (§8.4) — only from a current,
+/// complete map; failures first.
+fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
+    let model = &app.features;
+    if model.group != featmap::Group::Valid || model.features.is_empty() {
+        return None;
+    }
+    let uf = model.by_unit.get(unit_id)?;
+    if uf.outside {
+        return Some("Not part of the program your features run — its verdicts skip them.".into());
+    }
+    if model.no_single_main {
+        return Some(
+            "Features need a program with one main() — this target's facts show none.".into(),
+        );
+    }
+    let complete = model.map.current()
+        && model.features.iter().all(|f| {
+            f.scenarios.iter().all(|s| {
+                s.record
+                    .as_ref()
+                    .is_some_and(|r| r.noted == "complete" && r.probe_agrees)
+            })
+        });
+    if !complete {
+        return Some("Which features run it: not known — map the features.".into());
+    }
+    if uf.running.is_empty() {
+        return Some(if uf.unwatched == 0 {
+            "None of your features runs this unit's functions, so their checks pass whatever \
+             its Rust does."
+                .into()
+        } else {
+            format!(
+                "None of your features ran its watched functions; {} of its functions could not \
+                 be watched, so this is not proof.",
+                uf.unwatched
+            )
+        });
+    }
+    let result_of = |fid: &str| {
+        model
+            .feature(fid)
+            .and_then(|f| f.units.iter().find(|r| r.unit == unit_id))
+            .map(|r| r.result.clone())
+    };
+    let names = |pick: &dyn Fn(&featmap::UnitResult) -> bool| -> Vec<String> {
+        uf.running
+            .iter()
+            .filter(|(fid, _)| result_of(fid).as_ref().is_some_and(pick))
+            .filter_map(|(fid, _)| model.feature(fid).map(|f| display::line(&f.name)))
+            .collect()
+    };
+    let failed = names(&|r| matches!(r, featmap::UnitResult::Failed(_)));
+    let pending = names(&|r| {
+        matches!(
+            r,
+            featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
+        )
+    });
+    let n = uf.running.len();
+    let mut text = format!(
+        "{n} of your features run{} it",
+        if n == 1 { "s" } else { "" }
+    );
+    if !failed.is_empty() {
+        text.push_str(&format!(
+            " · {} failed: {}",
+            failed.len(),
+            failed.join(", ")
+        ));
+    } else if !pending.is_empty() {
+        text.push_str(&format!(" · {} not re-checked", pending.len()));
+    } else if names(&|r| *r == featmap::UnitResult::Passed).len() == n {
+        text.push_str(" · all passed");
+    }
+    text.push_str(" — see Features");
+    Some(text)
 }
 
 /// The spans filtered and clipped, one after the other, to `width`.
@@ -889,12 +1030,17 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
     // Failed first; checks with the same words (the whole-program samples)
     // collapse into one chip with a count.
     let mut grouped: Vec<(bool, String, usize)> = Vec::new();
-    for check in v
+    let feature_prefix = harness_core::features::CHECK_PREFIX;
+    let feature_passes = v
         .checks
         .iter()
-        .filter(|c| !c.passed)
-        .chain(v.checks.iter().filter(|c| c.passed))
-    {
+        .filter(|c| c.passed && c.name.starts_with(feature_prefix))
+        .count();
+    for check in v.checks.iter().filter(|c| !c.passed).chain(
+        v.checks
+            .iter()
+            .filter(|c| c.passed && !c.name.starts_with(feature_prefix)),
+    ) {
         let words = check_words(&check.name);
         match grouped
             .iter_mut()
@@ -903,6 +1049,10 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
             Some((_, _, n)) => *n += 1,
             None => grouped.push((check.passed, words, 1)),
         }
+    }
+    if feature_passes > 0 {
+        let reach = features_reach_words(app, v);
+        grouped.push((true, format!("scenarios ×{feature_passes}{reach}"), 1));
     }
     for (passed, words, n) in grouped {
         let count = if n > 1 {
@@ -950,6 +1100,62 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
         }
     }
     lines.into_iter().map(Line::from).collect()
+}
+
+/// The overlay's note under a feature check: the feature's name and
+/// arguments, and whether its feature runs the unit (§8.4).
+fn feature_check_note(app: &App, unit: &str, name: &str, passed: bool) -> Option<String> {
+    let rest = name.strip_prefix(harness_core::features::CHECK_PREFIX)?;
+    let (fid, sid) = rest.split_once('/')?;
+    let f = app.features.feature(fid)?;
+    let s = f.scenarios.iter().find(|s| s.id == sid)?;
+    let mut text = format!(
+        "{}: {} {}",
+        display::line(&f.name),
+        app.snapshot.program_name,
+        s.argv.join(" ")
+    );
+    if app.features.map.current() {
+        let runs = app
+            .features
+            .by_unit
+            .get(unit)
+            .is_some_and(|uf| uf.running.iter().any(|(id, _)| id == fid));
+        if !runs {
+            text.push_str(if passed {
+                " (its feature does not run this unit's functions)"
+            } else {
+                " (its feature does not run this unit's functions — yet it failed: the map may \
+                 be incomplete)"
+            });
+        }
+    }
+    Some(text)
+}
+
+/// "(4 run this unit)" for a unit's passing feature checks, from a current
+/// map; what the map cannot say, said (§8.4).
+fn features_reach_words(app: &App, v: &harness_core::Verdict) -> String {
+    let model = &app.features;
+    match &model.map {
+        featmap::MapStatus::None | featmap::MapStatus::Unreadable(_) => " (not mapped yet)".into(),
+        featmap::MapStatus::OutOfDate(_) => " (map out of date)".into(),
+        featmap::MapStatus::Current => {
+            let Some(uf) = model.by_unit.get(&v.unit) else {
+                return String::new();
+            };
+            let running: std::collections::BTreeSet<&str> =
+                uf.running.iter().map(|(f, _)| f.as_str()).collect();
+            let n = v
+                .checks
+                .iter()
+                .filter(|c| c.passed)
+                .filter_map(|c| c.name.strip_prefix(harness_core::features::CHECK_PREFIX))
+                .filter(|rest| rest.split('/').next().is_some_and(|f| running.contains(f)))
+                .count();
+            format!(" ({n} run this unit)")
+        }
+    }
 }
 
 /// The project summary (§3): the Next step first, as a fact; the facts; the
@@ -1001,6 +1207,8 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             Style::default(),
         ));
     }
+    let start = lines.len();
+    lines.extend(summary_features(app, width, links, start));
     // (The read model's own note — "no plan — run `harness plan`" — is the
     // CLI's wording; the Next step above says it the cockpit's way.)
     if let Some(h) = &app.holder {
@@ -1050,6 +1258,92 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             )));
         }
     }
+    lines
+}
+
+/// The project summary's features line (§8.4), a link to the group.
+fn summary_features(
+    app: &App,
+    width: usize,
+    links: &mut Vec<(usize, Selection)>,
+    start: usize,
+) -> Vec<Line<'static>> {
+    let model = &app.features;
+    let text = match &model.group {
+        // A library (no single main()): features do not apply; say nothing.
+        featmap::Group::NoFile if model.no_single_main => return Vec::new(),
+        featmap::Group::NoFile => "Features: none yet — see Features".to_string(),
+        featmap::Group::Invalid(_) => "Features: features.toml has an error — see Features".into(),
+        featmap::Group::Valid => {
+            let mut counts: Vec<(String, usize)> = Vec::new();
+            let mut caveat = false;
+            for f in &model.features {
+                let word = match &f.state {
+                    featmap::FeatureState::HoldsSoFar { .. } => {
+                        caveat = true;
+                        "hold so far".to_string()
+                    }
+                    featmap::FeatureState::AllMigrated => {
+                        caveat = true;
+                        "all units migrated".into()
+                    }
+                    other => other.word(),
+                };
+                match counts.iter_mut().find(|(w, _)| *w == word) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((word, 1)),
+                }
+            }
+            let mut text = format!(
+                "Features: {} — {}",
+                model.features.len(),
+                counts
+                    .iter()
+                    .map(|(w, n)| format!("{n} {w}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if model.map.current() && model.watched > 0 {
+                text.push_str(&format!(
+                    " · they ran {} of {} watched functions",
+                    model.ran, model.watched
+                ));
+            }
+            let behind = app
+                .snapshot
+                .units
+                .iter()
+                .filter(|u| {
+                    matches!(
+                        u.unit.status,
+                        harness_core::plan::UnitStatus::Verified
+                            | harness_core::plan::UnitStatus::Merged
+                    ) && model.features.iter().any(|f| {
+                        f.units.iter().any(|r| {
+                            r.unit == u.unit.id
+                                && matches!(
+                                    r.result,
+                                    featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
+                                )
+                        })
+                    })
+                })
+                .count();
+            if behind > 0 {
+                text.push_str(&format!(
+                    " · {behind} unit{} not re-checked",
+                    plural_s(behind)
+                ));
+            }
+            if caveat {
+                text.push_str(" (each unit checked with only its own Rust swapped in)");
+            }
+            text
+        }
+    };
+    let mut lines = vec![Line::from("")];
+    links.push((start + lines.len(), Selection::Features));
+    lines.extend(wrapped(&text, width, Style::default()));
     lines
 }
 
@@ -1198,24 +1492,28 @@ fn features_view(
             ],
             width,
         )));
-        let count = |pick: fn(&featmap::UnitResult) -> bool| {
-            f.units.iter().filter(|r| pick(&r.result)).count()
-        };
+        let count =
+            |pick: fn(&featmap::UnitRow) -> bool| f.units.iter().filter(|r| pick(r)).count();
         let mut parts = vec![format!("{} unit{}", f.units.len(), plural_s(f.units.len()))];
         for (n, what) in [
-            (count(|r| *r == featmap::UnitResult::Passed), "pass"),
+            (count(|r| r.result == featmap::UnitResult::Passed), "pass"),
             (
-                count(|r| matches!(r, featmap::UnitResult::Failed(_))),
+                count(|r| matches!(r.result, featmap::UnitResult::Failed(_))),
                 "fail",
             ),
             (
                 count(|r| {
-                    matches!(
-                        r,
-                        featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
-                    )
+                    r.has_rust
+                        && matches!(
+                            r.result,
+                            featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
+                        )
                 }),
                 "not re-checked",
+            ),
+            (
+                count(|r| !r.has_rust && r.result == featmap::UnitResult::NotChecked),
+                "still C",
             ),
         ] {
             if n > 0 {
@@ -1301,8 +1599,11 @@ fn plural_s(n: usize) -> &'static str {
 }
 
 /// A unit result in words (§8.4's "Where its code lives").
-fn result_words(r: &featmap::UnitResult) -> (String, Style) {
-    match r {
+fn result_words(row: &featmap::UnitRow) -> (String, Style) {
+    if !row.has_rust && row.result == featmap::UnitResult::NotChecked {
+        return ("– still C".into(), dim());
+    }
+    match &row.result {
         featmap::UnitResult::Passed => ("✓ passed".into(), Style::default().fg(Color::Green)),
         featmap::UnitResult::Failed(ids) => (
             format!("✗ failed: {}", ids.join(", ")),
@@ -1480,7 +1781,7 @@ fn feature_view(
             .and_then(|i| app.files.units.get(i))
             .map(|i| (i.state.glyph(), i.state.word()))
             .unwrap_or(("", String::new()));
-        let (result, style) = result_words(&row.result);
+        let (result, style) = result_words(row);
         links.push((lines.len(), Selection::Unit(row.unit.clone())));
         lines.push(Line::from(clipped(
             vec![
@@ -1658,6 +1959,11 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
                 ));
             }
         }
+        if let Selection::Function(file, name) = &sel {
+            if let Some(line) = function_features_line(app, file, name) {
+                head.extend(wrapped(&line, width, Style::default().fg(Color::Cyan)));
+            }
+        }
         if let Some(note) = &source.note {
             head.extend(wrapped(note, width, Style::default().fg(Color::Yellow)));
         }
@@ -1683,6 +1989,11 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
     let mut head = unit_header(app, &unit, width);
+    if let Selection::Function(file, name) = &sel {
+        if let Some(line) = function_features_line(app, file, name) {
+            head.extend(wrapped(&line, width, Style::default().fg(Color::Cyan)));
+        }
+    }
     if let Selection::File(p) = &sel {
         let internal: Vec<String> = app
             .files
@@ -2600,6 +2911,22 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                     inner,
                     style,
                 ));
+                if let Some(note) = feature_check_note(app, &v.unit, &c.name, c.passed) {
+                    rows.extend(wrapped(&format!("    {note}"), inner, dim()));
+                }
+            }
+            if !v.inputs.features_skipped.is_empty() {
+                rows.push(Line::from(""));
+                rows.extend(wrapped("Your scenarios that could not run:", inner, bold()));
+                for entry in &v.inputs.features_skipped {
+                    if let Some((f, sc, reason)) = harness_core::features::parse_skip(entry) {
+                        rows.extend(wrapped(
+                            &format!("  {f}/{sc}: {} — {}", reason.words(), reason.what_to_do()),
+                            inner,
+                            Style::default().fg(Color::Yellow),
+                        ));
+                    }
+                }
             }
             if let Some(check) = v.checks.get(selected) {
                 rows.push(Line::from(""));
@@ -5024,5 +5351,177 @@ mod tests {
         }
         let (line, _) = state(&mut app);
         assert!(line.contains("· or click"), "chat rules: {line}");
+    }
+
+    // ----- the person's features (docs/FEATURES-DESIGN.md §8) -----------------
+
+    const FEATURES_TOML: &str = "schema_version = 1\n\
+[[feature]]\nid = \"gzip\"\nname = \"Compress to gzip\"\n\
+[[feature]]\nid = \"help\"\nname = \"Show the help\"\n\
+[[scenario]]\nfeature = \"gzip\"\nid = \"text\"\nargs = [\"-c\", \"{input}\"]\ninput = \"sample:text\"\n\
+[[scenario]]\nfeature = \"help\"\nid = \"flag\"\nargs = [\"-h\"]\n";
+
+    fn zopfli_with_features(tag: &str, text: &str) -> App {
+        let app = crate::app::tests::app_of("targets/zopfli", tag);
+        let dir = app.config.target.join("migration/features");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("features.toml"), text).unwrap();
+        crate::app::tests::app_of_path(&app.config.target)
+    }
+
+    /// A current map in which gzip runs katajainen and main, help runs main.
+    fn write_current_map(app: &App) {
+        let read = crate::load::read(&app.config.target).unwrap();
+        let now = read.map_now.expect("today's inputs");
+        let record =
+            |f: &str, s: &str, funcs: Vec<(&str, &str)>| harness_core::features::ScenarioRecord {
+                feature: f.into(),
+                scenario: s.into(),
+                end: "exit 0".into(),
+                stdout_bytes: 1,
+                stderr_bytes: 0,
+                stderr_head: String::new(),
+                stable: true,
+                probe_agrees: true,
+                noted: "complete".into(),
+                reason: None,
+                functions: funcs
+                    .into_iter()
+                    .map(|(a, b)| (a.into(), b.into()))
+                    .collect(),
+            };
+        let map = harness_core::features::FeatureMap {
+            schema: harness_core::features::MAP_SCHEMA_NAME.into(),
+            schema_version: 1,
+            inputs: now,
+            unwatched: vec![],
+            scenarios: vec![
+                record(
+                    "gzip",
+                    "text",
+                    vec![
+                        ("src/zopfli/katajainen.c", "ZopfliLengthLimitedCodeLengths"),
+                        ("src/zopfli/zopfli_bin.c", "main"),
+                    ],
+                ),
+                record("help", "flag", vec![("src/zopfli/zopfli_bin.c", "main")]),
+            ],
+        };
+        std::fs::write(
+            harness_core::features::map_path(&app.config.target),
+            map.to_bytes().unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn features_start_with_a_map_then_a_re_check() {
+        let mut app = zopfli_with_features("feat-next", FEATURES_TOML);
+        let (step, act) = app.next_step().expect("a next step");
+        assert!(step.starts_with("Map the features"), "{step}");
+        assert_eq!(act, Some(crate::app::Act::MapFeatures));
+        let items = app.menu_items();
+        let map = items
+            .iter()
+            .find(|i| i.label == "Map the features")
+            .expect("the project menu offers it");
+        assert!(map.greyed.is_none(), "{:?}", map.greyed);
+        let argv = crate::app::tests::strs(&map.pending.as_ref().unwrap().argv);
+        assert_eq!(
+            argv,
+            [
+                crate::app::tests::HARNESS,
+                "--json",
+                "features",
+                "map",
+                &format!("--target={}", app.config.target.display())
+            ]
+        );
+        assert_eq!(
+            crate::menu::recommended(
+                &items,
+                &Selection::Project,
+                Some(crate::app::Act::MapFeatures),
+                false
+            ),
+            items
+                .iter()
+                .position(|i| i.label == "Map the features")
+                .unwrap()
+        );
+        // Mapped: u001 has Rust, and its verdict predates the features.
+        write_current_map(&app);
+        app = crate::app::tests::app_of_path(&app.config.target);
+        assert!(app.features.map.current());
+        let (step, act) = app.next_step().expect("a next step");
+        assert!(step.starts_with("Re-check u001-katajainen"), "{step}");
+        assert_eq!(act, None);
+        // The unit's screen: the marker on its verdict line, the features line.
+        app.select(Selection::Unit("u001-katajainen".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("your features: not checked on this unit yet"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("1 of your features runs it · 1 not re-checked"),
+            "{screen}"
+        );
+        // The Features view: gzip needs a re-check; help is all C.
+        app.select(Selection::Features);
+        let screen = text(&render(&mut app, 160, 40));
+        // Every unit with Rust counts: help needs the re-check too (§8.2 F3).
+        assert!(
+            screen.contains("↻ Compress to gzip  needs a re-check"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("2 units · 1 not re-checked · 1 still C"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("↻ Show the help  needs a re-check"),
+            "{screen}"
+        );
+        assert!(screen.contains("1 unit · 1 still C"), "{screen}");
+        assert!(screen.contains("Your features ran 2 of the"), "{screen}");
+    }
+
+    #[test]
+    fn a_features_file_with_an_error_is_a_row_and_a_sentence_not_a_failure() {
+        let mut app = zopfli_with_features("feat-invalid", "schema_version = 1\nnope = 1\n");
+        assert!(matches!(app.features.group, featmap::Group::Invalid(_)));
+        let (glyph, _) = app.node_label(&Selection::Features);
+        assert_eq!(glyph, "⚠");
+        app.select(Selection::Features);
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(screen.contains("Features (error)"), "{screen}");
+        assert!(screen.contains("unknown key `nope`"), "{screen}");
+        assert!(screen.contains("Re-checks and"), "{screen}");
+        assert!(
+            !app.menu_items()
+                .iter()
+                .any(|i| i.label == "Map the features"),
+            "nothing to map"
+        );
+    }
+
+    #[test]
+    fn a_unit_no_feature_reaches_says_so_only_from_a_current_complete_map() {
+        let mut app = zopfli_with_features("feat-none-runs", FEATURES_TOML);
+        app.select(Selection::Unit("u-cache".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("Which features run it: not known"),
+            "{screen}"
+        );
+        write_current_map(&app);
+        let mut app = crate::app::tests::app_of_path(&app.config.target);
+        app.select(Selection::Unit("u-cache".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("None of your features runs this unit's functions"),
+            "{screen}"
+        );
     }
 }

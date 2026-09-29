@@ -78,14 +78,20 @@ fn item(label: impl Into<String>, action: Action, accel: Option<&'static str>) -
 pub const MODEL_SEPARATOR: &str = "Uses a model — can take minutes";
 
 /// The index of the recommended item (focus starts there).
-pub fn recommended(items: &[Item], sel: &Selection, next_step: Option<Act>) -> usize {
+pub fn recommended(
+    items: &[Item],
+    sel: &Selection,
+    next_step: Option<Act>,
+    feature_wants_map: bool,
+) -> usize {
     let find = |f: &dyn Fn(&Item) -> bool| items.iter().position(f);
     let open = find(&|i: &Item| matches!(i.action, Action::Open | Action::Fold));
+    let act = |act: Act| find(&|i: &Item| i.action == Action::Act(act) && i.greyed.is_none());
     match sel {
-        Selection::Project => next_step
-            .and_then(|act| find(&|i: &Item| i.action == Action::Act(act) && i.greyed.is_none()))
-            .or(open)
-            .unwrap_or(0),
+        Selection::Project => next_step.and_then(act).or(open).unwrap_or(0),
+        // A feature that is not mapped, or whose map is out of date:
+        // Map the features (§8.5).
+        Selection::Feature(_) if feature_wants_map => act(Act::MapFeatures).or(open).unwrap_or(0),
         _ => open.unwrap_or(0),
     }
 }
@@ -278,7 +284,10 @@ impl App {
         // Every node opens into the View (§4.2 "any | Open"); a directory
         // and the units group also fold.
         items.push(item("Open", Action::Open, None));
-        if matches!(sel, Selection::Dir(_) | Selection::Units) {
+        if matches!(
+            sel,
+            Selection::Dir(_) | Selection::Units | Selection::Features
+        ) {
             items.push(item(
                 if self.expansion.is_open(sel) {
                     "Fold"
@@ -327,6 +336,23 @@ impl App {
             );
             if it.greyed.is_none() {
                 it.greyed = self.facts_gate();
+            }
+            items.push(it);
+        }
+        // The person's features (docs/FEATURES-DESIGN.md §8.5).
+        let on_features = project || matches!(sel, Selection::Features | Selection::Feature(_));
+        let scenarios = match &self.snapshot.features {
+            harness_core::features::FeatureSnapshot::Valid { features, .. } => {
+                features.scenarios.len()
+            }
+            _ => 0,
+        };
+        if on_features && scenarios > 0 {
+            let mut it = self.act_item("Map the features".into(), Act::MapFeatures, None, None);
+            if it.greyed.is_none() {
+                it.greyed = self.facts_gate().map(|_| {
+                    "the facts are missing or out of date — Scan the project first".into()
+                });
             }
             items.push(it);
         }
