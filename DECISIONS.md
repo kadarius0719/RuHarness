@@ -2362,3 +2362,72 @@ test a fork can fail.
 (re-record with `tests/fixtures/chat/record.py`; the recordings name the version); a peer
 inbox for Claude Code sessions becomes discoverable (the foreign-message rule); another
 runtime (ACP) is wanted.
+
+## 2026-09-29 — Feature-workflow view: §15 spike (what "a feature" is here); DECIDED (user): scenarios + verify
+
+Three time-boxed Sonnet subagents (the landscape, an inventory of this workspace, the premise
+run end to end on `targets/zopfli` and `targets/tractor`), then the probe idea prototyped by
+the main session on a copy of zopfli.
+
+**The premise failed as stated.** "A feature = an entry point plus the call paths under it" does
+not separate behaviours on the real targets:
+- zopfli: after two graph repairs (23 calls to `static inline` functions in `symbols.h` are
+  unresolved — the scanner resolves statics only within the calling file; 4 functions reached
+  only as function-pointer values have no edge), `main` reaches 110 of 111 functions and all 11
+  units. The five README API functions are not roots (the CLI calls them). gzip, zlib and
+  deflate differ by 2 functions of ~100 (Jaccard 0.96–0.98). CLI options set values inside
+  `main`; the dispatch happens deep in `ZopfliCompress`. Static reachability cannot split them
+  without dataflow.
+- TRACTOR: 99 of 100 cases are one unit, 95 have one root; the only descriptive scenario names
+  sit in `heldout/`, which never enters a target or a prompt. Not a useful target for this view.
+- **The oracle gap the spike exposed:** zopfli's whole-program check runs `zopfli -c <sample>`
+  only — the gzip path. No program-level check ever runs the zlib or deflate code, so a unit on
+  those paths is judged at program level by a run that never calls it.
+
+**What does separate them:** running each behaviour. Per-scenario coverage (clang source-based
+coverage, `xcrun llvm-profdata`/`llvm-cov`) gives `--zlib` = gzip − {ZopfliGzipCompress, CRC} +
+{ZopfliZlibCompress, adler32}, `--deflate` = gzip − {…}, `-v` + PrintBlockSplitPoints, `--i1`
+− the four RandomizeStatFreqs functions. The main session then prototyped the harness-owned
+alternative: a copy of the sources with `__probe(N);` inserted right after each scanned
+function's opening brace (same line — `__LINE__` unchanged), a harness-owned C runtime that
+writes each id once to a file in the run's temp dir, `-include` for its declaration, only `cc`.
+Identical results to llvm-cov, exact facts ids (statics, header inlines as
+`src/zopfli/symbols.h::…`), the program's output byte-identical to the uninstrumented build.
+Chosen: the probe — no new tools on the allowlist (llvm-cov is not on PATH on macOS; `xcrun` is
+a general launcher), gcc and clang alike, ids that are the scanner's own, data written at first
+hit (a crash keeps it), and the oracle already has a confined run that reads back one file
+from its temp dir (design B's `Extras::collect`).
+
+**Landscape** (sources in the spike report; checked, not recalled): feature location splits
+into static, dynamic (software reconnaissance, Wilde & Scully 1995; scenario traces with
+concept analysis, Eisenbarth et al. 2003), textual and hybrid; dynamic results depend on
+scenario design and are confounded by input (a fixed input per scenario); "omnipresent" code
+is usually filtered by fan-in, which for a migration hides exactly the shared code a swap can
+break — annotate it (touched by k of N features), never drop it. C→Rust work (TRACTOR's vectors:
+argv/stdin/env → stdout/stderr/exit; CRUST-Bench; Syzygy; RustPrint's LLM rubric) has no
+code-mapped feature: behaviour is always a test vector. Names come from usage text, README,
+test names — or a person; an LLM may later propose, never override, a person's label.
+
+**Decided (user, 2026-09-29), of three scopes offered — scenarios + verify / scenarios, view
+only / static only:** a person names features in a ledger file, each defined by scenarios
+(a run of the program: flags plus an input); the harness observes each scenario's footprint
+on a probed copy of the original C (functions → files → units); each scenario also becomes a
+whole-program C-vs-mixed check in `verify`, so a unit's verdict says which of the person's
+behaviours still match; the cockpit shows a Features group and, on each unit, the features
+that run through it. The design is docs/FEATURES-DESIGN.md.
+
+**Rejected:** static reachability as the map (above); program slicing (needs dataflow the
+facts lack); textual/IR location (terse C names, fuzzy); an LLM rubric as the map
+(non-deterministic, a proxy); pure reconnaissance (keeps only feature-unique code); llvm-cov
+(new allowlisted tools, clang-only, per-TU names needing a mapping rule); `-finstrument-
+functions` (addresses: statics of the same name in two files are ambiguous without a link map).
+
+**Found in passing, separate tasks:** the scanner leaves calls to a header's `static inline`
+functions unresolved when the caller is in another file, and records no edge for a function
+passed as a value (known gap, SCHEMAS.md); `043_iso646_and_digraphs_lib` scans to zero symbols
+(digraphs).
+
+**Revisit when:** a target is a library with no `main` (features then need a scenario program
+of their own); a behaviour's output is a file, not a stream; stdin input is needed; two
+features share their scenarios' footprints entirely (then only line-level evidence separates
+them).
