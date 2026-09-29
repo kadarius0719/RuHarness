@@ -683,6 +683,7 @@ pub fn record_human_attempt(
     remove_path(&work_dir.join(attempts::HUMAN_EDIT_DIR))?;
     let mut record = AttemptRecord {
         features: String::new(),
+        program: String::new(),
         schema: attempts::ATTEMPT_SCHEMA_NAME.to_string(),
         schema_version: attempts::schema_version_for(None),
         id: id.clone(),

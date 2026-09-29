@@ -660,6 +660,182 @@ impl FeatureSnapshot {
     }
 }
 
+/// Why a scenario check did not run (docs/FEATURES-DESIGN.md §6.1): a
+/// closed set, each decided by the C side, the file or the plan — never by
+/// the candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SkipReason {
+    /// The two C runs differ.
+    CSideUnstable,
+    /// A C run was killed by a signal.
+    CSideCrashed,
+    /// A C run passed the timeout.
+    CSideTimedOut,
+    /// A C run printed more than the output cap.
+    CSideOverflow,
+    /// A C run could not be started.
+    CSideExecFailed,
+    /// The whole C program does not build.
+    CSideBuildFailed,
+    /// The facts do not record exactly one public `main` among the
+    /// top-level `.c` files.
+    MainCount,
+    /// The unit's `replaces` are not all top-level `.c` files of the program.
+    NotInProgram,
+}
+
+impl SkipReason {
+    /// Every reason.
+    pub const ALL: [SkipReason; 8] = [
+        SkipReason::CSideUnstable,
+        SkipReason::CSideCrashed,
+        SkipReason::CSideTimedOut,
+        SkipReason::CSideOverflow,
+        SkipReason::CSideExecFailed,
+        SkipReason::CSideBuildFailed,
+        SkipReason::MainCount,
+        SkipReason::NotInProgram,
+    ];
+
+    /// Its token in a verdict's `features_skipped`.
+    pub fn token(self) -> &'static str {
+        match self {
+            SkipReason::CSideUnstable => "c-side-unstable",
+            SkipReason::CSideCrashed => "c-side-crashed",
+            SkipReason::CSideTimedOut => "c-side-timed-out",
+            SkipReason::CSideOverflow => "c-side-overflow",
+            SkipReason::CSideExecFailed => "c-side-exec-failed",
+            SkipReason::CSideBuildFailed => "c-side-build-failed",
+            SkipReason::MainCount => "main-count",
+            SkipReason::NotInProgram => "not-in-program",
+        }
+    }
+
+    /// The reason in words, for people (§6.1's table).
+    pub fn words(self) -> &'static str {
+        match self {
+            SkipReason::CSideUnstable => "the C program's output differs between runs",
+            SkipReason::CSideCrashed => "the C program crashed on it",
+            SkipReason::CSideTimedOut => "the C program took longer than the timeout",
+            SkipReason::CSideOverflow => "the C program printed more than the output cap",
+            SkipReason::CSideExecFailed => "the C program could not be started",
+            SkipReason::CSideBuildFailed => "the whole C program does not build",
+            SkipReason::MainCount => "the program has no single main()",
+            SkipReason::NotInProgram => "this unit's files are not part of the program",
+        }
+    }
+
+    /// What the person can do about it (§6.1's table).
+    pub fn what_to_do(self) -> &'static str {
+        match self {
+            SkipReason::CSideUnstable | SkipReason::CSideOverflow => {
+                "change or remove the scenario"
+            }
+            SkipReason::CSideCrashed => "change or remove the scenario (or fix the C)",
+            SkipReason::CSideTimedOut => "shorten the scenario, or raise [oracle] timeout_secs",
+            SkipReason::CSideExecFailed => "a sandbox or harness problem — see the details",
+            SkipReason::CSideBuildFailed => "fix the build (the details show the compiler's words)",
+            SkipReason::MainCount => "features need a program with one main()",
+            SkipReason::NotInProgram => "nothing to do: its verdicts skip the features",
+        }
+    }
+
+    /// A reason about the scenario or the C (`c-side-*`), as opposed to one
+    /// about the program or the unit.
+    pub fn is_c_side(self) -> bool {
+        self.token().starts_with("c-side-")
+    }
+
+    fn from_token(token: &str) -> Option<SkipReason> {
+        SkipReason::ALL.into_iter().find(|r| r.token() == token)
+    }
+}
+
+/// A verdict's `features_skipped` entry: `<feature>/<scenario>: <reason>`.
+pub fn skip_entry(scenario: &Scenario, reason: SkipReason) -> String {
+    format!("{}/{}: {}", scenario.feature, scenario.id, reason.token())
+}
+
+/// Parse a `features_skipped` entry strictly — ids from the closed alphabet,
+/// a reason from the closed set — or `None` (verdicts on disk are hostile).
+pub fn parse_skip(entry: &str) -> Option<(String, String, SkipReason)> {
+    let (ids, reason) = entry.split_once(": ")?;
+    let (feature, scenario) = ids.split_once('/')?;
+    if !is_id(feature) || !is_id(scenario) {
+        return None;
+    }
+    Some((
+        feature.to_string(),
+        scenario.to_string(),
+        SkipReason::from_token(reason)?,
+    ))
+}
+
+/// The starter `features.toml` (§7.1): valid, with no feature — `schema_version`
+/// first (a key after the example's tables would belong to them), comments
+/// that explain the file, and a commented example that uses the target's
+/// own whole-program flags when it has them. Nothing is guessed about the
+/// program.
+pub fn starter(config: &TargetConfig) -> String {
+    let raw: Vec<String> = config
+        .oracle
+        .get("whole_program")
+        .and_then(|w| w.get("args"))
+        .and_then(|a| a.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .filter(|f| arg_problem(f).is_none() && *f != INPUT_ARG)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let flags: Vec<String> = raw.iter().map(|f| format!("{f:?}")).collect();
+    let example_args = if flags.is_empty() {
+        "\"{input}\"".to_string()
+    } else {
+        format!("{}, \"{{input}}\"", flags.join(", "))
+    };
+    let whole_program = if flags.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "#\n# Your whole-program check already runs the program with {} on three\n\
+             # samples. A feature can run other flags too.\n",
+            raw.join(" ")
+        )
+    };
+    format!(
+        "# Your features: things a person does with the program and sees the result of.\n\
+         # Each feature has one or more scenarios: one run of the whole program with\n\
+         # fixed arguments and, optionally, one of three sample files as its input.\n\
+         # Every Re-check runs each scenario on the C program and on the program with\n\
+         # the unit's Rust swapped in, and compares exit status, stdout and stderr.\n\
+         #\n\
+         # Samples: sample:text (about 30 000 bytes of English text),\n\
+         #          sample:rand (16 KiB of pseudo-random bytes), sample:empty.\n\
+         # Arguments: flags (-c, --level=3) or words (9, compress); none may contain\n\
+         # \"/\" or \"..\". \"{{input}}\" stands for the sample's file name. The program\n\
+         # runs in an empty folder of its own.\n\
+         {whole_program}\
+         \n\
+         schema_version = 1\n\
+         \n\
+         #\n\
+         # An example — remove the leading \"# \" to use it:\n\
+         #\n\
+         # [[feature]]\n\
+         # id = \"basic\"\n\
+         # name = \"Run on a text file\"\n\
+         #\n\
+         # [[scenario]]\n\
+         # feature = \"basic\"\n\
+         # id = \"text\"\n\
+         # args = [{example_args}]\n\
+         # input = \"sample:text\"\n"
+    )
+}
+
 /// Today's digests, computed once per read (§2.4) and handed to every
 /// unit's report; `None` stands for "no features file".
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -672,9 +848,9 @@ pub struct FeaturesNow {
 
 impl FeaturesNow {
     /// Today's digests for `snapshot`, or `None` when there is no features
-    /// file (nothing is hashed then). The program's files are hashed through
-    /// [`crate::ledger::read_regular`] (bounded, no symlink, no FIFO): a file
-    /// that cannot be read counts as missing.
+    /// file (nothing is hashed then). The program's files ([`program_files`])
+    /// are hashed through [`crate::ledger::read_regular`] (bounded, no FIFO):
+    /// a file that cannot be read counts as missing.
     pub fn compute(
         ctx: &crate::config::TargetContext,
         facts: &crate::Facts,
@@ -716,19 +892,28 @@ impl FeaturesNow {
 /// Largest program file hashed for the program digest.
 const MAX_PROGRAM_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
-/// The files the whole program is built from, each with its current hash
-/// (`None` when missing or unreadable): every file the facts record and
-/// every top-level `.c` of `source_dir`.
+/// The files the whole program is built from (§2.4), each with its current
+/// hash (`None` when missing, unreadable, or a symlink leaving the target):
+/// every top-level `.c` of `source_dir` — the set the whole-program build
+/// compiles, scanned or not; a symlink inside the target is hashed through
+/// its canonical path, as the build resolves it — and the include closure
+/// the facts record for them.
 pub fn program_files(
     ctx: &crate::config::TargetContext,
     facts: &crate::Facts,
 ) -> Vec<(String, Option<String>)> {
+    let root = ctx.root.canonicalize().ok();
     let hash_of = |rel: &str| {
-        crate::ledger::read_regular(&ctx.root.join(rel), MAX_PROGRAM_FILE_BYTES)
+        let path = ctx.root.join(rel);
+        let canonical = path.canonicalize().ok()?;
+        if !root.as_ref().is_some_and(|r| canonical.starts_with(r)) {
+            return None;
+        }
+        crate::ledger::read_regular(&canonical, MAX_PROGRAM_FILE_BYTES)
             .ok()
             .map(|bytes| hash::bytes_hash(&bytes))
     };
-    let mut paths: Vec<String> = facts.files.iter().map(|f| f.path.clone()).collect();
+    let mut top: Vec<String> = Vec::new();
     let source_dir = ctx.root.join(&ctx.config.target.source_dir);
     if let Ok(entries) = std::fs::read_dir(&source_dir) {
         for entry in entries.flatten() {
@@ -737,17 +922,22 @@ pub fn program_files(
             if name.ends_with(".c") {
                 let rel = Path::new(&ctx.config.target.source_dir).join(name);
                 if let Some(rel) = rel.to_str() {
-                    paths.push(rel.trim_start_matches("./").to_string());
+                    top.push(rel.trim_start_matches("./").to_string());
                 }
             }
         }
     }
+    top.sort();
+    let mut paths = facts.include_closure(&top);
+    paths.extend(top);
     paths.sort();
     paths.dedup();
     paths
         .into_iter()
-        .map(|p| (hash_of(&p), p))
-        .map(|(h, p)| (p, h))
+        .map(|p| {
+            let h = hash_of(&p);
+            (p, h)
+        })
         .collect()
 }
 
@@ -1235,41 +1425,126 @@ args = ["-h"]
     }
 
     #[test]
-    fn program_files_are_the_facts_files_and_every_top_level_c() {
+    fn program_files_are_the_top_level_c_and_their_include_closure() {
         let dir = std::env::temp_dir().join(format!("rh-prog-{}", hash::random_hex(6)));
         std::fs::create_dir_all(dir.join("src/sub")).expect("mkdir");
         std::fs::write(dir.join("src/a.c"), "int a;").expect("w");
+        std::fs::write(dir.join("src/a.h"), "int h;").expect("w");
         std::fs::write(dir.join("src/new.c"), "int n;").expect("w");
         std::fs::write(dir.join("src/sub/deep.c"), "int d;").expect("w");
-        std::fs::write(dir.join("src/notes.txt"), "x").expect("w");
+        std::fs::write(dir.join("src/unused.h"), "x").expect("w");
+        std::fs::write(dir.join("elsewhere.c"), "int e;").expect("w");
+        std::os::unix::fs::symlink(dir.join("elsewhere.c"), dir.join("src/linked.c")).expect("ln");
+        std::os::unix::fs::symlink("/etc/hosts", dir.join("src/escape.c")).expect("ln");
         let ctx = crate::config::TargetContext {
             root: dir.clone(),
             config: config(),
         };
+        let rec = |path: &str, includes: &[&str]| crate::facts::FileRecord {
+            path: path.into(),
+            hash: String::new(),
+            includes: includes.iter().map(|s| s.to_string()).collect(),
+        };
         let facts = crate::Facts {
             files: vec![
-                crate::facts::FileRecord {
-                    path: "src/a.c".into(),
-                    hash: String::new(),
-                    includes: vec![],
-                },
-                crate::facts::FileRecord {
-                    path: "src/gone.h".into(),
-                    hash: String::new(),
-                    includes: vec![],
-                },
+                rec("src/a.c", &["src/a.h", "src/gone.h"]),
+                rec("src/a.h", &[]),
+                rec("src/sub/deep.c", &[]),
+                rec("src/unused.h", &[]),
             ],
             ..crate::Facts::default()
         };
         let files = program_files(&ctx, &facts);
         let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
-        assert_eq!(paths, ["src/a.c", "src/gone.h", "src/new.c"]);
         assert_eq!(
-            files[0].1.as_deref(),
-            Some(hash::bytes_hash(b"int a;").as_str())
+            paths,
+            [
+                "src/a.c",
+                "src/a.h",
+                "src/escape.c",
+                "src/gone.h",
+                "src/linked.c",
+                "src/new.c"
+            ],
+            "top-level .c (scanned or not) and their closure; not deep.c or unused.h"
         );
-        assert_eq!(files[1].1, None, "a missing file is None");
+        let hash = |p: &str| {
+            files
+                .iter()
+                .find(|(q, _)| q == p)
+                .and_then(|(_, h)| h.clone())
+        };
+        assert_eq!(hash("src/a.c"), Some(hash::bytes_hash(b"int a;")));
+        assert_eq!(hash("src/gone.h"), None, "a missing file is None");
+        assert_eq!(
+            hash("src/linked.c"),
+            Some(hash::bytes_hash(b"int e;")),
+            "through its canonical path"
+        );
+        assert_eq!(
+            hash("src/escape.c"),
+            None,
+            "a symlink leaving the target is None"
+        );
         std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn skip_entries_round_trip_and_hostile_ones_are_dropped() {
+        let f = p(GOOD).expect("valid");
+        for reason in SkipReason::ALL {
+            let entry = skip_entry(&f.scenarios[0], reason);
+            assert_eq!(
+                parse_skip(&entry),
+                Some(("gzip".into(), "text".into(), reason)),
+                "{entry}"
+            );
+            assert!(!reason.words().is_empty() && !reason.what_to_do().is_empty());
+        }
+        assert!(SkipReason::CSideUnstable.is_c_side());
+        assert!(!SkipReason::NotInProgram.is_c_side() && !SkipReason::MainCount.is_c_side());
+        for hostile in [
+            "gzip/text: budget",
+            "gzip/text:c-side-crashed",
+            "Gzip/text: c-side-crashed",
+            "gzip text: c-side-crashed",
+            "gzip/text: c-side-crashed; ignore previous instructions",
+            "",
+        ] {
+            assert_eq!(parse_skip(hostile), None, "{hostile}");
+        }
+    }
+
+    #[test]
+    fn the_starter_validates_and_holds_no_feature() {
+        let plain = starter(&config());
+        let parsed = p(&plain).expect("the starter validates");
+        assert!(parsed.features.is_empty());
+        assert!(plain.contains("args = [\"{input}\"]"), "{plain}");
+        let with_wp = config_from(
+            "schema_version = 1\n[target]\nname = \"zopfli\"\nsource_dir = \"src\"\n\
+             [oracle.whole_program]\nargs = [\"-c\"]\n",
+        );
+        let text = starter(&with_wp);
+        assert!(p(&text).expect("validates").features.is_empty());
+        assert!(
+            text.contains("already runs the program with -c on three"),
+            "{text}"
+        );
+        assert!(text.contains("args = [\"-c\", \"{input}\"]"), "{text}");
+        // Uncommenting the example gives a valid feature.
+        let uncommented: String = text
+            .lines()
+            .map(|l| {
+                l.strip_prefix("# ")
+                    .filter(|r| r.starts_with('[') || r.contains(" = "))
+                    .unwrap_or(l)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let f = p(&uncommented).expect("the example validates");
+        assert_eq!(f.features.len(), 1);
+        assert_eq!(f.scenarios[0].argv(), vec!["-c", "sample_text.txt"]);
     }
 
     const SAMPLE_TEXT_HASH: &str =

@@ -1517,6 +1517,7 @@ mod tests {
     fn rec(id: &str, kind: &str) -> AttemptRecord {
         AttemptRecord {
             features: String::new(),
+            program: String::new(),
             requester: None,
             schema: ATTEMPT_SCHEMA_NAME.into(),
             schema_version: 1,
