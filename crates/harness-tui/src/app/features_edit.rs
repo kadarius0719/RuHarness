@@ -603,8 +603,8 @@ mod tests {
             "the starter: {starter}"
         );
         assert!(
-            app.kept_paths().iter().any(|p| file.starts_with(p)),
-            "the draft is named on quit"
+            app.kept_paths().contains(&file.parent().unwrap().to_path_buf()),
+            "the draft's dir is named on quit (an editor's recovery file lands beside it)"
         );
         std::fs::write(&file, GOOD).unwrap();
         assert_eq!(app.features_edited(ok()), Command::None);
