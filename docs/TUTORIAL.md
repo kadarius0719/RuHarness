@@ -339,6 +339,36 @@ For anything in the right column the chat tells you which menu item to use.
 
 If you leave the chat with an unsent draft, letters in the other panes are ignored until you press an arrow, `Tab` or `Esc` — so typing that was meant for the chat never triggers a shortcut. Everything the chat asked for is recorded as "asked in chat".
 
+## Your features: what a person does with the program
+
+The judge compares each translated piece with the C one on its own. But what a person notices
+is the whole program: "compress this file to gzip", "show the help", "say the file is
+missing". Your **features** are those things, in your own words — and RuHarness checks them too.
+
+A feature is made of one or more **scenarios**: one run of the whole program with fixed
+arguments and, if you like, one of three sample files as its input (a page of English text,
+some random bytes, or an empty file). The program runs in an empty folder of its own, so an
+argument is a flag or a word, never a path.
+
+- **Write them.** On the Features row in the tree, press Enter and choose *Write your features
+  file*. The cockpit tells you which editor opens and how to save and leave it (in nano:
+  Ctrl-O then Enter saves, Ctrl-X leaves). When you come back it checks the file and asks
+  before saving it.
+- **Every Re-check runs them.** From then on, every Re-check (and every translation the chat
+  asks for) runs each scenario on the C program and on the program with that piece's Rust
+  swapped in, and compares what a person would see: the exit status and everything printed.
+  A scenario the C itself cannot run the same way twice is skipped and named — it never stops
+  you from working.
+- **Map them.** *Map the features* runs each scenario on a scratch copy of the C in which every
+  function notes that it ran. The Features view then shows, for each feature, which pieces of
+  the program it runs, which of those are already in Rust, and whether its checks passed there
+  — and each piece shows which of your features run it. A piece that none of your features
+  runs is said plainly: its checks pass whatever its Rust does, so you may want a scenario that
+  reaches it.
+
+Each piece is still checked with only its own Rust swapped in; the Features view says so
+wherever a feature "holds so far". Commit `migration/features/` with your work.
+
 ## Your first migration, step by step
 
 This walk-through migrates one unit through the chat, from asking to accepting. It takes a few minutes, most of it waiting for the model and the oracle. The example uses a practice copy of the zopfli project in which the unit `u001-katajainen` has been reset to planned (in the project itself it is already migrated). In your own project, any unit marked `◇` (planned) or `✗` (failing) works the same way.

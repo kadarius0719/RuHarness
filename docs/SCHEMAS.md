@@ -1122,3 +1122,87 @@ The kinds come from typed `harness_core::Error` variants (`Locked`, `Stale`,
 |---|---|
 | `units/<id>/attempts/<human id>/**` (incl. `edit/`) | `override` |
 
+
+---
+
+# The person's features (docs/FEATURES-DESIGN.md governs; additive)
+
+A target without `migration/features/features.toml` is unchanged in every byte: verify's checks,
+verdicts, attempt records, `state status`, harness-mcp's reports, the events.
+
+## `migration/features/features.toml` (`ruharness-features` v1, hand-written)
+
+`schema_version = 1`; `[[feature]]` (`id`, `name`) and `[[scenario]]` (`feature`, `id`, `args`,
+`input`). Ids `^[a-z0-9][a-z0-9-]{0,23}$`; names 1–60 characters, no control characters,
+display-only (never in a check name, verdict, event or prompt); args 0–8, each `{input}`, a flag
+`^-{1,2}[A-Za-z0-9][A-Za-z0-9_.#+=:,-]*$` or a word `^[A-Za-z0-9][A-Za-z0-9_.#+=:,-]*$`, 1–64
+bytes, never `/` or `..`; input one of `sample:text`, `sample:rand`, `sample:empty` (the
+whole-program samples), `{input}` exactly once iff an input; ≤ 16 features, ≤ 8 scenarios per
+feature, ≤ 16 in all, every feature ≥ 1 scenario; ≤ 64 KiB. **Strict**: an unknown key, a
+wrong type, a duplicate or unknown id is refused with its key path — so **every new key bumps
+`schema_version`** (an exception to the pass-over-unknown-fields rule). A file that cannot be
+used is a value on every read path (the snapshot's `Invalid`), never an error.
+
+## `migration/features/map.json` (`ruharness-features-map` v1, written by `features map`)
+
+`{schema, schema_version, inputs {facts, features, program, platform}, unwatched [[file, id]],
+scenarios [{feature, scenario, end, stdout_bytes, stderr_bytes, stderr_head, stable,
+probe_agrees, noted, reason?, functions [[file, id]]}]}`. `end` ∈ `exit N | signal N | timed out |
+too much output | could not start`; `noted` ∈ `complete | unavailable` (`reason`: `none written |
+unreadable`); `stderr_head` printable ASCII, ≤ 100 bytes. Current iff all four inputs equal
+today's. Read strictly (hostile, committed); pairs today's facts do not know are dropped.
+
+## Verdict and attempt additions
+
+`VerdictInputs.features` (the digest the feature step ran under, or `invalid`),
+`.program` (the program digest), `.features_skipped` (`<feature>/<scenario>: <reason>`, reason ∈
+`c-side-unstable | c-side-crashed | c-side-timed-out | c-side-overflow | c-side-exec-failed |
+c-side-build-failed | not-in-program`) — all omitted when empty, filled only by a run that
+reached the feature step. `AttemptRecord.features`, `.program` — omitted when empty; a replay
+judges with the recorded features when it can (none or `invalid` → none), else explains a
+divergence first ("the features changed since it was recorded" / "other C changed since").
+Checks `feature:<feature>/<scenario>` run last (after sanitizers and boundary): pass iff the
+mixed program exits with the C's code and byte-identical streams; details are numbers only.
+
+`UnitReport.features` / the `unit` event's `features` / harness-mcp's unit report `features`:
+`"current"` or reasons from `not-yet | changed | invalid | program | skipped` — a marker beside
+the verdict, **never** part of `stale`, `fresh_green` or the contradiction rule.
+
+## Digests
+
+`features` = blake3 over each feature's scenarios by id (args, input bytes) + the program's run
+name + `[oracle] timeout_secs` (names excluded). `program` = blake3 over the top-level `.c` of
+`source_dir` (canonical when a contained symlink) and their facts include closure as
+`(path, hash | missing)`, + `source_dir`, `include_dirs`, `[oracle] extra_link_args`. Gap: non-C
+includes (`.inc`) are not in it.
+
+## CLI
+
+- `harness features init [--target]` — a starter (no feature); never overwrites; never through a
+  symlink. Exit 0/1.
+- `harness features save --expect <blake3|none> --bytes N [--target]` — the text on stdin
+  (exactly N bytes, ≤ 64 KiB, UTF-8, not a terminal), saved only when it validates and the file
+  is still the one `--expect` names. Exit 0/1. An outside editor racing it is not covered.
+- `harness features map [--target] [--allow-unsandboxed]` — refuses without a file, scenarios,
+  fresh facts, or a sandbox; writes `map.json`; events `scenario {feature, scenario, n, of, end,
+  stable, probe_agrees, noted, functions}`. Exit 0 when written, 1 otherwise.
+- `harness verify`/`promote` print what the features will do and each skipped scenario.
+
+## Trust boundaries
+
+`features.toml`, `map.json` and verdicts' skip lists are target-owned: only ids and closed
+reasons reach checks, prompts, events or harness-mcp; everything shown is display-filtered.
+Scenario runs: cwd = their own empty temp dir; the binary at one path per scenario; streams
+rewritten (`$`→`$$`, the temp dir → `$TMPDIR`, the program dir → `$PROGDIR`); the run profile
+plus `(deny signal)` `(allow signal (target self))` `(deny process-fork)`; the process group
+killed when the leader exits. Without the sandbox the candidate's inability to spawn or signal
+rests on the deny scan and the capabilities check alone. The map is shaped by the target's own
+C (it can write its notes file, interpose libc): it gates nothing.
+
+## Writer table additions
+
+| File | Writer |
+|---|---|
+| `migration/features/features.toml` | a person; `features init`; `features save` |
+| `migration/features/map.json` | `features map` |
+| `migration/build/.features/**`, `migration/build/<unit>/f/**` (gitignored) | `features map`; `verify` |

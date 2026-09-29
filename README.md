@@ -345,6 +345,16 @@ live sandboxed process group and the harness dies by the signal (no evidence is
 journaled for a child it killed). Writing commands hold a writer lock on
 `migration/.lock`; a second writer fails fast naming the holder.
 
+## Features: user-visible behaviour, mapped and checked
+
+`migration/features/features.toml` holds the person's features — named runs of the whole
+program (flags plus one of the three samples). Every `verify` runs each scenario on the all-C
+program and the mixed one (`feature:<feature>/<scenario>` checks: exit status and both streams
+byte-identical); `harness features map` runs them on a probed copy of the C and records which
+functions — hence which units — each one runs (`map.json`); the cockpit's Features view shows
+both. `harness features init` writes a starter; `features save` is what the cockpit's Edit uses.
+Design and contracts: docs/FEATURES-DESIGN.md, docs/SCHEMAS.md "The person's features".
+
 ## The review cockpit (`harness-tui`)
 
 ```bash
