@@ -603,7 +603,8 @@ mod tests {
             "the starter: {starter}"
         );
         assert!(
-            app.kept_paths().contains(&file.parent().unwrap().to_path_buf()),
+            app.kept_paths()
+                .contains(&file.parent().unwrap().to_path_buf()),
             "the draft's dir is named on quit (an editor's recovery file lands beside it)"
         );
         std::fs::write(&file, GOOD).unwrap();

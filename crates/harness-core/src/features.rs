@@ -1181,6 +1181,18 @@ pub fn program_paths(ctx: &crate::config::TargetContext, facts: &crate::Facts) -
                 .filter_map(repo_relative),
         );
     }
+    // One path per file, the first found — the top-level `.c` and the facts'
+    // own paths, then `source_dir`'s headers in the scan's order — so a
+    // header an `include_dirs` alias also reaches keeps the scan's path
+    // (fix check 2 N4).
+    let root = ctx.root.canonicalize().ok();
+    let mut seen = std::collections::HashSet::new();
+    paths.retain(
+        |p| match root.as_deref().and_then(|root| program_file_at(root, p)) {
+            Some(file) => seen.insert(file),
+            None => true,
+        },
+    );
     paths.sort();
     paths.dedup();
     paths
@@ -1245,9 +1257,12 @@ pub fn program_digest_now(ctx: &crate::config::TargetContext, facts: &crate::Fac
                 Some(now) => now != record,
                 None => !ctx.root.join(path).exists(),
             },
+            // Only a regular file: the scan records nothing else (a FIFO or
+            // a folder named `x.c` is no sign; fix check 2 N4).
             None => root
                 .as_deref()
                 .and_then(|root| program_file_at(root, path))
+                .filter(|file| file.is_file())
                 .zip(scanned_dir.as_deref())
                 .is_some_and(|(file, dir)| file.starts_with(dir)),
         });
@@ -1976,6 +1991,48 @@ args = ["-h"]
             ..crate::Facts::default()
         };
         assert!(program_digest_now(&ctx("src"), &facts).starts_with("blake3:"));
+        // Fix check 2 N4: a folder or a FIFO named `x.c` is no sign of
+        // stale facts; an include dir reached through an alias the scan
+        // walked first keeps the scan's path.
+        std::fs::remove_file(&big).unwrap();
+        let facts = crate::Facts {
+            files: vec![rec("src/main.c")],
+            ..crate::Facts::default()
+        };
+        std::fs::create_dir_all(dir.join("src/gen.c")).unwrap();
+        assert!(std::process::Command::new("mkfifo")
+            .arg(dir.join("src/pipe.c"))
+            .status()
+            .unwrap()
+            .success());
+        assert!(program_digest_now(&ctx("src"), &facts).starts_with("blake3:"));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("rh-alias-{}", hash::random_hex(6)));
+        std::fs::create_dir_all(dir.join("p/src/include")).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        std::fs::write(dir.join("p/main.c"), "int m;").unwrap();
+        std::fs::write(dir.join("p/src/include/x.h"), "int x;").unwrap();
+        std::os::unix::fs::symlink("src/include", dir.join("p/include")).unwrap();
+        let ctx = crate::config::TargetContext {
+            root: dir.clone(),
+            config: config_from(
+                "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"p\"\n\
+                 include_dirs = [\"p/src/include\"]\n",
+            ),
+        };
+        let rec = |path: &str| crate::facts::FileRecord {
+            path: path.into(),
+            hash: hash::file_hash(&dir.join(path)).unwrap(),
+            includes: Vec::new(),
+        };
+        // The scan walks `p` in order: `include` (the alias) before `src`.
+        let facts = crate::Facts {
+            files: vec![rec("p/include/x.h"), rec("p/main.c")],
+            ..crate::Facts::default()
+        };
+        assert_eq!(program_paths(&ctx, &facts), ["p/include/x.h", "p/main.c"]);
+        assert!(program_digest_now(&ctx, &facts).starts_with("blake3:"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -613,6 +613,61 @@ fn the_map_says_which_functions_each_scenario_ran() {
     assert!(!main.contains("__ruharness"));
 }
 
+/// Review M7 (third pass): the map refuses a program whose build reads a
+/// file the scratch copy would not — an include leaving `source_dir`, a
+/// folder linked into it — and maps one whose stray include is never
+/// compiled.
+#[test]
+fn the_map_refuses_what_its_copy_would_build_differently() {
+    let map = |root: &Path| {
+        let target = TargetContext::load(root).unwrap();
+        let facts = with_symbols(root);
+        let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+            panic!("valid")
+        };
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+    };
+    let prepend = |root: &Path, text: &str| {
+        let main = root.join("src/tool/main.c");
+        let old = std::fs::read_to_string(&main).unwrap();
+        std::fs::write(&main, format!("{text}{old}")).unwrap();
+    };
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+
+    // An include that leaves source_dir.
+    let tmp = TempDir::new("feat-map-leaves");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(&tmp.path().join("src/extra.h"), "#define EXTRA 1\n");
+    prepend(tmp.path(), "#include \"../extra.h\"\n");
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(err.contains("outside source_dir"), "{err}");
+
+    // The same include, never compiled: mapped.
+    let tmp = TempDir::new("feat-map-if0");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(&tmp.path().join("src/extra.h"), "#define EXTRA 1\n");
+    prepend(
+        tmp.path(),
+        "#if 0\n#include \"../extra.h\"\n#endif\n/* #include \"../extra.h\" */\n",
+    );
+    write(
+        &tmp.path().join("src/tool/tests/t.c"),
+        "#include \"../../extra.h\"\n",
+    );
+    let mapped = map(tmp.path()).expect("maps");
+    assert_eq!(mapped.scenarios.len(), 1);
+
+    // A folder linked into source_dir: the copy holds one path per folder.
+    let tmp = TempDir::new("feat-map-alias");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(&tmp.path().join("src/tool/arch/types.h"), "#define T 1\n");
+    std::os::unix::fs::symlink("arch", tmp.path().join("src/tool/sys")).unwrap();
+    prepend(tmp.path(), "#include \"sys/types.h\"\n");
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(err.contains("outside source_dir"), "{err}");
+}
+
 /// Review M3: a program that closes every inherited descriptor (the notes'
 /// one too) keeps its notes, and never sees the probe in errno.
 #[test]

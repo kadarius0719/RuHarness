@@ -403,23 +403,23 @@ fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<
     let head = String::from_utf8_lossy(&src[def.start_byte()..at]);
     if head
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .any(|word| word == "naked")
+        .any(|word| word == "naked" || word == "__naked__")
     {
         return None;
     }
     // What opens the body must allow a statement before it: not a pragma in
     // any spelling (`#pragma`, `# pragma`, `_Pragma`, one inside `#if` —
     // STDC FENV_ACCESS and clang fp must open the block; review M2), and
-    // not what the parser could not read (a macro that may expand to one;
-    // fix check N1). An error further in is not in the note's way (M9).
+    // not what the parser could not read at its very start (a macro that
+    // may expand to one; fix checks N1). An error further in — later in the
+    // first statement too — is not in the note's way (M9).
     let mut cursor = body.walk();
     let first = body
         .named_children(&mut cursor)
         .find(|c| c.kind() != "comment");
     if let Some(first) = first {
         let words = text(first, src);
-        if first.is_error()
-            || first.has_error()
+        if opens_with_error(first)
             || words.trim_start().starts_with("_Pragma")
             || (first.kind().starts_with("preproc") && words.contains("pragma"))
         {
@@ -427,6 +427,27 @@ fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<
         }
     }
     Some(at)
+}
+
+/// The parser could not read how `node` starts: it, or one of its first
+/// children down to a leaf, is an ERROR or MISSING node — or it opens with a
+/// bare name (a macro, perhaps one that expands to a pragma: `FP_FAST
+/// return x;`) and holds an error. A statement that opens with a keyword
+/// (`if`, `switch`, `static`) and holds an error further in (an `#ifdef` in
+/// its condition, a case range) reads fine where the note goes.
+fn opens_with_error(node: tree_sitter::Node) -> bool {
+    let mut n = node;
+    loop {
+        if n.is_error() || n.is_missing() {
+            return true;
+        }
+        match n.child(0) {
+            Some(child) => n = child,
+            None => {
+                return node.has_error() && matches!(n.kind(), "identifier" | "type_identifier");
+            }
+        }
+    }
 }
 
 /// The definition's source text from its start to the start of its body

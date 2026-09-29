@@ -1641,6 +1641,15 @@ impl App {
             self.chat_start_failed(tag, why);
             return;
         }
+        // A features save is not offered again with its text as it was: the
+        // draft may move on; Continue saves what it holds (fix check N6).
+        if pending.act == Act::SaveFeatures {
+            self.notice = notice(format!(
+                "could not start the save: {why}; your features draft is kept — the menu offers \
+                 Continue my features draft"
+            ));
+            return;
+        }
         self.notice = notice(if pending.act == Act::HandEdit {
             format!("could not start the command: {why}; the hand edit is kept — E offers it again")
         } else {
@@ -2445,7 +2454,8 @@ impl App {
                     vec!["Quit? The chat's conversation is not kept.".into()]
                 } else {
                     vec![
-                        "Nothing is running. Hand edits not recorded are named on the way out."
+                        "Nothing is running. Hand edits not recorded and features drafts not saved are \
+                         named on the way out."
                             .into(),
                     ]
                 },

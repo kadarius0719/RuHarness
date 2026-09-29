@@ -121,8 +121,13 @@ pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
              function ids come from the facts)"
         );
     }
-    if let Some(unscanned) = unscanned_c(&ctx, &facts)? {
-        bail!("{unscanned} has no facts record: scan the project first");
+    // The facts describe the program as it is — the digest's own rule, so a
+    // scan always lets the map run (fix check 2 N5).
+    if features::program_digest_now(&ctx, &facts) == features::STALE_PROGRAM {
+        bail!(
+            "the program's C changed since the scan (a file added, changed or gone): scan the \
+             project first"
+        );
     }
     let mut progress = Progress;
     let map = match harness_oracle::map_features(&ctx, &facts, &features, &digest, &mut progress) {
@@ -206,28 +211,6 @@ impl harness_oracle::MapProgress for Progress {
             functions: record.functions.len(),
         });
     }
-}
-
-/// A top-level `.c` of `source_dir` the facts do not record, if any.
-fn unscanned_c(ctx: &TargetContext, facts: &Facts) -> Result<Option<String>> {
-    let dir = ctx.root.join(&ctx.config.target.source_dir);
-    let entries = std::fs::read_dir(&dir).with_context(|| format!("listing {}", dir.display()))?;
-    let mut names: Vec<String> = Vec::new();
-    for entry in entries {
-        let name = entry?.file_name();
-        if let Some(name) = name.to_str().filter(|n| n.ends_with(".c")) {
-            names.push(name.to_string());
-        }
-    }
-    names.sort();
-    for name in names {
-        let rel = Path::new(&ctx.config.target.source_dir).join(&name);
-        let rel = rel.to_string_lossy().trim_start_matches("./").to_string();
-        if !facts.files.iter().any(|f| f.path == rel) {
-            return Ok(Some(rel));
-        }
-    }
-    Ok(None)
 }
 
 /// How many distinct public `main`s the facts record among the top-level

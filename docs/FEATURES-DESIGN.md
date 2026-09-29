@@ -490,13 +490,15 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   `-ffp-contract=off` and `extra_link_args`; every tool child has `SOURCE_DATE_EPOCH=0`, so the
   plain and probed builds (and verify's all-C and mixed ones) print the same `__DATE__`,
   `__TIME__` and `__TIMESTAMP__` (review M5; not recorded in a verdict's evidence — a C unit
-  that returns those macros is compared against 1970's). An include that resolves outside
-  `source_dir` — read from the program's own `#include` lines and found as the compiler finds
-  it (the facts never record one: the scan stays in `source_dir`) — is refused before any
-  build, naming the file and the include: the mirror holds `source_dir` only, and the compiler
-  would fall through to a system header of the same name, a different program mapped silently
-  (review M7, fixed after the fix check). A probed copy that does not build says so in neutral
-  words.
+  that returns those macros is compared against 1970's). The files the program's build reads
+  and the files the copy's would read must be the same: the compiler lists both (`cc -MM`,
+  project files only, the copy's named back as the target's), and a difference — an include
+  outside `source_dir`, a folder linked into it (the mirror holds one path per folder), a
+  `.inc` that leaves it — is refused before the copy is built, naming the file: in the copy
+  the compiler would fall through to a system header of the same name, a different program
+  mapped silently (review M7; the facts never record such an include, and reading `#include`
+  lines by hand refused includes under `#if 0` and in files never compiled — the second check).
+  A probed copy that does not build says so in neutral words.
 - **The insertion** — `harness_scan::probe_source(rel_path, source, index_of)`, pure, built on
   the scanner's own `collect_functions`/`canonical_id` (which, unlike mutate.rs, walk into
   preprocessor branches), with `FnDef` gaining the body's start byte:
@@ -512,9 +514,11 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   `{`; a definition with a preprocessor directive between its declarator and its body (a line
   that starts with `#` — a brace inside `#if`, which compiles on one branch only; a `#` in a
   comment is none); a body that opens with a pragma in any spelling (`#pragma`, `# pragma`,
-  `_Pragma`, one inside a leading `#if`) or with what the parser cannot read (a macro that may
-  expand to one), and a function with `naked` as a word of its head (review M2, fix check
-  N1/N4). Residual: `naked` given only on an earlier declaration — the probed build fails and
+  `_Pragma`, one inside a leading `#if`) or with what the parser cannot read — its first
+  statement opens with an ERROR, or with a bare name (a macro that may expand to a pragma) and
+  holds one; a statement that opens with a keyword and holds an error further in (an `#ifdef`
+  in a condition, a case range) is watched — and a function with `naked` or `__naked__` as a
+  word of its head (review M2, fix checks N1/N4/N7). Residual: `naked` given only on an earlier declaration — the probed build fails and
   the map says so with the compiler's words, never silently. A definition the facts do not
   record gets nothing — the facts do not know it either.
 
@@ -1294,3 +1298,14 @@ words for a map without notes), the digest (N2: `facts-stale` that no scan clear
 sentinels equal in the replay), the probe (N1: a leading `_Pragma` or unreadable code, N4:
 `naked` inside a name). All fixed in the second pass, each with a test; the rule text above
 says the result. Mutation checks: 60 mutants of the named rules and the fixes, all killed.
+
+**The check of the second pass** (6310410) found two medium issues — the probe's first-statement
+rule unwatched ordinary functions whose first statement held an error further in (31 in a
+294-file corpus: sqlite, oniguruma, tree-sitter), and the hand-read `#include` lines refused
+includes under `#if 0`, in comments and in files never compiled — and low ones: includes the
+line reading missed (`#import`, a macro-named include, a `.inc`, a linked folder), `facts-stale`
+for a FIFO or a folder named `x.c` and for an `include_dirs` alias, the map's own gate keeping
+the old rule, a save that failed to start offered on `t`, `__naked__`. The third pass: the
+opening-error rule above; the compiler's dependency lists for the copy; one path per file in
+the program digest, only regular files as unscanned; the map's gate is the digest's own rule;
+no `t` for a save; each with a test.

@@ -167,6 +167,18 @@ mod tests {
                    double g(double x) { _Pragma(\"STDC FENV_ACCESS ON\"); return x; }\n";
         let p = probe(src, &["a", "b", "c", "d", "e", "g"]);
         assert_eq!(p.unwatched, ["a", "b", "c", "d", "g"], "{}", text(&p));
+        // Fix check 2 N1: an error later in the first statement is not in
+        // the note's way.
+        let src = "int w(int x) {\n  if (x\n#ifdef A\n  > 1\n#else\n  > 2\n#endif\n  ) return 1;\n  return 0; }\n\
+                   int v(int x) { switch (x) { case 1 ... 5: return 1; } return 0; }\n";
+        let p = probe(src, &["w", "v"]);
+        assert!(p.unwatched.is_empty(), "{}", text(&p));
+        // Fix check 2 N7: `__naked__` is `naked`.
+        let p = probe(
+            "__attribute__((__naked__)) void n(void) { __asm__(\"ret\"); }\n",
+            &["n"],
+        );
+        assert_eq!(p.unwatched, ["n"]);
         // Fix check N4: `naked` only as a word of the head.
         let src = "static int naked_count(struct naked_list *l) { return 0; }\n\
                    int snaked(int x) { return x; }\n";
