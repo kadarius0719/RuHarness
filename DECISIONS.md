@@ -2586,3 +2586,31 @@ harness:
 adversarial design review from 3–4 lenses with findings verified, revision and its check,
 steps, code review, fix passes each checked, mutation checks. The rest of the check's findings (wording, flaky-test causes, the
 runner's poll ramp, doc gaps) are independent of this choice.
+
+## 2026-09-30 — Features map, compiler-guided probe: the design, reviewed and checked twice; built from revision 3
+
+**Premise** (scratchpad `proto/`): a prototype with the guessing rules off and a compile-and-retry
+driver built every adversarial repro file (24/24, 25/25; today's rules 17/24, 18/25) in ≤ 2
+rounds, and on real code cut unwatched functions from 3 044 to 6 (corpus) and 1 162 to 129
+(extensions) — sqlite3.c ~1 500 → 0 — with no note rejected. A shared-memory runtime checked
+under the sandbox (scratchpad `spike-mmap/`).
+
+**Review**: the draft (777cd27) — 4 angles, 37 findings, each reproduced by two verifiers
+(a skipped-branch note read "not run", a note in a stringized macro argument, backend and link
+errors missed by syntax-only checks, the runner's 8 KiB error excerpt, `#line` and same-line
+placement, gcc). Revision 1 (a14c807) checked: 4 fully resolved, 33 in part, 20 new. Revision 2
+(f345a49, the same-program text comparison) checked: 17 of 57 fully, 40 in part, 14 new (two
+high: a pre-zeroed notes file reading "nothing ran", and the comparison refusing every program).
+Every finding, all rounds, confirmed by two independent verifiers; none refuted.
+
+**Decided (process):** revision 3 (docs/FEATURES-PROBE-REDESIGN.md) takes every concrete change
+those checks asked for and is built without a further design round. The mechanisms settled in
+three rounds; what the last check found were details of the mechanisms (line-marker forms,
+linker message forms, byte limits) that the build's tests, its code review and the checks of its
+fix passes find better than another reading — each design round also added mechanisms that drew
+new edge cases. The build still follows the process: steps each committed green, an adversarial
+code review verified against the code, every fix pass checked, mutation checks of the named
+rules, the premise re-run through `harness features map` itself (§8).
+
+**Revisit when:** the build's premise re-run (§8) disagrees with §2's table — stop and hold a
+design session before building further.

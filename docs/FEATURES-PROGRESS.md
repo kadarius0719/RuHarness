@@ -32,15 +32,29 @@ fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
 ## Open (in order) — the next session starts here
 
-1. ~~The two low items~~, ~~the checks of the fourth, fifth and sixth passes~~ (passes 5–7:
-   bf75af8, 950eee3, b31f6ef) — §R5, last three paragraphs.
-2. **Check the seventh pass** (scoped: `reads` — (spelling, file) pairs with depth, equality
-   less the probe header, the `-H`-free error words, control-character names left out, `=`
-   refused; exec.rs's backoff wait; the probe's leading edge, nested definitions,
-   `split_by_directive`, `lone_macro`) — re-run both corpora, the five matrices
-   (scratchpad check6B/syn, `myeach.py`) and the checkers' repro suites; fix what it finds,
-   mutation-checked. Consider instead the structural fallback proposed in DECISIONS (a probe
-   miss unwatches the function the compiler names, never fails the map).
+1. ~~The two low items~~, ~~the checks of passes 4–6~~ (passes 5–7: bf75af8, 950eee3, b31f6ef).
+   The check of pass 7 (45 findings) led to a redesign, decided by the person: **the
+   compiler-guided probe**, docs/FEATURES-PROBE-REDESIGN.md revision 3 (reviewed, checked twice;
+   DECISIONS 2026-09-30). Build it in steps, each committed green:
+   a. the runner: a call returning a failed tool's whole stderr and how it ended; tool runs
+      wait 1 ms doubling to 8 ms, built and scenario runs keep 50 ms; `timeout_secs` clamped;
+      the overflow-then-sleep tests; the two flaky tests' timeouts;
+   b. harness-scan: the guessing rules removed; rule 3's depth form and directive scanner;
+      rule 4 (gcc); `probe_source` with the skip list, body ranges, the listing copy's end
+      tokens, the store note;
+   c. the runtime (shared mapping, attach byte, `environ`, pinned imports) and confine.rs
+      creating the notes file before every scenario run; the strict read;
+   d. featuremap.rs: listings with `-E -MD -MF -H` into the random folder, data reads,
+      stringized notes, the end-token count, the same-code comparison, the plain build there;
+   e. the compile-and-retry pass: placement, the search and restore, the link and its map,
+      bounds, progress, the runtime-names refusal;
+   f. map.json `unwatched_reasons` and `inputs.probe`, SCHEMAS.md, the CLI lines, the cockpit's
+      reason; the small fixes of §5;
+   g. §8: the premise re-run through `harness features map`, replacing §2's table; then the
+      code review, fix passes (each checked), mutation checks; update docs/TESTING-GUIDE.md
+      Part 8 (the map's output lines).
+2. **The C-vs-Rust performance baselines** — spike done (DECISIONS 2026-09-30; scratchpad
+   `spike-perf/`, the `perfrun` launcher premise holds under the sandbox); the design next.
 3. **`bench check --replay`** (the CLI changed since step 2): needs the gitignored
    `targets/tractor/.scorer-vendor/` and `.bench/` and a quiet machine; expect `198 reproduce
    (1 conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)`, `OK — no regression`.
