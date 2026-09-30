@@ -658,6 +658,23 @@ fn the_map_refuses_what_its_copy_would_build_differently() {
     let mapped = map(tmp.path()).expect("maps");
     assert_eq!(mapped.scenarios.len(), 1);
 
+    // Under a folder whose name has a space (make escapes it: fix check 3
+    // N8), the same include is still refused.
+    let tmp = TempDir::new("feat-map-space");
+    let spaced = tmp.path().join("sp ace");
+    std::fs::create_dir_all(&spaced).unwrap();
+    program(&spaced, GOOD, Some(features), "");
+    write(&spaced.join("src/extra.h"), "#define EXTRA 1\n");
+    prepend(&spaced, "#include \"../extra.h\"\n");
+    let err = map(&spaced).expect_err("refused").to_string();
+    assert!(err.contains("outside source_dir"), "{err}");
+    // … and one that builds maps.
+    let tmp = TempDir::new("feat-map-space-ok");
+    let spaced = tmp.path().join("sp ace");
+    std::fs::create_dir_all(&spaced).unwrap();
+    program(&spaced, GOOD, Some(features), "");
+    map(&spaced).expect("maps");
+
     // A folder linked into source_dir: the copy holds one path per folder.
     let tmp = TempDir::new("feat-map-alias");
     program(tmp.path(), GOOD, Some(features), "");

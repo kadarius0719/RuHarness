@@ -173,6 +173,14 @@ mod tests {
                    int v(int x) { switch (x) { case 1 ... 5: return 1; } return 0; }\n";
         let p = probe(src, &["w", "v"]);
         assert!(p.unwatched.is_empty(), "{}", text(&p));
+        // Fix check 3 N10: a pragma a leading conditional opens with, in
+        // any spelling; N7: a parameter named `naked` is no attribute.
+        let src = "double p(double x) {\n#ifdef __clang__\n_Pragma(\"STDC FENV_ACCESS ON\")\n#endif\n  return x; }\n\
+                   double q(double x) {\n#if 1\nFENV_ON\n#endif\n  return x; }\n\
+                   int r(int x) {\n#ifdef DEBUG\n  x++;\n#endif\n  return x; }\n\
+                   int setmode(int naked) { return naked; }\n";
+        let p = probe(src, &["p", "q", "r", "setmode"]);
+        assert_eq!(p.unwatched, ["p", "q"], "{}", text(&p));
         // Fix check 2 N7: `__naked__` is `naked`.
         let p = probe(
             "__attribute__((__naked__)) void n(void) { __asm__(\"ret\"); }\n",

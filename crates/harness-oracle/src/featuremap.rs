@@ -317,19 +317,28 @@ impl PairIndex {
 /// compiler lists them (`cc -MM`: no system headers), canonical. With
 /// `mirror = Some((mirror, root))`, a file of the mirror is named as the
 /// target's file at the same place (then canonical, as the program's own
-/// build resolves it). `Ok(Err(why))` when the compiler could not list them.
+/// build resolves it). The compiler runs with the build's own flags (`-O2`
+/// defines `__OPTIMIZE__`: an `#ifdef` on it picks the same branch; fix
+/// check 3 N9) less `-o` (several inputs list to stdout). `Ok(Err(why))`
+/// when the compiler could not list them, or named a file that does not
+/// resolve.
 fn dependencies(
     runner: &Runner,
     includes: &[PathBuf],
     inputs: &[PathBuf],
     mirror: Option<(&Path, &Path)>,
 ) -> Result<Result<std::collections::BTreeSet<PathBuf>, Error>, Error> {
-    let mut argv = vec!["cc".to_string(), "-MM".to_string()];
-    for dir in includes {
-        argv.push(format!("-I{}", path_string(dir)?));
-    }
-    for input in inputs {
-        argv.push(path_string(input)?.to_string());
+    let unused = Path::new("-");
+    let mut argv = crate::cc_argv(&CcInvocation {
+        includes,
+        cflags: &["-MM".to_string()],
+        quiet: true,
+        out: unused,
+        inputs,
+        libs: &[],
+    })?;
+    if let Some(at) = argv.iter().position(|a| a == "-o") {
+        argv.drain(at..at + 2);
     }
     let out = match runner.tool_outcome(&argv)? {
         Ok(out) => out,
@@ -342,8 +351,12 @@ fn dependencies(
     let mut files = std::collections::BTreeSet::new();
     for token in make_prerequisites(&String::from_utf8_lossy(&out)) {
         let path = runner.cwd.join(&token);
+        // A file the compiler read resolves; one that does not is a list
+        // misread, never a file to skip (fix check 3 N8).
         let Ok(canonical) = path.canonicalize() else {
-            continue;
+            return Ok(Err(Error::Invariant(format!(
+                "the compiler's list names {token:?}, which does not resolve"
+            ))));
         };
         let named = match (&mirror_canonical, mirror) {
             (Some(m), Some((_, root))) => match canonical.strip_prefix(m) {
@@ -360,14 +373,47 @@ fn dependencies(
     Ok(Ok(files))
 }
 
-/// The prerequisites of make rules (`a.o: a.c a.h \` continued lines): every
-/// word that is not a target.
+/// The prerequisites of make rules (`a.o: a.c a\ b.h \` continued lines):
+/// every word after a target's `:`, with make's escapes read — `\ ` a
+/// space, `\#` a `#`, `$$` a `$` (fix check 3 N8: a folder with a space).
 fn make_prerequisites(rules: &str) -> Vec<String> {
-    rules
-        .replace("\\\n", " ")
-        .split_whitespace()
-        .filter(|w| !w.ends_with(':'))
-        .map(str::to_string)
+    let mut words: Vec<(String, bool)> = Vec::new();
+    let mut word = String::new();
+    let mut chars = rules.chars().peekable();
+    let flush = |word: &mut String, words: &mut Vec<(String, bool)>, target: bool| {
+        if !word.is_empty() {
+            words.push((std::mem::take(word), target));
+        }
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.peek() {
+                Some('\n') => {
+                    chars.next();
+                    flush(&mut word, &mut words, false);
+                }
+                Some(&next @ (' ' | '#' | '\\')) => {
+                    chars.next();
+                    word.push(next);
+                }
+                _ => word.push('\\'),
+            },
+            '$' if chars.peek() == Some(&'$') => {
+                chars.next();
+                word.push('$');
+            }
+            ':' if matches!(chars.peek(), Some(' ' | '\n' | '\t') | None) => {
+                flush(&mut word, &mut words, true);
+            }
+            c if c.is_whitespace() => flush(&mut word, &mut words, false),
+            c => word.push(c),
+        }
+    }
+    flush(&mut word, &mut words, false);
+    words
+        .into_iter()
+        .filter(|(_, target)| !target)
+        .map(|(w, _)| w)
         .collect()
 }
 
@@ -513,6 +559,12 @@ mod tests {
         assert_eq!(
             make_prerequisites(rules),
             ["src/a.c", "src/a.h", "src/sub/b.h", "src/b.c"]
+        );
+        // Fix check 3 N8: make's escapes.
+        let rules = "a.o: /t/sp\\ ace/a.c /t/sp\\ ace/x\\#1.h /t/d$$/y.h\n";
+        assert_eq!(
+            make_prerequisites(rules),
+            ["/t/sp ace/a.c", "/t/sp ace/x#1.h", "/t/d$/y.h"]
         );
     }
 

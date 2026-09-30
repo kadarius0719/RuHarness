@@ -399,8 +399,17 @@ fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<
         return None;
     }
     // A naked function takes no statement (review M2) — `naked` as a word
-    // of its head, not inside a name (fix check N4).
-    let head = String::from_utf8_lossy(&src[def.start_byte()..at]);
+    // of its head, not inside a name (fix check N4), nor a parameter's name
+    // (fix check 3 N7).
+    let params = parameter_list(declarator);
+    let head = match params {
+        Some(p) => format!(
+            "{} {}",
+            String::from_utf8_lossy(&src[def.start_byte()..p.start_byte()]),
+            String::from_utf8_lossy(&src[p.end_byte()..at])
+        ),
+        None => String::from_utf8_lossy(&src[def.start_byte()..at]).into_owned(),
+    };
     if head
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .any(|word| word == "naked" || word == "__naked__")
@@ -417,16 +426,55 @@ fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<
     let first = body
         .named_children(&mut cursor)
         .find(|c| c.kind() != "comment");
-    if let Some(first) = first {
-        let words = text(first, src);
-        if opens_with_error(first)
-            || words.trim_start().starts_with("_Pragma")
-            || (first.kind().starts_with("preproc") && words.contains("pragma"))
-        {
-            return None;
-        }
+    if first.is_some_and(|first| blocks_note(first, src)) {
+        return None;
     }
     Some(at)
+}
+
+/// The parameter list of the function a declarator declares (through
+/// pointer and parenthesized declarators).
+fn parameter_list(declarator: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut d = declarator;
+    loop {
+        if d.kind() == "function_declarator" {
+            return d.child_by_field_name("parameters");
+        }
+        d = d.child_by_field_name("declarator")?;
+    }
+}
+
+/// What opens a body keeps a statement from going before it (see
+/// [`probe_point`]): a pragma in any spelling — `#pragma`, `# pragma`,
+/// `_Pragma` — what the parser could not read at its start, or a leading
+/// conditional whose first branch opens with one of these (fix check 3
+/// N10: `#ifdef __clang__` then `_Pragma(…)`).
+fn blocks_note(node: tree_sitter::Node, src: &[u8]) -> bool {
+    let words = text(node, src);
+    if opens_with_error(node) || words.trim_start().starts_with("_Pragma") {
+        return true;
+    }
+    if !node.kind().starts_with("preproc") {
+        return false;
+    }
+    if words.to_ascii_lowercase().contains("pragma") {
+        return true;
+    }
+    if !matches!(
+        node.kind(),
+        "preproc_if" | "preproc_ifdef" | "preproc_elif" | "preproc_else"
+    ) {
+        return false;
+    }
+    let skip: Vec<usize> = ["name", "condition"]
+        .iter()
+        .filter_map(|f| node.child_by_field_name(f).map(|n| n.id()))
+        .collect();
+    let mut cursor = node.walk();
+    let first = node
+        .named_children(&mut cursor)
+        .find(|c| !skip.contains(&c.id()) && c.kind() != "comment");
+    first.is_some_and(|first| blocks_note(first, src))
 }
 
 /// The parser could not read how `node` starts: it, or one of its first

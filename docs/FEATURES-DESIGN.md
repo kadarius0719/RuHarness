@@ -399,7 +399,8 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
 - Refuses, before building anything, with a message that says what to do, when: there is no
   features file, it has no scenarios, or it does not validate (the loader's message); the
   facts are missing, or stale for any file ("scan the project first" — the probe's ids come
-  from the facts); a top-level `.c` of `source_dir` has no facts record; `sandbox: none`
+  from the facts); the facts do not describe the program's C (the program digest's own
+  `facts-stale` rule, §2.4: a scan always lets the map run); `sandbox: none`
   without `--allow-unsandboxed`. Whether the program has one `main()` is the link's to say:
   a failed `plain` build is refused with the compiler's first lines and, when the facts do not
   record exactly one `main` (distinct file and id) among the top-level `.c`, "features need a
@@ -494,7 +495,9 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   and the files the copy's would read must be the same: the compiler lists both (`cc -MM`,
   project files only, the copy's named back as the target's), and a difference — an include
   outside `source_dir`, a folder linked into it (the mirror holds one path per folder), a
-  `.inc` that leaves it — is refused before the copy is built, naming the file: in the copy
+  `.inc` that leaves it — is refused before the copy is built (the lists come from the build's
+  own flags, `-O2` included, and make's escapes are read: a folder with a space; a listed
+  path that does not resolve is an error, never skipped), naming the file: in the copy
   the compiler would fall through to a system header of the same name, a different program
   mapped silently (review M7; the facts never record such an include, and reading `#include`
   lines by hand refused includes under `#if 0` and in files never compiled — the second check).
@@ -517,8 +520,9 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   `_Pragma`, one inside a leading `#if`) or with what the parser cannot read — its first
   statement opens with an ERROR, or with a bare name (a macro that may expand to a pragma) and
   holds one; a statement that opens with a keyword and holds an error further in (an `#ifdef`
-  in a condition, a case range) is watched — and a function with `naked` or `__naked__` as a
-  word of its head (review M2, fix checks N1/N4/N7). Residual: `naked` given only on an earlier declaration — the probed build fails and
+  in a condition, a case range) is watched; a leading conditional counts by what its first
+  branch opens with — and a function with `naked` or `__naked__` as a word of its head, its
+  parameter list aside (review M2, fix checks N1/N4/N7/N10). Residual: `naked` given only on an earlier declaration — the probed build fails and
   the map says so with the compiler's words, never silently. A definition the facts do not
   record gets nothing — the facts do not know it either.
 
@@ -1309,3 +1313,14 @@ the old rule, a save that failed to start offered on `t`, `__naked__`. The third
 opening-error rule above; the compiler's dependency lists for the copy; one path per file in
 the program digest, only regular files as unscanned; the map's gate is the digest's own rule;
 no `t` for a save; each with a test.
+
+**The check of the third pass** (2de32ef) confirmed N1–N4 and N6 and found two medium issues —
+a folder with a space in its name turned the copy's check off (make's `\ ` escape), and a
+pragma inside a leading `#if` was watched again — plus low ones: the dependency lists without
+the build's `-O2`; a parameter named `naked`; a top-level `.c` linked out of `source_dir`
+refused with include words (the mirror never holds it); a FIFO named `x.c` reaching the build
+(its timeout). The fourth pass fixed the first four, each with a test. **Open when this track
+paused (2026-09-29):** the linked-out top-level `.c` (refuse it by name before the build), the
+FIFO (only regular `.c` into the feature step and the map, never into the shared whole-program
+list, §10), a check of the fourth pass, `bench check --replay`, and the live chat tests (the
+`claude` sign-in had expired) — docs/FEATURES-PROGRESS.md.
