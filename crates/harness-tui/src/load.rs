@@ -92,6 +92,7 @@ pub fn read(target: &Path) -> Result<Read, String> {
                     features: now.features.clone(),
                     program: now.program.clone(),
                     platform: features::platform(),
+                    probe: features::MAP_PROBE.to_string(),
                 }),
                 _ => None,
             },

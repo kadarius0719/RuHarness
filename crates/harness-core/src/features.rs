@@ -696,7 +696,30 @@ pub fn map_path(root: &Path) -> PathBuf {
     features_dir(root).join(MAP_FILE)
 }
 
-/// The map's inputs: it is current iff all four equal today's (§5.2).
+/// The probe a map is made by (docs/FEATURES-PROBE-REDESIGN.md §3.7).
+pub const MAP_PROBE: &str = "compiler-guided-1";
+
+/// The kinds of reason a function has no note
+/// (docs/FEATURES-PROBE-REDESIGN.md §3.7), as `map.json` names them.
+pub const UNWATCHED_KINDS: &[&str] = &[
+    "parser",
+    "not-a-block",
+    "conditional-brace",
+    "skipped-branch",
+    "naked",
+    "stringized",
+    "data",
+    "compile",
+    "elimination",
+    "link",
+    "file-limit",
+    "not-checked",
+];
+
+/// The longest detail of an unwatched function's reason, in bytes.
+pub const UNWATCHED_DETAIL_BYTES: usize = 160;
+
+/// The map's inputs: it is current iff all of them equal today's (§5.2).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MapInputs {
     /// [`facts_digest`] of the facts it was made from.
@@ -707,6 +730,26 @@ pub struct MapInputs {
     pub program: String,
     /// OS and architecture ([`platform`]).
     pub platform: String,
+    /// The probe that made it ([`MAP_PROBE`]); empty for a map made before
+    /// the compiler-guided probe — out of date, never current.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub probe: String,
+}
+
+/// Why one function has no note (docs/FEATURES-PROBE-REDESIGN.md §3.7):
+/// display-only — never in prompts, events or harness-mcp.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UnwatchedReason {
+    /// The file, as in `unwatched`.
+    pub file: String,
+    /// The canonical id, as in `unwatched`.
+    pub id: String,
+    /// One of [`UNWATCHED_KINDS`].
+    pub kind: String,
+    /// The file, the compiler's message or the symbol: at most
+    /// [`UNWATCHED_DETAIL_BYTES`], no control characters.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
 }
 
 /// One scenario's record in the map (§5.2).
@@ -732,7 +775,8 @@ pub struct ScenarioRecord {
     pub probe_agrees: bool,
     /// `complete` or `unavailable`.
     pub noted: String,
-    /// Why the notes are unavailable: `none written` or `unreadable`.
+    /// Why the notes are unavailable: `none written`, `unreadable`, or
+    /// `the probe's setup did not run`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The functions it ran, `[file, canonical id]`, sorted, each once.
@@ -750,6 +794,10 @@ pub struct FeatureMap {
     pub inputs: MapInputs,
     /// Definitions the probe could not watch, `[file, canonical id]`.
     pub unwatched: Vec<(String, String)>,
+    /// Why each of them has no note (an optional field: a map made before
+    /// the compiler-guided probe has none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unwatched_reasons: Vec<UnwatchedReason>,
     /// One record per scenario, in the features file's order.
     pub scenarios: Vec<ScenarioRecord>,
 }
@@ -780,6 +828,9 @@ impl FeatureMap {
         if self.inputs.platform != now.platform {
             why.push("made on another platform");
         }
+        if self.inputs.probe != now.probe {
+            why.push("made by an older harness");
+        }
         why
     }
 }
@@ -806,7 +857,7 @@ pub enum MapState {
     /// dropped from it.
     Loaded {
         /// The map, with unknown pairs dropped.
-        map: FeatureMap,
+        map: Box<FeatureMap>,
         /// How many were dropped.
         unknown: usize,
     },
@@ -866,7 +917,10 @@ pub fn load_map(root: &Path, facts: &crate::Facts) -> MapState {
         }
         let ok = match (r.noted.as_str(), r.reason.as_deref()) {
             ("complete", None) => true,
-            ("unavailable", Some("none written" | "unreadable")) => r.functions.is_empty(),
+            (
+                "unavailable",
+                Some("none written" | "unreadable" | "the probe's setup did not run"),
+            ) => r.functions.is_empty(),
             _ => false,
         };
         if !ok
@@ -875,6 +929,26 @@ pub fn load_map(root: &Path, facts: &crate::Facts) -> MapState {
         {
             return MapState::Unreadable(
                 "a scenario's record is not one the harness writes".into(),
+            );
+        }
+    }
+    // Each reason strictly: a kind the harness writes, a short detail with
+    // no control character, its pair in the map's own `unwatched` list.
+    {
+        let pairs: std::collections::BTreeSet<(&str, &str)> = map
+            .unwatched
+            .iter()
+            .map(|(f, n)| (f.as_str(), n.as_str()))
+            .collect();
+        let bad = map.unwatched_reasons.iter().any(|r| {
+            !UNWATCHED_KINDS.contains(&r.kind.as_str())
+                || r.detail.len() > UNWATCHED_DETAIL_BYTES
+                || r.detail.chars().any(char::is_control)
+                || !pairs.contains(&(r.file.as_str(), r.id.as_str()))
+        });
+        if bad {
+            return MapState::Unreadable(
+                "an unwatched function's reason is not one the harness writes".into(),
             );
         }
     }
@@ -893,7 +967,12 @@ pub fn load_map(root: &Path, facts: &crate::Facts) -> MapState {
     for r in &mut map.scenarios {
         keep(&mut r.functions);
     }
-    MapState::Loaded { map, unknown }
+    map.unwatched_reasons
+        .retain(|r| known.contains(&(r.file.as_str(), r.id.as_str())));
+    MapState::Loaded {
+        map: Box::new(map),
+        unknown,
+    }
 }
 
 /// `stderr`'s first line as the map records it (§5.2).
@@ -2104,8 +2183,10 @@ args = ["-h"]
                 features: "blake3:g".into(),
                 program: "blake3:p".into(),
                 platform: platform(),
+                probe: MAP_PROBE.to_string(),
             },
             unwatched: vec![("src/a.c".into(), "src/a.c::odd".into())],
+            unwatched_reasons: Vec::new(),
             scenarios: vec![ScenarioRecord {
                 feature: "gzip".into(),
                 scenario: "text".into(),
@@ -2179,6 +2260,48 @@ args = ["-h"]
         let mut m = a_map();
         m.schema_version = 2;
         assert!(unreadable(m), "too new");
+        // The unwatched functions' reasons, read strictly.
+        let reason = |kind: &str, detail: &str, id: &str| UnwatchedReason {
+            file: "src/a.c".into(),
+            id: id.into(),
+            kind: kind.into(),
+            detail: detail.into(),
+        };
+        let mut m = a_map();
+        m.unwatched_reasons = vec![reason("compile", &"é".repeat(80), "src/a.c::odd")];
+        write(&m);
+        assert!(
+            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            "a detail of 160 bytes"
+        );
+        for (bad, why) in [
+            (
+                reason("guess", "", "src/a.c::odd"),
+                "a kind the harness never writes",
+            ),
+            (
+                reason("compile", &"x".repeat(161), "src/a.c::odd"),
+                "a detail too long",
+            ),
+            (
+                reason("compile", "a\u{1b}b", "src/a.c::odd"),
+                "a control character",
+            ),
+            (reason("compile", "", "main"), "a pair not in unwatched"),
+        ] {
+            let mut m = a_map();
+            m.unwatched_reasons = vec![bad];
+            assert!(unreadable(m), "{why}");
+        }
+        let mut m = a_map();
+        m.scenarios[0].noted = "unavailable".into();
+        m.scenarios[0].reason = Some("the probe's setup did not run".into());
+        m.scenarios[0].functions.clear();
+        write(&m);
+        assert!(matches!(
+            load_map(&dir, &map_facts()),
+            MapState::Loaded { .. }
+        ));
         let mut m = a_map();
         m.schema = "other".into();
         assert!(unreadable(m));
@@ -2214,6 +2337,13 @@ args = ["-h"]
             m.out_of_date(&now),
             ["your scenarios changed", "the program's C changed"]
         );
+        // A map made before the compiler-guided probe (no `probe` input).
+        let mut older = a_map();
+        older.inputs.probe = String::new();
+        let text = String::from_utf8(older.to_bytes().expect("bytes")).expect("utf8");
+        assert!(!text.contains("\"probe\""), "an empty probe is not written");
+        let read: FeatureMap = serde_json::from_str(&text).expect("reads");
+        assert_eq!(read.out_of_date(&m.inputs), ["made by an older harness"]);
     }
 
     #[test]

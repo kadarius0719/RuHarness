@@ -803,6 +803,7 @@ mod tests {
                 schema_version: features::MAP_SCHEMA_VERSION,
                 inputs: now,
                 unwatched: Vec::new(),
+                unwatched_reasons: Vec::new(),
                 scenarios: functions
                     .iter()
                     .map(|(f, s, funcs)| ScenarioRecord {

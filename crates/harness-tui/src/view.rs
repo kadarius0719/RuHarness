@@ -5633,6 +5633,7 @@ mod tests {
             schema_version: 1,
             inputs: now,
             unwatched: vec![],
+            unwatched_reasons: Vec::new(),
             scenarios: vec![
                 record(
                     "gzip",
@@ -5753,6 +5754,7 @@ mod tests {
             schema_version: 1,
             inputs: now,
             unwatched: vec![],
+            unwatched_reasons: Vec::new(),
             scenarios: vec![
                 record("gzip", "text", "exit 0", "unavailable", vec![]),
                 record(

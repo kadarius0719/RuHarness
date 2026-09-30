@@ -75,6 +75,8 @@ mod confine;
 mod exec;
 mod featuremap;
 mod features;
+mod probebuild;
+mod probecopy;
 mod sandbox;
 mod scrub;
 mod shape;

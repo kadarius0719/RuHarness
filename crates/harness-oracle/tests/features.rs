@@ -1010,21 +1010,18 @@ fn the_map_compares_names_and_depths() {
     let err = map(tmp.path()).expect_err("refused").to_string();
     assert!(err.contains("src/tool/lib/sys/types.h"), "{err}");
 
-    // A lookup that finds the harness's own build folder from the mirror:
-    // only the copy reads it.
-    let tmp = TempDir::new("feat-map-copy-only");
-    program(tmp.path(), GOOD, Some(features), "");
-    prepend(
-        tmp.path(),
-        "#if __has_include(\"../../../fnprobe.c\")\n#define RUN 1\n#endif\n",
-    );
-    let err = map(tmp.path()).expect_err("refused").to_string();
-    assert!(
-        err.contains(
-            "the scratch copy would read src/tool/../../../fnprobe.c, which the program does not"
-        ),
-        "{err}"
-    );
+    // A lookup from the mirror for what the map builds finds nothing: it
+    // all lives in a random folder outside the target
+    // (docs/FEATURES-PROBE-REDESIGN.md §3.4 "Order").
+    for looked_up in ["../../../fnprobe.c", "../../../plain", "../../../fnprobe.h"] {
+        let tmp = TempDir::new("feat-map-copy-only");
+        program(tmp.path(), GOOD, Some(features), "");
+        prepend(
+            tmp.path(),
+            &format!("#if __has_include(\"{looked_up}\")\n#error found\n#endif\n"),
+        );
+        map(tmp.path()).expect("the lookup finds nothing, in the program and the copy alike");
+    }
 
     let tmp = TempDir::new("feat-map-words");
     program(tmp.path(), GOOD, Some(features), "");
@@ -1260,4 +1257,315 @@ fn the_runtime_merges_and_marks_that_it_attached() {
         .expect("runs");
     assert!(ran.success());
     assert_eq!(std::fs::read(&notes).unwrap(), [0u8; 5], "not attached");
+}
+
+/// docs/FEATURES-PROBE-REDESIGN.md §3.3: a probed file read as data —
+/// `#embed` in any spelling, `__has_embed`, a `__has_include` lookup — goes
+/// back unprobed and the map succeeds; a note turned into text by a macro
+/// is taken out; a probed header both included and embedded is refused by
+/// the same-code check; a target under a folder with non-ASCII names maps.
+#[test]
+fn the_copy_is_the_same_program_or_the_map_says_why() {
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+    let map_with = |root: &Path, extra: &[(&str, &str)]| {
+        let target = TargetContext::load(root).unwrap();
+        let mut facts = with_symbols(root);
+        for (file, name) in extra {
+            facts.symbols.push(harness_core::facts::SymbolRecord {
+                name: (*name).into(),
+                kind: "function".into(),
+                file: (*file).into(),
+                visibility: "public".into(),
+                signature: String::new(),
+                span: (1, 1),
+            });
+        }
+        let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+            panic!("valid")
+        };
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+    };
+    let prepend = |root: &Path, text: &str| {
+        let main = root.join("src/tool/main.c");
+        let old = std::fs::read_to_string(&main).unwrap();
+        std::fs::write(&main, format!("{text}{old}")).unwrap();
+    };
+    for spelling in [
+        "#embed \"unit.c\"",
+        "# embed \"unit.c\"",
+        "%:embed \"unit.c\"",
+        "#/*c*/embed \"unit.c\"",
+    ] {
+        let tmp = TempDir::new("feat-map-embed");
+        program(tmp.path(), GOOD, Some(features), "");
+        prepend(
+            tmp.path(),
+            &format!("static const unsigned char unit_src[] = {{\n{spelling}\n}};\n"),
+        );
+        let map = map_with(tmp.path(), &[]).expect("maps");
+        assert!(
+            map.unwatched
+                .contains(&("src/tool/unit.c".to_string(), "unit_add".to_string())),
+            "{spelling}: {:?}",
+            map.unwatched
+        );
+    }
+    let tmp = TempDir::new("feat-map-has-embed");
+    program(tmp.path(), GOOD, Some(features), "");
+    prepend(
+        tmp.path(),
+        "#if __has_embed(\"unit.c\")\n#define HAS 1\n#endif\n",
+    );
+    let map = map_with(tmp.path(), &[]).expect("maps");
+    assert!(map
+        .unwatched
+        .contains(&("src/tool/unit.c".to_string(), "unit_add".to_string())));
+    let tmp = TempDir::new("feat-map-has-include-only");
+    program(tmp.path(), GOOD, Some(features), "");
+    prepend(
+        tmp.path(),
+        "#if __has_include(\"mul.c\")\n#define HAS 1\n#endif\n",
+    );
+    let map = map_with(tmp.path(), &[]).expect("maps");
+    assert!(map
+        .unwatched
+        .contains(&("src/tool/mul.c".to_string(), "mul_step".to_string())));
+
+    // A note a macro turns into text: taken out, the program's text kept.
+    let tmp = TempDir::new("feat-map-stringized");
+    program(tmp.path(), GOOD, Some(features), "");
+    prepend(
+        tmp.path(),
+        "#define STR(...) #__VA_ARGS__\n#define SHADER static const char frag[] = STR\n\
+         SHADER(\nvoid shade(void) { color = vec4(1.0); }\n);\n",
+    );
+    let map = map_with(tmp.path(), &[("src/tool/main.c", "shade")]).expect("maps");
+    assert!(
+        map.unwatched
+            .contains(&("src/tool/main.c".to_string(), "shade".to_string())),
+        "{:?}",
+        map.unwatched
+    );
+
+    // A probed header both included and embedded: the embedded bytes would
+    // carry notes — refused by the same-code check, by name.
+    let tmp = TempDir::new("feat-map-include-and-embed");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(
+        &tmp.path().join("src/tool/twice.h"),
+        "static inline int twice(int x) { return 2 * x; }\n",
+    );
+    prepend(
+        tmp.path(),
+        "#include \"twice.h\"\nstatic const unsigned char twice_src[] = {\n#embed \"twice.h\"\n};\n",
+    );
+    let err = map_with(
+        tmp.path(),
+        &[("src/tool/twice.h", "src/tool/twice.h::twice")],
+    )
+    .expect_err("refused")
+    .to_string();
+    assert!(err.contains("is not the same program near"), "{err}");
+
+    // A target under folders named with non-ASCII characters maps.
+    let tmp = TempDir::new("feat-map-unicode");
+    let odd = tmp.path().join("café\u{a0}dir");
+    std::fs::create_dir_all(&odd).unwrap();
+    program(&odd, GOOD, Some(features), "");
+    map_with(&odd, &[]).expect("maps");
+}
+
+/// Writes `main.c` (with `extra` files), records `functions` of main.c in
+/// the facts beside the fixture's, and maps it.
+fn map_program(
+    name: &str,
+    main: &str,
+    extra: &[(&str, &str)],
+    functions: &[(&str, &str)],
+) -> (
+    TempDir,
+    Result<harness_core::features::FeatureMap, harness_core::error::Error>,
+) {
+    let tmp = TempDir::new(name);
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+    let (target, _) = program(tmp.path(), GOOD, Some(features), "");
+    write(&tmp.path().join("src/tool/main.c"), main);
+    for (path, text) in extra {
+        write(&tmp.path().join(path), text);
+    }
+    let mut facts = with_symbols(tmp.path());
+    for (file, id) in functions {
+        facts.symbols.push(harness_core::facts::SymbolRecord {
+            name: (*id).into(),
+            kind: "function".into(),
+            file: (*file).into(),
+            visibility: "public".into(),
+            signature: String::new(),
+            span: (1, 1),
+        });
+    }
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    let map =
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()));
+    (tmp, map)
+}
+
+fn unwatched_ids(map: &harness_core::features::FeatureMap) -> Vec<&str> {
+    map.unwatched.iter().map(|(_, id)| id.as_str()).collect()
+}
+
+/// docs/FEATURES-PROBE-REDESIGN.md §3.4: the compiler decides — a note it
+/// rejects is taken out of exactly the function its error lands in, and
+/// the map succeeds; the functions whose notes compile stay watched.
+#[test]
+fn the_compiler_decides_which_notes_stay() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's pragma errors: skipped on this compiler");
+        return;
+    }
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n\
+                #define FENV_ON _Pragma(\"STDC FENV_ACCESS ON\")\n\
+                #define DO_PRAGMA(x) _Pragma(#x)\n\
+                #define FENV(x) DO_PRAGMA(STDC FENV_ACCESS x)\n\
+                double a(double x) {\n#pragma STDC FENV_ACCESS ON\n  return x * 2; }\n\
+                double b(double x) { FENV_ON\n  return x; }\n\
+                double c(double x) {\n  FENV(ON)\n  x = x + 1;\n  return x; }\n\
+                int l(int x) { __label__ out; if (x) goto out; return 0; out: return 1; }\n\
+                int ok(int x) { return x + 1; }\n\
+                int main(void) { return (int)a(1) + (int)b(1) + (int)c(1) + l(0) + ok(0) + unit_add(1, 2) - 11 - (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "feat-map-compiler-decides",
+        main,
+        &[],
+        &[
+            ("src/tool/main.c", "a"),
+            ("src/tool/main.c", "b"),
+            ("src/tool/main.c", "c"),
+            ("src/tool/main.c", "l"),
+            ("src/tool/main.c", "ok"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        unwatched_ids(&map),
+        ["a", "b", "c", "l"],
+        "{:?}",
+        map.unwatched
+    );
+    // Each with its reason: the compiler's own words.
+    for r in &map.unwatched_reasons {
+        assert_eq!(r.kind, "compile", "{r:?}");
+        assert!(!r.detail.is_empty() && r.detail.len() <= 160, "{r:?}");
+    }
+    assert_eq!(map.unwatched_reasons.len(), 4);
+    assert!(map
+        .unwatched_reasons
+        .iter()
+        .any(|r| r.id == "a" && r.detail.contains("FENV_ACCESS")));
+    let r = &map.scenarios[0];
+    assert_eq!(r.noted, "complete", "{r:?}");
+    let ran: Vec<&str> = r.functions.iter().map(|(_, n)| n.as_str()).collect();
+    assert!(ran.contains(&"ok") && ran.contains(&"main"), "{ran:?}");
+}
+
+/// Two hundred rejected notes across a header and the file — well over the
+/// runner's 8 KiB error excerpt — are all read: at most two rounds, exactly
+/// those unwatched.
+#[test]
+fn every_error_line_is_read() {
+    if cfg!(not(target_os = "macos")) {
+        return;
+    }
+    let mut header = String::from("#define FENV_ON _Pragma(\"STDC FENV_ACCESS ON\")\n");
+    let mut main = String::from("#include \"unit.h\"\n#include \"mul.h\"\n#include \"many.h\"\n");
+    let mut functions = Vec::new();
+    let mut names = Vec::new();
+    for i in 0..100 {
+        header.push_str(&format!(
+            "static inline double h{i}(double x) {{ FENV_ON\n  return x; }}\n"
+        ));
+        names.push(format!("src/tool/many.h::h{i}"));
+    }
+    for i in 0..100 {
+        main.push_str(&format!(
+            "double m{i}(double x) {{ FENV_ON\n  return x + h{i}(x); }}\n"
+        ));
+        names.push(format!("m{i}"));
+    }
+    main.push_str(
+        "int main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1) + (int)m0(1); }\n",
+    );
+    for n in &names {
+        let file = if n.starts_with("src/tool/many.h") {
+            "src/tool/many.h"
+        } else {
+            "src/tool/main.c"
+        };
+        functions.push((file, n.as_str()));
+    }
+    let (_tmp, map) = map_program(
+        "feat-map-many-errors",
+        &main,
+        &[("src/tool/many.h", &header)],
+        &functions,
+    );
+    let map = map.expect("maps");
+    let mut unwatched: Vec<&str> = unwatched_ids(&map);
+    unwatched.sort();
+    let mut expected: Vec<&str> = names.iter().map(String::as_str).collect();
+    expected.sort();
+    assert_eq!(unwatched, expected);
+    assert_eq!(map.scenarios[0].noted, "complete");
+}
+
+/// Placement by byte: ten functions on one line, a tab and a multibyte
+/// character before the error's column, only the last one rejected; a
+/// bison-shaped `#line`; an error in an included `.inc` placed through the
+/// include chain.
+#[test]
+fn an_error_lands_in_the_function_that_holds_it() {
+    if cfg!(not(target_os = "macos")) {
+        return;
+    }
+    let mut line = String::from("\t/* é */ ");
+    let mut functions = Vec::new();
+    let names: Vec<String> = (0..10).map(|i| format!("f{i}")).collect();
+    for (i, n) in names.iter().enumerate() {
+        if i == 9 {
+            line.push_str(&format!(
+                "int {n}(int x) {{ __label__ out; if (x) goto out; return 0; out: return 1; }} "
+            ));
+        } else {
+            line.push_str(&format!("int {n}(int x) {{ return x + {i}; }} "));
+        }
+    }
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{line}\n\
+         #line 40 \"gen.y\"\n\
+         double g(double x) {{\n#pragma STDC FENV_ACCESS ON\n  return x; }}\n\
+         double inc(double x) {{\n#include \"fenv.inc\"\n  return x; }}\n\
+         int main(void) {{ return f0(0) + f9(0) + (int)g(0) + (int)inc(0) + unit_add(1, 2) - 3 - (int)mul_step(0, 0); }}\n"
+    );
+    for n in &names {
+        functions.push(("src/tool/main.c", n.as_str()));
+    }
+    functions.push(("src/tool/main.c", "g"));
+    functions.push(("src/tool/main.c", "inc"));
+    let (_tmp, map) = map_program(
+        "feat-map-placement",
+        &main,
+        &[("src/tool/fenv.inc", "#pragma STDC FENV_ACCESS ON\n")],
+        &functions,
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        unwatched_ids(&map),
+        ["f9", "g", "inc"],
+        "{:?}",
+        map.unwatched
+    );
 }

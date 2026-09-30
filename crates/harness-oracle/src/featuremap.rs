@@ -7,6 +7,8 @@
 use crate::confine::{Collected, Confinement, NotesFile, ScenarioEnd, ScenarioRun};
 use crate::exec::{self, Runner};
 use crate::features::place;
+use crate::probebuild::{Build, Cc};
+use crate::probecopy::{self, scan_text, Kind, Probe, Reason};
 use crate::sandbox::{self, HostDirs, ProfileSpec};
 use crate::scrub::Scrubber;
 use crate::{
@@ -70,6 +72,7 @@ fn map_inner(
         features: digest.to_string(),
         program: features::program_digest_now(target, facts),
         platform: features::platform(),
+        probe: features::MAP_PROBE.to_string(),
     };
     let link_args = extra_link_args(target)?;
     let base = Base::resolve(target, FEATURES_BUILD_DIR, &["cc"])?;
@@ -101,6 +104,11 @@ fn map_inner(
         )));
     }
     let build = scratch_dir(&root)?;
+    // Everything made after the mirror goes to a fresh folder outside the
+    // target, out of reach of the copy's -I folders; removed on every way out
+    // (docs/FEATURES-PROBE-REDESIGN.md §3.4 "Order").
+    let out = MapOut::create()?;
+    let write_dirs = vec![build.clone(), out.path().to_path_buf()];
 
     let host = match sandbox_mode() {
         "sandbox-exec" => Some(HostDirs::from_env()?),
@@ -111,7 +119,7 @@ fn map_inner(
             host,
             target_root: &root,
             toolchain: true,
-            write_dirs: std::slice::from_ref(&build),
+            write_dirs: &write_dirs,
             write_files: &[],
         })?),
         None => None,
@@ -167,11 +175,20 @@ fn map_inner(
         )));
     }
 
+    let cc = Cc::detect(&runner)?;
+    let gcc = matches!(cc, Cc::Gcc(_));
+
     // The probed copy: the mirror, the notes, the runtime.
     progress.message("Copying source_dir into a scratch copy that notes each function it runs…");
     let index = PairIndex::from_facts(facts);
     let mirror = build.join("mirror");
-    let unwatched = write_mirror(&base, facts, &index, &mirror)?;
+    let mut probe = Probe::new(gcc);
+    let times = write_mirror(&base, facts, &index, &mirror, &mut probe)?;
+    let index_of = |rel: &str| {
+        let rel = rel.to_string();
+        let index = &index;
+        move |id: &str| index.of(&rel, id)
+    };
     let to_mirror = |p: &Path| -> Result<PathBuf, Error> {
         let rel = p.strip_prefix(&root).map_err(|_| {
             Error::Invariant(format!("{} is not under the target root", p.display()))
@@ -183,11 +200,12 @@ fn map_inner(
         .iter()
         .map(|d| to_mirror(d))
         .collect::<Result<_, _>>()?;
-    let header = build.join("fnprobe.h");
-    let runtime_src = build.join("fnprobe.c");
+    let header = out.path().join("fnprobe.h");
+    let runtime_src = out.path().join("fnprobe.c");
     write(&header, FNPROBE_H.as_bytes())?;
     write(&runtime_src, FNPROBE_C.as_bytes())?;
-    let mut probed_inputs: Vec<PathBuf> = c_files
+    let header = header.canonicalize().map_err(|e| Error::io(&header, e))?;
+    let probed_inputs: Vec<PathBuf> = c_files
         .iter()
         .map(|p| to_mirror(p))
         .collect::<Result<_, _>>()?;
@@ -205,6 +223,14 @@ fn map_inner(
             shown(c, &root).display()
         )));
     }
+    let mirror_canonical = mirror.canonicalize().map_err(|e| Error::io(&mirror, e))?;
+    let rel_of_mirror = |canonical: &Path| -> Option<String> {
+        canonical
+            .strip_prefix(&mirror_canonical)
+            .ok()
+            .and_then(|r| r.to_str())
+            .map(str::to_string)
+    };
     // The mirror holds `source_dir` only (one path per file and folder): an
     // include that leaves it, or a folder linked into it, would fall through
     // in the copy to a system header of the same name — a different program,
@@ -215,7 +241,7 @@ fn map_inner(
     // compiles missed a linked folder reached by both its names in two files
     // (fix check 5 M1), and a file linked to another is one file to
     // `#pragma once` but two in the copy (L1). Refused, named, before any
-    // build.
+    // build. The same runs give the preprocessed text for §3.2–§3.3.
     let cflags = vec![
         "-include".to_string(),
         path_string(&header)?,
@@ -233,74 +259,145 @@ fn map_inner(
         root: &root,
         source_dir: &base.source_dir,
     };
-    for (c_file, copied) in c_files.iter().zip(&probed_inputs) {
-        let program = reads(&runner, &base.includes(), &[], c_file, None)?
+    let listing_out = |side: &str, n: usize| {
+        (
+            out.path().join(format!("{side}-{n}.i")),
+            out.path().join(format!("{side}-{n}.d")),
+        )
+    };
+    let mut programs: Vec<Reads> = Vec::with_capacity(c_files.len());
+    for (n, c_file) in c_files.iter().enumerate() {
+        let (i, d) = listing_out("program", n);
+        let program = reads(&runner, &base.includes(), &[], c_file, (&i, &d), None)?
             .map_err(|why| build_failed("the C program does not build", why))?;
-        let copied = match reads(&runner, &includes, &cflags, copied, Some(&copy))? {
-            Ok(reads) => reads,
-            Err(why) => {
-                return Err(Error::Invariant(format!(
-                    "the scratch copy cannot find what the program includes (an include \
-                     outside source_dir, or a folder linked into it) — the features map copies \
-                     only source_dir: {why}"
-                )))
+        programs.push(program);
+    }
+    let mut copy_texts: Vec<Vec<u8>> = Vec::new();
+    let mut unit_reads: Vec<std::collections::BTreeSet<String>> = Vec::new();
+    for pass in 0.. {
+        copy_texts.clear();
+        unit_reads.clear();
+        let mut changed = false;
+        for (n, (c_file, copied)) in c_files.iter().zip(&probed_inputs).enumerate() {
+            let program = &programs[n];
+            let (ci, cd) = listing_out("copy", n);
+            let copied_reads =
+                match reads(&runner, &includes, &cflags, copied, (&ci, &cd), Some(&copy))? {
+                    Ok(reads) => reads,
+                    Err(why) => {
+                        return Err(Error::Invariant(format!(
+                            "the scratch copy cannot find what the program includes (an include \
+                         outside source_dir, or a folder linked into it) — the features map \
+                         copies only source_dir: {why}"
+                        )))
+                    }
+                };
+            compare_reads(c_file, program, &copied_reads, &root)?;
+            let own = copied.canonicalize().ok();
+            // §3.3 step 1: a probed file listed and not entered is read as
+            // data (`#embed`, `__has_embed`, `__has_include`).
+            for listed in copied_reads
+                .listed
+                .difference(&copied_reads.entered_as_read)
+            {
+                if Some(listed) == own.as_ref() || *listed == header {
+                    continue;
+                }
+                if let Some(rel) = rel_of_mirror(listed) {
+                    let why = format!(
+                        "listed but never included by {} (#embed, __has_embed or __has_include)",
+                        shown(c_file, &root).display()
+                    );
+                    changed |= probe.unprobe(&rel, Reason::new(Kind::Data, &why));
+                }
             }
-        };
-        // The same files, by the same names: one the program reads that the
-        // copy would not, or one only the copy reads (a lookup that finds the
-        // harness's own build folder from the mirror; fix check 6).
-        let spelled = |read: &Read| shown(&read.0, &root).display().to_string();
-        if let Some(missed) = program.files.difference(&copied.files).next() {
-            return Err(Error::Invariant(format!(
-                "the program reads {}, which the scratch copy would not (it is outside \
-                 source_dir, in migration/ or .git/ there, or reached through a folder linked \
-                 into it): the features map copies only source_dir, so it cannot map this \
-                 program",
-                spelled(missed)
-            )));
-        }
-        if let Some(extra) = copied.files.difference(&program.files).next() {
-            return Err(Error::Invariant(format!(
-                "the scratch copy would read {}, which the program does not: the features map \
-                 cannot map this program",
-                spelled(extra)
-            )));
-        }
-        if program.entered != copied.entered {
-            let at = program
-                .entered
+            let scan = scan_text(&copied_reads.text);
+            // §3.3 step 2: a note turned into text.
+            for n in &scan.in_literals {
+                if let Some((file, id)) = index.pairs.get(*n as usize) {
+                    changed |= probe.take_out(file, id, Reason::new(Kind::Stringized, ""));
+                }
+            }
+            // §3.2: a note in a branch the build skips.
+            for (n, ends) in &scan.ends {
+                if scan.notes.get(n).copied().unwrap_or(0) < *ends {
+                    if let Some((file, id)) = index.pairs.get(*n as usize) {
+                        changed |= probe.take_out(file, id, Reason::new(Kind::SkippedBranch, ""));
+                    }
+                }
+            }
+            // §3.3 step 1: files `.incbin` reads.
+            for name in &scan.incbins {
+                let why = format!("read by .incbin in {}", shown(c_file, &root).display());
+                let found = name.as_ref().and_then(|name| {
+                    std::iter::once(root.join(name))
+                        .chain(includes.iter().map(|d| d.join(name)))
+                        .find_map(|p| p.canonicalize().ok())
+                });
+                match (name, found) {
+                    (Some(_), Some(path)) => {
+                        if let Some(rel) = rel_of_mirror(&path) {
+                            changed |= probe.unprobe(&rel, Reason::new(Kind::Data, &why));
+                        }
+                    }
+                    _ => {
+                        for rel in probe.rels() {
+                            changed |= probe.unprobe(&rel, Reason::new(Kind::Data, &why));
+                        }
+                    }
+                }
+            }
+            let mut entered: std::collections::BTreeSet<String> = copied_reads
+                .entered_as_read
                 .iter()
-                .zip(&copied.entered)
-                .take_while(|(a, b)| a == b)
-                .count();
-            let name = |e: Option<&(usize, Read)>| {
-                e.map_or("nothing more".to_string(), |(depth, read)| {
-                    format!("{} (depth {depth})", spelled(read))
-                })
-            };
+                .chain(own.iter())
+                .filter_map(|p| rel_of_mirror(p))
+                .collect();
+            entered.retain(|rel| probe.rels().contains(rel));
+            unit_reads.push(entered);
+            copy_texts.push(copied_reads.text);
+        }
+        if !changed {
+            break;
+        }
+        if pass == 2 {
+            return Err(Error::Invariant(
+                "the scratch copy keeps changing while it is checked — a fault in the harness, \
+                 not your program; please report it"
+                    .to_string(),
+            ));
+        }
+        for rel in probe.rels() {
+            probe.write(&mirror, &rel, &index_of(&rel), true)?;
+        }
+        keep_times(&times);
+    }
+    // §3.3 step 4: apart from its notes, the copy is the program's code.
+    for (n, c_file) in c_files.iter().enumerate() {
+        if let Err(line) = probecopy::same_code(&programs[n].text, &copy_texts[n], &header) {
             return Err(Error::Invariant(format!(
-                "compiling {}, the program's header #{} is {} and the scratch copy's would be {} \
-                 (a file or folder of source_dir reached by two names, or an include outside \
-                 it): the features map copies each file of source_dir once, so it cannot map \
-                 this program",
-                shown(c_file, &root).display(),
-                at + 1,
-                name(program.entered.get(at)),
-                name(copied.entered.get(at)),
+                "the scratch copy of {} is not the same program near: {line} — the features \
+                 map cannot map this program",
+                shown(c_file, &root).display()
             )));
         }
     }
+    // The compile copies: no end tokens.
+    for rel in probe.rels() {
+        probe.write(&mirror, &rel, &index_of(&rel), false)?;
+    }
+    keep_times(&times);
 
     // The plain program: the whole-program check's build of `whole_c`.
     progress.message("Building the C program…");
-    let plain = build.join("plain");
+    let plain = out.path().join("plain");
     compile(&runner, &base.includes(), &[], &plain, &c_files, &link_args)
         .map_err(|e| build_failed("the C program does not build", e))?;
     progress.message("Building the scratch copy…");
     // The runtime: its own compile — no target include folder, no builtins
     // (its imports stay open, fstat, mmap, close) — linked first
     // (docs/FEATURES-PROBE-REDESIGN.md §3.5, §3.4 step 5).
-    let runtime = build.join("fnprobe.o");
+    let runtime = out.path().join("fnprobe.o");
     cc_compile(
         &runner,
         &CcInvocation {
@@ -317,17 +414,23 @@ fn map_inner(
         },
     )
     .map_err(|e| build_failed("the probe's runtime does not build", e))?;
-    probed_inputs.insert(0, runtime);
-    let probed = build.join("probed");
-    compile(
-        &runner,
-        &includes,
-        &cflags,
-        &probed,
-        &probed_inputs,
-        &link_args,
-    )
-    .map_err(|e| build_failed("the probed copy does not build", e))?;
+    let index_pair = |rel: &str, id: &str| index.of(rel, id);
+    let build_copy = Build {
+        runner: &runner,
+        cc,
+        root: &root,
+        mirror: &mirror,
+        includes: &includes,
+        cflags: &cflags,
+        units: &probed_inputs,
+        reads: &unit_reads,
+        runtime: &runtime,
+        link_args: &link_args,
+        out: out.path(),
+        index_of: &index_pair,
+        times: &times,
+    };
+    let probed = build_copy.run(&mut probe, progress)?;
 
     // The runs: plain, probed, plain — all at the one path of §4.1.
     let run_path = build.join("f").join(features::program_name(&target.config));
@@ -357,13 +460,132 @@ fn map_inner(
         records.push(record);
     }
 
+    // The two programs stay in the build folder for a look afterwards; the
+    // random folder goes with its guard.
+    for (from, name) in [(&plain, "plain"), (&probed, "probed")] {
+        let to = build.join(name);
+        std::fs::copy(from, &to).map_err(|e| Error::io(&to, e))?;
+    }
     Ok(FeatureMap {
         schema: features::MAP_SCHEMA_NAME.to_string(),
         schema_version: features::MAP_SCHEMA_VERSION,
         inputs,
-        unwatched,
+        unwatched: probe.unwatched(),
+        unwatched_reasons: probe
+            .reasons
+            .iter()
+            .map(|((file, id), reason)| features::UnwatchedReason {
+                file: file.clone(),
+                id: id.clone(),
+                kind: reason.kind.name().to_string(),
+                detail: reason.detail.clone(),
+            })
+            .collect(),
         scenarios: records,
     })
+}
+
+/// The same files, by the same names, and the same headers entered in order
+/// — the program's compile of `c_file` and the copy's (§5.3).
+fn compare_reads(c_file: &Path, program: &Reads, copied: &Reads, root: &Path) -> Result<(), Error> {
+    // One the program reads that the copy would not, or one only the copy
+    // reads (a lookup that finds the harness's own build folder from the
+    // mirror; fix check 6).
+    let spelled = |read: &Read| shown(&read.0, root).display().to_string();
+    if let Some(missed) = program.files.difference(&copied.files).next() {
+        return Err(Error::Invariant(format!(
+            "the program reads {}, which the scratch copy would not (it is outside \
+             source_dir, in migration/ or .git/ there, or reached through a folder linked \
+             into it): the features map copies only source_dir, so it cannot map this \
+             program",
+            spelled(missed)
+        )));
+    }
+    if let Some(extra) = copied.files.difference(&program.files).next() {
+        return Err(Error::Invariant(format!(
+            "the scratch copy would read {}, which the program does not: the features map \
+             cannot map this program",
+            spelled(extra)
+        )));
+    }
+    if program.entered != copied.entered {
+        let at = program
+            .entered
+            .iter()
+            .zip(&copied.entered)
+            .take_while(|(a, b)| a == b)
+            .count();
+        let name = |e: Option<&(usize, Read)>| {
+            e.map_or("nothing more".to_string(), |(depth, read)| {
+                format!("{} (depth {depth})", spelled(read))
+            })
+        };
+        return Err(Error::Invariant(format!(
+            "compiling {}, the program's header #{} is {} and the scratch copy's would be {} \
+             (a file or folder of source_dir reached by two names, or an include outside \
+             it): the features map copies each file of source_dir once, so it cannot map \
+             this program",
+            shown(c_file, root).display(),
+            at + 1,
+            name(program.entered.get(at)),
+            name(copied.entered.get(at)),
+        )));
+    }
+    Ok(())
+}
+
+/// The folder a map makes everything in after the mirror
+/// (`$TMPDIR/ruharness-map-<random>`), removed when dropped — on success,
+/// refusal, error and interrupt alike.
+struct MapOut(PathBuf);
+
+impl MapOut {
+    fn create() -> Result<MapOut, Error> {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let base_raw = std::env::temp_dir();
+        let base = base_raw
+            .canonicalize()
+            .map_err(|e| Error::io(&base_raw, e))?;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        for _ in 0..1000 {
+            let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let tag = harness_core::hash::bytes_hash(
+                format!("{}-{nanos}-{n}", std::process::id()).as_bytes(),
+            );
+            let dir = base.join(format!("ruharness-map-{}", &tag[..16]));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(MapOut(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(Error::io(&dir, e)),
+            }
+        }
+        Err(Error::Invariant(format!(
+            "could not create a fresh folder for the features map under {}",
+            base.display()
+        )))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for MapOut {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Give each mirror file its original's modification time (for the build).
+pub(crate) fn keep_file_times(times: &[(PathBuf, std::time::SystemTime)]) {
+    keep_times(times);
+}
+
+/// A path as UTF-8 text (for an argv).
+pub(crate) fn path_text(p: &Path) -> Result<String, Error> {
+    path_string(p)
 }
 
 /// `migration/build/.features/`, recreated, canonical and contained.
@@ -419,6 +641,11 @@ fn build_failed(what: &str, e: Error) -> Error {
         Error::Interrupted => Error::Interrupted,
         other => Error::Invariant(format!("{what}: {other}")),
     }
+}
+
+/// Write `bytes` to `path`, its folders made first.
+pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    write(path, bytes)
 }
 
 fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
@@ -486,6 +713,13 @@ struct Reads {
     /// The headers it enters, in order, each with its depth — the probe's
     /// header left out.
     entered: Vec<(usize, Read)>,
+    /// Every file listed, canonical as the compile read it (the copy's
+    /// mirror paths kept) — for the files read as data (§3.3 step 1).
+    listed: std::collections::BTreeSet<PathBuf>,
+    /// Every header entered, canonical as the compile read it.
+    entered_as_read: std::collections::BTreeSet<PathBuf>,
+    /// The preprocessed text.
+    text: Vec<u8>,
 }
 
 /// What a compile of `input` with `includes` and `cflags` reads: the files
@@ -510,34 +744,56 @@ fn reads(
     includes: &[PathBuf],
     cflags: &[String],
     input: &Path,
+    out: (&Path, &Path),
     copy: Option<&CopyPaths<'_>>,
 ) -> Result<Result<Reads, Error>, Error> {
-    let unused = Path::new("-");
+    let (text_path, deps_path) = out;
     let mut listing = cflags.to_vec();
-    listing.push("-M".to_string());
-    listing.push("-H".to_string());
+    listing.extend([
+        "-E".to_string(),
+        "-MD".to_string(),
+        "-MF".to_string(),
+        path_string(deps_path)?,
+        "-H".to_string(),
+    ]);
     let mut argv = crate::cc_argv(&CcInvocation {
         includes,
         cflags: &listing,
         quiet: true,
-        out: unused,
+        out: text_path,
         inputs: std::slice::from_ref(&input.to_path_buf()),
         libs: &[],
     })?;
-    if let Some(at) = argv.iter().position(|a| a == "-o") {
-        argv.drain(at..at + 2);
-    }
-    let (rules, headers) = match runner.tool_outcome_both(&argv)? {
-        Ok(out) => out,
-        Err(why) => {
+    let run = runner.tool_run(&argv)?;
+    let headers = match run.end {
+        crate::exec::ChildEnd::Exited(status) if status.success() => run.stderr,
+        // No re-run after a timeout or an overflow (check 7: an included
+        // FIFO would wait twice).
+        crate::exec::ChildEnd::TimedOut => {
+            return Ok(Err(Error::Invariant(format!(
+                "cc timed out after {}s",
+                runner.timeout.as_secs()
+            ))))
+        }
+        crate::exec::ChildEnd::OutputOverflow => {
+            return Ok(Err(Error::Invariant(format!(
+                "cc produced more than {} bytes of output",
+                runner.max_output
+            ))))
+        }
+        crate::exec::ChildEnd::Exited(_) => {
+            // The compiler's own words, from a run without -H, whose header
+            // lines would bury them (fix check 6 L2).
             argv.retain(|a| a != "-H");
             let why = match runner.tool_outcome(&argv)? {
                 Err(plain) => plain,
-                Ok(_) => why,
+                Ok(_) => crate::exec::stderr_excerpt(&run.stderr),
             };
             return Ok(Err(Error::Invariant(why)));
         }
     };
+    let rules = std::fs::read(deps_path).map_err(|e| Error::io(deps_path, e))?;
+    let text = std::fs::read(text_path).map_err(|e| Error::io(text_path, e))?;
     let canonical_of = |p: &Path| p.canonicalize().map_err(|e| Error::io(p, e));
     let copy = match copy {
         Some(c) => Some((
@@ -588,7 +844,12 @@ fn reads(
         Ok(Ok(Some((spelled, file))))
     };
     let mut files = std::collections::BTreeSet::new();
+    let mut listed = std::collections::BTreeSet::new();
+    let mut entered_as_read = std::collections::BTreeSet::new();
     for token in make_prerequisites(&String::from_utf8_lossy(&rules)) {
+        if let Ok(read) = runner.cwd.join(&token).canonicalize() {
+            listed.insert(read);
+        }
         match name(&token)? {
             Ok(Some(read)) => {
                 files.insert(read);
@@ -606,13 +867,22 @@ fn reads(
         let Some(path) = rest.strip_prefix(' ').filter(|_| depth > 0) else {
             continue;
         };
+        if let Ok(read) = runner.cwd.join(path).canonicalize() {
+            entered_as_read.insert(read);
+        }
         match name(path)? {
             Ok(Some(read)) => entered.push((depth, read)),
             Ok(None) => {}
             Err(why) => return Ok(Err(why)),
         }
     }
-    Ok(Ok(Reads { files, entered }))
+    Ok(Ok(Reads {
+        files,
+        entered,
+        listed,
+        entered_as_read,
+        text,
+    }))
 }
 
 /// The prerequisites of make rules (`a.o: a.c a\ b.h \` continued lines):
@@ -655,7 +925,9 @@ fn make_prerequisites(rules: &str) -> Vec<String> {
                 flush(&mut word, &mut words, targets);
                 targets = true;
             }
-            c if c.is_whitespace() => flush(&mut word, &mut words, targets),
+            // ASCII blanks only: a no-break or ideographic space is part of
+            // a name (check 7).
+            ' ' | '\t' | '\r' => flush(&mut word, &mut words, targets),
             c => word.push(c),
         }
     }
@@ -675,7 +947,8 @@ fn write_mirror(
     facts: &Facts,
     index: &PairIndex,
     mirror: &Path,
-) -> Result<Vec<(String, String)>, Error> {
+    probe: &mut Probe,
+) -> Result<Vec<(PathBuf, std::time::SystemTime)>, Error> {
     let skipped_dirs = [base.root.join("migration"), base.root.join(".git")];
     let walked = walk::confined_except(
         &base.source_dir,
@@ -698,7 +971,7 @@ fn write_mirror(
     let with_functions: std::collections::BTreeSet<&str> =
         facts.symbols.iter().map(|s| s.file.as_str()).collect();
     let mut total: u64 = 0;
-    let mut unwatched: Vec<(String, String)> = Vec::new();
+    let mut times: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
     for path in walked.files {
         if skipped_dirs.iter().any(|d| path.starts_with(d)) {
             continue;
@@ -717,7 +990,14 @@ fn write_mirror(
         if rel.chars().any(char::is_control) {
             continue;
         }
-        let bytes = std::fs::read(&path).map_err(|e| Error::io(&path, e))?;
+        // An unreadable file stays out of the copy (check 7): if the program
+        // reads it, the listings differ and the map refuses by name.
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        if let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) {
+            times.push((mirror.join(rel_path), modified));
+        }
         total += bytes.len() as u64;
         if total > MIRROR_MAX_BYTES {
             return Err(Error::Invariant(format!(
@@ -725,28 +1005,26 @@ fn write_mirror(
                 MIRROR_MAX_BYTES / (1024 * 1024)
             )));
         }
-        let out = if with_functions.contains(rel) {
-            let probed = harness_scan::probe_source(
-                rel,
-                &bytes,
-                &|id| index.of(rel, id),
-                harness_scan::ProbeOptions::default(),
-            )?;
-            unwatched.extend(
-                probed
-                    .unwatched
-                    .into_iter()
-                    .map(|(id, _)| (rel.to_string(), id)),
-            );
-            probed.source
+        if with_functions.contains(rel) {
+            // The listing copy first (end tokens, §3.2).
+            probe.add(mirror, rel, bytes, &|id| index.of(rel, id), true)?;
         } else {
-            bytes
-        };
-        write(&mirror.join(rel_path), &out)?;
+            write(&mirror.join(rel_path), &bytes)?;
+        }
     }
-    unwatched.sort();
-    unwatched.dedup();
-    Ok(unwatched)
+    keep_times(&times);
+    Ok(times)
+}
+
+/// Give each mirror file its original's modification time: gcc's
+/// `__TIMESTAMP__` reads it (`SOURCE_DATE_EPOCH` covers it on clang only;
+/// docs/FEATURES-PROBE-REDESIGN.md §3.3 step 4).
+fn keep_times(times: &[(PathBuf, std::time::SystemTime)]) {
+    for (path, modified) in times {
+        if let Ok(file) = std::fs::File::options().write(true).open(path) {
+            let _ = file.set_modified(*modified);
+        }
+    }
 }
 
 /// How a run ended, as the map says it.
@@ -831,6 +1109,11 @@ mod tests {
         assert_eq!(
             make_prerequisites(rules),
             ["/t/sp ace/a.c", "/t/sp ace/x#1.h", "/t/d$/y.h"]
+        );
+        // A no-break space is part of a name (check 7).
+        assert_eq!(
+            make_prerequisites("a.o: /t/caf\u{e9}\u{a0}dir/a.c /t/b.h\n"),
+            ["/t/caf\u{e9}\u{a0}dir/a.c", "/t/b.h"]
         );
         // Fix check 4 F3: only a rule's first `:` ends its targets.
         let rules = "a.o: /t/a.c /t/o: \\\n  /t/y.h\nb.o c.o: /t/b.c\n";
