@@ -1430,8 +1430,11 @@ lines, 2 × N sequential listings each waiting ≥ 50 ms, `=` in the target's pa
 `#include`. **The seventh pass** fixed all of them, each with a test: reads as (spelling,
 file) with depth, equal less the probe header; control-character names left out of the copy;
 the error words from a run without `-H`; the runner's wait starting at 1 ms; `=` refused; the
-probe rules above (the checker's own two tried fixes, combined, and the leading edge
-generalized). 14 mutants, all killed (a tab-named header the program reads guards the copy's
-leaving control-character names out). Both corpora unchanged; the checkers' repro suites (33
-tests) all refused or mapped as intended; zopfli's map unchanged; the matrices: no function
-fails that failed under neither earlier pass, and the residual same-line shapes remain.
+probe rules above (the checker's own two tried fixes, combined; the leading edge
+generalized; a macro that opens the branch a split opens, alone or before the statement on
+its line — the checker's open "shape 0"). 19 mutants, all killed (a tab-named header the
+program reads guards the copy's leaving control-character names out). Both corpora
+unchanged; the checkers' repro suites (33 tests) all refused or mapped as intended; zopfli's
+map unchanged; the five pragma-macro matrices, per function under 7 define sets: no function
+fails that failed under neither the sixth pass's predecessor bf75af8 (g6 121 of its 261, g8 47
+= 47, e_split 2 of 30, g7 0, g9 0) — every one left is a documented residual shape.

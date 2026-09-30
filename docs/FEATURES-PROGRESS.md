@@ -20,10 +20,11 @@ decision (scenarios + verify): DECISIONS.md 2026-09-29.
 | 8 review | — | 4 lenses → 35 findings, each verified: 33 confirmed, 2 refuted (M4, O8) |
 | 8 fix passes | 71d9e1a, 6310410, 2de32ef, e98a2a2 (+ test commits 253fa76, 09c458f, 4ee851c, 474383c) | each pass checked by independent agents; the next pass fixed what the check found (§R5) |
 | 8 fix pass 5 | bf75af8 | the two lows + the check of the fourth pass (§R5) |
-| 8 fix pass 6 | (this commit) | the check of the fifth pass: per-compile ordered reads, probe rules (§R5) |
+| 8 fix pass 6 | 950eee3 | the check of the fifth pass: per-compile ordered reads, probe rules (§R5) |
+| 8 fix pass 7 | b31f6ef | the check of the sixth pass: reads by name and depth, probe split and macro rules (§R5) |
 | mutation | — | 87 mutants of the §12 named rules and every fix: 86 killed, 1 equivalent (the copy that cannot list its includes is refused by the difference check anyway) |
 
-958 workspace tests pass (+20 mutants of the fifth pass, all killed; 15 of the sixth, 14 killed, 1 equivalent) (one known flake, `harness-core` `a_reader_never_makes_a_writer_fail`,
+960 workspace tests pass (mutants: 20 of the fifth pass, all killed; 15 of the sixth, 14 killed, 1 equivalent; 19 of the seventh, all killed) (one known flake, `harness-core` `a_reader_never_makes_a_writer_fail`,
 fails under load and passes alone — listed in DECISIONS "still separate").
 
 Review reports and verdicts (scratchpad, not in the repo): code-review/<lens>/{findings,verdicts}.md,
@@ -31,12 +32,15 @@ fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
 ## Open (in order) — the next session starts here
 
-1. ~~The two low items~~, ~~the check of the fourth pass~~ (fifth pass, bf75af8) and ~~the
-   check of the fifth pass~~ (sixth pass): done — §R5, last two paragraphs.
-2. **Check the sixth pass** (scoped: `reads` — per-compile `-M` containment and the ordered
-   `-H` headers, the control-character refusal; the probe's name-alone-on-its-line, `#include`,
-   `__label__`, splice, split-tail and empty-branch rules) — re-run both corpora (the 294 files
-   and the extra 128 in the check's `extra.txt`); fix what it finds, mutation-checked.
+1. ~~The two low items~~, ~~the checks of the fourth, fifth and sixth passes~~ (passes 5–7:
+   bf75af8, 950eee3, b31f6ef) — §R5, last three paragraphs.
+2. **Check the seventh pass** (scoped: `reads` — (spelling, file) pairs with depth, equality
+   less the probe header, the `-H`-free error words, control-character names left out, `=`
+   refused; exec.rs's backoff wait; the probe's leading edge, nested definitions,
+   `split_by_directive`, `lone_macro`) — re-run both corpora, the five matrices
+   (scratchpad check6B/syn, `myeach.py`) and the checkers' repro suites; fix what it finds,
+   mutation-checked. Consider instead the structural fallback proposed in DECISIONS (a probe
+   miss unwatches the function the compiler names, never fails the map).
 3. **`bench check --replay`** (the CLI changed since step 2): needs the gitignored
    `targets/tractor/.scorer-vendor/` and `.bench/` and a quiet machine; expect `198 reproduce
    (1 conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)`, `OK — no regression`.
