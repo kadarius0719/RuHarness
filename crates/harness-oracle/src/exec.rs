@@ -61,8 +61,37 @@ pub(crate) const DEFAULT_MAX_OUTPUT: usize = 64 * 1024 * 1024;
 /// How much of a failed child's stderr is quoted in errors and check details.
 pub(crate) const STDERR_EXCERPT: usize = 8 * 1024;
 
-/// `try_wait` polling interval.
+/// `try_wait` polling interval of a built program or a scenario run (a
+/// fixed interval: a forked child that outlives its leader by a few ms is
+/// then always kept or always killed, never by chance).
 const POLL: Duration = Duration::from_millis(50);
+
+/// How a run waits for its child: a tool run (the compiler, whose listings
+/// end in milliseconds) polls from 1 ms doubling to 8 ms; a built program or
+/// a scenario polls every [`POLL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Wait {
+    /// 1 ms, doubling to at most 8 ms.
+    Tool,
+    /// Every [`POLL`].
+    Built,
+}
+
+impl Wait {
+    fn first(self) -> Duration {
+        match self {
+            Wait::Tool => Duration::from_millis(1),
+            Wait::Built => POLL,
+        }
+    }
+
+    fn cap(self) -> Duration {
+        match self {
+            Wait::Tool => Duration::from_millis(8),
+            Wait::Built => POLL,
+        }
+    }
+}
 
 /// How long to wait for the reader threads after the child is gone. They
 /// normally finish at once (EOF when the child exits); the bound only
@@ -230,7 +259,7 @@ impl Runner {
         }
         let shown = argv.join(" ");
         let env = tool_env(extra_env);
-        let out = self.spawn(argv, profile, TOOL_ENV, &env, &shown)?;
+        let out = self.spawn(argv, profile, TOOL_ENV, &env, &shown, Wait::Tool)?;
         match out.end {
             ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
             ChildEnd::Exited(status) => Err(Error::Invariant(format!(
@@ -264,17 +293,8 @@ impl Runner {
         &self,
         argv: &[String],
     ) -> Result<Result<Streams, String>, Error> {
-        let exe = argv
-            .first()
-            .ok_or_else(|| Error::Invariant("oracle: empty argv".into()))?;
-        if !self.allowlist.iter().any(|a| a == exe) {
-            return Err(Error::Invariant(format!(
-                "executable `{exe}` is not on the [oracle] allowlist in harness.toml"
-            )));
-        }
-        let shown = argv.join(" ");
-        let env = tool_env(&[]);
-        let out = self.spawn(argv, self.tool_profile.as_deref(), TOOL_ENV, &env, &shown)?;
+        let exe = argv.first().cloned().unwrap_or_default();
+        let out = self.tool_run(argv)?;
         Ok(match out.end {
             ChildEnd::Exited(status) if status.success() => Ok((out.stdout, out.stderr)),
             ChildEnd::Exited(status) => Err(format!(
@@ -287,6 +307,32 @@ impl Runner {
                 self.max_output
             )),
         })
+    }
+
+    /// Run an allowlisted tool under the tool profile and hand back how it
+    /// ended with both streams whole (up to the output cap) — a failed
+    /// compile's every error line, where [`Runner::tool_outcome`] keeps an
+    /// excerpt (docs/FEATURES-PROBE-REDESIGN.md §3.4 step 2). `Err` only when
+    /// it could not be run at all (allowlist, spawn, interrupt).
+    pub(crate) fn tool_run(&self, argv: &[String]) -> Result<ChildOutput, Error> {
+        let exe = argv
+            .first()
+            .ok_or_else(|| Error::Invariant("oracle: empty argv".into()))?;
+        if !self.allowlist.iter().any(|a| a == exe) {
+            return Err(Error::Invariant(format!(
+                "executable `{exe}` is not on the [oracle] allowlist in harness.toml"
+            )));
+        }
+        let shown = argv.join(" ");
+        let env = tool_env(&[]);
+        self.spawn(
+            argv,
+            self.tool_profile.as_deref(),
+            TOOL_ENV,
+            &env,
+            &shown,
+            Wait::Tool,
+        )
     }
 
     /// Run a binary the oracle just built — by path, exempt from the name
@@ -332,7 +378,7 @@ impl Runner {
         let mut argv: Vec<String> = vec![bin_str.to_string()];
         argv.extend(args.iter().map(|a| (*a).to_string()));
         let shown = argv.join(" ");
-        let out = match self.spawn(&argv, profile, BUILT_ENV, extra_env, &shown) {
+        let out = match self.spawn(&argv, profile, BUILT_ENV, extra_env, &shown, Wait::Built) {
             Ok(out) => out,
             Err(Error::Interrupted) => return Err(Error::Interrupted),
             Err(e) => return Ok(Err(RunFailure::Failed(e.to_string()))),
@@ -372,7 +418,7 @@ impl Runner {
         let mut argv: Vec<String> = vec![bin_str.to_string()];
         argv.extend(args.iter().map(|a| (*a).to_string()));
         let shown = argv.join(" ");
-        let out = self.spawn(&argv, profile, BUILT_ENV, extra_env, &shown)?;
+        let out = self.spawn(&argv, profile, BUILT_ENV, extra_env, &shown, Wait::Built)?;
         Ok(match out.end {
             ChildEnd::Exited(status) => match status.code() {
                 Some(code) => crate::bench::RunStatus::Exited(code),
@@ -390,8 +436,11 @@ impl Runner {
         env_keys: &[&str],
         extra_env: &[(&str, &std::ffi::OsStr)],
         shown: &str,
+        wait: Wait,
     ) -> Result<ChildOutput, Error> {
-        self.spawn_in(argv, profile, env_keys, extra_env, shown, &self.cwd, false)
+        self.spawn_in(
+            argv, profile, env_keys, extra_env, shown, &self.cwd, false, wait,
+        )
     }
 
     /// [`Runner::spawn`] with its working directory given, and — for a
@@ -407,6 +456,7 @@ impl Runner {
         shown: &str,
         cwd: &Path,
         kill_group_on_exit: bool,
+        wait: Wait,
     ) -> Result<ChildOutput, Error> {
         let full: Vec<String> = match profile {
             Some(p) => sandbox::wrap(p, argv),
@@ -422,6 +472,7 @@ impl Runner {
             self.timeout,
             self.max_output,
             kill_group_on_exit,
+            wait,
         )
     }
 
@@ -444,7 +495,16 @@ impl Runner {
         let mut argv: Vec<String> = vec![bin_str.to_string()];
         argv.extend(args.iter().map(|a| (*a).to_string()));
         let shown = argv.join(" ");
-        self.spawn_in(&argv, profile, BUILT_ENV, extra_env, &shown, cwd, true)
+        self.spawn_in(
+            &argv,
+            profile,
+            BUILT_ENV,
+            extra_env,
+            &shown,
+            cwd,
+            true,
+            Wait::Built,
+        )
     }
 }
 
@@ -509,7 +569,7 @@ fn kill_process_group(pgid: u32) {
 }
 
 /// Spawn `cmd`, capture stdout/stderr on reader threads, and poll `try_wait`
-/// every [`POLL`] until exit or `timeout`, killing the child at the deadline
+/// as `wait` says ([`Wait`]) until exit or `timeout`, killing the child at the deadline
 /// (or when a stream exceeds `max_output`). `Err` only for spawn/wait
 /// failures; timeouts and overflows are reported in [`ChildOutput::end`].
 pub(crate) fn run_with_timeout(
@@ -518,6 +578,7 @@ pub(crate) fn run_with_timeout(
     timeout: Duration,
     max_output: usize,
     kill_group_on_exit: bool,
+    wait: Wait,
 ) -> Result<ChildOutput, Error> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     // Spawn under the registry lock: a cancellation either happened before
@@ -555,9 +616,7 @@ pub(crate) fn run_with_timeout(
     drop(done_tx);
 
     let deadline = Instant::now() + timeout;
-    // A short child (a compiler listing) ends in milliseconds: the wait
-    // starts at 1 ms and doubles up to `POLL` (fix check 6 L3).
-    let mut poll = Duration::from_millis(1);
+    let mut poll = wait.first();
     let end = loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -593,7 +652,7 @@ pub(crate) fn run_with_timeout(
             };
         }
         std::thread::sleep(poll);
-        poll = (poll * 2).min(POLL);
+        poll = (poll * 2).min(wait.cap());
     };
     // A child that ended after the cancellation may have been killed by it:
     // its end is not evidence. Reap anything left and report the interrupt.
@@ -770,6 +829,7 @@ mod tests {
             Duration::from_secs(60),
             DEFAULT_MAX_OUTPUT,
             false,
+            Wait::Tool,
         )
         .expect("runs");
         assert!(matches!(out.end, ChildEnd::Exited(s) if s.success()));
@@ -868,6 +928,34 @@ mod tests {
         assert!(failure.to_string().contains("more bytes of stderr omitted"));
     }
 
+    /// A child that writes past the cap and then goes quiet — sleeping, or
+    /// ignoring SIGPIPE and writing on — ends as an overflow at once, never
+    /// at the deadline (docs/FEATURES-PROBE-REDESIGN.md §4, the runner).
+    #[test]
+    fn an_overflow_ends_the_run_even_when_the_child_goes_quiet() {
+        for (script, wait) in [
+            ("head -c 3000000 /dev/zero; sleep 60", Wait::Tool),
+            ("head -c 3000000 /dev/zero; sleep 60", Wait::Built),
+            (
+                "trap '' PIPE; while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 2>/dev/null; done",
+                Wait::Built,
+            ),
+        ] {
+            let cmd = scrubbed_command(&sv(&["sh", "-c", script]), TOOL_ENV, &std::env::temp_dir())
+                .expect("command");
+            let started = Instant::now();
+            let out =
+                run_with_timeout(cmd, "sh", Duration::from_secs(60), 1024 * 1024, false, wait)
+                    .expect("runs");
+            assert!(
+                matches!(out.end, ChildEnd::OutputOverflow),
+                "{script}: {:?}",
+                out.end
+            );
+            assert!(started.elapsed() < Duration::from_secs(20), "{script}");
+        }
+    }
+
     #[test]
     fn runaway_output_is_cut_off() {
         let mut r = runner(Duration::from_secs(30));
@@ -893,7 +981,9 @@ mod tests {
         std::fs::write(
             &src,
             "#include <stdio.h>\n#include <unistd.h>\n\
-             int main(void) {\n\
+             int main(int argc, char **argv) {\n\
+               (void)argv;\n\
+               if (argc > 1) return 0;\n\
                pid_t c = fork();\n\
                if (c == 0) { sleep(30); return 0; }\n\
                printf(\"%d %d\\n\", (int)getpid(), (int)c);\n\
@@ -911,6 +1001,11 @@ mod tests {
             .status()
             .expect("cc runs");
         assert!(built.success(), "fixture must compile");
+        // The first exec of a freshly linked binary can take seconds under
+        // load (the system checks it): warm it once, so the timed run's
+        // second is the program's own (check 7: this test's flake).
+        let warm = Command::new(&bin).arg("warm").status().expect("warm run");
+        assert!(warm.success());
 
         let bin_str = bin.to_str().expect("utf-8 bin path");
         let cmd = scrubbed_command(&sv(&[bin_str]), BUILT_ENV, tmp.path()).expect("command");
@@ -921,6 +1016,7 @@ mod tests {
             Duration::from_secs(1),
             DEFAULT_MAX_OUTPUT,
             false,
+            Wait::Built,
         )
         .expect("runs");
         assert!(matches!(out.end, ChildEnd::TimedOut), "{:?}", out.end);

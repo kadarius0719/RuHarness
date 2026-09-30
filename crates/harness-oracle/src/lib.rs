@@ -1171,23 +1171,30 @@ pub(crate) fn extra_link_args(target: &TargetContext) -> Result<Vec<String>, Err
 }
 
 /// The kind-owned `[oracle] timeout_secs` key: wall-clock limit for every
-/// child process, in whole seconds (default 120, must be at least 1).
+/// child process, in whole seconds (default 120, 1 to [`MAX_TIMEOUT_SECS`]:
+/// a larger one would overflow the deadline — check 7).
 fn timeout_secs(target: &TargetContext) -> Result<Duration, Error> {
     let secs = match target.config.oracle.get("timeout_secs") {
         None => exec::DEFAULT_TIMEOUT_SECS,
         Some(value) => value
             .as_integer()
             .and_then(|n| u64::try_from(n).ok())
-            .filter(|n| *n >= 1)
+            .filter(|n| (1..=MAX_TIMEOUT_SECS).contains(n))
             .ok_or_else(|| {
                 Error::parse(
                     target.root.join("harness.toml"),
-                    format!("[oracle] timeout_secs must be a positive integer, got {value}"),
+                    format!(
+                        "[oracle] timeout_secs must be a whole number of seconds from 1 to \
+                         {MAX_TIMEOUT_SECS} (a week), got {value}"
+                    ),
                 )
             })?,
     };
     Ok(Duration::from_secs(secs))
 }
+
+/// The largest `[oracle] timeout_secs`: a week.
+pub(crate) const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// Compare two clean runs, stdout AND stderr, into a named check: a unit
 /// that reports on stderr is observable behavior too (M4: `014_pow_
@@ -1951,10 +1958,16 @@ mod tests {
             "timeout_secs = -5",
             "timeout_secs = \"60\"",
             "timeout_secs = 1.5",
+            "timeout_secs = 604801",
+            "timeout_secs = 9223372036854775807",
         ] {
             let err = timeout_secs(&context_with_oracle(bad)).expect_err(bad);
-            assert!(err.to_string().contains("timeout_secs"), "{err}");
+            assert!(err.to_string().contains("from 1 to 604800"), "{err}");
         }
+        assert_eq!(
+            timeout_secs(&context_with_oracle("timeout_secs = 604800")).expect("a week"),
+            Duration::from_secs(604_800)
+        );
     }
 
     #[test]

@@ -990,10 +990,20 @@ int main(int argc, char **argv) {
         let build = root.join("migration/build/u1");
         std::fs::create_dir_all(&build).expect("build dir");
         let bin = build_scenario_probe(&build);
-        let mut r = runner(&root);
-        r.timeout = Duration::from_secs(2);
         let host = (sandbox::sandbox_mode() == "sandbox-exec")
             .then(|| HostDirs::from_env().expect("host dirs"));
+        // The first sandboxed exec of a freshly built binary can take
+        // seconds under load: warm it with the default timeout, and keep the
+        // 2 s runner for the run that must time out (check 7: this test's
+        // flake).
+        let patient = runner(&root);
+        let warm = scenario_confinement(&patient, host.as_ref(), &root);
+        let first = warm
+            .run_scenario(&bin, &["exit:3"], None, None)
+            .expect("runs");
+        assert_eq!(first.end, ScenarioEnd::Exited(3));
+        let mut r = runner(&root);
+        r.timeout = Duration::from_secs(2);
         let c = scenario_confinement(&r, host.as_ref(), &root);
         let exit3 = c.run_scenario(&bin, &["exit:3"], None, None).expect("runs");
         assert_eq!(exit3.end, ScenarioEnd::Exited(3));
