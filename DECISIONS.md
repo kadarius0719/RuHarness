@@ -2431,3 +2431,59 @@ passed as a value (known gap, SCHEMAS.md); `043_iso646_and_digraphs_lib` scans t
 of their own); a behaviour's output is a file, not a stream; stdin input is needed; two
 features share their scenarios' footprints entirely (then only line-level evidence separates
 them).
+
+## 2026-09-29 — Feature-workflow view: built, reviewed, four fix passes (paused before the last check)
+
+**What exists.** A person's features in `migration/features/features.toml` — features, each one
+or more scenarios (fixed arguments, at most one of three in-memory samples as input). Every
+Re-check and every judged migration turn runs each scenario on the all-C program and on the
+program with the unit's Rust swapped in (C, mixed, C): a check `feature:<f>/<s>` passes iff the
+exit status and both streams match byte for byte (streams rewritten one-to-one: `$$`,
+`$TMPDIR`, `$PROGDIR`); a C side that is not usable is a recorded skip with a closed reason,
+never evidence. `harness features map` builds a probed scratch copy (a one-byte-guarded note
+after each function's `{`, a harness-owned runtime) and records which functions each scenario
+runs in the committed `map.json`. The cockpit has a Features group (eleven states, per-unit
+results, the Edit flow through a private draft and a confirmed `features save` with the text on
+stdin), markers on verdicts and lines on units and functions; harness-mcp reports a closed
+`features` coverage field. Nothing about features blocks work: an invalid file, unusable
+scenarios or a unit outside the program each record a marker and a skip. zopfli is the
+dogfood: 7 features, 8 scenarios, mapped in ~9 s (gzip/zlib/deflate/`-v`/`--i1` separate as the
+spike found); u001 verifies green with 8 feature checks.
+
+**How it was checked.** Design: four revisions (190 findings, §R–§R4). Build: eight steps, each
+green. Code review from four lenses (trust, oracle, probe and map, cockpit and docs): 35
+findings, each verified by an independent agent — 33 confirmed (two high: a kept features
+draft deleted on an unchanged editor return; `source_dir = "."` read as "outside the program"
+everywhere), 2 refuted as design-accepted. Four fix passes, each checked by independent agents;
+each check found real issues in the pass before it — the pattern worth keeping:
+- pass 1's include check could never fire (the scanner never records an include that leaves
+  `source_dir`); the C-binary guard noted the bytes after the whole-program check's candidate
+  runs (an in-crate test then showed the false green a self-copying candidate had without the
+  sandbox, whole-program check included — pre-existing);
+- pass 2's probe rule unwatched 31 ordinary functions in a 294-file corpus (sqlite,
+  oniguruma, tree-sitter), and its hand-read `#include` lines refused includes under `#if 0`;
+- pass 3's dependency comparison (`cc -MM`, the program's build against its copy's) turned off
+  silently under a folder with a space (make's `\ ` escape).
+87 mutants of the §12 named rules and every fix: 86 killed, 1 equivalent. 952 tests.
+
+**Decided along the way (the design text holds each):** byte counts in details as a person
+reads them (the dogfood found 206 for zopfli's 205 — the `$$` escape); `SOURCE_DATE_EPOCH=0`
+for every tool child (two compiles of the same C print the same `__DATE__` — this also removes
+a flaky false failure in the whole-program check); the program digest covers the facts' closure
+plus every header on the include path, or is `facts-stale` exactly where a scan would change
+the facts; a scenario's cwd is `run/` inside its temp dir; human CLI lines show control
+characters as `?`.
+
+**Open when paused (docs/FEATURES-PROGRESS.md "Open"):** two low items the check of pass 3
+found (a top-level `.c` linked out of `source_dir`; a FIFO named `x.c`), a check of pass 4,
+`bench check --replay` (the CLI changed), the live chat tests (the `claude` sign-in had
+expired; every failure was that, said in words by the chat).
+
+**Next**: finish the open items, then the C-vs-Rust performance baselines, then the briefing's
+M5. Still separate: the ledger test that fails under load
+(`a_reader_never_makes_a_writer_fail`); a whole-program check without the sandbox is only as
+strong as the C binary guard (C reads elsewhere are not covered — SCHEMAS.md).
+
+**Revisit when:** a target is a library (features then need a scenario program); a behaviour's
+output is a file, not a stream; stdin input is wanted; the scanner learns macro-made
+definitions (the map could watch them).

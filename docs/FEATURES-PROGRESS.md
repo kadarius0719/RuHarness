@@ -1,49 +1,59 @@
-# Features track — progress (resume here after a context reset)
+# Features track — progress (resume here)
 
-Branch: `claude/rust-migration-harness-ee89d6` in worktree `.claude/worktrees/rust-migration-harness-5d0aef`
-(not yet merged to main / pushed — push at the end of the track, per the solo-dev rule).
-
-Design: docs/FEATURES-DESIGN.md (four revisions: §R 84, §R2 58, §R3 37, §R4 11 findings; the
-rule text governs). Spike + user decision (scenarios + verify): DECISIONS.md 2026-09-29.
+On `main` (merged and pushed 2026-09-29, paused at the person's request). Design:
+docs/FEATURES-DESIGN.md — four design revisions (§R 84, §R2 58, §R3 37, §R4 11 findings), then
+the build's code review and four fix passes (§R5); the rule text governs. Spike and the user's
+decision (scenarios + verify): DECISIONS.md 2026-09-29.
 
 ## Done (each committed green: fmt, clippy -D warnings, cargo test --workspace)
 
 | step | commit | what |
 |---|---|---|
 | 1 core | c25bff5, 5e4d1b9 | features.toml loader/snapshot/digests, VerdictInputs + AttemptRecord fields, Coverage marker in UnitReport, SkipReason, starter |
-| 2 oracle | 52a0802 | run_scenario (one path, cwd = temp dir, `$`-escaped rewrite, scenario profile, group kill, ExecFailed), feature step after boundary, verify_with, migrate/replay/promote snapshots, CLI messages |
-| bench | — | `bench check --replay` after step 2: 198 reproduce (1 conformant, 197 drifted), 2 expected divergences, 0 problems, OK no regression, hidden 16/17 public 70/77 |
-| 3 map | 1cd6b91 | probe_source (harness-scan), fnprobe runtime, map_features, map.json loader, CLI features init/save/map |
-| 4a | 0a9f19b | featmap model, Features tree group, Features + feature Views |
-| 4b | e29430c | verdict marker, unit/function feature lines, feature chip, overlay notes, summary line, Next-step rules 5-6, Map act |
-| 4c | 26362d2 | Edit flow (draft, editor dialog, validation, `features save` on stdin, kept draft), Help, pty test Map end to end |
-| 5 | 9e62e29 | chat brief (feature checks apart, none ≠ passing, scenario ids, menu items), harness-mcp closed `features` field |
+| 2 oracle | 52a0802 | run_scenario, feature step after boundary, verify_with, migrate/replay/promote snapshots, CLI messages |
+| bench | — | `bench check --replay` after step 2: 198 reproduce (1 conformant, 197 drifted), 2 expected divergences, 0 problems, OK no regression |
+| 3 map | 1cd6b91 | probe_source, fnprobe runtime, map_features, map.json loader, CLI features init/save/map |
+| 4a–4c | 0a9f19b, e29430c, 26362d2 | cockpit: featmap, Features group and Views, markers and lines, Next-step rules 5–6, the Edit flow, Help, pty test (Map) |
+| 5 | 9e62e29 | chat brief, harness-mcp's closed `features` field |
 | 7 | c5f6891 | SCHEMAS, TUTORIAL, README |
-| 6 | a38c2aa | dogfood: zopfli features.toml (7 features, 8 scenarios) + map.json, u001 re-verified green with 8 feature checks; counts in the shown form (`$$` undone, paths as tokens — found by the dogfood: 206 for 205); `same_result` for run comparisons; zopfli-loading tests adjusted, a dogfood view test, MCP `features: current` |
+| 6 dogfood | a38c2aa | zopfli's features.toml (7 features, 8 scenarios) + map.json; u001 green with 8 feature checks |
+| 8 review | — | 4 lenses → 35 findings, each verified: 33 confirmed, 2 refuted (M4, O8) |
+| 8 fix passes | 71d9e1a, 6310410, 2de32ef, e98a2a2 (+ test commits 253fa76, 09c458f, 4ee851c, 474383c) | each pass checked by independent agents; the next pass fixed what the check found (§R5) |
+| mutation | — | 87 mutants of the §12 named rules and every fix: 86 killed, 1 equivalent (the copy that cannot list its includes is refused by the difference check anyway) |
 
-Verified on a copy of zopfli: `features map` (8 scenarios, 10 s) separates gzip/zlib/deflate/-v/--i1 as
-the spike found; `verify u001` runs 8 feature checks, green; `state status` shows features=current.
+952 workspace tests pass (one known flake, `harness-core` `a_reader_never_makes_a_writer_fail`,
+fails under load and passes alone — listed in DECISIONS "still separate").
 
-## Next (in order)
-| 8a review | — | 4 lenses → 35 findings, each verified independently: 33 confirmed, 2 refuted (M4, O8) — scratchpad code-review/<lens>/{findings,verdicts}.md; FEATURES-DESIGN §R5 |
-| 8b fix pass | (this) | every confirmed finding fixed or its residual named (§R5 table); 940 tests pass |
+Review reports and verdicts (scratchpad, not in the repo): code-review/<lens>/{findings,verdicts}.md,
+fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
-Live chat tests after step 5: every failure was the `claude` sign-in expiring ("OAuth session
-expired and could not be refreshed" — the chat said so in words); re-run both after the person
-signs in again (the fix pass changes nothing in the chat protocol, but the brief changed).
+## Open (in order) — the next session starts here
 
-5. (done) The chat brief (§9: feature checks reported separately; no feature checks ≠ passing; name
-   scenarios by id; menu items) + harness-mcp unit report's closed `features` field; then the
-   live chat tests (`RUHARNESS_LIVE_CHAT=1 cargo test -p harness-tui --test chat_live -- --ignored
-   --test-threads=1`, inside Claude Code and with `RUHARNESS_LIVE_CHAT_HOST=plain`).
-6. (done) Dogfood: `targets/zopfli/migration/features/features.toml` (gzip text/rand, zlib, deflate,
-   verbose, quick --i1, help -h, no-file) + map.json; re-verify u001; adjust the zopfli-loading
-   tests (zopfli_verify exact check list — run it on a copy without the file; others).
-7. (done) SCHEMAS.md (ruharness-features v1, ruharness-features-map v1, the new fields/events/CLI,
-   trust boundaries), TUTORIAL "Features" section, README line.
-8. (review + fix pass done) check the fix pass →
-   mutation checks of the named rules (§12 end) → bench check --replay again (CLI changed) →
-   DECISIONS handoff → merge to main, push. Then memory update.
+1. **Two low items the check of the third pass found** (§R5, last paragraph):
+   - a top-level `.c` symlinked out of `source_dir` (`src/extra.c → ../lib/extra.c`): the map
+     refuses it with include words, because the mirror never holds it — refuse it by name
+     before any build ("links outside source_dir");
+   - a FIFO (or a folder) named `x.c`: it reaches the feature step's and the map's build and
+     hangs until the timeout — only regular `.c` into those two (never change the shared
+     `program_c_files_in`: the whole-program check shares it, §10).
+2. **Check the fourth pass** (e98a2a2 and 1): a scoped checker, as for each pass — the make
+   escapes (`make_prerequisites`), the `-MM` argv from `cc_argv` minus `-o`, `blocks_note`'s
+   leading-conditional rule (re-run the 294-file probe corpus: the earlier checker's
+   `probe_cmp` examples), `parameter_list`. Fix what it finds; mutation-check the new rules.
+3. **`bench check --replay`** (the CLI changed since step 2): needs the gitignored
+   `targets/tractor/.scorer-vendor/` and `.bench/` and a quiet machine; expect `198 reproduce
+   (1 conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)`, `OK — no regression`.
+4. **The live chat tests** (the brief changed in step 5; every earlier failure was the `claude`
+   sign-in expiring): `RUHARNESS_LIVE_CHAT=1 cargo test -p harness-tui --test chat_live --
+   --ignored --test-threads=1`, once inside Claude Code and once with
+   `RUHARNESS_LIVE_CHAT_HOST=plain` — after the person signs in to `claude` again.
+5. DECISIONS: close the features entry's "open" line; then the next track — the C-vs-Rust
+   performance baselines, then the briefing's M5.
 
-Known gaps to review: Next-step rule 6 has no project-menu Re-check item (text only, act None);
-migrate turns do not print skip messages (verdict carries them); the pty test covers Map only.
+Known gaps, judged acceptable (§R5): Next-step rule 6 has no project-menu Re-check item (a
+project-level Re-check would be refused: it needs the unit on screen); migrate turns do not
+print skip messages (the verdict carries them); the pty test covers Map only (the edit flow is
+tested at the app level); the O6/M10 digest-before-build orderings have no test; the probe's
+reopen after a failed write can drop notes silently if the reopen fails; `SOURCE_DATE_EPOCH=0`
+is not recorded in a verdict's evidence; `naked` given only on an earlier declaration fails the
+probed build loudly.
