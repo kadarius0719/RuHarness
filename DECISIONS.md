@@ -2582,7 +2582,7 @@ harness:
 4. Costs: one `-fsyntax-only` compile per probed file (sqlite3.c ~1 s), more only for files
    that fail. The probe unit tests of the guessing rules become map-level tests of the retry.
 
-**Not decided yet**: whether to build this (a design review from 3–4 lenses first, as every
-track), or to accept the current rules with their named residuals and move on to the
-performance baselines. The rest of the check's findings (wording, flaky-test causes, the
+**DECIDED (user, 2026-09-30): redesign.** Build it as every track: premise run, design, an
+adversarial design review from 3–4 lenses with findings verified, revision and its check,
+steps, code review, fix passes each checked, mutation checks. The rest of the check's findings (wording, flaky-test causes, the
 runner's poll ramp, doc gaps) are independent of this choice.
