@@ -2614,3 +2614,15 @@ rules, the premise re-run through `harness features map` itself (§8).
 
 **Revisit when:** the build's premise re-run (§8) disagrees with §2's table — stop and hold a
 design session before building further.
+
+## 2026-09-30 — Compiler-guided probe: built (steps a–f), paused for its code review
+
+Built from docs/FEATURES-PROBE-REDESIGN.md rev 3: 9a8ed37, f18e161, 2955dfc, b943926 (978 tests).
+Checked while building: every adversarial repro and matrix shape of the last three checks maps;
+200 rejected notes (over 8 KiB of errors) read in ≤ 2 rounds; byte placement on shared lines,
+`#line`, errors through include chains; `#embed`/`__has_embed`/`__has_include`/stringized notes;
+the runtime's merge across images and its attach byte; zopfli re-mapped with the same functions
+per scenario and none unwatched. Found while building: the one-byte note shows no inlining window
+on clang 21 (the C99-inline link case could not be provoked); the map loader would have refused
+the new "setup did not run" reason (fixed, tested). Open: the §8 premise re-run and the code
+review (both running at the pause), fix passes, mutation checks — docs/FEATURES-PROGRESS.md.

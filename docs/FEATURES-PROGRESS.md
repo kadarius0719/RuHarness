@@ -32,38 +32,28 @@ fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
 ## Open (in order) — the next session starts here
 
-1. ~~The two low items~~, ~~the checks of passes 4–6~~ (passes 5–7: bf75af8, 950eee3, b31f6ef).
-   The check of pass 7 (45 findings) led to a redesign, decided by the person: **the
-   compiler-guided probe**, docs/FEATURES-PROBE-REDESIGN.md revision 3 (reviewed, checked twice;
-   DECISIONS 2026-09-30). Build it in steps, each committed green:
-   a. the runner: a call returning a failed tool's whole stderr and how it ended; tool runs
-      wait 1 ms doubling to 8 ms, built and scenario runs keep 50 ms; `timeout_secs` clamped;
-      the overflow-then-sleep tests; the two flaky tests' timeouts;
-   b. harness-scan: the guessing rules removed; rule 3's depth form and directive scanner;
-      rule 4 (gcc); `probe_source` with the skip list, body ranges, the listing copy's end
-      tokens, the store note;
-   c. the runtime (shared mapping, attach byte, `environ`, pinned imports) and confine.rs
-      creating the notes file before every scenario run; the strict read;
-   d. featuremap.rs: listings with `-E -MD -MF -H` into the random folder, data reads,
-      stringized notes, the end-token count, the same-code comparison, the plain build there;
-   e. the compile-and-retry pass: placement, the search and restore, the link and its map,
-      bounds, progress, the runtime-names refusal;
-   f. map.json `unwatched_reasons` and `inputs.probe`, SCHEMAS.md, the CLI lines, the cockpit's
-      reason; the small fixes of §5;
-   g. §8: the premise re-run through `harness features map`, replacing §2's table; then the
-      code review, fix passes (each checked), mutation checks; update docs/TESTING-GUIDE.md
-      Part 8 (the map's output lines).
-2. **The C-vs-Rust performance baselines** — spike done (DECISIONS 2026-09-30; scratchpad
-   `spike-perf/`, the `perfrun` launcher premise holds under the sandbox); the design next.
-3. **`bench check --replay`** (the CLI changed since step 2): needs the gitignored
-   `targets/tractor/.scorer-vendor/` and `.bench/` and a quiet machine; expect `198 reproduce
-   (1 conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)`, `OK — no regression`.
-4. **The live chat tests** (the brief changed in step 5; every earlier failure was the `claude`
-   sign-in expiring): `RUHARNESS_LIVE_CHAT=1 cargo test -p harness-tui --test chat_live --
-   --ignored --test-threads=1`, once inside Claude Code and once with
-   `RUHARNESS_LIVE_CHAT_HOST=plain` — after the person signs in to `claude` again.
-5. DECISIONS: close the features entry's "open" line; then the next track — the C-vs-Rust
-   performance baselines, then the briefing's M5.
+The compiler-guided probe (docs/FEATURES-PROBE-REDESIGN.md rev 3) is BUILT, steps a–f, on main:
+9a8ed37 (runner), f18e161 (rules, note, runtime), 2955dfc (listings, same-code check, per-file
+compile-and-retry, link, map.json reasons; zopfli re-mapped: same functions, none unwatched),
+b943926 (CLI/cockpit reasons, runtime-names refusal, small fixes). 978 tests green.
+
+1. **Collect two runs started at the pause** (scratchpad of session f2454ac1…, may be gone):
+   - the §8 premise re-run through the real map: `scratchpad/premise8/run.log`, `results.json`
+     (mini-targets per corpus file with generated link stubs) — replace §2's table with it;
+   - the adversarial code review of the build, Workflow run `wf_833f5d1a-f42`
+     (4 lenses, 2 verifiers per finding; journal under the session's subagents/workflows).
+   If gone, re-run both (the review script is in the session's workflows/scripts folder, or
+   rebuild it: lenses silent-wrong-map, retry-mechanics, runner-runtime-sandbox, format-ux-tests).
+2. **Fix what the review confirms**, each fix with a test; check every fix pass (process);
+   mutation-check the rules of design §3 (the review's format lens lists surviving mutants).
+3. Known gaps of the build to weigh in the fix pass: link rule (b)'s search over the named
+   objects is not built (it refuses instead); the search's `-fsyntax-only` trials are not used;
+   the include chain is carried per diagnostics() call, not strictly "printed last"; no map-level
+   test of the C99-inline link case (the one-byte note shows no inlining window on clang 21).
+4. Then: `bench check --replay` (quiet machine, ~29 min); the live chat tests (the person signs
+   in to `claude` first); close the features entry in DECISIONS.
+5. Next track: the C-vs-Rust performance baselines — spike done (DECISIONS 2026-09-30), the
+   `perfrun` launcher premise holds; write the design. Then the briefing's M5.
 
 Known gaps, judged acceptable (§R5): Next-step rule 6 has no project-menu Re-check item (a
 project-level Re-check would be refused: it needs the unit on screen); migrate turns do not

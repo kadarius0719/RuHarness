@@ -1,3 +1,16 @@
+# Next session — kickoff (2026-09-30)
+
+Paste the Agent Briefing first, then:
+
+Resume RuHarness. Read `DECISIONS.md`'s last entries and `docs/FEATURES-PROGRESS.md` "Open" —
+its list is this session's work, in order: collect the code review of the compiler-guided
+probe build (and the §8 premise re-run), fix what it confirms with tests, check each fix pass,
+mutation-check the named rules; then `bench check --replay`, the live chat tests, and the
+C-vs-Rust performance baselines design. Report to the person in plain words — no review codes
+(M1, N4, …). A from-zero testing guide for the person is at docs/TESTING-GUIDE.md (liblzg).
+
+---
+
 # Kickoff prompt for the next session
 
 Paste the full Agent Briefing (the `# Agent Briefing: Rust Migration Harness` document)
