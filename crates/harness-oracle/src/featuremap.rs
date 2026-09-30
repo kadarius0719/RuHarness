@@ -79,7 +79,12 @@ fn map_inner(
     // The facts name files by the configured `source_dir`, the mirror by the
     // path under the canonical one: a `source_dir` reached through a link or
     // spelled in another case would probe nothing (fix check 4 F5).
-    let spelled: PathBuf = Path::new(&target.config.target.source_dir)
+    let configured = Path::new(&target.config.target.source_dir);
+    let configured = configured
+        .strip_prefix(&target.root)
+        .or_else(|_| configured.strip_prefix(&root))
+        .unwrap_or(configured);
+    let spelled: PathBuf = configured
         .components()
         .filter(|c| !matches!(c, std::path::Component::CurDir))
         .collect();
@@ -126,8 +131,6 @@ fn map_inner(
         target_root: &root,
     };
 
-    // The plain program: the whole-program check's build of `whole_c`.
-    progress.message("Building the C program…");
     let c_files = program_c_files_in(&base, FEATURES_BUILD_DIR)?;
     // Refused by name before any build: a `.c` that is not a regular file
     // (a FIFO would hang the build until the timeout), and one linked out of
@@ -146,12 +149,9 @@ fn map_inner(
             shown(out, &root).display()
         )));
     }
-    let plain = build.join("plain");
-    compile(&runner, &base.includes(), &[], &plain, &c_files, &link_args)
-        .map_err(|e| build_failed("the C program does not build", e))?;
 
     // The probed copy: the mirror, the notes, the runtime.
-    progress.message("Building a scratch copy that notes each function it runs…");
+    progress.message("Copying source_dir into a scratch copy that notes each function it runs…");
     let index = PairIndex::from_facts(facts);
     let mirror = build.join("mirror");
     let unwatched = write_mirror(&base, facts, &index, &mirror)?;
@@ -188,12 +188,17 @@ fn map_inner(
             shown(c, &root).display()
         )));
     }
-    // The mirror holds `source_dir` only (one path per folder): an include
-    // that leaves it, or a folder linked into it, would fall through in the
-    // copy to a system header of the same name — a different program,
-    // mapped silently (review M7). The compiler says what each build reads
-    // (`-MM`: its project files, no system headers); they must be the same
-    // files. Refused, named, before the copy is built.
+    // The mirror holds `source_dir` only (one path per file and folder): an
+    // include that leaves it, or a folder linked into it, would fall through
+    // in the copy to a system header of the same name — a different program,
+    // mapped silently (review M7). The compiler says what each compile reads
+    // (`-M`: every file, system headers too) and which headers it enters, in
+    // order (`-H`); for each `.c` the program's files must be among the
+    // copy's and the headers entered the same, one by one — a set over all
+    // compiles missed a linked folder reached by both its names in two files
+    // (fix check 5 M1), and a file linked to another is one file to
+    // `#pragma once` but two in the copy (L1). Refused, named, before any
+    // build.
     let cflags = vec![
         "-include".to_string(),
         path_string(&header)?,
@@ -204,33 +209,66 @@ fn map_inner(
         ),
         format!("-DRUHARNESS_FNPROBE_N={}", index.len()),
     ];
-    let program_reads = dependencies(&runner, &base.includes(), &[], &c_files, None)?
-        .map_err(|why| build_failed("the C program's includes cannot be listed", why))?;
     let copy = CopyPaths {
         build: &build,
+        header: &header,
         mirror: &mirror,
         root: &root,
         source_dir: &base.source_dir,
     };
-    let copy_reads = match dependencies(&runner, &includes, &cflags, &probed_inputs, Some(copy))? {
-        Ok(files) => files,
-        Err(why) => {
+    for (c_file, copied) in c_files.iter().zip(&probed_inputs) {
+        let program = reads(&runner, &base.includes(), &[], c_file, None)?
+            .map_err(|why| build_failed("the C program's includes cannot be listed", why))?;
+        let copied = match reads(&runner, &includes, &cflags, copied, Some(&copy))? {
+            Ok(reads) => reads,
+            Err(why) => {
+                return Err(Error::Invariant(format!(
+                    "the scratch copy cannot find what the program includes (an include \
+                     outside source_dir, or a folder linked into it) — the features map copies \
+                     only source_dir: {why}"
+                )))
+            }
+        };
+        if let Some(missed) = program.files.difference(&copied.files).next() {
             return Err(Error::Invariant(format!(
-                "the scratch copy cannot find what the program includes (an include outside \
-                 source_dir, or a folder linked into it) — the features map copies only \
-                 source_dir: {why}"
-            )))
+                "the program reads {}, which the scratch copy would not (it is outside \
+                 source_dir, in migration/ or .git/ there, or reached through a folder linked \
+                 into it): the features map copies only source_dir, so it cannot map this \
+                 program",
+                shown(missed, &root).display()
+            )));
         }
-    };
-    if let Some(missed) = program_reads.difference(&copy_reads).next() {
-        let shown = shown(missed, &root);
-        return Err(Error::Invariant(format!(
-            "the program reads {}, which the scratch copy would not (it is outside source_dir, \
-             or reached through a folder linked into it): the features map copies only \
-             source_dir, so it cannot map this program",
-            shown.display()
-        )));
+        if program.entered != copied.entered {
+            let at = program
+                .entered
+                .iter()
+                .zip(&copied.entered)
+                .take_while(|(a, b)| a == b)
+                .count();
+            let name = |p: Option<&PathBuf>| {
+                p.map_or("nothing more".to_string(), |p| {
+                    shown(p, &root).display().to_string()
+                })
+            };
+            return Err(Error::Invariant(format!(
+                "compiling {}, the program's header #{} is {} and the scratch copy's would be {} \
+                 (a file or folder of source_dir reached by two names, or an include outside \
+                 it): the features map copies each file of source_dir once, so it cannot map \
+                 this program",
+                shown(c_file, &root).display(),
+                at + 1,
+                name(program.entered.get(at)),
+                name(copied.entered.get(at)),
+            )));
+        }
     }
+
+    // The plain program: the whole-program check's build of `whole_c`.
+    progress.message("Building the C program…");
+    let plain = build.join("plain");
+    compile(&runner, &base.includes(), &[], &plain, &c_files, &link_args)
+        .map_err(|e| build_failed("the C program does not build", e))?;
+    progress.message("Building the scratch copy…");
     probed_inputs.push(runtime);
     let probed = build.join("probed");
     compile(
@@ -376,48 +414,58 @@ impl PairIndex {
     }
 }
 
-/// Where the scratch copy lives, for [`dependencies`].
+/// Where the scratch copy lives, for [`reads`].
 struct CopyPaths<'a> {
     build: &'a Path,
+    header: &'a Path,
     mirror: &'a Path,
     root: &'a Path,
     source_dir: &'a Path,
 }
 
-/// The files a compile of `inputs` with `includes` and `cflags` reads, as
-/// the compiler lists them (`cc -M`: system headers too — `-MM` drops a
-/// project file included from a `system_header`; fix check 4 F1),
-/// canonical. With `copy`, a file of the mirror is named as the target's
-/// file at the same place (then canonical, as the program's own build
-/// resolves it), and a file of `source_dir` read by its own path — the
-/// unprobed original, through `#include __FILE__` under the copy's
-/// `-fmacro-prefix-map` (fix check 4 F2) — is `Ok(Err(why))`. The compiler runs with the build's own flags (`-O2`
-/// defines `__OPTIMIZE__`: an `#ifdef` on it picks the same branch; fix
-/// check 3 N9) less `-o` (several inputs list to stdout). `Ok(Err(why))`
-/// when the compiler could not list them, or named a file that does not
-/// resolve.
-fn dependencies(
+/// What one compile reads (see [`reads`]).
+struct Reads {
+    /// Every file the compiler lists.
+    files: std::collections::BTreeSet<PathBuf>,
+    /// The headers it enters, in order — the probe's header left out.
+    entered: Vec<PathBuf>,
+}
+
+/// What a compile of `input` with `includes` and `cflags` reads: the files
+/// the compiler lists (`cc -M`: system headers too — `-MM` drops a project
+/// file included from a `system_header`; fix check 4 F1) and the headers it
+/// enters, in order (`-H`, on stderr), canonical. With `copy`, a file of the
+/// mirror is named as the target's file at the same place (then canonical,
+/// as the program's own build resolves it), and a file of `source_dir` read
+/// by its own path — the unprobed original, through `#include __FILE__`
+/// under the copy's `-fmacro-prefix-map` (fix check 4 F2) — is refused. The
+/// compiler runs with the build's own flags (`-O2` defines `__OPTIMIZE__`:
+/// an `#ifdef` on it picks the same branch; fix check 3 N9) less `-o`.
+/// `Ok(Err(why))` when the compiler could not list them, or named a file
+/// that does not resolve.
+fn reads(
     runner: &Runner,
     includes: &[PathBuf],
     cflags: &[String],
-    inputs: &[PathBuf],
-    copy: Option<CopyPaths<'_>>,
-) -> Result<Result<std::collections::BTreeSet<PathBuf>, Error>, Error> {
+    input: &Path,
+    copy: Option<&CopyPaths<'_>>,
+) -> Result<Result<Reads, Error>, Error> {
     let unused = Path::new("-");
     let mut listing = cflags.to_vec();
     listing.push("-M".to_string());
+    listing.push("-H".to_string());
     let mut argv = crate::cc_argv(&CcInvocation {
         includes,
         cflags: &listing,
         quiet: true,
         out: unused,
-        inputs,
+        inputs: std::slice::from_ref(&input.to_path_buf()),
         libs: &[],
     })?;
     if let Some(at) = argv.iter().position(|a| a == "-o") {
         argv.drain(at..at + 2);
     }
-    let out = match runner.tool_outcome(&argv)? {
+    let (rules, headers) = match runner.tool_outcome_both(&argv)? {
         Ok(out) => out,
         Err(why) => return Ok(Err(Error::Invariant(why))),
     };
@@ -425,42 +473,69 @@ fn dependencies(
     let copy = match copy {
         Some(c) => Some((
             canonical_of(c.build)?,
+            canonical_of(c.header)?,
             canonical_of(c.mirror)?,
             c.root,
             c.source_dir,
         )),
         None => None,
     };
-    let mut files = std::collections::BTreeSet::new();
-    for token in make_prerequisites(&String::from_utf8_lossy(&out)) {
-        let path = runner.cwd.join(&token);
+    // `Ok(None)`: the probe's header, left out of the headers entered.
+    let name = |token: &str| -> Result<Result<Option<PathBuf>, Error>, Error> {
         // A file the compiler read resolves; one that does not is a list
         // misread, never a file to skip (fix check 3 N8).
-        let Ok(canonical) = path.canonicalize() else {
+        let Ok(canonical) = runner.cwd.join(token).canonicalize() else {
             return Ok(Err(Error::Invariant(format!(
                 "the compiler's list names {token:?}, which does not resolve"
             ))));
         };
-        let named = match &copy {
-            Some((build, mirror, root, source_dir)) => match canonical.strip_prefix(mirror) {
-                Ok(rel) => root
-                    .join(rel)
-                    .canonicalize()
-                    .unwrap_or_else(|_| root.join(rel)),
-                Err(_) if canonical.starts_with(source_dir) && !canonical.starts_with(build) => {
-                    return Ok(Err(Error::Invariant(format!(
-                        "the copy reads {} itself, not its copy (an include of __FILE__?), so \
-                         its functions would run unwatched",
-                        canonical.strip_prefix(root).unwrap_or(&canonical).display()
-                    ))));
-                }
-                Err(_) => canonical,
-            },
-            None => canonical,
+        let Some((build, header, mirror, root, source_dir)) = &copy else {
+            return Ok(Ok(Some(canonical)));
         };
-        files.insert(named);
+        if canonical == *header {
+            return Ok(Ok(None));
+        }
+        Ok(Ok(Some(match canonical.strip_prefix(mirror) {
+            Ok(rel) => root
+                .join(rel)
+                .canonicalize()
+                .unwrap_or_else(|_| root.join(rel)),
+            Err(_) if canonical.starts_with(source_dir) && !canonical.starts_with(build) => {
+                return Err(Error::Invariant(format!(
+                    "the scratch copy would read {} itself, not its copy (an include of \
+                     __FILE__, or an absolute include), so its functions would run unwatched: \
+                     the features map cannot map this program",
+                    canonical.strip_prefix(root).unwrap_or(&canonical).display()
+                )));
+            }
+            Err(_) => canonical,
+        })))
+    };
+    let mut files = std::collections::BTreeSet::new();
+    for token in make_prerequisites(&String::from_utf8_lossy(&rules)) {
+        match name(&token)? {
+            Ok(Some(path)) => {
+                files.insert(path);
+            }
+            Ok(None) => {}
+            Err(why) => return Ok(Err(why)),
+        }
     }
-    Ok(Ok(files))
+    // `-H`: one line per header entered, its depth in dots, a space, its
+    // path; any other line (a gcc trailer) is not one.
+    let mut entered = Vec::new();
+    for line in String::from_utf8_lossy(&headers).lines() {
+        let rest = line.trim_start_matches('.');
+        let Some(path) = rest.strip_prefix(' ').filter(|_| rest.len() < line.len()) else {
+            continue;
+        };
+        match name(path)? {
+            Ok(Some(path)) => entered.push(path),
+            Ok(None) => {}
+            Err(why) => return Ok(Err(why)),
+        }
+    }
+    Ok(Ok(Reads { files, entered }))
 }
 
 /// The prerequisites of make rules (`a.o: a.c a\ b.h \` continued lines):
@@ -557,6 +632,14 @@ fn write_mirror(
         let rel = rel_path
             .to_str()
             .ok_or_else(|| Error::Invariant(format!("non-UTF-8 path: {}", rel_path.display())))?;
+        // The compiler writes a newline or a tab in a name as is, so its
+        // lists could not be read back (fix check 5 L2).
+        if rel.chars().any(char::is_control) {
+            return Err(Error::Invariant(format!(
+                "{rel:?} has a control character in its name: the compiler's lists of what \
+                 the program reads could not be read back, so the features map cannot map it"
+            )));
+        }
         let bytes = std::fs::read(&path).map_err(|e| Error::io(&path, e))?;
         total += bytes.len() as u64;
         if total > MIRROR_MAX_BYTES {

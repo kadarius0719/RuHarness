@@ -492,10 +492,14 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   plain and probed builds (and verify's all-C and mixed ones) print the same `__DATE__`,
   `__TIME__` and `__TIMESTAMP__` (review M5; not recorded in a verdict's evidence — a C unit
   that returns those macros is compared against 1970's). The files the program's build reads
-  and the files the copy's would read must be the same: the compiler lists both (`cc -M`,
-  system headers too — `-MM` drops a project file included from a `system_header`; the
-  copy's list made with the copy's own flags and named back as the target's), every file the
-  program reads must be among the copy's, and a difference — an include
+  and the files the copy's would read must be the same: for each `.c`, the compiler lists
+  both (`cc -M`, system headers too — `-MM` drops a project file included from a
+  `system_header`; `-H`, the headers entered, in order; the copy's made with the copy's own
+  flags and named back as the target's), every file the program reads must be among the
+  copy's and the headers entered the same, one by one (a set over all compiles missed a
+  linked folder reached by both its names; a file linked to another is one file to
+  `#pragma once` but two in the copy — a guarded header included by both names is refused
+  too, the price of reading the order), and a difference — an include
   outside `source_dir`, a folder linked into it (the mirror holds one path per folder), a
   `.inc` that leaves it — is refused before the copy is built (the lists come from the build's
   own flags, `-O2` included, and make's escapes are read: a folder with a space; only a
@@ -505,16 +509,21 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   mapped silently (review M7; the facts never record such an include, and reading `#include`
   lines by hand refused includes under `#if 0` and in files never compiled — the second check).
   The copy reading a file of `source_dir` by its own path — the unprobed original, through
-  `#include __FILE__` under the prefix map — is refused too (its functions would run
-  unwatched). Before any build, refused by name: a top-level `.c` that is not a regular file
+  `#include __FILE__` under the prefix map — is refused too, in its own words (its
+  functions would run unwatched). A file of `source_dir` with a control character in its
+  name is refused while copying (the compiler writes a newline or tab in its lists as is).
+  All of these come before any build. Before any build, refused by name: a top-level `.c` that is not a regular file
   (a FIFO would hang the build), one linked out of `source_dir`, one the mirror holds under
   another path (reached first through a linked folder), and a `source_dir` whose configured
-  spelling is not its canonical path (a link, another case: the facts name files by the
-  former, the mirror by the latter). The feature step of verify skips (`c-side-build-failed`)
+  spelling (relative, or absolute under the root) is not its canonical path (a link, another
+  case: the facts name files by the former, the mirror by the latter). The feature step of verify skips (`c-side-build-failed`)
   on a non-regular top-level `.c`; the whole-program check's shared list is unchanged (§10).
-  A probed copy that does not build says so in neutral words. Residual: Apple clang writes a
-  `\` in a listed path as `/` and leaves a tab unescaped, so such a name is refused as "does
-  not resolve" or, for a hostile tree, can hide a read — the map is shaped by its own C.
+  A probed copy that does not build says so in neutral words. Residuals: Apple clang writes a
+  `\` in a listed path as `/`, so such a name is refused as "does not resolve" or, for a
+  hostile tree, can hide a read — the map is shaped by its own C; an included FIFO header
+  holds the plain listing until the timeout; a folder alias that sorts before the folder it
+  names (`compat → include`) is the path the copy holds, so `#include "include/…"` is refused
+  even when nothing uses the alias.
 - **The insertion** — `harness_scan::probe_source(rel_path, source, index_of)`, pure, built on
   the scanner's own `collect_functions`/`canonical_id` (which, unlike mutate.rs, walk into
   preprocessor branches), with `FnDef` gaining the body's start byte:
@@ -531,18 +540,26 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   that starts with `#` — a brace inside `#if`, which compiles on one branch only; a `#` in a
   comment is none); a body whose leading run — every directive and conditional up to the
   first ordinary statement, looked through since they produce no statement — holds a pragma
-  in any spelling (the `#pragma` directive, `# pragma`, `_Pragma`, `__pragma`; the word in a
-  macro name is none) or what the parser cannot read: a statement that opens with an ERROR,
-  or with a bare name (a macro that may expand to a pragma) and holds one, or is only a bare
-  name (`FENV_ON;`); a statement that opens with a keyword and holds an error further in (an
-  `#ifdef` in a condition, a case range, `} else` split across `#endif`) is watched; a
+  in any spelling (the `#pragma` directive, `# pragma`, a line splice inside it, `_Pragma`,
+  `__pragma`; the word in a macro name is none), an `#include` (the file may hold one),
+  `__label__` (it must open its block), or what may be a macro expanding to a pragma: a
+  statement that opens with an ERROR, is only a bare name (`FENV_ON;`), opens with a name
+  alone on its line (`FENV_ON⏎ g(x);`, which the parser folds into a declaration), or opens
+  with a name and holds an error (`FP_FAST return x;`, `DO_PRAGMA(STDC FENV_ACCESS ON);`) —
+  unless the error is a split's: the statement spans a directive, or its errors are only
+  closing punctuation (`Py_None);` after `#else`). A statement that opens with a keyword and
+  holds an error further in (an `#ifdef` in a condition, a case range) is watched; a
   conditional in the run counts by the leading run of every branch, and by what the parser
-  hangs on it after its `#else`/`#elif` (an empty branch's macro) — and a function with
-  `naked` or `__naked__` as a word of its head, its parameter list and K&R declarations
-  aside (review M2, fix checks N1/N4/N7/N10, fix check 4 M1/M2/L1/L2/L4). Residuals, each a
-  probed build that fails loudly with the compiler's words (the whole map then fails, never
-  silently): `naked` given only on an earlier declaration, or hidden in a macro the parser
-  reads cleanly (`NAKED_VOID f(void)`); a function named `naked` is unwatched. A definition the facts do not
+  hangs on it after an empty `#else`/`#elif` branch (a macro opening it); an error after a
+  branch that holds a statement (`} else` split across `#endif`) is that statement's — and a
+  function with `naked` or `__naked__` as a word of its head, its parameter list and K&R
+  declarations aside (review M2, fix checks N1/N4/N7/N10, fix checks 4 and 5). Costs, each a
+  function unwatched though a note would build: a bare-name statement (`Py_RETURN_NONE;`), a
+  name alone on its line (Cython's `__Pyx_RefNannyDeclarations`), a function named `naked`.
+  Residuals, each a probed build that fails loudly with the compiler's words (the whole map
+  then fails, never silently): a pragma macro that reads as an ordinary statement
+  (`FENV_ON();`, `FENV_ON *p = 1;`); `naked` given only on an earlier declaration, or hidden
+  in a macro the parser reads cleanly (`NAKED_VOID f(void)`). A definition the facts do not
   record gets nothing — the facts do not know it either.
 
 ### 5.4 The probe runtime (harness-owned C)
@@ -1360,3 +1377,21 @@ the corpus re-run after it unwatches exactly the functions the fourth pass did. 
 residuals: a `naked` hidden in a clean macro (L3), Apple clang's `\`→`/` in listed paths (F4).
 Not fixed (a nit): a top-level `.c` linked outside the target root is refused in the plan's
 words ("unit `.features`").
+
+**The check of the fifth pass** (two checkers on bf75af8; both corpora re-run — the 294 files
+and 128 more from Python and Ruby extensions) found two medium issues — the map compared one
+set of files over all compiles and only as containment, so a folder linked into `source_dir`
+and reached by both its names hid the copy's fall-through to a system header (M1; one file or
+two), and the probe watched a pragma macro the parser folds into the next statement
+(`FENV_ON⏎ g(x);`, M1) — and low ones: `#pragma once` through a file link (the copy holds two
+files), a newline in a name, `__label__`, an `#include` in the leading run, a line splice in
+`#pragma`, the ERROR-after-`#else` rule firing after a branch that holds a statement, and the
+plain-name-with-an-error rule unwatching calls split by `#ifdef` (5 real functions) — plus
+nits (the `__FILE__` refusal's words, a refusal after the plain build, an absolute
+`source_dir`, the wording for `migration/`). **The sixth pass** fixed all of them, each with a
+test: per compile, `-M` containment and the ordered `-H` headers; control characters refused;
+the probe rules above. 15 mutants, all killed but one equivalent (the probe header left out of
+the copy's `-H`: clang's `-H` never lists an `-include`d file; kept for gcc). The 294-file
+corpus unwatches exactly what the fourth pass did; the 128 extra files: 11 functions watched
+again, 14 `__Pyx_RefNanny…`-style lines unwatched (the cost named above); zopfli's map is
+unchanged. Residual: `FENV_ON();` (above).

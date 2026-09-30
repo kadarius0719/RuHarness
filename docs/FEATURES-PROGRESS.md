@@ -19,9 +19,11 @@ decision (scenarios + verify): DECISIONS.md 2026-09-29.
 | 6 dogfood | a38c2aa | zopfli's features.toml (7 features, 8 scenarios) + map.json; u001 green with 8 feature checks |
 | 8 review | — | 4 lenses → 35 findings, each verified: 33 confirmed, 2 refuted (M4, O8) |
 | 8 fix passes | 71d9e1a, 6310410, 2de32ef, e98a2a2 (+ test commits 253fa76, 09c458f, 4ee851c, 474383c) | each pass checked by independent agents; the next pass fixed what the check found (§R5) |
+| 8 fix pass 5 | bf75af8 | the two lows + the check of the fourth pass (§R5) |
+| 8 fix pass 6 | (this commit) | the check of the fifth pass: per-compile ordered reads, probe rules (§R5) |
 | mutation | — | 87 mutants of the §12 named rules and every fix: 86 killed, 1 equivalent (the copy that cannot list its includes is refused by the difference check anyway) |
 
-952 workspace tests pass (one known flake, `harness-core` `a_reader_never_makes_a_writer_fail`,
+958 workspace tests pass (+20 mutants of the fifth pass, all killed; 15 of the sixth, 14 killed, 1 equivalent) (one known flake, `harness-core` `a_reader_never_makes_a_writer_fail`,
 fails under load and passes alone — listed in DECISIONS "still separate").
 
 Review reports and verdicts (scratchpad, not in the repo): code-review/<lens>/{findings,verdicts}.md,
@@ -29,17 +31,12 @@ fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
 ## Open (in order) — the next session starts here
 
-1. **Two low items the check of the third pass found** (§R5, last paragraph):
-   - a top-level `.c` symlinked out of `source_dir` (`src/extra.c → ../lib/extra.c`): the map
-     refuses it with include words, because the mirror never holds it — refuse it by name
-     before any build ("links outside source_dir");
-   - a FIFO (or a folder) named `x.c`: it reaches the feature step's and the map's build and
-     hangs until the timeout — only regular `.c` into those two (never change the shared
-     `program_c_files_in`: the whole-program check shares it, §10).
-2. **Check the fourth pass** (e98a2a2 and 1): a scoped checker, as for each pass — the make
-   escapes (`make_prerequisites`), the `-MM` argv from `cc_argv` minus `-o`, `blocks_note`'s
-   leading-conditional rule (re-run the 294-file probe corpus: the earlier checker's
-   `probe_cmp` examples), `parameter_list`. Fix what it finds; mutation-check the new rules.
+1. ~~The two low items~~, ~~the check of the fourth pass~~ (fifth pass, bf75af8) and ~~the
+   check of the fifth pass~~ (sixth pass): done — §R5, last two paragraphs.
+2. **Check the sixth pass** (scoped: `reads` — per-compile `-M` containment and the ordered
+   `-H` headers, the control-character refusal; the probe's name-alone-on-its-line, `#include`,
+   `__label__`, splice, split-tail and empty-branch rules) — re-run both corpora (the 294 files
+   and the extra 128 in the check's `extra.txt`); fix what it finds, mutation-checked.
 3. **`bench check --replay`** (the CLI changed since step 2): needs the gitignored
    `targets/tractor/.scorer-vendor/` and `.bench/` and a quiet machine; expect `198 reproduce
    (1 conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)`, `OK — no regression`.

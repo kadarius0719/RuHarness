@@ -473,12 +473,16 @@ fn parameter_list(declarator: tree_sitter::Node) -> Option<tree_sitter::Node> {
 /// [`probe_point`]): a pragma in any spelling — `#pragma`, `# pragma`,
 /// `_Pragma`, `__pragma` — what the parser could not read at its start, a
 /// statement that is a bare name (`FENV_ON;`: a macro, perhaps one that
-/// expands to a pragma; fix check 4 L4), or a leading conditional any of
-/// whose branches opens with one of these (a macro opening an empty
+/// expands to a pragma; fix check 4 L4) or opens with a name alone on its
+/// line (`FENV_ON⏎ g(x);`, which the parser folds into a declaration of
+/// `g`; fix check 5 M1), `__label__` (it must open its block; L1), an
+/// `#include` (the file may hold either; L2), or a leading conditional any
+/// of whose branches opens with one of these (a macro opening an empty
 /// branch's `#else` lands on the conditional itself; fix check 4 M2).
 fn blocks_note(node: tree_sitter::Node, src: &[u8]) -> bool {
     let words = text(node, src).trim_start();
-    if opens_with_error(node) || words.starts_with("_Pragma") || words.starts_with("__pragma") {
+    if opens_with_error(node, src) || words.starts_with("_Pragma") || words.starts_with("__pragma")
+    {
         return true;
     }
     if node.kind() == "expression_statement"
@@ -489,12 +493,40 @@ fn blocks_note(node: tree_sitter::Node, src: &[u8]) -> bool {
     {
         return true;
     }
+    if !node.kind().starts_with("preproc") {
+        if node.kind() == "declaration"
+            && node.child(0).is_some_and(|t| text(t, src) == "__label__")
+        {
+            return true;
+        }
+        let mut leaf = node;
+        while let Some(child) = leaf.child(0) {
+            leaf = child;
+        }
+        return matches!(leaf.kind(), "identifier" | "type_identifier") && ends_its_line(leaf, src);
+    }
+    if node.kind() == "preproc_include" {
+        return true;
+    }
     if node.kind() == "preproc_call" {
         // The directive's name, not the word anywhere: `#ifdef
-        // HAVE_PRAGMA_WEAK` is no pragma (fix check 4 L1).
-        return node
-            .child_by_field_name("directive")
-            .is_some_and(|d| text(d, src).trim_start_matches('#').trim() == "pragma");
+        // HAVE_PRAGMA_WEAK` is no pragma (fix check 4 L1); a line splice
+        // inside it is none either: `#pr\⏎agma` reads as the directive
+        // `#pr` (fix check 5).
+        let spliced = |t: &str| {
+            let t = t.replace("\\\r\n", "").replace("\\\n", "");
+            let name: String = t
+                .trim_start_matches('#')
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            matches!(name.as_str(), "pragma" | "include_next" | "import")
+        };
+        return spliced(text(node, src))
+            || node
+                .child_by_field_name("directive")
+                .is_some_and(|d| spliced(text(d, src)));
     }
     if !matches!(
         node.kind(),
@@ -508,16 +540,28 @@ fn blocks_note(node: tree_sitter::Node, src: &[u8]) -> bool {
         .collect();
     let mut cursor = node.walk();
     let children: Vec<_> = node.named_children(&mut cursor).collect();
-    // What opens an empty branch's `#else` the parser hangs after it, on
-    // the conditional; an error inside the first branch (`} else` split
-    // across `#endif`) is a statement's, not in the note's way.
+    // What opens an empty `#else`/`#elif` branch the parser hangs after
+    // that branch, on the conditional (fix check 4 M2); an error after a
+    // branch that holds a statement is that statement's (`} else` split
+    // across `#endif`), as is one inside the first branch — neither is in
+    // the note's way (fix check 5 L3).
     let alternative = node.child_by_field_name("alternative");
-    if alternative.is_some_and(|alt| {
-        children
+    if let Some(alternative) = alternative {
+        for error in children
             .iter()
-            .any(|c| c.is_error() && c.start_byte() >= alt.start_byte())
-    }) {
-        return true;
+            .filter(|c| c.is_error() && c.start_byte() >= alternative.start_byte())
+        {
+            let mut branch = alternative;
+            while let Some(next) = branch
+                .child_by_field_name("alternative")
+                .filter(|n| n.start_byte() < error.start_byte())
+            {
+                branch = next;
+            }
+            if branch_is_empty(branch) {
+                return true;
+            }
+        }
     }
     if leading_run_blocks(
         children.iter().copied().filter(|c| !skip.contains(&c.id())),
@@ -529,13 +573,71 @@ fn blocks_note(node: tree_sitter::Node, src: &[u8]) -> bool {
         .is_some_and(|alt| blocks_note(alt, src))
 }
 
+/// Whether `branch` (an `#else`/`#elif` node) holds no statement of its own:
+/// only comments and directives, or nothing.
+fn branch_is_empty(branch: tree_sitter::Node) -> bool {
+    let skip: Vec<usize> = ["name", "condition", "alternative"]
+        .iter()
+        .filter_map(|f| branch.child_by_field_name(f).map(|n| n.id()))
+        .collect();
+    let mut cursor = branch.walk();
+    let empty = branch
+        .named_children(&mut cursor)
+        .filter(|c| !skip.contains(&c.id()))
+        .all(|c| c.kind() == "comment" || c.kind().starts_with("preproc"));
+    empty
+}
+
+/// A line of `node` after its first starts with `#`: a directive splits it.
+fn split_by_directive(node: tree_sitter::Node, src: &[u8]) -> bool {
+    text(node, src)
+        .lines()
+        .skip(1)
+        .any(|l| l.trim_start().starts_with('#'))
+}
+
+/// Every error in `node` is closing punctuation — the tail of a call split
+/// across `#if`/`#else` (`Py_None);`), not a macro's words (fix check 5 L5).
+fn continues_a_split(node: tree_sitter::Node, src: &[u8]) -> bool {
+    fn errors<'t>(node: tree_sitter::Node<'t>, out: &mut Vec<tree_sitter::Node<'t>>) {
+        if node.is_error() {
+            out.push(node);
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            errors(child, out);
+        }
+    }
+    let mut found = Vec::new();
+    errors(node, &mut found);
+    !found.is_empty()
+        && found.iter().all(|e| {
+            text(*e, src)
+                .chars()
+                .all(|c| matches!(c, ')' | ',' | ';') || c.is_whitespace())
+        })
+}
+
+/// Nothing but blanks, or a comment, follows `node` on its line.
+fn ends_its_line(node: tree_sitter::Node, src: &[u8]) -> bool {
+    let rest = &src[node.end_byte()..];
+    let line = rest.split(|&b| b == b'\n').next().unwrap_or(rest);
+    let line = String::from_utf8_lossy(line);
+    let line = line.trim();
+    line.is_empty() || line.starts_with("//") || line.starts_with("/*")
+}
+
 /// The parser could not read how `node` starts: it, or one of its first
 /// children down to a leaf, is an ERROR or MISSING node — or it opens with a
-/// bare name (a macro, perhaps one that expands to a pragma: `FP_FAST
-/// return x;`) and holds an error. A statement that opens with a keyword
-/// (`if`, `switch`, `static`) and holds an error further in (an `#ifdef` in
-/// its condition, a case range) reads fine where the note goes.
-fn opens_with_error(node: tree_sitter::Node) -> bool {
+/// name (a macro, perhaps one that expands to a pragma: `FP_FAST return x;`,
+/// `DO_PRAGMA(STDC FENV_ACCESS ON);`) and holds an error. A statement that
+/// opens with a keyword (`if`, `switch`, `static`) and holds an error
+/// further in (an `#ifdef` in its condition, a case range), or with a plain
+/// name and split by a directive (`x = g(x,` with its arguments split by
+/// `#ifdef`), or the tail of such a split (`Py_None);`; fix check 5 L5),
+/// reads fine where the note goes.
+fn opens_with_error(node: tree_sitter::Node, src: &[u8]) -> bool {
     let mut n = node;
     loop {
         if n.is_error() || n.is_missing() {
@@ -544,7 +646,13 @@ fn opens_with_error(node: tree_sitter::Node) -> bool {
         match n.child(0) {
             Some(child) => n = child,
             None => {
-                return node.has_error() && matches!(n.kind(), "identifier" | "type_identifier");
+                // A plain name's error that a directive inside the statement
+                // explains is the split's, not a macro's (fix check 5 L5).
+                return node.has_error()
+                    && (n.kind() == "type_identifier"
+                        || (n.kind() == "identifier"
+                            && !split_by_directive(node, src)
+                            && !continues_a_split(node, src)));
             }
         }
     }

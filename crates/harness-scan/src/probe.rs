@@ -226,6 +226,32 @@ mod tests {
         assert!(p.unwatched.is_empty(), "{}", text(&p));
     }
 
+    /// Fix check 5: a pragma macro the parser folds into the next
+    /// statement (M1), `__label__` (L1), an `#include` (L2), a line splice
+    /// in `#pragma`, and a pragma macro whose arguments hold an error are
+    /// unwatched; a statement split across `#else` (L3) or by `#ifdef` in its
+    /// arguments, or the tail of such a split (L5), is watched.
+    #[test]
+    fn folded_macros_block_and_split_statements_do_not() {
+        let src = "int a(int x) { FENV_ON\n  g(x);\n  return x; }\n\
+                   int b(int x) {\n  FENV_ON /* fast */\n  x = 2;\n  return x; }\n\
+                   int c(int x) { __label__ out; if (x) goto out; return 0; out: return 1; }\n\
+                   int d(int x) {\n#include \"fenv_on.inc\"\n  return x; }\n\
+                   int e(int x) {\n#pr\\\nagma STDC FENV_ACCESS ON\n  return x; }\n\
+                   int f(int x) {\n  DO_PRAGMA(STDC FENV_ACCESS ON);\n  return x; }\n\
+                   int m(int x) {\n#if A\n  x++;\n#elif B\n  x--;\n#else\nFENV_ON\n#endif\n  return x; }\n";
+        let all = ["a", "b", "c", "d", "e", "f", "m"];
+        let p = probe(src, &all);
+        assert_eq!(p.unwatched, all, "{}", text(&p));
+        let src = "int s(int *p) {\n#ifdef W\n  (*p)++;\n#else\n  if (g(*p)) {\n    g(1);\n  } else\n#endif\n  if (p) {\n    g(3);\n  }\n  return 0; }\n\
+                   int t(int *p) {\n#ifdef W\n  if (g(*p)) {\n    g(1);\n  } else\n#elif defined(V)\n  if (g(2)) {\n    g(1);\n  } else\n#endif\n  if (p) {\n    g(3);\n  }\n  return 0; }\n\
+                   int k(int x) {\n#ifdef B\n  x++;\n#else\n  x = g(x,\n#ifdef C\n        1);\n#else\n        2);\n#endif\n#endif\n  return x; }\n\
+                   int y(int x) {\n#if defined(A)\n  int r;\n  r = g(x,\n  #ifdef C\n    1);\n  #else\n    Py_None);\n  #endif\n  x = r;\n#endif\n  return x; }\n\
+                   int z(int x) {\n  x = g(x,\n    1);\n  return x; }\n";
+        let p = probe(src, &["s", "t", "k", "y", "z"]);
+        assert!(p.unwatched.is_empty(), "{}", text(&p));
+    }
+
     #[test]
     fn two_functions_of_one_name_in_two_files_get_their_own_notes() {
         let known = ["src/a.c::helper", "src/b.c::helper"];

@@ -806,7 +806,14 @@ fn the_map_refuses_a_copy_that_reads_other_files() {
          unsigned mul_step(unsigned acc, int c) { return acc * 31u + (unsigned)c; }\n#endif\n",
     );
     let err = map(tmp.path()).expect_err("refused").to_string();
-    assert!(err.contains("reads src/tool/mul.c itself"), "{err}");
+    assert!(
+        err.starts_with("the scratch copy would read src/tool/mul.c itself"),
+        "the refusal's own words, not the include words (fix check 5 N1): {err}"
+    );
+    assert!(
+        !tmp.path().join("migration/build/.features/plain").exists(),
+        "refused before any build (fix check 5 N2)"
+    );
 
     let tmp = TempDir::new("feat-map-linked-dir");
     program(tmp.path(), GOOD, Some(features), "");
@@ -831,6 +838,92 @@ fn the_map_refuses_a_copy_that_reads_other_files() {
         err.contains("src/tool/zdir/x.c is reached through a link"),
         "{err}"
     );
+}
+
+/// Fix check 5: the copy's reads are compared per compile and in order — a
+/// folder linked into `source_dir` reached by both its names, in two files
+/// (M1) or in one, and a file linked to another that `#pragma once` sees as
+/// one (L1); a name with a newline is refused (L2); an absolute `source_dir`
+/// inside the root maps (N3).
+#[test]
+fn the_map_compares_each_compile_in_order() {
+    let map = |root: &Path| {
+        let target = TargetContext::load(root).unwrap();
+        let facts = with_symbols(root);
+        let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+            panic!("valid")
+        };
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+    };
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+    let prepend = |root: &Path, file: &str, text: &str| {
+        let path = root.join("src/tool").join(file);
+        let old = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, format!("{text}{old}")).unwrap();
+    };
+    // `sys` links to `proj`; the copy's `sys/un.h` falls through to the
+    // system's.
+    let aliased = |name: &str| {
+        let tmp = TempDir::new(name);
+        program(tmp.path(), GOOD, Some(features), "");
+        write(&tmp.path().join("src/tool/proj/un.h"), "#define PROJ_T 7\n");
+        std::os::unix::fs::symlink("proj", tmp.path().join("src/tool/sys")).unwrap();
+        tmp
+    };
+
+    let tmp = aliased("feat-map-cross-tu");
+    prepend(tmp.path(), "main.c", "#include \"sys/un.h\"\n");
+    prepend(tmp.path(), "unit.c", "#include \"proj/un.h\"\n");
+    // Per compile, the files alone already tell (M1).
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(
+        err.contains("the program reads src/tool/proj/un.h, which the scratch copy would not"),
+        "{err}"
+    );
+
+    // In one compile only the order tells.
+    let tmp = aliased("feat-map-same-tu");
+    prepend(
+        tmp.path(),
+        "main.c",
+        "#include \"sys/un.h\"\n#include \"proj/un.h\"\n",
+    );
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(err.contains("compiling src/tool/main.c"), "{err}");
+
+    let tmp = TempDir::new("feat-map-pragma-once");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(
+        &tmp.path().join("src/tool/y.h"),
+        "#pragma once\n#ifdef SEEN_Y\n#define TWICE\n#endif\n#define SEEN_Y\n",
+    );
+    std::os::unix::fs::symlink("y.h", tmp.path().join("src/tool/x.h")).unwrap();
+    prepend(tmp.path(), "main.c", "#include \"y.h\"\n#include \"x.h\"\n");
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(
+        err.contains("the program's header #2 is") && err.contains("would be src/tool/y.h"),
+        "{err}"
+    );
+
+    let tmp = TempDir::new("feat-map-newline");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(&tmp.path().join("src/tool/a\nb.h"), "#define AB 1\n");
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(err.contains("has a control character in its name"), "{err}");
+
+    let tmp = TempDir::new("feat-map-absolute");
+    program(tmp.path(), GOOD, Some(features), "");
+    let toml = tmp.path().join("harness.toml");
+    let text = std::fs::read_to_string(&toml).unwrap().replace(
+        "source_dir = \"src/tool\"",
+        &format!(
+            "source_dir = {:?}",
+            tmp.path().join("src/tool").display().to_string()
+        ),
+    );
+    std::fs::write(&toml, text).unwrap();
+    map(tmp.path()).expect("an absolute source_dir inside the root maps");
 }
 
 /// Review M3: a program that closes every inherited descriptor (the notes'

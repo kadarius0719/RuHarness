@@ -131,6 +131,9 @@ pub(crate) enum ChildEnd {
     OutputOverflow,
 }
 
+/// A tool's stdout and stderr.
+pub(crate) type Streams = (Vec<u8>, Vec<u8>);
+
 /// A finished child: how it ended plus everything captured.
 #[derive(Debug)]
 pub(crate) struct ChildOutput {
@@ -252,6 +255,15 @@ impl Runner {
     /// `Err` only when it could not be run at all (allowlist, spawn). Used
     /// where a compile failure is evidence (a failed check), not an error.
     pub(crate) fn tool_outcome(&self, argv: &[String]) -> Result<Result<Vec<u8>, String>, Error> {
+        Ok(self.tool_outcome_both(argv)?.map(|(stdout, _)| stdout))
+    }
+
+    /// [`Runner::tool_outcome`] with the stderr of a run that succeeded
+    /// (`cc -H` lists the headers there).
+    pub(crate) fn tool_outcome_both(
+        &self,
+        argv: &[String],
+    ) -> Result<Result<Streams, String>, Error> {
         let exe = argv
             .first()
             .ok_or_else(|| Error::Invariant("oracle: empty argv".into()))?;
@@ -264,7 +276,7 @@ impl Runner {
         let env = tool_env(&[]);
         let out = self.spawn(argv, self.tool_profile.as_deref(), TOOL_ENV, &env, &shown)?;
         Ok(match out.end {
-            ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
+            ChildEnd::Exited(status) if status.success() => Ok((out.stdout, out.stderr)),
             ChildEnd::Exited(status) => Err(format!(
                 "{exe} failed ({status}):\n{}",
                 stderr_excerpt(&out.stderr)
