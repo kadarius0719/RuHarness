@@ -2550,3 +2550,39 @@ gating migrations or CI on perf; comparing across machines; cross-language LTO.
 per-thread counter API or `libc` gains `rusage_info_v6` (P/E-core split); instruction and cycle
 deltas disagree in sign on real units (then cycles become the headline); a CI target has no
 PMU (add a valgrind lane); multithreaded targets arrive.
+
+## 2026-09-30 — Features map: PROPOSAL for review — let the compiler decide which functions the probe can watch
+
+**Why now.** Seven fix passes of the features track, each checked by independent agents, and
+every check found new ways the probe's syntax rules go wrong: pass 4's check 4 problems, pass
+5's 2 medium, pass 6's 3 medium, pass 7's (b31f6ef, 45 confirmed by two verifiers each —
+scratchpad `check7/findings.md`) one silent wrong map, three regressions of pass 7's own
+split exception, and a precision cost the rules cannot avoid (a function whose head starts
+with a macro word is never watched: about half of sqlite, much of Cython). The rules guess, from
+a tree-sitter parse of unpreprocessed C, whether a statement at a body's start compiles; macros
+make that undecidable, so each rule trades one wrong guess for another. Briefing §17: when an
+implementation keeps hitting what the spec cannot answer, stop and hold a design session.
+
+**Proposal (for the person's review).** The compiler is the oracle, as everywhere else in the
+harness:
+1. Watch every function the facts record, except where a note cannot even be placed (no real
+   `{`, a directive between the declarator and the body, a definition under a parse error, a
+   `naked` head) — the "hard" rules stay; the guessing rules (pragma macros, bare names,
+   splits, lone macros, leading edges) go.
+2. Before the probed build, compile each probed file with `-fsyntax-only` and the copy's own
+   flags. If it fails where the original compiles: read each error's `file:line`, unwatch the
+   watched function whose body holds that line (its note is on the body's first line; a
+   misplaced pragma's error sits a line or two below), record the compiler's first message as
+   the reason, re-probe that file and try again — bounded (at most the file's watched functions,
+   and 8 rounds); an error that no watched function holds puts the file back unprobed, every
+   function in it unwatched with that reason. A probe miss then costs one function, named
+   with the compiler's words — never the whole map.
+3. Refuse, by name, a probed file the copy reads as data rather than as code (listed by `-M`,
+   never entered by `-H`: `#embed`, `.incbin`) — the one silent wrong map the check found.
+4. Costs: one `-fsyntax-only` compile per probed file (sqlite3.c ~1 s), more only for files
+   that fail. The probe unit tests of the guessing rules become map-level tests of the retry.
+
+**Not decided yet**: whether to build this (a design review from 3–4 lenses first, as every
+track), or to accept the current rules with their named residuals and move on to the
+performance baselines. The rest of the check's findings (wording, flaky-test causes, the
+runner's poll ramp, doc gaps) are independent of this choice.
