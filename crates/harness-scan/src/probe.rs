@@ -194,6 +194,38 @@ mod tests {
         assert!(p.unwatched.is_empty(), "{}", text(&p));
     }
 
+    /// Fix check 4: the whole leading run of directives is looked through
+    /// (M1), every branch of a leading conditional counts and a macro the
+    /// parser hangs on the conditional itself blocks (M2), a pragma is the
+    /// directive, not the word (L1), a K&R declaration is no attribute (L2),
+    /// and a bare-name statement may be a macro that expands to a pragma
+    /// (L4).
+    #[test]
+    fn the_leading_run_and_every_branch_decide_the_note() {
+        let src = "unsigned a(unsigned x) {\n#if 0\n  x = 0;\n#endif\n#pragma STDC FENV_ACCESS ON\n  return x; }\n\
+                   unsigned b(unsigned x) {\n#define K 31u\n#pragma clang fp contract(fast)\n  return x * K; }\n\
+                   unsigned c(unsigned x) {\n#ifdef NOTDEF\n#endif\n#pragma STDC FENV_ACCESS ON\n  return x; }\n\
+                   unsigned d(unsigned x) {\n#ifdef NOPE\n/* nothing */\n#else\nFENV_ON\n#endif\n  return x; }\n\
+                   unsigned e(unsigned x) {\n#if 0\n#elif 1\nFENV_ON\n#endif\n  return x; }\n\
+                   unsigned f(unsigned x) {\n#ifdef TRACE\n  x += 0;\n#else\nFENV_ON\n#endif\n  return x; }\n\
+                   unsigned g(unsigned x) {\n#ifdef NOPE\n#elifdef __clang__\nFENV_ON\n#endif\n  return x; }\n\
+                   unsigned h(unsigned x) { FENV_ON;\n  return x; }\n\
+                   int i(int x) { __pragma(loop(no_vector)); return x; }\n\
+                   int j(int x) {\n#ifdef NOPE\n  x++;\n#else\n#pragma STDC FENV_ACCESS ON\n#endif\n  return x; }\n\
+                   int k(int x) {\n#ifdef NOPE\n  x++;\n#elifdef __clang__\n#pragma STDC FENV_ACCESS ON\n#endif\n  return x; }\n";
+        let all = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"];
+        let p = probe(src, &all);
+        assert_eq!(p.unwatched, all, "{}", text(&p));
+        let src = "int f(int x) {\n#ifdef HAVE_PRAGMA_WEAK\n  x++;\n#endif\n  return x; }\n\
+                   int g(int x) {\n#ifndef SQLITE_OMIT_PRAGMA\n  /* PRAGMA */ x--;\n#endif\n  return x; }\n\
+                   int kr(naked) int naked; { return naked; }\n\
+                   int m(int x) {\n#define TWICE(v) ((v) * 2)\n  return TWICE(x); }\n\
+                   int n(int x) {\n#ifdef A\n  x++;\n#else\n  x--;\n#endif\n  return x; }\n\
+                   int s(int *p) {\n#ifdef W\n  if (g(p)) {\n    h(p);\n  } else\n#endif\n  if (p) {\n    m(p);\n  }\n  return 0; }\n";
+        let p = probe(src, &["f", "g", "kr", "m", "n", "s"]);
+        assert!(p.unwatched.is_empty(), "{}", text(&p));
+    }
+
     #[test]
     fn two_functions_of_one_name_in_two_files_get_their_own_notes() {
         let known = ["src/a.c::helper", "src/b.c::helper"];

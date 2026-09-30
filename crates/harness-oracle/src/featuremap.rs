@@ -10,7 +10,8 @@ use crate::features::place;
 use crate::sandbox::{self, HostDirs, ProfileSpec};
 use crate::scrub::Scrubber;
 use crate::{
-    cc_compile, extra_link_args, inside, program_c_files_in, sandbox_mode, Base, CcInvocation,
+    cc_compile, extra_link_args, inside, irregular_c_file, program_c_files_in, sandbox_mode, Base,
+    CcInvocation,
 };
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
@@ -75,6 +76,27 @@ fn map_inner(
     let link_args = extra_link_args(target)?;
     let base = Base::resolve(target, FEATURES_BUILD_DIR, &["cc"])?;
     let root = base.root.clone();
+    // The facts name files by the configured `source_dir`, the mirror by the
+    // path under the canonical one: a `source_dir` reached through a link or
+    // spelled in another case would probe nothing (fix check 4 F5).
+    let spelled: PathBuf = Path::new(&target.config.target.source_dir)
+        .components()
+        .filter(|c| !matches!(c, std::path::Component::CurDir))
+        .collect();
+    let canonical = base
+        .source_dir
+        .strip_prefix(&root)
+        .unwrap_or(&base.source_dir);
+    if spelled != canonical {
+        return Err(Error::Invariant(format!(
+            "source_dir = {:?} resolves to {} (through a link, or in another case): the \
+             features map finds functions by the path the scan recorded — set source_dir to \
+             {:?}",
+            target.config.target.source_dir,
+            canonical.display(),
+            canonical.display().to_string()
+        )));
+    }
     let build = scratch_dir(&root)?;
 
     let host = match sandbox_mode() {
@@ -107,6 +129,23 @@ fn map_inner(
     // The plain program: the whole-program check's build of `whole_c`.
     progress.message("Building the C program…");
     let c_files = program_c_files_in(&base, FEATURES_BUILD_DIR)?;
+    // Refused by name before any build: a `.c` that is not a regular file
+    // (a FIFO would hang the build until the timeout), and one linked out of
+    // `source_dir` — the copy holds `source_dir` only, so the include words
+    // below would name the wrong cause.
+    if let Some(odd) = irregular_c_file(&c_files) {
+        return Err(Error::Invariant(format!(
+            "{} is not a regular file, so the C program cannot be built from it",
+            shown(odd, &root).display()
+        )));
+    }
+    if let Some(out) = c_files.iter().find(|p| !p.starts_with(&base.source_dir)) {
+        return Err(Error::Invariant(format!(
+            "a .c file in source_dir links outside source_dir (to {}): the features map \
+             copies only source_dir, so it cannot map this program",
+            shown(out, &root).display()
+        )));
+    }
     let plain = build.join("plain");
     compile(&runner, &base.includes(), &[], &plain, &c_files, &link_args)
         .map_err(|e| build_failed("the C program does not build", e))?;
@@ -135,36 +174,26 @@ fn map_inner(
         .iter()
         .map(|p| to_mirror(p))
         .collect::<Result<_, _>>()?;
+    // A `.c` the copy does not hold under its own path (one linked into
+    // `migration/`, or reached first through a linked folder): refused by
+    // name, never with include words (fix check 4 F6).
+    if let Some((c, _)) = c_files
+        .iter()
+        .zip(&probed_inputs)
+        .find(|(_, m)| !m.is_file())
+    {
+        return Err(Error::Invariant(format!(
+            "{} is reached through a link the scratch copy does not hold: the features map \
+             copies each file of source_dir once, so it cannot map this program",
+            shown(c, &root).display()
+        )));
+    }
     // The mirror holds `source_dir` only (one path per folder): an include
     // that leaves it, or a folder linked into it, would fall through in the
     // copy to a system header of the same name — a different program,
     // mapped silently (review M7). The compiler says what each build reads
     // (`-MM`: its project files, no system headers); they must be the same
     // files. Refused, named, before the copy is built.
-    let program_reads = dependencies(&runner, &base.includes(), &c_files, None)?
-        .map_err(|why| build_failed("the C program's includes cannot be listed", why))?;
-    let copy_reads = match dependencies(&runner, &includes, &probed_inputs, Some((&mirror, &root)))?
-    {
-        Ok(files) => files,
-        Err(why) => {
-            return Err(Error::Invariant(format!(
-                "the scratch copy cannot find what the program includes (an include outside \
-                 source_dir, or a folder linked into it) — the features map copies only \
-                 source_dir: {why}"
-            )))
-        }
-    };
-    if let Some(missed) = program_reads.difference(&copy_reads).next() {
-        let shown = missed.strip_prefix(&root).unwrap_or(missed);
-        return Err(Error::Invariant(format!(
-            "the program reads {}, which the scratch copy would not (it is outside source_dir, \
-             or reached through a folder linked into it): the features map copies only \
-             source_dir, so it cannot map this program",
-            shown.display()
-        )));
-    }
-    probed_inputs.push(runtime);
-    let probed = build.join("probed");
     let cflags = vec![
         "-include".to_string(),
         path_string(&header)?,
@@ -175,6 +204,35 @@ fn map_inner(
         ),
         format!("-DRUHARNESS_FNPROBE_N={}", index.len()),
     ];
+    let program_reads = dependencies(&runner, &base.includes(), &[], &c_files, None)?
+        .map_err(|why| build_failed("the C program's includes cannot be listed", why))?;
+    let copy = CopyPaths {
+        build: &build,
+        mirror: &mirror,
+        root: &root,
+        source_dir: &base.source_dir,
+    };
+    let copy_reads = match dependencies(&runner, &includes, &cflags, &probed_inputs, Some(copy))? {
+        Ok(files) => files,
+        Err(why) => {
+            return Err(Error::Invariant(format!(
+                "the scratch copy cannot find what the program includes (an include outside \
+                 source_dir, or a folder linked into it) — the features map copies only \
+                 source_dir: {why}"
+            )))
+        }
+    };
+    if let Some(missed) = program_reads.difference(&copy_reads).next() {
+        let shown = shown(missed, &root);
+        return Err(Error::Invariant(format!(
+            "the program reads {}, which the scratch copy would not (it is outside source_dir, \
+             or reached through a folder linked into it): the features map copies only \
+             source_dir, so it cannot map this program",
+            shown.display()
+        )));
+    }
+    probed_inputs.push(runtime);
+    let probed = build.join("probed");
     compile(
         &runner,
         &includes,
@@ -261,6 +319,11 @@ fn compile(
     )
 }
 
+/// `path` relative to the target root when it is under it.
+fn shown<'a>(path: &'a Path, root: &Path) -> &'a Path {
+    path.strip_prefix(root).unwrap_or(path)
+}
+
 fn build_failed(what: &str, e: Error) -> Error {
     match e {
         Error::Interrupted => Error::Interrupted,
@@ -313,11 +376,22 @@ impl PairIndex {
     }
 }
 
-/// The project files a compile of `inputs` with `includes` reads, as the
-/// compiler lists them (`cc -MM`: no system headers), canonical. With
-/// `mirror = Some((mirror, root))`, a file of the mirror is named as the
-/// target's file at the same place (then canonical, as the program's own
-/// build resolves it). The compiler runs with the build's own flags (`-O2`
+/// Where the scratch copy lives, for [`dependencies`].
+struct CopyPaths<'a> {
+    build: &'a Path,
+    mirror: &'a Path,
+    root: &'a Path,
+    source_dir: &'a Path,
+}
+
+/// The files a compile of `inputs` with `includes` and `cflags` reads, as
+/// the compiler lists them (`cc -M`: system headers too — `-MM` drops a
+/// project file included from a `system_header`; fix check 4 F1),
+/// canonical. With `copy`, a file of the mirror is named as the target's
+/// file at the same place (then canonical, as the program's own build
+/// resolves it), and a file of `source_dir` read by its own path — the
+/// unprobed original, through `#include __FILE__` under the copy's
+/// `-fmacro-prefix-map` (fix check 4 F2) — is `Ok(Err(why))`. The compiler runs with the build's own flags (`-O2`
 /// defines `__OPTIMIZE__`: an `#ifdef` on it picks the same branch; fix
 /// check 3 N9) less `-o` (several inputs list to stdout). `Ok(Err(why))`
 /// when the compiler could not list them, or named a file that does not
@@ -325,13 +399,16 @@ impl PairIndex {
 fn dependencies(
     runner: &Runner,
     includes: &[PathBuf],
+    cflags: &[String],
     inputs: &[PathBuf],
-    mirror: Option<(&Path, &Path)>,
+    copy: Option<CopyPaths<'_>>,
 ) -> Result<Result<std::collections::BTreeSet<PathBuf>, Error>, Error> {
     let unused = Path::new("-");
+    let mut listing = cflags.to_vec();
+    listing.push("-M".to_string());
     let mut argv = crate::cc_argv(&CcInvocation {
         includes,
-        cflags: &["-MM".to_string()],
+        cflags: &listing,
         quiet: true,
         out: unused,
         inputs,
@@ -344,8 +421,14 @@ fn dependencies(
         Ok(out) => out,
         Err(why) => return Ok(Err(Error::Invariant(why))),
     };
-    let mirror_canonical = match mirror {
-        Some((m, _)) => Some(m.canonicalize().map_err(|e| Error::io(m, e))?),
+    let canonical_of = |p: &Path| p.canonicalize().map_err(|e| Error::io(p, e));
+    let copy = match copy {
+        Some(c) => Some((
+            canonical_of(c.build)?,
+            canonical_of(c.mirror)?,
+            c.root,
+            c.source_dir,
+        )),
         None => None,
     };
     let mut files = std::collections::BTreeSet::new();
@@ -358,15 +441,22 @@ fn dependencies(
                 "the compiler's list names {token:?}, which does not resolve"
             ))));
         };
-        let named = match (&mirror_canonical, mirror) {
-            (Some(m), Some((_, root))) => match canonical.strip_prefix(m) {
+        let named = match &copy {
+            Some((build, mirror, root, source_dir)) => match canonical.strip_prefix(mirror) {
                 Ok(rel) => root
                     .join(rel)
                     .canonicalize()
                     .unwrap_or_else(|_| root.join(rel)),
+                Err(_) if canonical.starts_with(source_dir) && !canonical.starts_with(build) => {
+                    return Ok(Err(Error::Invariant(format!(
+                        "the copy reads {} itself, not its copy (an include of __FILE__?), so \
+                         its functions would run unwatched",
+                        canonical.strip_prefix(root).unwrap_or(&canonical).display()
+                    ))));
+                }
                 Err(_) => canonical,
             },
-            _ => canonical,
+            None => canonical,
         };
         files.insert(named);
     }
@@ -374,11 +464,14 @@ fn dependencies(
 }
 
 /// The prerequisites of make rules (`a.o: a.c a\ b.h \` continued lines):
-/// every word after a target's `:`, with make's escapes read — `\ ` a
+/// every word after a rule's first `:`, with make's escapes read — `\ ` a
 /// space, `\#` a `#`, `$$` a `$` (fix check 3 N8: a folder with a space).
+/// Only a line that starts a rule (after a newline that is no continuation)
+/// has targets: a file named `o:` is a prerequisite (fix check 4 F3).
 fn make_prerequisites(rules: &str) -> Vec<String> {
     let mut words: Vec<(String, bool)> = Vec::new();
     let mut word = String::new();
+    let mut targets = true;
     let mut chars = rules.chars().peekable();
     let flush = |word: &mut String, words: &mut Vec<(String, bool)>, target: bool| {
         if !word.is_empty() {
@@ -402,10 +495,15 @@ fn make_prerequisites(rules: &str) -> Vec<String> {
                 chars.next();
                 word.push('$');
             }
-            ':' if matches!(chars.peek(), Some(' ' | '\n' | '\t') | None) => {
+            ':' if targets && matches!(chars.peek(), Some(' ' | '\n' | '\t') | None) => {
                 flush(&mut word, &mut words, true);
+                targets = false;
             }
-            c if c.is_whitespace() => flush(&mut word, &mut words, false),
+            '\n' => {
+                flush(&mut word, &mut words, targets);
+                targets = true;
+            }
+            c if c.is_whitespace() => flush(&mut word, &mut words, targets),
             c => word.push(c),
         }
     }
@@ -565,6 +663,12 @@ mod tests {
         assert_eq!(
             make_prerequisites(rules),
             ["/t/sp ace/a.c", "/t/sp ace/x#1.h", "/t/d$/y.h"]
+        );
+        // Fix check 4 F3: only a rule's first `:` ends its targets.
+        let rules = "a.o: /t/a.c /t/o: \\\n  /t/y.h\nb.o c.o: /t/b.c\n";
+        assert_eq!(
+            make_prerequisites(rules),
+            ["/t/a.c", "/t/o:", "/t/y.h", "/t/b.c"]
         );
     }
 

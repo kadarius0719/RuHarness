@@ -6,7 +6,9 @@
 
 use crate::confine::{shown_len, shown_offset, Confinement, ScenarioEnd, ScenarioRun};
 use crate::exec::Runner;
-use crate::{build_whole_c, build_whole_mixed, program_c_files, Prepared, WholePrograms};
+use crate::{
+    build_whole_c, build_whole_mixed, irregular_c_file, program_c_files, Prepared, WholePrograms,
+};
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::features::{self, FeatureSnapshot, Scenario, SkipReason, INVALID_DIGEST};
@@ -62,8 +64,13 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
     // A top-level `.c` the build cannot take (a dangling link, one leaving
     // the target): the tree's doing, never the candidate's — a skip, as
     // nothing about features blocks work (review O1).
+    // So is one that is not a regular file (a FIFO named `x.c`).
     let c_files = match program_c_files(ctx.prep, ctx.unit) {
-        Ok(files) => files,
+        Ok(files) if irregular_c_file(&files).is_none() => files,
+        Ok(_) => {
+            skip_all(ctx, SkipReason::CSideBuildFailed);
+            return Ok(());
+        }
         Err(Error::Interrupted) => return Err(Error::Interrupted),
         Err(_) => {
             skip_all(ctx, SkipReason::CSideBuildFailed);

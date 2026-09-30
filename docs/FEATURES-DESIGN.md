@@ -492,16 +492,29 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   plain and probed builds (and verify's all-C and mixed ones) print the same `__DATE__`,
   `__TIME__` and `__TIMESTAMP__` (review M5; not recorded in a verdict's evidence — a C unit
   that returns those macros is compared against 1970's). The files the program's build reads
-  and the files the copy's would read must be the same: the compiler lists both (`cc -MM`,
-  project files only, the copy's named back as the target's), and a difference — an include
+  and the files the copy's would read must be the same: the compiler lists both (`cc -M`,
+  system headers too — `-MM` drops a project file included from a `system_header`; the
+  copy's list made with the copy's own flags and named back as the target's), every file the
+  program reads must be among the copy's, and a difference — an include
   outside `source_dir`, a folder linked into it (the mirror holds one path per folder), a
   `.inc` that leaves it — is refused before the copy is built (the lists come from the build's
-  own flags, `-O2` included, and make's escapes are read: a folder with a space; a listed
+  own flags, `-O2` included, and make's escapes are read: a folder with a space; only a
+  rule's first `:` ends its targets, so a file named `o:` is a prerequisite; a listed
   path that does not resolve is an error, never skipped), naming the file: in the copy
   the compiler would fall through to a system header of the same name, a different program
   mapped silently (review M7; the facts never record such an include, and reading `#include`
   lines by hand refused includes under `#if 0` and in files never compiled — the second check).
-  A probed copy that does not build says so in neutral words.
+  The copy reading a file of `source_dir` by its own path — the unprobed original, through
+  `#include __FILE__` under the prefix map — is refused too (its functions would run
+  unwatched). Before any build, refused by name: a top-level `.c` that is not a regular file
+  (a FIFO would hang the build), one linked out of `source_dir`, one the mirror holds under
+  another path (reached first through a linked folder), and a `source_dir` whose configured
+  spelling is not its canonical path (a link, another case: the facts name files by the
+  former, the mirror by the latter). The feature step of verify skips (`c-side-build-failed`)
+  on a non-regular top-level `.c`; the whole-program check's shared list is unchanged (§10).
+  A probed copy that does not build says so in neutral words. Residual: Apple clang writes a
+  `\` in a listed path as `/` and leaves a tab unescaped, so such a name is refused as "does
+  not resolve" or, for a hostile tree, can hide a read — the map is shaped by its own C.
 - **The insertion** — `harness_scan::probe_source(rel_path, source, index_of)`, pure, built on
   the scanner's own `collect_functions`/`canonical_id` (which, unlike mutate.rs, walk into
   preprocessor branches), with `FnDef` gaining the body's start byte:
@@ -516,14 +529,20 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   cannot read — is not in the note's way; review M9); a body whose first byte is not a real
   `{`; a definition with a preprocessor directive between its declarator and its body (a line
   that starts with `#` — a brace inside `#if`, which compiles on one branch only; a `#` in a
-  comment is none); a body that opens with a pragma in any spelling (`#pragma`, `# pragma`,
-  `_Pragma`, one inside a leading `#if`) or with what the parser cannot read — its first
-  statement opens with an ERROR, or with a bare name (a macro that may expand to a pragma) and
-  holds one; a statement that opens with a keyword and holds an error further in (an `#ifdef`
-  in a condition, a case range) is watched; a leading conditional counts by what its first
-  branch opens with — and a function with `naked` or `__naked__` as a word of its head, its
-  parameter list aside (review M2, fix checks N1/N4/N7/N10). Residual: `naked` given only on an earlier declaration — the probed build fails and
-  the map says so with the compiler's words, never silently. A definition the facts do not
+  comment is none); a body whose leading run — every directive and conditional up to the
+  first ordinary statement, looked through since they produce no statement — holds a pragma
+  in any spelling (the `#pragma` directive, `# pragma`, `_Pragma`, `__pragma`; the word in a
+  macro name is none) or what the parser cannot read: a statement that opens with an ERROR,
+  or with a bare name (a macro that may expand to a pragma) and holds one, or is only a bare
+  name (`FENV_ON;`); a statement that opens with a keyword and holds an error further in (an
+  `#ifdef` in a condition, a case range, `} else` split across `#endif`) is watched; a
+  conditional in the run counts by the leading run of every branch, and by what the parser
+  hangs on it after its `#else`/`#elif` (an empty branch's macro) — and a function with
+  `naked` or `__naked__` as a word of its head, its parameter list and K&R declarations
+  aside (review M2, fix checks N1/N4/N7/N10, fix check 4 M1/M2/L1/L2/L4). Residuals, each a
+  probed build that fails loudly with the compiler's words (the whole map then fails, never
+  silently): `naked` given only on an earlier declaration, or hidden in a macro the parser
+  reads cleanly (`NAKED_VOID f(void)`); a function named `naked` is unwatched. A definition the facts do not
   record gets nothing — the facts do not know it either.
 
 ### 5.4 The probe runtime (harness-owned C)
@@ -1324,3 +1343,20 @@ paused (2026-09-29):** the linked-out top-level `.c` (refuse it by name before t
 FIFO (only regular `.c` into the feature step and the map, never into the shared whole-program
 list, §10), a check of the fourth pass, `bench check --replay`, and the live chat tests (the
 `claude` sign-in had expired) — docs/FEATURES-PROGRESS.md.
+
+**The fifth pass** (2026-09-29) fixed those two first: a non-regular top-level `.c` is a
+`c-side-build-failed` skip in the feature step and refused by name in the map, with one linked
+out of `source_dir` (4 mutants, all killed). **The check of the fourth pass** (two checkers on
+e98a2a2 + that commit; the 294-file corpus re-run: no ordinary function lost, the probed copies
+of all 258 files that build unprobed build) found four medium issues — the probe watched a
+pragma after a leading `#if 0 … #endif`, `#define` or empty conditional (M1) and a macro opening
+an `#else`/`#elif` branch (M2), and the map's `-MM` dropped a project file included from a
+`system_header` (F1) and listed the copy without the copy's own flags, so `#include __FILE__`
+read the unprobed original silently (F2) — and low ones: the word "pragma" in a macro name
+(L1), a K&R `naked` parameter (L2), a bare `FENV_ON;` (L4), a file named `o:` read as a target
+(F3), a linked or other-case `source_dir` probing nothing (F5), a `.c` the mirror holds under
+another path named with include words (F6). All fixed in the same pass, each with a test;
+the corpus re-run after it unwatches exactly the functions the fourth pass did. Recorded as
+residuals: a `naked` hidden in a clean macro (L3), Apple clang's `\`→`/` in listed paths (F4).
+Not fixed (a nit): a top-level `.c` linked outside the target root is refused in the plan's
+words ("unit `.features`").

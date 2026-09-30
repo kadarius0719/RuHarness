@@ -401,15 +401,26 @@ fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<
     // A naked function takes no statement (review M2) — `naked` as a word
     // of its head, not inside a name (fix check N4), nor a parameter's name
     // (fix check 3 N7).
-    let params = parameter_list(declarator);
-    let head = match params {
-        Some(p) => format!(
-            "{} {}",
-            String::from_utf8_lossy(&src[def.start_byte()..p.start_byte()]),
-            String::from_utf8_lossy(&src[p.end_byte()..at])
-        ),
-        None => String::from_utf8_lossy(&src[def.start_byte()..at]).into_owned(),
-    };
+    // Nor a K&R declaration's (fix check 4 L2).
+    let mut cut: Vec<(usize, usize)> = parameter_list(declarator)
+        .map(|p| (p.start_byte(), p.end_byte()))
+        .into_iter()
+        .collect();
+    let mut cursor = def.walk();
+    cut.extend(
+        def.children(&mut cursor)
+            .filter(|c| c.kind() == "declaration")
+            .map(|c| (c.start_byte(), c.end_byte())),
+    );
+    cut.sort_unstable();
+    let mut head = String::new();
+    let mut from = def.start_byte();
+    for (start, end) in cut {
+        head.push_str(&String::from_utf8_lossy(&src[from..start.max(from)]));
+        head.push(' ');
+        from = end.max(from);
+    }
+    head.push_str(&String::from_utf8_lossy(&src[from..at]));
     if head
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .any(|word| word == "naked" || word == "__naked__")
@@ -423,13 +434,27 @@ fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<
     // may expand to one; fix checks N1). An error further in — later in the
     // first statement too — is not in the note's way (M9).
     let mut cursor = body.walk();
-    let first = body
-        .named_children(&mut cursor)
-        .find(|c| c.kind() != "comment");
-    if first.is_some_and(|first| blocks_note(first, src)) {
+    if leading_run_blocks(body.named_children(&mut cursor), src) {
         return None;
     }
     Some(at)
+}
+
+/// Whether the leading run of `nodes` (a body's, or a conditional branch's)
+/// keeps a note from going before it: every directive and conditional up to
+/// the first ordinary statement is looked through, since they produce no
+/// statement of their own — a pragma after `#if 0 … #endif` or a `#define`
+/// still opens the block (fix check 4 M1).
+fn leading_run_blocks<'t>(nodes: impl Iterator<Item = tree_sitter::Node<'t>>, src: &[u8]) -> bool {
+    for node in nodes.filter(|n| n.kind() != "comment") {
+        if blocks_note(node, src) {
+            return true;
+        }
+        if !node.kind().starts_with("preproc") {
+            return false;
+        }
+    }
+    false
 }
 
 /// The parameter list of the function a declarator declares (through
@@ -446,35 +471,62 @@ fn parameter_list(declarator: tree_sitter::Node) -> Option<tree_sitter::Node> {
 
 /// What opens a body keeps a statement from going before it (see
 /// [`probe_point`]): a pragma in any spelling — `#pragma`, `# pragma`,
-/// `_Pragma` — what the parser could not read at its start, or a leading
-/// conditional whose first branch opens with one of these (fix check 3
-/// N10: `#ifdef __clang__` then `_Pragma(…)`).
+/// `_Pragma`, `__pragma` — what the parser could not read at its start, a
+/// statement that is a bare name (`FENV_ON;`: a macro, perhaps one that
+/// expands to a pragma; fix check 4 L4), or a leading conditional any of
+/// whose branches opens with one of these (a macro opening an empty
+/// branch's `#else` lands on the conditional itself; fix check 4 M2).
 fn blocks_note(node: tree_sitter::Node, src: &[u8]) -> bool {
-    let words = text(node, src);
-    if opens_with_error(node) || words.trim_start().starts_with("_Pragma") {
+    let words = text(node, src).trim_start();
+    if opens_with_error(node) || words.starts_with("_Pragma") || words.starts_with("__pragma") {
         return true;
     }
-    if !node.kind().starts_with("preproc") {
-        return false;
-    }
-    if words.to_ascii_lowercase().contains("pragma") {
+    if node.kind() == "expression_statement"
+        && node.named_child_count() == 1
+        && node
+            .named_child(0)
+            .is_some_and(|n| n.kind() == "identifier")
+    {
         return true;
+    }
+    if node.kind() == "preproc_call" {
+        // The directive's name, not the word anywhere: `#ifdef
+        // HAVE_PRAGMA_WEAK` is no pragma (fix check 4 L1).
+        return node
+            .child_by_field_name("directive")
+            .is_some_and(|d| text(d, src).trim_start_matches('#').trim() == "pragma");
     }
     if !matches!(
         node.kind(),
-        "preproc_if" | "preproc_ifdef" | "preproc_elif" | "preproc_else"
+        "preproc_if" | "preproc_ifdef" | "preproc_elif" | "preproc_elifdef" | "preproc_else"
     ) {
         return false;
     }
-    let skip: Vec<usize> = ["name", "condition"]
+    let skip: Vec<usize> = ["name", "condition", "alternative"]
         .iter()
         .filter_map(|f| node.child_by_field_name(f).map(|n| n.id()))
         .collect();
     let mut cursor = node.walk();
-    let first = node
-        .named_children(&mut cursor)
-        .find(|c| !skip.contains(&c.id()) && c.kind() != "comment");
-    first.is_some_and(|first| blocks_note(first, src))
+    let children: Vec<_> = node.named_children(&mut cursor).collect();
+    // What opens an empty branch's `#else` the parser hangs after it, on
+    // the conditional; an error inside the first branch (`} else` split
+    // across `#endif`) is a statement's, not in the note's way.
+    let alternative = node.child_by_field_name("alternative");
+    if alternative.is_some_and(|alt| {
+        children
+            .iter()
+            .any(|c| c.is_error() && c.start_byte() >= alt.start_byte())
+    }) {
+        return true;
+    }
+    if leading_run_blocks(
+        children.iter().copied().filter(|c| !skip.contains(&c.id())),
+        src,
+    ) {
+        return true;
+    }
+    node.child_by_field_name("alternative")
+        .is_some_and(|alt| blocks_note(alt, src))
 }
 
 /// The parser could not read how `node` starts: it, or one of its first

@@ -434,6 +434,37 @@ fn a_dangling_c_link_in_the_source_dir_is_a_skip_not_an_error() {
         .all(|s| s.ends_with(": c-side-build-failed")));
 }
 
+/// Check of the third pass: a top-level `.c` that is not a regular file — a
+/// FIFO would reach the build and hang until the timeout — is a C-side skip,
+/// never a wait.
+#[test]
+fn a_fifo_named_like_a_c_file_is_a_skip_not_a_wait() {
+    let tmp = TempDir::new("feat-fifo");
+    let (target, unit) = program(tmp.path(), GOOD, Some(FEATURES), "timeout_secs = 20");
+    mkfifo(&tmp.path().join("src/tool/x.c"));
+    let started = std::time::Instant::now();
+    let verdict = CAbiDifferential
+        .verify(&target, &unit)
+        .expect("oracle runs");
+    assert!(verdict.green, "{}", describe(&verdict));
+    assert!(feature_names(&verdict).is_empty());
+    assert_eq!(verdict.inputs.features_skipped.len(), 6);
+    assert!(verdict
+        .inputs
+        .features_skipped
+        .iter()
+        .all(|s| s.ends_with(": c-side-build-failed")));
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+fn mkfifo(path: &Path) {
+    let made = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success());
+}
+
 /// Review O2: a program file changed since the scan — its includes may be
 /// ones the facts never saw — records the stale-facts digest, which no
 /// status reads as current.
@@ -683,6 +714,123 @@ fn the_map_refuses_what_its_copy_would_build_differently() {
     prepend(tmp.path(), "#include \"sys/types.h\"\n");
     let err = map(tmp.path()).expect_err("refused").to_string();
     assert!(err.contains("outside source_dir"), "{err}");
+}
+
+/// Check of the third pass: the map refuses by name, before any build, a
+/// top-level `.c` linked out of `source_dir` (the copy never holds it: the
+/// include words would name the wrong cause) and one that is not a regular
+/// file (a FIFO would hang the build).
+#[test]
+fn the_map_refuses_an_odd_c_file_by_name() {
+    let map = |root: &Path| {
+        let target = TargetContext::load(root).unwrap();
+        let facts = with_symbols(root);
+        let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+            panic!("valid")
+        };
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+    };
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+
+    let tmp = TempDir::new("feat-map-linked-c");
+    program(tmp.path(), GOOD, Some(features), "timeout_secs = 20");
+    write(
+        &tmp.path().join("src/extra.c"),
+        "int extra(void) { return 1; }\n",
+    );
+    std::os::unix::fs::symlink("../extra.c", tmp.path().join("src/tool/extra.c")).unwrap();
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(
+        err.contains("links outside source_dir (to src/extra.c)"),
+        "{err}"
+    );
+
+    let tmp = TempDir::new("feat-map-fifo");
+    program(tmp.path(), GOOD, Some(features), "timeout_secs = 20");
+    mkfifo(&tmp.path().join("src/tool/x.c"));
+    let started = std::time::Instant::now();
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(err.contains("src/tool/x.c is not a regular file"), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+
+    let tmp = TempDir::new("feat-map-dir-c");
+    program(tmp.path(), GOOD, Some(features), "timeout_secs = 20");
+    std::fs::create_dir_all(tmp.path().join("src/tool/y.c")).unwrap();
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(err.contains("src/tool/y.c is not a regular file"), "{err}");
+}
+
+/// Fix check 4: what the copy would read differently, refused by name — a
+/// project file reached from a `system_header` (F1: `-MM` drops it), the
+/// original read through `#include __FILE__` (F2), a `source_dir` reached
+/// through a link (F5), a `.c` the copy holds under another path (F6).
+#[test]
+fn the_map_refuses_a_copy_that_reads_other_files() {
+    let map = |root: &Path| {
+        let target = TargetContext::load(root).unwrap();
+        let facts = with_symbols(root);
+        let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+            panic!("valid")
+        };
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+    };
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+    let prepend = |root: &Path, text: &str| {
+        let main = root.join("src/tool/main.c");
+        let old = std::fs::read_to_string(&main).unwrap();
+        std::fs::write(&main, format!("{text}{old}")).unwrap();
+    };
+
+    let tmp = TempDir::new("feat-map-sysheader");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(
+        &tmp.path().join("src/tool/compat.h"),
+        "#pragma GCC system_header\n#include \"../include/stdio.h\"\n",
+    );
+    // The copy falls through to the system's `../include/stdio.h`.
+    write(&tmp.path().join("src/include/stdio.h"), "#define EXTRA 1\n");
+    prepend(tmp.path(), "#include \"compat.h\"\n");
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(
+        err.contains("src/include/stdio.h, which the scratch copy would not"),
+        "{err}"
+    );
+
+    let tmp = TempDir::new("feat-map-file");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(
+        &tmp.path().join("src/tool/mul.c"),
+        "#ifndef AGAIN\n#define AGAIN\n#include __FILE__\n#else\n#include \"mul.h\"\n\
+         unsigned mul_step(unsigned acc, int c) { return acc * 31u + (unsigned)c; }\n#endif\n",
+    );
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(err.contains("reads src/tool/mul.c itself"), "{err}");
+
+    let tmp = TempDir::new("feat-map-linked-dir");
+    program(tmp.path(), GOOD, Some(features), "");
+    std::fs::rename(tmp.path().join("src/tool"), tmp.path().join("src/real")).unwrap();
+    std::os::unix::fs::symlink("real", tmp.path().join("src/tool")).unwrap();
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(
+        err.contains("resolves to src/real (through a link"),
+        "{err}"
+    );
+
+    let tmp = TempDir::new("feat-map-alias-c");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(
+        &tmp.path().join("src/tool/zdir/x.c"),
+        "int x_c(void) { return 1; }\n",
+    );
+    std::os::unix::fs::symlink("zdir", tmp.path().join("src/tool/a_link")).unwrap();
+    std::os::unix::fs::symlink("zdir/x.c", tmp.path().join("src/tool/b.c")).unwrap();
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(
+        err.contains("src/tool/zdir/x.c is reached through a link"),
+        "{err}"
+    );
 }
 
 /// Review M3: a program that closes every inherited descriptor (the notes'

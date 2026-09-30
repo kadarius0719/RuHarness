@@ -966,6 +966,16 @@ pub(crate) fn program_c_files_in(base: &Base, who: &str) -> Result<Vec<PathBuf>,
     Ok(c_files)
 }
 
+/// The first of `c_files` that is not a regular file — a FIFO or a folder
+/// named `x.c`, which would reach the compiler and hang until the timeout.
+/// The feature step and the features map refuse it; the whole-program
+/// check's shared list stays as it is (§10).
+pub(crate) fn irregular_c_file(c_files: &[PathBuf]) -> Option<&PathBuf> {
+    c_files
+        .iter()
+        .find(|p| !std::fs::metadata(p).is_ok_and(|m| m.is_file()))
+}
+
 fn whole_cc(prep: &Prepared, runner: &Runner, out: &Path, inputs: &[PathBuf]) -> Result<(), Error> {
     let includes = prep.base.includes();
     cc_compile(
