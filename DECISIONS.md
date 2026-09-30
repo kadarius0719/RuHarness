@@ -2487,3 +2487,66 @@ strong as the C binary guard (C reads elsewhere are not covered — SCHEMAS.md).
 **Revisit when:** a target is a library (features then need a scenario program); a behaviour's
 output is a file, not a stream; stdin input is wanted; the scanner learns macro-made
 definitions (the map could watch them).
+
+## 2026-09-30 — C-vs-Rust performance baselines: §15 spike
+
+Three time-boxed Sonnet subagents (measurement on this machine; the migration and CI
+landscape; where timing hooks into the harness), then the premise run by the main session on
+`targets/zopfli` (u001-katajainen, the all-C and mixed programs `verify` builds). Notes:
+scratchpad `spike-perf/{measurement,landscape,codebase,premise}.md`.
+
+**The premise holds, with two corrections.** On a 200 KB input, 1 warm-up and 5 interleaved
+runs each, under load from other agents: the all-C program 3.94e9 instructions (range 0.022%),
+1.007e9 cycles (1.7%), 0.26 s wall (3.8%); the mixed one **+3.24% instructions, +0.79% cycles,
++3.8% wall**, the same 12.39 MB peak footprint. Corrections: (1) **the oracle's samples are
+useless for timing** — `sample_text.txt` compresses 30 KB to 205 bytes in ~1 ms, where fixed
+costs dominate (+85% instructions, cycles range 46%); workloads must be the person's and big
+enough (≥ ~50 ms or ~1e8 instructions a run); (2) **instructions and cycles disagree** (the
+Rust katajainen executes 3% more instructions at a better IPC) — instructions are the stable
+signal, cycles the time-like one; report both, never judge on instructions alone.
+
+**Measurement (verified on this M3, macOS 26.5.2, no root).** `proc_pid_rusage(pid,
+RUSAGE_INFO_V4)` works for a child, under `sandbox-exec` (it execs in place, same pid), but
+only before the child is reaped: `waitid(P_PID, WEXITED|WNOWAIT)`, then the rusage, then
+`wait4` (user/sys time, maxrss). `libc` (already a dependency) exposes all of it; every call is
+`unsafe`, so it needs an isolated FFI module — the second `unsafe` exception, to be justified in
+the design. Traps: `ri_user_time` is in mach ticks, not ns; `ri_phys_footprint` is 0 after exit
+(use `ri_lifetime_max_phys_footprint`, byte-identical across 30 runs); `ru_maxrss` is bytes on
+macOS and KiB on Linux. Stability over 30 runs of a 0.3 s loop: instructions CV 0.004%,
+cycles 0.05%, wall 0.53% (a 6 ms run: 0.076%, 1.1%, 4.1%); A vs A+0.5% work was detected at
+n=6. `/usr/bin/time -l` prints the same counters, but the run sandbox forbids exec of anything
+but the program. Linux: `perf_event_open` user-space instructions at `perf_event_paranoid` 2;
+GitHub-hosted runners expose no PMU; valgrind `Ir` is the deterministic fallback.
+
+**Landscape** (checked, with sources in the notes): TRACTOR's benchmark ranks correctness >
+safety > performance > idiomaticity and measures runtime with `perf stat` and memory with
+massif, randomized order with warm-up; most LLM translators measure no runtime; Syzygy's Zopfli
+(our dogfood) ran up to 3.67× slower optimized (`Vec` allocation, bounds checks in
+`ZopfliUpdateHash`), and 9–14× under default (debug) settings; c2rust-derived rav1d is within
+6% after work (dynamic dispatch, locks, zeroing, bounds checks). Regression practice:
+rustc-perf and the LLVM tracker judge instructions against per-benchmark noise; benchstat
+reports medians with a 95% interval and prints `~` when not significant; interleaving A/B runs
+cuts variance (layout and environment bias). Cross-language LTO needs matching LLVM majors and
+does not work with Apple clang — out of scope.
+
+**Chosen defaults (for the design):** a `harness perf` step of its own, never inside `verify`
+(verdicts are content-bound and replay-compared; `migrate` and `bench check` run `verify`); the
+two programs `verify` already builds (`whole_c`, `whole_mixed`) on workloads the person names
+(args + an input file inside the target), plus the unit's differential driver (`drv_c` vs
+`drv_rs`) as a per-unit row flagged when too short; instructions, cycles, wall, CPU time and
+peak footprint per run; 1 warm-up + n interleaved runs a side (default 5); medians, ranges,
+the ratio, and words from a non-inferiority rule ("slower by X%" only when the ranges are
+apart and the gap exceeds the noise floor; else "within noise" or "inconclusive — add runs");
+statistics in `std`; results with a machine and toolchain fingerprint; the cockpit shows a line
+per unit. Tier 0 throughout.
+
+**Rejected:** wall time alone (50–100× noisier); kperf/kpc (private, root); `xctrace` (a 16 MB
+sampled trace for a 10 ms run); valgrind on macOS arm64 (an experimental fork); hyperfine,
+criterion, divan as dependencies (an external binary without a decision rule; in-process
+harnesses); Gungraun (in-process Rust benches, Linux-only); a history server or dashboard;
+gating migrations or CI on perf; comparing across machines; cross-language LTO.
+
+**Revisit when:** TRACTOR's round reports publish metrics and thresholds; Apple ships a public
+per-thread counter API or `libc` gains `rusage_info_v6` (P/E-core split); instruction and cycle
+deltas disagree in sign on real units (then cycles become the headline); a CI target has no
+PMU (add a valgrind lane); multithreaded targets arrive.
