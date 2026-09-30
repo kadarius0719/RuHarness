@@ -42,6 +42,13 @@ b943926 (CLI/cockpit reasons, runtime-names refusal, small fixes). 978 tests gre
      (mini-targets per corpus file with generated link stubs) — replace §2's table with it;
    - the adversarial code review of the build, Workflow run `wf_833f5d1a-f42`
      (4 lenses, 2 verifiers per finding; journal under the session's subagents/workflows).
+   **The §8 re-run finished**: 45 of 79 mini-targets mapped — corpus 24 (8 unwatched now;
+   prototype 6; old rules 3 006), extensions 21 (0; 0; 3). It found a real bug, fixed after
+   b943926 (see the commit after the handoff): the same-code check refused every function with
+   an empty body `{}` (the note and end token removed left `{ }`); code is now compared as
+   tokens. The other refusals were the mini-targets' own (missing Python/tree-sitter headers,
+   CPU-feature flags) — re-run §8 after the fix and replace §2's table. The code review ran on
+   b943926, before this fix.
    If gone, re-run both (the review script is in the session's workflows/scripts folder, or
    rebuild it: lenses silent-wrong-map, retry-mechanics, runner-runtime-sandbox, format-ux-tests).
 2. **Fix what the review confirms**, each fix with a test; check every fix pass (process);

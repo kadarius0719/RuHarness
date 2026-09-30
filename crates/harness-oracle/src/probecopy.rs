@@ -601,18 +601,49 @@ fn code_lines(text: &[u8], header: Option<&[u8]>) -> Vec<String> {
         if header.is_some() {
             code = strip_notes(&code);
         }
-        let words: Vec<&str> = std::str::from_utf8(&code)
-            .map(|s| s.split_whitespace().collect())
-            .unwrap_or_default();
-        if words.is_empty() {
-            if std::str::from_utf8(&code).is_err() {
-                out.push(String::from_utf8_lossy(&code).into_owned());
-            }
+        let tokens = token_text(&code);
+        if tokens.is_empty() {
             continue;
         }
-        out.push(words.join(" "));
+        out.push(tokens);
     }
     out
+}
+
+/// `line` as its tokens: whitespace kept (as one space) only where it
+/// separates two word characters, and inside literals as it is — so taking
+/// a note or end token out of `{}` compares equal, and `int x` never reads as
+/// `intx`.
+fn token_text(line: &[u8]) -> String {
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+    let mut out: Vec<u8> = Vec::with_capacity(line.len());
+    let mut pending_space = false;
+    let mut i = 0;
+    while i < line.len() {
+        let b = line[i];
+        if b.is_ascii_whitespace() {
+            pending_space = true;
+            i += 1;
+            continue;
+        }
+        if pending_space && out.last().is_some_and(|l| word(*l)) && word(b) {
+            out.push(b' ');
+        }
+        pending_space = false;
+        if b == b'"' || b == b'\'' {
+            let start = i;
+            i += 1;
+            while i < line.len() && line[i] != b {
+                i += if line[i] == b'\\' { 2 } else { 1 };
+            }
+            i = (i + 1).min(line.len());
+            out.extend_from_slice(&line[start..i]);
+            continue;
+        }
+        out.push(b);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `line` with every note (`__ruharness_seen[N] = 1;`) and end token
@@ -718,8 +749,20 @@ mod tests {
             b"# 1 \"/m/src/a.c\"\nint f(void) {__ruharness_seen[0] = 1; return 2; }\nint x = 3;\n";
         assert_eq!(
             same_code(program, different, Path::new("/o/fnprobe.h")),
-            Err("int f(void) { return 2; }".to_string())
+            Err("int f(void){return 2;}".to_string())
         );
+        // An empty body: the note and end token out, `{ }` is `{}`.
+        let program = b"void f(void) {}\nint x;\n";
+        let copy = b"void f(void) {__ruharness_seen[0] = 1; __ruharness_end_0 }\nint  x;\n";
+        assert_eq!(same_code(program, copy, Path::new("/o/fnprobe.h")), Ok(()));
+        // Words stay apart; spaces inside a literal count.
+        assert!(same_code(b"int x;\n", b"intx;\n", Path::new("/o/h")).is_err());
+        assert!(same_code(
+            b"char *s = \"a b\";\n",
+            b"char *s = \"a  b\";\n",
+            Path::new("/o/h")
+        )
+        .is_err());
         // A note turned into text is not taken out: the texts differ.
         let program = b"const char *s = \"{ }\";\n";
         let copy = b"const char *s = \"{__ruharness_seen[0] = 1; }\";\n";
