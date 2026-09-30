@@ -3154,13 +3154,20 @@ harness features map --target targets/lzg
 features: Copying source_dir into a scratch copy that notes each function it runs…
 features: Building the C program…
 features: Building the scratch copy…
+features: Checking where the notes compile… src/lzg/checksum.c (round 1)
+features: Checking where the notes compile… src/lzg/decode.c (round 1)
+features: Checking where the notes compile… src/lzg/encode.c (round 1)
+features: Checking where the notes compile… src/lzg/lzg.c (round 1)
+features: Checking where the notes compile… src/lzg/version.c (round 1)
 features: mapped compress/text (1 of 3) — exit 0, <number> functions
 features: mapped version/flag (2 of 3) — exit 0, <number> functions
 features: mapped no-file/missing (3 of 3) — exit 0, <number> functions
 features: mapped 3 scenarios — wrote migration/features/map.json
 ```
 
-**What just happened.** The harness ran each scenario three times: on the plain C, on the noting copy, and on the plain C again. It wrote `migration/features/map.json`, which records how each run ended and which functions it ran.
+**What just happened.** The harness first checked that the scratch copy is the same program as yours apart from its notes, then compiled it one `.c` file at a time: a note the compiler rejects is taken out of just that function (the "Checking where the notes compile" lines). It ran each scenario three times: on the plain C, on the noting copy, and on the plain C again. It wrote `migration/features/map.json`, which records how each run ended, which functions it ran, and — for any function it could not watch — why.
+
+If some functions could not get a note, you also see a line like `features: 2 functions unwatched — a note at their start does not compile (e.g. src/lzg/x.c, f)` before the last line. That is not an error: those functions are simply not tracked, and the cockpit shows the reason beside each.
 
 **If it looks different.** Any of these endings on a `mapped` line makes the summary add `(<number> need a look)`:
 - `— its output differs between runs`: check that the scenario's `args` name no output file. Then run the same command by hand twice, in an empty folder, and compare the outputs (as in Step 1.8).

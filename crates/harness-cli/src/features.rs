@@ -133,12 +133,38 @@ pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
     let map = match harness_oracle::map_features(&ctx, &facts, &features, &digest, &mut progress) {
         Ok(map) => map,
         Err(e) => {
-            if main_count(&ctx, &facts) != 1 {
+            // Only when the refusal is about main (check 7: a unity build's
+            // other refusals are not).
+            if main_count(&ctx, &facts) != 1 && e.to_string().contains("main") {
                 out("features: features need a program with one main()".into());
             }
             return Err(e.into());
         }
     };
+    // Why functions have no note, one line per kind (§3.7): a count and one
+    // example, the words shown as a person reads them.
+    let mut kinds: std::collections::BTreeMap<&str, (usize, &features::UnwatchedReason)> =
+        std::collections::BTreeMap::new();
+    for r in &map.unwatched_reasons {
+        kinds.entry(r.kind.as_str()).or_insert((0, r)).0 += 1;
+    }
+    // The example (a compiler's message may quote source text) only for a
+    // person's terminal; events carry the counts (§3.7: reasons stay out of
+    // events and prompts).
+    let human = crate::report::mode() == crate::report::Mode::Human;
+    for (kind, (count, example)) in &kinds {
+        let plural = if *count == 1 { "" } else { "s" };
+        out(if human {
+            format!(
+                "features: {count} function{plural} unwatched — {} (e.g. {}, {})",
+                features::unwatched_words(kind, &example.detail),
+                example.file,
+                example.id,
+            )
+        } else {
+            format!("features: {count} function{plural} unwatched ({kind})")
+        });
+    }
     let path = features::map_path(&ctx.root);
     harness_core::ledger::write_atomic(&path, &map.to_bytes()?)?;
     let look = map

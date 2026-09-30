@@ -1569,3 +1569,37 @@ fn an_error_lands_in_the_function_that_holds_it() {
         map.unwatched
     );
 }
+
+/// docs/FEATURES-PROBE-REDESIGN.md §3.5: a program that defines a name the
+/// probe's runtime uses before `main` is refused by name; an absolute
+/// include of a header without notes is the same file either way and maps.
+#[test]
+fn the_runtimes_names_and_function_less_headers() {
+    let main = "#include <unistd.h>\n#include \"unit.h\"\n#include \"mul.h\"\n\
+                int close(int fd) { (void)fd; return 0; }\n\
+                int main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "feat-map-own-close",
+        main,
+        &[],
+        &[("src/tool/main.c", "close")],
+    );
+    let err = map.expect_err("refused").to_string();
+    assert!(err.contains("the program defines close()"), "{err}");
+
+    let tmp = TempDir::new("feat-map-absolute-header");
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+    let (target, _) = program(tmp.path(), GOOD, Some(features), "");
+    write(&tmp.path().join("src/tool/consts.h"), "#define ANSWER 42\n");
+    let consts = tmp.path().join("src/tool/consts.h").canonicalize().unwrap();
+    let main = tmp.path().join("src/tool/main.c");
+    let old = std::fs::read_to_string(&main).unwrap();
+    std::fs::write(&main, format!("#include \"{}\"\n{old}", consts.display())).unwrap();
+    let facts = with_symbols(tmp.path());
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+        .expect("an absolute include of a header without notes maps");
+}

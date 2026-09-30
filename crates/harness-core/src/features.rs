@@ -716,6 +716,36 @@ pub const UNWATCHED_KINDS: &[&str] = &[
     "not-checked",
 ];
 
+/// An unwatched function's reason in plain words
+/// (docs/FEATURES-PROBE-REDESIGN.md §3.7): the kind's words, with the
+/// detail where it has one.
+pub fn unwatched_words(kind: &str, detail: &str) -> String {
+    let with = |words: &str| {
+        if detail.is_empty() {
+            words.to_string()
+        } else {
+            format!("{words}: {detail}")
+        }
+    };
+    match kind {
+        "parser" => "the parser could not read its definition".to_string(),
+        "not-a-block" => "its body is not a { } block".to_string(),
+        "conditional-brace" => "a # line between its head and its body".to_string(),
+        "skipped-branch" => "its body's brace is inside #if".to_string(),
+        "naked" => "a naked function (gcc)".to_string(),
+        "stringized" => "its body is inside a macro argument that becomes a string".to_string(),
+        "data" => with("its file is read as data"),
+        "compile" => with("a note at its start does not compile"),
+        "elimination" => with("its note broke the build (found by building without it)"),
+        "link" => with("the program does not link with its note"),
+        "file-limit" => with("the scratch copy of its file did not build with notes"),
+        "not-checked" => {
+            "not checked: the notes check stopped at its limit before its file".to_string()
+        }
+        _ => "the probe could not put a note in it".to_string(),
+    }
+}
+
 /// The longest detail of an unwatched function's reason, in bytes.
 pub const UNWATCHED_DETAIL_BYTES: usize = 160;
 

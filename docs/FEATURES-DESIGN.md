@@ -478,6 +478,11 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
 
 ### 5.3 The probed copy
 
+> **Superseded in part (2026-09-30)** by docs/FEATURES-PROBE-REDESIGN.md, the compiler-guided
+> probe: its §3.1 replaces "Unwatched" below, its §3.2–§3.4 the checks and the probed build, its
+> §3.6 the runtime of §5.4, its §3.7 what the map records. The mirror and the listing rules below
+> stand where the redesign does not change them.
+
 - **The mirror**: every regular file under the canonical `source_dir` — except `migration/`
   and `.git/` when `source_dir` is the target root — copied to
   `migration/build/.features/mirror/<repo-relative path>` by a new walk mode (all files, not

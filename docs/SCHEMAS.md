@@ -1145,11 +1145,17 @@ used is a value on every read path (the snapshot's `Invalid`), never an error.
 
 ## `migration/features/map.json` (`ruharness-features-map` v1, written by `features map`)
 
-`{schema, schema_version, inputs {facts, features, program, platform}, unwatched [[file, id]],
-scenarios [{feature, scenario, end, stdout_bytes, stderr_bytes, stderr_head, stable,
-probe_agrees, noted, reason?, functions [[file, id]]}]}`. `end` ∈ `exit N | signal N | timed out |
-too much output | could not start`; `noted` ∈ `complete | unavailable` (`reason`: `none written |
-unreadable`); `stdout_bytes`/`stderr_bytes` count the first run's streams with paths as `$TMPDIR`/`$PROGDIR`
+`{schema, schema_version, inputs {facts, features, program, platform, probe?}, unwatched [[file,
+id]], unwatched_reasons? [{file, id, kind, detail?}], scenarios [{feature, scenario, end,
+stdout_bytes, stderr_bytes, stderr_head, stable, probe_agrees, noted, reason?, functions [[file,
+id]]}]}`. `probe` is the probe that made it (`compiler-guided-1`); a map without it reads out of
+date ("made by an older harness"). `unwatched_reasons` (docs/FEATURES-PROBE-REDESIGN.md §3.7):
+`kind` ∈ `parser | not-a-block | conditional-brace | skipped-branch | naked | stringized | data |
+compile | elimination | link | file-limit | not-checked`, `detail` ≤ 160 bytes with no control
+character (a compiler's message may quote the target's source: display-only, never in prompts,
+events or harness-mcp), each pair in `unwatched`. `end` ∈ `exit N | signal N | timed out | too
+much output | could not start`; `noted` ∈ `complete | unavailable` (`reason`: `none written |
+unreadable | the probe's setup did not run`); `stdout_bytes`/`stderr_bytes` count the first run's streams with paths as `$TMPDIR`/`$PROGDIR`
 and no `$$` escape (for a program that prints no path, its own bytes);
 `stderr_head` printable ASCII, ≤ 100 bytes, from the rewritten stream (`$TMPDIR`, `$PROGDIR`, `$$`). Current iff all four inputs equal
 today's. Read strictly (hostile, committed); pairs today's facts do not know are dropped.

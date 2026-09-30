@@ -566,12 +566,19 @@ impl Build<'_> {
         pass: &mut usize,
     ) -> Result<PathBuf, Error> {
         let program = self.out.join("probed");
+        let link_map = self.out.join("probed.map");
         for _ in 0..LINK_ROUNDS {
             let mut argv = vec![
                 "cc".to_string(),
                 "-o".to_string(),
                 crate::featuremap::path_text(&program)?,
             ];
+            // The link's map says which object defines each name (§3.5).
+            let map_text = crate::featuremap::path_text(&link_map)?;
+            argv.push(match self.cc {
+                Cc::Clang => format!("-Wl,-map,{map_text}"),
+                Cc::Gcc(_) => format!("-Wl,-Map={map_text},--cref"),
+            });
             argv.push(crate::featuremap::path_text(self.runtime)?);
             for n in 0..self.units.len() {
                 argv.push(crate::featuremap::path_text(&self.object(n))?);
@@ -579,7 +586,18 @@ impl Build<'_> {
             argv.extend(self.link_args.iter().cloned());
             let run = self.runner.tool_run(&argv)?;
             let stderr = match run.end {
-                ChildEnd::Exited(status) if status.success() => return Ok(program),
+                ChildEnd::Exited(status) if status.success() => {
+                    let text = std::fs::read(&link_map).unwrap_or_default();
+                    let objects: Vec<PathBuf> =
+                        (0..self.units.len()).map(|n| self.object(n)).collect();
+                    if let Some(name) = defined_by_program(&text, &objects) {
+                        return Err(Error::Invariant(format!(
+                            "the program defines {name}(), which the probe's runtime also uses \
+                             before main — the features map cannot map it"
+                        )));
+                    }
+                    return Ok(program);
+                }
                 ChildEnd::Exited(_) => run.stderr,
                 _ => {
                     return Err(Error::Invariant(format!(
@@ -656,6 +674,69 @@ impl Build<'_> {
                 .to_string(),
         ))
     }
+}
+
+/// The names the probe's runtime uses (docs/FEATURES-PROBE-REDESIGN.md
+/// §3.5); a unit test pins them against the runtime object's imports.
+pub(crate) const RUNTIME_IMPORTS: &[&str] = &["open", "fstat", "mmap", "close", "environ"];
+
+/// The first of [`RUNTIME_IMPORTS`] the link's map says one of the
+/// program's `objects` defines — ld64's map (`[ n] path` object lines, then
+/// `0x… 0x… [ n] _name` symbol lines) or GNU ld's cross-reference table
+/// (`name  definer` then referrers). `None` when none is, or the map cannot
+/// be read.
+pub(crate) fn defined_by_program(map: &[u8], objects: &[PathBuf]) -> Option<String> {
+    let text = String::from_utf8_lossy(map);
+    let is_program = |path: &str| {
+        let path = Path::new(path.trim());
+        objects.iter().any(|o| o == path)
+    };
+    // ld64
+    let mut files: BTreeMap<usize, bool> = BTreeMap::new();
+    let mut section = "";
+    let bracket = |l: &str| -> Option<(usize, String)> {
+        let open = l.find('[')?;
+        let close = l[open..].find(']')? + open;
+        let n = l[open + 1..close].trim().parse().ok()?;
+        Some((n, l[close + 1..].trim().to_string()))
+    };
+    for line in text.lines() {
+        if line.starts_with("# Object files:") {
+            section = "objects";
+        } else if line.starts_with("# Symbols:") {
+            section = "symbols";
+        } else if line.starts_with("# Sections:") || line.starts_with("# Dead Stripped Symbols:") {
+            section = "";
+        } else if line.starts_with('#') {
+        } else if section == "objects" {
+            if let Some((n, path)) = bracket(line) {
+                files.insert(n, is_program(&path));
+            }
+        } else if section == "symbols" {
+            if let Some((n, name)) = bracket(line) {
+                let name = name.strip_prefix('_').unwrap_or(&name);
+                if RUNTIME_IMPORTS.contains(&name) && files.get(&n) == Some(&true) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    // GNU ld: after "Cross Reference Table", a symbol at column 0 is
+    // followed by its definer.
+    if let Some(at) = text.find("Cross Reference Table") {
+        for line in text[at..].lines().skip(1) {
+            if line.is_empty() || line.starts_with(char::is_whitespace) {
+                continue;
+            }
+            let mut words = line.split_whitespace();
+            if let (Some(name), Some(definer)) = (words.next(), words.next()) {
+                if RUNTIME_IMPORTS.contains(&name) && is_program(definer) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// A canonical id's function name (a static's `file::name` read as `name`).
@@ -780,6 +861,76 @@ mod tests {
         assert_eq!(offset(text, 2, 2), Some(4));
         assert_eq!(offset(text, 3, 3), Some(8), "a lone CR ends a line");
         assert_eq!(offset(text, 4, 2), Some(11), "a tab is one byte");
+    }
+
+    #[test]
+    fn the_link_map_says_who_defines_the_runtimes_names() {
+        let objects = vec![
+            PathBuf::from("/o/probed-0.o"),
+            PathBuf::from("/o/probed-1.o"),
+        ];
+        let ld64 = b"# Path: /o/probed\n# Object files:\n[  0] linker synthesized\n\
+                     [  1] /o/fnprobe.o\n[  2] /o/probed-0.o\n[  3] /usr/lib/libSystem.tbd\n\
+                     # Sections:\n# Address Size Segment Section\n\
+                     # Symbols:\n# Address\tSize    \tFile  Name\n\
+                     0x100003E6C\t0x00000070\t[  2] _main\n\
+                     0x100003F00\t0x00000010\t[  2] _close\n";
+        assert_eq!(
+            defined_by_program(ld64, &objects),
+            Some("close".to_string())
+        );
+        let fine = String::from_utf8_lossy(ld64).replace("[  2] _close", "[  3] _close");
+        assert_eq!(defined_by_program(fine.as_bytes(), &objects), None);
+        let gnu = b"Cross Reference Table\n\nSymbol                File\n\
+                    close                 /o/probed-1.o\n                      /o/fnprobe.o\n\
+                    open                  /lib/libc.so.6\n";
+        assert_eq!(defined_by_program(gnu, &objects), Some("close".to_string()));
+        assert_eq!(defined_by_program(b"", &objects), None);
+    }
+
+    /// The names [`RUNTIME_IMPORTS`] lists are the runtime object's own
+    /// imports (reserved `__` names aside).
+    #[test]
+    fn the_runtimes_imports_are_pinned() {
+        let dir = std::env::temp_dir().join(format!("rh-rt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fnprobe/fnprobe.c");
+        let obj = dir.join("fnprobe.o");
+        let built = std::process::Command::new("cc")
+            .args(["-O2", "-c", "-fno-builtin", "-DRUHARNESS_FNPROBE_N=4", "-o"])
+            .arg(&obj)
+            .arg(&src)
+            .status()
+            .expect("cc runs");
+        assert!(built.success());
+        let nm = std::process::Command::new("nm")
+            .arg("-u")
+            .arg(&obj)
+            .output()
+            .expect("nm runs");
+        let names: Vec<String> = String::from_utf8_lossy(&nm.stdout)
+            .split_whitespace()
+            .filter(|w| *w != "U")
+            // Mach-O's one leading `_`; a name that still starts with `_`
+            // is reserved to the implementation (`__stack_chk_fail`,
+            // `___chkstk_darwin`), never a program's own.
+            .map(|w| {
+                if cfg!(target_os = "macos") {
+                    w.strip_prefix('_').unwrap_or(w).to_string()
+                } else {
+                    w.to_string()
+                }
+            })
+            .filter(|w| !w.is_empty())
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        for name in &names {
+            let reserved = name.starts_with('_');
+            assert!(
+                reserved || RUNTIME_IMPORTS.contains(&name.as_str()),
+                "the runtime imports {name}, which RUNTIME_IMPORTS does not list: {names:?}"
+            );
+        }
     }
 
     #[test]

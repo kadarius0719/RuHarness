@@ -235,6 +235,8 @@ pub struct FeatureModel {
     pub watched: usize,
     /// Definitions it could not watch.
     pub unwatched: BTreeSet<Pair>,
+    /// Why each unwatched function has no note, in plain words.
+    pub unwatched_why: BTreeMap<Pair, String>,
     /// Pairs in the map today's facts did not know (dropped).
     pub unknown: usize,
     /// The facts record no single `main()` among the program's files.
@@ -381,6 +383,7 @@ pub fn build(
         ran: 0,
         watched: 0,
         unwatched: BTreeSet::new(),
+        unwatched_why: BTreeMap::new(),
         unknown: 0,
         no_single_main: no_single_main(snapshot),
         complete: false,
@@ -454,6 +457,16 @@ pub fn build(
     }
     if let Some(m) = loaded {
         model.unwatched = m.unwatched.iter().cloned().collect();
+        model.unwatched_why = m
+            .unwatched_reasons
+            .iter()
+            .map(|r| {
+                (
+                    (r.file.clone(), r.id.clone()),
+                    features::unwatched_words(&r.kind, &r.detail),
+                )
+            })
+            .collect();
         model.watched = facts_pairs.len().saturating_sub(model.unwatched.len());
     }
     let records: BTreeMap<(String, String), &ScenarioRecord> = loaded

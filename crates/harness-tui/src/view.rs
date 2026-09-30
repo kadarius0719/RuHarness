@@ -867,7 +867,10 @@ fn function_features_line(app: &App, file: &str, name: &str) -> Option<String> {
     }
     let pair = (file.to_string(), name.to_string());
     if model.unwatched.contains(&pair) {
-        return Some("Not watched by the map (the probe could not put a note in it).".into());
+        return Some(match model.unwatched_why.get(&pair) {
+            Some(why) => format!("Not watched by the map: {why}."),
+            None => "Not watched by the map (the probe could not put a note in it).".into(),
+        });
     }
     Some(match model.by_function.get(&pair) {
         Some(ids) => format!(

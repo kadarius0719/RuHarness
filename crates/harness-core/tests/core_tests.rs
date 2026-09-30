@@ -420,6 +420,39 @@ fn target_config_cannot_request_unbounded_llm_spend() {
     assert!(harness_core::TargetContext::load(&dir).is_ok());
 }
 
+/// `source_dir = "."` (the target root) and `"./src"` are spellings of their
+/// folders: include_dirs inside them load (check 7); outside still refused.
+#[test]
+fn include_dirs_are_read_against_the_source_dirs_own_spelling() {
+    let dir = temp_dir("cfg-include-dirs");
+    let write = |source: &str, include: &str| {
+        std::fs::write(
+            dir.join("harness.toml"),
+            format!(
+                "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"{source}\"\n\
+                 include_dirs = [\"{include}\"]\n"
+            ),
+        )
+        .unwrap();
+    };
+    for (source, include) in [
+        (".", "include"),
+        ("./", "src/inc"),
+        ("./src", "src/inc"),
+        ("src", "src"),
+    ] {
+        write(source, include);
+        assert!(
+            harness_core::TargetContext::load(&dir).is_ok(),
+            "{source} with {include}"
+        );
+    }
+    write("src", "other");
+    assert!(harness_core::TargetContext::load(&dir).is_err());
+    write("src", "srcother");
+    assert!(harness_core::TargetContext::load(&dir).is_err());
+}
+
 #[test]
 fn hostile_plan_paths_are_refused_at_load() {
     // Regression (M3 design review): plan fields become path components.

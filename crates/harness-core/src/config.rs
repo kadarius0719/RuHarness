@@ -201,10 +201,16 @@ impl TargetConfig {
             }
         }
         config.driver_policy().map_err(|m| Error::parse(&path, m))?;
+        // `source_dir = "."` (or "./", "./src") is the root's own spelling:
+        // normalised before the prefix test (check 7).
+        let source_dir = config.target.source_dir.trim_end_matches('/');
+        let source_dir = source_dir.strip_prefix("./").unwrap_or(source_dir);
+        let source_dir = if source_dir == "." { "" } else { source_dir };
         for dir in &config.target.include_dirs {
-            let inside = dir
-                .strip_prefix(config.target.source_dir.trim_end_matches('/'))
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+            let inside = source_dir.is_empty()
+                || dir
+                    .strip_prefix(source_dir)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
             if !crate::plan::is_clean_relative_path(dir) || !inside {
                 return Err(Error::parse(
                     &path,

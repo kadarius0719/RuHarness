@@ -252,7 +252,17 @@ fn map_inner(
         ),
         format!("-DRUHARNESS_FNPROBE_N={}", index.len()),
     ];
+    let root_for_notes = root.clone();
+    let probe_rels: std::collections::BTreeSet<String> = probe.rels().into_iter().collect();
+    let has_notes = move |canonical: &Path| -> bool {
+        canonical
+            .strip_prefix(&root_for_notes)
+            .ok()
+            .and_then(|r| r.to_str())
+            .is_some_and(|rel| probe_rels.contains(rel))
+    };
     let copy = CopyPaths {
+        has_notes: &has_notes,
         build: &build,
         header: &header,
         mirror: &mirror,
@@ -268,8 +278,19 @@ fn map_inner(
     let mut programs: Vec<Reads> = Vec::with_capacity(c_files.len());
     for (n, c_file) in c_files.iter().enumerate() {
         let (i, d) = listing_out("program", n);
-        let program = reads(&runner, &base.includes(), &[], c_file, (&i, &d), None)?
-            .map_err(|why| build_failed("the C program does not build", why))?;
+        let program =
+            reads(&runner, &base.includes(), &[], c_file, (&i, &d), None)?.map_err(|why| {
+                // A list the compiler printed but that cannot be read back
+                // is not a build failure (check 7).
+                if why.to_string().contains("the compiler's list names") {
+                    Error::Invariant(format!(
+                        "the compiler's list of what {} reads cannot be read back: {why}",
+                        shown(c_file, &root).display()
+                    ))
+                } else {
+                    build_failed("the C program does not build", why)
+                }
+            })?;
         programs.push(program);
     }
     let mut copy_texts: Vec<Vec<u8>> = Vec::new();
@@ -695,6 +716,8 @@ impl PairIndex {
 
 /// Where the scratch copy lives, for [`reads`].
 struct CopyPaths<'a> {
+    /// Whether a canonical file of the target is a probed file with notes.
+    has_notes: &'a dyn Fn(&Path) -> bool,
     build: &'a Path,
     header: &'a Path,
     mirror: &'a Path,
@@ -803,6 +826,7 @@ fn reads(
             canonical_of(c.mirror)?,
             c.root,
             c.source_dir,
+            c.has_notes,
         )),
         None => None,
     };
@@ -816,7 +840,8 @@ fn reads(
                 "the compiler's list names {token:?}, which does not resolve"
             ))));
         };
-        let Some((build, header, mirror, mirror_canonical, root, source_dir)) = &copy else {
+        let Some((build, header, mirror, mirror_canonical, root, source_dir, has_notes)) = &copy
+        else {
             return Ok(Ok(Some((spelled, canonical))));
         };
         if canonical == *header {
@@ -831,7 +856,14 @@ fn reads(
                 .join(rel)
                 .canonicalize()
                 .unwrap_or_else(|_| root.join(rel)),
-            Err(_) if canonical.starts_with(source_dir) && !canonical.starts_with(build) => {
+            // Only a file with notes matters: its original runs unwatched
+            // (check 7: a function-less header read by its own path is the
+            // same file either way).
+            Err(_)
+                if canonical.starts_with(source_dir)
+                    && !canonical.starts_with(build)
+                    && has_notes(&canonical) =>
+            {
                 return Err(Error::Invariant(format!(
                     "the scratch copy would read {} itself, not its copy (an include of \
                      __FILE__, or an absolute include), so its functions would run unwatched: \
