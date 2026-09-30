@@ -4,7 +4,7 @@
 //! plain — and the notes read back into `map.json`'s records. Nothing here
 //! gates anything; the map only says which functions each scenario ran.
 
-use crate::confine::{Collected, Confinement, ScenarioEnd, ScenarioRun};
+use crate::confine::{Collected, Confinement, NotesFile, ScenarioEnd, ScenarioRun};
 use crate::exec::{self, Runner};
 use crate::features::place;
 use crate::sandbox::{self, HostDirs, ProfileSpec};
@@ -26,8 +26,6 @@ use std::path::{Path, PathBuf};
 const FNPROBE_H: &str = include_str!("fnprobe/fnprobe.h");
 /// The runtime.
 const FNPROBE_C: &str = include_str!("fnprobe/fnprobe.c");
-/// The file a probed run leaves its notes in, in its temp dir.
-const NOTES_FILE: &str = "ruharness-fnprobe";
 /// The mirror's bounds (§5.3).
 const MIRROR_MAX_FILES: usize = 20_000;
 const MIRROR_MAX_BYTES: u64 = 256 * 1024 * 1024;
@@ -186,9 +184,9 @@ fn map_inner(
         .map(|d| to_mirror(d))
         .collect::<Result<_, _>>()?;
     let header = build.join("fnprobe.h");
-    let runtime = build.join("fnprobe.c");
+    let runtime_src = build.join("fnprobe.c");
     write(&header, FNPROBE_H.as_bytes())?;
-    write(&runtime, FNPROBE_C.as_bytes())?;
+    write(&runtime_src, FNPROBE_C.as_bytes())?;
     let mut probed_inputs: Vec<PathBuf> = c_files
         .iter()
         .map(|p| to_mirror(p))
@@ -299,7 +297,27 @@ fn map_inner(
     compile(&runner, &base.includes(), &[], &plain, &c_files, &link_args)
         .map_err(|e| build_failed("the C program does not build", e))?;
     progress.message("Building the scratch copy…");
-    probed_inputs.push(runtime);
+    // The runtime: its own compile — no target include folder, no builtins
+    // (its imports stay open, fstat, mmap, close) — linked first
+    // (docs/FEATURES-PROBE-REDESIGN.md §3.5, §3.4 step 5).
+    let runtime = build.join("fnprobe.o");
+    cc_compile(
+        &runner,
+        &CcInvocation {
+            includes: &[],
+            cflags: &[
+                "-c".to_string(),
+                "-fno-builtin".to_string(),
+                format!("-DRUHARNESS_FNPROBE_N={}", index.len()),
+            ],
+            quiet: true,
+            out: &runtime,
+            inputs: std::slice::from_ref(&runtime_src),
+            libs: &[],
+        },
+    )
+    .map_err(|e| build_failed("the probe's runtime does not build", e))?;
+    probed_inputs.insert(0, runtime);
     let probed = build.join("probed");
     compile(
         &runner,
@@ -313,7 +331,7 @@ fn map_inner(
 
     // The runs: plain, probed, plain — all at the one path of §4.1.
     let run_path = build.join("f").join(features::program_name(&target.config));
-    let cap = 4 * (index.len().max(1) as u64) * 64;
+    let notes_len = index.len() as u64 + 1;
     let of = features.scenarios.len();
     let mut records = Vec::with_capacity(of);
     for (i, scenario) in features.scenarios.iter().enumerate() {
@@ -323,13 +341,17 @@ fn map_inner(
         let input = sample
             .as_ref()
             .map(|(name, bytes)| (*name, bytes.as_slice()));
-        let run = |bin: &Path, collect: Option<(&str, u64)>| -> Result<ScenarioRun, Error> {
+        let run = |bin: &Path, read: bool| -> Result<ScenarioRun, Error> {
             place(bin, &run_path)?;
-            confined.run_scenario(&run_path, &args, input, collect)
+            let notes = NotesFile {
+                len: notes_len,
+                read,
+            };
+            confined.run_scenario(&run_path, &args, input, Some(notes))
         };
-        let first = run(&plain, None)?;
-        let noted = run(&probed, Some((NOTES_FILE, cap)))?;
-        let second = run(&plain, None)?;
+        let first = run(&plain, false)?;
+        let noted = run(&probed, true)?;
+        let second = run(&plain, false)?;
         let record = record(scenario, &first, &noted, &second, &index);
         progress.scenario(&record, i + 1, of);
         records.push(record);
@@ -704,8 +726,18 @@ fn write_mirror(
             )));
         }
         let out = if with_functions.contains(rel) {
-            let probed = harness_scan::probe_source(rel, &bytes, &|id| index.of(rel, id))?;
-            unwatched.extend(probed.unwatched.into_iter().map(|id| (rel.to_string(), id)));
+            let probed = harness_scan::probe_source(
+                rel,
+                &bytes,
+                &|id| index.of(rel, id),
+                harness_scan::ProbeOptions::default(),
+            )?;
+            unwatched.extend(
+                probed
+                    .unwatched
+                    .into_iter()
+                    .map(|(id, _)| (rel.to_string(), id)),
+            );
             probed.source
         } else {
             bytes
@@ -738,13 +770,9 @@ fn record(
 ) -> ScenarioRecord {
     let same = |a: &ScenarioRun, b: &ScenarioRun| a.same_result(b);
     let (noted_word, reason, functions) = match &noted.collected {
-        // Opened, never written: the notes were lost (review M3).
-        Some(Collected::Bytes(bytes)) if bytes.is_empty() => {
-            ("unavailable", Some("none written"), Vec::new())
-        }
         Some(Collected::Bytes(bytes)) => match decode_notes(bytes, index) {
-            Some(functions) => ("complete", None, functions),
-            None => ("unavailable", Some("unreadable"), Vec::new()),
+            Ok(functions) => ("complete", None, functions),
+            Err(why) => ("unavailable", Some(why), Vec::new()),
         },
         Some(Collected::Missing) => ("unavailable", Some("none written"), Vec::new()),
         Some(Collected::Invalid) | None => ("unavailable", Some("unreadable"), Vec::new()),
@@ -764,24 +792,26 @@ fn record(
     }
 }
 
-/// The notes as `[file, id]` pairs, sorted, each once — `None` when they are
-/// not whole 4-byte records of known ids.
-fn decode_notes(bytes: &[u8], index: &PairIndex) -> Option<Vec<(String, String)>> {
-    if !bytes.len().is_multiple_of(4) {
-        return None;
+/// The notes as `[file, id]` pairs, sorted, each once
+/// (docs/FEATURES-PROBE-REDESIGN.md §3.6): exactly one byte per watched pair
+/// and the attach byte, each 0 or 1. The attach byte 0 means the runtime's
+/// setup did not run — the program changed `TMPDIR`, exited inside its own
+/// constructor — never a record where nothing ran.
+fn decode_notes(bytes: &[u8], index: &PairIndex) -> Result<Vec<(String, String)>, &'static str> {
+    if bytes.len() != index.len() + 1 || bytes.iter().any(|b| *b > 1) {
+        return Err("unreadable");
     }
-    let mut ids = std::collections::BTreeSet::new();
-    for chunk in bytes.chunks_exact(4) {
-        let id = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize;
-        if id >= index.len() {
-            return None;
-        }
-        ids.insert(id);
+    if bytes[index.len()] != 1 {
+        return Err("the probe's setup did not run");
     }
-    let mut pairs: Vec<(String, String)> =
-        ids.into_iter().map(|i| index.pairs[i].clone()).collect();
+    let mut pairs: Vec<(String, String)> = bytes[..index.len()]
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| **b == 1)
+        .map(|(i, _)| index.pairs[i].clone())
+        .collect();
     pairs.sort();
-    Some(pairs)
+    Ok(pairs)
 }
 
 #[cfg(test)]
@@ -843,22 +873,33 @@ mod tests {
     #[test]
     fn notes_decode_strictly() {
         let index = PairIndex::from_facts(&facts());
-        let rec = |ids: &[u32]| {
-            ids.iter()
-                .flat_map(|i| i.to_le_bytes())
-                .collect::<Vec<u8>>()
-        };
+        // Three pairs: main, helper, api — then the attach byte.
         assert_eq!(
-            decode_notes(&rec(&[2, 0, 2]), &index),
-            Some(vec![
+            decode_notes(&[1, 0, 1, 1], &index),
+            Ok(vec![
                 ("src/a.c".into(), "main".into()),
                 ("src/b.c".into(), "api".into())
             ]),
-            "sorted, each once (a forked child writes its own)"
+            "sorted, each once"
         );
-        assert_eq!(decode_notes(&[], &index), Some(vec![]));
-        assert_eq!(decode_notes(&rec(&[3]), &index), None, "an id out of range");
-        assert_eq!(decode_notes(&[0, 0, 0], &index), None, "a torn record");
+        assert_eq!(decode_notes(&[0, 0, 0, 1], &index), Ok(vec![]));
+        assert_eq!(
+            decode_notes(&[1, 1, 1, 0], &index),
+            Err("the probe's setup did not run"),
+            "never a record where nothing ran"
+        );
+        assert_eq!(decode_notes(&[], &index), Err("unreadable"));
+        assert_eq!(decode_notes(&[1, 0, 1], &index), Err("unreadable"), "short");
+        assert_eq!(
+            decode_notes(&[1, 0, 1, 1, 0], &index),
+            Err("unreadable"),
+            "long"
+        );
+        assert_eq!(
+            decode_notes(&[2, 0, 1, 1], &index),
+            Err("unreadable"),
+            "not 0 or 1"
+        );
     }
 
     #[test]

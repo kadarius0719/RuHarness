@@ -1049,6 +1049,84 @@ fn the_map_compares_names_and_depths() {
 
 /// Review M3: a program that closes every inherited descriptor (the notes'
 /// one too) keeps its notes, and never sees the probe in errno.
+/// docs/FEATURES-PROBE-REDESIGN.md §3.6: the runtime's setup reads the
+/// notes file from `TMPDIR`; a program whose own constructor changes
+/// `TMPDIR` first leaves the attach byte unset — "the probe's setup did not
+/// run", never a complete record where nothing ran. A program that lists its
+/// temp dir sees the same entries plain and probed (the notes file is in
+/// every run's), and one that defines `strlen` is not recorded as running it
+/// (the note calls nothing).
+#[test]
+fn the_runtime_attaches_or_says_it_did_not() {
+    let features = "schema_version = 1\n[[feature]]\nid = \"f\"\nname = \"F\"\n\
+                    [[scenario]]\nfeature = \"f\"\nid = \"x\"\nargs = [\"-q\"]\n";
+    let map_of = |root: &Path, main: &str, extra: &[&str]| {
+        let (target, _) = program(root, GOOD, Some(features), "");
+        write(&root.join("src/tool/main.c"), main);
+        let mut facts = with_symbols(root);
+        for name in extra {
+            facts.symbols.push(harness_core::facts::SymbolRecord {
+                name: (*name).into(),
+                kind: "function".into(),
+                file: "src/tool/main.c".into(),
+                visibility: "public".into(),
+                signature: String::new(),
+                span: (1, 1),
+            });
+        }
+        let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+            panic!("valid")
+        };
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+            .expect("maps")
+    };
+
+    // The runtime is linked first: its setup runs before the program's own
+    // constructors, so one that changes TMPDIR comes too late to matter.
+    let tmp = TempDir::new("feat-map-tmpdir-moved");
+    let map = map_of(
+        tmp.path(),
+        "#include <stdlib.h>\n#include \"unit.h\"\n#include \"mul.h\"\n\
+         __attribute__((constructor)) static void away(void) { setenv(\"TMPDIR\", \"/nonexistent\", 1); }\n\
+         int main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1); }\n",
+        &["src/tool/main.c::away"],
+    );
+    let r = &map.scenarios[0];
+    assert_eq!(r.noted, "complete", "{r:?}");
+    let names: Vec<&str> = r.functions.iter().map(|(_, n)| n.as_str()).collect();
+    assert_eq!(names, ["main", "src/tool/main.c::away", "unit_add"]);
+
+    let tmp = TempDir::new("feat-map-lists-tmpdir");
+    let map = map_of(
+        tmp.path(),
+        "#include <dirent.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include \"unit.h\"\n#include \"mul.h\"\n\
+         int main(void) {\n\
+           DIR *d = opendir(getenv(\"TMPDIR\"));\n\
+           int n = 0; struct dirent *e;\n\
+           while (d && (e = readdir(d))) n++;\n\
+           printf(\"%d entries %d\\n\", n, unit_add(1, 2));\n\
+           return 0;\n\
+         }\n",
+        &[],
+    );
+    let r = &map.scenarios[0];
+    assert!(r.probe_agrees, "the same entries plain and probed: {r:?}");
+    assert_eq!(r.noted, "complete");
+
+    let tmp = TempDir::new("feat-map-own-strlen");
+    let map = map_of(
+        tmp.path(),
+        "#include <stddef.h>\n#include \"unit.h\"\n#include \"mul.h\"\n\
+         size_t strlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }\n\
+         int main(void) { return unit_add(1, 2) == 3 ? 0 : 1; }\n",
+        &["strlen"],
+    );
+    let r = &map.scenarios[0];
+    assert_eq!(r.noted, "complete", "{r:?}");
+    let names: Vec<&str> = r.functions.iter().map(|(_, n)| n.as_str()).collect();
+    assert_eq!(names, ["main", "unit_add"], "strlen never ran");
+}
+
 #[test]
 fn a_program_that_closes_its_descriptors_keeps_its_notes_and_its_errno() {
     let tmp = TempDir::new("feat-map-closefrom");
@@ -1122,4 +1200,64 @@ fn a_crash_keeps_the_notes_before_it() {
     assert_eq!(r.noted, "complete");
     let names: Vec<&str> = r.functions.iter().map(|(_, n)| n.as_str()).collect();
     assert_eq!(names, ["main", "unit_add"]);
+}
+
+/// docs/FEATURES-PROBE-REDESIGN.md §3.6, the runtime itself: with the notes
+/// file in `TMPDIR`, setup maps it, merges the notes made before it and sets
+/// the attach byte; a second image adds its notes; without `TMPDIR` the
+/// file stays all zeros — read as "the probe's setup did not run".
+#[test]
+fn the_runtime_merges_and_marks_that_it_attached() {
+    let tmp = TempDir::new("fnprobe-runtime");
+    let runtime = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fnprobe/fnprobe.c");
+    let main = tmp.path().join("main.c");
+    write(
+        &main,
+        "#include <stdlib.h>\n#include <unistd.h>\n\
+         extern unsigned char *volatile __ruharness_seen;\n\
+         __attribute__((constructor)) static void early(void) { __ruharness_seen[0] = 1; }\n\
+         static void second(void) { __ruharness_seen[2] = 1; }\n\
+         int main(int argc, char **argv) {\n\
+           __ruharness_seen[1] = 1;\n\
+           if (argc > 1) { second(); return 0; }\n\
+           char *again[] = { argv[0], \"again\", 0 };\n\
+           pid_t p = fork();\n\
+           if (p == 0) { execv(argv[0], again); _exit(9); }\n\
+           int st; while (wait(&st) < 0) {}\n\
+           return 0;\n\
+         }\n",
+    );
+    let bin = tmp.path().join("probed");
+    let built = std::process::Command::new("cc")
+        .args(["-O2", "-DRUHARNESS_FNPROBE_N=4", "-include"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fnprobe/fnprobe.h"))
+        .arg("-o")
+        .arg(&bin)
+        .arg(&runtime)
+        .arg(&main)
+        .status()
+        .expect("cc runs");
+    assert!(built.success());
+    let dir = tmp.path().join("t");
+    std::fs::create_dir_all(&dir).unwrap();
+    let notes = dir.join(".ruharness-notes");
+    std::fs::write(&notes, [0u8; 5]).unwrap();
+    let ran = std::process::Command::new(&bin)
+        .env_clear()
+        .env("TMPDIR", &dir)
+        .status()
+        .expect("runs");
+    assert!(ran.success());
+    assert_eq!(
+        std::fs::read(&notes).unwrap(),
+        [1, 1, 1, 0, 1],
+        "the constructor's note merged, the child image's note added, attached"
+    );
+    std::fs::write(&notes, [0u8; 5]).unwrap();
+    let ran = std::process::Command::new(&bin)
+        .env_clear()
+        .status()
+        .expect("runs");
+    assert!(ran.success());
+    assert_eq!(std::fs::read(&notes).unwrap(), [0u8; 5], "not attached");
 }

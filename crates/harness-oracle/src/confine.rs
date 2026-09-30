@@ -158,6 +158,20 @@ pub(crate) enum ScenarioEnd {
 
 /// A scenario run: how it ended, and both streams (rewritten, §4.1 step 3)
 /// for a run that exited or was signalled. Compare runs with
+/// The features map's notes file in a scenario run's temp dir
+/// (docs/FEATURES-PROBE-REDESIGN.md §3.6).
+pub(crate) const NOTES_FILE: &str = ".ruharness-notes";
+
+/// A notes file for a scenario run: created with `len` zero bytes before
+/// the run; read back after it when `read`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NotesFile {
+    /// Its size in bytes (the watched pairs, plus the attach byte).
+    pub len: u64,
+    /// Read it back after the run (the probed run).
+    pub read: bool,
+}
+
 /// [`ScenarioRun::same_result`].
 #[derive(Debug, Clone)]
 pub(crate) struct ScenarioRun {
@@ -231,7 +245,7 @@ impl Confinement<'_> {
         bin: &Path,
         args: &[&str],
         input: Option<(&str, &[u8])>,
-        collect_file: Option<(&str, u64)>,
+        notes: Option<NotesFile>,
     ) -> Result<ScenarioRun, Error> {
         let tmp = RunTmp::create()?;
         // The program's own folder, inside the run's temp dir: `$TMPDIR`
@@ -253,6 +267,15 @@ impl Confinement<'_> {
                 .map_err(|e| Error::io(&path, e))?;
             file.set_modified(SCENARIO_INPUT_MTIME)
                 .map_err(|e| Error::io(&path, e))?;
+        }
+        // The features map's notes file, before every run of a scenario —
+        // plain and probed alike, so the three runs' temp dirs hold the same
+        // entries (docs/FEATURES-PROBE-REDESIGN.md §3.6).
+        let notes_path = tmp.path().join(NOTES_FILE);
+        if let Some(notes) = notes {
+            let file = std::fs::File::create(&notes_path).map_err(|e| Error::io(&notes_path, e))?;
+            file.set_len(notes.len)
+                .map_err(|e| Error::io(&notes_path, e))?;
         }
         let profile = match self.host {
             Some(host) => Some(sandbox::render_scenario_profile(&RunSpec {
@@ -282,7 +305,9 @@ impl Confinement<'_> {
                 })
             }
         };
-        let collected = collect_file.map(|(name, cap)| collect(&tmp.path().join(name), cap));
+        let collected = notes
+            .filter(|n| n.read)
+            .map(|n| collect(&notes_path, n.len));
         let rewrite = |raw: &[u8]| {
             let escaped = replace_bytes(raw, b"$", b"$$");
             let tmp_done = replace_bytes(

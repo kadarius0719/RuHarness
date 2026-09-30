@@ -316,9 +316,9 @@ test fixtures.
   functions under the same ERROR node (both configurations); rule 2; rule 3 in each spelling —
   `#ifdef`, `#ifndef`, `#if X`, `#  ifdef`, `/* c */ #ifdef`, `%:ifdef`, `#\⏎ifdef` — with and
   without the define; two heads for one body; watched: a parameter list split by `#ifdef`, a
-  head that starts inside `#ifdef _WIN32 __declspec(dllexport) #endif`, and Cython's `#if X /
-  static int f(…) / #else / static int f(…) / #endif / {` shape (the same name both ways);
-  rule 4 on gcc only.
+  head that starts inside `#ifdef _WIN32 __declspec(dllexport) #endif`; unwatched: Cython's `#if X /
+  static int f(…) / #else / static int f(…) / #endif / {` shape, even with the same name both
+  ways (rule 3 does not compare the heads' names — counted in §6's cost); rule 4 on gcc only.
 - §3.2 — a brace in a skipped branch that the text rule is made to miss (a unit test that turns
   rule 3 off): the end-token count unwatches it.
 - §3.3 — `#embed`, `# embed`, `%:embed`, `#\⏎embed`, `#/*c*/embed`, `__has_embed(… clang::offset(N))`;

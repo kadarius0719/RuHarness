@@ -35,7 +35,7 @@ pub use interface::{
 };
 pub use lint::{lint_driver, DRIVER_SYSTEM_INCLUDES};
 pub use mutate::mutants;
-pub use probe::{probe_source, Probed};
+pub use probe::{probe_source, PlacedNote, ProbeOptions, Probed};
 
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
@@ -69,11 +69,30 @@ struct FnDef {
     span: (u32, u32),
     /// Names appearing as direct callees inside this definition.
     calls: BTreeSet<String>,
-    /// Byte offset of the body's opening `{`, when the features probe can
-    /// put a note right after it (docs/FEATURES-DESIGN.md §5.3): the body is
-    /// a real `{`-block, nothing on the way is an ERROR or MISSING node, and
-    /// no preprocessor directive stands between the declarator and the body.
-    probe_at: Option<usize>,
+    /// Where the features probe can put a note (docs/FEATURES-PROBE-REDESIGN.md
+    /// §3.1): the byte of the body's opening `{` and the body's end, or why
+    /// no note can go there. Whether a note there compiles is the
+    /// compiler's to say (§3.4), not this rule's.
+    note_at: Result<(usize, usize), NoNote>,
+    /// The head names `naked` (its parameters and K&R declarations aside):
+    /// on gcc such a function is not watched (§3.1 rule 4).
+    naked_head: bool,
+}
+
+/// Why the features probe cannot put a note in a definition
+/// (docs/FEATURES-PROBE-REDESIGN.md §3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoNote {
+    /// Rule 1: the definition lies under a parse error — its body's bounds
+    /// are a guess.
+    Parser,
+    /// Rule 2: the body is not a real `{ … }` block.
+    NotABlock,
+    /// Rule 3: the body's `{` sits in a conditional group its head is not
+    /// wholly in.
+    ConditionalBrace,
+    /// Rule 4 (gcc only): a naked function.
+    Naked,
 }
 
 impl FnDef {
@@ -358,7 +377,8 @@ fn collect_functions_in(
                         (child.end_position().row + 1) as u32,
                     ),
                     calls,
-                    probe_at: probe_point(child, src, under_error),
+                    note_at: note_point(child, src, under_error),
+                    naked_head: naked_head(child, src),
                 });
             }
         } else {
@@ -368,40 +388,212 @@ fn collect_functions_in(
     }
 }
 
-/// Where a note can go in `def` (see [`FnDef::probe_at`]).
-fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<usize> {
+/// Where a note can go in `def` (see [`FnDef::note_at`]): rules 1–3 of
+/// docs/FEATURES-PROBE-REDESIGN.md §3.1 — nothing else is guessed.
+fn note_point(
+    def: tree_sitter::Node,
+    src: &[u8],
+    under_error: bool,
+) -> Result<(usize, usize), NoNote> {
     if under_error {
-        return None;
+        return Err(NoNote::Parser);
     }
-    let body = def.child_by_field_name("body")?;
-    let declarator = def.child_by_field_name("declarator")?;
-    // A parse error in the head (not in the body: a loop macro there is
-    // harmless before the note; review M9).
-    let mut cursor = def.walk();
-    if def
-        .children(&mut cursor)
-        .any(|c| c.id() != body.id() && (c.is_error() || c.has_error()))
-    {
-        return None;
-    }
+    let body = def.child_by_field_name("body").ok_or(NoNote::NotABlock)?;
+    let declarator = def
+        .child_by_field_name("declarator")
+        .ok_or(NoNote::Parser)?;
     if body.kind() != "compound_statement" || body.is_missing() {
-        return None;
+        return Err(NoNote::NotABlock);
     }
     let at = body.start_byte();
     if src.get(at) != Some(&b'{') {
-        return None;
+        return Err(NoNote::NotABlock);
     }
-    // A directive between the declarator and the body (a brace inside
-    // `#if`) compiles on one branch only: a line that starts with `#` —
-    // not a `#` in a comment (review M9).
-    let head = String::from_utf8_lossy(&src[declarator.end_byte()..at]);
-    if head.lines().any(|l| l.trim_start().starts_with('#')) {
-        return None;
+    // Rule 3, from the start of the function's name (the parser can fold an
+    // `#ifdef` into the declarator; a directive before the name — a
+    // `__declspec` under `#ifdef _WIN32` — is the head's own).
+    let from = name_start(declarator).unwrap_or(declarator.start_byte());
+    if brace_is_conditional(&src[from.min(at)..at]) {
+        return Err(NoNote::ConditionalBrace);
     }
-    // A naked function takes no statement (review M2) — `naked` as a word
-    // of its head, not inside a name (fix check N4), nor a parameter's name
-    // (fix check 3 N7).
-    // Nor a K&R declaration's (fix check 4 L2).
+    Ok((at, body.end_byte()))
+}
+
+/// The byte where the declared function's name starts: through pointer and
+/// parenthesized declarators to the identifier.
+fn name_start(declarator: tree_sitter::Node) -> Option<usize> {
+    let mut d = declarator;
+    loop {
+        if d.kind() == "identifier" {
+            return Some(d.start_byte());
+        }
+        d = match d.child_by_field_name("declarator") {
+            Some(inner) => inner,
+            None => {
+                let mut cursor = d.walk();
+                let inner = d
+                    .named_children(&mut cursor)
+                    .find(|c| c.kind().ends_with("declarator") || c.kind() == "identifier");
+                inner?
+            }
+        };
+    }
+}
+
+/// Rule 3 (docs/FEATURES-PROBE-REDESIGN.md §3.1): whether the `{` that ends
+/// `head` — the text from the function's name to its body's `{` — sits in a
+/// conditional group the head is not wholly in: an `#if`/`#ifdef`/`#ifndef`
+/// opened in `head` still open at its end, or an `#else`/`#elif…`/`#endif`
+/// of a group opened before it (two heads for one body). A directive line
+/// starts, after blanks and comments, with `#` or the digraph `%:`; line
+/// splices are joined first.
+fn brace_is_conditional(head: &[u8]) -> bool {
+    let mut depth = 0usize;
+    let mut in_comment = false;
+    for line in logical_lines(head) {
+        let mut rest = skip_blanks_and_comments(&line, &mut in_comment);
+        let directive = if let Some(r) = rest.strip_prefix(b"#") {
+            Some(r)
+        } else {
+            rest.strip_prefix(b"%:")
+        };
+        if let Some(after) = directive {
+            let mut after_comment = in_comment;
+            let words = skip_blanks_and_comments(after, &mut after_comment);
+            let keyword: Vec<u8> = words
+                .iter()
+                .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_')
+                .copied()
+                .collect();
+            match keyword.as_slice() {
+                b"if" | b"ifdef" | b"ifndef" => depth += 1,
+                b"else" | b"elif" | b"elifdef" | b"elifndef" => {
+                    if depth == 0 {
+                        return true;
+                    }
+                }
+                b"endif" => {
+                    if depth == 0 {
+                        return true;
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            rest = words;
+        }
+        // A comment opened later on the line runs on into the next.
+        track_comments(rest, &mut in_comment);
+    }
+    depth > 0
+}
+
+/// `text` split into lines (`\n`, `\r\n` or a lone `\r`), each line ending
+/// in a backslash joined to the next — as the preprocessor reads them.
+fn logical_lines(text: &[u8]) -> Vec<Vec<u8>> {
+    let mut lines: Vec<Vec<u8>> = Vec::new();
+    let mut current: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        let b = text[i];
+        let end = match b {
+            b'\n' => Some(1),
+            b'\r' if text.get(i + 1) == Some(&b'\n') => Some(2),
+            b'\r' => Some(1),
+            _ => None,
+        };
+        match end {
+            Some(len) => {
+                if current.last() == Some(&b'\\') {
+                    current.pop();
+                } else {
+                    lines.push(std::mem::take(&mut current));
+                }
+                i += len;
+            }
+            None => {
+                current.push(b);
+                i += 1;
+            }
+        }
+    }
+    lines.push(current);
+    lines
+}
+
+/// `line` past its leading blanks and comments (a `/* */` comment may have
+/// begun on an earlier line: `in_comment`).
+fn skip_blanks_and_comments<'a>(mut line: &'a [u8], in_comment: &mut bool) -> &'a [u8] {
+    loop {
+        if *in_comment {
+            match line.windows(2).position(|w| w == b"*/") {
+                Some(end) => {
+                    line = &line[end + 2..];
+                    *in_comment = false;
+                }
+                None => return &[],
+            }
+        }
+        let trimmed = line
+            .iter()
+            .position(|b| !matches!(b, b' ' | b'\t' | b'\x0b' | b'\x0c'))
+            .map_or(&line[line.len()..], |p| &line[p..]);
+        if let Some(r) = trimmed.strip_prefix(b"/*") {
+            *in_comment = true;
+            line = r;
+            continue;
+        }
+        if trimmed.starts_with(b"//") {
+            return &[];
+        }
+        return trimmed;
+    }
+}
+
+/// Follow `line`'s code to its end, noting whether a `/* */` comment is
+/// left open (string and character literals skipped).
+fn track_comments(line: &[u8], in_comment: &mut bool) {
+    let mut i = 0;
+    while i < line.len() {
+        if *in_comment {
+            match line[i..].windows(2).position(|w| w == b"*/") {
+                Some(end) => {
+                    i += end + 2;
+                    *in_comment = false;
+                }
+                None => return,
+            }
+            continue;
+        }
+        match line[i] {
+            b'/' if line.get(i + 1) == Some(&b'*') => {
+                *in_comment = true;
+                i += 2;
+            }
+            b'/' if line.get(i + 1) == Some(&b'/') => return,
+            quote @ (b'"' | b'\'') => {
+                i += 1;
+                while i < line.len() && line[i] != quote {
+                    i += if line[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+}
+
+/// Whether `def`'s head names `naked` or `__naked__` as a word, its
+/// parameter list and K&R declarations aside (a parameter named `naked` is
+/// no attribute) — rule 4, applied on gcc only.
+fn naked_head(def: tree_sitter::Node, src: &[u8]) -> bool {
+    let (Some(body), Some(declarator)) = (
+        def.child_by_field_name("body"),
+        def.child_by_field_name("declarator"),
+    ) else {
+        return false;
+    };
+    let at = body.start_byte();
     let mut cut: Vec<(usize, usize)> = parameter_list(declarator)
         .map(|p| (p.start_byte(), p.end_byte()))
         .into_iter()
@@ -416,45 +608,15 @@ fn probe_point(def: tree_sitter::Node, src: &[u8], under_error: bool) -> Option<
     let mut head = String::new();
     let mut from = def.start_byte();
     for (start, end) in cut {
-        head.push_str(&String::from_utf8_lossy(&src[from..start.max(from)]));
+        head.push_str(&String::from_utf8_lossy(
+            &src[from..start.max(from).min(at)],
+        ));
         head.push(' ');
         from = end.max(from);
     }
-    head.push_str(&String::from_utf8_lossy(&src[from..at]));
-    if head
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+    head.push_str(&String::from_utf8_lossy(&src[from.min(at)..at]));
+    head.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .any(|word| word == "naked" || word == "__naked__")
-    {
-        return None;
-    }
-    // What opens the body must allow a statement before it: not a pragma in
-    // any spelling (`#pragma`, `# pragma`, `_Pragma`, one inside `#if` —
-    // STDC FENV_ACCESS and clang fp must open the block; review M2), and
-    // not what the parser could not read at its very start (a macro that
-    // may expand to one; fix checks N1). An error further in — later in the
-    // first statement too — is not in the note's way (M9).
-    let mut cursor = body.walk();
-    if leading_run_blocks(body.named_children(&mut cursor), src) {
-        return None;
-    }
-    Some(at)
-}
-
-/// Whether the leading run of `nodes` (a body's, or a conditional branch's)
-/// keeps a note from going before it: every directive and conditional up to
-/// the first ordinary statement is looked through, since they produce no
-/// statement of their own — a pragma after `#if 0 … #endif` or a `#define`
-/// still opens the block (fix check 4 M1).
-fn leading_run_blocks<'t>(nodes: impl Iterator<Item = tree_sitter::Node<'t>>, src: &[u8]) -> bool {
-    for node in nodes.filter(|n| n.kind() != "comment") {
-        if blocks_note(node, src) {
-            return true;
-        }
-        if !node.kind().starts_with("preproc") {
-            return false;
-        }
-    }
-    false
 }
 
 /// The parameter list of the function a declarator declares (through
@@ -466,291 +628,6 @@ fn parameter_list(declarator: tree_sitter::Node) -> Option<tree_sitter::Node> {
             return d.child_by_field_name("parameters");
         }
         d = d.child_by_field_name("declarator")?;
-    }
-}
-
-/// What opens a body keeps a statement from going before it (see
-/// [`probe_point`]): a pragma in any spelling — `#pragma`, `# pragma`,
-/// `_Pragma`, `__pragma` — what the parser could not read at its start, a
-/// statement that is a bare name (`FENV_ON;`: a macro, perhaps one that
-/// expands to a pragma; fix check 4 L4) or opens with a name alone on its
-/// line (`FENV_ON⏎ g(x);`, which the parser folds into a declaration of
-/// `g`; fix check 5 M1), `__label__` (it must open its block; L1), an
-/// `#include` (the file may hold either; L2), or a leading conditional any
-/// of whose branches opens with one of these (a macro opening an empty
-/// branch's `#else` lands on the conditional itself; fix check 4 M2).
-fn blocks_note(node: tree_sitter::Node, src: &[u8]) -> bool {
-    let words = text(node, src).trim_start();
-    if opens_with_error(node, src) || words.starts_with("_Pragma") || words.starts_with("__pragma")
-    {
-        return true;
-    }
-    if node.kind() == "expression_statement"
-        && node.named_child_count() == 1
-        && node
-            .named_child(0)
-            .is_some_and(|n| n.kind() == "identifier")
-    {
-        return true;
-    }
-    if !node.kind().starts_with("preproc") {
-        if node.kind() == "declaration"
-            && node.child(0).is_some_and(|t| text(t, src) == "__label__")
-        {
-            return true;
-        }
-        // A function-like macro alone on its line, folded with the statement
-        // below it (`FENV_ACCESS(ON)⏎ x = g(x);` read as a declaration,
-        // `PRAGMA(…)⏎ while (x) {…}` as a nested function definition, which
-        // is never valid in a body; fix check 6 L1).
-        if node.kind() == "function_definition" {
-            return true;
-        }
-        // Anywhere on the statement's leading edge: `FENV(ON)⏎ -x;` reads as
-        // `FENV(ON) - x`.
-        let mut head = node.child(0);
-        while let Some(h) = head {
-            if matches!(h.kind(), "macro_type_specifier" | "call_expression")
-                && ends_its_line(h, src)
-            {
-                return true;
-            }
-            head = h.child(0);
-        }
-        let mut leaf = node;
-        while let Some(child) = leaf.child(0) {
-            leaf = child;
-        }
-        return matches!(leaf.kind(), "identifier" | "type_identifier") && ends_its_line(leaf, src);
-    }
-    if node.kind() == "preproc_include" {
-        return true;
-    }
-    if node.kind() == "preproc_call" {
-        // The directive's name, not the word anywhere: `#ifdef
-        // HAVE_PRAGMA_WEAK` is no pragma (fix check 4 L1); a line splice
-        // inside it is none either: `#pr\⏎agma` reads as the directive
-        // `#pr` (fix check 5).
-        let spliced = |t: &str| {
-            let t = t.replace("\\\r\n", "").replace("\\\n", "");
-            let name: String = t
-                .trim_start_matches('#')
-                .trim_start()
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                .collect();
-            matches!(
-                name.as_str(),
-                "pragma" | "include" | "include_next" | "import"
-            )
-        };
-        return spliced(text(node, src))
-            || node
-                .child_by_field_name("directive")
-                .is_some_and(|d| spliced(text(d, src)));
-    }
-    if !matches!(
-        node.kind(),
-        "preproc_if" | "preproc_ifdef" | "preproc_elif" | "preproc_elifdef" | "preproc_else"
-    ) {
-        return false;
-    }
-    let skip: Vec<usize> = ["name", "condition", "alternative"]
-        .iter()
-        .filter_map(|f| node.child_by_field_name(f).map(|n| n.id()))
-        .collect();
-    let mut cursor = node.walk();
-    let children: Vec<_> = node.named_children(&mut cursor).collect();
-    // What opens an empty `#else`/`#elif` branch the parser hangs after
-    // that branch, on the conditional (fix check 4 M2); an error after a
-    // branch that holds a statement is that statement's (`} else` split
-    // across `#endif`), as is one inside the first branch — neither is in
-    // the note's way (fix check 5 L3).
-    let alternative = node.child_by_field_name("alternative");
-    if let Some(alternative) = alternative {
-        for error in children
-            .iter()
-            .filter(|c| c.is_error() && c.start_byte() >= alternative.start_byte())
-        {
-            let mut branch = alternative;
-            while let Some(next) = branch
-                .child_by_field_name("alternative")
-                .filter(|n| n.start_byte() < error.start_byte())
-            {
-                branch = next;
-            }
-            if branch_is_empty(branch) {
-                return true;
-            }
-        }
-    }
-    if leading_run_blocks(
-        children.iter().copied().filter(|c| !skip.contains(&c.id())),
-        src,
-    ) {
-        return true;
-    }
-    node.child_by_field_name("alternative")
-        .is_some_and(|alt| blocks_note(alt, src))
-}
-
-/// Whether `branch` (an `#else`/`#elif` node) holds no statement of its own:
-/// only comments and directives, or nothing.
-fn branch_is_empty(branch: tree_sitter::Node) -> bool {
-    let skip: Vec<usize> = ["name", "condition", "alternative"]
-        .iter()
-        .filter_map(|f| branch.child_by_field_name(f).map(|n| n.id()))
-        .collect();
-    let mut cursor = branch.walk();
-    let empty = branch
-        .named_children(&mut cursor)
-        .filter(|c| !skip.contains(&c.id()))
-        .all(|c| c.kind() == "comment" || c.kind().starts_with("preproc"));
-    empty
-}
-
-/// A directive splits `node` and its errors are the split's: a line after
-/// its first starts with `#`, every error reaches past the first such line
-/// (an `#ifdef` deep in the statement's own block excuses nothing before it;
-/// fix check 6 M1), and no line right after a directive is a pragma or a
-/// lone macro (one opening the branch the split opens).
-fn split_by_directive(node: tree_sitter::Node, src: &[u8]) -> bool {
-    let words = text(node, src);
-    let mut at = node.start_byte();
-    let mut first_directive = None;
-    for (i, line) in words.split_inclusive('\n').enumerate() {
-        if i > 0 && line.trim_start().starts_with('#') {
-            first_directive = Some(at);
-            break;
-        }
-        at += line.len();
-    }
-    let Some(directive) = first_directive else {
-        return false;
-    };
-    fn errors<'t>(node: tree_sitter::Node<'t>, out: &mut Vec<tree_sitter::Node<'t>>) {
-        if node.is_error() || node.is_missing() {
-            out.push(node);
-            return;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            errors(child, out);
-        }
-    }
-    let mut found = Vec::new();
-    errors(node, &mut found);
-    if !found.iter().all(|e| e.end_byte() > directive) {
-        return false;
-    }
-    let lines: Vec<&str> = words.lines().collect();
-    !lines.windows(2).any(|pair| {
-        if !pair[0].trim_start().starts_with('#') {
-            return false;
-        }
-        let next = pair[1].trim();
-        let next = next.split("//").next().unwrap_or(next);
-        let next = next.split("/*").next().unwrap_or(next).trim();
-        lone_macro(next) || next.starts_with("_Pragma") || next.starts_with("__pragma")
-    })
-}
-
-/// `line` opens with a macro that may expand to a pragma: a name, or a name
-/// and its parenthesized arguments, that is the whole line (`FENV_ON`,
-/// `FENV(ON);`) or is followed by another name (`FENV_ON   x = g(2,`) — two
-/// names side by side open no statement a split continues.
-fn lone_macro(line: &str) -> bool {
-    let is_name_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    if !line.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
-        return false;
-    }
-    let name_end = line.find(|c: char| !is_name_char(c)).unwrap_or(line.len());
-    let mut rest = line[name_end..].trim_start();
-    if rest.starts_with('(') {
-        // The arguments, to their closing parenthesis.
-        let mut depth = 0usize;
-        let mut end = None;
-        for (i, c) in rest.char_indices() {
-            match c {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = Some(i + 1);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let Some(end) = end else {
-            return false;
-        };
-        rest = rest[end..].trim_start();
-    }
-    let rest = rest.trim_start_matches(';').trim();
-    rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-}
-
-/// Every error in `node` is closing punctuation — the tail of a call split
-/// across `#if`/`#else` (`Py_None);`), not a macro's words (fix check 5 L5).
-fn continues_a_split(node: tree_sitter::Node, src: &[u8]) -> bool {
-    fn errors<'t>(node: tree_sitter::Node<'t>, out: &mut Vec<tree_sitter::Node<'t>>) {
-        if node.is_error() {
-            out.push(node);
-            return;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            errors(child, out);
-        }
-    }
-    let mut found = Vec::new();
-    errors(node, &mut found);
-    !found.is_empty()
-        && found.iter().all(|e| {
-            text(*e, src)
-                .chars()
-                .all(|c| matches!(c, ')' | ',' | ';') || c.is_whitespace())
-        })
-}
-
-/// Nothing but blanks, or a comment, follows `node` on its line.
-fn ends_its_line(node: tree_sitter::Node, src: &[u8]) -> bool {
-    let rest = &src[node.end_byte()..];
-    let line = rest.split(|&b| b == b'\n').next().unwrap_or(rest);
-    let line = String::from_utf8_lossy(line);
-    let line = line.trim();
-    line.is_empty() || line.starts_with("//") || line.starts_with("/*")
-}
-
-/// The parser could not read how `node` starts: it, or one of its first
-/// children down to a leaf, is an ERROR or MISSING node — or it opens with a
-/// name (a macro, perhaps one that expands to a pragma: `FP_FAST return x;`,
-/// `DO_PRAGMA(STDC FENV_ACCESS ON);`) and holds an error. A statement that
-/// opens with a keyword (`if`, `switch`, `static`) and holds an error
-/// further in (an `#ifdef` in its condition, a case range), or with a plain
-/// name and split by a directive (`x = g(x,` with its arguments split by
-/// `#ifdef`), or the tail of such a split (`Py_None);`; fix check 5 L5),
-/// reads fine where the note goes.
-fn opens_with_error(node: tree_sitter::Node, src: &[u8]) -> bool {
-    let mut n = node;
-    loop {
-        if n.is_error() || n.is_missing() {
-            return true;
-        }
-        match n.child(0) {
-            Some(child) => n = child,
-            None => {
-                // A plain name's error that a directive inside the statement
-                // explains is the split's, not a macro's (fix check 5 L5).
-                return node.has_error()
-                    && (n.kind() == "type_identifier"
-                        || (n.kind() == "identifier"
-                            && !split_by_directive(node, src)
-                            && !continues_a_split(node, src)));
-            }
-        }
     }
 }
 
