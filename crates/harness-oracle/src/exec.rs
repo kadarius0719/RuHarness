@@ -555,6 +555,9 @@ pub(crate) fn run_with_timeout(
     drop(done_tx);
 
     let deadline = Instant::now() + timeout;
+    // A short child (a compiler listing) ends in milliseconds: the wait
+    // starts at 1 ms and doubles up to `POLL` (fix check 6 L3).
+    let mut poll = Duration::from_millis(1);
     let end = loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -589,7 +592,8 @@ pub(crate) fn run_with_timeout(
                 ChildEnd::TimedOut
             };
         }
-        std::thread::sleep(POLL);
+        std::thread::sleep(poll);
+        poll = (poll * 2).min(POLL);
     };
     // A child that ended after the cancellation may have been killed by it:
     // its end is not evidence. Reap anything left and report the interrupt.

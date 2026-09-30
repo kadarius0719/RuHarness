@@ -136,6 +136,25 @@ fn map_inner(
     // (a FIFO would hang the build until the timeout), and one linked out of
     // `source_dir` — the copy holds `source_dir` only, so the include words
     // below would name the wrong cause.
+    if let Some(odd) = c_files
+        .iter()
+        .find(|c| c.to_string_lossy().chars().any(char::is_control))
+    {
+        return Err(Error::Invariant(format!(
+            "{:?} has a control character in its name: the compiler's lists of what the program \
+             reads could not be read back, so the features map cannot map it",
+            shown(odd, &root)
+        )));
+    }
+    // `-fmacro-prefix-map` takes the first `=` as its separator (fix check 6
+    // L4): the copy's `__FILE__` would be another string.
+    if root.to_string_lossy().contains('=') {
+        return Err(Error::Invariant(format!(
+            "the target's folder {} has '=' in its path, which the scratch copy's compile \
+             cannot map back: move the target to a folder without '='",
+            root.display()
+        )));
+    }
     if let Some(odd) = irregular_c_file(&c_files) {
         return Err(Error::Invariant(format!(
             "{} is not a regular file, so the C program cannot be built from it",
@@ -218,7 +237,7 @@ fn map_inner(
     };
     for (c_file, copied) in c_files.iter().zip(&probed_inputs) {
         let program = reads(&runner, &base.includes(), &[], c_file, None)?
-            .map_err(|why| build_failed("the C program's includes cannot be listed", why))?;
+            .map_err(|why| build_failed("the C program does not build", why))?;
         let copied = match reads(&runner, &includes, &cflags, copied, Some(&copy))? {
             Ok(reads) => reads,
             Err(why) => {
@@ -229,13 +248,24 @@ fn map_inner(
                 )))
             }
         };
+        // The same files, by the same names: one the program reads that the
+        // copy would not, or one only the copy reads (a lookup that finds the
+        // harness's own build folder from the mirror; fix check 6).
+        let spelled = |read: &Read| shown(&read.0, &root).display().to_string();
         if let Some(missed) = program.files.difference(&copied.files).next() {
             return Err(Error::Invariant(format!(
                 "the program reads {}, which the scratch copy would not (it is outside \
                  source_dir, in migration/ or .git/ there, or reached through a folder linked \
                  into it): the features map copies only source_dir, so it cannot map this \
                  program",
-                shown(missed, &root).display()
+                spelled(missed)
+            )));
+        }
+        if let Some(extra) = copied.files.difference(&program.files).next() {
+            return Err(Error::Invariant(format!(
+                "the scratch copy would read {}, which the program does not: the features map \
+                 cannot map this program",
+                spelled(extra)
             )));
         }
         if program.entered != copied.entered {
@@ -245,9 +275,9 @@ fn map_inner(
                 .zip(&copied.entered)
                 .take_while(|(a, b)| a == b)
                 .count();
-            let name = |p: Option<&PathBuf>| {
-                p.map_or("nothing more".to_string(), |p| {
-                    shown(p, &root).display().to_string()
+            let name = |e: Option<&(usize, Read)>| {
+                e.map_or("nothing more".to_string(), |(depth, read)| {
+                    format!("{} (depth {depth})", spelled(read))
                 })
             };
             return Err(Error::Invariant(format!(
@@ -423,26 +453,36 @@ struct CopyPaths<'a> {
     source_dir: &'a Path,
 }
 
+/// One file a compile reads: the path as the compiler spelled it (the
+/// mirror's prefix put back to the root's) and the file it names.
+type Read = (PathBuf, PathBuf);
+
 /// What one compile reads (see [`reads`]).
 struct Reads {
     /// Every file the compiler lists.
-    files: std::collections::BTreeSet<PathBuf>,
-    /// The headers it enters, in order — the probe's header left out.
-    entered: Vec<PathBuf>,
+    files: std::collections::BTreeSet<Read>,
+    /// The headers it enters, in order, each with its depth — the probe's
+    /// header left out.
+    entered: Vec<(usize, Read)>,
 }
 
 /// What a compile of `input` with `includes` and `cflags` reads: the files
 /// the compiler lists (`cc -M`: system headers too — `-MM` drops a project
 /// file included from a `system_header`; fix check 4 F1) and the headers it
-/// enters, in order (`-H`, on stderr), canonical. With `copy`, a file of the
-/// mirror is named as the target's file at the same place (then canonical,
-/// as the program's own build resolves it), and a file of `source_dir` read
-/// by its own path — the unprobed original, through `#include __FILE__`
-/// under the copy's `-fmacro-prefix-map` (fix check 4 F2) — is refused. The
-/// compiler runs with the build's own flags (`-O2` defines `__OPTIMIZE__`:
-/// an `#ifdef` on it picks the same branch; fix check 3 N9) less `-o`.
-/// `Ok(Err(why))` when the compiler could not list them, or named a file
-/// that does not resolve.
+/// enters, in order and at their depth (`-H`, on stderr). Each is the path as
+/// the compiler spelled it and the file it names: the spelling is what a
+/// lookup through a folder linked into `source_dir` differs by — the copy
+/// holds one path per folder, so `__has_include("sys/x.h")` can be true in
+/// the program and false in the copy while both read `x.h` (fix check 6 M2).
+/// With `copy`, a path in the mirror is named as the target's at the same
+/// place (the file then canonical, as the program's own build resolves it),
+/// and a file of `source_dir` read by its own path — the unprobed original,
+/// through `#include __FILE__` under the copy's `-fmacro-prefix-map` (fix
+/// check 4 F2) — is refused. The compiler runs with the build's own flags
+/// (`-O2` defines `__OPTIMIZE__`: an `#ifdef` on it picks the same branch;
+/// fix check 3 N9) less `-o`. `Ok(Err(why))` when the compiler could not
+/// list them (its words from a run without `-H`, whose header lines would
+/// bury them; fix check 6 L2), or named a file that does not resolve.
 fn reads(
     runner: &Runner,
     includes: &[PathBuf],
@@ -467,35 +507,48 @@ fn reads(
     }
     let (rules, headers) = match runner.tool_outcome_both(&argv)? {
         Ok(out) => out,
-        Err(why) => return Ok(Err(Error::Invariant(why))),
+        Err(why) => {
+            argv.retain(|a| a != "-H");
+            let why = match runner.tool_outcome(&argv)? {
+                Err(plain) => plain,
+                Ok(_) => why,
+            };
+            return Ok(Err(Error::Invariant(why)));
+        }
     };
     let canonical_of = |p: &Path| p.canonicalize().map_err(|e| Error::io(p, e));
     let copy = match copy {
         Some(c) => Some((
             canonical_of(c.build)?,
             canonical_of(c.header)?,
+            c.mirror,
             canonical_of(c.mirror)?,
             c.root,
             c.source_dir,
         )),
         None => None,
     };
-    // `Ok(None)`: the probe's header, left out of the headers entered.
-    let name = |token: &str| -> Result<Result<Option<PathBuf>, Error>, Error> {
+    // `Ok(None)`: the probe's header, left out.
+    let name = |token: &str| -> Result<Result<Option<Read>, Error>, Error> {
+        let spelled = runner.cwd.join(token);
         // A file the compiler read resolves; one that does not is a list
         // misread, never a file to skip (fix check 3 N8).
-        let Ok(canonical) = runner.cwd.join(token).canonicalize() else {
+        let Ok(canonical) = spelled.canonicalize() else {
             return Ok(Err(Error::Invariant(format!(
                 "the compiler's list names {token:?}, which does not resolve"
             ))));
         };
-        let Some((build, header, mirror, root, source_dir)) = &copy else {
-            return Ok(Ok(Some(canonical)));
+        let Some((build, header, mirror, mirror_canonical, root, source_dir)) = &copy else {
+            return Ok(Ok(Some((spelled, canonical))));
         };
         if canonical == *header {
             return Ok(Ok(None));
         }
-        Ok(Ok(Some(match canonical.strip_prefix(mirror) {
+        let spelled = match spelled.strip_prefix(mirror) {
+            Ok(rel) => root.join(rel),
+            Err(_) => spelled,
+        };
+        let file = match canonical.strip_prefix(mirror_canonical) {
             Ok(rel) => root
                 .join(rel)
                 .canonicalize()
@@ -509,13 +562,14 @@ fn reads(
                 )));
             }
             Err(_) => canonical,
-        })))
+        };
+        Ok(Ok(Some((spelled, file))))
     };
     let mut files = std::collections::BTreeSet::new();
     for token in make_prerequisites(&String::from_utf8_lossy(&rules)) {
         match name(&token)? {
-            Ok(Some(path)) => {
-                files.insert(path);
+            Ok(Some(read)) => {
+                files.insert(read);
             }
             Ok(None) => {}
             Err(why) => return Ok(Err(why)),
@@ -526,11 +580,12 @@ fn reads(
     let mut entered = Vec::new();
     for line in String::from_utf8_lossy(&headers).lines() {
         let rest = line.trim_start_matches('.');
-        let Some(path) = rest.strip_prefix(' ').filter(|_| rest.len() < line.len()) else {
+        let depth = line.len() - rest.len();
+        let Some(path) = rest.strip_prefix(' ').filter(|_| depth > 0) else {
             continue;
         };
         match name(path)? {
-            Ok(Some(path)) => entered.push(path),
+            Ok(Some(read)) => entered.push((depth, read)),
             Ok(None) => {}
             Err(why) => return Ok(Err(why)),
         }
@@ -633,12 +688,12 @@ fn write_mirror(
             .to_str()
             .ok_or_else(|| Error::Invariant(format!("non-UTF-8 path: {}", rel_path.display())))?;
         // The compiler writes a newline or a tab in a name as is, so its
-        // lists could not be read back (fix check 5 L2).
+        // lists could not be read back (fix check 5 L2): such a file stays
+        // out of the copy — a Finder `Icon\r` is no reason to refuse (fix
+        // check 6 L1); one the program reads makes the copy's listing
+        // differ, and the map refuses then.
         if rel.chars().any(char::is_control) {
-            return Err(Error::Invariant(format!(
-                "{rel:?} has a control character in its name: the compiler's lists of what \
-                 the program reads could not be read back, so the features map cannot map it"
-            )));
+            continue;
         }
         let bytes = std::fs::read(&path).map_err(|e| Error::io(&path, e))?;
         total += bytes.len() as u64;

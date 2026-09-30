@@ -794,7 +794,7 @@ fn the_map_refuses_a_copy_that_reads_other_files() {
     prepend(tmp.path(), "#include \"compat.h\"\n");
     let err = map(tmp.path()).expect_err("refused").to_string();
     assert!(
-        err.contains("src/include/stdio.h, which the scratch copy would not"),
+        err.contains("src/tool/../include/stdio.h, which the scratch copy would not"),
         "{err}"
     );
 
@@ -878,11 +878,12 @@ fn the_map_compares_each_compile_in_order() {
     // Per compile, the files alone already tell (M1).
     let err = map(tmp.path()).expect_err("refused").to_string();
     assert!(
-        err.contains("the program reads src/tool/proj/un.h, which the scratch copy would not"),
+        err.contains("the program reads src/tool/sys/un.h, which the scratch copy would not"),
         "{err}"
     );
 
-    // In one compile only the order tells.
+    // In one compile the names tell too (fix check 6: the name the
+    // compiler used, not only the file).
     let tmp = aliased("feat-map-same-tu");
     prepend(
         tmp.path(),
@@ -890,7 +891,10 @@ fn the_map_compares_each_compile_in_order() {
         "#include \"sys/un.h\"\n#include \"proj/un.h\"\n",
     );
     let err = map(tmp.path()).expect_err("refused").to_string();
-    assert!(err.contains("compiling src/tool/main.c"), "{err}");
+    assert!(
+        err.contains("the program reads src/tool/sys/un.h, which the scratch copy would not"),
+        "{err}"
+    );
 
     let tmp = TempDir::new("feat-map-pragma-once");
     program(tmp.path(), GOOD, Some(features), "");
@@ -902,13 +906,35 @@ fn the_map_compares_each_compile_in_order() {
     prepend(tmp.path(), "main.c", "#include \"y.h\"\n#include \"x.h\"\n");
     let err = map(tmp.path()).expect_err("refused").to_string();
     assert!(
-        err.contains("the program's header #2 is") && err.contains("would be src/tool/y.h"),
+        err.contains("the program's header #2 is")
+            && err.contains("would be src/tool/x.h (depth 1)"),
         "{err}"
     );
 
+    // A name with a control character stays out of the copy (a Finder
+    // `Icon\r` is no reason to refuse; fix check 6 L1); a `.c` with one is
+    // refused by name.
     let tmp = TempDir::new("feat-map-newline");
     program(tmp.path(), GOOD, Some(features), "");
-    write(&tmp.path().join("src/tool/a\nb.h"), "#define AB 1\n");
+    write(&tmp.path().join("src/tool/Icon\r"), "");
+    map(tmp.path()).expect("an unread Icon\\r maps");
+    // A tab the program reads: `-M` leaves it unescaped, so both lists
+    // would split the name alike (`…/a` and `b.h`, each resolving) — the
+    // copy never holds it, and its compile fails instead.
+    let tabbed = TempDir::new("feat-map-tab");
+    program(tabbed.path(), GOOD, Some(features), "");
+    write(&tabbed.path().join("src/tool/a\tb.h"), "#define AB 1\n");
+    write(&tabbed.path().join("src/tool/a/keep.h"), "");
+    write(&tabbed.path().join("b.h"), "");
+    let main = tabbed.path().join("src/tool/main.c");
+    let old = std::fs::read_to_string(&main).unwrap();
+    std::fs::write(&main, format!("#include \"a\tb.h\"\n{old}")).unwrap();
+    let err = map(tabbed.path()).expect_err("refused").to_string();
+    assert!(err.contains("the scratch copy cannot find"), "{err}");
+    write(
+        &tmp.path().join("src/tool/a\nb.c"),
+        "int ab(void) { return 1; }\n",
+    );
     let err = map(tmp.path()).expect_err("refused").to_string();
     assert!(err.contains("has a control character in its name"), "{err}");
 
@@ -924,6 +950,101 @@ fn the_map_compares_each_compile_in_order() {
     );
     std::fs::write(&toml, text).unwrap();
     map(tmp.path()).expect("an absolute source_dir inside the root maps");
+}
+
+/// Fix check 6: a lookup through a folder linked into `source_dir` differs
+/// by the name the compiler used (M2: `__has_include`), and the headers
+/// entered by their depth (M1); a listing that fails says the compiler's own
+/// words (L2); a target folder with '=' in its path is refused (L4).
+#[test]
+fn the_map_compares_names_and_depths() {
+    let map = |root: &Path| {
+        let target = TargetContext::load(root).unwrap();
+        let facts = with_symbols(root);
+        let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+            panic!("valid")
+        };
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+    };
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+    let prepend = |root: &Path, text: &str| {
+        let path = root.join("src/tool/main.c");
+        let old = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, format!("{text}{old}")).unwrap();
+    };
+
+    let tmp = TempDir::new("feat-map-has-include");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(
+        &tmp.path().join("src/tool/proj/feat.h"),
+        "#ifndef FEAT_H\n#define FEAT_H\n#endif\n",
+    );
+    std::os::unix::fs::symlink("proj", tmp.path().join("src/tool/sys")).unwrap();
+    prepend(
+        tmp.path(),
+        "#include \"proj/feat.h\"\n#if __has_include(\"sys/feat.h\")\n#define RUN 1\n#endif\n",
+    );
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(
+        err.contains("the program reads src/tool/sys/feat.h, which the scratch copy would not"),
+        "{err}"
+    );
+
+    let tmp = TempDir::new("feat-map-depth");
+    program(tmp.path(), GOOD, Some(features), "");
+    write(
+        &tmp.path().join("src/tool/arch/types.h"),
+        "#ifndef ARCH_TYPES_H\n#define ARCH_TYPES_H\n#define PROJ_T 7\n#endif\n",
+    );
+    std::fs::create_dir_all(tmp.path().join("src/tool/lib")).unwrap();
+    std::os::unix::fs::symlink("../arch", tmp.path().join("src/tool/lib/sys")).unwrap();
+    write(
+        &tmp.path().join("src/tool/lib/a.h"),
+        "#include \"sys/types.h\"\n#ifdef PROJ_T\n#define RUN 1\n#else\n#define RUN 0\n#endif\n",
+    );
+    prepend(
+        tmp.path(),
+        "#include <sys/types.h>\n#include \"lib/a.h\"\n#include \"arch/types.h\"\n",
+    );
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(err.contains("src/tool/lib/sys/types.h"), "{err}");
+
+    // A lookup that finds the harness's own build folder from the mirror:
+    // only the copy reads it.
+    let tmp = TempDir::new("feat-map-copy-only");
+    program(tmp.path(), GOOD, Some(features), "");
+    prepend(
+        tmp.path(),
+        "#if __has_include(\"../../../fnprobe.c\")\n#define RUN 1\n#endif\n",
+    );
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(
+        err.contains(
+            "the scratch copy would read src/tool/../../../fnprobe.c, which the program does not"
+        ),
+        "{err}"
+    );
+
+    let tmp = TempDir::new("feat-map-words");
+    program(tmp.path(), GOOD, Some(features), "");
+    prepend(
+        tmp.path(),
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include \"missing.h\"\n",
+    );
+    let err = map(tmp.path()).expect_err("refused").to_string();
+    assert!(
+        err.starts_with("the C program does not build")
+            && err.contains("'missing.h' file not found"),
+        "{err}"
+    );
+
+    let tmp = TempDir::new("feat-map-eq");
+    let root = tmp.path().join("a=b");
+    std::fs::create_dir_all(&root).unwrap();
+    program(&root, GOOD, Some(features), "");
+    let err = map(&root).expect_err("refused").to_string();
+    assert!(err.contains("has '=' in its path"), "{err}");
 }
 
 /// Review M3: a program that closes every inherited descriptor (the notes'

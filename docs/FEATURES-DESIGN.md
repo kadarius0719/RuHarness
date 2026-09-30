@@ -494,12 +494,16 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   that returns those macros is compared against 1970's). The files the program's build reads
   and the files the copy's would read must be the same: for each `.c`, the compiler lists
   both (`cc -M`, system headers too — `-MM` drops a project file included from a
-  `system_header`; `-H`, the headers entered, in order; the copy's made with the copy's own
-  flags and named back as the target's), every file the program reads must be among the
-  copy's and the headers entered the same, one by one (a set over all compiles missed a
-  linked folder reached by both its names; a file linked to another is one file to
-  `#pragma once` but two in the copy — a guarded header included by both names is refused
-  too, the price of reading the order), and a difference — an include
+  `system_header`; `-H`, the headers entered, in order and at their depth; the copy's made
+  with the copy's own flags), each read taken as the path the compiler spelled (the mirror's
+  prefix put back to the root's) and the file it names — a lookup through a folder linked into
+  `source_dir` differs by the spelling alone (`__has_include("sys/x.h")` true in the program,
+  false in the copy, both reading `x.h`). The files must be equal, less the probe's header
+  (only the copy reading one — a lookup that finds the harness's build folder — is refused
+  too), and the headers entered the same, one by one (a set over all compiles missed a linked
+  folder reached by both its names; a file linked to another is one file to `#pragma once`
+  but two in the copy — a guarded header included by both names is refused too, the price of
+  reading the order), and a difference — an include
   outside `source_dir`, a folder linked into it (the mirror holds one path per folder), a
   `.inc` that leaves it — is refused before the copy is built (the lists come from the build's
   own flags, `-O2` included, and make's escapes are read: a folder with a space; only a
@@ -511,8 +515,13 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   The copy reading a file of `source_dir` by its own path — the unprobed original, through
   `#include __FILE__` under the prefix map — is refused too, in its own words (its
   functions would run unwatched). A file of `source_dir` with a control character in its
-  name is refused while copying (the compiler writes a newline or tab in its lists as is).
-  All of these come before any build. Before any build, refused by name: a top-level `.c` that is not a regular file
+  name stays out of the copy (the compiler writes a newline or tab in its lists as is, so
+  both lists could misread it alike; a Finder `Icon\r` is no reason to refuse); one the
+  program reads makes the copy fail and the map refuse; a top-level `.c` with one is refused
+  by name. A target folder with `=` in its path is refused (`-fmacro-prefix-map` splits at
+  the first `=`). A listing that fails is reported in the compiler's words from a run
+  without `-H`, and as "the C program does not build" on the program's side. All of these
+  come before any build. Before any build, refused by name: a top-level `.c` that is not a regular file
   (a FIFO would hang the build), one linked out of `source_dir`, one the mirror holds under
   another path (reached first through a linked folder), and a `source_dir` whose configured
   spelling (relative, or absolute under the root) is not its canonical path (a link, another
@@ -523,7 +532,10 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   hostile tree, can hide a read — the map is shaped by its own C; an included FIFO header
   holds the plain listing until the timeout; a folder alias that sorts before the folder it
   names (`compat → include`) is the path the copy holds, so `#include "include/…"` is refused
-  even when nothing uses the alias.
+  even when nothing uses the alias; a GNU line marker naming a file that does not exist
+  (checked-in `cc -E` output) or a `"` in a header name is refused as "does not resolve";
+  the listings are two compiles per top-level `.c`, one after another (a 150-file program
+  lists in ~20 s).
 - **The insertion** — `harness_scan::probe_source(rel_path, source, index_of)`, pure, built on
   the scanner's own `collect_functions`/`canonical_id` (which, unlike mutate.rs, walk into
   preprocessor branches), with `FnDef` gaining the body's start byte:
@@ -541,13 +553,19 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   comment is none); a body whose leading run — every directive and conditional up to the
   first ordinary statement, looked through since they produce no statement — holds a pragma
   in any spelling (the `#pragma` directive, `# pragma`, a line splice inside it, `_Pragma`,
-  `__pragma`; the word in a macro name is none), an `#include` (the file may hold one),
-  `__label__` (it must open its block), or what may be a macro expanding to a pragma: a
-  statement that opens with an ERROR, is only a bare name (`FENV_ON;`), opens with a name
-  alone on its line (`FENV_ON⏎ g(x);`, which the parser folds into a declaration), or opens
-  with a name and holds an error (`FP_FAST return x;`, `DO_PRAGMA(STDC FENV_ACCESS ON);`) —
-  unless the error is a split's: the statement spans a directive, or its errors are only
-  closing punctuation (`Py_None);` after `#else`). A statement that opens with a keyword and
+  `__pragma`; the word in a macro name is none), an `#include` (the file may hold one; a
+  splice inside it too), `__label__` (it must open its block), or what may be a macro
+  expanding to a pragma: a statement that opens with an ERROR, is only a bare name
+  (`FENV_ON;`), opens with a name alone on its line (`FENV_ON⏎ g(x);`, which the parser folds
+  into a declaration), has on its leading edge a function-like macro alone on its line
+  (`FENV(ON)⏎ -x;` read as `FENV(ON) - x`), is a nested function definition (`PRAGMA(…)⏎
+  while (x) {…}` — never valid in a body), or opens with a name and holds an error
+  (`FP_FAST return x;`, `DO_PRAGMA(STDC FENV_ACCESS ON);`) — unless the error is a split's:
+  a directive splits the statement, every error reaches past the first such line (an
+  `#ifdef` deep in the statement's own block excuses nothing before it) and no line right
+  after a directive opens with a pragma or a lone name; or its errors are only closing
+  punctuation (`Py_None);` after `#else`). A plain-name split is watched; one that opens with
+  a type name (`T r = g(x,⏎#ifdef …`) stays unwatched. A statement that opens with a keyword and
   holds an error further in (an `#ifdef` in a condition, a case range) is watched; a
   conditional in the run counts by the leading run of every branch, and by what the parser
   hangs on it after an empty `#else`/`#elif` branch (a macro opening it); an error after a
@@ -555,11 +573,14 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   function with `naked` or `__naked__` as a word of its head, its parameter list and K&R
   declarations aside (review M2, fix checks N1/N4/N7/N10, fix checks 4 and 5). Costs, each a
   function unwatched though a note would build: a bare-name statement (`Py_RETURN_NONE;`), a
-  name alone on its line (Cython's `__Pyx_RefNannyDeclarations`), a function named `naked`.
+  name or a call alone on its line with the statement below it (Cython's
+  `__Pyx_RefNannyDeclarations`; `g(x)⏎ ;`), a type-led split, a function named `naked`.
   Residuals, each a probed build that fails loudly with the compiler's words (the whole map
   then fails, never silently): a pragma macro that reads as an ordinary statement
-  (`FENV_ON();`, `FENV_ON *p = 1;`); `naked` given only on an earlier declaration, or hidden
-  in a macro the parser reads cleanly (`NAKED_VOID f(void)`). A definition the facts do not
+  (`FENV_ON();`, or on the statement's own line: `FENV_ON *p = 1;`, `FENV(ON) x = g(1, …)`);
+  `naked` given only on an earlier declaration, or hidden in a macro the parser reads
+  cleanly (`NAKED_VOID f(void)`). The parser's recovery from one malformed function can read
+  the next as no definition at all — the scanner and the probe alike, so it gets no note. A definition the facts do not
   record gets nothing — the facts do not know it either.
 
 ### 5.4 The probe runtime (harness-owned C)
@@ -1395,3 +1416,22 @@ the copy's `-H`: clang's `-H` never lists an `-include`d file; kept for gcc). Th
 corpus unwatches exactly what the fourth pass did; the 128 extra files: 11 functions watched
 again, 14 `__Pyx_RefNanny…`-style lines unwatched (the cost named above); zopfli's map is
 unchanged. Residual: `FENV_ON();` (above).
+
+**The check of the sixth pass** (two checkers on 950eee3; both corpora and pragma-macro
+matrices of up to 1,669 functions under up to 10 define sets) found three medium issues — the
+map compared canonical files, so a lookup through a folder linked into `source_dir`
+(`__has_include`/`__has_embed` of `sys/x.h`) was true in the program and false in the copy
+while both read `x.h` (M2), and the `-H` headers ignored their depth (M1); the probe's
+split exception excused a pragma macro's own error whenever the statement held an `#ifdef`
+anywhere, even deep in its own block (58 new failures in a matrix) — and low ones: a
+function-like pragma macro alone on its line folded into the statement below (or into a
+nested function definition), a Finder `Icon\r` refusing the map, errors buried under `-H`
+lines, 2 × N sequential listings each waiting ≥ 50 ms, `=` in the target's path, a splice in
+`#include`. **The seventh pass** fixed all of them, each with a test: reads as (spelling,
+file) with depth, equal less the probe header; control-character names left out of the copy;
+the error words from a run without `-H`; the runner's wait starting at 1 ms; `=` refused; the
+probe rules above (the checker's own two tried fixes, combined, and the leading edge
+generalized). 14 mutants, all killed (a tab-named header the program reads guards the copy's
+leaving control-character names out). Both corpora unchanged; the checkers' repro suites (33
+tests) all refused or mapped as intended; zopfli's map unchanged; the matrices: no function
+fails that failed under neither earlier pass, and the residual same-line shapes remain.

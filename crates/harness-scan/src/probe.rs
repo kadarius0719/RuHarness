@@ -252,6 +252,71 @@ mod tests {
         assert!(p.unwatched.is_empty(), "{}", text(&p));
     }
 
+    /// Fix check 6: a directive deep in the statement's own block excuses
+    /// no error before it (M1), nor one whose branch opens with a pragma; a
+    /// function-like macro alone on its line, folded with the statement
+    /// below (L1), or with a block statement into a nested definition; a
+    /// line splice in `#include` (N1). A typedef-led split stays unwatched —
+    /// the conservative side (N2).
+    #[test]
+    fn a_directive_excuses_only_the_split_it_makes() {
+        let src = "int a(int x) {\n  PRAGMA(STDC FENV_ACCESS ON)\n  while (x > 0) {\n#ifdef A\n    x -= 2;\n#else\n    x--;\n#endif\n  }\n  return x; }\n\
+                   int c(int x) {\n  FENV_ACCESS(ON)\n  x = g(x);\n  return x; }\n\
+                   int d(int x) {\n  FENV_ON while (x) {\n    x--;\n  }\n  return x; }\n\
+                   int e(int x) {\n#inc\\\nlude \"fenv_on.inc\"\n  return x; }\n\
+                   int t(int x) {\n  T r = g(x,\n#ifdef C\n  1);\n#else\n  2);\n#endif\n  return r; }\n\
+                   int u(int x) {\n  FENV(ON)\n  -x;\n  return x; }\n\
+                   int v(int *p) {\n  FENV(ON)\n  *(p) = 1;\n  return 0; }\n";
+        let all = ["a", "c", "d", "e", "t", "u", "v"];
+        let p = probe(src, &all);
+        assert_eq!(p.unwatched, all, "{}", text(&p));
+        // Alone: with more functions after it, the parser's recovery reads
+        // it as no definition at all (no note either).
+        let p = probe(
+            "int b(int x) {\n#ifdef A\n  x = g(1,\n#else\n  _Pragma(\"STDC FENV_ACCESS ON\")\n  x = g(2,\n#endif\n     3);\n  return x; }\n",
+            &["b"],
+        );
+        assert_eq!(p.unwatched, ["b"], "{}", text(&p));
+        let p = probe(
+            "int bb(int x) {\n#ifdef A\n  x = g(1,\n#else\n  FENV_ON\n  x = g(2,\n#endif\n     3);\n  return x; }\n",
+            &["bb"],
+        );
+        assert_eq!(p.unwatched, ["bb"], "{}", text(&p));
+        for opener in ["FENV_ON;", "FENV(ON)", "FENV(ON);"] {
+            let p = probe(
+                &format!(
+                    "int bc(int x) {{\n#ifdef B\n  x = g(1,\n#else\n{opener}\n  x = g(2,\n#endif\n   3);\n  x--;\n  return x; }}\n"
+                ),
+                &["bc"],
+            );
+            assert_eq!(p.unwatched, ["bc"], "{opener}: {}", text(&p));
+        }
+        // A macro on the line that opens the branch the split opens.
+        for opener in ["FENV_ON", "PRAGMA(STDC FENV_ACCESS ON)"] {
+            let p = probe(
+                &format!(
+                    "int bd(int x) {{\n#ifdef A\n  x = g(1,\n#else\n  {opener}   x = g(2,\n#endif\n     3);\n  return x;\n}}\n"
+                ),
+                &["bd"],
+            );
+            assert_eq!(p.unwatched, ["bd"], "{opener}: {}", text(&p));
+        }
+        // The macro's own error comes before the split: not excused.
+        let p = probe(
+            "int f(int x) {\n  FENV_ON ++x, x = g(1,\n#ifdef A\n    2)\n#else\n    3)\n#endif\n  ;\n  return x; }\n",
+            &["f"],
+        );
+        assert_eq!(p.unwatched, ["f"], "{}", text(&p));
+        let src = "int w(int x) {\n  x = g(x,\n#ifdef C\n    1);\n#else\n    2);\n#endif\n  return x; }\n\
+                   int y(int x) {\n  printf(\"%d\",\n    x);\n  return x; }\n";
+        let p = probe(src, &["w", "y"]);
+        assert!(p.unwatched.is_empty(), "{}", text(&p));
+        let src = "int r(int x) {\n#ifdef A\n  return g(1,\n#else\n  return g(2,\n#endif\n     3);\n}\n\
+                   int q(int x) {\n  x = g(0,\n#ifdef A\n    x = g(1, 2),\n#else\n    x,\n#endif\n    3);\n  return x; }\n";
+        let p = probe(src, &["r", "q"]);
+        assert!(p.unwatched.is_empty(), "{}", text(&p));
+    }
+
     #[test]
     fn two_functions_of_one_name_in_two_files_get_their_own_notes() {
         let known = ["src/a.c::helper", "src/b.c::helper"];

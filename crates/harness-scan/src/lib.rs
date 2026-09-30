@@ -499,6 +499,24 @@ fn blocks_note(node: tree_sitter::Node, src: &[u8]) -> bool {
         {
             return true;
         }
+        // A function-like macro alone on its line, folded with the statement
+        // below it (`FENV_ACCESS(ON)⏎ x = g(x);` read as a declaration,
+        // `PRAGMA(…)⏎ while (x) {…}` as a nested function definition, which
+        // is never valid in a body; fix check 6 L1).
+        if node.kind() == "function_definition" {
+            return true;
+        }
+        // Anywhere on the statement's leading edge: `FENV(ON)⏎ -x;` reads as
+        // `FENV(ON) - x`.
+        let mut head = node.child(0);
+        while let Some(h) = head {
+            if matches!(h.kind(), "macro_type_specifier" | "call_expression")
+                && ends_its_line(h, src)
+            {
+                return true;
+            }
+            head = h.child(0);
+        }
         let mut leaf = node;
         while let Some(child) = leaf.child(0) {
             leaf = child;
@@ -521,7 +539,10 @@ fn blocks_note(node: tree_sitter::Node, src: &[u8]) -> bool {
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                 .collect();
-            matches!(name.as_str(), "pragma" | "include_next" | "import")
+            matches!(
+                name.as_str(),
+                "pragma" | "include" | "include_next" | "import"
+            )
         };
         return spliced(text(node, src))
             || node
@@ -588,12 +609,87 @@ fn branch_is_empty(branch: tree_sitter::Node) -> bool {
     empty
 }
 
-/// A line of `node` after its first starts with `#`: a directive splits it.
+/// A directive splits `node` and its errors are the split's: a line after
+/// its first starts with `#`, every error reaches past the first such line
+/// (an `#ifdef` deep in the statement's own block excuses nothing before it;
+/// fix check 6 M1), and no line right after a directive is a pragma or a
+/// lone macro (one opening the branch the split opens).
 fn split_by_directive(node: tree_sitter::Node, src: &[u8]) -> bool {
-    text(node, src)
-        .lines()
-        .skip(1)
-        .any(|l| l.trim_start().starts_with('#'))
+    let words = text(node, src);
+    let mut at = node.start_byte();
+    let mut first_directive = None;
+    for (i, line) in words.split_inclusive('\n').enumerate() {
+        if i > 0 && line.trim_start().starts_with('#') {
+            first_directive = Some(at);
+            break;
+        }
+        at += line.len();
+    }
+    let Some(directive) = first_directive else {
+        return false;
+    };
+    fn errors<'t>(node: tree_sitter::Node<'t>, out: &mut Vec<tree_sitter::Node<'t>>) {
+        if node.is_error() || node.is_missing() {
+            out.push(node);
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            errors(child, out);
+        }
+    }
+    let mut found = Vec::new();
+    errors(node, &mut found);
+    if !found.iter().all(|e| e.end_byte() > directive) {
+        return false;
+    }
+    let lines: Vec<&str> = words.lines().collect();
+    !lines.windows(2).any(|pair| {
+        if !pair[0].trim_start().starts_with('#') {
+            return false;
+        }
+        let next = pair[1].trim();
+        let next = next.split("//").next().unwrap_or(next);
+        let next = next.split("/*").next().unwrap_or(next).trim();
+        lone_macro(next) || next.starts_with("_Pragma") || next.starts_with("__pragma")
+    })
+}
+
+/// `line` opens with a macro that may expand to a pragma: a name, or a name
+/// and its parenthesized arguments, that is the whole line (`FENV_ON`,
+/// `FENV(ON);`) or is followed by another name (`FENV_ON   x = g(2,`) — two
+/// names side by side open no statement a split continues.
+fn lone_macro(line: &str) -> bool {
+    let is_name_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    if !line.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+        return false;
+    }
+    let name_end = line.find(|c: char| !is_name_char(c)).unwrap_or(line.len());
+    let mut rest = line[name_end..].trim_start();
+    if rest.starts_with('(') {
+        // The arguments, to their closing parenthesis.
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, c) in rest.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else {
+            return false;
+        };
+        rest = rest[end..].trim_start();
+    }
+    let rest = rest.trim_start_matches(';').trim();
+    rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
 }
 
 /// Every error in `node` is closing punctuation — the tail of a call split
