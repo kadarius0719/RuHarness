@@ -1218,6 +1218,14 @@ mod tests {
                 "{space:?}"
             );
         }
+        // A number that ends at a Unicode space leaves the next character
+        // literal whole: the note after it stays code.
+        let scan = scan_text(
+            "int x = 1\u{a0}'a'; int y = '\"'; void f(void) {__ruharness_seen[3] = 1; }\n"
+                .as_bytes(),
+        );
+        assert_eq!(scan.notes, BTreeMap::from([(3, 1)]), "{scan:?}");
+        assert!(scan.in_literals.is_empty(), "{scan:?}");
         // #line after or inside a block comment over lines, after a
         // backslash-blank splice; never after a token on its line.
         for spelled in [

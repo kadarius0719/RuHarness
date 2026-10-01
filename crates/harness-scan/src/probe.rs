@@ -518,6 +518,9 @@ mod tests {
         assert!(!crate::body_misread(
             &balanced.as_bytes()[balanced.find('{').expect("body")..]
         ));
+        // A body the parser bounded wrongly for another reason (no `#if`:
+        // mimalloc's `if mi_likely(x) {`) is no misread `#if` body.
+        assert!(!crate::body_misread(b"{ if mi_likely(x) {\n y();\n }\n"));
         let defs = defs_of(balanced);
         assert_eq!(defs.len(), 1, "{defs:?}");
         assert!(defs[0].note_at.is_ok(), "{defs:?}");

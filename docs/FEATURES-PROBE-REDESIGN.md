@@ -781,3 +781,12 @@ wrong map). Fix pass 3 (the code governs):
 - **Tests**: the clang-tuned tests skip off macOS; a compile-count seam
   (`last_map_most_file_compiles`, hidden) lets a test hold every file to its bound at bounds 1–12
   (it pins fix pass 2's two live mutants); new tests for each fix.
+
+**Mutation check of fix pass 3**: 35 mutants of its rules, 33 killed (three tests strengthened on
+the way: an unbalanced body with no `#if`; a number ending at a Unicode space before a character
+literal; the ruled-out namesake's fixture, whose call the compiler had folded away, so the test
+passed without the rule). Two live: widening the link search on a cut-short list changes only
+compiles unless the pass bound is reached on a list whose every referrer sits in the named object
+(a fixture needs eight functions each tipped by an inlined note); a link that fails with no
+undefined symbol passing a trial needs a link failure of another kind during a search — neither
+reachable with this machine's fixtures.

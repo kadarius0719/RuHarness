@@ -3562,7 +3562,10 @@ fn a_ruled_out_namesake_explains_its_symbol() {
     let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
                 #define NI { return 1; }\nstatic int other(void) NI\n\
                 __attribute__((noinline)) static int helper(int x) { return x + 7; }\n\
-                int main(void) { return unit_add(1, 2) == 3 ? helper(0) - 7 + other() - 1 : (int)mul_step(0, 1); }\n";
+                static volatile int seed;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(seed) - 7 + other() - 1 : (int)mul_step(0, 1); }\n";
+    // helper has no note (rule 1) and a volatile argument: the compiler
+    // cannot fold its call away, so the object defines it.
     let (_tmp, map) = map_program(
         "ruled-namesake",
         main,
