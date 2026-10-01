@@ -323,6 +323,10 @@ fn map_inner(
     let mut copy_notes: Vec<std::collections::BTreeSet<u32>> = Vec::new();
     let mut notes_ever: Vec<std::collections::BTreeSet<u32>> =
         vec![std::collections::BTreeSet::new(); c_files.len()];
+    // Per top-level file: the notes whose head, macros expanded, is
+    // inline-only (`extern inline`), in any listing pass.
+    let mut inline_ever: Vec<std::collections::BTreeSet<u32>> =
+        vec![std::collections::BTreeSet::new(); c_files.len()];
     for pass in 0.. {
         unit_reads.clear();
         copy_notes.clear();
@@ -403,6 +407,7 @@ fn map_inner(
             entered.retain(|rel| probe.rels().contains(rel));
             unit_reads.push(entered);
             notes_ever[n].extend(scan.notes.keys().copied());
+            inline_ever[n].extend(scan.inline_notes.iter().copied());
             copy_notes.push(scan.notes.keys().copied().collect());
         }
         if !changed {
@@ -498,21 +503,6 @@ fn map_inner(
     // unwatched, never "not run" (review: an #if sibling shares its id). A
     // compiler's clone of it (gcc's `f.isra.0`, `f.part.0`) is its name.
     let name_of = |id: &str| id.rsplit("::").next().unwrap_or(id).to_string();
-    // Definitions a rule kept unwatched before this check: compiled where
-    // their file is entered, though they never had a note (fix pass 2's
-    // check: such a namesake explains the symbol too). Taken before the loop,
-    // so its own reasons do not count.
-    let ruled: std::collections::BTreeSet<(String, String)> = probe
-        .reasons
-        .iter()
-        .filter(|(_, reason)| {
-            matches!(
-                reason.kind,
-                Kind::Parser | Kind::NotABlock | Kind::ConditionalBrace | Kind::Naked
-            )
-        })
-        .map(|(pair, _)| pair.clone())
-        .collect();
     for (n, entered) in unit_reads.iter().enumerate() {
         for rel in entered {
             for (file, id) in index.pairs.iter().filter(|(file, _)| file == rel) {
@@ -528,19 +518,21 @@ fn map_inner(
                 let name = name_of(id);
                 let external = !id.contains("::");
                 let defined = defines_function(&built.defined[n], &name, external);
-                // Another watched definition of the name compiled in this
-                // unit explains the symbol — never an `extern inline` one,
-                // which may emit none (fix pass 2's check).
+                // Another watched definition of the name, its note code in
+                // one of this unit's listings, explains the symbol: C allows
+                // one definition of a name in a unit, so the hidden variant
+                // cannot be there too — save GNU's inline-only idiom, so never
+                // an `extern inline` one, however spelled (fix pass 3's check).
+                // A definition kept unwatched by a rule never explains: nothing
+                // shows whether the unit compiles it.
                 let explained = || {
                     index.pairs.iter().any(|(other_file, other)| {
                         (other_file, other) != (file, id)
                             && name_of(other) == name
                             && !probe.inline_only(other_file, other)
-                            && (index
-                                .of(other_file, other)
-                                .is_some_and(|k| notes_ever[n].contains(&k))
-                                || (entered.contains(other_file)
-                                    && ruled.contains(&(other_file.clone(), other.clone()))))
+                            && index.of(other_file, other).is_some_and(|k| {
+                                notes_ever[n].contains(&k) && !inline_ever[n].contains(&k)
+                            })
                     })
                 };
                 if !compiled && defined && !explained() {

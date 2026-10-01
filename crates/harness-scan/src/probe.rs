@@ -478,6 +478,79 @@ mod tests {
         );
     }
 
+    /// Fix pass 3's check: a body macro with arguments before the next head
+    /// (`NOT_IMPL(-1)`, `STUB(int)`) never takes the second head's name; a
+    /// K&R second head with typedef'd types is caught by the parse error it
+    /// leaves; a nested second head keeps its `static` and whole signature.
+    #[test]
+    fn the_real_second_head_is_named_in_every_layout() {
+        for src in [
+            "int g(void) NOT_IMPL(-1)\nint after(void) { return 1; }\n",
+            "int g(void) NOT_IMPL(-1)\n\nstatic int\nafter(void)\n{ return 1; }\n",
+            "int g(void) STUB(int)\nint after(void) { return 1; }\n",
+            "int g(void) NI\nCount\nafter(x)\n\tCount x;\n{ return x; }\n",
+        ] {
+            let defs = defs_of(src);
+            let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+            assert_eq!(names, ["g", "after"], "{src}: {defs:?}");
+            assert!(
+                defs.iter().all(|d| d.note_at == Err(NoNote::Parser)),
+                "{src}: {defs:?}"
+            );
+        }
+        for (src, signature) in [
+            (
+                "int g(void) NI\nstatic int (after)(void) { return 1; }\n",
+                "static int (after)(void)",
+            ),
+            (
+                "int g(void) NI\nstatic void (*after(int x))(int) { return 0; }\n",
+                "static void (*after(int x))(int)",
+            ),
+            (
+                "int g(void) NI\nunsigned long (after)(void) { return 1; }\n",
+                "unsigned long (after)(void)",
+            ),
+        ] {
+            let defs = defs_of(src);
+            assert_eq!(defs.len(), 2, "{src}: {defs:?}");
+            assert_eq!(defs[1].name, "after");
+            assert_eq!(defs[1].signature, signature, "{src}");
+            assert_eq!(defs[1].is_static, signature.starts_with("static"), "{src}");
+        }
+    }
+
+    /// Fix pass 3's check: an annotation naming the function's own parameters
+    /// (`__sized_by(n * size)`) is no second head; a macro before the real
+    /// name with attributes between (macOS's malloc headers) gives one static
+    /// definition under the real name; a macro-made `PREFIX(name)(params)` is
+    /// not recorded under the macro's name.
+    #[test]
+    fn annotations_and_name_macros_make_no_function() {
+        for src in [
+            "void *alloc_n(size_t n, size_t size) __sized_by(n * size) { return h(n); }\n",
+            "void *alloc_n(size_t count, size_t size)\n    __sized_by(count*size)\n{ return h(count); }\n",
+        ] {
+            let defs = defs_of(src);
+            assert_eq!(defs.len(), 1, "{src}: {defs:?}");
+            assert_eq!(defs[0].name, "alloc_n");
+            assert!(defs[0].note_at.is_ok(), "{src}: {defs:?}");
+        }
+        for src in [
+            "static void * SIZED(size) __attribute__((always_inline)) alloc_a(int size) { return 0; }\n",
+            "static void * __sized_by(count * size) my_calloc(int count, int size) { return 0; }\n",
+        ] {
+            let defs = defs_of(src);
+            let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+            assert_eq!(names.len(), 1, "{src}: {defs:?}");
+            assert!(names[0] == "alloc_a" || names[0] == "my_calloc", "{src}: {defs:?}");
+            assert!(defs[0].is_static, "{src}: {defs:?}");
+        }
+        let src = "static int PREFIX(scanLit)(int open, const char *p) { return 0; }\n\
+                   static int PREFIX(scanRef)(int open, const char *p) { return 1; }\n";
+        assert!(defs_of(src).is_empty(), "{:?}", defs_of(src));
+    }
+
     /// Fix pass 1's check: a definition inside a body the parser read
     /// whole — a GNU nested function, a statement macro misread after an
     /// `#endif` — is no file-scope function; the body keeps its note.
@@ -518,6 +591,15 @@ mod tests {
         assert!(!crate::body_misread(
             &balanced.as_bytes()[balanced.find('{').expect("body")..]
         ));
+        // Fix pass 3's check: an `#else` that closes the function and opens
+        // another is misread, though the first branch reads right.
+        let mis2 = "int f(int x) {\n#ifdef A\n  if (x) {\n#else\n  return 0;\n}\n\
+                    static int helper(int y) {\n  if (y) {\n#endif\n    g++;\n  }\n  return 0;\n}\n";
+        assert!(crate::body_misread(
+            &mis2.as_bytes()[mis2.find('{').expect("body")..]
+        ));
+        let names: Vec<String> = defs_of(mis2).into_iter().map(|d| d.name).collect();
+        assert!(names.contains(&"helper".to_string()), "{names:?}");
         // A body the parser bounded wrongly for another reason (no `#if`:
         // mimalloc's `if mi_likely(x) {`) is no misread `#if` body.
         assert!(!crate::body_misread(b"{ if mi_likely(x) {\n y();\n }\n"));

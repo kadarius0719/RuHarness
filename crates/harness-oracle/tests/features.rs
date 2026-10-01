@@ -3468,9 +3468,10 @@ fn no_file_compiles_past_its_bound() {
     }
 }
 
-/// Check of fix pass 2: a cut-short list whose referrers all sit in the
-/// object the linker names searches that object alone — never every unit
-/// at once, which the pass bound would turn into every file unprobed.
+/// Check of fix pass 2 (fixture from fix pass 3's check): a cut-short list
+/// whose referrers all sit in the object the linker names — eight distinct
+/// tipped statics in one file, so ld64 lists seven and `...` — searches that
+/// object alone, never every unit at once.
 #[test]
 fn a_cut_list_in_one_object_searches_that_object() {
     if cfg!(not(target_os = "macos")) {
@@ -3479,20 +3480,23 @@ fn a_cut_list_in_one_object_searches_that_object() {
     }
     let (_, files, _) = shared_tip(0);
     let tip = &files[0].1;
-    let mut u = String::from("#include \"tip.h\"\n");
-    for k in 0..8 {
-        u.push_str(&format!("int fa{k}(void) {{ return w({k}); }}\n"));
+    let mut u = String::new();
+    let mut ids: Vec<(String, String)> = Vec::new();
+    for i in 0..8 {
+        u.push_str(
+            &tip.replace("static void g(", &format!("static void g{i}("))
+                .replace("  g(n);", &format!("  g{i}(n);"))
+                .replace("static int w(", &format!("static int w{i}(")),
+        );
+        u.push_str(&format!(
+            "int fa{i}(void) {{ return w{i}(5); }}\nint fb{i}(void) {{ return w{i}(6); }}\n"
+        ));
+        ids.push(("src/tool/u.c".to_string(), format!("src/tool/u.c::g{i}")));
+        ids.push(("src/tool/u.c".to_string(), format!("fa{i}")));
+        ids.push(("src/tool/u.c".to_string(), format!("fb{i}")));
     }
-    let mut extra: Vec<(String, String)> = vec![
-        ("src/tool/tip.h".to_string(), tip.clone()),
-        ("src/tool/u.c".to_string(), u),
-    ];
-    let mut ids: Vec<(String, String)> = vec![(
-        "src/tool/tip.h".to_string(),
-        "src/tool/tip.h::g".to_string(),
-    )];
+    let mut extra: Vec<(String, String)> = vec![("src/tool/u.c".to_string(), u)];
     for k in 0..8 {
-        ids.push(("src/tool/u.c".to_string(), format!("fa{k}")));
         extra.push((
             format!("src/tool/t{k}.c"),
             format!("int xf{k}(int x) {{ return x + {k}; }}\n"),
@@ -3507,13 +3511,20 @@ fn a_cut_list_in_one_object_searches_that_object() {
         .collect();
     let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
     let bounds = harness_oracle::MapBounds {
-        pass_compiles: 20,
+        pass_compiles: 60,
         ..DESIGN_BOUNDS
     };
     let (_tmp, map, _) = map_program_bounded("cut-in-one-object", main, &extra, &ids, bounds);
     let map = map.expect("maps");
-    let g = reason_for(&map, "src/tool/tip.h::g").expect("g unwatched");
-    assert_eq!(g.kind, "link", "{:?}", map.unwatched_reasons);
+    for i in 0..8 {
+        let g = reason_for(&map, &format!("src/tool/u.c::g{i}"));
+        assert_eq!(
+            g.map(|r| r.kind.as_str()),
+            Some("link"),
+            "g{i}: {:?}",
+            map.unwatched_reasons
+        );
+    }
     for id in ["xf0", "xf7", "unit_add", "main"] {
         assert!(
             reason_for(&map, id).is_none(),
@@ -3521,6 +3532,9 @@ fn a_cut_list_in_one_object_searches_that_object() {
             map.unwatched_reasons
         );
     }
+    // Each round's search compiles the one object, never all ten.
+    let spent = harness_oracle::last_map_pass_compiles();
+    assert!(spent < 60, "the search spent {spent} compiles");
 }
 
 /// Check of fix pass 2: an `extern inline` (gnu_inline) namesake emits no
@@ -3552,12 +3566,13 @@ fn an_inline_only_namesake_explains_no_symbol() {
     );
 }
 
-/// Check of fix pass 2: a namesake a rule kept unwatched (rule 1 here: a
-/// second head run into the first) is still compiled — it explains the
-/// symbol, so a header's skipped static of the name reads "not run", never
-/// "the one compiled is another definition".
+/// Fix pass 3's check: a namesake a rule kept unwatched (rule 1 here: a
+/// second head run into the first) has no note, so nothing shows whether
+/// the unit compiles it — it explains nothing, and a header's skipped static
+/// of the name reads unwatched (parser), conservatively: never "not run" for
+/// a function that may have run.
 #[test]
-fn a_ruled_out_namesake_explains_its_symbol() {
+fn a_ruled_out_namesake_explains_nothing() {
     let h = "#ifdef USE_FAST\nstatic int helper(int x) { return x * 3; }\n#endif\n";
     let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
                 #define NI { return 1; }\nstatic int other(void) NI\n\
@@ -3577,8 +3592,9 @@ fn a_ruled_out_namesake_explains_its_symbol() {
         ],
     );
     let map = map.expect("maps");
-    assert!(
-        reason_for(&map, "src/tool/h.h::helper").is_none(),
+    assert_eq!(
+        reason_for(&map, "src/tool/h.h::helper").map(|r| r.kind.as_str()),
+        Some("parser"),
         "{:?}",
         map.unwatched_reasons
     );
@@ -3640,5 +3656,120 @@ fn the_pass_never_compiles_past_its_bound() {
         map.expect("maps");
         let spent = harness_oracle::last_map_pass_compiles();
         assert!(spent <= bound, "bound {bound}: the pass spent {spent}");
+    }
+}
+
+// ---- fix pass 4 (the check of fix pass 3) ----
+
+/// Fix pass 3's check: GNU's inline-only idiom spelled through a macro
+/// (glibc's `__extern_inline`) emits no symbol, so it never explains the one
+/// a hidden variant defines — the visible sibling is unwatched, never "not
+/// run".
+#[test]
+fn a_macro_spelled_inline_only_namesake_explains_no_symbol() {
+    let h = "#define EXTERN_INLINE extern __inline __attribute__((__gnu_inline__))\n\
+             EXTERN_INLINE int helper(int x) { return x * 5; }\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
+                #if 0\nint helper(int x) { return x - 1; }\n#else\n\
+                __attribute__((noinline)) int (helper)(int x) { return x * 3; }\n#endif\n\
+                static volatile int seed = 1;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(seed) - 3 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "macro-inline-only-namesake",
+        main,
+        &[("src/tool/h.h", h)],
+        &[("src/tool/h.h", "helper"), ("src/tool/main.c", "helper")],
+    );
+    let map = map.expect("maps");
+    let visible = map
+        .unwatched_reasons
+        .iter()
+        .find(|r| r.file == "src/tool/main.c" && r.id == "helper");
+    assert_eq!(
+        visible.map(|r| r.kind.as_str()),
+        Some("parser"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Fix pass 3's check: a namesake whose note a later listing pass took out
+/// (its header read as data by another file's `__has_include`) was still
+/// compiled — it explains the symbol, so a header's skipped static of the
+/// name reads "not run".
+#[test]
+fn a_namesake_taken_out_in_a_later_pass_explains_its_symbol() {
+    let h = "#ifdef USE_FAST\nstatic int helper(int x) { return x * 3; }\n#endif\n";
+    let hn = "__attribute__((noinline)) int helper(int x) { return x + 7; }\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n#include \"hn.h\"\n\
+                static volatile int seed;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(seed) - 7 : (int)mul_step(0, 1); }\n";
+    let probe_file = "#if __has_include(\"hn.h\")\nint has_hn(void) { return 1; }\n#endif\n";
+    let (_tmp, map) = map_program(
+        "namesake-taken-out",
+        main,
+        &[
+            ("src/tool/h.h", h),
+            ("src/tool/hn.h", hn),
+            ("src/tool/p.c", probe_file),
+        ],
+        &[
+            ("src/tool/h.h", "src/tool/h.h::helper"),
+            ("src/tool/hn.h", "helper"),
+            ("src/tool/p.c", "has_hn"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        reason_for(&map, "helper").map(|r| r.kind.as_str()),
+        Some("data"),
+        "the premise: hn.h's note was taken out: {:?}",
+        map.unwatched_reasons
+    );
+    assert!(
+        reason_for(&map, "src/tool/h.h::helper").is_none(),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Fix pass 3's check: the spread case at the design's bounds — a header's
+/// tipped static referenced from eight objects (ld64 lists seven) among
+/// forty more files: the named search, compiling also the unlisted object
+/// that still references the symbol, finds the note; nothing else goes
+/// back unprobed.
+#[test]
+fn the_spread_case_is_found_at_the_designs_bounds() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let (main, mut files, mut ids) = shared_tip(8);
+    for k in 0..40 {
+        files.push((
+            format!("src/tool/t{k}.c"),
+            format!("int xf{k}(int x) {{ return x + {k}; }}\n"),
+        ));
+        ids.push((format!("src/tool/t{k}.c"), format!("xf{k}")));
+    }
+    let extra: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let (_tmp, map) = map_program("spread-at-design-bounds", &main, &extra, &ids);
+    let map = map.expect("maps");
+    assert_eq!(
+        reason_for(&map, "src/tool/tip.h::g").map(|r| r.kind.as_str()),
+        Some("link"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    for id in ["xf0", "xf39", "main", "unit_add"] {
+        assert!(
+            reason_for(&map, id).is_none(),
+            "{id}: {:?}",
+            map.unwatched_reasons
+        );
     }
 }

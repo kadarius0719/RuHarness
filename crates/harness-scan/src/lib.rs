@@ -401,9 +401,15 @@ fn collect_functions_in(
             // the real name gives the definition the real name (see [`heads`]).
             if recorded {
                 match heads(child, src) {
-                    Heads::Two { name, call } => {
+                    Heads::Two {
+                        name,
+                        call,
+                        first_end,
+                        outer_end,
+                    } => {
                         defs[at].calls.clear();
-                        let second = second_head(child, name, call, src, file);
+                        let second =
+                            second_head(child, name, call, (first_end, outer_end), src, file);
                         defs.push(second);
                     }
                     Heads::MacroFirst { name } => {
@@ -764,6 +770,11 @@ enum Heads<'t> {
     Two {
         name: String,
         call: tree_sitter::Node<'t>,
+        /// Where the first head's parameter list ends.
+        first_end: usize,
+        /// Where the outermost function declarator ends (past a nested
+        /// second head's own parameters).
+        outer_end: usize,
     },
     /// The declarator is a macro (`SIZED(size) alloc_a(int size)`,
     /// `pg_attribute_unused()` then `RT_DUMP_NODE(RT_NODE * node)`): the
@@ -855,6 +866,92 @@ fn decl_shaped(args: &str) -> bool {
     words >= 2
 }
 
+/// The names a parameter list declares: each top-level item's last plain
+/// word that is not a type word (`(size_t n, const char *s)` → n, s).
+fn parameter_names(list: &str) -> Vec<String> {
+    let inner = list.trim();
+    let inner = inner
+        .strip_prefix('(')
+        .and_then(|r| r.strip_suffix(')'))
+        .unwrap_or(inner);
+    top_level_items(inner)
+        .iter()
+        .filter_map(|item| {
+            let item = item.split('[').next().unwrap_or(item);
+            item.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .rfind(|w| {
+                    !w.is_empty() && !type_word(w) && !w.starts_with(|c: char| c.is_ascii_digit())
+                })
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// The top-level, comma-separated items of an argument list's inside.
+fn top_level_items(inner: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut depth = 0i32;
+    let mut from = 0;
+    for (at, c) in inner.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                items.push(inner[from..at].trim());
+                from = at + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(inner[from..].trim());
+    items
+}
+
+/// Whether every word of `args` (numbers aside) is one of `names` — an
+/// annotation naming the function's own parameters (`__sized_by(n * size)`
+/// after `(size_t n, size_t size)`), where a second head declares new ones
+/// (fix pass 3's check).
+fn names_only(args: &str, names: &[String]) -> bool {
+    let words: Vec<&str> = args
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty() && !w.starts_with(|c: char| c.is_ascii_digit()))
+        .collect();
+    !words.is_empty() && words.iter().all(|w| names.iter().any(|n| n == w))
+}
+
+/// Whether every top-level item of an argument list is one plain name (K&R
+/// `after(x, y)`).
+fn plain_names(args: &str) -> bool {
+    let inner = args.trim();
+    let inner = inner
+        .strip_prefix('(')
+        .and_then(|r| r.strip_suffix(')'))
+        .unwrap_or(inner);
+    !inner.trim().is_empty()
+        && top_level_items(inner).iter().all(|item| {
+            !item.is_empty()
+                && item.chars().enumerate().all(|(k, c)| {
+                    c == '_' || c.is_ascii_alphabetic() || (k > 0 && c.is_ascii_digit())
+                })
+        })
+}
+
+/// Whether a function declarator holds anything after its parameter list —
+/// a nested declarator is two heads only then (fix pass 3's check: a bare
+/// `PREFIX(name)(params)` is a macro-made name, not two heads).
+fn has_trailing(declarator: tree_sitter::Node) -> bool {
+    let Some(parameters) = declarator.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = declarator.walk();
+    let found = declarator
+        .named_children(&mut cursor)
+        .skip_while(|c| c.id() != parameters.id())
+        .nth(1)
+        .is_some();
+    found
+}
+
 /// What follows a definition's parameter list (fix pass 3: the second head
 /// in any layout — GNU's return type on its own line, one line, K&R, a
 /// pointer or parenthesized name — while annotation macros keep the note).
@@ -874,16 +971,35 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
             None => return Heads::One,
         }
     }
+    let outer_end = node.end_byte();
     let mut nested = false;
     while let Some(inner) = node
         .child_by_field_name("declarator")
-        .filter(|d| d.kind() == "function_declarator")
+        .filter(|d| d.kind() == "function_declarator" && has_trailing(*d))
     {
         node = inner;
         nested = true;
     }
     let Some(parameters) = node.child_by_field_name("parameters") else {
         return Heads::One;
+    };
+    let first_params = text(parameters, src);
+    let own_names = parameter_names(first_params);
+    // A stray parse error between the declarator and the body: K&R
+    // declarations the parser could not read — a second head's (fix pass 3's
+    // check: `Count\nafter(x)\n\tCount x;`).
+    let stray = match (
+        def.child_by_field_name("declarator").map(|d| d.end_byte()),
+        def.child_by_field_name("body").map(|b| b.start_byte()),
+    ) {
+        (Some(end), Some(body)) => {
+            let mut c = def.walk();
+            let found = def
+                .children(&mut c)
+                .any(|n| n.is_error() && n.start_byte() >= end && n.end_byte() <= body);
+            found
+        }
+        _ => false,
     };
     let mut cursor = node.walk();
     let trailing: Vec<tree_sitter::Node> = node
@@ -899,6 +1015,14 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
             "identifier" | "primitive_type" | "type_identifier" | "sized_type_specifier"
         )
     };
+    // The qualifying calls, ranked (fix pass 3's check: a body macro with
+    // arguments before the next head, `NOT_IMPL(-1)` then `int after(void)`,
+    // must not take the name): the first call a type word stands before (or
+    // whose "function" is a keyword) wins; else the last that qualifies by
+    // its arguments or a K&R word after it.
+    type Candidate<'a> = (Option<String>, tree_sitter::Node<'a>, bool);
+    let mut by_position: Option<Candidate> = None;
+    let mut by_shape: Option<Candidate> = None;
     for (k, call) in trailing.iter().enumerate() {
         if call.kind() != "call_expression" {
             continue;
@@ -907,11 +1031,22 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
         let word_before = before
             .last()
             .is_some_and(|n| word_node(n) && type_word(text(**n, src)));
+        let args = call.child_by_field_name("arguments");
+        let args_text = args.map(|a| text(a, src)).unwrap_or("");
+        let words_after: Vec<&str> = trailing[k + 1..]
+            .iter()
+            .filter(|n| word_node(n))
+            .map(|n| text(*n, src))
+            .collect();
         let knr = trailing
             .get(k + 1)
-            .is_some_and(|n| word_node(n) && type_word(text(*n, src)));
-        let args = call.child_by_field_name("arguments");
-        let decl = args.is_some_and(|a| decl_shaped(text(a, src)));
+            .is_some_and(|n| word_node(n) && type_word(text(*n, src)))
+            || (stray
+                && plain_names(args_text)
+                && parameter_names(args_text)
+                    .iter()
+                    .any(|name| words_after.contains(&name.as_str())));
+        let decl = decl_shaped(args_text) && !names_only(args_text, &own_names);
         let function = call.child_by_field_name("function");
         let keyword_fn = function.is_some_and(|f| C_KEYWORDS.contains(&text(f, src)));
         if !(word_before || knr || decl || keyword_fn) {
@@ -925,23 +1060,42 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
                 .map(|f| text(f, src).to_string())
         }
         .filter(|n| !C_KEYWORDS.contains(&n.as_str()));
-        let Some(name) = name else {
-            return Heads::Unreadable;
-        };
+        // A macro before the real name: only attributes between the macro's
+        // parentheses and the call, and the macro's arguments are not a
+        // parameter list of their own (or name the call's parameters).
         let macro_first = decl
             && !word_before
             && !knr
             && !keyword_fn
             && !nested
-            && before.is_empty()
-            && !decl_shaped(text(parameters, src));
+            && before.iter().all(|n| n.kind() == "attribute_specifier")
+            && (!decl_shaped(first_params)
+                || names_only(first_params, &parameter_names(args_text)));
+        let candidate = (name, *call, macro_first);
+        if word_before || keyword_fn {
+            if by_position.is_none() {
+                by_position = Some(candidate);
+            }
+        } else {
+            by_shape = Some(candidate);
+        }
+    }
+    if let Some((name, call, macro_first)) = by_position.or(by_shape) {
+        let Some(name) = name else {
+            return Heads::Unreadable;
+        };
         return if macro_first {
             Heads::MacroFirst { name }
         } else {
-            Heads::Two { name, call: *call }
+            Heads::Two {
+                name,
+                call,
+                first_end: parameters.end_byte(),
+                outer_end,
+            }
         };
     }
-    if nested || trailing.iter().any(|c| c.is_error()) {
+    if nested || stray || trailing.iter().any(|c| c.is_error()) {
         Heads::Unreadable
     } else {
         Heads::One
@@ -973,13 +1127,10 @@ fn second_head(
     def: tree_sitter::Node,
     name: String,
     call: tree_sitter::Node,
+    (parameters_end, outer_end): (usize, usize),
     src: &[u8],
     file: &str,
 ) -> FnDef {
-    let parameters_end = def
-        .child_by_field_name("declarator")
-        .and_then(parameter_list)
-        .map_or(def.start_byte(), |p| p.end_byte());
     let between = &src[parameters_end.min(call.start_byte())..call.start_byte()];
     let words: Vec<&[u8]> = between
         .split(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
@@ -1007,7 +1158,10 @@ fn second_head(
         at = parameters_end + word_at;
         start = at;
     }
-    let raw = String::from_utf8_lossy(&src[start..call.end_byte()]);
+    // A nested second head's declarator runs past the call (`int
+    // (after)(void)`, `void (*after(int x))(int)`): its signature does too.
+    let end = outer_end.max(call.end_byte());
+    let raw = String::from_utf8_lossy(&src[start..end]);
     let mut calls = BTreeSet::new();
     if let Some(body) = def.child_by_field_name("body") {
         collect_calls(body, src, &mut calls);
@@ -1040,23 +1194,18 @@ fn inner_declarator(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
     })
 }
 
-/// Whether a function body as the parser read it holds an `#if` group with
-/// two or more branches that each change the brace depth — the parser reads
-/// every branch, so it runs the body on (sqlite3.c's winWrite and
-/// decodeIntArray) — **and** one configuration (the first branch of every
-/// group) does not read the same body: its braces close before the parser's
-/// closing brace, or not at it. Groups whose excess braces cancel inside the
-/// body (a lock taken in one `#if` and released in a later one) are read
-/// right (fix pass 2's check). Comments, string and character literals and
-/// line splices are skipped.
-fn body_misread(body: &[u8]) -> bool {
-    let mut two_branch = false;
-    // Per open group: whether the current branch is not its first.
-    let mut later_branch: Vec<bool> = Vec::new();
-    let mut depth = 0i64;
-    let mut closed_early = false;
-    let last_brace = body.iter().rposition(|c| *c == b'}');
-    let mut groups: Vec<Vec<i64>> = Vec::new();
+/// What a body holds that bears on its reading: `#if`-group directives and
+/// braces (comments, string and character literals and line splices
+/// skipped).
+enum BodyEvent {
+    If,
+    Else,
+    Endif,
+    Brace(i64, usize),
+}
+
+fn body_events(body: &[u8]) -> Vec<BodyEvent> {
+    let mut events = Vec::new();
     let mut i = 0;
     let mut line_start = true;
     while i < body.len() {
@@ -1110,27 +1259,9 @@ fn body_misread(body: &[u8]) -> bool {
                     .copied()
                     .collect();
                 match word.as_slice() {
-                    b"if" | b"ifdef" | b"ifndef" => {
-                        groups.push(vec![0]);
-                        later_branch.push(false);
-                    }
-                    b"elif" | b"elifdef" | b"elifndef" | b"else" => {
-                        if let Some(g) = groups.last_mut() {
-                            g.push(0);
-                        }
-                        if let Some(later) = later_branch.last_mut() {
-                            *later = true;
-                        }
-                    }
-                    b"endif" => {
-                        if groups
-                            .pop()
-                            .is_some_and(|g| g.iter().filter(|d| **d != 0).count() >= 2)
-                        {
-                            two_branch = true;
-                        }
-                        later_branch.pop();
-                    }
+                    b"if" | b"ifdef" | b"ifndef" => events.push(BodyEvent::If),
+                    b"elif" | b"elifdef" | b"elifndef" | b"else" => events.push(BodyEvent::Else),
+                    b"endif" => events.push(BodyEvent::Endif),
                     _ => {}
                 }
                 // The rest of the directive line, splices joined.
@@ -1139,26 +1270,102 @@ fn body_misread(body: &[u8]) -> bool {
                 }
                 continue;
             }
-            b'{' | b'}' => {
-                let step = if b == b'{' { 1 } else { -1 };
-                if let Some(group_depth) = groups.last_mut().and_then(|g| g.last_mut()) {
-                    *group_depth += step;
-                }
-                if !later_branch.iter().any(|later| *later) {
-                    depth += step;
-                    if depth == 0 && Some(i) != last_brace {
-                        closed_early = true;
-                    }
-                }
-            }
+            b'{' => events.push(BodyEvent::Brace(1, i)),
+            b'}' => events.push(BodyEvent::Brace(-1, i)),
             _ => {}
         }
         line_start = false;
         i += 1;
     }
-    two_branch && (closed_early || depth != 0)
+    events
 }
 
+/// Whether a function body as the parser read it holds an `#if` group with
+/// two or more branches that each change the brace depth — the parser reads
+/// every branch, so it runs the body on (sqlite3.c's winWrite and
+/// decodeIntArray) — **and** some configuration (branch k of every group, or
+/// its last when it has fewer; k from 0 to the most branches any group has)
+/// does not read the same body: its braces close before the parser's closing
+/// brace, or not at it. Groups whose excess braces cancel inside the body (a
+/// lock taken in one `#if` and released in a later one) are read right (fix
+/// pass 2's check); an `#else` that closes the function and opens another is
+/// misread, whichever branch comes first (fix pass 3's check).
+fn body_misread(body: &[u8]) -> bool {
+    let events = body_events(body);
+    // Per group (in order of its `#if`): its branches' brace changes.
+    let mut groups: Vec<Vec<i64>> = Vec::new();
+    let mut open: Vec<usize> = Vec::new();
+    for event in &events {
+        match event {
+            BodyEvent::If => {
+                open.push(groups.len());
+                groups.push(vec![0]);
+            }
+            BodyEvent::Else => {
+                if let Some(g) = open.last() {
+                    groups[*g].push(0);
+                }
+            }
+            BodyEvent::Endif => {
+                open.pop();
+            }
+            BodyEvent::Brace(step, _) => {
+                if let Some(g) = open.last() {
+                    if let Some(depth) = groups[*g].last_mut() {
+                        *depth += step;
+                    }
+                }
+            }
+        }
+    }
+    let two_branch = groups
+        .iter()
+        .any(|g| g.iter().filter(|d| **d != 0).count() >= 2);
+    if !two_branch {
+        return false;
+    }
+    let last_brace = body.iter().rposition(|c| *c == b'}');
+    let widest = groups.iter().map(Vec::len).max().unwrap_or(1);
+    (0..widest).any(|k| {
+        // Per open group: its index and the branch being read.
+        let mut open: Vec<(usize, usize)> = Vec::new();
+        let mut next_group = 0;
+        let mut depth = 0i64;
+        let mut closed_early = false;
+        for event in &events {
+            match event {
+                BodyEvent::If => {
+                    open.push((next_group, 0));
+                    next_group += 1;
+                }
+                BodyEvent::Else => {
+                    if let Some((_, branch)) = open.last_mut() {
+                        *branch += 1;
+                    }
+                }
+                BodyEvent::Endif => {
+                    open.pop();
+                }
+                BodyEvent::Brace(step, at) => {
+                    let active = open
+                        .iter()
+                        .all(|(g, branch)| *branch == k.min(groups[*g].len() - 1));
+                    if active {
+                        depth += step;
+                        if depth == 0 && Some(*at) != last_brace {
+                            closed_early = true;
+                        }
+                    }
+                }
+            }
+        }
+        closed_early || depth != 0
+    })
+}
+
+/// The identifier a function definition names, through pointer, parenthesized
+/// and C23-attributed declarators to the function declarator (and, for two
+/// heads run together, into the first head's).
 fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
     let mut node = def.child_by_field_name("declarator")?;
     loop {
@@ -1171,7 +1378,13 @@ fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
                 }
                 // Two heads run together (`int g(void) NI` then `int
                 // (after)(void)`): the first head's name.
+                // (Only when the inner declarator holds something after its
+                // parameters: a bare `PREFIX(name)(params)` is a macro-made
+                // name, unread — fix pass 3's check.)
                 if decl.kind() == "function_declarator" {
+                    if !has_trailing(decl) {
+                        return None;
+                    }
                     node = decl;
                     continue;
                 }

@@ -16,6 +16,19 @@ pub(crate) struct Defined {
 /// Every symbol `object` defines (in a section: not undefined, not common,
 /// no debugging entry). `Err` names what could not be read.
 pub(crate) fn defined(object: &[u8]) -> Result<Vec<Defined>, String> {
+    symbols(object).map(|(defined, _)| defined)
+}
+
+/// The external symbols `object` leaves undefined (Mach-O's leading `_`
+/// dropped; a common symbol is not one) — which objects still reference a
+/// symbol the link misses (fix pass 3's check).
+pub(crate) fn undefined(object: &[u8]) -> Result<Vec<String>, String> {
+    symbols(object).map(|(_, undefined)| undefined)
+}
+
+type Symbols = (Vec<Defined>, Vec<String>);
+
+fn symbols(object: &[u8]) -> Result<Symbols, String> {
     if object.starts_with(&[0xcf, 0xfa, 0xed, 0xfe]) {
         macho(object)
     } else if object.starts_with(b"\x7fELF") {
@@ -56,13 +69,14 @@ const N_STAB: u8 = 0xe0;
 const N_TYPE: u8 = 0x0e;
 const N_SECT: u8 = 0x0e;
 const N_EXT: u8 = 0x01;
+const N_UNDF: u8 = 0x00;
 const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x400;
 
 /// Mach-O: `LC_SYMTAB`'s `nlist_64` entries of type `N_SECT`; a section's
 /// flags (`LC_SEGMENT_64`, numbered from 1 in order) say whether it holds
 /// instructions.
-fn macho(b: &[u8]) -> Result<Vec<Defined>, String> {
+fn macho(b: &[u8]) -> Result<Symbols, String> {
     let bad = |what: &str| format!("the Mach-O object's {what} cannot be read");
     let ncmds = u32_at(b, 16).ok_or_else(|| bad("header"))? as usize;
     let mut at: usize = 32;
@@ -91,7 +105,7 @@ fn macho(b: &[u8]) -> Result<Vec<Defined>, String> {
         at = at.checked_add(size).ok_or_else(|| bad("load commands"))?;
     }
     let Some(at) = symtab else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let field = |k: usize| u32_at(b, at.saturating_add(8 + 4 * k)).map(|v| v as usize);
     let (Some(symoff), Some(nsyms), Some(stroff), Some(strsize)) =
@@ -103,6 +117,7 @@ fn macho(b: &[u8]) -> Result<Vec<Defined>, String> {
         .get(stroff..stroff.saturating_add(strsize))
         .ok_or_else(|| bad("string table"))?;
     let mut out = Vec::new();
+    let mut undefined = Vec::new();
     for k in 0..nsyms {
         let e = k
             .checked_mul(16)
@@ -115,6 +130,16 @@ fn macho(b: &[u8]) -> Result<Vec<Defined>, String> {
         ) else {
             return Err(bad("symbol table"));
         };
+        // An external undefined symbol (a common one has a size in n_value).
+        if ty & N_STAB == 0
+            && ty & N_TYPE == N_UNDF
+            && ty & N_EXT != 0
+            && u64_at(b, e.saturating_add(8)) == Some(0)
+        {
+            let name = name_at(strings, strx as usize).ok_or_else(|| bad("names"))?;
+            undefined.push(name.strip_prefix('_').unwrap_or(&name).to_string());
+            continue;
+        }
         if ty & N_STAB != 0 || ty & N_TYPE != N_SECT {
             continue;
         }
@@ -130,10 +155,13 @@ fn macho(b: &[u8]) -> Result<Vec<Defined>, String> {
                 .unwrap_or(false),
         });
     }
-    Ok(out)
+    Ok((out, undefined))
 }
 
 const SHT_SYMTAB: u32 = 2;
+const SHT_SYMTAB_SHNDX: u32 = 18;
+const SHN_LORESERVE: u16 = 0xff00;
+const SHN_XINDEX: u16 = 0xffff;
 const SHN_UNDEF: u16 = 0;
 const SHN_ABS: u16 = 0xfff1;
 const SHN_COMMON: u16 = 0xfff2;
@@ -147,7 +175,7 @@ const STT_GNU_IFUNC: u8 = 10;
 
 /// ELF: `.symtab`'s entries defined in a section (not sections or files).
 /// Every offset is checked: a malformed object is "cannot be read".
-fn elf(b: &[u8]) -> Result<Vec<Defined>, String> {
+fn elf(b: &[u8]) -> Result<Symbols, String> {
     let bad = |what: &str| format!("the ELF object's {what} cannot be read");
     if b.get(4) != Some(&2) || b.get(5) != Some(&1) {
         return Err("not a 64-bit little-endian ELF object".to_string());
@@ -206,7 +234,22 @@ fn elf(b: &[u8]) -> Result<Vec<Defined>, String> {
             .checked_add(str_size)
             .and_then(|end| b.get(str_off..end))
             .ok_or_else(|| bad("string table"))?;
+        // Extended section indexes (SHN_XINDEX): the SHT_SYMTAB_SHNDX table
+        // linked to this symbol table, entry k (fix pass 3's check).
+        let mut shndx_table: Option<usize> = None;
+        for j in 0..shnum {
+            let h = section(j)?;
+            if u32_at(b, at(h, 4)?) == Some(SHT_SYMTAB_SHNDX)
+                && u32_at(b, at(h, 0x28)?) == Some(i as u32)
+            {
+                shndx_table = Some(size_of(
+                    u64_at(b, at(h, 0x18)?).ok_or_else(|| bad("section indexes"))?,
+                    "section indexes",
+                )?);
+            }
+        }
         let mut out = Vec::new();
+        let mut undefined = Vec::new();
         for k in 1..size / 24 {
             let e = k
                 .checked_mul(24)
@@ -220,6 +263,10 @@ fn elf(b: &[u8]) -> Result<Vec<Defined>, String> {
                 return Err(bad("symbol table"));
             };
             let kind = info & 0xf;
+            if shndx == SHN_UNDEF && info >> 4 != STB_LOCAL && name != 0 {
+                undefined.push(name_at(strings, name as usize).ok_or_else(|| bad("names"))?);
+                continue;
+            }
             if matches!(shndx, SHN_UNDEF | SHN_ABS | SHN_COMMON)
                 || matches!(kind, STT_SECTION | STT_FILE)
             {
@@ -229,11 +276,25 @@ fn elf(b: &[u8]) -> Result<Vec<Defined>, String> {
             // instructions (a function written in assembly without `.type`,
             // as Mach-O's section rule reads it; fix pass 2's check).
             let in_code = || -> Result<bool, String> {
-                let shndx = shndx as usize;
-                if shndx >= shnum {
+                let index = match shndx {
+                    SHN_XINDEX => match shndx_table {
+                        Some(table) => match k
+                            .checked_mul(4)
+                            .and_then(|o| o.checked_add(table))
+                            .and_then(|o| u32_at(b, o))
+                        {
+                            Some(index) => index as usize,
+                            None => return Ok(false),
+                        },
+                        None => return Ok(false),
+                    },
+                    reserved if reserved >= SHN_LORESERVE => return Ok(false),
+                    plain => plain as usize,
+                };
+                if index >= shnum {
                     return Ok(false);
                 }
-                Ok(u64_at(b, at(section(shndx)?, 0x08)?).is_some_and(|f| f & SHF_EXECINSTR != 0))
+                Ok(u64_at(b, at(section(index)?, 0x08)?).is_some_and(|f| f & SHF_EXECINSTR != 0))
             };
             out.push(Defined {
                 name: name_at(strings, name as usize).ok_or_else(|| bad("names"))?,
@@ -242,9 +303,9 @@ fn elf(b: &[u8]) -> Result<Vec<Defined>, String> {
                     || (kind == STT_NOTYPE && in_code()?),
             });
         }
-        return Ok(out);
+        return Ok((out, undefined));
     }
-    Ok(Vec::new())
+    Ok((Vec::new(), Vec::new()))
 }
 
 #[cfg(test)]
@@ -289,6 +350,11 @@ mod tests {
         assert!(function("e") && function("s"), "code: {found:?}");
         assert!(!function("v") && !function("keep"), "data: {found:?}");
         assert!(!found.iter().any(|d| d.name == "g"), "undefined: {found:?}");
+        assert_eq!(
+            undefined(&bytes),
+            Ok(vec!["g".to_string()]),
+            "g is referenced"
+        );
         assert!(defined(b"not an object").is_err());
         assert!(defined(&bytes[..40]).is_err(), "cut short");
     }
@@ -379,5 +445,13 @@ mod tests {
         let found = defined(&asm).unwrap();
         assert!(found[0].function, "{found:?}");
         assert!(!found[1].function, "an object stays data: {found:?}");
+        // Fix pass 3's check: a reserved section index never borrows another
+        // section's flags; SHN_XINDEX with no index table is not code.
+        for reserved in [0xff05u16, SHN_XINDEX] {
+            let mut odd = asm.clone();
+            odd[symbols + 30..symbols + 32].copy_from_slice(&reserved.to_le_bytes());
+            let found = defined(&odd).unwrap();
+            assert!(!found[0].function, "{reserved:#x}: {found:?}");
+        }
     }
 }

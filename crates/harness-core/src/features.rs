@@ -983,6 +983,16 @@ pub fn load_map(root: &Path, facts: &crate::Facts) -> MapState {
     // that version wrote raw (fix pass 2's check): its unsafe characters
     // shown as `?`, an over-long detail cut. The other rules hold.
     if map.inputs.probe != MAP_PROBE {
+        // A reason kind this harness does not know, or a detail on a kind
+        // whose words take none, is dropped too (fix pass 3's check: a newer
+        // probe's kind made the map unreadable).
+        map.unwatched_reasons
+            .retain(|r| UNWATCHED_KINDS.contains(&r.kind.as_str()));
+        for r in &mut map.unwatched_reasons {
+            if !UNWATCHED_DETAIL_KINDS.contains(&r.kind.as_str()) {
+                r.detail.clear();
+            }
+        }
         for r in &mut map.unwatched_reasons {
             let mut detail: String = r
                 .detail
@@ -2423,6 +2433,24 @@ args = ["-h"]
         assert!(
             matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
             "another version, loaded"
+        );
+        // Fix pass 3's check: a newer probe's unknown kind, and a detail on a
+        // kind that takes none, never make it unreadable.
+        let mut m = a_map();
+        m.inputs.probe = "compiler-guided-9".into();
+        m.unwatched_reasons = vec![reason("a-new-kind", "x", "src/a.c::odd")];
+        write(&m);
+        assert!(
+            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            "a newer probe's kind"
+        );
+        let mut m = a_map();
+        m.inputs.probe = "compiler-guided-9".into();
+        m.unwatched_reasons = vec![reason("skipped-branch", "words", "src/a.c::odd")];
+        write(&m);
+        assert!(
+            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            "a detail on a detail-less kind"
         );
         // Review: one reason per pair.
         let mut m = a_map();

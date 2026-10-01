@@ -376,7 +376,14 @@ fn holds_line_directive(source: &[u8]) -> bool {
                 while j < text.len() && text[j] != quote && text[j] != b'\n' {
                     j += if text[j] == b'\\' { 2 } else { 1 };
                 }
-                i = (j + 1).min(text.len());
+                // An unclosed literal ends at the line end, which stays: the
+                // next line can hold a directive (fix pass 3's check: after
+                // `#warning don't` or a C23 `1'000`).
+                i = if text.get(j) == Some(&quote) {
+                    j + 1
+                } else {
+                    j
+                };
                 at_start = false;
             }
             b'#' | b'%' if at_start && (text[i] == b'#' || text.get(i + 1) == Some(&b':')) => {
@@ -416,6 +423,10 @@ pub(crate) struct TextScan {
     pub ends: BTreeMap<u32, usize>,
     /// The files `.incbin` names (`None`: one whose name cannot be read).
     pub incbins: Vec<Option<String>>,
+    /// Notes whose definition's head, as the compiler sees it (macros
+    /// expanded), says `extern` and `inline` — GNU's inline-only idiom, which
+    /// may emit no symbol (fix pass 3's check: glibc's `__extern_inline`).
+    pub inline_notes: BTreeSet<u32>,
 }
 
 impl TextScan {
@@ -443,6 +454,10 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
             note_incbin(&joined, scan);
         }
     };
+    // The words since the last `;`, `{` or `}` (a definition's head, macros
+    // expanded), and whether the head before the last `{` was inline-only.
+    let mut head: Vec<&[u8]> = Vec::new();
+    let mut inline_head = false;
     for line in lex(text) {
         if line.directive {
             // A line marker or a `#pragma` (the compiler drops both before it
@@ -479,8 +494,23 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
             }
             if let Some((n, len)) = note_at(text, toks, k) {
                 *scan.notes.entry(n).or_insert(0) += 1;
+                if inline_head {
+                    scan.inline_notes.insert(n);
+                }
                 k += len;
                 continue;
+            }
+            match tok.kind {
+                TokKind::Word => head.push(&text[tok.start..tok.end]),
+                TokKind::Punct if matches!(&text[tok.start..tok.end], b";" | b"{" | b"}") => {
+                    inline_head = &text[tok.start..tok.end] == b"{"
+                        && head.contains(&&b"extern"[..])
+                        && head
+                            .iter()
+                            .any(|w| matches!(*w, b"inline" | b"__inline" | b"__inline__"));
+                    head.clear();
+                }
+                _ => {}
             }
             if let Some(n) = end_token(text, tok) {
                 *scan.ends.entry(n).or_insert(0) += 1;
@@ -1241,6 +1271,26 @@ mod tests {
             );
         }
         assert!(!holds_line_directive(b"int y; /* a\n b */ #line 400\n"));
+        // Fix pass 3's check: an inline-only head, however spelled before
+        // preprocessing, marks its note.
+        let scan = scan_text(
+            b"extern __inline __attribute__((__gnu_inline__)) int h(int x)\n{__ruharness_seen[5] = 1; return x; }\n\
+              static inline int s(int x) {__ruharness_seen[6] = 1; return x; }\n\
+              int e(int x) {__ruharness_seen[7] = 1; return x; }\n",
+        );
+        assert_eq!(scan.inline_notes, BTreeSet::from([5]), "{scan:?}");
+        // Fix pass 3's check: an unclosed literal keeps its line end.
+        for spelled in [
+            &b"#warning don't\n#line 4\n"[..],
+            b"int x = 1'000;\n#line 4\n",
+            b"int x = 1'000;\r#line 4\r",
+        ] {
+            assert!(
+                holds_line_directive(spelled),
+                "{:?}",
+                String::from_utf8_lossy(spelled)
+            );
+        }
         assert!(!holds_line_directive(b"char *s = \"#line 4\";\n"));
     }
 

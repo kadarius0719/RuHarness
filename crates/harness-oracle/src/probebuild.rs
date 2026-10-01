@@ -737,12 +737,7 @@ impl Build<'_> {
         // file back unprobed (fix pass 2's check: a fixed 32 rounds refused
         // programs whose tipped referrers the linker lists seven at a time),
         // so the notes and the probed files bound the rounds.
-        let rounds = probe
-            .rels()
-            .iter()
-            .map(|rel| probe.notes(rel).len() + 1)
-            .sum::<usize>()
-            + 1;
+        let rounds = link_round_bound(probe.rels().iter().map(|rel| probe.notes(rel).len()));
         for _ in 0..rounds {
             // Re-compiles: a file whose probed files lost notes after it
             // compiled, or whose object a link search left in a trial state.
@@ -931,36 +926,61 @@ impl Build<'_> {
                 .flat_map(|n| self.reads[*n].iter().cloned())
                 .collect()
         };
-        let mut rels = rels_of(&units);
-        let mut searched = self.link_search(probe, &symbol, &units, &rels, &program, pass)?;
-        // The linker named only some referrers (a list cut short, in words
-        // this reader knows or not): every unit, once, before the map is
-        // refused — unless the pass bound is spent, when every unit's files
-        // go back unprobed instead.
-        if searched.is_none()
-            && units.len() < self.units.len()
-            && *pass >= self.bounds.pass_compiles
-        {
-            units = (0..self.units.len()).collect();
-            rels = rels_of(&units);
-            searched = Some(LinkSearch::Cut);
-        } else if searched.is_none() && units.len() < self.units.len() {
-            units = (0..self.units.len()).collect();
-            rels = rels_of(&units);
-            searched = self.link_search(probe, &symbol, &units, &rels, &program, pass)?;
+        // The named units' files are what the search rewrites. Every other
+        // unit that reads one of them and whose object still references the
+        // symbol is compiled in each trial too (fix pass 3's check: a header
+        // static tipped in an object the linker left unlisted kept the old
+        // object, so no trial could pass).
+        let named_rels = rels_of(&units);
+        let named_held_notes = named_rels.iter().any(|rel| !probe.notes(rel).is_empty());
+        for n in 0..self.units.len() {
+            if !units.contains(&n)
+                && !self.reads[n].is_disjoint(&named_rels)
+                && self.references(n, &symbol)
+            {
+                units.insert(n);
+            }
+        }
+        let mut search_rels = named_rels.clone();
+        let mut searched =
+            self.link_search(probe, &symbol, &units, &search_rels, &program, pass)?;
+        // The cause is elsewhere (a list cut short, in words this reader
+        // knows or not): every unit, once, before the map is refused. With
+        // the pass bound spent, the named units' files go back unprobed when
+        // they held notes (the next round names the rest), every unit's
+        // only when they held none (fix pass 3's check).
+        if searched.is_none() && units.len() < self.units.len() {
+            if *pass >= self.bounds.pass_compiles {
+                if !named_held_notes {
+                    units = (0..self.units.len()).collect();
+                    search_rels = rels_of(&units);
+                }
+                searched = Some(LinkSearch::Cut);
+            } else {
+                units = (0..self.units.len()).collect();
+                search_rels = rels_of(&units);
+                searched =
+                    self.link_search(probe, &symbol, &units, &search_rels, &program, pass)?;
+            }
         }
         match searched {
             Some(LinkSearch::Found(rel, id)) => {
                 probe.take_out(&rel, &id, Reason::new(Kind::Link, &why));
             }
             Some(LinkSearch::Cut) => {
-                for rel in &rels {
+                let cut = if named_held_notes {
+                    &named_rels
+                } else {
+                    &search_rels
+                };
+                for rel in cut {
                     probe.unprobe(rel, Reason::new(Kind::FileLimit, &why));
                 }
             }
             None => return Err(refuse(&stderr)),
         }
-        self.rewrite(probe, &rels, &[])?;
+        // Every file a trial may have rewritten goes back to the probe's state.
+        self.rewrite(probe, &search_rels, &[])?;
         Ok(Linked::Changed(units))
     }
 
@@ -1033,6 +1053,15 @@ impl Build<'_> {
         }))
     }
 
+    /// Whether top-level file `n`'s object still references `symbol` (an
+    /// object that cannot be read counts as one that does).
+    fn references(&self, n: usize, symbol: &str) -> bool {
+        std::fs::read(self.object(n))
+            .ok()
+            .and_then(|bytes| objsyms::undefined(&bytes).ok())
+            .is_none_or(|names| names.iter().any(|name| name == symbol))
+    }
+
     /// What each top-level file's object defines.
     fn defined(&self) -> Result<Vec<Vec<objsyms::Defined>>, Error> {
         (0..self.units.len())
@@ -1070,6 +1099,18 @@ enum Linked {
 enum LinkSearch {
     Found(String, String),
     Cut,
+}
+
+/// The link rounds a pass may take: one per note and per probed file, plus
+/// one — every round that does not link takes a note out or sends a file
+/// back unprobed (fix pass 2's check: a fixed 32 refused programs whose
+/// tipped referrers the linker lists seven at a time).
+fn link_round_bound(notes_per_file: impl IntoIterator<Item = usize>) -> usize {
+    notes_per_file
+        .into_iter()
+        .map(|notes| notes + 1)
+        .sum::<usize>()
+        + 1
 }
 
 /// A refusal's words, or that the compiler printed none.
@@ -1494,6 +1535,16 @@ mod tests {
         ] {
             assert_eq!(killed_child(stderr.as_bytes()), None, "{stderr}");
         }
+    }
+
+    /// Fix pass 3's check: the link rounds grow with the notes — 218 tipped
+    /// referrers listed seven a round need more than 32.
+    #[test]
+    fn the_link_rounds_grow_with_the_notes() {
+        assert_eq!(link_round_bound([]), 1);
+        assert_eq!(link_round_bound([3, 0]), 6);
+        assert!(link_round_bound(std::iter::repeat_n(1, 218)) > 218 / 7 + 1);
+        assert!(link_round_bound([218]) > 32);
     }
 
     #[test]

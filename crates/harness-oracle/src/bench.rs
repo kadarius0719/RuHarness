@@ -922,26 +922,29 @@ impl RunRoot {
         let base = base_raw
             .canonicalize()
             .map_err(|e| Error::io(&base_raw, e))?;
-        for _ in 0..1000 {
-            let dir = base.join(format!(
-                "ruharness-score-{}-{}",
-                std::process::id(),
-                RUN_COUNTER.fetch_add(1, Ordering::SeqCst)
-            ));
-            match std::fs::create_dir(&dir) {
-                Ok(()) => {
-                    return Ok(RunRoot {
-                        dir,
-                        name: name.to_string(),
-                    })
+        // Registered for the signal's cleanup, as every run's temp folder is
+        // (fix pass 3's check).
+        let dir = crate::featuremap::make_live_dir(|| {
+            for _ in 0..1000 {
+                let dir = base.join(format!(
+                    "ruharness-score-{}-{}",
+                    std::process::id(),
+                    RUN_COUNTER.fetch_add(1, Ordering::SeqCst)
+                ));
+                match std::fs::create_dir(&dir) {
+                    Ok(()) => return Ok(dir),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(Error::io(&dir, e)),
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(Error::io(&dir, e)),
             }
-        }
-        Err(Error::Invariant(
-            "could not create a scoring run dir".into(),
-        ))
+            Err(Error::Invariant(
+                "could not create a scoring run dir".into(),
+            ))
+        })?;
+        Ok(RunRoot {
+            dir,
+            name: name.to_string(),
+        })
     }
     fn path(&self) -> &Path {
         &self.dir
@@ -953,13 +956,25 @@ impl RunRoot {
 
 impl Drop for RunRoot {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        crate::featuremap::drop_live_dir(&self.dir);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fix pass 3's check: a scoring run's folder is registered for the
+    /// signal's cleanup while it lives, and forgotten when it goes.
+    #[test]
+    fn a_scoring_runs_folder_is_registered_while_it_lives() {
+        let root = RunRoot::create("case").expect("made");
+        let path = root.path().to_path_buf();
+        assert!(crate::featuremap::is_live_dir(&path));
+        drop(root);
+        assert!(!crate::featuremap::is_live_dir(&path));
+        assert!(!path.exists());
+    }
 
     fn report(text: &str) -> String {
         parsed(text, parse_report)

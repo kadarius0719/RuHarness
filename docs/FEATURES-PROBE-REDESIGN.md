@@ -479,6 +479,16 @@ test fixtures.
 - **C23 attributes**: `int f(void) [[gnu::cold]] __attribute__((noinline)) {` (a C23 attribute
   then a GNU one after the parameters; clang only) is read by tree-sitter-c as a declaration and
   a block: the definition is not in the facts.
+- **Hidden variants, conservatively** (§10.3): a namesake that only a rule keeps unwatched, or any
+  `extern inline` namesake (C99's emits its symbol, GNU's inline-only idiom does not; perf cannot
+  tell them apart), explains no symbol, so a skipped sibling beside it reads unwatched (parser)
+  where "not run" may be true — never the reverse.
+- **Macro-made names**: `static int PREFIX(scanLit)(int open, …)` (expat, ppport.h) is not in the
+  facts — the parser reads the macro as the name; recording it under the macro's name would merge
+  every such function into one id.
+- **A second head behind `**` or `* const *`** (`int g(void) NI` then `char **after(void) {`):
+  tree-sitter folds the first head into a parse error before the declarator — the second is
+  watched in its own body (right), the first is not in the facts.
 - **A probed run's time**: +11 % on a call-heavy workload (sqlite3.c); a scenario near
   `timeout_secs` can time out only when probed — recorded as `probe_agrees = false`.
 
@@ -790,3 +800,44 @@ compiles unless the pass bound is reached on a list whose every referrer sits in
 (a fixture needs eight functions each tipped by an inlined note); a link that fails with no
 undefined symbol passing a trial needs a link failure of another kind during a search — neither
 reachable with this machine's fixtures.
+
+### 10.3 The check of fix pass 3, and fix pass 4
+
+Three lenses checked fix pass 3 at 4f79938 (`wf_6d4c61e3-bf5`, `SP/fc3/result.json`): 21 findings,
+all confirmed by both verifiers, none refuted, none high — 6 medium, 10 low, 5 nits. Fix pass 4
+(the code governs):
+- **Second heads, ranked**: of the calls after the first head's parameters, the first that a type
+  word stands before (or whose "function" is a keyword) is the second head; else the last that
+  qualifies by its arguments or a K&R word after it — a body macro with arguments before the next
+  head (`NOT_IMPL(-1)`, `STUB(int)`) never takes the name. An annotation whose arguments only name
+  the first head's parameters (`__sized_by(n * size)`) is no head. A macro before the real name
+  may have attributes after it (macOS's malloc headers: one static definition under the real
+  name). A K&R second head with typedef'd types is caught by the parse error it leaves between the
+  declarator and the body. A nested declarator is two heads only when the inner one holds
+  something after its parameters; a bare `PREFIX(name)(params)` is not recorded (§6). A nested
+  second head keeps its `static` and its whole signature.
+- **A misread body** is read in every configuration (branch k of every group, k up to the most
+  branches): an `#else` that closes the function and opens another is misread whichever branch
+  comes first.
+- **`#line`**: an unclosed literal keeps its line end.
+- **Link**: each trial of the search also compiles every unit that reads a file the search
+  rewrites and whose object still references the symbol (a new undefined-symbol reader in
+  `objsyms`, Mach-O and ELF) — the spread case is found at the design's bounds, among forty more
+  files; when the pass bound ends a search, only the named units' files go back unprobed if they
+  held notes; the link-round bound is a function of the notes, with a unit test.
+- **Objects**: ELF symbols in reserved sections are never code; extended indexes are read from the
+  `SHT_SYMTAB_SHNDX` table.
+- **Hidden variants**: C allows one definition of a name in a unit, so a namesake whose note is
+  code in one of the unit's listings is the unit's definition and the hidden variant cannot be
+  there — save GNU's inline-only idiom, which is now read from the listing's own head tokens
+  (macros expanded: glibc's `__extern_inline`), not the source; a namesake only a rule keeps
+  unwatched no longer explains (nothing shows whether it is compiled; §6).
+- **Scratch folders**: the benchmark scorer's run folders are registered for the signal's
+  cleanup too.
+- **Older maps**: a map of another probe drops reason kinds this harness does not know, and
+  details on kinds that take none, instead of being refused.
+- **Tests**: the cut-list test now has a real cut list (eight distinct tipped statics in one file)
+  and holds the search's compiles; the spread case at the design's bounds; a macro-spelled
+  inline-only namesake; a namesake taken out in a later pass; the ruled namesake's conservative
+  answer; the scanner's shapes; the reserved ELF indexes; the link-round bound; the scorer's
+  folders; newer maps. The 101 bench targets' facts byte-identical; sqlite3.c unchanged.
