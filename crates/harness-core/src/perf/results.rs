@@ -23,6 +23,12 @@ pub const MAX_RESULTS_BYTES: u64 = 4 * 1024 * 1024;
 /// Longest free text a row may hold (a CPU's name, a compiler's line, a
 /// log's name).
 pub const MAX_TEXT: usize = 160;
+/// The output cap: the most of one stream perf keeps and compares (§3.3,
+/// §3.9). A difference's lengths and its kept files are never longer.
+pub const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
+/// A replaces-mismatch's index is below this: far past any unit's
+/// `replaces`, and small enough that the words can count from it.
+pub const MAX_REPLACES_INDEX: u32 = 65_536;
 
 /// `program.json` in the resolved `migration/perf/` folder.
 pub fn program_path(perf_dir: &Path) -> PathBuf {
@@ -736,6 +742,14 @@ pub fn check_row(row: &Row, kind: RowKind) -> Result<(), String> {
         check_end(&f.end, true)?;
     }
     check_setup(o, row.setup.as_ref())?;
+    if let (Some(i), Some(r)) = (
+        row.setup.as_ref().and_then(|s| s.index),
+        &row.inputs.replaces,
+    ) {
+        if i as usize >= r.len() {
+            return Err("replaces-mismatch's index is past the unit's replaces".into());
+        }
+    }
     match (o, &row.first_difference) {
         ("behaves-differently", Some(d)) => check_difference(d)?,
         ("behaves-differently", None) => {
@@ -751,8 +765,14 @@ pub fn check_row(row: &Row, kind: RowKind) -> Result<(), String> {
         check_difference(d)?;
     }
     if let Some(t) = &row.last_try {
-        let ok = is_set_up(&t.outcome) || (kind == RowKind::CAlone && is_c_side(&t.outcome));
-        if !ok || is_set_up(o) || (kind == RowKind::CAlone && (is_c_side(o) || o == "too-short")) {
+        // The replace rule's own rows (§3.7, note 23): a set-up outcome is
+        // kept beside any row that is not itself a set-up row — a too-short
+        // or C-side row on the C alone among them; the C's own outcome is
+        // kept beside a C-alone row only where it does not replace it, so
+        // never beside a too-short or C-side row.
+        let c_try = kind == RowKind::CAlone && is_c_side(&t.outcome);
+        let ok = is_set_up(&t.outcome) || c_try;
+        if !ok || is_set_up(o) || (c_try && (is_c_side(o) || o == "too-short")) {
             return Err(
                 "last_try is a later set-up (or the C's) outcome beside an earlier row".into(),
             );
@@ -970,8 +990,10 @@ fn check_setup(outcome: &str, setup: Option<&SetupFacts>) -> Result<(), String> 
             }
         }
         "replaces-mismatch" => {
-            if s.index.is_none() {
-                return Err("replaces-mismatch names the entry's index".into());
+            if s.index.is_none_or(|i| i >= MAX_REPLACES_INDEX) {
+                return Err(format!(
+                    "replaces-mismatch names the entry's index, below {MAX_REPLACES_INDEX}"
+                ));
             }
         }
         "input-unusable" => {
@@ -1018,14 +1040,30 @@ fn check_difference(d: &Difference) -> Result<(), String> {
     }
     check_end(&d.c_end, true)?;
     check_end(&d.other_end, true)?;
+    // What perf itself writes: both lengths within the output cap, the
+    // first differing byte no further than the shorter one ends, and an
+    // exit difference with no lengths at all.
+    if d.c_len > MAX_OUTPUT_BYTES
+        || d.other_len > MAX_OUTPUT_BYTES
+        || d.offset > d.c_len.min(d.other_len)
+    {
+        return Err(
+            "a difference's lengths are at most 64 MiB and its byte within the shorter".into(),
+        );
+    }
+    if d.stream == "exit" && (d.c_len, d.other_len, d.offset) != (0, 0, 0) {
+        return Err("an exit difference has no lengths and no byte".into());
+    }
     for k in &d.kept {
         let name_ok = crate::plan::is_clean_segment(&k.name)
             && [".c.stdout", ".c.stderr", ".other.stdout", ".other.stderr"]
                 .iter()
                 .any(|s| k.name.ends_with(s));
-        if !name_ok || !is_digest(&k.blake3) {
+        if !name_ok || !is_digest(&k.blake3) || k.size > MAX_OUTPUT_BYTES {
             return Err(
-                "a kept file is <workload>.{c,other}.{stdout,stderr} with its blake3".into(),
+                "a kept file is <workload>.{c,other}.{stdout,stderr} with its blake3, at most \
+                 64 MiB"
+                    .into(),
             );
         }
     }
@@ -1362,6 +1400,160 @@ mod tests {
             merge(Some(&other(c, "c-crashed", None)), unstable.clone(), c),
             unstable
         );
+    }
+
+    #[test]
+    fn a_set_up_try_is_kept_beside_a_too_short_or_c_side_c_alone_row() {
+        // A missing input, or a launcher failure, after a C-alone row that
+        // was too short or one of the C's own: the row stays, the try goes
+        // beside it, and the files take it (a run goes on to the next
+        // workload).
+        let c = RowKind::CAlone;
+        let missing = other(
+            c,
+            "input-unusable",
+            Some(SetupFacts {
+                input: Some("missing".into()),
+                ..SetupFacts::default()
+            }),
+        );
+        let unmeasurable = other(c, "run-failed: unmeasurable", None);
+        let dir = std::env::temp_dir().join(format!("perf-t-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let p = program_path(&dir);
+        for earlier in std::iter::once("too-short").chain(C_SIDE.iter().copied()) {
+            let old = other(c, earlier, None);
+            for new in [&missing, &unmeasurable] {
+                let m = merge(Some(&old), new.clone(), c);
+                assert_eq!(m.outcome, earlier);
+                assert_eq!(
+                    m.last_try.as_ref().map(|t| t.outcome.as_str()),
+                    Some(new.outcome.as_str())
+                );
+                check_row(&m, c).unwrap_or_else(|e| panic!("{earlier} + {}: {e}", new.outcome));
+                let mut program = ProgramResults::default();
+                program.c_alone.push(m);
+                write_program(&p, &program).expect("written");
+                assert_eq!(read_program(&p).expect("read"), Some(program));
+            }
+        }
+        // The C's own outcome never sits beside such a row: it replaces it.
+        let mut m = other(c, "too-short", None);
+        m.last_try = Some(LastTry {
+            outcome: "c-crashed".into(),
+            setup: None,
+            units: None,
+        });
+        assert!(check_row(&m, c).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_differences_numbers_and_a_replaces_index_are_bounded() {
+        let k = RowKind::Unit;
+        let with = |d: Difference| {
+            let mut r = other(k, "behaves-differently", None);
+            r.first_difference = Some(d);
+            r
+        };
+        check_row(&with(difference()), k).expect("valid");
+        // The byte may be where the shorter output ends ...
+        check_row(
+            &with(Difference {
+                offset: 10,
+                ..difference()
+            }),
+            k,
+        )
+        .expect("the shorter's end");
+        let mut kept = measured(k);
+        kept.found_before = Some(difference());
+        check_row(&kept, k).expect("a finding kept beside a row");
+        // ... but never past it, past the cap, or on an exit difference.
+        for bad in [
+            Difference {
+                offset: u64::MAX,
+                ..difference()
+            },
+            Difference {
+                offset: 11,
+                ..difference()
+            },
+            Difference {
+                c_len: MAX_OUTPUT_BYTES + 1,
+                ..difference()
+            },
+            Difference {
+                other_len: u64::MAX,
+                ..difference()
+            },
+            Difference {
+                stream: "exit".into(),
+                ..difference()
+            },
+        ] {
+            assert!(check_row(&with(bad.clone()), k).is_err(), "{bad:?}");
+            // found_before is read by the same rule.
+            let mut r = kept.clone();
+            r.found_before = Some(bad);
+            assert!(check_row(&r, k).is_err());
+        }
+        let mut d = difference();
+        d.kept[0].size = MAX_OUTPUT_BYTES + 1;
+        assert!(check_row(&with(d), k).is_err(), "a kept file over the cap");
+        check_row(
+            &with(Difference {
+                stream: "exit".into(),
+                c_len: 0,
+                other_len: 0,
+                offset: 0,
+                other_end: "exit 1".into(),
+                kept: Vec::new(),
+                ..difference()
+            }),
+            k,
+        )
+        .expect("an exit difference");
+        // A replaces-mismatch's index: within the unit's replaces when the
+        // row holds them, and below the bound everywhere, its last try too.
+        let index = |i: u32| {
+            Some(SetupFacts {
+                index: Some(i),
+                ..SetupFacts::default()
+            })
+        };
+        let mut r = other(k, "replaces-mismatch", index(0));
+        check_row(&r, k).expect("the first entry");
+        r.setup = index(1);
+        assert!(check_row(&r, k).is_err(), "past the one entry it holds");
+        r.inputs.replaces = None;
+        check_row(&r, k).expect("no replaces held");
+        r.setup = index(u32::MAX);
+        assert!(check_row(&r, k).is_err());
+        r.setup = index(MAX_REPLACES_INDEX);
+        assert!(check_row(&r, k).is_err());
+        let mut m = measured(k);
+        m.last_try = Some(LastTry {
+            outcome: "replaces-mismatch".into(),
+            setup: index(u32::MAX),
+            units: None,
+        });
+        assert!(check_row(&m, k).is_err(), "a last try's index");
+        // Read back from a file, a huge byte is refused.
+        let dir = std::env::temp_dir().join(format!("perf-b-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(dir.join(UNITS_DIR)).expect("dir");
+        let u = unit_path(&dir, "u001");
+        let mut unit = UnitResults::new("u001");
+        unit.rows.push(with(difference()));
+        write_unit(&u, &unit).expect("write");
+        let text = std::fs::read_to_string(&u).expect("read");
+        std::fs::write(
+            &u,
+            text.replacen("\"offset\": 4", "\"offset\": 18446744073709551615", 1),
+        )
+        .expect("write");
+        assert!(read_unit(&u, "u001").is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -212,30 +212,42 @@ pub fn parse(text: &str, path: &Path) -> Result<Workloads, ParseError> {
     let table = doc.get_ref();
     let mut version: Option<&Spanned> = None;
     let mut list: Option<&Spanned> = None;
+    let mut unknown: Option<(&str, std::ops::Range<usize>)> = None;
     for (key, value) in table.iter() {
         match key.get_ref().as_ref() {
             "schema_version" => version = Some(value),
             "workload" => list = Some(value),
             other => {
-                return Err(at(
-                    text,
-                    key.span(),
-                    format!("unknown key {other:?} (the keys are schema_version and [[workload]])"),
-                ))
+                if unknown.is_none() {
+                    unknown = Some((other, key.span()));
+                }
             }
         }
+    }
+    // A newer file first, whatever its keys: a key this harness does not
+    // know is what a newer version adds, so it is told to upgrade, never to
+    // fix the file.
+    if let Some(n) = version
+        .and_then(|v| integer(v.get_ref()))
+        .filter(|n| *n > WORKLOADS_SCHEMA_VERSION)
+    {
+        return Err(ParseError::TooNew(Error::SchemaTooNew {
+            path: path.to_path_buf(),
+            found: n as u64,
+            supported: WORKLOADS_SCHEMA_VERSION as u64,
+        }));
+    }
+    if let Some((other, span)) = unknown {
+        return Err(at(
+            text,
+            span,
+            format!("unknown key {other:?} (the keys are schema_version and [[workload]])"),
+        ));
     }
     match version {
         None => return Err(at(text, 0..0, "`schema_version = 1` is missing".into())),
         Some(v) => match integer(v.get_ref()) {
             Some(n) if n == WORKLOADS_SCHEMA_VERSION => {}
-            Some(n) if n > WORKLOADS_SCHEMA_VERSION => {
-                return Err(ParseError::TooNew(Error::SchemaTooNew {
-                    path: path.to_path_buf(),
-                    found: n as u64,
-                    supported: WORKLOADS_SCHEMA_VERSION as u64,
-                }))
-            }
             _ => return Err(at(text, v.span(), "schema_version must be 1".into())),
         },
     }
@@ -644,7 +656,9 @@ pub fn read_input(root: &Path, rel: &str) -> Result<Vec<u8>, InputUnusable> {
 
 /// The workload's digest (§3.1): blake3 over its id, its arguments, its
 /// input's name and bytes — not `runs` (a row records the n it used).
-/// `input` is the bytes [`read_input`] gave, when the workload has one.
+/// `input` is the bytes [`read_input`] gave, when the workload has one;
+/// `None` for an input perf could not use, which is hashed as absent, never
+/// as empty bytes: an input that comes back as an empty file is a change.
 pub fn digest(workload: &Workload, input: Option<&[u8]>) -> String {
     let mut h = blake3::Hasher::new();
     let mut field = |tag: &[u8], bytes: &[u8]| {
@@ -658,7 +672,10 @@ pub fn digest(workload: &Workload, input: Option<&[u8]>) -> String {
     }
     if let Some(name) = &workload.input {
         field(b"input-name", name.as_bytes());
-        field(b"input-bytes", input.unwrap_or_default());
+        match input {
+            Some(bytes) => field(b"input-bytes", bytes),
+            None => field(b"input-absent", b""),
+        }
     }
     format!("{HASH_PREFIX}{}", h.finalize().to_hex())
 }
@@ -754,11 +771,28 @@ mod tests {
                 .as_str()
             )
         );
-        // A newer schema is its own error, not a rule.
-        assert!(matches!(
-            parse("schema_version = 2\n", Path::new("w.toml")),
-            Err(ParseError::TooNew(_))
-        ));
+        // A newer schema is its own error, not a rule — also when it has a
+        // key or a table this harness does not know, before or after the
+        // version.
+        for newer in [
+            "schema_version = 2\n",
+            "schema_version = 2\nprofile = 1\n",
+            "profile = 1\nschema_version = 2\n",
+            "schema_version = 2\n[settings]\nwarm = true\n",
+            "schema_version = 2\n[[workload]]\nid = \"a\"\nwarmup = 3\n",
+        ] {
+            assert!(
+                matches!(
+                    parse(newer, Path::new("w.toml")),
+                    Err(ParseError::TooNew(_))
+                ),
+                "{newer:?}"
+            );
+        }
+        // A misspelt version is named where it is.
+        let e = rule("schema_versoin = 1\n");
+        assert_eq!((e.line, e.column), (1, 1), "{e}");
+        assert!(e.message.contains("unknown key \"schema_versoin\""), "{e}");
         assert!(rule("[[workload]]\nid = \"a\"\n")
             .message
             .contains("schema_version"));
@@ -839,6 +873,13 @@ mod tests {
                 && words.ends_with("— fix it, or Edit the workloads file"),
             "{words}"
         );
+        // A newer file with a key of its own: upgrade the harness, not "fix
+        // it".
+        std::fs::write(workloads_path(&dir), "schema_version = 2\nprofile = 1\n").expect("write");
+        assert!(matches!(
+            load(&dir),
+            Err(Error::SchemaTooNew { found: 2, .. })
+        ));
         std::fs::write(
             workloads_path(&dir),
             "schema_version = 1\n[[workload]]\nid = \"a\"\n",
@@ -884,16 +925,91 @@ mod tests {
             Err(InputUnusable::UnderMigration)
         );
         assert_eq!(read_input(&root, "bench"), Err(InputUnusable::NotAFile));
-        // Each reason has its own words and token.
-        for r in InputUnusable::ALL {
-            assert_eq!(InputUnusable::from_token(r.token()), Some(r));
-            assert!(r.words("bench/big.txt").starts_with("bench/big.txt "));
-        }
+        // A socket is not a file either.
+        let _socket =
+            std::os::unix::net::UnixListener::bind(root.join("bench/sock")).expect("bind");
         assert_eq!(
-            InputUnusable::Missing.words("bench/big.txt"),
-            "bench/big.txt is not here — put the file back or remove the workload"
+            read_input(&root, "bench/sock"),
+            Err(InputUnusable::NotAFile)
         );
+        // Over 64 MiB by its size (a sparse file, nothing written); exactly
+        // 64 MiB reads. The capped read's own check is reached only when the
+        // file grows between the look and the read, which no test can time.
+        let huge = std::fs::File::create(root.join("bench/huge.bin")).expect("create");
+        huge.set_len(MAX_INPUT_BYTES + 1).expect("grow");
+        assert_eq!(
+            read_input(&root, "bench/huge.bin"),
+            Err(InputUnusable::TooLarge)
+        );
+        huge.set_len(MAX_INPUT_BYTES).expect("shrink");
+        assert_eq!(
+            read_input(&root, "bench/huge.bin").map(|b| b.len() as u64),
+            Ok(MAX_INPUT_BYTES)
+        );
+        // Its permissions refuse the read — unless the tests run as root,
+        // who reads it anyway.
+        use std::os::unix::fs::PermissionsExt;
+        let locked = root.join("bench/locked.txt");
+        std::fs::write(&locked, b"x").expect("write");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        if std::fs::File::open(&locked).is_err() {
+            assert_eq!(
+                read_input(&root, "bench/locked.txt"),
+                Err(InputUnusable::PermissionDenied)
+            );
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).expect("chmod");
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn every_input_unusable_reason_has_its_own_words() {
+        // §3.1's eight sentences, word for word, the same in the CLI and
+        // the cockpit; the ninth (another read failure) has none there, so
+        // its own is pinned.
+        let want = [
+            (
+                InputUnusable::Missing,
+                "bench/big.txt is not here — put the file back or remove the workload",
+            ),
+            (
+                InputUnusable::Link,
+                "bench/big.txt is a link — copy the file in instead",
+            ),
+            (
+                InputUnusable::Outside,
+                "bench/big.txt leads outside the project through a linked folder — copy the file in",
+            ),
+            (
+                InputUnusable::IntoGit,
+                "bench/big.txt leads into .git through a linked folder — copy the file in",
+            ),
+            (
+                InputUnusable::NotAFile,
+                "bench/big.txt is a folder (or a pipe, or a device) — name a file",
+            ),
+            (
+                InputUnusable::TooLarge,
+                "bench/big.txt is over 64 MiB — use a smaller input",
+            ),
+            (
+                InputUnusable::UnderMigration,
+                "bench/big.txt is under migration/ — move it",
+            ),
+            (
+                InputUnusable::PermissionDenied,
+                "bench/big.txt cannot be read (permission denied) — fix its permissions",
+            ),
+            (
+                InputUnusable::Unreadable,
+                "bench/big.txt cannot be read — check the file and measure again",
+            ),
+        ];
+        assert_eq!(want.map(|(r, _)| r), InputUnusable::ALL);
+        for (r, words) in want {
+            assert_eq!(r.words("bench/big.txt"), words);
+            assert_eq!(InputUnusable::from_token(r.token()), Some(r));
+        }
     }
 
     #[test]
@@ -905,6 +1021,10 @@ mod tests {
             runs: 15,
         };
         let d = digest(&w, Some(b"one"));
+        // An input perf could not read is not an empty one: when it comes
+        // back empty, the workload changed.
+        assert_ne!(digest(&w, None), digest(&w, Some(b"")));
+        assert_eq!(digest(&w, None), digest(&w, None));
         assert_eq!(
             digest(
                 &Workload {

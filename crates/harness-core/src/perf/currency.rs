@@ -334,6 +334,52 @@ mod tests {
     }
 
     #[test]
+    fn an_input_that_comes_back_empty_is_a_change() {
+        // perf could not read the input (it was missing) and stored the
+        // workload's digest without it; today the file is there, empty.
+        use super::super::results::SetupFacts;
+        use super::super::workloads::{digest, Workload};
+        let w = Workload {
+            id: "w".into(),
+            args: vec!["{input}".into()],
+            input: Some("bench/empty.txt".into()),
+            runs: 15,
+        };
+        let mut unusable = row(RowKind::CAlone);
+        unusable.outcome = "input-unusable".into();
+        unusable.setup = Some(SetupFacts {
+            input: Some("missing".into()),
+            ..SetupFacts::default()
+        });
+        unusable.inputs.workload = digest(&w, None);
+        let crates = |_: &str| None;
+        let empty = digest(&w, Some(b""));
+        let b = d('b');
+        let today = |workload| Today {
+            workload,
+            program: &b,
+            crate_digest: &crates,
+            replaces: None,
+            program_name: "tool",
+            measurable: None,
+            computer: None,
+            compilers: None,
+        };
+        let why = reasons(&unusable, RowKind::CAlone, &today(Some(&empty)));
+        assert_eq!(
+            why.iter().map(|r| r.token).collect::<Vec<_>>(),
+            ["workload"],
+            "{why:?}"
+        );
+        // Still missing: it says so, and nothing else.
+        let why = reasons(&unusable, RowKind::CAlone, &today(None));
+        assert_eq!(
+            why.iter().map(|r| r.token).collect::<Vec<_>>(),
+            ["workload-gone"]
+        );
+    }
+
+    #[test]
     fn the_program_as_it_stands_is_judged_per_unit() {
         let p = row(RowKind::AsItStands);
         let crates = |id: &str| match id {
