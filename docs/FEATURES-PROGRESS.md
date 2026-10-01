@@ -30,7 +30,7 @@ fails under load and passes alone — listed in DECISIONS "still separate").
 Review reports and verdicts (scratchpad, not in the repo): code-review/<lens>/{findings,verdicts}.md,
 fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
-## Open (in order) — resume here (session 17c366c0…, 2026-09-30; continues after a context compaction)
+## Open (in order) — resume here (session 17c366c0…, 2026-09-30 → 10-01; continues after context compactions)
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
 `.claude/worktrees/rust-migration-harness-7d1c42`), NOT yet merged to main or pushed. This
@@ -118,10 +118,20 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    (bfb2c7d, tests 7e40ef1; design §10.3): second heads ranked, every misread configuration, the
    spread case (objsyms undefined symbols), inline-only from the listing, ruled namesakes no
    longer explain (conservative), scorer folders registered, newer maps loaded; mutation 23/21
-   (2 without effect). 101 bench facts identical; sqlite3.c same. RUNNING: the CHECK OF FIX PASS 4,
-   `wf_49dab672-ae0` (script `SP/fix-pass-4-check.js`, base `SP/fc4/base`). RULE (set before
-   it): the last probe review round unless it finds a silent wrong map or a high finding; lower
-   findings are fixed directly or named in §6. Then items 4–7 below.
+   (2 without effect). 101 bench facts identical; sqlite3.c same. The CHECK OF FIX PASS 4
+   FINISHED (`wf_49dab672-ae0`, `SP/fc4/result.json`, digest `SP/fc4/digest.md`): 13 confirmed,
+   0 refuted, none high; silent wrong maps remain (a `()` second head after a typedef/tag return;
+   a namesake renamed by a macro explains; a K&R gnu_inline namesake escapes the inline check) and
+   one regression (added units = every unit skips the every-unit search → refusal). RULE (set
+   before it): the last probe review round unless it finds a silent wrong map or a high finding;
+   lower findings are fixed directly or named in §6. So FIX PASS 5 (in progress): fix those four,
+   the lows (misread walk over all branch combinations, capped; K&R function-typed parameter
+   `int cb(int)` outranking `after(cb)`; folded second head's static; non-nested signature ends at
+   the call; `static Count (after)(void)` named `Count`), the missing tests (by-shape ranking,
+   stray-K&R name check, closed-group misread, references narrowing, SHNDX table, K&R inline
+   tests); the verifiers' accepted fixes are in the digest. Then a mutation check and a short
+   check of the fix-pass-5 diff (verify findings closed; new silent wrong maps only), then items
+   4–7 below.
 4. Full `cargo test --workspace --no-fail-fast` on a quiet machine. Load-sensitive tests seen
    failing only under load: validate_driver (fixed: first exec), zopfli_verify u001 driver
    self-validation, harness-tui chat_e2e and `an_exited_leaders_pipes_are_read_first`,
