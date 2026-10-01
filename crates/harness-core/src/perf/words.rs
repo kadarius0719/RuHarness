@@ -729,9 +729,10 @@ fn baseline(row: &Row, _cx: &Context) -> RowWords {
         _ => "measured".into(),
     };
     let mut details = vec![format!("{} runs", row.runs.unwrap_or(0))];
+    // A short run is under both legs of the floor (§3.5 step 2).
     if row.short == Some(true) {
         details.push(
-            "a short run: under 1e9 instructions or half a second of CPU — use a bigger input"
+            "a short run: under 1e9 instructions and half a second of CPU — use a bigger input"
                 .into(),
         );
     }
@@ -813,8 +814,9 @@ fn measured(row: &Row, cx: &Context) -> RowWords {
     }
     details.push(format!("{runs} runs each"));
     if short {
-        details
-            .push("a short run: under 1e9 instructions or half a second of CPU on one side".into());
+        details.push(
+            "a short run: under 1e9 instructions and half a second of CPU on one side".into(),
+        );
     }
     let parallel = several_cores(c, o);
     if let Some(p) = &parallel {
@@ -2204,6 +2206,75 @@ mod tests {
             w.details
         );
         assert_eq!(w.short, "about as fast · parallel");
+    }
+
+    #[test]
+    fn a_short_run_is_named_by_both_legs_of_the_floor() {
+        let short = "a short run: under 1e9 instructions and half a second of CPU on one side";
+        // A memory-bound program at 2.6 s of CPU and 0.9e9 instructions is
+        // measured in full: inside the line it reads about as fast, with
+        // its memory line and no short-run words.
+        let bound = |runs: Vec<Run>| -> Vec<Run> {
+            runs.into_iter()
+                .map(|r| Run {
+                    instructions: Some(900_000_000),
+                    p_instructions: Some(900_000_000),
+                    ..r
+                })
+                .collect()
+        };
+        let full = row(
+            bound(side(15, 8.32e9, 0.004)),
+            bound(side(15, 8.32e9, 0.004)),
+            "macos-v6-pnorm",
+            false,
+        );
+        let w = words(&full, &UNIT);
+        assert_eq!(w.answer, "about-as-fast", "{}", w.headline);
+        assert!(w.details.iter().any(|d| d.starts_with("CPU about 2.60 s")));
+        assert!(w
+            .details
+            .iter()
+            .any(|d| d == "about the same memory (within 8.5 %)"));
+        assert!(!w.details.iter().any(|d| d.contains("short run")));
+        // Marked short: the short-run words, and the memory line only
+        // over 4 MiB.
+        let mut s = full.clone();
+        s.short = Some(true);
+        let w = words(&s, &UNIT);
+        assert_eq!(w.answer, "cant-tell-short-run");
+        assert!(w.details.iter().any(|d| d == short), "{:?}", w.details);
+        assert!(w.details.iter().any(|d| d.contains("memory")));
+        let small = |runs: &mut Vec<Run>| {
+            for r in runs.iter_mut() {
+                r.memory = Some(1_000_000);
+            }
+        };
+        small(s.c.as_mut().expect("runs"));
+        small(s.other.as_mut().expect("runs"));
+        let w = words(&s, &UNIT);
+        assert!(!w.details.iter().any(|d| d.contains("memory")));
+        // The C alone's baseline, marked short (an older file's row).
+        let mut b = full.clone();
+        b.outcome = "baseline".into();
+        b.other = None;
+        b.platform_metrics = None;
+        b.short = Some(true);
+        let w = words(
+            &b,
+            &Context {
+                side: Side::C,
+                ..UNIT
+            },
+        );
+        assert_eq!(
+            w.details,
+            [
+                "15 runs",
+                "a short run: under 1e9 instructions and half a second of CPU — use a bigger \
+                 input"
+            ]
+        );
     }
 
     fn step1(c_cpu: u64, c_ins: u64, o_cpu: u64, o_ins: u64) -> Step1 {
