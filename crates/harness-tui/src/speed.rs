@@ -8,7 +8,7 @@ use crate::model::{short_id, ProvenanceView, Snapshot, UnitView};
 use crate::perfread::InputNow;
 use harness_core::perf::currency::{self, Today};
 use harness_core::perf::estimate::{self, Job};
-use harness_core::perf::results::{Difference, Row, RowKind};
+use harness_core::perf::results::{self, Difference, Row, RowKind};
 use harness_core::perf::words::{self as words, RowWords, Side};
 use harness_core::perf::workloads::WorkloadsState;
 use std::collections::BTreeMap;
@@ -60,6 +60,10 @@ pub struct SpeedRow {
     pub out_of_date: Vec<String>,
     /// The same reasons' tokens (`harness_core::perf::currency::REASONS`).
     pub out_of_date_tokens: Vec<&'static str>,
+    /// The computer and compilers the row records, in words ("measured on
+    /// Apple M3, 15.6 24G84, with rustc 1.94.1 and Apple clang …") — what
+    /// the View's "see each row" points to; not checked here.
+    pub measured_on: String,
     /// Where the outputs differed: the row's own (behaves-differently), or
     /// the one found before that a later measure did not clear.
     pub difference: Option<Difference>,
@@ -386,13 +390,17 @@ impl SpeedModel {
         self.units.iter().find(|u| u.id == id)
     }
 
-    /// A unit's header (§3.11): `Speed: <short> on <workload>` and, on its
-    /// own line, the interval or detail and "k of n workloads" — each within
-    /// 54 columns.
+    /// A unit's header (§3.11, build note 16): `Speed: <short> on
+    /// <workload>` — the short form without its interval or "· parallel" —
+    /// and, on its own line, the interval (whether or not the 26-column
+    /// short form had room for it), "parallel" when the row uses several
+    /// cores, "k of n workloads" and "out of date" — each within 54 columns.
     pub fn unit_header(&self, id: &str) -> Option<(String, String)> {
         let u = self.unit(id)?;
         let worst = u.rows.first()?;
-        let (head, interval) = split_interval(&worst.words.short);
+        let short = worst.words.short.as_str();
+        let short = short.strip_suffix(" · parallel").unwrap_or(short);
+        let (head, _) = split_interval(short);
         let first = format!("Speed: {head} on {}", worst.workload);
         let n = u.rows.len();
         let alike = u
@@ -400,15 +408,21 @@ impl SpeedModel {
             .iter()
             .filter(|r| r.words.answer == worst.words.answer)
             .count();
-        let count = format!("{alike} of {n} workload{}", if n == 1 { "" } else { "s" });
-        let mut second = match interval {
-            Some(i) => format!("{i} · {count}"),
-            None => count,
-        };
-        if !worst.out_of_date.is_empty() {
-            second.push_str(" · out of date");
+        let mut second: Vec<String> = Vec::new();
+        if let Some(i) = headline_interval(&worst.words) {
+            second.push(i.to_string());
         }
-        Some((cut(&first, 54), cut(&second, 54)))
+        if is_parallel(&worst.words) {
+            second.push("parallel".into());
+        }
+        second.push(format!(
+            "{alike} of {n} workload{}",
+            if n == 1 { "" } else { "s" }
+        ));
+        if !worst.out_of_date.is_empty() {
+            second.push("out of date".into());
+        }
+        Some((cut(&first, 54), cut(&second.join(" · "), 54)))
     }
 
     /// The project summary's line (§3.11), or `None` without a workloads
@@ -480,7 +494,7 @@ fn summary_kind(answer: &str) -> &'static str {
         "faster" => "faster",
         "behaves-differently" => "behaves differently",
         "no-clear-difference" => "no clear difference",
-        "too-short" | "short-run" => "too short",
+        "too-short" | "cant-tell-short-run" => "too short",
         a if a.starts_with("cant-tell") => "can't tell",
         _ => "not measured",
     }
@@ -491,6 +505,45 @@ pub fn is_parallel(w: &RowWords) -> bool {
     w.details
         .iter()
         .any(|d| d.starts_with("uses several cores"))
+}
+
+/// The computer and compilers `row` records, in words (each value through
+/// `safe_line`): what tells rows from different computers apart.
+fn measured_on(row: &Row) -> String {
+    let safe = |s: &str| harness_core::text::safe_line(s).to_string();
+    let c = &row.inputs.computer;
+    let mut compilers = Vec::new();
+    if let Some(r) = &row.inputs.compilers.rustc {
+        compilers.push(safe(r.split(" (").next().unwrap_or(r)));
+    }
+    compilers.push(safe(&row.inputs.compilers.cc));
+    format!(
+        "measured on {}, {} {}, with {} (not checked here)",
+        safe(&c.cpu),
+        safe(&c.os),
+        safe(&c.build),
+        compilers.join(" and ")
+    )
+}
+
+/// The interval a time answer's headline gives — `(4.1–8.3 %)`, or
+/// `(3.6–3.8×)` at 2× and more — the same text the words made; `None` for
+/// an answer without one (about as fast, no clear difference, can't tell).
+fn headline_interval(w: &RowWords) -> Option<&str> {
+    if !matches!(
+        w.answer,
+        "slower"
+            | "faster"
+            | "probably-slower"
+            | "probably-faster"
+            | "close-call-slower"
+            | "close-call-faster"
+    ) {
+        return None;
+    }
+    let start = w.headline.find(" (")? + 1;
+    let len = w.headline[start..].find(')')? + 1;
+    Some(&w.headline[start..start + len])
 }
 
 /// A short form split into its words and its parenthesised interval
@@ -661,6 +714,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 words,
                 out_of_date,
                 out_of_date_tokens,
+                measured_on: measured_on(row),
                 difference: row
                     .first_difference
                     .clone()
@@ -770,20 +824,38 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
             Group::COnly
         }
     } else {
-        Group::Units {
-            measured: model.units.len(),
-            of: measurable.len().max(model.units.len()),
-        }
+        // Measured: a unit with a row perf timed or ran (not only set-up
+        // rows, which say "not measured"); of: those measurable today and
+        // every unit with rows.
+        let measured = model
+            .units
+            .iter()
+            .filter(|u| u.rows.iter().any(|r| !results::is_set_up(&r.outcome)))
+            .count();
+        let of = model
+            .units
+            .iter()
+            .filter(|u| !measurable.contains(&u.id))
+            .count()
+            + measurable.len();
+        Group::Units { measured, of }
     };
     let on = match computers.len() {
         0 => String::new(),
         1 => format!("measured on {}", computers[0]),
-        n => format!("measured on {n} kinds of computer — see each row"),
+        n => format!("measured on {n} kinds of computer"),
     };
     let with = match compilers.len() {
         0 => String::new(),
         1 => format!(" with rustc {} (not checked here)", compilers[0]),
-        n => format!(" with {n} compilers — see each row"),
+        n => format!(" with {n} compilers"),
+    };
+    // Rows from different computers or compilers: each row names its own
+    // (its details), said once.
+    let with = if computers.len() > 1 || compilers.len() > 1 {
+        format!("{with} — see each row")
+    } else {
+        with
     };
     let each = match runs.as_slice() {
         [n] => format!(" · {n} runs each"),

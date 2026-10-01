@@ -396,9 +396,12 @@ same computer, and perf says which was faster and by how much — or honestly th
   rows already finished.
 - **Read the results.** The Speed view lists the C, the program as it stands and each unit,
   worst first: "about as fast", "slower 6.2 % (4.1–8.3 %)" — the best guess and the range it
-  surely lies in — "probably slower", "close call", "can't tell" (measure again with 31 runs on a
-  quiet computer), "too short to time". Move to a row to read its full sentence. A row turns
-  "out of date" when the C, the Rust or the workload changed since; measure again.
+  lies in (perf is at least 95 % sure of it) — "probably slower", "close call", "can't tell:
+  ±3.4 %" (the runs varied: measure again with 31 runs on a quiet computer), "can't tell: slow
+  cores" (the computer may have been busy), "short run: can't tell" and "too short to time" (use
+  a bigger input — more runs will not help). Help (`?`) lists every answer. Move to a row to read
+  its full sentence. A row turns "out of date" when the C, the Rust or the workload changed
+  since; measure again.
 - **Behaves differently.** perf also compares what the program prints and how it ends. If the
   Rust prints or ends differently on one of your workloads, that row says so in red on the unit,
   and *Compare the outputs* shows both around the first difference. The judge's checks do not

@@ -1459,12 +1459,13 @@ fn speed_row_lines(row: &speed::SpeedRow, column: usize, width: usize) -> Vec<Li
         ));
     }
     let mut lines = vec![Line::from(clipped(spans, width))];
+    // Under its row, wrapped whole at a shallow indent: never cut mid-word
+    // beside a wide workload column.
     for d in &row.words.details {
         if d.starts_with("last try:") || d.starts_with("a difference found before") {
-            lines.push(Line::from(clipped(
-                vec![Span::styled(format!("  {}{d}", " ".repeat(column)), dim())],
-                width,
-            )));
+            for part in word_wrap(d, width.saturating_sub(4)) {
+                lines.push(Line::from(Span::styled(format!("    {part}"), dim())));
+            }
         }
     }
     lines
@@ -1605,11 +1606,22 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         column,
         width,
     };
-    if model.c_rows.is_empty() {
+    if model.group == speed::Group::NotYetRun {
         section.lines.extend(wrapped(
             "Nothing measured yet — on this row, press Enter and choose Measure speed.",
             width,
             bold(),
+        ));
+    } else if model.c_rows.is_empty() {
+        // Units measured alone (`--unit`): the C alone is not, yet.
+        section
+            .lines
+            .push(Line::from(Span::styled("The original C", bold())));
+        section.lines.extend(wrapped(
+            "not measured yet — Measure speed on this row measures the C alone; measuring one \
+             unit does not",
+            width,
+            dim(),
         ));
     } else {
         section.push(
@@ -1688,6 +1700,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         for d in &row.words.details {
             lines.extend(wrapped(d, width, dim()));
         }
+        lines.extend(wrapped(&row.measured_on, width, dim()));
         if !row.out_of_date.is_empty() {
             lines.extend(wrapped(
                 &format!("out of date: {}", row.out_of_date.join(", ")),
@@ -2996,7 +3009,7 @@ const HELP_SPEED_WORDS: &[(&str, &str)] = &[
     ("about as fast", "within 2 % of the C, either way"),
     (
         "slower 6.2 % (4.1–8.3 %)",
-        "the best guess, and the range it surely lies in",
+        "the best guess, and the range it lies in (perf is at least 95 % sure of it)",
     ),
     (
         "probably slower",
@@ -3004,8 +3017,26 @@ const HELP_SPEED_WORDS: &[(&str, &str)] = &[
     ),
     ("close call", "too close to the 2 % line to call"),
     (
-        "can't tell",
-        "the runs vary too much — measure again with 31 runs, on a quiet computer",
+        "can't tell: ±3.4 %",
+        "the runs varied too much — measure again with 31 runs, on a quiet computer",
+    ),
+    (
+        "can't tell: slow cores",
+        "many runs ran mostly on the slower cores — the computer may have been busy (close \
+         other work and measure again), or the program runs there by design",
+    ),
+    (
+        "can't tell: too few",
+        "too few runs gave a value — measure again",
+    ),
+    (
+        "short run: can't tell",
+        "the run is too short to tell a difference this small — use a bigger input; more runs \
+         will not settle it",
+    ),
+    (
+        "no clear diff ±1.2 %",
+        "31 runs found no difference bigger than that",
     ),
     (
         "too short to time",
@@ -6251,24 +6282,120 @@ mod tests {
         crate::app::tests::app_of_path(&root)
     }
 
+    /// The workload whose id is the longest allowed (24 characters).
+    const LONG_WORKLOAD: &str = "compress-a-big-text-file";
+
+    /// [`write_speed_results`] and what the Speed View's golden must show
+    /// (§4 *The cockpit*, build notes 16, 23 and 28): a workload whose id is
+    /// 24 characters, its C-alone line at 12.41 s and 124.3 MB with a C-side
+    /// last try beside it, a unit row on several cores, and the program as
+    /// it stands built with a second rustc.
+    fn write_speed_golden(app: &App) -> App {
+        use harness_core::perf::results::{self as res, LastTry};
+        let app = write_speed_results(app, false);
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        assert_eq!(LONG_WORKLOAD.len(), 24);
+        let workloads = perf.join("workloads.toml");
+        let mut text = std::fs::read_to_string(&workloads).unwrap();
+        text.push_str(&format!(
+            "[[workload]]\nid = \"{LONG_WORKLOAD}\"\nargs = [\"--i10\", \"{{input}}\"]\n\
+             input = \"bench/big.txt\"\n"
+        ));
+        std::fs::write(&workloads, text).unwrap();
+        let read = crate::load::read(&root).unwrap();
+        let Some(crate::perfread::InputNow::Digest(digest)) =
+            read.snapshot.perf.inputs.get(LONG_WORKLOAD).cloned()
+        else {
+            panic!("{:?}", read.snapshot.perf.inputs)
+        };
+        let path = res::program_path(&perf);
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        let mut c = program.c_alone[0].clone();
+        c.workload = LONG_WORKLOAD.into();
+        c.inputs.workload = digest.clone();
+        for r in c.c.iter_mut().flatten() {
+            r.cpu_us = Some(12_410_000);
+            r.wall_us = Some(12_415_000);
+            r.memory = Some(124_300_000);
+        }
+        c.last_try = Some(LastTry {
+            outcome: "c-unstable".into(),
+            setup: None,
+            units: None,
+        });
+        program.c_alone.push(c);
+        for r in &mut program.as_it_stands {
+            r.inputs.compilers.rustc = Some("rustc 1.95.0 (0a1b2c3d4 2026-05-14)".into());
+        }
+        res::write_program(&path, &program).unwrap();
+        let id = "u001-katajainen";
+        let path = res::unit_path(&perf, id);
+        let mut unit = res::read_unit(&path, id).unwrap().unwrap();
+        let mut u = unit.rows[0].clone();
+        u.workload = LONG_WORKLOAD.into();
+        u.inputs.workload = digest;
+        for r in u.other.iter_mut().flatten() {
+            r.wall_us = r.cpu_us.map(|c| c / 4);
+        }
+        unit.rows.push(u);
+        res::write_unit(&path, &unit).unwrap();
+        crate::app::tests::app_of_path(&root)
+    }
+
     #[test]
     fn the_speed_view_at_54_columns() {
         let app = app_of("targets/zopfli", "speed-view");
-        let mut app = write_speed_results(&app, false);
+        let mut app = write_speed_golden(&app);
         assert!(
             app.snapshot.perf.units.values().all(Result::is_ok),
             "{:?}",
             app.snapshot.perf.units
         );
+        assert!(
+            matches!(app.snapshot.perf.program, Ok(Some(_))),
+            "{:?}",
+            app.snapshot.perf.program
+        );
         app.select(Selection::Speed);
         let buffer = render(&mut app, 80, 40);
         golden("speed-54.txt", &app, &buffer);
-        // The focused row's full sentence below the list.
+        let screen = text(&buffer);
+        // The 24-character id whole, its short forms whole beside it at
+        // column 2 + 26, the last try under its row, the header's compilers.
+        let view: Vec<&str> = screen.lines().filter_map(|l| l.split('│').nth(3)).collect();
+        for (short, at) in [("CPU 12.4 s · 124 MB", 0), ("slower 6.2 % · parallel", 1)] {
+            let line = view
+                .iter()
+                .filter(|l| l.starts_with(&format!("  {LONG_WORKLOAD}  ")))
+                .nth(at)
+                .unwrap_or_else(|| panic!("{screen}"));
+            assert_eq!(line.trim_end(), format!("  {LONG_WORKLOAD}  {short}"));
+        }
+        let c = view
+            .iter()
+            .position(|l| l.starts_with(&format!("  {LONG_WORKLOAD}  CPU")))
+            .unwrap();
+        assert!(
+            view[c + 1].starts_with("    last try: the C ends or prints"),
+            "{screen}"
+        );
+        assert!(
+            view.iter()
+                .any(|l| l.contains("with 2 compilers — see each row")),
+            "{screen}"
+        );
+        // The focused row's full sentence below the list, and the computer
+        // and compilers it records.
         app.focus = Focus::View;
-        app.link = Some(5);
-        let screen = text(&render(&mut app, 80, 40));
+        app.link = Some(6);
+        let screen = text(&render(&mut app, 80, 60));
         assert!(
             screen.contains("u001-katajainen on big-text — slower"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("measured on Apple M3, 15.6 24G84, with rustc 1.94.1"),
             "{screen}"
         );
         // The unit's header and the project summary.
@@ -6279,13 +6406,20 @@ mod tests {
             "{screen}"
         );
         assert!(
-            screen.contains("(5.6–6.8 %) · 1 of 2 workloads"),
+            screen.contains("(5.6–6.8 %) · 2 of 3 workloads"),
             "{screen}"
         );
         app.select(Selection::Project);
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("Speed: 1 of 1 unit measured — 1 slower — see Speed"),
+            screen.contains("Speed: 1 of 1 unit measured — 1 slower, 1 parallel — see Speed"),
+            "{screen}"
+        );
+        let mut app = write_speed_results(&app, false);
+        app.select(Selection::Unit("u001-katajainen".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("(5.6–6.8 %) · 1 of 2 workloads"),
             "{screen}"
         );
         // Stale digests: every row says why, dimmed.
@@ -6787,6 +6921,245 @@ mod tests {
         for r in &app.speed.program_rows {
             assert!(r.out_of_date.is_empty(), "{:?}", r.out_of_date);
         }
+    }
+
+    /// A unit's header (§3.11, build note 16): line 1 the short form without
+    /// its interval or "· parallel"; line 2 the interval the headline gives
+    /// (the × one at 2× and more), "parallel" whenever the row uses several
+    /// cores — even where the short form had no room for it —, the count.
+    #[test]
+    fn the_unit_header_carries_the_interval_and_parallel() {
+        use harness_core::perf::results as res;
+        let app = app_of("targets/zopfli", "speed-header");
+        let app = write_speed_golden(&app);
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        let id = "u001-katajainen";
+        let path = res::unit_path(&perf, id);
+        // The other side `f` times the C's cycles, on four cores.
+        let header = |f: f64| {
+            let mut file = res::read_unit(&path, id).unwrap().unwrap();
+            file.rows.retain(|r| r.workload == LONG_WORKLOAD);
+            let c = file.rows[0].c.clone().unwrap();
+            for (o, c) in file.rows[0].other.iter_mut().flatten().zip(&c) {
+                let cycles = (c.cycles.unwrap() as f64 * f) as u64;
+                o.cycles = Some(cycles);
+                o.p_cycles = Some(cycles);
+                o.cpu_us = Some(cycles / 3_200);
+                o.wall_us = Some(cycles / 3_200 / 4);
+            }
+            res::write_unit(&path, &file).unwrap();
+            let app = crate::app::tests::app_of_path(&root);
+            let (a, b) = app.speed.unit_header(id).unwrap();
+            assert!(a.chars().count() <= 54 && b.chars().count() <= 54);
+            (
+                app.speed.unit(id).unwrap().rows[0].words.short.clone(),
+                a,
+                b,
+            )
+        };
+        let (short, a, b) = header(1.062);
+        assert_eq!(short, "slower 6.2 % · parallel");
+        assert_eq!(a, format!("Speed: slower 6.2 % on {LONG_WORKLOAD}"));
+        assert_eq!(b, "(5.6–6.8 %) · parallel · 1 of 1 workload");
+        let (short, a, b) = header(3.7);
+        assert_eq!(short, "3.7× as slow · parallel");
+        assert_eq!(a, format!("Speed: 3.7× as slow on {LONG_WORKLOAD}"));
+        assert!(
+            b.starts_with('(') && b.ends_with("×) · parallel · 1 of 1 workload"),
+            "{b}"
+        );
+        // No room for "· parallel" in a close call's short form: the
+        // header's second line still says it.
+        let (short, a, b) = header(1.021);
+        assert!(short.starts_with("close call: ≈"), "{short}");
+        assert!(!short.contains("parallel"), "{short}");
+        assert!(a.starts_with("Speed: close call: ≈"), "{a}");
+        assert!(
+            b.starts_with('(') && b.ends_with("%) · parallel · 1 of 1 workload"),
+            "{b}"
+        );
+    }
+
+    /// A unit whose only rows are set-up rows ("not measured") is counted
+    /// among those that could be, never as measured (§3.11 summary).
+    #[test]
+    fn a_unit_with_only_set_up_rows_is_not_counted_as_measured() {
+        use harness_core::perf::results as res;
+        let app = app_of("targets/zopfli", "speed-set-up-only");
+        let mut app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        let id = "u001-katajainen";
+        let path = res::unit_path(&perf, id);
+        let mut file = res::read_unit(&path, id).unwrap().unwrap();
+        let mut set_up = file.rows[0].clone();
+        set_up.outcome = "not-verified".into();
+        set_up.short = None;
+        set_up.runs = None;
+        set_up.platform_metrics = None;
+        set_up.c = None;
+        set_up.other = None;
+        set_up.std = None;
+        set_up.setup = Some(res::SetupFacts {
+            reason: Some("not-fresh".into()),
+            ..res::SetupFacts::default()
+        });
+        file.rows = vec![set_up];
+        res::write_unit(&path, &file).unwrap();
+        app = crate::app::tests::app_of_path(&root);
+        assert_eq!(app.speed.label(), "Speed (0 of 1)");
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("Speed: 0 of 1 unit measured — 1 not measured — see Speed"),
+            "{screen}"
+        );
+    }
+
+    /// Unit rows with no C-alone rows (a first `--unit` measure): the view
+    /// says the C alone is not measured yet, never "Nothing measured yet"
+    /// above the rows it lists.
+    #[test]
+    fn units_measured_alone_say_the_c_is_not_measured_yet() {
+        let app = app_of("targets/zopfli", "speed-units-only");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        std::fs::remove_file(harness_core::perf::results::program_path(
+            &harness_core::perf::perf_dir(&root),
+        ))
+        .unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        app.select(Selection::Speed);
+        let screen = text(&render(&mut app, 80, 40));
+        assert!(!screen.contains("Nothing measured yet"), "{screen}");
+        assert!(screen.contains("The original C"), "{screen}");
+        assert!(
+            screen.contains("not measured yet — Measure speed on this row measures"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("big-text    slower 6.2 % (5.6–6.8 %)"),
+            "{screen}"
+        );
+    }
+
+    /// Rows from different computers and compilers: the header points to
+    /// the rows once, and each row names its own (§3.11, build note 28).
+    #[test]
+    fn rows_from_other_computers_name_their_own() {
+        use harness_core::perf::results as res;
+        let app = app_of("targets/zopfli", "speed-computers");
+        let app = write_speed_golden(&app);
+        let root = app.config.target.clone();
+        let path = res::program_path(&harness_core::perf::perf_dir(&root));
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        for r in &mut program.c_alone {
+            r.inputs.computer.cpu = "Apple M1".into();
+        }
+        res::write_program(&path, &program).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert_eq!(app.speed.header.len(), 1);
+        let header = &app.speed.header[0];
+        assert!(
+            header.starts_with("measured on 2 kinds of computer with 2 compilers — see each row"),
+            "{header}"
+        );
+        assert_eq!(header.matches("see each row").count(), 1, "{header}");
+        assert!(app
+            .speed
+            .row(&crate::speed::SideKey::C, "big-text")
+            .unwrap()
+            .measured_on
+            .starts_with("measured on Apple M1, 15.6 24G84, with Apple clang"));
+        app.select(Selection::Speed);
+        app.focus = Focus::View;
+        app.link = Some(0);
+        let screen = text(&render(&mut app, 120, 60));
+        assert!(
+            screen.contains("measured on Apple M1, 15.6 24G84, with Apple clang version 17.0.0"),
+            "{screen}"
+        );
+    }
+
+    /// Every short form, at its longest, whole beside a 24-character
+    /// workload id within 54 columns; a last-try line wrapped whole under
+    /// its row, never cut mid-word.
+    #[test]
+    fn short_forms_fit_beside_the_longest_workload_id() {
+        let app = app_of("targets/zopfli", "speed-widths");
+        let app = write_speed_golden(&app);
+        let mut row = app
+            .speed
+            .row(&crate::speed::SideKey::C, LONG_WORKLOAD)
+            .unwrap()
+            .clone();
+        let column = LONG_WORKLOAD.len() + 2;
+        for short in [
+            "slower 12 % (10.1–14.6 %)",
+            "faster 12 % (10.1–14.6 %)",
+            "close call: ≈9.9 % slower",
+            "probably slower ≈9.9 %",
+            "about as fast · parallel",
+            "slower 9.9 % · parallel",
+            "can't tell: slow cores",
+            "short run: can't tell",
+            "too short · Rust 99× CPU",
+            "no clear diff ±99 %",
+            "CPU 12.4 s · 124 MB",
+        ] {
+            row.words.short = short.into();
+            let lines = speed_row_lines(&row, column, 54);
+            let first: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+            assert_eq!(first, format!("  {LONG_WORKLOAD}  {short}"));
+            assert!(width_of(&first) <= 54, "{first}");
+            // The last try: whole, in rows of at most 54 columns.
+            let rest: Vec<String> = lines[1..]
+                .iter()
+                .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                .collect();
+            assert!(rest.iter().all(|l| width_of(l) <= 54), "{rest:?}");
+            let joined = rest.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+            assert_eq!(
+                joined,
+                "last try: the C ends or prints differently from one run to the next"
+            );
+        }
+    }
+
+    /// Help's glossary has an entry for each can't-tell short form, each
+    /// with its own next step (more runs only where they can settle it).
+    #[test]
+    fn the_glossary_names_each_kind_of_cant_tell() {
+        let (rows, _) = help_rows(1000, true, None);
+        let help: String = rows
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        for (short, next) in [
+            ("can't tell: ±", "measure again with 31 runs"),
+            ("can't tell: slow cores", "may have been busy"),
+            ("can't tell: too few", "measure again"),
+            (
+                "short run: can't tell",
+                "use a bigger input; more runs will not settle it",
+            ),
+            ("no clear diff ±", "31 runs found no difference"),
+        ] {
+            let line = help
+                .lines()
+                .find(|l| l.trim_start().starts_with(short))
+                .unwrap_or_else(|| panic!("{short}: {help}"));
+            assert!(line.contains(next), "{line}");
+        }
+        assert!(help.contains("at least 95 % sure"), "{help}");
+        assert!(!help.contains("surely"), "{help}");
     }
 
     /// A unit the program as it stands left out with its crate's digest

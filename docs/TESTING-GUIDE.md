@@ -3737,7 +3737,7 @@ The first time, it also says `building the launcher…`: perf builds its own sma
 | Answer | Meaning |
 |---|---|
 | `about as fast as the C (within 2 %)` | The difference, whichever way, is under 2 %. |
-| `slower by about 6.2 % (4.1–8.3 %)` | The best guess, and the range it surely lies in. `faster` is the mirror. |
+| `slower by about 6.2 % (4.1–8.3 %)` | The best guess, and the range it lies in (perf is at least 95 % sure of it). `faster` is the mirror. |
 | `probably slower …` / `close call …` | Slower, but not clearly past the 2 % line — or too close to it to call. |
 | `can't tell: the estimate is ±Y %` | The runs varied too much. It ends with the command to measure again with 31 runs. |
 | `too short to time` | The C ran too briefly. It says how many times bigger the input should be. |
