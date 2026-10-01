@@ -2732,3 +2732,448 @@ fn rule_1_holds_in_both_configurations() {
         );
     }
 }
+
+// ---- Review: tests that kill the surviving mutants of §3.4–§3.6 ----
+
+fn rounds_of(messages: &[String], file: &str) -> usize {
+    messages
+        .iter()
+        .filter(|m| {
+            m.starts_with("Checking where the notes compile")
+                && m.contains(&format!("{file} (round"))
+        })
+        .count()
+}
+
+/// The placement fixture of an_error_lands_in_the_function_that_holds_it,
+/// with what that test leaves out: each reason is the compiler's (kind
+/// "compile", never found by search), in one placed round.
+#[test]
+fn placement_is_by_location_in_one_round() {
+    if cfg!(not(target_os = "macos")) {
+        return;
+    }
+    let mut line = String::from("\t/* é */ ");
+    let mut functions = Vec::new();
+    let names: Vec<String> = (0..10).map(|i| format!("f{i}")).collect();
+    for (i, n) in names.iter().enumerate() {
+        if i == 9 {
+            line.push_str(&format!(
+                "int {n}(int x) {{ __label__ out; if (x) goto out; return 0; out: return 1; }} "
+            ));
+        } else {
+            line.push_str(&format!("int {n}(int x) {{ return x + {i}; }} "));
+        }
+    }
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{line}\n\
+         #line 40 \"gen.y\"\n\
+         double g(double x) {{\n#pragma STDC FENV_ACCESS ON\n  return x; }}\n\
+         double inc(double x) {{\n#include \"fenv.inc\"\n  return x; }}\n\
+         int main(void) {{ return f0(0) + f9(0) + (int)g(0) + (int)inc(0) + unit_add(1, 2) - 3 - (int)mul_step(0, 0); }}\n"
+    );
+    for n in &names {
+        functions.push(("src/tool/main.c", n.as_str()));
+    }
+    functions.push(("src/tool/main.c", "g"));
+    functions.push(("src/tool/main.c", "inc"));
+    let (_tmp, map, messages) = map_program_bounded(
+        "feat-sweep-placement",
+        &main,
+        &[("src/tool/fenv.inc", "#pragma STDC FENV_ACCESS ON\n")],
+        &functions,
+        DESIGN_BOUNDS,
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        unwatched_ids(&map),
+        ["f9", "g", "inc"],
+        "{:?}",
+        map.unwatched
+    );
+    for r in &map.unwatched_reasons {
+        assert_eq!(r.kind, "compile", "placed, not searched: {r:?}");
+    }
+    assert_eq!(rounds_of(&messages, "src/tool/main.c"), 2, "{messages:?}");
+}
+
+/// An error through two include levels (and a `..`-spelled include) lands
+/// in the innermost probed file's function.
+#[test]
+fn an_error_through_two_include_levels() {
+    if cfg!(not(target_os = "macos")) {
+        return;
+    }
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"lib/../a.h\"\n\
+                int ok(int x) { return x + 1; }\n\
+                int main(void) { return (int)ha(0) + ok(-1) + unit_add(1, 2) - 3 - (int)mul_step(0, 0); }\n";
+    let a_h = "static inline double ha(double x) {\n#include \"fenv.inc\"\n  return x; }\n\
+               static inline int hb(int x) { return x; }\n";
+    let (_tmp, map, _) = map_program_bounded(
+        "feat-sweep-two-levels",
+        main,
+        &[
+            ("src/tool/a.h", a_h),
+            ("src/tool/lib/keep.h", "\n"),
+            ("src/tool/fenv.inc", "#pragma STDC FENV_ACCESS ON\n"),
+        ],
+        &[
+            ("src/tool/main.c", "ok"),
+            ("src/tool/a.h", "src/tool/a.h::ha"),
+            ("src/tool/a.h", "src/tool/a.h::hb"),
+        ],
+        DESIGN_BOUNDS,
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        unwatched_ids(&map),
+        ["src/tool/a.h::ha"],
+        "{:?}",
+        map.unwatched
+    );
+    assert_eq!(
+        map.unwatched_reasons[0].kind, "compile",
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// every_error_line_is_read's fixture, with what that test's comment
+/// promises and does not check: at most two rounds, no search.
+#[test]
+fn every_error_line_in_at_most_two_rounds() {
+    if cfg!(not(target_os = "macos")) {
+        return;
+    }
+    let mut header = String::from("#define FENV_ON _Pragma(\"STDC FENV_ACCESS ON\")\n");
+    let mut main = String::from("#include \"unit.h\"\n#include \"mul.h\"\n#include \"many.h\"\n");
+    let mut functions = Vec::new();
+    let mut names = Vec::new();
+    for i in 0..100 {
+        header.push_str(&format!(
+            "static inline double h{i}(double x) {{ FENV_ON\n  return x; }}\n"
+        ));
+        names.push(format!("src/tool/many.h::h{i}"));
+    }
+    for i in 0..100 {
+        main.push_str(&format!(
+            "double m{i}(double x) {{ FENV_ON\n  return x + h{i}(x); }}\n"
+        ));
+        names.push(format!("m{i}"));
+    }
+    main.push_str(
+        "int main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1) + (int)m0(1); }\n",
+    );
+    for n in &names {
+        let file = if n.starts_with("src/tool/many.h") {
+            "src/tool/many.h"
+        } else {
+            "src/tool/main.c"
+        };
+        functions.push((file, n.as_str()));
+    }
+    let (_tmp, map, messages) = map_program_bounded(
+        "feat-sweep-many-errors",
+        &main,
+        &[("src/tool/many.h", &header)],
+        &functions,
+        DESIGN_BOUNDS,
+    );
+    let map = map.expect("maps");
+    assert_eq!(map.unwatched.len(), 200);
+    assert!(
+        map.unwatched_reasons.iter().all(|r| r.kind == "compile"),
+        "no search"
+    );
+    assert!(
+        rounds_of(&messages, "src/tool/main.c") <= 3,
+        "at most two placed rounds: {messages:?}"
+    );
+}
+
+/// Two top-level files with a weak function of the same name: the probed
+/// link keeps the plain build's object order, so the same one is chosen.
+#[test]
+fn the_link_keeps_the_plain_order() {
+    let main = "#include <stdio.h>\n#include \"unit.h\"\n#include \"mul.h\"\n\
+                int pick(void);\n\
+                int main(void) { printf(\"%d\\n\", pick()); return unit_add(1, 2) - 3 + (int)mul_step(0, 0); }\n";
+    let (_tmp, map, _) = map_program_bounded(
+        "feat-sweep-weak-order",
+        main,
+        &[
+            (
+                "src/tool/a_weak.c",
+                "__attribute__((weak)) int pick(void) { return 1; }\n",
+            ),
+            (
+                "src/tool/z_weak.c",
+                "__attribute__((weak)) int pick(void) { return 2; }\n",
+            ),
+        ],
+        &[("src/tool/a_weak.c", "pick"), ("src/tool/z_weak.c", "pick")],
+        DESIGN_BOUNDS,
+    );
+    let map = map.expect("maps");
+    let r = &map.scenarios[0];
+    assert!(r.probe_agrees, "{r:?}");
+    assert_eq!(r.noted, "complete", "{r:?}");
+}
+
+/// §3.4 step 4: an error that stays after the function it lands in lost its
+/// note (an `asm` "i" operand in w, which a note inlined from g makes too big
+/// to inline) — the search finds g's note, in file order, and takes out
+/// exactly that one ("elimination"); h, which would also do, stays watched.
+#[test]
+fn the_search_finds_the_first_note_that_makes_it_compile() {
+    if cfg!(not(target_os = "macos")) {
+        return;
+    }
+    let tmp = TempDir::new("feat-sweep-search-sweep");
+    let gen = |k: usize, nw: bool, ng: bool, nh: bool, decl: bool| {
+        let note = |on: bool, n: u32| {
+            if on {
+                format!(" __ruharness_seen[{n}] = 1;")
+            } else {
+                String::new()
+            }
+        };
+        let mut s = String::new();
+        if decl {
+            s.push_str("extern unsigned char *volatile __ruharness_seen;\n");
+        }
+        s.push_str("volatile int sink;\n");
+        s.push_str(&format!("static void g(void) {{{}\n", note(ng, 1)));
+        for _ in 0..k {
+            s.push_str("  sink = 1;\n");
+        }
+        s.push_str("}\n");
+        s.push_str(&format!(
+            "static void h(void) {{{} sink = 2; }}\n",
+            note(nh, 4)
+        ));
+        s.push_str(&format!(
+            "static void w(int n) {{{} g(); h(); __asm__ volatile(\"# %0\" :: \"i\"(n)); }}\n",
+            note(nw, 2)
+        ));
+        s.push_str(&format!(
+            "int f(void) {{{} w(5); w(6); return 0; }}\n",
+            note(decl, 3)
+        ));
+        s
+    };
+    let compiles = |src: &str| {
+        let c = tmp.path().join("t.c");
+        std::fs::write(&c, src).unwrap();
+        std::process::Command::new("cc")
+            .args(["-O2", "-w", "-ffp-contract=off", "-c", "-o"])
+            .arg(tmp.path().join("t.o"))
+            .arg(&c)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    let k = (1..200)
+        .find(|k| {
+            let k = *k;
+            compiles(&gen(k, false, false, false, true))
+                && !compiles(&gen(k, true, true, true, true))
+                && !compiles(&gen(k, false, true, true, true))
+                && compiles(&gen(k, false, false, true, true))
+        })
+        .expect("a size where only a second note out makes w inline");
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{}\
+         int main(void) {{ return f() + unit_add(1, 2) - 3 + (int)mul_step(0, 0); }}\n",
+        gen(k, false, false, false, false)
+    );
+    let (_tmp, map, _) = map_program_bounded(
+        "feat-sweep-search",
+        &main,
+        &[],
+        &[
+            ("src/tool/main.c", "src/tool/main.c::g"),
+            ("src/tool/main.c", "src/tool/main.c::h"),
+            ("src/tool/main.c", "src/tool/main.c::w"),
+            ("src/tool/main.c", "f"),
+        ],
+        DESIGN_BOUNDS,
+    );
+    let map = map.expect("maps");
+    let kinds: Vec<(&str, &str)> = map
+        .unwatched_reasons
+        .iter()
+        .map(|r| (r.id.as_str(), r.kind.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("src/tool/main.c::g", "elimination"),
+            ("src/tool/main.c::w", "compile")
+        ],
+        "k = {k}"
+    );
+    assert_eq!(map.scenarios[0].noted, "complete");
+}
+
+/// §3.5: the runtime is compiled without the target's include folders — a
+/// project header named like a system one (a Windows `sys/mman.h` shim)
+/// is not what the runtime includes.
+#[test]
+fn the_runtime_ignores_the_targets_headers() {
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n\
+                int main(void) { return unit_add(1, 2) - 3 + (int)mul_step(0, 0); }\n";
+    let (_tmp, map, _) = map_program_bounded(
+        "feat-sweep-runtime-no-I",
+        main,
+        &[
+            (
+                "src/tool/sys/mman.h",
+                "#error \"the project's own sys/mman.h\"\n",
+            ),
+            ("src/tool/fcntl.h", "#error \"the project's own fcntl.h\"\n"),
+        ],
+        &[],
+        DESIGN_BOUNDS,
+    );
+    let map = map.expect("maps");
+    assert_eq!(map.scenarios[0].noted, "complete");
+}
+
+/// §3.5: the probe header is left out of the copy's lists only by its exact
+/// path — a program's own `fnprobe.h` is still compared.
+#[test]
+fn a_program_header_named_like_the_probes() {
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"fnprobe.h\"\n\
+                int main(void) { return unit_add(1, 2) - 3 + (int)mul_step(0, 0) + PROJ; }\n";
+    let (_tmp, map, _) = map_program_bounded(
+        "feat-sweep-own-fnprobe-h",
+        main,
+        &[("src/tool/fnprobe.h", "#define PROJ 0\n")],
+        &[],
+        DESIGN_BOUNDS,
+    );
+    let map = map.expect("maps");
+    assert_eq!(map.scenarios[0].noted, "complete");
+}
+
+/// A renumbering `#line N` (no file name): the error lands in the function
+/// that holds it physically, never in the one its presumed line names.
+#[test]
+fn a_renumbering_line_directive() {
+    if cfg!(not(target_os = "macos")) {
+        return;
+    }
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n\
+                int r1(int x) { return x + 1; }\n\
+                int r2(int x) { return x + 2; }\n\
+                #line 3\n\
+                int rg(int x) { __label__ out; if (x) goto out; return 0; out: return 1; }\n\
+                int main(void) { return r1(0) + r2(0) - 3 + rg(0) + unit_add(1, 2) - 3 + (int)mul_step(0, 0); }\n";
+    let (_tmp, map, _) = map_program_bounded(
+        "feat-sweep-renumbering-line",
+        main,
+        &[],
+        &[
+            ("src/tool/main.c", "r1"),
+            ("src/tool/main.c", "r2"),
+            ("src/tool/main.c", "rg"),
+        ],
+        DESIGN_BOUNDS,
+    );
+    let map = map.expect("maps");
+    let kinds: Vec<(&str, &str)> = map
+        .unwatched_reasons
+        .iter()
+        .map(|r| (r.id.as_str(), r.kind.as_str()))
+        .collect();
+    assert_eq!(kinds, [("rg", "compile")]);
+}
+
+/// §3.6, the runtime's guards: a notes file that is a symbolic link is not
+/// followed (O_NOFOLLOW), one of the wrong size is not mapped, and the
+/// descriptor is closed before the program runs.
+#[test]
+fn the_runtime_follows_no_link_checks_the_size_and_closes_its_descriptor() {
+    let tmp = TempDir::new("feat-sweep-fnprobe-guards");
+    let runtime = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fnprobe/fnprobe.c");
+    let main = tmp.path().join("main.c");
+    write(
+        &main,
+        "#include <fcntl.h>\n#include <stdio.h>\n\
+         extern unsigned char *volatile __ruharness_seen;\n\
+         int main(void) {\n\
+           __ruharness_seen[1] = 1;\n\
+           int fd = open(\"/dev/null\", O_RDONLY);\n\
+           printf(\"%d\\n\", fd);\n\
+           return 0;\n\
+         }\n",
+    );
+    let bin = tmp.path().join("probed");
+    assert!(std::process::Command::new("cc")
+        .args(["-O2", "-DRUHARNESS_FNPROBE_N=4", "-include"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fnprobe/fnprobe.h"))
+        .arg("-o")
+        .arg(&bin)
+        .arg(&runtime)
+        .arg(&main)
+        .status()
+        .unwrap()
+        .success());
+    let dir = tmp.path().join("t");
+    std::fs::create_dir_all(&dir).unwrap();
+    let notes = dir.join(".ruharness-notes");
+    let run = || {
+        std::process::Command::new(&bin)
+            .env_clear()
+            .env("TMPDIR", &dir)
+            .output()
+            .expect("runs")
+    };
+    // Attached: the descriptor it used is closed (the program's open gets 3).
+    std::fs::write(&notes, [0u8; 5]).unwrap();
+    let out = run();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "3\n",
+        "the runtime's descriptor was closed"
+    );
+    assert_eq!(std::fs::read(&notes).unwrap(), [0, 1, 0, 0, 1]);
+    // A symbolic link is not followed.
+    std::fs::remove_file(&notes).unwrap();
+    let elsewhere = tmp.path().join("elsewhere");
+    std::fs::write(&elsewhere, [0u8; 5]).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &notes).unwrap();
+    assert!(run().status.success());
+    assert_eq!(
+        std::fs::read(&elsewhere).unwrap(),
+        [0u8; 5],
+        "the link was followed"
+    );
+    // The wrong size: not mapped, nothing written.
+    std::fs::remove_file(&notes).unwrap();
+    std::fs::write(&notes, [0u8; 4]).unwrap();
+    assert!(run().status.success());
+    assert_eq!(
+        std::fs::read(&notes).unwrap(),
+        [0u8; 4],
+        "a short file was written"
+    );
+}
+
+/// §3.4 step 4: a copy that fails with no note to blame (the program
+/// declares the probe's own name another way: the copy alone fails, at file
+/// scope; main's use of it is a placed error first) is refused after the
+/// one every-note-out compile: one placed round, then the refusal.
+#[test]
+fn a_copy_that_fails_without_notes_is_refused_at_once() {
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nint __ruharness_seen;\n\
+                int main(void) { return unit_add(1, 2) - 3 + (int)mul_step(0, 0) + __ruharness_seen; }\n";
+    let (_tmp, map, messages) =
+        map_program_bounded("feat-sweep-no-note-to-blame", main, &[], &[], DESIGN_BOUNDS);
+    let err = map.expect_err("refused").to_string();
+    assert!(err.contains("does not compile even without notes"), "{err}");
+    assert_eq!(rounds_of(&messages, "src/tool/main.c"), 2, "{messages:?}");
+}
