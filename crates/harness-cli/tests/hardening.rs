@@ -762,7 +762,8 @@ fn a_signal_during_a_map_leaves_no_scratch_folder() {
             .unwrap_or_default()
     };
     let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
-        .args(["features", "map", "--target", target])
+        // Linux has no sandbox: the map runs unconfined there.
+        .args(["features", "map", "--allow-unsandboxed", "--target", target])
         .env("TMPDIR", &own_tmp)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -799,7 +800,7 @@ fn a_signal_during_a_map_leaves_no_scratch_folder() {
 /// §4 (§3.4 step 2), review: a probed compile that does not finish is
 /// refused by name — "raise [oracle] timeout_secs" — never read as a
 /// compile error. A `cc` on PATH that hangs only on the probed compiles
-/// (the only ones with `-ferror-limit=0`).
+/// (the only ones with `-ferror-limit=0` or `-fmax-errors=0`).
 #[cfg(unix)]
 #[test]
 fn a_probed_compile_that_hangs_is_refused_by_name() {
@@ -829,18 +830,31 @@ fn a_probed_compile_that_hangs_is_refused_by_name() {
     let t = target.to_str().unwrap();
     let r = harness(&["scan", "--target", t]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
-    // Which compile hangs: a probed compile (the only ones with
-    // -ferror-limit=0), then the copy's listing (-E with the probe header).
-    for (name, pattern, words) in [
+    // Which compile hangs: a probed compile (the only ones with clang's
+    // -ferror-limit=0 or gcc's -fmax-errors=0), then the copy's listing (-E
+    // with the probe header).
+    // Last, a probed compile whose compiler proper (cc1) is killed: the
+    // driver exits 1 and says so — refused in those words, never searched.
+    let hang = "sleep 100; exit 0";
+    let killed = "echo 'clang: error: unable to execute command: Killed: 9' >&2; exit 1";
+    for (name, pattern, action, words) in [
         (
             "probed",
-            "*\" -ferror-limit=0 \"*",
+            "*\" -ferror-limit=0 \"*|*\" -fmax-errors=0 \"*",
+            hang,
             "src/main.c did not finish in 5 s — raise [oracle] timeout_secs",
         ),
         (
             "listing",
             "*\" -include \"*\" -E \"*",
+            hang,
             "the compiler's listing of main.c did not finish in 5 s — raise [oracle] timeout_secs",
+        ),
+        (
+            "killed",
+            "*\" -ferror-limit=0 \"*|*\" -fmax-errors=0 \"*",
+            killed,
+            "src/main.c was ended from outside (clang: error: unable to execute command: Killed: 9)",
         ),
     ] {
         let fake = tmp.join(format!("bin-{name}"));
@@ -849,7 +863,7 @@ fn a_probed_compile_that_hangs_is_refused_by_name() {
         std::fs::write(
             &cc,
             format!(
-                "#!/bin/sh\ncase \" $* \" in\n  {pattern}) sleep 100; exit 0 ;;\nesac\n\
+                "#!/bin/sh\ncase \" $* \" in\n  {pattern}) {action} ;;\nesac\n\
                  exec /usr/bin/cc \"$@\"\n"
             ),
         )
@@ -861,7 +875,7 @@ fn a_probed_compile_that_hangs_is_refused_by_name() {
         let path = format!("{}:/usr/bin:/bin", fake.display());
         let started = std::time::Instant::now();
         let out = Command::new(env!("CARGO_BIN_EXE_harness"))
-            .args(["features", "map", "--target", t])
+            .args(["features", "map", "--allow-unsandboxed", "--target", t])
             .env("PATH", &path)
             .output()
             .expect("spawn harness");

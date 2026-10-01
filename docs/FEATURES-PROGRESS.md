@@ -85,14 +85,16 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    given in its HARNESS line).
 3. The check of the whole fix pass, workflow `wf_35a3625c-b71`: its four lenses FINISHED with 26
    findings (`SP/fc1/lenses.json`; verifiers were still running — read the journal for verdicts).
-   FIX PASS 2 in progress, from those findings: tokenizer (raw-string delimiters with `"`, Unicode
-   whitespace, pragma lines in .incbin runs and stringized notes, the unresolvable-.incbin test,
-   has_line_directives spellings), MAP_PROBE → compiler-guided-2, the link search with cut-short
-   referrer lists, nested definitions only inside a misread body (an #if group with two branches
-   that move the brace depth) — never statement-macro misreads or GNU nested functions, the
-   run-together rule only for a second head on a later line, hidden-variant false positives,
-   C23 attributed declarators, killed child compilers, bounds order, GNU/lld parsing, ELF
-   e_shnum = 0, the signal cleanup made final, hardening tests on Linux, the lld main() hint.
+   FIX PASS 2 DONE (part 1 4feb237: tokenizer, scanner, MAP_PROBE compiler-guided-2; part 2
+   the next commit: bounds checked before each compile, the placed-rounds bound only for a round
+   that places, cut-short referrer lists and a retry over every unit, GNU/lld forms, gcc #line
+   over all reads, killed child compilers + -fno-crash-diagnostics, objsyms ELF e_shnum = 0 and
+   checked offsets and a `function` flag, hidden variants (code only, clone names, explained
+   names), the signal cleanup made final (race: before 14/21 runs left a folder, after 0/27;
+   `SP/race2/race3.py <harness> <scanned zopfli copy> copy|spawn <ms,…> <runs>`), tests on Linux
+   (--allow-unsandboxed, -fmax-errors=0), the lld main hint, the incbin-macro test, zopfli's
+   map.json regenerated). Recorded in design §10.1. NEXT: mutation-check fix pass 2's rules
+   (`SP/mutfix.py`, new entries; `git archive HEAD | tar -x -C SP/mut1`), then check it.
    Then check fix pass 2 likewise. Was: at e846261 (base copy
    `SP/fc1/base`; lenses tokenizer, build-link, scanner-variant, runner-ux; two verifiers each). Was planned as: lenses over the diff
    665495b..HEAD — the tokenizer and same-code check, probebuild bounds/search/link, objsyms and
@@ -102,7 +104,9 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    failing only under load: validate_driver (fixed: first exec), zopfli_verify u001 driver
    self-validation, harness-tui chat_e2e and `an_exited_leaders_pipes_are_read_first`,
    harness-mcp protocol drains, `a_fifo_named_like_a_c_file_is_a_skip_not_a_wait` (bound now
-   100 s). Re-run each alone if it fails.
+   100 s), features `a_c_side_that_times_out_is_a_skip_and_costs_one_run`, validate_driver
+   `tce_equivalent_mutants_are_discarded` and `a_weak_driver_fails_mutation_adequacy` (all
+   three pass alone; failed only with ~18 review agents running). Re-run each alone if it fails.
 5. `bench check --replay` (quiet machine, ~29 min; `.bench/` and `.scorer-vendor/` are present in
    this worktree's targets/tractor). Expect 198 reproduce (1 conformant, 197 drifted), 2 expected
    divergences, 0 problems, "no regression". All 101 bench targets re-scan to byte-identical facts

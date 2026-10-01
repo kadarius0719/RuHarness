@@ -6,7 +6,7 @@
     "features": "blake3:e613abcb485e3fb146c07b68374707d1f58f3b4feb36cb1baf768a5311417265",
     "program": "blake3:d191be5c4b9a2380dc6a075da3c8dccc92216562d1103bc82c7dc6d8a9e75d64",
     "platform": "macos-aarch64",
-    "probe": "compiler-guided-1"
+    "probe": "compiler-guided-2"
   },
   "unwatched": [],
   "scenarios": [

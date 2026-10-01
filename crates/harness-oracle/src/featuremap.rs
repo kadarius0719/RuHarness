@@ -202,8 +202,11 @@ fn map_inner(
         .collect::<Result<_, _>>()?;
     let header = out.path().join("fnprobe.h");
     let runtime_src = out.path().join("fnprobe.c");
-    write(&header, FNPROBE_H.as_bytes())?;
-    write(&runtime_src, FNPROBE_C.as_bytes())?;
+    // Into the folder as made, never a folder made again: after a signal's
+    // cleanup removed it, these fail instead of leaving it behind.
+    for (path, text) in [(&header, FNPROBE_H), (&runtime_src, FNPROBE_C)] {
+        std::fs::write(path, text.as_bytes()).map_err(|e| Error::io(path, e))?;
+    }
     let header = header.canonicalize().map_err(|e| Error::io(&header, e))?;
     let probed_inputs: Vec<PathBuf> = c_files
         .iter()
@@ -469,10 +472,13 @@ fn map_inner(
     let built = build_copy.run(&mut probe, progress)?;
     let probed = built.program;
     // A watched function whose note no compile holds, in a file the
-    // compiles enter, while a compiled object defines its name: its visible
+    // compiles enter, while a compiled object defines a function of its name
+    // that no other watched definition compiled there explains: its visible
     // definition sits in a branch the build skips, and one the parser cannot
     // read (made by a macro, a parenthesized name) is compiled in its place —
-    // unwatched, never "not run" (review: an #if sibling shares its id).
+    // unwatched, never "not run" (review: an #if sibling shares its id). A
+    // compiler's clone of it (gcc's `f.isra.0`, `f.part.0`) is its name.
+    let name_of = |id: &str| id.rsplit("::").next().unwrap_or(id).to_string();
     for (n, entered) in unit_reads.iter().enumerate() {
         for rel in entered {
             for (file, id) in index.pairs.iter().filter(|(file, _)| file == rel) {
@@ -485,12 +491,23 @@ fn map_inner(
                 }
                 let compiled = (0..unit_reads.len())
                     .any(|m| unit_reads[m].contains(rel) && copy_notes[m].contains(&number));
-                let name = id.rsplit("::").next().unwrap_or(id);
+                let name = name_of(id);
                 let external = !id.contains("::");
-                let defined = built.defined[n]
-                    .iter()
-                    .any(|d| d.name == name && (d.external || !external));
-                if !compiled && defined {
+                let defined = built.defined[n].iter().any(|d| {
+                    d.function
+                        && (d.external || !external)
+                        && crate::probebuild::function_name(&d.name) == name
+                });
+                let explained = || {
+                    index.pairs.iter().any(|(other_file, other)| {
+                        (other_file, other) != (file, id)
+                            && name_of(other) == name
+                            && index
+                                .of(other_file, other)
+                                .is_some_and(|k| copy_notes[n].contains(&k))
+                    })
+                };
+                if !compiled && defined && !explained() {
                     probe.take_out(
                         file,
                         id,
@@ -617,14 +634,18 @@ static LIVE_DIRS: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
     std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 /// Remove the random folder of every map in progress — the signal handler's
-/// part, after it has killed the children that write there. Returns how
-/// many it removed.
+/// part, after it has killed the children that write there. Final, as the
+/// process registry is: the registry stays locked for good, so no map
+/// makes a folder afterwards while the process is on its way out. Returns
+/// how many it removed.
 pub fn remove_live_scratch_dirs() -> usize {
     let live = LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner());
     for dir in live.iter() {
         let _ = std::fs::remove_dir_all(dir);
     }
-    live.len()
+    let n = live.len();
+    std::mem::forget(live);
+    n
 }
 
 impl MapOut {
@@ -637,6 +658,12 @@ impl MapOut {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
+        // Made and registered under the registry's lock, after a check for
+        // a signal: the cleanup either sees the folder or ran before it.
+        let mut live = LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner());
+        if crate::exec::cancelled() {
+            return Err(Error::Interrupted);
+        }
         for _ in 0..1000 {
             let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let tag = harness_core::hash::bytes_hash(
@@ -656,10 +683,7 @@ impl MapOut {
             };
             match made {
                 Ok(()) => {
-                    LIVE_DIRS
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(dir.clone());
+                    live.insert(dir.clone());
                     return Ok(MapOut(dir));
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -680,6 +704,11 @@ impl MapOut {
 impl Drop for MapOut {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        // After a signal the registry stays locked for good (see
+        // `remove_live_scratch_dirs`): nothing to unregister.
+        if crate::exec::cancelled() {
+            return;
+        }
         LIVE_DIRS
             .lock()
             .unwrap_or_else(|e| e.into_inner())

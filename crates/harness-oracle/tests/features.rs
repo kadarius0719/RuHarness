@@ -3177,3 +3177,239 @@ fn a_copy_that_fails_without_notes_is_refused_at_once() {
     assert!(err.contains("does not compile even without notes"), "{err}");
     assert_eq!(rounds_of(&messages, "src/tool/main.c"), 2, "{messages:?}");
 }
+
+// ---- fix pass 2 (the check of fix pass 1) ----
+
+/// Repo-relative paths and what each holds, or the ids a file records.
+type Pairs = Vec<(String, String)>;
+
+/// The tipped static `w` (no note) and its callee `g` (a note) in a shared
+/// header, called with constants from `units` files: each object keeps an
+/// out-of-line `w` that references `bad_size`.
+fn shared_tip(units: usize) -> (String, Pairs, Pairs) {
+    let mut h = String::from(
+        "extern void bad_size(void);\nextern volatile int sink; extern volatile int sink2;\n\
+         static void g(int n) { sink = n; }\nstatic int w(int n)\n#if 1\n{\n#endif\n  g(n);\n",
+    );
+    for i in 0..23 {
+        h.push_str(&format!("  sink = n * {i} + sink;\n"));
+    }
+    for _ in 0..4 {
+        h.push_str("  sink2 = 1;\n");
+    }
+    h.push_str("  if (!__builtin_constant_p(n)) bad_size();\n  return n; }\n");
+    let mut files = vec![("src/tool/tip.h".to_string(), h)];
+    let mut ids = vec![(
+        "src/tool/tip.h".to_string(),
+        "src/tool/tip.h::g".to_string(),
+    )];
+    for k in 0..units {
+        files.push((
+            format!("src/tool/u{k}.c"),
+            format!(
+                "#include \"tip.h\"\nint fa{k}(void) {{ return w(5); }}\nint fb{k}(void) {{ return w(6); }}\n"
+            ),
+        ));
+        ids.push((format!("src/tool/u{k}.c"), format!("fa{k}")));
+        ids.push((format!("src/tool/u{k}.c"), format!("fb{k}")));
+    }
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nvolatile int sink; volatile int sink2;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1); }\n"
+        .to_string();
+    (main, files, ids)
+}
+
+/// The reason a map gives for `id`, if any.
+fn reason_for<'m>(
+    map: &'m harness_core::features::FeatureMap,
+    id: &str,
+) -> Option<&'m harness_core::features::UnwatchedReason> {
+    map.unwatched_reasons.iter().find(|r| r.id == id)
+}
+
+/// Check of fix pass 1: every linker lists only some referrers (ld64 seven,
+/// then `...`): the search reaches the objects it leaves out.
+#[test]
+fn a_link_search_reaches_the_objects_the_linker_leaves_unlisted() {
+    let (main, files, ids) = shared_tip(8);
+    let extra: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let (_tmp, map) = map_program("link-unlisted", &main, &extra, &ids);
+    let map = map.expect("maps");
+    let g = reason_for(&map, "src/tool/tip.h::g").expect("g unwatched");
+    assert_eq!(g.kind, "link", "{g:?}");
+    assert!(g.detail.contains("bad_size is undefined"), "{g:?}");
+}
+
+/// Check of fix pass 1: after the last placed round the bound allows, an
+/// error only a search can find still gets its search — a search is not a
+/// placed round.
+#[test]
+fn a_search_after_the_last_placed_round_still_runs() {
+    let w = tipping_w(23, 4, true).replace(
+        "extern void bad_size(void);",
+        "__attribute__((error(\"not constant\"))) extern void bad_size(void);",
+    );
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{w}\
+         int d(int x) {{ __label__ out; if (x) goto out; return 0; out: return 1; }}\n\
+         int main(void) {{ return unit_add(1, 2) == 3 ? d(0) : (int)mul_step(0, 1) + f() + f2(); }}\n"
+    );
+    let ids = [
+        ("src/tool/main.c", "src/tool/main.c::g"),
+        ("src/tool/main.c", "f"),
+        ("src/tool/main.c", "f2"),
+        ("src/tool/main.c", "d"),
+    ];
+    let bounds = harness_oracle::MapBounds {
+        placed_rounds: 1,
+        ..DESIGN_BOUNDS
+    };
+    let (_tmp, map, _) = map_program_bounded("round-then-search", &main, &[], &ids, bounds);
+    let map = map.expect("maps");
+    let kind = |id: &str| reason_for(&map, id).map(|r| r.kind.as_str());
+    assert_eq!(kind("d"), Some("compile"), "{:?}", map.unwatched_reasons);
+    assert_eq!(kind("src/tool/main.c::g"), Some("elimination"));
+    assert_eq!(kind("main"), None, "{:?}", map.unwatched_reasons);
+    assert_eq!(kind("f"), None);
+}
+
+/// Check of fix pass 1: a search that starts at the per-file bound stops
+/// there (its `-fsyntax-only` check and every-note-out trial count) — the
+/// file goes back unprobed, no note blamed.
+#[test]
+fn a_search_keeps_within_the_per_file_bound() {
+    let (body, _) = tipping_pairs(1);
+    let a = format!("{body}int a_use(void) {{ return f0() + h0(); }}\n");
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nint a_use(void);\n\
+                int main(void) { return unit_add(1, 2) == 3 ? a_use() - 11 : (int)mul_step(0, 1); }\n";
+    let bounds = harness_oracle::MapBounds {
+        file_compiles: 2,
+        ..DESIGN_BOUNDS
+    };
+    let (_tmp, map, _) = map_program_bounded(
+        "file-bound-search",
+        main,
+        &[("src/tool/a.c", &a)],
+        &[
+            ("src/tool/a.c", "src/tool/a.c::g0"),
+            ("src/tool/a.c", "a_use"),
+        ],
+        bounds,
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        reason_for(&map, "src/tool/a.c::g0").map(|r| r.kind.as_str()),
+        Some("file-limit"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Check of fix pass 1: a header's static in an `#if` branch the build
+/// skips, beside the file's own static of the same name — the object's
+/// `helper` is the file's, so the header's is "not run", never unwatched.
+#[test]
+fn a_skipped_static_beside_its_namesake_is_not_run() {
+    let h = "#ifdef USE_FAST\nstatic int helper(int x) { return x * 3; }\n#endif\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
+                __attribute__((noinline)) static int helper(int x) { return x + 7; }\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(0) - 7 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "skipped-static-namesake",
+        main,
+        &[("src/tool/h.h", h)],
+        &[
+            ("src/tool/h.h", "src/tool/h.h::helper"),
+            ("src/tool/main.c", "src/tool/main.c::helper"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert!(
+        map.unwatched_reasons.is_empty(),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Check of fix pass 1: a hidden variant whose parameter is unused (gcc's
+/// IPA-SRA names its clone `scale.isra.0`) is still the one compiled.
+#[test]
+fn a_hidden_variant_the_compiler_renamed_is_still_found() {
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n\
+                #if 0\nstatic int scale(int x, int unused) { return x - 1; }\n#else\n\
+                __attribute__((noinline)) static int (scale)(int x, int unused) { return x * 3; }\n\
+                #endif\n\
+                __attribute__((noinline)) int use(int v) { return scale(v, 0); }\n\
+                int main(void) { return unit_add(1, 2) == 3 ? use(1) - 3 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "hidden-variant-renamed",
+        main,
+        &[],
+        &[
+            ("src/tool/main.c", "src/tool/main.c::scale"),
+            ("src/tool/main.c", "use"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        reason_for(&map, "src/tool/main.c::scale").map(|r| r.kind.as_str()),
+        Some("parser"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Check of fix pass 1: an `.incbin` whose name the assembler resolves and
+/// the scan cannot read (an assembler macro's parameter) sends every probed
+/// file back — the rule the older test never reached (its name resolved
+/// nowhere, so the plain build failed first).
+#[test]
+fn an_incbin_name_the_scan_cannot_read_sends_every_file_back() {
+    let main = concat!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n",
+        r#"__asm__(".macro inc f\n.incbin \"\\f\"\n.endm\n.data\ninc unit.c\n.text\n");"#,
+        "\nint main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1); }\n"
+    );
+    let (_tmp, map) = map_program("incbin-macro", main, &[], &[]);
+    let map = map.expect("maps");
+    for id in ["main", "unit_add", "mul_step"] {
+        assert_eq!(
+            reason_for(&map, id).map(|r| r.kind.as_str()),
+            Some("data"),
+            "{id}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+    assert!(
+        map.unwatched_reasons.iter().all(|r| r.kind == "data"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Check of fix pass 1: only code is a hidden variant — a header's public
+/// function in a branch the build skips, beside the file's variable of that
+/// name, is "not run".
+#[test]
+fn a_skipped_function_beside_a_variable_of_its_name_is_not_run() {
+    let h = "#ifdef USE_FAST\nint helper(int x) { return x * 3; }\n#endif\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
+                volatile int helper = 7;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper - 7 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "skipped-function-variable",
+        main,
+        &[("src/tool/h.h", h)],
+        &[("src/tool/h.h", "helper")],
+    );
+    let map = map.expect("maps");
+    assert!(
+        map.unwatched_reasons.is_empty(),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}

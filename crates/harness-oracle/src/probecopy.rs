@@ -258,6 +258,13 @@ impl Probe {
         true
     }
 
+    /// Whether [`Probe::take_out`] would take `id`'s note out of `rel`.
+    pub(crate) fn carries(&self, rel: &str, id: &str) -> bool {
+        self.files
+            .get(rel)
+            .is_some_and(|f| !f.unprobed && !f.skip.iter().any(|s| s == id))
+    }
+
     /// Put `id`'s note back in `rel` (the search's restore pass).
     pub(crate) fn put_back(&mut self, rel: &str, id: &str) {
         if let Some(file) = self.files.get_mut(rel) {

@@ -646,3 +646,60 @@ governs):
 **Mutation check of the fix pass**: 49 mutants of the fixes, 48 killed, 1 equivalent (encoding
 prefixes: a prefix read as a word before the literal compares the same on both sides).
 
+
+### 10.1 The check of fix pass 1, and fix pass 2
+
+Four independent lenses checked fix pass 1 at e846261 (the tokenizer; the build and link; the
+scanner and hidden variants; the runner and what the person sees), each finding with two
+verifiers: 26 findings. Fix pass 2 answers them (the code governs):
+- **Tokenizer**: a raw string's delimiter may hold `"` (refusing it put the tokenizer out of step:
+  a note turned into text read as code, a silent wrong map); Unicode spaces clang reads as
+  whitespace (a no-break space before `R"`) are whitespace; a `#pragma` between literals keeps an
+  `.incbin` run, and a note turned into text on a `#pragma` line is seen; `#line` in every
+  spelling (splices, CR line ends, `%:`, comments) for gcc's presumed-place rule.
+- **Scanner**: definitions are recorded inside a body only when the parser misread it (an `#if`
+  group with two branches that each move the brace depth, sqlite3.c's shape) — never a statement
+  macro misread as a definition, never a GNU nested function. Two heads run together only when a
+  second head stands on a later line after a word: an annotation macro with arguments
+  (`__acquires(x)`, `ATTR(x)`) keeps its note, and the second function is recorded too (rule 1),
+  no longer lost from the facts. A C23 attribute after the declarator. sqlite3.c unchanged (457
+  unwatched); the 101 bench targets' facts byte-identical.
+- **Version**: the probe is `compiler-guided-2`; a map made before reads "made by another version
+  of the harness".
+- **Bounds**: every bound is checked before the compile it would allow — the search's
+  `-fsyntax-only` check and every-note-out trial included, and the restore pass keeps room for
+  the compile that takes a note out again; so a file uses at most 64 compiles and then, past the
+  bound, the one more of §3.4 step 6. The placed-rounds bound holds only a round that would place
+  a note: after the last one, an error only a search can find still gets its search.
+- **Link**: a referrer list the linker cut short (ld64's `...` after seven, GNU's "more undefined
+  references to … follow", lld's "referenced N more times") names every unit; GNU's one line per
+  reference is read as one symbol; and a search whose every-note-out trial still fails over the
+  named units runs once over every unit before the map is refused. GNU: a second reference from
+  the same function (prefixed, `.text`) stays that function's. lld: an undefined hidden,
+  protected or internal symbol, and lld run as `ld`.
+- **gcc's `#line`**: a `#line` in any probed file a unit reads sends that unit's errors to the
+  search (it could name another probed file's line), as §3.4 step 3 says.
+- **A killed compiler** whose driver survives (clang's `cc1` child: "unable to execute command:
+  Killed", "… failed due to signal"; gcc's "Killed signal terminated program") is refused in the
+  driver's words with no search, compile or link; clang's probed compiles pass
+  `-fno-crash-diagnostics` (no crash reproducer in `$TMPDIR`).
+- **Objects**: an ELF object with 0xff00 sections or more (the count in section 0) reads whole;
+  every offset is checked ("cannot be read", never a panic); each symbol says whether it is code
+  (ELF `STT_FUNC`, a Mach-O section of instructions).
+- **Hidden variants**: only a code symbol counts, a compiler's clone name (`f.isra.0`) is `f`, and
+  a name another watched definition compiled in that unit explains (a header's skipped static
+  beside the file's own static of that name) is "not run", as it should read.
+- **A signal** ends the scratch folder for good: the registry stays locked after the cleanup, a
+  folder is made only under that lock after a check for a signal, and the runtime's sources are
+  written into the folder as made (a write after the cleanup fails rather than making the folder
+  again). The reviewer's race (stderr on a full pipe so the process lingers 250 ms): before, 14
+  of 21 interrupted runs left a folder (empty 0700, or 0755 with the runtime's sources); after, 0
+  of 27.
+- **Words**: the main() hint matches lld's unquoted name only whole (`main_loop` is not main).
+- **Tests**: the hardening and features-map tests pass `--allow-unsandboxed` (Linux has no
+  sandbox) and match gcc's `-fmax-errors=0`; an `.incbin` whose name only the assembler resolves
+  (a macro's parameter) is the case that reaches the "every probed file back" rule; new tests
+  for each fix above (lib: linker forms, a driver's killed child, ELF section counts; features:
+  eight objects past ld64's list, a search after the last placed round, the per-file bound, a
+  skipped static beside its namesake, a hidden variant with an unused parameter — gcc names it
+  `.isra`, clang keeps the name, and only clang is on this machine; CLI: a killed `cc1`).

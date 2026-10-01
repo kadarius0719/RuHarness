@@ -198,7 +198,7 @@ fn save_and_init_never_write_through_a_symlinked_directory() {
 fn map_refuses_what_it_cannot_map_and_maps_the_rest() {
     let root = zopfli("map");
     let target = format!("--target={}", root.display());
-    let r = harness(&["features", "map", &target], None);
+    let r = harness(&["features", "map", "--allow-unsandboxed", &target], None);
     assert_eq!(r.code, 1);
     assert!(
         r.stderr
@@ -210,7 +210,7 @@ fn map_refuses_what_it_cannot_map_and_maps_the_rest() {
     let dir = root.join("migration/features");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("features.toml"), "schema_version = 1\n").unwrap();
-    let r = harness(&["features", "map", &target], None);
+    let r = harness(&["features", "map", "--allow-unsandboxed", &target], None);
     assert_eq!(r.code, 1);
     assert!(r.stderr.contains("no scenario"), "{}", r.stderr);
 
@@ -219,12 +219,15 @@ fn map_refuses_what_it_cannot_map_and_maps_the_rest() {
     let main = root.join("src/zopfli/zopfli_bin.c");
     let original = std::fs::read(&main).unwrap();
     std::fs::write(&main, [original.as_slice(), b"\n/* edited */\n"].concat()).unwrap();
-    let r = harness(&["features", "map", &target], None);
+    let r = harness(&["features", "map", "--allow-unsandboxed", &target], None);
     assert_eq!(r.code, 1);
     assert!(r.stderr.contains("scan the project first"), "{}", r.stderr);
     std::fs::write(&main, &original).unwrap();
 
-    let r = harness(&["--json", "features", "map", &target], None);
+    let r = harness(
+        &["--json", "features", "map", "--allow-unsandboxed", &target],
+        None,
+    );
     assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
     let scenario_events: Vec<serde_json::Value> = r
         .stdout

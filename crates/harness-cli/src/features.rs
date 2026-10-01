@@ -263,17 +263,21 @@ fn main_count(ctx: &TargetContext, facts: &Facts) -> usize {
 /// Whether a refusal is the plain build's link failing on `main` — none, or
 /// more than one (ld64, GNU ld and lld spellings).
 fn link_failed_on_main(refusal: &str) -> bool {
+    // lld's spelling is unquoted: only the whole name (not `main_loop`).
+    let lld = |needle: &str| {
+        refusal.match_indices(needle).any(|(at, _)| {
+            refusal[at + needle.len()..]
+                .chars()
+                .next()
+                .is_none_or(char::is_whitespace)
+        })
+    };
     refusal.contains("the C program does not build")
-        && [
-            "'_main'",
-            "\"_main\"",
-            "`main'",
-            "'main'",
-            "symbol: main",
-            "symbol: _main",
-        ]
-        .iter()
-        .any(|m| refusal.contains(m))
+        && (["'_main'", "\"_main\"", "`main'", "'main'"]
+            .iter()
+            .any(|m| refusal.contains(m))
+            || lld("symbol: main")
+            || lld("symbol: _main"))
 }
 
 fn display(root: &Path, path: &Path) -> String {
@@ -296,12 +300,16 @@ mod tests {
             "the C program does not build: Undefined symbols for architecture arm64:\n  \"_main\", referenced from:",
             "the C program does not build: /usr/bin/ld: b.o: multiple definition of `main'; a.o: first defined here",
             "the C program does not build: ld.lld: error: duplicate symbol: main",
+            "the C program does not build: ld.lld: error: undefined symbol: main\n>>> referenced by crt1.o",
         ] {
             assert!(link_failed_on_main(refusal), "{refusal}");
         }
         for refusal in [
             "the scratch copy of src/main.c is not the same program near: int x;",
             "the C program does not build: src/main.c:3:1: error: expected ';'",
+            // Review: lld's unquoted name, only whole.
+            "the C program does not build: ld.lld: error: undefined symbol: main_loop\n>>> referenced by app.c",
+            "the C program does not build: ld.lld: error: duplicate symbol: _main_window",
         ] {
             assert!(!link_failed_on_main(refusal), "{refusal}");
         }

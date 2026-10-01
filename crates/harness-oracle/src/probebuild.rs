@@ -53,7 +53,9 @@ impl Cc {
     /// The flags that make every error readable (§3.4 step 1).
     fn error_flags(self) -> Vec<String> {
         let flags: &[&str] = match self {
+            // No crash reproducer left in $TMPDIR when the compiler dies.
             Cc::Clang => &[
+                "-fno-crash-diagnostics",
                 "-ferror-limit=0",
                 "-Xclang",
                 "-fno-diagnostics-use-presumed-location",
@@ -343,7 +345,17 @@ impl Build<'_> {
                     killed_by(&status).unwrap_or(0)
                 )))
             }
-            ChildEnd::Exited(_) => Ok(Outcome::Failed(run.stderr)),
+            // The driver's own child (cc1) killed or crashed: the driver
+            // exits 1 and says so.
+            ChildEnd::Exited(_) => match killed_child(&run.stderr) {
+                Some(words) => Err(Error::Invariant(format!(
+                    "the scratch copy's compile of {} was ended from outside ({}) — out of \
+                     memory? try again",
+                    self.shown(&self.units[n]),
+                    crate::probecopy::detail_text(&words)
+                ))),
+                None => Ok(Outcome::Failed(run.stderr)),
+            },
             ChildEnd::TimedOut => Err(Error::Invariant(format!(
                 "the scratch copy's compile of {} did not finish in {} s — raise [oracle] \
                  timeout_secs",
@@ -361,7 +373,18 @@ impl Build<'_> {
     /// The probed file and the innermost watched body a located error falls
     /// in (the chain's innermost probed frame when the error's own file is
     /// not probed).
-    fn place(&self, probe: &Probe, d: &Diagnostic, gcc_presumed: bool) -> Option<(String, String)> {
+    fn place(&self, n: usize, probe: &Probe, d: &Diagnostic) -> Option<(String, String)> {
+        // gcc reports at presumed places: a #line in any probed file the
+        // unit reads can name another file's line, so its errors go to the
+        // search (§3.4 step 3).
+        let gcc = matches!(self.cc, Cc::Gcc(_));
+        if gcc
+            && self.reads[n]
+                .iter()
+                .any(|rel| probe.has_line_directives(rel))
+        {
+            return None;
+        }
         let mirror = self.mirror.canonicalize().ok()?;
         let rel_of = |p: &Path| -> Option<String> {
             let canonical = if p.is_absolute() {
@@ -385,13 +408,10 @@ impl Build<'_> {
             }),
         };
         let (rel, line, col) = spot?;
-        if gcc_presumed && probe.has_line_directives(&rel) {
-            return None;
-        }
         let text = std::fs::read(self.mirror.join(&rel)).ok()?;
         // gcc counts a byte-order mark's bytes in line 1's columns its own
         // way: such an error goes to the search (§3.4 step 3).
-        if matches!(self.cc, Cc::Gcc(_)) && line == 1 && text.starts_with(b"\xef\xbb\xbf") {
+        if gcc && line == 1 && text.starts_with(b"\xef\xbb\xbf") {
             return None;
         }
         let at = offset(&text, line, col)?;
@@ -405,7 +425,9 @@ impl Build<'_> {
 
     /// Compile top-level file `n` until it compiles, taking notes out as
     /// §3.4 steps 3–6 say. `pass` counts every compile beyond the call's
-    /// first (a file's first compile, or a step 7 re-compile).
+    /// first (a file's first compile, or a step 7 re-compile). Every bound
+    /// is checked before the compile it would allow: past one, the file
+    /// goes back unprobed and compiles once more (step 6).
     fn settle(
         &self,
         n: usize,
@@ -421,9 +443,16 @@ impl Build<'_> {
         let mut round = 0;
         let mut compiles = 0;
         let rels = &self.reads[n];
-        let gcc = matches!(self.cc, Cc::Gcc(_));
         let mut eliminated: Vec<(String, String)> = Vec::new();
+        let mut last: Vec<u8> = Vec::new();
         loop {
+            if compiles > 0 {
+                if compiles >= bounds.file_compiles || *pass >= bounds.pass_compiles {
+                    return self.give_up(n, probe, &last);
+                }
+                *pass += 1;
+            }
+            compiles += 1;
             round += 1;
             // A file compiled again (a file it reads lost notes, or the
             // link took one out) says so: its rounds start over.
@@ -432,17 +461,14 @@ impl Build<'_> {
                 self.shown(&self.units[n]),
                 if again { "again, " } else { "" },
             ));
-            if compiles > 0 {
-                *pass += 1;
-            }
-            compiles += 1;
             let stderr = match self.compile(n, false)? {
                 Outcome::Ok => {
                     // The restore pass: each note the search took out is put
                     // back alone once and kept if the file still compiles —
-                    // within the bounds; past them the rest stay out.
+                    // within the bounds, room left for the compile that takes
+                    // it out again; past them the rest stay out.
                     for (rel, id) in std::mem::take(&mut eliminated) {
-                        if compiles >= bounds.file_compiles || *pass >= bounds.pass_compiles {
+                        if compiles + 2 > bounds.file_compiles || *pass + 2 > bounds.pass_compiles {
                             break;
                         }
                         let reason = probe.reasons.get(&(rel.clone(), id.clone())).cloned();
@@ -471,21 +497,12 @@ impl Build<'_> {
                 }
                 Outcome::Failed(stderr) => stderr,
             };
-            if placed_rounds >= bounds.placed_rounds
-                || compiles >= bounds.file_compiles
-                || *pass >= bounds.pass_compiles
-            {
-                return self.give_up(n, probe, &stderr);
-            }
             let found = diagnostics(&stderr, self.cc);
-            let mut placed = false;
+            let mut places: Vec<(String, String, String)> = Vec::new();
             let mut unplaced: Option<String> = None;
             for d in &found {
-                match self.place(probe, d, gcc) {
-                    Some((rel, id)) => {
-                        let reason = Reason::new(Kind::Compile, &d.message);
-                        placed |= probe.take_out(&rel, &id, reason);
-                    }
+                match self.place(n, probe, d) {
+                    Some((rel, id)) => places.push((rel, id, d.message.clone())),
                     None => {
                         unplaced.get_or_insert_with(|| d.message.clone());
                     }
@@ -494,17 +511,27 @@ impl Build<'_> {
             if found.is_empty() {
                 unplaced = Some(crate::exec::stderr_excerpt(&stderr));
             }
-            if placed {
+            last = stderr;
+            // The placed-rounds bound holds only a round that would place
+            // a note: one that needs a search goes on (the compile bound
+            // limits the search).
+            if places.iter().any(|(rel, id, _)| probe.carries(rel, id)) {
+                if placed_rounds >= bounds.placed_rounds {
+                    return self.give_up(n, probe, &last);
+                }
+                for (rel, id, message) in &places {
+                    probe.take_out(rel, id, Reason::new(Kind::Compile, message));
+                }
                 placed_rounds += 1;
                 self.rewrite(probe, rels, &[])?;
                 continue;
             }
-            let why = unplaced.unwrap_or_else(|| crate::exec::stderr_excerpt(&stderr));
+            let why = unplaced.unwrap_or_else(|| crate::exec::stderr_excerpt(&last));
             match self.search(n, probe, &why, &mut compiles, pass)? {
                 Search::Found(pair) => eliminated.push(pair),
                 // A search a bound stopped has found nothing: the file goes
                 // back unprobed, no note blamed.
-                Search::Cut => return self.give_up(n, probe, &stderr),
+                Search::Cut => return self.give_up(n, probe, &last),
             }
         }
     }
@@ -537,6 +564,12 @@ impl Build<'_> {
             .into_iter()
             .filter(|p| seen.insert(p.clone()))
             .collect();
+        let spent = |compiles: &usize, pass: &usize| {
+            *compiles >= bounds.file_compiles || *pass >= bounds.pass_compiles
+        };
+        if spent(compiles, pass) {
+            return Ok(Search::Cut);
+        }
         *compiles += 1;
         *pass += 1;
         let syntax_only = match self.compile(n, true)? {
@@ -555,6 +588,9 @@ impl Build<'_> {
             *pass += 1;
             Ok(matches!(self.compile(n, syntax_only)?, Outcome::Ok))
         };
+        if spent(compiles, pass) {
+            return Ok(Search::Cut);
+        }
         if !trial(notes.len(), probe, compiles, pass)? {
             self.rewrite(probe, rels, &[])?;
             return Err(Error::Invariant(format!(
@@ -566,7 +602,7 @@ impl Build<'_> {
         }
         let (mut lo, mut hi) = (0usize, notes.len());
         while hi - lo > 1 {
-            if *compiles >= bounds.file_compiles || *pass >= bounds.pass_compiles {
+            if spent(compiles, pass) {
                 self.rewrite(probe, rels, &[])?;
                 return Ok(Search::Cut);
             }
@@ -706,7 +742,14 @@ impl Build<'_> {
                     killed_by(&status).unwrap_or(0)
                 )))
             }
-            ChildEnd::Exited(_) => Ok(Some(run.stderr)),
+            ChildEnd::Exited(_) => match killed_child(&run.stderr) {
+                Some(words) => Err(Error::Invariant(format!(
+                    "the scratch copy's link was ended from outside ({}) — out of memory? try \
+                     again",
+                    crate::probecopy::detail_text(&words)
+                ))),
+                None => Ok(Some(run.stderr)),
+            },
             _ => Err(Error::Invariant(format!(
                 "the scratch copy's link did not finish: {}",
                 crate::exec::stderr_excerpt(&run.stderr)
@@ -765,7 +808,11 @@ impl Build<'_> {
         let mut unresolved: Option<(String, BTreeSet<usize>)> = None;
         for u in &undefined {
             let why = format!("{} is undefined", u.symbol);
-            let units = self.units_named(&u.refs);
+            let units = if u.cut {
+                (0..self.units.len()).collect()
+            } else {
+                self.units_named(&u.refs)
+            };
             // (a) a function of the program: an external one, whose id is
             // its name (a static is never an undefined symbol).
             if self.functions.iter().any(|(_, id)| *id == u.symbol) {
@@ -815,15 +862,26 @@ impl Build<'_> {
             self.rewrite(probe, &changed, &[])?;
             return Ok(Linked::Changed(BTreeSet::new()));
         }
-        let Some((symbol, units)) = unresolved else {
+        let Some((symbol, mut units)) = unresolved else {
             return Err(refuse(&stderr));
         };
         let why = format!("{symbol} is undefined");
-        let rels: BTreeSet<String> = units
-            .iter()
-            .flat_map(|n| self.reads[*n].iter().cloned())
-            .collect();
-        match self.link_search(probe, &symbol, &units, &rels, &program, pass)? {
+        let rels_of = |units: &BTreeSet<usize>| -> BTreeSet<String> {
+            units
+                .iter()
+                .flat_map(|n| self.reads[*n].iter().cloned())
+                .collect()
+        };
+        let mut rels = rels_of(&units);
+        let mut searched = self.link_search(probe, &symbol, &units, &rels, &program, pass)?;
+        // A list the linker cut short in words this reader does not know:
+        // every unit, once, before the map is refused.
+        if searched.is_none() && units.len() < self.units.len() {
+            units = (0..self.units.len()).collect();
+            rels = rels_of(&units);
+            searched = self.link_search(probe, &symbol, &units, &rels, &program, pass)?;
+        }
+        match searched {
             Some(LinkSearch::Found(rel, id)) => {
                 probe.take_out(&rel, &id, Reason::new(Kind::Link, &why));
             }
@@ -955,6 +1013,35 @@ fn killed_by(status: &std::process::ExitStatus) -> Option<i32> {
     }
 }
 
+/// A compiler driver's report that its own child (the compiler proper,
+/// the linker) was killed or crashed — clang's `unable to execute command:
+/// Killed` and `… failed due to signal`, gcc's `Killed signal terminated
+/// program` and `internal compiler error: Killed`. Only the driver's own
+/// lines (`<name>: error: …`), never a located error quoting the source.
+fn killed_child(stderr: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(stderr);
+    text.lines()
+        .find(|line| {
+            let Some((name, rest)) = line.split_once(": ") else {
+                return false;
+            };
+            // A driver's name, not a located error's `file:line:col`.
+            let driver =
+                !name.is_empty() && !name.contains(|c: char| c.is_whitespace() || c == ':');
+            let message = ["error: ", "fatal error: ", "internal compiler error: "]
+                .iter()
+                .find_map(|kind| rest.strip_prefix(kind));
+            driver
+                && message.is_some_and(|m| {
+                    m.starts_with("unable to execute command: Killed")
+                        || m.contains("failed due to signal")
+                        || m.starts_with("Killed signal terminated program")
+                        || m.starts_with("Killed (program")
+                })
+        })
+        .map(|line| line.trim().to_string())
+}
+
 /// The names the probe's runtime uses (docs/FEATURES-PROBE-REDESIGN.md
 /// §3.5); a unit test pins them against the runtime object's imports.
 pub(crate) const RUNTIME_IMPORTS: &[&str] = &["open", "fstat", "mmap", "close", "environ"];
@@ -972,7 +1059,7 @@ pub(crate) fn runtime_name_defined(objects: &[Vec<objsyms::Defined>]) -> Option<
 
 /// A function the linker names, without a compiler's clone suffix (gcc's
 /// `.constprop.0`, `.isra.0`, `.part.0`, `.cold`: a C name has no `.`).
-fn function_name(name: &str) -> String {
+pub(crate) fn function_name(name: &str) -> String {
     name.split('.').next().unwrap_or(name).to_string()
 }
 
@@ -993,11 +1080,13 @@ pub(crate) struct Referrer {
     pub object: Option<String>,
 }
 
-/// An undefined symbol of a failed link and its referrers.
+/// An undefined symbol of a failed link and its referrers. `cut`: the
+/// linker said it listed only some of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Undefined {
     pub symbol: String,
     pub refs: Vec<Referrer>,
+    pub cut: bool,
 }
 
 /// The name quoted at the start of `text` — `` `name' ``, `'name'` or
@@ -1024,16 +1113,51 @@ fn gnu_object(line: &str) -> Option<String> {
     Some(rest[..end].trim().to_string())
 }
 
+/// The section a GNU ld place names: `x:(.data.rel.local+0x0)` → `.data.rel.local`.
+fn gnu_section(line: &str) -> Option<&str> {
+    let open = line.find(":(")? + 2;
+    let end = line[open..].find(['+', ')'])?;
+    Some(&line[open..open + end])
+}
+
+/// The symbol of lld's `<name>: error: undefined [hidden |protected |internal ]symbol: x`
+/// (lld names itself by how it was run: `ld.lld`, `ld`).
+fn lld_undefined(line: &str) -> Option<String> {
+    let at = line.find(": error: undefined ")?;
+    if line[..at].contains(' ') {
+        return None;
+    }
+    let rest = &line[at + ": error: undefined ".len()..];
+    let rest = ["hidden ", "protected ", "internal "]
+        .iter()
+        .find_map(|v| rest.strip_prefix(v))
+        .unwrap_or(rest);
+    Some(rest.strip_prefix("symbol: ")?.trim().to_string())
+}
+
 /// The undefined symbols of a failed link, each with its referrers — ld64
-/// (`"_name", referenced from:` then indented `_fn in f.o` lines), GNU ld
-/// (`` f.o: in function `fn': `` then `` undefined reference to `name' ``
-/// lines — any case, any quotes; a reference of its own, from data, names
-/// no function) and lld (`undefined symbol: name` then `>>> referenced by …
-/// f.o:(fn)`). Mach-O's leading `_` dropped.
+/// (`"_name", referenced from:` then indented `_fn in f.o` lines, `...` when
+/// cut short), GNU ld (`` f.o: in function `fn': `` then `` undefined
+/// reference to `name' `` lines — any case, any quotes; a reference of its
+/// own, from a section not code, names no function; `more undefined
+/// references to` when cut short) and lld (`undefined symbol: name` then
+/// `>>> referenced by … f.o:(fn)`, `>>> referenced N more times` when cut
+/// short). One entry per symbol, in the order first named; Mach-O's
+/// leading `_` dropped.
 pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<Undefined> {
     let text = String::from_utf8_lossy(stderr);
     let strip = |s: &str| s.strip_prefix('_').unwrap_or(s).to_string();
     let mut out: Vec<Undefined> = Vec::new();
+    let mut add = |symbol: String, refs: Vec<Referrer>, cut: bool| match out
+        .iter_mut()
+        .find(|u| u.symbol == symbol)
+    {
+        Some(u) => {
+            u.refs.extend(refs);
+            u.cut |= cut;
+        }
+        None => out.push(Undefined { symbol, refs, cut }),
+    };
     let mut gnu_context: Option<Referrer> = None;
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
@@ -1044,9 +1168,13 @@ pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<Undefined> {
             if let Some(end) = rest.find("\", referenced from:") {
                 let symbol = strip(&rest[..end]);
                 let mut refs = Vec::new();
+                let mut cut = false;
                 while let Some(next) = lines.peek() {
                     let n = next.trim();
-                    if let Some((f, object)) = n.split_once(" in ") {
+                    if n == "..." {
+                        cut = true;
+                        lines.next();
+                    } else if let Some((f, object)) = n.split_once(" in ") {
                         refs.push(Referrer {
                             function: Some(function_name(&strip(f))),
                             object: Some(object.trim().to_string()),
@@ -1056,11 +1184,17 @@ pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<Undefined> {
                         break;
                     }
                 }
-                out.push(Undefined { symbol, refs });
+                add(symbol, refs, cut);
                 continue;
             }
         }
         // GNU ld
+        if let Some(at) = lower.find("more undefined references to ") {
+            if let Some(symbol) = quoted_name(&t[at + "more undefined references to ".len()..]) {
+                add(symbol, Vec::new(), true);
+            }
+            continue;
+        }
         if let Some(at) = lower.find("in function ") {
             if !lower.contains("undefined reference to ") {
                 gnu_context = Some(Referrer {
@@ -1075,10 +1209,13 @@ pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<Undefined> {
             let Some(symbol) = quoted_name(&t[at + "undefined reference to ".len()..]) else {
                 continue;
             };
-            // A message of its own (the linker's prefix before it) is not
-            // under the last "in function" line: a reference from data.
+            // ld prints "in function" only when the function changes: a
+            // message of its own (the linker's prefix before it) from code
+            // is the last function's; from any other section, a reference
+            // from data, naming no function.
             let own = t[..at].contains("ld: ");
-            let referrer = if own {
+            let code = gnu_section(t).is_none_or(|s| s.starts_with(".text"));
+            let referrer = if own && !code {
                 Referrer {
                     function: None,
                     object: gnu_object(t),
@@ -1089,22 +1226,22 @@ pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<Undefined> {
                     object: None,
                 })
             };
-            out.push(Undefined {
-                symbol,
-                refs: vec![referrer],
-            });
+            add(symbol, vec![referrer], false);
             continue;
         }
         // lld
-        if let Some(rest) = t.strip_prefix("ld.lld: error: undefined symbol: ") {
-            let symbol = rest.to_string();
+        if let Some(symbol) = lld_undefined(t) {
             let mut refs = Vec::new();
+            let mut cut = false;
             while let Some(next) = lines.peek() {
                 let n = next.trim();
                 let Some(r) = n.strip_prefix(">>>") else {
                     break;
                 };
-                if let (Some(open), Some(close)) = (r.rfind(":("), r.rfind(')')) {
+                let r = r.trim();
+                if r.starts_with("referenced ") && r.ends_with(" more times") {
+                    cut = true;
+                } else if let (Some(open), Some(close)) = (r.rfind(":("), r.rfind(')')) {
                     if open < close {
                         let inside = &r[open + 2..close];
                         let function = inside
@@ -1120,7 +1257,7 @@ pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<Undefined> {
                 }
                 lines.next();
             }
-            out.push(Undefined { symbol, refs });
+            add(symbol, refs, cut);
         }
     }
     out
@@ -1183,6 +1320,7 @@ mod tests {
         let d = |name: &str, external: bool| objsyms::Defined {
             name: name.to_string(),
             external,
+            function: true,
         };
         let objects = vec![
             vec![d("main", true), d("close", false)],
@@ -1207,6 +1345,30 @@ mod tests {
         assert_eq!(killed_by(&std::process::ExitStatus::from_raw(1 << 8)), None);
         assert_eq!(words_or_none("  "), "(the compiler printed nothing)");
         assert_eq!(words_or_none("x"), "x");
+    }
+
+    /// Review: the driver's report of its own child (cc1, the linker)
+    /// killed or crashed is told apart from the copy's errors — only in the
+    /// driver's own lines.
+    #[test]
+    fn a_killed_child_of_the_driver_is_told_apart() {
+        for stderr in [
+            "clang: error: unable to execute command: Killed: 9\nclang: error: clang frontend command failed due to signal (use -v to see invocation)\n",
+            "cc: error: clang frontend command failed due to signal (use -v to see invocation)\n",
+            "gcc: fatal error: Killed signal terminated program cc1\ncompilation terminated.\n",
+            "x86_64-linux-gnu-gcc-12: internal compiler error: Killed (program cc1)\n",
+            "clang: error: linker command failed due to signal (use -v to see invocation)\n",
+        ] {
+            assert!(killed_child(stderr.as_bytes()).is_some(), "{stderr}");
+        }
+        for stderr in [
+            "/m/src/a.c:3:1: error: unable to execute command: Killed\n",
+            "    3 | clang: error: failed due to signal\n",
+            "clang: error: linker command failed with exit code 1 (use -v to see invocation)\n",
+            "a.c:2:5: error: expected ';' after expression\n",
+        ] {
+            assert_eq!(killed_child(stderr.as_bytes()), None, "{stderr}");
+        }
     }
 
     #[test]
@@ -1273,6 +1435,7 @@ mod tests {
         let u = |symbol: &str, refs: Vec<Referrer>| Undefined {
             symbol: symbol.to_string(),
             refs,
+            cut: false,
         };
         let ld64 = b"Undefined symbols for architecture arm64:\n  \"_step\", referenced from:\n      _main in probed-0.o\n      _helper in probed-1.o\nld: symbol(s) not found\n";
         assert_eq!(
@@ -1314,6 +1477,57 @@ mod tests {
                     r(None, Some("probed-1.o"))
                 ]
             )]
+        );
+        // Review: a list the linker cut short — ld64's `...`, GNU's "more
+        // undefined references", lld's "referenced N more times" — says so;
+        // GNU's one line per reference is one entry per symbol.
+        let ld64 = b"Undefined symbols for architecture arm64:\n  \"_bad\", referenced from:\n      _f0 in probed-0.o\n      _g0 in probed-0.o\n      ...\nld: symbol(s) not found for architecture arm64\n";
+        let found = undefined_symbols(ld64);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].cut, "{found:?}");
+        assert_eq!(found[0].refs.len(), 2);
+        let gnu = b"/usr/bin/ld: /o/probed-0.o: in function `f':\nmain.c:(.text+0x9): undefined reference to `bad'\n\
+                    /usr/bin/ld: /o/probed-1.o: in function `g':\nb.c:(.text+0x9): undefined reference to `bad'\n\
+                    /usr/bin/ld: b.c:(.text+0x15): more undefined references to `bad' follow\n";
+        let found = undefined_symbols(gnu);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].cut);
+        assert_eq!(
+            found[0].refs,
+            vec![
+                r(Some("f"), Some("/o/probed-0.o")),
+                r(Some("g"), Some("/o/probed-1.o"))
+            ]
+        );
+        let lld = b"ld.lld: error: undefined symbol: bad\n>>> referenced by a.c\n>>>               probed-0.o:(f)\n>>> referenced 4 more times\n";
+        assert!(undefined_symbols(lld)[0].cut);
+        assert!(!undefined_symbols(b"ld.lld: error: undefined symbol: bad\n>>> referenced by a.c\n>>>               probed-0.o:(f)\n")[0].cut);
+        // Review: binutils prints "in function" only when the function
+        // changes — a second reference from its code, prefixed, is still
+        // that function's.
+        let gnu = b"/usr/bin/ld: /o/probed-0.o: in function `main':\nmain.c:(.text+0x9): undefined reference to `step'\n\
+                    /usr/bin/ld: main.c:(.text+0x15): undefined reference to `other'\n";
+        assert_eq!(
+            undefined_symbols(gnu)[1],
+            u("other", vec![r(Some("main"), Some("/o/probed-0.o"))])
+        );
+        // Review: lld's undefined hidden, protected and internal symbols, and
+        // lld installed as `ld`.
+        for text in [
+            "ld.lld: error: undefined hidden symbol: bad_size\n>>> referenced by a.c\n>>>               probed-0.o:(w)\n",
+            "ld.lld: error: undefined protected symbol: bad_size\n>>> referenced by a.c\n>>>               probed-0.o:(w)\n",
+            "ld: error: undefined internal symbol: bad_size\n>>> referenced by a.c\n>>>               probed-0.o:(w)\n",
+            "ld: error: undefined symbol: bad_size\n>>> referenced by a.c\n>>>               probed-0.o:(w)\n",
+        ] {
+            assert_eq!(
+                undefined_symbols(text.as_bytes()),
+                vec![u("bad_size", vec![r(Some("w"), Some("probed-0.o"))])],
+                "{text}"
+            );
+        }
+        assert!(
+            undefined_symbols(b"a.c:3:1: note: error: undefined symbol: x\n").is_empty(),
+            "a located message is not lld's"
         );
         assert_eq!(unit_of_object("/t/ruharness-map-x/probed-12.o"), Some(12));
         assert_eq!(unit_of_object("main.o"), None);
