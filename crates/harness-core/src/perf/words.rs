@@ -58,6 +58,43 @@ pub struct Context<'a> {
     pub input: Option<&'a str>,
 }
 
+/// Every value [`RowWords::answer`] takes — the MCP's closed set: the time
+/// answers, then each outcome's own.
+pub const ANSWERS: &[&str] = &[
+    "about-as-fast",
+    "slower",
+    "faster",
+    "probably-slower",
+    "probably-faster",
+    "close-call-slower",
+    "close-call-faster",
+    "no-clear-difference",
+    "cant-tell-estimate",
+    "cant-tell-short-run",
+    "cant-tell-too-few",
+    "cant-tell-slow-cores",
+    "baseline",
+    "too-short",
+    "behaves-differently",
+    "stopped-by-sigkill",
+    "run-failed-timeout",
+    "run-failed-exit",
+    "run-failed-signal",
+    "c-unstable",
+    "c-crashed",
+    "c-timed-out",
+    "output-too-large",
+    "c-could-not-start",
+    "could-not-start",
+    "not-verified",
+    "replaces-mismatch",
+    "crate-does-not-build",
+    "does-not-link",
+    "mixed-panic",
+    "input-unusable",
+    "run-failed: unmeasurable",
+];
+
 /// A row's words.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RowWords {
@@ -2057,6 +2094,33 @@ mod tests {
             ),
             "bench/big.txt is over 64 MiB — use a smaller input"
         );
+    }
+
+    #[test]
+    fn every_outcome_answers_from_the_closed_set() {
+        let base = row(
+            side(15, 1e9, 0.01),
+            side(15, 1.05e9, 0.01),
+            "macos-v6-cycles",
+            false,
+        );
+        for o in super::super::results::OUTCOMES {
+            let mut r = base.clone();
+            r.outcome = (*o).into();
+            if *o == "baseline" {
+                r.other = None;
+            }
+            for cx in [
+                UNIT,
+                Context {
+                    side: Side::C,
+                    ..UNIT
+                },
+            ] {
+                let w = words(&r, &cx);
+                assert!(ANSWERS.contains(&w.answer), "{o}: {}", w.answer);
+            }
+        }
     }
 
     #[test]

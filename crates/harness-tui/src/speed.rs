@@ -58,11 +58,15 @@ pub struct SpeedRow {
     /// Why it is out of date; empty when current as far as the cockpit can
     /// tell (the computer and the compilers are not checked here).
     pub out_of_date: Vec<String>,
+    /// The same reasons' tokens (`harness_core::perf::currency::REASONS`).
+    pub out_of_date_tokens: Vec<&'static str>,
     /// Where the outputs differed: the row's own (behaves-differently), or
     /// the one found before that a later measure did not clear.
     pub difference: Option<Difference>,
     /// `difference` is the one found before.
     pub found_before: bool,
+    /// The stored row itself (its runs, metrics and numbers).
+    pub row: Row,
 }
 
 impl SpeedRow {
@@ -581,36 +585,42 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 computer: None,
                 compilers: None,
             };
-            let mut out_of_date = if program_now.is_empty() {
+            let mut why: Vec<currency::Reason> = if program_now.is_empty() {
                 Vec::new()
             } else {
-                currency::out_of_date(row, kind, &today)
+                currency::reasons(row, kind, &today)
             };
+            let reason = |token: &'static str, words: String| currency::Reason { token, words };
             match perf.inputs.get(&row.workload) {
                 Some(InputNow::WhileMeasuring) => {
-                    out_of_date.push("can't check while measuring".into())
+                    why.push(reason("measuring", "can't check while measuring".into()))
                 }
-                Some(InputNow::TooLarge) => {
-                    out_of_date.push("can't check: inputs too large to hash here".into())
-                }
-                Some(InputNow::Unusable(reason)) => {
+                Some(InputNow::TooLarge) => why.push(reason(
+                    "too-large",
+                    "can't check: inputs too large to hash here".into(),
+                )),
+                Some(InputNow::Unusable(unusable)) => {
                     if let Some(input) = &input {
-                        out_of_date.retain(|w| !w.starts_with("the workload is gone"));
-                        out_of_date.push(reason.words(input));
+                        why.retain(|r| r.token != "workload-gone");
+                        why.push(reason("input-unusable", unusable.words(input)));
                     }
                 }
                 _ => {}
             }
+            let out_of_date_tokens = why.iter().map(|r| r.token).collect();
+            let out_of_date = why.into_iter().map(|r| r.words).collect();
             SpeedRow {
                 workload: row.workload.clone(),
                 outcome: row.outcome.clone(),
                 words,
                 out_of_date,
+                out_of_date_tokens,
                 difference: row
                     .first_difference
                     .clone()
                     .or_else(|| row.found_before.clone()),
                 found_before: row.first_difference.is_none() && row.found_before.is_some(),
+                row: row.clone(),
             }
         };
     let mut computers: Vec<String> = Vec::new();

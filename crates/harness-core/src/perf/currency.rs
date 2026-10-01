@@ -27,37 +27,91 @@ pub struct Today<'a> {
     pub compilers: Option<(&'a str, &'a str)>,
 }
 
+/// Every reason's token (the MCP's closed set): the workload changed or is
+/// gone, the C, the program's name, the recipe, the launcher, a unit's
+/// Rust, its replaced files, a held unit left out, a unit accepted or
+/// verified since, the plan's order, the computer, the compilers — and the
+/// cockpit's own: measuring now, inputs too large to hash, an input perf
+/// could not use.
+pub const REASONS: &[&str] = &[
+    "workload",
+    "workload-gone",
+    "program",
+    "program-name",
+    "recipe",
+    "launcher",
+    "rust",
+    "replaces",
+    "left-out",
+    "accepted",
+    "verified",
+    "plan-order",
+    "computer",
+    "compilers",
+    "measuring",
+    "too-large",
+    "input-unusable",
+];
+
+/// One reason a row is out of date: its token (one of [`REASONS`]) and its
+/// words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reason {
+    /// One of [`REASONS`].
+    pub token: &'static str,
+    /// In words.
+    pub words: String,
+}
+
+fn reason(token: &'static str, words: impl Into<String>) -> Reason {
+    Reason {
+        token,
+        words: words.into(),
+    }
+}
+
 /// Why `row` is out of date, in words, one reason each; empty when it is
 /// current as far as `today` could tell.
 pub fn out_of_date(row: &Row, kind: RowKind, today: &Today<'_>) -> Vec<String> {
+    reasons(row, kind, today)
+        .into_iter()
+        .map(|r| r.words)
+        .collect()
+}
+
+/// [`out_of_date`] with each reason's token.
+pub fn reasons(row: &Row, kind: RowKind, today: &Today<'_>) -> Vec<Reason> {
     let i = &row.inputs;
     let mut why = Vec::new();
     match today.workload {
         Some(w) if w == i.workload => {}
-        Some(_) => why.push("your workload changed".to_string()),
-        None => why.push("the workload is gone or its input cannot be read".to_string()),
+        Some(_) => why.push(reason("workload", "your workload changed")),
+        None => why.push(reason(
+            "workload-gone",
+            "the workload is gone or its input cannot be read",
+        )),
     }
     if i.program != today.program {
-        why.push("the C changed".to_string());
+        why.push(reason("program", "the C changed"));
     }
     if i.program_name != today.program_name {
-        why.push("the program's name changed".to_string());
+        why.push(reason("program-name", "the program's name changed"));
     }
     if i.recipe != super::PERF_RECIPE {
-        why.push("measured another way (an older perf)".to_string());
+        why.push(reason("recipe", "measured another way (an older perf)"));
     }
     if i.launcher != super::PERF_LAUNCHER {
-        why.push("measured by another launcher".to_string());
+        why.push(reason("launcher", "measured by another launcher"));
     }
     if kind == RowKind::Unit {
         for c in i.crates.iter().flatten() {
             if (today.crate_digest)(&c.id).as_deref() != Some(c.digest.as_str()) {
-                why.push(format!("{}'s Rust changed since", c.id));
+                why.push(reason("rust", format!("{}'s Rust changed since", c.id)));
             }
         }
         if let (Some(then), Some(now)) = (&i.replaces, today.replaces) {
             if then.as_slice() != now {
-                why.push("its replaced files changed".to_string());
+                why.push(reason("replaces", "its replaced files changed"));
             }
         }
     }
@@ -65,13 +119,13 @@ pub fn out_of_date(row: &Row, kind: RowKind, today: &Today<'_>) -> Vec<String> {
         let held: Vec<&str> = i.units.iter().flatten().map(|u| u.id.as_str()).collect();
         for u in i.units.iter().flatten() {
             if (today.crate_digest)(&u.id).as_deref() != Some(u.crate_digest.as_str()) {
-                why.push(format!("{}'s Rust changed since", u.id));
+                why.push(reason("rust", format!("{}'s Rust changed since", u.id)));
             }
         }
         if let Some(now) = today.measurable {
             for id in &held {
                 if !now.iter().any(|n| n == id) {
-                    why.push(format!("{id} is left out now"));
+                    why.push(reason("left-out", format!("{id} is left out now")));
                 }
             }
             let left: Vec<&str> = i.left_out.iter().flatten().map(|l| l.id.as_str()).collect();
@@ -87,16 +141,16 @@ pub fn out_of_date(row: &Row, kind: RowKind, today: &Today<'_>) -> Vec<String> {
                     .map(|l| l.reason.as_str())
                 {
                     None if !left.contains(&id.as_str()) => {
-                        why.push(format!("{id} was accepted since"))
+                        why.push(reason("accepted", format!("{id} was accepted since")))
                     }
                     Some("not-fresh") | Some("accept-interrupted") | Some("replaces-changed") => {
-                        why.push(format!("{id} was verified since"))
+                        why.push(reason("verified", format!("{id} was verified since")))
                     }
                     Some(_) => {
                         if let Some(l) = i.left_out.iter().flatten().find(|l| l.id == *id) {
                             if (today.crate_digest)(id).as_deref() != Some(l.crate_digest.as_str())
                             {
-                                why.push(format!("{id}'s Rust changed since"));
+                                why.push(reason("rust", format!("{id}'s Rust changed since")));
                             }
                         }
                     }
@@ -109,24 +163,27 @@ pub fn out_of_date(row: &Row, kind: RowKind, today: &Today<'_>) -> Vec<String> {
                 .filter(|id| held.contains(id))
                 .collect();
             if order_now.len() == held.len() && order_now != held {
-                why.push("the plan's order changed".to_string());
+                why.push(reason("plan-order", "the plan's order changed"));
             }
         }
     }
     if let Some(c) = today.computer {
         if *c != i.computer {
-            why.push(format!(
-                "measured on another computer ({}, {} {})",
-                crate::text::safe_line(&i.computer.cpu),
-                crate::text::safe_line(&i.computer.os),
-                crate::text::safe_line(&i.computer.build)
+            why.push(reason(
+                "computer",
+                format!(
+                    "measured on another computer ({}, {} {})",
+                    crate::text::safe_line(&i.computer.cpu),
+                    crate::text::safe_line(&i.computer.os),
+                    crate::text::safe_line(&i.computer.build)
+                ),
             ));
         }
     }
     if let Some((cc, rustc)) = today.compilers {
         let rust_differs = i.compilers.rustc.as_deref().is_some_and(|r| r != rustc);
         if i.compilers.cc != cc || rust_differs {
-            why.push("measured with other compilers".to_string());
+            why.push(reason("compilers", "measured with other compilers"));
         }
     }
     why
@@ -249,6 +306,31 @@ mod tests {
         ] {
             assert!(why.iter().any(|w| w == want), "{want}: {why:?}");
         }
+    }
+
+    #[test]
+    fn every_reason_has_a_closed_token() {
+        let unit = row(RowKind::Unit);
+        let changed = |_: &str| Some(d('z'));
+        let moved = vec!["src/b.c".to_string()];
+        let other = d('x');
+        let computer = Computer {
+            cpu: "Apple M4".into(),
+            ..unit.inputs.computer.clone()
+        };
+        let today = Today {
+            workload: Some(&other),
+            program: &other,
+            crate_digest: &changed,
+            replaces: Some(&moved),
+            program_name: "other",
+            measurable: None,
+            computer: Some(&computer),
+            compilers: Some(("cc 2", "rustc 2")),
+        };
+        let why = reasons(&unit, RowKind::Unit, &today);
+        assert_eq!(why.len(), 7, "{why:?}");
+        assert!(why.iter().all(|r| REASONS.contains(&r.token)), "{why:?}");
     }
 
     #[test]

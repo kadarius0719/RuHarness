@@ -90,7 +90,18 @@ below are history.
   and word list; `harness_core::perf::{PERF_OUT_DIR, KEPT_UNITS, KEPT_PROGRAM,
   kept_outputs_dir}` shared with the oracle; `words::difference_words` public;
   `model::short_id` (app re-exports it).
-  NEXT: (f4) the MCP Speed fact. Then (g) SCHEMAS, tutorial, the
+- Step (f4) DONE: harness-mcp `reads::speed_row` / `speed_head` / `unit_speed` — `harness_status`
+  gains `speed` (state, units measured/measurable, measuring, the C alone's rows with
+  cpu_seconds and memory_bytes, the program as it stands's units, left-out, rows; null without a
+  workloads file) and each unit's worst row; `harness_unit` gains `speed` (all rows). Closed
+  sets: `words::ANSWERS` (tested over every outcome), `currency::REASONS` (`currency::reasons`
+  gives each reason's token; `out_of_date` its words), results' OUTCOMES / PLATFORM_METRICS /
+  LEFT_OUT_REASONS; `environment_checked: false`. (The design's `cant-tell-busy` is not an
+  answer the words give: busy is a detail.)
+  NEXT: step (g) — SCHEMAS (results rows, perf-row event, the MCP speed fields; results are
+  forgeable like every ledger file), the tutorial's Speed part, the testing guide's Part 11 on
+  liblzg; then the code review (workflow), fix passes each checked, mutation checks, DECISIONS
+  (incl. the Linux refusal), merge to main, push. Then (g) SCHEMAS, tutorial, the
   testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree

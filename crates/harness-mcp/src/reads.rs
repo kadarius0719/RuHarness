@@ -9,6 +9,7 @@ use harness_core::config::TargetConfig;
 use harness_core::status::{UnitReport, VerdictState};
 use harness_tui::model::{AttemptView, AuthorshipView, ProvenanceView, Snapshot, UnitView};
 use harness_tui::pairs::{CSide, FunctionPair, RustNote, SourceSpan};
+use harness_tui::speed::{self, SpeedModel, SpeedRow};
 use serde_json::{json, Value};
 
 /// Most attempts listed per unit by `harness_status` (bound first;
@@ -175,6 +176,90 @@ fn report(r: &UnitReport) -> Value {
     out
 }
 
+/// A number rounded to two decimals (percent shifts, seconds).
+fn two(v: f64) -> Value {
+    json!((v * 100.0).round() / 100.0)
+}
+
+/// One Speed row as a fact of closed values and numbers
+/// (docs/PERF-DESIGN.md §3.11): the answer the cockpit's words give, the
+/// workload, the metric, `short`, `runs`, the shift and its interval in
+/// percent (never on a can't-tell answer), `current` with closed reasons,
+/// and `environment_checked: false` — the computer and the compilers are
+/// not checked here. The C alone's adds its median CPU time and memory.
+pub fn speed_row(r: &SpeedRow, c_alone: bool) -> Value {
+    let row = &r.row;
+    let mut v = json!({
+        "workload": short("workload id", &r.workload),
+        "answer": closed("speed answer", r.words.answer, harness_core::perf::words::ANSWERS),
+        "outcome": closed("perf outcome", &r.outcome, harness_core::perf::results::OUTCOMES),
+        "platform_metrics": row.platform_metrics.as_deref().map(|m| {
+            closed("platform metrics", m, harness_core::perf::results::PLATFORM_METRICS)
+        }),
+        "short": row.short,
+        "runs": row.runs,
+        "current": r.out_of_date.is_empty(),
+        "out_of_date": r.out_of_date_tokens.iter()
+            .map(|t| closed("out-of-date reason", t, harness_core::perf::currency::REASONS))
+            .collect::<Vec<_>>(),
+        "environment_checked": false,
+    });
+    if let Some((x, lo, hi)) = r.words.shift {
+        v["shift_percent"] = json!({"estimate": two(x), "low": two(lo), "high": two(hi)});
+    }
+    if c_alone {
+        let median = |f: fn(&harness_core::perf::results::Run) -> Option<u64>| {
+            let values: Vec<Option<f64>> = row
+                .c
+                .iter()
+                .flatten()
+                .map(|run| f(run).map(|x| x as f64))
+                .collect();
+            harness_core::perf::stats::median(&values)
+        };
+        v["cpu_seconds"] = median(|r| r.cpu_us).map_or(Value::Null, |us| two(us / 1e6));
+        v["memory_bytes"] = median(|r| r.memory).map_or(Value::Null, |b| json!(b.round() as u64));
+    }
+    v
+}
+
+/// The speed's head for `harness_status`: the group's state, the C alone's
+/// rows, the program as it stands's (its held and left-out units), and
+/// whether a perf run is measuring — `null` without a workloads file.
+fn speed_head(model: &SpeedModel) -> Value {
+    let (state, measured, of) = match &model.group {
+        speed::Group::NoFile => return Value::Null,
+        speed::Group::NoWorkload => ("no-workload", 0, 0),
+        speed::Group::FileError(_) => ("file-error", 0, 0),
+        speed::Group::NotYetRun => ("not-yet-run", 0, 0),
+        speed::Group::COnly => ("c-only", 0, model.measurable.len()),
+        speed::Group::Units { measured, of } => ("units", *measured, *of),
+    };
+    json!({
+        "state": state,
+        "units_measured": measured,
+        "units_measurable": of,
+        "measuring": model.measuring,
+        "c_alone": model.c_rows.iter().map(|r| speed_row(r, true)).collect::<Vec<_>>(),
+        "as_it_stands": {
+            "units": model.held.iter().map(|id| short("unit id", id)).collect::<Vec<_>>(),
+            "left_out": model.left_out.iter().map(|(id, reason)| json!({
+                "id": short("unit id", id),
+                "reason": closed("left-out reason", reason, harness_core::perf::results::LEFT_OUT_REASONS),
+            })).collect::<Vec<_>>(),
+            "rows": model.program_rows.iter().map(|r| speed_row(r, false)).collect::<Vec<_>>(),
+        },
+    })
+}
+
+/// A unit's Speed rows, worst first (out-of-date rows last).
+fn unit_speed(model: &SpeedModel, id: &str) -> Vec<Value> {
+    model
+        .unit(id)
+        .map(|u| u.rows.iter().map(|r| speed_row(r, false)).collect())
+        .unwrap_or_default()
+}
+
 /// Pending hand-offs of the blind protocol in `u`: its unseeded `external`
 /// migrate attempts in progress, and its driver-generation attempts in
 /// progress on `external` (driver generation is never seeded).
@@ -209,8 +294,12 @@ fn unit_head(snapshot: &Snapshot, u: &UnitView) -> Value {
     v
 }
 
-fn unit_summary(snapshot: &Snapshot, u: &UnitView) -> Value {
+fn unit_summary(snapshot: &Snapshot, model: &SpeedModel, u: &UnitView) -> Value {
     let mut v = unit_head(snapshot, u);
+    // Its worst Speed row (harness_unit gives them all).
+    if let Some(worst) = unit_speed(model, &u.unit.id).into_iter().next() {
+        v["speed"] = worst;
+    }
     let shown = u.attempts.len().min(MAX_STATUS_ATTEMPTS);
     v["attempts"] = Value::Array(u.attempts[..shown].iter().map(attempt_summary).collect());
     if u.attempts.len() > shown {
@@ -247,8 +336,10 @@ pub fn status(
                 + 1
         }
     };
+    let model = speed::build(snapshot);
     let mut out = json!({
         "target": fence::path("path", &snapshot.root.to_string_lossy()),
+        "speed": speed_head(&model),
         "facts": snapshot.facts_state.as_ref().map(|f| json!({"files": f.files, "stale": f.stale})),
         "note": snapshot.note.as_deref().map(|n| short("note", n)),
         "routing": routing,
@@ -264,7 +355,7 @@ pub fn status(
     let rest = &snapshot.units[start.min(snapshot.units.len())..];
     let (mut shown, mut oversized, mut last) = (0usize, Vec::new(), None);
     for u in rest {
-        if fence::fill_at(&mut out, "/units", vec![unit_summary(snapshot, u)]) == 0 {
+        if fence::fill_at(&mut out, "/units", vec![unit_summary(snapshot, &model, u)]) == 0 {
             shown += 1;
             last = Some(&u.unit.id);
         } else if shown == 0 && oversized.len() < 2 {
@@ -405,6 +496,7 @@ pub fn unit(
             "kind": if shown.is_some() { "attempt" } else { "unit-crate" },
             "crate_path": crate_dir.as_ref().map(|p| fence::path("path", &p.to_string_lossy())),
         },
+        "speed": unit_speed(&speed::build(snapshot), &u.unit.id),
         // Room for the `omitted` note (the final one is no larger).
         "omitted": {"pairs": usize::MAX, "checks": usize::MAX, "turns": usize::MAX,
                     "attempt_ids": usize::MAX, "why": OMITTED_WHY},
@@ -959,6 +1051,145 @@ mod tests {
         );
     }
 
+    /// docs/PERF-DESIGN.md §3.11: the Speed fact — closed values and
+    /// numbers, `current` with closed reasons, the environment not checked;
+    /// absent without a workloads file.
+    #[test]
+    fn the_speed_fact_is_closed_values_and_numbers() {
+        use harness_core::perf::results::{
+            self as res, Compilers, Computer, CrateDigest, ProgramResults, Row, RowInputs, Run,
+            UnitResults,
+        };
+        fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+            std::fs::create_dir_all(dst).unwrap();
+            for e in std::fs::read_dir(src).unwrap().flatten() {
+                let name = e.file_name();
+                if ["build", "target", ".git"].contains(&name.to_string_lossy().as_ref()) {
+                    continue;
+                }
+                let (from, to) = (e.path(), dst.join(&name));
+                if from.is_dir() {
+                    copy_dir(&from, &to);
+                } else {
+                    std::fs::copy(&from, &to).unwrap();
+                }
+            }
+        }
+        let root = std::env::temp_dir().join(format!("mcp-speed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        copy_dir(&repo().join("targets/zopfli"), &root);
+        let _ = std::fs::remove_dir_all(root.join("migration/perf"));
+        let snap = Snapshot::load(&root).unwrap();
+        let s = status(&snap, json!({}), Value::Null, None).unwrap();
+        assert_eq!(s["speed"], Value::Null, "no workloads file");
+        let perf = harness_core::perf::perf_dir(&root);
+        std::fs::create_dir_all(perf.join(res::UNITS_DIR)).unwrap();
+        std::fs::write(
+            perf.join("workloads.toml"),
+            "schema_version = 1\n[[workload]]\nid = \"help\"\nargs = [\"-h\"]\nruns = 5\n",
+        )
+        .unwrap();
+        let fake = format!("blake3:{}", "f".repeat(64));
+        let run = |c: u64| Run {
+            instructions: Some(4_000_000_000),
+            cycles: Some(c),
+            cpu_us: Some(c / 3_200),
+            wall_us: Some(c / 3_200 + 5_000),
+            memory: Some(12_400_000),
+            end: "exit 0".into(),
+            ..Run::default()
+        };
+        let inputs = |rust: bool| RowInputs {
+            workload: fake.clone(),
+            program: fake.clone(),
+            crates: rust.then(|| {
+                vec![CrateDigest {
+                    id: "u001-katajainen".into(),
+                    digest: fake.clone(),
+                }]
+            }),
+            replaces: None,
+            program_name: "zopfli".into(),
+            units: None,
+            left_out: None,
+            recipe: harness_core::perf::PERF_RECIPE.into(),
+            launcher: harness_core::perf::PERF_LAUNCHER.into(),
+            computer: Computer {
+                os: "15.6".into(),
+                build: "24G84".into(),
+                arch: "arm64".into(),
+                cpu: "Apple M3".into(),
+                two_kinds: true,
+                fast_cores: 4,
+            },
+            compilers: Compilers {
+                cc: "cc".into(),
+                rustc: rust.then(|| "rustc 1.94.1".into()),
+            },
+        };
+        let row = |rust: bool| Row {
+            workload: "help".into(),
+            outcome: if rust { "measured" } else { "baseline" }.into(),
+            short: Some(false),
+            runs: Some(5),
+            platform_metrics: Some("cpu-time".into()),
+            inputs: inputs(rust),
+            c: Some((0..5).map(|i| run(3_200_000_000 + i * 1_000_000)).collect()),
+            other: rust.then(|| (0..5).map(|i| run(3_520_000_000 + i * 1_000_000)).collect()),
+            std: rust.then_some(true),
+            fat_lto: None,
+            profile: None,
+            step1: None,
+            failed_run: None,
+            setup: None,
+            first_difference: None,
+            found_before: None,
+            last_try: None,
+        };
+        res::write_program(
+            &res::program_path(&perf),
+            &ProgramResults {
+                c_alone: vec![row(false)],
+                ..ProgramResults::default()
+            },
+        )
+        .unwrap();
+        let mut unit_file = UnitResults::new("u001-katajainen");
+        unit_file.rows.push(row(true));
+        res::write_unit(&res::unit_path(&perf, "u001-katajainen"), &unit_file).unwrap();
+        let snap = Snapshot::load(&root).unwrap();
+        let s = status(&snap, json!({}), Value::Null, None).unwrap();
+        let sp = &s["speed"];
+        assert_eq!(sp["state"], "units", "{sp}");
+        let c = &sp["c_alone"][0];
+        assert_eq!(c["answer"], "baseline");
+        assert_eq!(c["cpu_seconds"], json!(1.0), "{c}");
+        assert_eq!(c["memory_bytes"], json!(12_400_000));
+        assert_eq!(c["environment_checked"], false);
+        assert_eq!(c["current"], false, "fake digests");
+        assert!(c["out_of_date"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t.is_string()
+                && harness_core::perf::currency::REASONS.contains(&t.as_str().unwrap())));
+        let u = s["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["id"]["text"] == "u001-katajainen")
+            .unwrap();
+        assert_eq!(u["speed"]["answer"], "slower", "{}", u["speed"]);
+        assert!(u["speed"]["shift_percent"]["estimate"].as_f64().unwrap() > 9.0);
+        let v = unit(&snap, "u001-katajainen", None, None).unwrap();
+        assert_eq!(v["speed"].as_array().unwrap().len(), 1);
+        assert!(v["speed"][0]["out_of_date"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("rust")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn provider_classes() {
         assert_eq!(provider_class("external"), "external");
@@ -1462,7 +1693,10 @@ mod tests {
                 a
             })
             .collect();
-        assert!(fence::size(&unit_summary(&snap, &snap.units[3])) > fence::RESULT_BUDGET);
+        assert!(
+            fence::size(&unit_summary(&snap, &speed::build(&snap), &snap.units[3]))
+                > fence::RESULT_BUDGET
+        );
         let mut seen: Vec<String> = Vec::new();
         let mut oversized: Vec<String> = Vec::new();
         let mut after: Option<String> = None;

@@ -127,7 +127,10 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
                  authorship, requester, superseded by; `blind_hand_off_pending` marks an \
                  unseeded hand-off no chat asked for, which belongs to the blind protocol); the \
                  effective migrate routing; \
-                 this server's own act in flight. Read-only. {untrusted}"
+                 this server's own act in flight; and the C-vs-Rust speed (`speed`: the C \
+                 alone's and the program as it stands's rows, each unit's worst row — closed \
+                 answers and numbers, `current` with closed reasons; the computer and the \
+                 compilers are not checked here). Read-only. {untrusted}"
             ),
             read_only: true,
             destructive: false,
@@ -149,6 +152,7 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
                 ("routing", &["object"]),
                 ("act_in_flight", &["object", "null"]),
                 ("blind_hand_offs_pending", &["integer"]),
+                ("speed", &["object", "null"]),
                 ("units", &["array"]),
                 ("omitted", &["object"]),
                 ERROR_FIELD,
@@ -162,8 +166,8 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
                  its verdict's checks (failed first), the attempt's turns and notes, and the \
                  function pairs: each plan symbol's C definition beside the Rust shim and the \
                  logic function it calls (the pair's Rust is those two functions; the crate \
-                 path is given). A result that does not fit says what it left out; `symbol` \
-                 shows one pair. Read-only. {untrusted}"
+                 path is given), and its Speed rows worst first (`speed`). A result that does \
+                 not fit says what it left out; `symbol` shows one pair. Read-only. {untrusted}"
             ),
             read_only: true,
             destructive: false,
@@ -192,6 +196,7 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
             output: vec![
                 ("unit", &["object"]),
                 ("shown", &["object"]),
+                ("speed", &["array"]),
                 ("attempt", &["object", "null"]),
                 ("verdict", &["object", "null"]),
                 ("attempt_ids", &["array"]),
