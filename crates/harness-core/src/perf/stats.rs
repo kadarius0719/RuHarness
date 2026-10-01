@@ -133,6 +133,34 @@ pub fn hodges_lehmann(base: &[Option<f64>], other: &[Option<f64>]) -> Option<Shi
     })
 }
 
+/// The Hodges–Lehmann shift in the values' own units — the median of every
+/// `other_i − base_j` and its interval — over the usable values, or `None`
+/// with fewer than [`MIN_VALUES`] on either side (the start-up note's
+/// absolute instruction difference, build note 18).
+pub fn hodges_lehmann_linear(base: &[Option<f64>], other: &[Option<f64>]) -> Option<Shift> {
+    let b: Vec<f64> = base.iter().filter_map(|v| usable(*v)).collect();
+    let o: Vec<f64> = other.iter().filter_map(|v| usable(*v)).collect();
+    if b.len() < MIN_VALUES || o.len() < MIN_VALUES {
+        return None;
+    }
+    let (m, n) = (b.len(), o.len());
+    let c = critical_value(m, n)?;
+    let mut d: Vec<f64> = Vec::with_capacity(m * n);
+    for oi in &o {
+        for bj in &b {
+            d.push(oi - bj);
+        }
+    }
+    d.sort_by(f64::total_cmp);
+    Some(Shift {
+        estimate: median_sorted(&d),
+        lo: d[c],
+        hi: d[m * n - c - 1],
+        m,
+        n,
+    })
+}
+
 /// The median of a sorted, non-empty slice (the mean of the middle two at
 /// an even length).
 pub fn median_sorted(sorted: &[f64]) -> f64 {

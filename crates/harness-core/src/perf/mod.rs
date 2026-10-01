@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub mod results;
 pub mod stats;
+pub mod words;
 pub mod workloads;
 
 /// The launcher's version (§3.3): `perfrun` and `perfgo`'s sources are
