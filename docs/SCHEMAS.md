@@ -1313,12 +1313,14 @@ computer | compilers`, and the cockpit's own `measuring | too-large | input-unus
   unit (verified or merged, verdict green and fresh, no interrupted Accept), and the program as it
   stands. Exit 0 when it ran (a difference is a row, not a failure), 1 refused, 2 usage.
 - `harness perf show [--target] [--no-check] [--allow-unsandboxed]` — every stored row's words,
-  rebuilt, with why it is out of date. Never builds the launcher. Besides the launcher's own
-  `perfrun facts` (only when its cache is current), it starts only `cc --version` and `rustc -V`,
-  as tool runs (the tool sandbox, the tool environment, the allowlist, `[oracle] timeout_secs`);
-  "compilers not checked" when either is not allowlisted, either run fails, or no sandbox is
-  available and `--allow-unsandboxed` was not given. `--no-check` checks neither the computer nor
-  the compilers. Exit 0/1.
+  rebuilt, with why it is out of date. Creates and writes nothing in the target; never builds the
+  launcher; refuses a link (or a non-folder) at `migration/`, `migration/perf` or
+  `migration/perf/units` instead of reading through it. Besides the launcher's own `perfrun facts`
+  (only when its cache is current), it starts only `cc --version` and `rustc -V`, as tool runs
+  (the tool sandbox, the tool environment, the allowlist, `[oracle] timeout_secs`); "compilers not
+  checked" when either is not allowlisted, either run fails, or no sandbox is available and
+  `--allow-unsandboxed` was not given. `--no-check` checks neither the computer nor the compilers.
+  Exit 0/1.
 - Events (`--json`): `perf-row {side: c | program | unit, unit (unit rows), workload, outcome,
   words}` — `words` is a display-only courtesy (the CLI's line), never parsed.
 

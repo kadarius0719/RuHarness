@@ -490,3 +490,65 @@ fn show_checks_the_compilers_in_the_sandbox() {
         r.stdout
     );
 }
+
+/// `perf show` only reads: it creates no folder, and it refuses a linked
+/// `migration/perf` or `migration/perf/units` instead of reading another
+/// folder's files as this target's rows (§3.9: links are refused on read).
+#[test]
+fn show_reads_only_and_refuses_linked_folders() {
+    let t = zopfli("show-links");
+    let target = t.to_str().unwrap();
+    let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains("perf: nothing measured yet"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        !t.join("migration/perf").exists(),
+        "perf show made migration/perf"
+    );
+
+    // A units folder linked to one outside the project.
+    let outside = t.with_extension("outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(
+        outside.join("u001-katajainen.json"),
+        "{\"schema\": \"SECRET-OUTSIDE\"}",
+    )
+    .unwrap();
+    std::fs::write(
+        outside.join("private-notes.json"),
+        "{\"api_key\": \"SECRET-OUTSIDE\"}",
+    )
+    .unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::os::unix::fs::symlink(&outside, t.join("migration/perf/units")).unwrap();
+    let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        r.stderr
+            .contains("migration/perf/units: must be a directory (a link is refused)"),
+        "{}",
+        r.stderr
+    );
+    for text in [&r.stdout, &r.stderr] {
+        assert!(!text.contains("SECRET-OUTSIDE"), "{text}");
+        assert!(!text.contains("private-notes"), "{text}");
+    }
+
+    // And a linked migration/perf.
+    std::fs::remove_file(t.join("migration/perf/units")).unwrap();
+    std::fs::remove_dir(t.join("migration/perf")).unwrap();
+    std::os::unix::fs::symlink(&outside, t.join("migration/perf")).unwrap();
+    let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        r.stderr
+            .contains("migration/perf: must be a directory (a link is refused)"),
+        "{}",
+        r.stderr
+    );
+}
