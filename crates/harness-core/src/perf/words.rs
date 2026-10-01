@@ -230,15 +230,35 @@ pub fn end(v: f64, boundaries: &[f64]) -> String {
     for b in boundaries {
         let crossed = (v > *b && shown <= *b) || (v < *b && shown >= *b);
         if crossed {
-            let away = if v > *b {
-                (v * 100.0).ceil() / 100.0
-            } else {
-                (v * 100.0).floor() / 100.0
-            };
-            return fmt_fixed(away, 2);
+            return fmt_fixed(away_from(v, *b), 2);
         }
     }
     near
+}
+
+/// `v` at two decimals, rounded away from `b` — a value already on the
+/// 0.01 step stays put (1.52 shows 1.52, not 1.53), and one a hair past
+/// `b` still shows a step past it, never on it.
+fn away_from(v: f64, b: f64) -> f64 {
+    if v > b {
+        (((v * 100.0) - 1e-9).ceil() / 100.0).max(b + 0.01)
+    } else {
+        (((v * 100.0) + 1e-9).floor() / 100.0).min(b - 0.01)
+    }
+}
+
+/// An end of the "3.7× as slow" form: the ratio `1 + p/100` at one
+/// decimal, unless that would put it on or under `line` (the 2 % line as a
+/// ratio) from above: then two decimals, rounded up (build note 13).
+fn ratio_end(p: f64, line: f64) -> String {
+    let r = 1.0 + p / 100.0;
+    let near = fmt_fixed(r, 1);
+    let shown: f64 = near.parse().unwrap_or(r);
+    if r > line && shown <= line {
+        fmt_fixed(away_from(r, line), 2)
+    } else {
+        near
+    }
 }
 
 /// "(a–b %)" from two shown ends; one number when they show equal.
@@ -900,29 +920,32 @@ fn time_headline(answer: Answer, shift: Option<&Shift>, share: Option<&str>) -> 
     };
     let x = s.percent();
     let (lo, hi) = s.percent_interval();
+    // Both ends of slower, faster and a close call keep off ±M: the far
+    // end too, so a narrow interval just past the line never reads
+    // backwards, and a close call's far end never shows inside the line.
+    let line = 1.0 + m / 100.0;
     match answer {
         Answer::AboutAsFast => format!("about as fast as the C (within {} %)", margin(m)),
         Answer::Slower if x >= 99.95 => suffix(format!(
-            "{}× as slow ({}–{}×)",
+            "{}× as slow {}",
             fmt_fixed(1.0 + x / 100.0, 1),
-            fmt_fixed(1.0 + lo / 100.0, 1),
-            fmt_fixed(1.0 + hi / 100.0, 1)
+            interval(&ratio_end(lo, line), &ratio_end(hi, line), "×")
         )),
         Answer::Slower => suffix(format!(
             "slower by {} % {}",
             pct(x),
-            interval(&end(lo, &[m]), &end(hi, &[]), " %")
+            interval(&end(lo, &[m]), &end(hi, &[m]), " %")
         )),
         Answer::Faster => suffix(format!(
             "faster: takes {} % less time {}",
             pct(-x),
-            interval(&end(-hi, &[m]), &end(-lo, &[]), " %")
+            interval(&end(-hi, &[m]), &end(-lo, &[m]), " %")
         )),
         Answer::CloseCall { slower } => {
             let (a, b, word) = if slower {
-                (end(lo, &[0.0, m]), end(hi, &[]), "slower")
+                (end(lo, &[0.0, m]), end(hi, &[m]), "slower")
             } else {
-                (end(-hi, &[0.0, m]), end(-lo, &[]), "faster")
+                (end(-hi, &[0.0, m]), end(-lo, &[m]), "faster")
             };
             format!(
                 "about {} % {word} {} — too close to the {} % line to call",
@@ -995,7 +1018,7 @@ fn time_short(
             let full = format!(
                 "slower {} % {}",
                 pct(x),
-                interval(&end(lo, &[m]), &end(hi, &[]), " %")
+                interval(&end(lo, &[m]), &end(hi, &[m]), " %")
             );
             let s = if parallel {
                 with_parallel(format!("slower {} %", pct(x)))
@@ -1008,7 +1031,7 @@ fn time_short(
             let full = format!(
                 "faster {} % {}",
                 pct(-x),
-                interval(&end(-hi, &[m]), &end(-lo, &[]), " %")
+                interval(&end(-hi, &[m]), &end(-lo, &[m]), " %")
             );
             let s = if parallel {
                 with_parallel(format!("faster {} %", pct(-x)))
@@ -1075,12 +1098,12 @@ fn instruction_words(c: &[Run], o: &[Run], std: bool, cx: &Context) -> String {
         Answer::Slower => format!(
             "{} % more instructions {}",
             pct(x),
-            interval(&end(lo, &[m]), &end(hi, &[]), " %")
+            interval(&end(lo, &[m]), &end(hi, &[m]), " %")
         ),
         Answer::Faster => format!(
             "{} % fewer instructions {}",
             pct(-x),
-            interval(&end(-hi, &[m]), &end(-lo, &[]), " %")
+            interval(&end(-hi, &[m]), &end(-lo, &[m]), " %")
         ),
         Answer::CloseCall { slower } => format!(
             "about {} % {} instructions — too close to the {} % line to call",
@@ -1120,13 +1143,13 @@ fn memory_words(c: &[Run], o: &[Run]) -> Option<String> {
         format!(
             "uses about {} % more memory {}",
             pct(x),
-            interval(&end(lo, &[margin]), &end(hi, &[]), " %")
+            interval(&end(lo, &[margin]), &end(hi, &[margin]), " %")
         )
     } else if hi < -margin {
         format!(
             "uses about {} % less memory {}",
             pct(-x),
-            interval(&end(-hi, &[margin]), &end(-lo, &[]), " %")
+            interval(&end(-hi, &[margin]), &end(-lo, &[margin]), " %")
         )
     } else {
         "memory: can't tell — memory varied from run to run".into()
@@ -1513,6 +1536,24 @@ mod tests {
             .collect()
     }
 
+    /// One run of `base` cycles per percent, each scaled by it. Against a
+    /// C side of equal runs every pairwise difference is one of these, so
+    /// the interval is known by hand: at 15 runs its ends are the 5th and
+    /// 11th smallest percents and the estimate the 8th (c = 64 of 225
+    /// pairs); at 31 runs the 12th and 20th, the estimate the 16th (c =
+    /// 341 of 961).
+    fn at(base: f64, percents: &[f64]) -> Vec<Run> {
+        percents
+            .iter()
+            .map(|p| run(base * (1.0 + p / 100.0)))
+            .collect()
+    }
+
+    /// A C side of `n` equal runs at 1e9 cycles.
+    fn flat(n: usize) -> Vec<Run> {
+        at(1e9, &vec![0.0; n])
+    }
+
     #[test]
     fn each_branch_from_constructed_intervals() {
         let m = TIME_MARGIN;
@@ -1565,6 +1606,140 @@ mod tests {
         assert_eq!(bytes(2_100_000_000.0), "2.10 GB");
         assert_eq!(count(1.21e10), "1.21e10");
         assert_eq!(grouped(40_961), "40 961");
+        // A value already on the 0.01 step stays put, float noise or not.
+        assert_eq!(end(1.520_000_000_000_01, &[INSTRUCTIONS_MARGIN]), "1.52");
+        assert_eq!(end(2.010_000_000_000_000_2, &[TIME_MARGIN]), "2.01");
+        assert_eq!(end(2.04, &[TIME_MARGIN]), "2.04");
+        assert_eq!(end(2.03, &[TIME_MARGIN]), "2.03");
+        // A hair past a line still shows a step past it, never on it.
+        assert_eq!(end(1e-12, &[0.0]), "0.01");
+        assert_eq!(end(2.0 + 1e-12, &[TIME_MARGIN]), "2.01");
+    }
+
+    #[test]
+    fn an_interval_just_past_the_line_never_reads_backwards() {
+        // Time: every ratio 1.02005 — before, "(2.01–2.0 %)".
+        let w = words(
+            &row(flat(15), at(1e9, &[2.005; 15]), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "slower");
+        assert_eq!(w.headline, "slower by 2.0 % (2.01 %)");
+        assert_eq!(w.short, "slower 2.0 % (2.01 %)");
+        // An ordered pair when the ends differ: 2.01 … 2.04.
+        let mut p = [2.01; 15];
+        p[10..].copy_from_slice(&[2.04; 5]);
+        let w = words(&row(flat(15), at(1e9, &p), "macos-v6-cycles", false), &UNIT);
+        assert_eq!(w.headline, "slower by 2.0 % (2.01–2.04 %)");
+        assert_eq!(w.short, "slower 2.0 % (2.01–2.04 %)");
+        assert!(w.short.chars().count() <= SHORT_WIDTH);
+        // Faster, the mirror: 2.01 % less time on every run.
+        let w = words(
+            &row(flat(15), at(1e9, &[-2.01; 15]), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "faster");
+        assert_eq!(w.headline, "faster: takes 2.0 % less time (2.01 %)");
+        assert_eq!(w.short, "faster 2.0 % (2.01 %)");
+        // Instructions, nearly the same on every run: 1.52 % more and
+        // fewer — before, "(1.53–1.5 %)".
+        let ins = |v: f64| -> Vec<Run> {
+            (0..15)
+                .map(|_| Run {
+                    instructions: Some(v as u64),
+                    ..run(1e9)
+                })
+                .collect()
+        };
+        assert_eq!(
+            instruction_words(&ins(4.0e9), &ins(4.0608e9), false, &UNIT),
+            "1.5 % more instructions (1.52 %)"
+        );
+        assert_eq!(
+            instruction_words(&ins(4.0e9), &ins(3.9392e9), false, &UNIT),
+            "1.5 % fewer instructions (1.52 %)"
+        );
+        // Memory: a 30 MB C (margin 5 %) and 5.02 % more on every run.
+        let mem = |v: u64| -> Vec<Run> {
+            (0..15)
+                .map(|_| Run {
+                    memory: Some(v),
+                    ..run(1e9)
+                })
+                .collect()
+        };
+        assert_eq!(
+            memory_words(&mem(30_000_000), &mem(31_506_000)).as_deref(),
+            Some("uses about 5.0 % more memory (5.02 %)")
+        );
+        assert_eq!(
+            memory_words(&mem(30_000_000), &mem(28_494_000)).as_deref(),
+            Some("uses about 5.0 % less memory (5.02 %)")
+        );
+    }
+
+    #[test]
+    fn the_times_form_rounds_its_low_end_off_the_line_and_shows_equal_ends_once() {
+        let w = |percents: &[f64]| {
+            words(
+                &row(flat(15), at(1e9, percents), "macos-v6-cycles", false),
+                &UNIT,
+            )
+        };
+        // The design's example: the interval [+240, +300] %.
+        let wide: Vec<f64> = (0..15).map(|i| 200.0 + 10.0 * i as f64).collect();
+        assert_eq!(w(&wide).headline, "3.7× as slow (3.4–4.0×)");
+        // Every run exactly twice the C: one number.
+        assert_eq!(w(&[100.0; 15]).headline, "2.0× as slow (2.0×)");
+        // A narrow 3.7×: one number, the whole headline.
+        let narrow = words(
+            &row(
+                side(15, 4e9, 0.004),
+                side(15, 1.48e10, 0.004),
+                "macos-v6-pnorm",
+                false,
+            ),
+            &UNIT,
+        );
+        assert_eq!(narrow.headline, "3.7× as slow (3.7×)");
+        assert_eq!(narrow.short, "3.7× as slow");
+        // A two-cluster Rust: [+3, +250] %, estimate +200 % — the low end
+        // shows 1.03×, never "1.0×", which reads as the same speed.
+        let bimodal = [
+            1.0, 1.0, 1.0, 1.0, 3.0, 100.0, 150.0, 200.0, 210.0, 220.0, 250.0, 260.0, 270.0, 280.0,
+            290.0,
+        ];
+        let b = w(&bimodal);
+        assert_eq!(b.answer, "slower");
+        assert_eq!(b.headline, "3.0× as slow (1.03–3.5×)");
+    }
+
+    #[test]
+    fn a_close_call_shows_its_far_end_past_the_line() {
+        // [+0.5, +2.03] %, estimate +1.2 %: before, "(0.5–2.0 %)", an
+        // interval inside the line, which is what "about as fast" means.
+        let slower = [
+            0.1, 0.2, 0.3, 0.4, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 2.03, 2.5, 2.6, 2.7, 2.8,
+        ];
+        let w = words(
+            &row(flat(15), at(1e9, &slower), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "close-call-slower");
+        assert_eq!(
+            w.headline,
+            "about 1.2 % slower (0.5–2.03 %) — too close to the 2 % line to call"
+        );
+        let faster: Vec<f64> = slower.iter().rev().map(|p| -p).collect();
+        let w = words(
+            &row(flat(15), at(1e9, &faster), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "close-call-faster");
+        assert_eq!(
+            w.headline,
+            "about 1.2 % faster (0.5–2.03 %) — too close to the 2 % line to call"
+        );
     }
 
     #[test]
