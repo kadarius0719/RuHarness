@@ -242,9 +242,19 @@ pub fn end(v: f64, boundaries: &[f64]) -> String {
 /// `b` still shows a step past it, never on it.
 fn away_from(v: f64, b: f64) -> f64 {
     if v > b {
-        (((v * 100.0) - 1e-9).ceil() / 100.0).max(b + 0.01)
+        let up = ((v * 100.0) - 1e-9).ceil() / 100.0;
+        if up <= b {
+            up + 0.01
+        } else {
+            up
+        }
     } else {
-        (((v * 100.0) + 1e-9).floor() / 100.0).min(b - 0.01)
+        let down = ((v * 100.0) + 1e-9).floor() / 100.0;
+        if down >= b {
+            down - 0.01
+        } else {
+            down
+        }
     }
 }
 
@@ -1739,6 +1749,9 @@ mod tests {
         // A hair past a line still shows a step past it, never on it.
         assert_eq!(end(1e-12, &[0.0]), "0.01");
         assert_eq!(end(2.0 + 1e-12, &[TIME_MARGIN]), "2.01");
+        assert_eq!(end(-2.0 - 1e-12, &[-TIME_MARGIN]), "-2.01");
+        // Memory's margin is off the 0.01 step: the nearest step past it.
+        assert_eq!(end(8.447, &[8.446]), "8.45");
     }
 
     #[test]
