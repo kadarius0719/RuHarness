@@ -151,10 +151,14 @@ on the new mechanisms, two verifiers per new finding); then revise (revision 2),
 `SP/perf/`. REVISION 2's CHECK FINISHED (`wf_89198fcc-3e6`; `SP/perf/revision2-check.json`, digest
 `SP/perf/rev2-digest.md`): of 118 changes 36 done, 73 in part, 2 not done, 7 wrong; 35 new
 confirmed (two high: the every-run metric rule answers almost no loaded row; the shared C pair
-undoes C, other, C), 1 disputed, 0 refuted. REVISION 3 written (1b27d10) answering each; its CHECK
-RUNNING: workflow `wf_d21b13f6-ea1` (script `SP/perf-rev3-check.js`; dispositions of the open items +
-three fresh lenses, two verifiers each; experiments in `SP/design-check3/`). Then: revise if it asks,
-and build in §5's order (b, c, a, d, e, f, g) with the full process.
+undoes C, other, C), 1 disputed, 0 refuted. REVISION 3 written (1b27d10); its check FINISHED (`wf_d21b13f6-ea1`;
+`SP/perf/revision3-check.json`, digest `SP/perf/rev3-digest.md`): 74 done, 43 in part, 1 wrong; 30
+new (1 high: perfrun's own timeout read as a crash), 1 disputed (taken), 0 refuted. REVISION 4
+written (f7a4905); its CHECK RUNNING: workflow `wf_8aea486a-f12` (script `SP/perf-rev4-check.js`,
+experiments `SP/design-check4/`). DECIDED (process, recorded in DECISIONS at the probe's close):
+revision 4's check is the last design round — what it confirms below high severity goes into the
+build's revision 5 notes and the build's tests; a high finding (a mechanism that fails) gets one
+more revision and check. Then build in §5's order (b, c, a, d, e, f, g) with the full process.
 
 Known gaps, judged acceptable (§R5): Next-step rule 6 has no project-menu Re-check item (a
 project-level Re-check would be refused: it needs the unit on screen); migrate turns do not
