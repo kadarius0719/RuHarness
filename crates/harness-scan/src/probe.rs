@@ -367,6 +367,24 @@ mod tests {
                 "int g(void) NI\nmytype\nafter(int x)\n{ return x; }\n",
                 false,
             ),
+            // Fix pass 4's check: an empty parameter list after a typedef'd
+            // or tag return type, or after an attribute.
+            ("int g(void) NI\nCount\nafter()\n{ return 1; }\n", false),
+            ("Count g(void) NI\n\nCount\nafter()\n{ return 1; }\n", false),
+            (
+                "int g(void) NI\nstatic Count after()\n{ return 1; }\n",
+                true,
+            ),
+            ("int g(void) NI\nstruct s\nafter()\n{ return 1; }\n", false),
+            ("int g(void) NI\nenum e after()\n{ return 1; }\n", false),
+            (
+                "int g(void) NOT_IMPL(-1)\nstatic Count\nafter()\n{ return 1; }\n",
+                true,
+            ),
+            (
+                "int g(void) NI\nint __attribute__((noinline))\nafter()\n{ return 1; }\n",
+                false,
+            ),
         ];
         for (src, second_static) in cases {
             let defs = defs_of(src);
@@ -407,6 +425,9 @@ mod tests {
             "int q(char *p)\n__nonnull((1))\n{ return 0; }\n",
             "int v(void)\nAPPLE_ARCHIVE_AVAILABLE(macos(11.0), ios(14.0))\n{ return 0; }\n",
             "int r(int i) __constant_range(i, 0, 3) { return i; }\n",
+            // One annotation word, then an empty call: no second head.
+            "int f(void) ATTR NAME() { return 1; }\n",
+            "int f(void) __attribute__((cold)) NAME() { return 1; }\n",
         ] {
             let defs = defs_of(src);
             assert_eq!(defs.len(), 1, "{src}: {defs:?}");
@@ -489,6 +510,12 @@ mod tests {
             "int g(void) NOT_IMPL(-1)\n\nstatic int\nafter(void)\n{ return 1; }\n",
             "int g(void) STUB(int)\nint after(void) { return 1; }\n",
             "int g(void) NI\nCount\nafter(x)\n\tCount x;\n{ return x; }\n",
+            // Fix pass 4's check: the last call that qualifies by its
+            // arguments, not the first (`STUB(int)` reads as parameters).
+            "int g(void) STUB(int)\nmytype\nafter(int x)\n{ return x; }\n",
+            // A K&R parameter of function type is declared, not a head.
+            "int g(void) NI\nCount\nafter(cb)\n\tint cb(int);\n{ return cb(1); }\n",
+            "int g(void) NI\nstatic Count\nafter(cb)\n\tint cb(int);\n{ return cb(1); }\n",
         ] {
             let defs = defs_of(src);
             let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
@@ -497,6 +524,7 @@ mod tests {
                 defs.iter().all(|d| d.note_at == Err(NoNote::Parser)),
                 "{src}: {defs:?}"
             );
+            assert_eq!(defs[1].is_static, src.contains("static"), "{src}");
         }
         for (src, signature) in [
             (
@@ -510,6 +538,37 @@ mod tests {
             (
                 "int g(void) NI\nunsigned long (after)(void) { return 1; }\n",
                 "unsigned long (after)(void)",
+            ),
+            // Fix pass 4's check: a typedef'd return type before a
+            // parenthesized name.
+            (
+                "int g(void) NI\nstatic Count (after)(void) { return 1; }\n",
+                "static Count (after)(void)",
+            ),
+            (
+                "int g(void) NI\nstatic Count (*after(int x))(int) { return 0; }\n",
+                "static Count (*after(int x))(int)",
+            ),
+            (
+                "int g(void) NI\nsize_t (after)(void) { return 1; }\n",
+                "size_t (after)(void)",
+            ),
+            (
+                "int g(void) NI\nCount (after)(void) { return 1; }\n",
+                "Count (after)(void)",
+            ),
+            (
+                "int g(void) NOT_IMPL(-1)\nstatic Count (after)(void) { return 1; }\n",
+                "static Count (after)(void)",
+            ),
+            // A head that is not nested ends at its call, whatever follows.
+            (
+                "int g(void) NI\nint after(void) ATTR\n{ return 1; }\n",
+                "int after(void)",
+            ),
+            (
+                "int g(void) NI\nint after(x) int x; { return x; }\n",
+                "int after(x)",
             ),
         ] {
             let defs = defs_of(src);
@@ -526,7 +585,9 @@ mod tests {
     fn a_stray_parse_error_before_the_body_is_rule_1() {
         let src = "int g(void) NI\nCount\nafter(x)\n\tOther y;\n{ return 0; }\n";
         let defs = defs_of(src);
-        assert!(!defs.is_empty(), "{defs:?}");
+        // The call's arguments are not named after it: no second head.
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["g"], "{defs:?}");
         assert!(
             defs.iter().all(|d| d.note_at == Err(NoNote::Parser)),
             "{defs:?}"
@@ -613,12 +674,139 @@ mod tests {
         ));
         let names: Vec<String> = defs_of(mis2).into_iter().map(|d| d.name).collect();
         assert!(names.contains(&"helper".to_string()), "{names:?}");
+        // Fix pass 4's check: the same shape with its closing group, which
+        // the parser reads without an error: helper is found in f's body.
+        let mis3 = "int f(int x) {\n#ifdef A\n  if (x) {\n#else\n  return 0; }\n\
+                    static int helper(int y) { if (y) {\n#endif\n    g++;\n#ifdef A\n  }\n\
+                    #else\n  }\n#endif\n  return 0;\n}\n";
+        let defs3 = defs_of(mis3);
+        let f = defs3.iter().find(|d| d.name == "f").expect("f");
+        assert_eq!(f.note_at, Err(NoNote::Parser), "{defs3:?}");
+        let helper = defs3.iter().find(|d| d.name == "helper").expect("helper");
+        assert!(helper.nested && helper.is_static, "{defs3:?}");
         // A body the parser bounded wrongly for another reason (no `#if`:
         // mimalloc's `if mi_likely(x) {`) is no misread `#if` body.
         assert!(!crate::body_misread(b"{ if mi_likely(x) {\n y();\n }\n"));
         let defs = defs_of(balanced);
         assert_eq!(defs.len(), 1, "{defs:?}");
         assert!(defs[0].note_at.is_ok(), "{defs:?}");
+    }
+
+    /// Fix pass 4's check: a misread body is read in every combination of
+    /// branches, not only branch k of every group: an `#ifndef A` beside an
+    /// `#ifdef A` (branch 0 is the other build), or two macros of their own,
+    /// where the build that closes the function takes branch 0 of one group
+    /// and branch 1 of another.
+    #[test]
+    fn a_misread_body_is_read_in_every_combination_of_branches() {
+        let inverted = "int f(int x) {\n#ifndef A\n  g += 0;\n#else\n  if (x > 5) {\n#endif\n\
+                        #ifdef A\n  if (x) {\n#else\n  return 0; }\n\
+                        static int helper(int y) { if (y) {\n#endif\n    g++;\n\
+                        #ifdef A\n  }\n#else\n  }\n#endif\n#ifndef A\n  g--;\n#else\n  }\n#endif\n\
+                        return 0;\n}\n";
+        let two_macros = "int f(int x) {\n#ifdef A\n  g += 0;\n#else\n  if (x > 5) {\n#endif\n\
+                          #ifdef B\n  if (x) {\n#else\n  return 0; }\n\
+                          static int helper(int y) { if (y) {\n#endif\n    g++;\n\
+                          #ifdef B\n  }\n#else\n  }\n#endif\n#ifdef A\n  g--;\n#else\n  }\n#endif\n\
+                          return 0;\n}\n";
+        for src in [inverted, two_macros] {
+            assert!(
+                crate::body_misread(&src.as_bytes()[src.find('{').expect("body")..]),
+                "{src}"
+            );
+            let p = probe(src, &["f", "src/a.c::helper"]);
+            assert!(
+                p.unwatched
+                    .contains(&("src/a.c::helper".to_string(), NoNote::Parser)),
+                "{src}: {p:?}"
+            );
+            assert!(
+                p.unwatched.contains(&("f".to_string(), NoNote::Parser)),
+                "{src}: {p:?}"
+            );
+        }
+        // Past the cap of combinations a body counts as misread.
+        let mut many = String::from("{\n#if A\n if (x) {\n#else\n {\n#endif\n");
+        for k in 0..13 {
+            many.push_str(&format!("#if B{k}\n {{ }}\n#endif\n"));
+        }
+        many.push_str(" }\n}\n");
+        assert!(crate::body_misread(many.as_bytes()));
+    }
+
+    /// Fix pass 4's check: a second head the parser folds behind a parse
+    /// error (`**`, `* const *`, or one `*` after a typedef'd or struct
+    /// return type) keeps its own storage class — never the first head's —
+    /// and its signature starts at its own head.
+    #[test]
+    fn a_folded_second_head_keeps_its_own_static() {
+        let cases = [
+            (
+                "int g(void) NI\nstatic char **after(void)\n{ return 0; }\n",
+                "after",
+                true,
+                "static char **after(void)",
+            ),
+            (
+                "int g(void) NI\nstatic Count *\nafter(int x)\n{ return h(); }\n",
+                "after",
+                true,
+                "static Count * after(int x)",
+            ),
+            (
+                "int g(void) NI\nstatic Count *after(int x)\n{ return h(); }\n",
+                "after",
+                true,
+                "static Count *after(int x)",
+            ),
+            (
+                "int g(void) NI\nstatic struct node *\nnext_node(struct node *n)\n{ return n; }\n",
+                "next_node",
+                true,
+                "static struct node * next_node(struct node *n)",
+            ),
+            (
+                "int g(void) NI\nstatic char * const *after(void)\n{ return 0; }\n",
+                "after",
+                true,
+                "static char * const *after(void)",
+            ),
+            (
+                "static int g(void) NI\nstruct node *\nnext_node(struct node *n)\n{ return n; }\n",
+                "next_node",
+                false,
+                "struct node * next_node(struct node *n)",
+            ),
+            (
+                "static int g(void) NI\nchar **after(void)\n{ return 0; }\n",
+                "after",
+                false,
+                "char **after(void)",
+            ),
+            (
+                "int g(void) NI\nCount *after(int x)\n{ return h(); }\n",
+                "after",
+                false,
+                "Count *after(int x)",
+            ),
+            // An attribute macro is no first head: the `static` before it is
+            // the definition's.
+            (
+                "static int M(x) **after(int x)\n{ return 0; }\n",
+                "after",
+                true,
+                "static int M(x) **after(int x)",
+            ),
+        ];
+        for (src, name, is_static, signature) in cases {
+            let defs = defs_of(src);
+            let d = defs
+                .iter()
+                .find(|d| d.name == name)
+                .unwrap_or_else(|| panic!("{src}: {defs:?}"));
+            assert_eq!(d.is_static, is_static, "{src}: {defs:?}");
+            assert_eq!(d.signature, signature, "{src}");
+        }
     }
 
     /// The real-code re-run (sqlite3.c, 23 times): an `else if (` right

@@ -945,20 +945,25 @@ impl Build<'_> {
         let mut searched =
             self.link_search(probe, &symbol, &units, &search_rels, &program, pass)?;
         // The cause is elsewhere (a list cut short, in words this reader
-        // knows or not): every unit, once, before the map is refused. With
-        // the pass bound spent, the named units' files go back unprobed when
-        // they held notes (the next round names the rest), every unit's
-        // only when they held none (fix pass 3's check).
-        if searched.is_none() && units.len() < self.units.len() {
+        // knows or not): every unit and every file, once, before the map is
+        // refused — whenever the search left a unit or a file out (fix pass
+        // 4's check: the added units can make up every unit while only the
+        // named units' files were searched). With the pass bound spent, the
+        // named units' files go back unprobed when they held notes (the next
+        // round names the rest), every unit's only when they held none (fix
+        // pass 3's check).
+        let every: BTreeSet<usize> = (0..self.units.len()).collect();
+        let every_rels = rels_of(&every);
+        if searched.is_none() && (units != every || search_rels != every_rels) {
             if *pass >= self.bounds.pass_compiles {
                 if !named_held_notes {
-                    units = (0..self.units.len()).collect();
-                    search_rels = rels_of(&units);
+                    units = every;
+                    search_rels = every_rels;
                 }
                 searched = Some(LinkSearch::Cut);
             } else {
-                units = (0..self.units.len()).collect();
-                search_rels = rels_of(&units);
+                units = every;
+                search_rels = every_rels;
                 searched =
                     self.link_search(probe, &symbol, &units, &search_rels, &program, pass)?;
             }

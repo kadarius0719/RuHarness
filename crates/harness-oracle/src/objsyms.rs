@@ -454,4 +454,79 @@ mod tests {
             assert!(!found[0].function, "{reserved:#x}: {found:?}");
         }
     }
+
+    /// Fix pass 4's check — extended section indexes: an untyped symbol
+    /// whose st_shndx is SHN_XINDEX takes its section from entry k of the
+    /// SHT_SYMTAB_SHNDX table linked to the symbol table — code when that
+    /// section holds instructions, data otherwise; a table linked to another
+    /// section is not this symbol table's.
+    #[test]
+    fn an_extended_index_is_read_from_its_own_table() {
+        // Sections: 0 null, 1 .symtab (link 2), 2 .strtab, 3 the index table
+        // (link 1), 4 code (SHF_EXECINSTR), 5 data, 6 a decoy index table
+        // linked to section 2.
+        let build = |entries: [u32; 3], decoy: [u32; 3]| -> Vec<u8> {
+            let mut b = vec![0u8; 64];
+            b[..4].copy_from_slice(b"\x7fELF");
+            b[4] = 2;
+            b[5] = 1;
+            let strings = b"\0c\0d\0";
+            let mut symbols = vec![0u8; 24 * 3];
+            for (k, name) in [(1usize, 1u32), (2, 3)] {
+                symbols[24 * k..24 * k + 4].copy_from_slice(&name.to_le_bytes());
+                symbols[24 * k + 4] = 1 << 4; // STB_GLOBAL | STT_NOTYPE
+                symbols[24 * k + 6..24 * k + 8].copy_from_slice(&SHN_XINDEX.to_le_bytes());
+            }
+            let symbols_at = b.len();
+            b.extend(&symbols);
+            let strings_at = b.len();
+            b.extend(strings);
+            let table_at = b.len();
+            for e in entries {
+                b.extend(e.to_le_bytes());
+            }
+            let decoy_at = b.len();
+            for e in decoy {
+                b.extend(e.to_le_bytes());
+            }
+            while !b.len().is_multiple_of(8) {
+                b.push(0);
+            }
+            let shoff = b.len();
+            let mut header = |kind: u32, flags: u64, offset: usize, size: usize, link: u32| {
+                let mut h = vec![0u8; 64];
+                h[4..8].copy_from_slice(&kind.to_le_bytes());
+                h[0x08..0x10].copy_from_slice(&flags.to_le_bytes());
+                h[0x18..0x20].copy_from_slice(&(offset as u64).to_le_bytes());
+                h[0x20..0x28].copy_from_slice(&(size as u64).to_le_bytes());
+                h[0x28..0x2c].copy_from_slice(&link.to_le_bytes());
+                b.extend(h);
+            };
+            header(0, 0, 0, 0, 0);
+            header(SHT_SYMTAB, 0, symbols_at, symbols.len(), 2);
+            header(3, 0, strings_at, strings.len(), 0);
+            header(SHT_SYMTAB_SHNDX, 0, table_at, 12, 1);
+            header(1, 0x2 | SHF_EXECINSTR, 0, 0, 0);
+            header(1, 0x2 | 0x1, 0, 0, 0);
+            header(SHT_SYMTAB_SHNDX, 0, decoy_at, 12, 2);
+            b[0x28..0x30].copy_from_slice(&(shoff as u64).to_le_bytes());
+            b[0x3a..0x3c].copy_from_slice(&64u16.to_le_bytes());
+            b[0x3c..0x3e].copy_from_slice(&7u16.to_le_bytes());
+            b
+        };
+        let code = |b: &[u8]| -> Vec<(String, bool)> {
+            defined(b)
+                .unwrap()
+                .into_iter()
+                .map(|d| (d.name, d.function))
+                .collect()
+        };
+        let pair = |c: bool, d: bool| vec![("c".to_string(), c), ("d".to_string(), d)];
+        // c in the code section, d in the data section.
+        assert_eq!(code(&build([0, 4, 5], [0, 5, 4])), pair(true, false));
+        // Swapped: c in the data section, d in the code section.
+        assert_eq!(code(&build([0, 5, 4], [0, 4, 5])), pair(false, true));
+        // An entry past the last section is not code.
+        assert_eq!(code(&build([0, 4, 99], [0, 4, 4])), pair(true, false));
+    }
 }

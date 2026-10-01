@@ -327,6 +327,10 @@ fn map_inner(
     // inline-only (`extern inline`), in any listing pass.
     let mut inline_ever: Vec<std::collections::BTreeSet<u32>> =
         vec![std::collections::BTreeSet::new(); c_files.len()];
+    // Per top-level file: each note's head words, macros expanded, in any
+    // listing pass (the name its definition is compiled under is there).
+    let mut heads_ever: Vec<std::collections::BTreeMap<u32, std::collections::BTreeSet<String>>> =
+        vec![std::collections::BTreeMap::new(); c_files.len()];
     for pass in 0.. {
         unit_reads.clear();
         copy_notes.clear();
@@ -408,6 +412,9 @@ fn map_inner(
             unit_reads.push(entered);
             notes_ever[n].extend(scan.notes.keys().copied());
             inline_ever[n].extend(scan.inline_notes.iter().copied());
+            for (k, words) in scan.note_heads {
+                heads_ever[n].entry(k).or_default().extend(words);
+            }
             copy_notes.push(scan.notes.keys().copied().collect());
         }
         if !changed {
@@ -519,19 +526,24 @@ fn map_inner(
                 let external = !id.contains("::");
                 let defined = defines_function(&built.defined[n], &name, external);
                 // Another watched definition of the name, its note code in
-                // one of this unit's listings, explains the symbol: C allows
-                // one definition of a name in a unit, so the hidden variant
-                // cannot be there too — save GNU's inline-only idiom, so never
-                // an `extern inline` one, however spelled (fix pass 3's check).
-                // A definition kept unwatched by a rule never explains: nothing
-                // shows whether the unit compiles it.
+                // one of this unit's listings and compiled under the name (its
+                // head, macros expanded, holds it — fix pass 4's check: a
+                // macro can rename it), explains the symbol: C allows one
+                // definition of a name in a unit, so the hidden variant cannot
+                // be there too — save GNU's inline-only idiom, so never an
+                // `extern inline` one, however spelled, K&R heads too (fix
+                // passes 3 and 4's checks). A definition kept unwatched by a
+                // rule never explains: nothing shows whether the unit compiles
+                // it.
                 let explained = || {
                     index.pairs.iter().any(|(other_file, other)| {
                         (other_file, other) != (file, id)
                             && name_of(other) == name
                             && !probe.inline_only(other_file, other)
                             && index.of(other_file, other).is_some_and(|k| {
-                                notes_ever[n].contains(&k) && !inline_ever[n].contains(&k)
+                                notes_ever[n].contains(&k)
+                                    && !inline_ever[n].contains(&k)
+                                    && heads_ever[n].get(&k).is_some_and(|h| h.contains(&name))
                             })
                     })
                 };

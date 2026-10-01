@@ -3842,3 +3842,274 @@ fn a_cut_search_unprobes_only_the_files_that_reference_the_symbol() {
         }
     }
 }
+
+/// Fix pass 4's check: common.h (probed: eight tipped statics w0..w7, each
+/// with its watched callee g0..g7) is read by all three units, but only
+/// main.c calls w0..w7, so ld64 lists seven of main.o's eight referrers,
+/// then `...`. unit.c and mul.c are left unlisted; each reads common.h and
+/// references bad_size through tip2.h's tipped static, a header main.c does
+/// not read. The named and added units together are every unit, while the
+/// search covered only main.c's files.
+fn every_unit_fixture() -> (String, Pairs, Pairs) {
+    let (_, files, _) = shared_tip(0);
+    let tip = files[0].1.clone();
+    let mut ids: Pairs = Vec::new();
+    let externs =
+        "extern void bad_size(void);\nextern volatile int sink; extern volatile int sink2;\n";
+    let mut common = String::from(externs);
+    for i in 0..8 {
+        common.push_str(
+            &tip.replace("static void g(", &format!("static void g{i}("))
+                .replace("  g(n);", &format!("  g{i}(n);"))
+                .replace("static int w(", &format!("static int w{i}("))
+                .replace(externs, ""),
+        );
+        ids.push((
+            "src/tool/common.h".into(),
+            format!("src/tool/common.h::g{i}"),
+        ));
+    }
+    let mut main = String::from(
+        "#include \"unit.h\"\n#include \"mul.h\"\n#include \"common.h\"\n\
+         volatile int sink; volatile int sink2;\n",
+    );
+    for i in 0..8 {
+        main.push_str(&format!(
+            "int fa{i}(void) {{ return w{i}(5); }}\nint fb{i}(void) {{ return w{i}(6); }}\n"
+        ));
+        ids.push(("src/tool/main.c".into(), format!("fa{i}")));
+        ids.push(("src/tool/main.c".into(), format!("fb{i}")));
+    }
+    main.push_str("int main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1); }\n");
+    let unit = "#include \"unit.h\"\n#include \"common.h\"\n#include \"tip2.h\"\n\
+                int unit_add(int a, int b) { return (int)((unsigned)a + (unsigned)b); }\n\
+                int ua(void) { return w(5); }\nint ub(void) { return w(6); }\n";
+    let mul = "#include \"mul.h\"\n#include \"common.h\"\n#include \"tip2.h\"\n\
+               unsigned mul_step(unsigned acc, int c) { return acc * 31u + (unsigned)c; }\n\
+               int ma(void) { return w(5); }\nint mb(void) { return w(6); }\n";
+    ids.push(("src/tool/tip2.h".into(), "src/tool/tip2.h::g".into()));
+    for (f, n) in [
+        ("unit.c", "ua"),
+        ("unit.c", "ub"),
+        ("mul.c", "ma"),
+        ("mul.c", "mb"),
+    ] {
+        ids.push((format!("src/tool/{f}"), n.to_string()));
+    }
+    let files: Pairs = vec![
+        ("src/tool/common.h".into(), common),
+        ("src/tool/tip2.h".into(), tip),
+        ("src/tool/unit.c".into(), unit.into()),
+        ("src/tool/mul.c".into(), mul.into()),
+    ];
+    (main, files, ids)
+}
+
+fn map_every_unit_fixture(
+    name: &str,
+    bounds: harness_oracle::MapBounds,
+) -> Result<harness_core::features::FeatureMap, harness_core::error::Error> {
+    let (main, files, ids) = every_unit_fixture();
+    let extra: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let (_tmp, map, _) = map_program_bounded(name, &main, &extra, &ids, bounds);
+    map
+}
+
+/// When the named and added units are every unit but the search covered
+/// only the named units' files, the search over every file still runs: the
+/// program maps (fix pass 4's check — it was refused).
+#[test]
+fn a_search_over_the_named_files_alone_still_reaches_every_file() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let map = map_every_unit_fixture("every-unit-named-or-added", DESIGN_BOUNDS)
+        .unwrap_or_else(|e| panic!("refused: {e}"));
+    assert_eq!(
+        reason_for(&map, "src/tool/tip2.h::g").map(|r| r.kind.as_str()),
+        Some("link"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    for id in ["main", "unit_add", "mul_step", "fa0", "ua", "ma"] {
+        assert!(
+            reason_for(&map, id).is_none(),
+            "{id}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+    // With the pass bound spent on the named files' trial, those files go
+    // back unprobed: the map is made, never refused.
+    for bound in [3usize, 4, 10] {
+        let bounds = harness_oracle::MapBounds {
+            pass_compiles: bound,
+            ..DESIGN_BOUNDS
+        };
+        let map = map_every_unit_fixture(&format!("every-unit-bound-{bound}"), bounds)
+            .unwrap_or_else(|e| panic!("bound {bound}: refused: {e}"));
+        assert!(
+            map.unwatched_reasons.iter().any(|r| r.kind == "file-limit"),
+            "bound {bound}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+}
+
+/// Forty more files read tip.h but never call w: only the eight objects
+/// that still reference bad_size join each trial (fix pass 4's check — the
+/// narrowing to objects that reference the symbol keeps the trials cheap).
+#[test]
+fn a_header_read_widely_adds_only_the_objects_that_reference_the_symbol() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let (main, mut files, mut ids) = shared_tip(8);
+    for k in 0..40 {
+        files.push((
+            format!("src/tool/t{k}.c"),
+            format!("#include \"tip.h\"\nint xf{k}(int x) {{ return x + {k}; }}\n"),
+        ));
+        ids.push((format!("src/tool/t{k}.c"), format!("xf{k}")));
+    }
+    let extra: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let bounds = harness_oracle::MapBounds {
+        pass_compiles: 150,
+        ..DESIGN_BOUNDS
+    };
+    let (_tmp, map, _) = map_program_bounded("forty-readers", &main, &extra, &ids, bounds);
+    let spent = harness_oracle::last_map_pass_compiles();
+    let map = map.expect("maps");
+    assert_eq!(
+        reason_for(&map, "src/tool/tip.h::g").map(|r| r.kind.as_str()),
+        Some("link"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    for id in ["xf0", "xf39", "main", "unit_add"] {
+        assert!(
+            reason_for(&map, id).is_none(),
+            "{id}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+    assert!(spent < 60, "pass compiles {spent}");
+}
+
+/// The visible `#if 0` sibling of a hidden variant `int (helper)(int x)` in
+/// main.c, with the namesake `h` in hn.h: the hidden variant runs (the exit
+/// status proves it), so the sibling is unwatched (parser), never "not run".
+fn a_hidden_variant_beside(name: &str, h: &str, main_head: &str) {
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{main_head}\
+         #if 0\nint helper(int x) {{ return x - 1; }}\n#else\n\
+         __attribute__((noinline)) int (helper)(int x) {{ return x * 3; }}\n#endif\n\
+         static volatile int seed = 1;\n\
+         int main(void) {{ return unit_add(1, 2) == 3 ? (helper)(seed) - 3 : (int)mul_step(0, 1); }}\n"
+    );
+    let (_tmp, map) = map_program(
+        name,
+        &main,
+        &[("src/tool/hn.h", h)],
+        &[("src/tool/hn.h", "helper"), ("src/tool/main.c", "helper")],
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        map.scenarios[0].end, "exit 0",
+        "{name}: {:?}",
+        map.scenarios
+    );
+    let visible = map
+        .unwatched_reasons
+        .iter()
+        .find(|r| r.file == "src/tool/main.c" && r.id == "helper");
+    assert_eq!(
+        visible.map(|r| r.kind.as_str()),
+        Some("parser"),
+        "{name}: ran {:?}, unwatched {:?}",
+        map.scenarios[0].functions,
+        map.unwatched_reasons
+    );
+}
+
+/// Fix pass 4's check: a namesake a macro renames where it is written (an
+/// object-like `#define helper helper_alt` around its include, or libc's
+/// same-named function-like macro) is compiled under another name — not the
+/// unit's definition of `helper`, so it explains no symbol.
+#[test]
+fn a_namesake_a_macro_renames_explains_no_symbol() {
+    a_hidden_variant_beside(
+        "renamed-namesake-fnlike",
+        "int helper(int x);\n#define helper(x) helper_impl(x)\n\
+         int helper(int x) { return x + 7; }\n",
+        "#include \"hn.h\"\n",
+    );
+    a_hidden_variant_beside(
+        "renamed-namesake-objlike",
+        "int helper(int x) { return x + 7; }\n",
+        "#define helper helper_alt\n#include \"hn.h\"\n#undef helper\n",
+    );
+}
+
+/// Fix pass 4's check: a K&R inline-only (gnu_inline) namesake, spelled
+/// through a macro or not — its parameter declarations' `;` stands between
+/// the head and the body — emits no symbol, so it explains none.
+#[test]
+fn a_knr_inline_only_namesake_explains_no_symbol() {
+    a_hidden_variant_beside(
+        "knr-inline-only-macro",
+        "#define EXTERN_INLINE extern __inline __attribute__((__gnu_inline__))\n\
+         EXTERN_INLINE int helper(x)\n  int x;\n{ return x * 5; }\n",
+        "#include \"hn.h\"\n",
+    );
+    a_hidden_variant_beside(
+        "knr-inline-only-literal",
+        "extern __inline __attribute__((__gnu_inline__)) int helper(x)\n  int x;\n\
+         { return x * 5; }\n",
+        "#include \"hn.h\"\n",
+    );
+}
+
+/// Fix pass 4's check: a K&R namesake is compiled under its name (its head
+/// and parameter declarations are read together), so it is still the unit's
+/// definition of `helper`: a header's skipped static of the name reads "not
+/// run".
+#[test]
+fn a_knr_namesake_still_explains() {
+    let h = "#ifdef USE_FAST\nstatic int helper(int x) { return x * 3; }\n#endif\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
+                __attribute__((noinline)) static int helper(x)\n  int x;\n{ return x + 7; }\n\
+                static volatile int seed;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(seed) - 7 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "knr-namesake",
+        main,
+        &[("src/tool/h.h", h)],
+        &[
+            ("src/tool/h.h", "src/tool/h.h::helper"),
+            ("src/tool/main.c", "src/tool/main.c::helper"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(map.scenarios[0].end, "exit 0");
+    assert!(
+        ran(&map).contains(&"src/tool/main.c::helper"),
+        "{:?} {:?}",
+        ran(&map),
+        map.unwatched_reasons
+    );
+    assert!(
+        reason_for(&map, "src/tool/h.h::helper").is_none(),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}

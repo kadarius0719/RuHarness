@@ -427,6 +427,11 @@ pub(crate) struct TextScan {
     /// expanded), says `extern` and `inline` — GNU's inline-only idiom, which
     /// may emit no symbol (fix pass 3's check: glibc's `__extern_inline`).
     pub inline_notes: BTreeSet<u32>,
+    /// Note number → the words of its definition's head as the compiler
+    /// sees it (macros expanded): the name it is compiled under is among
+    /// them (fix pass 4's check: a namesake a macro renames is compiled
+    /// under another name).
+    pub note_heads: BTreeMap<u32, BTreeSet<String>>,
 }
 
 impl TextScan {
@@ -455,8 +460,18 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
         }
     };
     // The words since the last `;`, `{` or `}` (a definition's head, macros
-    // expanded), and whether the head before the last `{` was inline-only.
+    // expanded); the `;`-ended segments since the last `{` or `}`, each
+    // marked when a word follows one of its outermost `)` — a K&R head's
+    // declarator (`int h(x) int x;`); a `{` right after a `;` closes the
+    // K&R head, read from the last marked segment on (fix pass 4's check).
+    // And the head before the last `{`, with whether it was inline-only.
     let mut head: Vec<&[u8]> = Vec::new();
+    let mut depth = 0i32;
+    let mut after_close = false;
+    let mut declarator = false;
+    let mut segments: Vec<(Vec<&[u8]>, bool)> = Vec::new();
+    let mut after_semicolon = false;
+    let mut brace_head: Vec<&[u8]> = Vec::new();
     let mut inline_head = false;
     for line in lex(text) {
         if line.directive {
@@ -497,21 +512,62 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
                 if inline_head {
                     scan.inline_notes.insert(n);
                 }
+                scan.note_heads.entry(n).or_default().extend(
+                    brace_head
+                        .iter()
+                        .map(|w| String::from_utf8_lossy(w).into_owned()),
+                );
                 k += len;
                 continue;
             }
+            let spelled = &text[tok.start..tok.end];
+            let closed = after_close;
+            after_close = false;
             match tok.kind {
-                TokKind::Word => head.push(&text[tok.start..tok.end]),
-                TokKind::Punct if matches!(&text[tok.start..tok.end], b";" | b"{" | b"}") => {
-                    inline_head = &text[tok.start..tok.end] == b"{"
-                        && head.contains(&&b"extern"[..])
-                        && head
+                TokKind::Word => {
+                    declarator |= closed;
+                    head.push(spelled);
+                }
+                TokKind::Punct if spelled == b"(" => depth += 1,
+                TokKind::Punct if spelled == b")" => {
+                    depth -= 1;
+                    after_close = depth == 0;
+                }
+                TokKind::Punct if spelled == b";" => {
+                    segments.push((std::mem::take(&mut head), declarator));
+                    brace_head.clear();
+                    inline_head = false;
+                    depth = 0;
+                    declarator = false;
+                }
+                TokKind::Punct if matches!(spelled, b"{" | b"}") => {
+                    brace_head = if spelled == b"}" {
+                        Vec::new()
+                    } else if after_semicolon {
+                        let from = segments
+                            .iter()
+                            .rposition(|(_, declarator)| *declarator)
+                            .unwrap_or(segments.len().saturating_sub(1));
+                        segments[from..]
+                            .iter()
+                            .flat_map(|(words, _)| words.iter().copied())
+                            .collect()
+                    } else {
+                        std::mem::take(&mut head)
+                    };
+                    inline_head = spelled == b"{"
+                        && brace_head.contains(&&b"extern"[..])
+                        && brace_head
                             .iter()
                             .any(|w| matches!(*w, b"inline" | b"__inline" | b"__inline__"));
                     head.clear();
+                    segments.clear();
+                    depth = 0;
+                    declarator = false;
                 }
                 _ => {}
             }
+            after_semicolon = spelled == b";";
             if let Some(n) = end_token(text, tok) {
                 *scan.ends.entry(n).or_insert(0) += 1;
             }
@@ -1279,6 +1335,21 @@ mod tests {
               int e(int x) {__ruharness_seen[7] = 1; return x; }\n",
         );
         assert_eq!(scan.inline_notes, BTreeSet::from([5]), "{scan:?}");
+        // Fix pass 4's check: a K&R head is read with its parameter
+        // declarations (their `;` stands before the body), and each note
+        // keeps the words of its head — the name it is compiled under.
+        let scan = scan_text(
+            b"int other(int);\nextern __inline int h(x)\n int x;\n{__ruharness_seen[5] = 1; return x; }\n\
+              static int helper_alt(int x) {__ruharness_seen[6] = 1; return x; }\n\
+              int f(int a) { a++; {__ruharness_seen[7] = 1; } return a; }\n",
+        );
+        assert_eq!(scan.inline_notes, BTreeSet::from([5]), "{scan:?}");
+        let words = |n: u32| scan.note_heads.get(&n).cloned().unwrap_or_default();
+        assert!(words(5).contains("h") && words(5).contains("x"), "{scan:?}");
+        assert!(!words(5).contains("other"), "{scan:?}");
+        assert!(words(6).contains("helper_alt"), "{scan:?}");
+        assert!(!words(6).contains("helper"), "{scan:?}");
+        assert!(!words(7).contains("f"), "{scan:?}");
         // Fix pass 3's check: an unclosed literal keeps its line end.
         for spelled in [
             &b"#warning don't\n#line 4\n"[..],

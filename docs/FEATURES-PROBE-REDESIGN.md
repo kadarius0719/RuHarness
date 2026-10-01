@@ -475,20 +475,30 @@ test fixtures.
   twin rule, so a definition of its id read whole elsewhere in the file (an `#else` branch)
   loses its note too — unwatched, never a wrong map. A head whose first parameter has a
   typedef'd type and no type word before it on one line is not caught (the run-together search
-  of real code found 4, in macOS's `malloc.h`).
+  of real code found 4, in macOS's `malloc.h`). Not caught either (§10.4): an implicit-int second
+  head with empty parentheses (`NI` then `after()`, C89 only: clang and gcc 14 reject implicit
+  int in C99 and later), and one whose only parameter is `...` after a typedef'd return type —
+  the first head then keeps a note in the second's body. Caught too widely: two annotation words
+  then an empty call (`ATTR1 ATTR2 NAME()`) read as a second head `NAME` — both rule 1, never a
+  wrong map, though the phantom name reaches the facts. A parenthesized second head after a
+  typedef'd type whose `static` is a macro (`STATIC Count (after)(void)`) is recorded public.
 - **C23 attributes**: `int f(void) [[gnu::cold]] __attribute__((noinline)) {` (a C23 attribute
   then a GNU one after the parameters; clang only) is read by tree-sitter-c as a declaration and
   a block: the definition is not in the facts.
-- **Hidden variants, conservatively** (§10.3): a namesake that only a rule keeps unwatched, or any
-  `extern inline` namesake (C99's emits its symbol, GNU's inline-only idiom does not; perf cannot
-  tell them apart), explains no symbol, so a skipped sibling beside it reads unwatched (parser)
-  where "not run" may be true — never the reverse.
+- **Hidden variants, conservatively** (§10.3, §10.4): a namesake that only a rule keeps
+  unwatched, any `extern inline` namesake (C99's emits its symbol, GNU's inline-only idiom does
+  not; the probe cannot tell them apart), or one whose compiled head (macros expanded) does not
+  hold the name, explains no symbol, so a skipped sibling beside it reads unwatched (parser) where
+  "not run" may be true. The reverse — "not run" for a function that ran — needs a namesake
+  compiled under its name that does not define it, which C does not allow in one unit.
 - **Macro-made names**: `static int PREFIX(scanLit)(int open, …)` (expat, ppport.h) is not in the
   facts — the parser reads the macro as the name; recording it under the macro's name would merge
   every such function into one id.
-- **A second head behind `**` or `* const *`** (`int g(void) NI` then `char **after(void) {`):
+- **A second head behind `**` or `* const *`, or one `*` after a typedef'd or struct return
+  type** (`int g(void) NI` then `char **after(void) {`, `static Count *after(int x) {`):
   tree-sitter folds the first head into a parse error before the declarator — the second is
-  watched in its own body (right), the first is not in the facts.
+  watched in its own body (right), with its own `static` and signature (§10.4); the first is not
+  in the facts. `static Count *(after)(void)` after a first head records neither.
 - **A probed run's time**: +11 % on a call-heavy workload (sqlite3.c); a scenario near
   `timeout_secs` can time out only when probed — recorded as `probe_agrees = false`.
 
@@ -747,7 +757,8 @@ hidden variants and the runner), each finding with two verifiers (`wf_b40998a8-a
 `SP/fc2/result.json`): 26 findings, all confirmed by both, none refuted — one high (two heads in
 GNU's layout read as one watched function: a regression of fix pass 2's narrower rule, a silent
 wrong map). Fix pass 3 (the code governs):
-- **Two heads** are found by what follows the first head's parameters, in any layout: a call
+- **Two heads** are found by what follows the first head's parameters, in any layout (narrowed
+  in §10.4 and §6): a call
   there is a second head when a type word stands right before it (`int`, `static`, `size_t`; a
   `*` skipped), a type word follows it (K&R), its arguments read as parameters (`(void)`, `(int
   size)`, `(RT_NODE * node)`), or its "function" is a type keyword (`int (after)(void)`, `void
@@ -817,7 +828,7 @@ all confirmed by both verifiers, none refuted, none high — 6 medium, 10 low, 5
   something after its parameters; a bare `PREFIX(name)(params)` is not recorded (§6). A nested
   second head keeps its `static` and its whole signature.
 - **A misread body** is read in every configuration (branch k of every group, k up to the most
-  branches): an `#else` that closes the function and opens another is misread whichever branch
+  branches — the diagonal ones only; §10.4 walks every combination): an `#else` that closes the function and opens another is misread whichever branch
   comes first.
 - **`#line`**: an unclosed literal keeps its line end.
 - **Link**: each trial of the search also compiles every unit that reads a file the search
@@ -830,7 +841,7 @@ all confirmed by both verifiers, none refuted, none high — 6 medium, 10 low, 5
 - **Hidden variants**: C allows one definition of a name in a unit, so a namesake whose note is
   code in one of the unit's listings is the unit's definition and the hidden variant cannot be
   there — save GNU's inline-only idiom, which is now read from the listing's own head tokens
-  (macros expanded: glibc's `__extern_inline`), not the source; a namesake only a rule keeps
+  (macros expanded: glibc's `__extern_inline`) as well as the source; a namesake only a rule keeps
   unwatched no longer explains (nothing shows whether it is compiled; §6).
 - **Scratch folders**: the benchmark scorer's run folders are registered for the signal's
   cleanup too.
@@ -849,3 +860,39 @@ the forty; plus a stray parse error with no call to name). Two live, both withou
 map: the nested-declarator gate in `heads()` (the definition is never recorded — `function_name`
 gates it first), and widening the units when the pass bound is spent (it changes what is
 recompiled, not what goes back unprobed).
+
+
+### 10.4 The check of fix pass 4, and fix pass 5
+
+Three lenses checked fix pass 4 at 7e40ef1 (`wf_49dab672-ae0`, `SP/fc4/result.json`): 13 findings,
+all confirmed by both verifiers, none refuted, none high — 2 medium, 5 low, 6 nits. Three were
+silent wrong maps (a function reported as run that did not, or "not run" for one that ran) and
+one a regression, so by the rule set before that check fix pass 5 followed (the code governs):
+- **Second heads**: an empty parameter list after a word that is not the first after the
+  parameters is a head (a typedef'd or tag return type: `Count` then `after()`, `struct s
+  after()`), and attributes between a return type and the name are skipped; one annotation word
+  then `NAME()` keeps the note. A K&R head's parameter of function type (`after(cb)` then `int
+  cb(int);`) is declared, not a head. A nested declarator's last call with one name inside, after
+  no base type word, is a parenthesized head with a typedef'd return type (`static Count
+  (after)(void)`), where `int PREFIX(name)(void)` stays a macro-made name. A second head that is
+  not nested ends its signature at its call. A second head the parser folds behind a parse error
+  takes its `static` and signature from what follows the first head's parameters (a first head
+  names a function and declares parameters, and no `;` follows it).
+- **A misread body** is read in every combination of branches over the groups a brace sits under
+  (an `#ifndef A` beside an `#ifdef A`, or two macros of their own), with "none taken" for a group
+  without `#else`; past 4 096 combinations the body counts as misread (rule 1, erring safe).
+- **Link**: the search over every unit and every file runs whenever the search left a unit or a
+  file out — the added units can make up every unit while only the named units' files were
+  searched (a regression of fix pass 4: such a program was refused).
+- **Hidden variants**: a namesake explains a symbol only when its compiled head (macros expanded)
+  holds the name — a macro can rename it where it is written (`#define helper helper_alt`, libc's
+  same-named function-like macro). A K&R head is read with its parameter declarations (from the
+  `;`-ended segment that holds the declarator), so a K&R inline-only namesake, however spelled,
+  explains nothing, and a K&R namesake still explains.
+- **Tests**: the scanner's new shapes (empty-parentheses heads, K&R function parameters, typedef'd
+  parenthesized heads, signatures' ends, folded heads' `static`, every-combination misreads and
+  the cap, the last-by-shape ranking, a stray error's unnamed call, the closed-group misread); the
+  every-unit search at the design's bounds and with the pass bound spent; a header read by forty
+  more files adds only the objects that reference the symbol; an extended index read from its own
+  table; renamed, K&R inline-only and K&R namesakes; the listing's head words. The 101 bench
+  targets' facts byte-identical; sqlite3.c unchanged.
