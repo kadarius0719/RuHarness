@@ -2348,6 +2348,32 @@ args = ["-h"]
             m.unwatched_reasons = vec![bad];
             assert!(unreadable(m), "{why}");
         }
+        // §4, review (mutation sweep): a map holding a maximal reason of
+        // every kind — 160 bytes for a kind with a detail, none otherwise —
+        // reads back.
+        let mut m = a_map();
+        m.unwatched_reasons = UNWATCHED_KINDS
+            .iter()
+            .enumerate()
+            .map(|(i, kind)| {
+                let detail = if UNWATCHED_DETAIL_KINDS.contains(kind) {
+                    format!("{}{}", "é".repeat(79), "ab")
+                } else {
+                    String::new()
+                };
+                reason(kind, &detail, &format!("src/a.c::k{i}"))
+            })
+            .collect();
+        m.unwatched = m
+            .unwatched_reasons
+            .iter()
+            .map(|r| (r.file.clone(), r.id.clone()))
+            .collect();
+        write(&m);
+        assert!(
+            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            "every kind, maximal"
+        );
         // Review: one reason per pair.
         let mut m = a_map();
         m.unwatched_reasons = vec![

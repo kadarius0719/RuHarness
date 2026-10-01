@@ -221,16 +221,27 @@ mod tests {
             },
         );
         assert_eq!(p.unwatched, [("h".to_string(), NoNote::Naked)]);
-        // A parameter named `naked` is no attribute, on gcc too.
+        // A parameter named `naked` is no attribute, on gcc too — nor a
+        // K&R declaration of one (review: the mutation sweep).
+        let gcc = ProbeOptions {
+            gcc: true,
+            ..ProbeOptions::default()
+        };
         let p = probe_with(
             "int setmode(int naked) { return naked; }\n",
             &["setmode"],
-            ProbeOptions {
-                gcc: true,
-                ..ProbeOptions::default()
-            },
+            gcc,
         );
         assert!(p.unwatched.is_empty(), "{p:?}");
+        let p = probe_with("int kr(naked) int naked; { return naked; }\n", &["kr"], gcc);
+        assert!(p.unwatched.is_empty(), "{p:?}");
+        // The reserved spelling is the same attribute.
+        let p = probe_with(
+            "__attribute__((__naked__)) void n(void) { __asm__(\"ret\"); }\n",
+            &["n"],
+            gcc,
+        );
+        assert_eq!(p.unwatched, [("n".to_string(), NoNote::Naked)], "{p:?}");
     }
 
     /// Premise re-run (sqlite3.c's winWrite): an `#if` whose branches each
@@ -260,6 +271,27 @@ mod tests {
         assert!(p.notes.iter().any(|n| n.id == "os_init"), "{p:?}");
         // The misread body itself: its bounds are a guess.
         assert!(unwatched.contains(&"src/a.c::w"), "{p:?}");
+    }
+
+    /// Review (the mutation sweep): a head whose body a macro supplies runs
+    /// on into the next definition's head, and the parser gives the first
+    /// name the second body — no parse error. Such a definition is rule 1;
+    /// heads with attributes, an `asm` label or a macro word after their
+    /// parameters keep their notes.
+    #[test]
+    fn a_head_run_into_the_next_one_gets_no_note() {
+        let p = probe(
+            "int g(void) NOT_IMPLEMENTED\nint after(void) { return 1; }\n",
+            &["g"],
+        );
+        assert_eq!(p.unwatched, [("g".to_string(), NoNote::Parser)], "{p:?}");
+        assert!(p.notes.is_empty(), "{p:?}");
+        let fine = "int a(void) __attribute__((noinline)) { return 1; }\n\
+                    void b(void) UNUSED_MACRO\n{ }\n\
+                    int c(x) int x; { return x; }\n";
+        let p = probe(fine, &["a", "b", "c"]);
+        assert!(p.unwatched.is_empty(), "{p:?}");
+        assert_eq!(p.notes.len(), 3);
     }
 
     /// The real-code re-run (sqlite3.c, 23 times): an `else if (` right
@@ -296,29 +328,33 @@ mod tests {
             "int s5(int a)\n/* trace */ #ifdef TRACE\n{ return a; }\n#else\n{ return -a; }\n#endif\n",
             "int s6(int a)\n%:ifdef TRACE\n{ return a; }\n%:else\n{ return -a; }\n%:endif\n",
             "int s7(int a)\n#\\\nifdef TRACE\n{ return a; }\n#else\n{ return -a; }\n#endif\n",
-            // two heads, one body
-            // two heads, one body — the same name or not (another name would
-            // take this body's note in the other build)
-            "#if X\nstatic int s8(int a)\n#else\nstatic int s8(long a)\n#endif\n{ return (int)a; }\n",
-            "#if X\nstatic int s9(int a)\n#else\nstatic int s9(int a)\n#endif\n{ return a; }\n",
+            // Review (mutation sweep): a comment between `#` and the word,
+            // and a CRLF line splice.
+            "int s8(int a)\n#/*c*/ifdef TRACE\n{ return a; }\n#else\n{ return -a; }\n#endif\n",
+            "int s9(int a)\r\n#\\\r\nifdef TRACE\r\n{ return a; }\r\n#else\r\n{ return -a; }\r\n#endif\r\n",
         ];
         for src in conditional {
             let name = &src[src.find("s").unwrap()..][..2];
             let p = probe(src, &[name]);
-            if !p.unwatched.is_empty() || p.notes.is_empty() {
-                assert!(
-                    p.unwatched.is_empty()
-                        || p.unwatched == [(name.to_string(), NoNote::ConditionalBrace)]
-                        || p.unwatched == [(name.to_string(), NoNote::Parser)],
-                    "{src}: {p:?}"
-                );
-            }
+            assert_eq!(
+                p.unwatched,
+                [(name.to_string(), NoNote::ConditionalBrace)],
+                "{src}: {p:?}"
+            );
             assert!(
                 p.notes.is_empty(),
                 "{src}: a note on one branch only: {}",
                 text(&p)
             );
         }
+        // Two heads, one body (Cython's module init): the parser reads the
+        // second head into the first's — never a note in a body one build
+        // gives the other name.
+        let src = "#if PY_MAJOR_VERSION >= 3\nPyMODINIT_FUNC PyInit_m(void)\n#else\n\
+                   PyMODINIT_FUNC initm(void)\n#endif\n{ return 0; }\n";
+        let p = probe(src, &["PyInit_m"]);
+        assert_eq!(p.unwatched.len(), 1, "{p:?}");
+        assert!(p.notes.is_empty(), "{p:?}");
         // Wholly in the head: watched.
         let watched = [
             "int w1(\n#ifdef WIDE\n long a\n#else\n int a\n#endif\n) { return (int)a; }\n",
@@ -332,6 +368,36 @@ mod tests {
         }
     }
 
+    /// §4, rule 1, review (mutation sweep: the rule had no test): an
+    /// `#ifdef` inside an initializer (signal-hook's extract.c) leaves the
+    /// parser in an error that holds every later definition — their bodies'
+    /// bounds are a guess, in either configuration.
+    #[test]
+    fn definitions_under_a_parse_error_are_rule_1() {
+        let tail = "struct C cs[] = {\n#ifdef X\n    { 1, 2 },\n#endif\n    { 3, 4 },\n};\n\
+                    int later(int x) { return x + cs[0].a; }\n\
+                    int last(int x) { return x; }\n";
+        for head in ["", "#define X 1\n"] {
+            let src = format!("{head}struct C {{ int a; int b; }};\n{tail}");
+            let p = probe(&src, &["later", "last"]);
+            assert_eq!(
+                p.unwatched,
+                [
+                    ("later".to_string(), NoNote::Parser),
+                    ("last".to_string(), NoNote::Parser)
+                ],
+                "{head:?}: {p:?}"
+            );
+            assert!(p.notes.is_empty());
+        }
+        // An ERROR inside a definition's own head is not one around it.
+        let p = probe(
+            "int bad(int x,) { return x; }\nint good(void) { return 1; }\n",
+            &["bad", "good"],
+        );
+        assert!(p.unwatched.is_empty(), "{p:?}");
+    }
+
     #[test]
     fn the_scanner_reads_directives_as_the_preprocessor_does() {
         use crate::brace_is_conditional as c;
@@ -342,6 +408,14 @@ mod tests {
         assert!(c(b"f(int a)\r#if X\r"));
         assert!(c(b"f(int a)\n#else\n"), "an outer group's #else");
         assert!(c(b"f(int a)\n#endif\n"), "an outer group's #endif");
+        // Review (mutation sweep): the #elif forms, a comment after `#`, a
+        // CRLF splice, and an open #if after a string holding `/*`.
+        assert!(c(b"f(int a)\n#elif Y\n"));
+        assert!(c(b"f(int a)\n#elifdef Y\n"));
+        assert!(c(b"f(int a)\n#elifndef Y\n"));
+        assert!(c(b"f(int a)\n#/*c*/ifdef X\n"));
+        assert!(c(b"f(int a)\r\n#\\\r\nif X\r\n"));
+        assert!(c(b"f(int a) __attribute__((section(\"/*\")))\n#if X\n"));
         assert!(!c(b"f(\n#if X\nint a\n#endif\n)\n"));
         assert!(!c(b"f(int a) /* #if X */\n"));
         assert!(!c(b"f(int a) // #if X\n"));

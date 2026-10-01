@@ -2523,3 +2523,212 @@ fn setup_switches_to_the_mapping_before_it_merges() {
         .expect("setup merges the early notes");
     assert!(switch < merge, "the merge runs before the switch");
 }
+
+/// The features file every review test here maps with.
+const USE_FEATURES: &str = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                            [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+
+/// `program` with `text` put before main.c's own, mapped with `extra`
+/// functions in the facts.
+fn map_prepended(
+    name: &str,
+    text: &str,
+    extra: &[(&str, &str)],
+) -> (
+    TempDir,
+    Result<harness_core::features::FeatureMap, harness_core::error::Error>,
+) {
+    let tmp = TempDir::new(name);
+    program(tmp.path(), GOOD, Some(USE_FEATURES), "");
+    let main = tmp.path().join("src/tool/main.c");
+    let old = std::fs::read_to_string(&main).unwrap();
+    std::fs::write(&main, format!("{text}{old}")).unwrap();
+    let target = TargetContext::load(tmp.path()).unwrap();
+    let mut facts = with_symbols(tmp.path());
+    for (file, id) in extra {
+        facts.symbols.push(harness_core::facts::SymbolRecord {
+            name: (*id).into(),
+            kind: "function".into(),
+            file: (*file).into(),
+            visibility: "public".into(),
+            signature: String::new(),
+            span: (1, 1),
+        });
+    }
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    let map =
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()));
+    (tmp, map)
+}
+
+/// §4 (§3.3 step 1), review (mutation sweep: these shapes had no test): the
+/// data rule in the remaining spellings, with its exact reason; the
+/// negatives that unwatch nothing; a file embedding itself refused by name;
+/// a target under a folder with a backslash.
+#[test]
+fn the_data_rule_in_every_spelling_and_its_negatives() {
+    let words =
+        "listed but never included by src/tool/main.c (#embed, __has_embed or __has_include)";
+    for (label, text) in [
+        (
+            "splice",
+            "static const unsigned char u[] = {\n#\\\nembed \"unit.c\"\n};\n",
+        ),
+        (
+            "offset",
+            "#if __has_embed(\"unit.c\" clang::offset(4))\n#define HAS 1\n#endif\n",
+        ),
+    ] {
+        let (_tmp, map) = map_prepended(&format!("feat-review-data-{label}"), text, &[]);
+        let map = map.expect("maps");
+        let reason = map.unwatched_reasons.iter().find(|r| r.id == "unit_add");
+        assert!(
+            reason.is_some_and(|r| r.kind == "data" && r.detail == words),
+            "{label}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+    for (label, text, extra) in [
+        ("comment", "/* see #embed \"unit.c\" */\n", None),
+        (
+            "defined",
+            "#if defined(__has_embed)\n#define HAS 1\n#endif\n",
+            None,
+        ),
+        (
+            "logo",
+            "static const unsigned char logo[] = {\n#embed \"logo.bin\"\n};\n",
+            Some(("src/tool/logo.bin", "\x01\x02\x03")),
+        ),
+    ] {
+        let tmp = TempDir::new(&format!("feat-review-data-no-{label}"));
+        program(tmp.path(), GOOD, Some(USE_FEATURES), "");
+        if let Some((path, bytes)) = extra {
+            write(&tmp.path().join(path), bytes);
+        }
+        let main = tmp.path().join("src/tool/main.c");
+        let old = std::fs::read_to_string(&main).unwrap();
+        std::fs::write(&main, format!("{text}{old}")).unwrap();
+        let target = TargetContext::load(tmp.path()).unwrap();
+        let facts = with_symbols(tmp.path());
+        let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+            panic!("valid")
+        };
+        let map = harness_oracle::map_features(
+            &target,
+            &facts,
+            &features,
+            &digest,
+            &mut Quiet(Vec::new()),
+        )
+        .expect("maps");
+        assert!(
+            map.unwatched.is_empty(),
+            "{label}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+    // A file embedding itself: its copy's bytes carry notes.
+    let (_tmp, map) = map_prepended(
+        "feat-review-data-self",
+        "static const unsigned char me[] = {\n#embed \"main.c\"\n};\n",
+        &[],
+    );
+    let err = map.expect_err("refused").to_string();
+    assert!(err.contains("is not the same program near"), "{err}");
+    // A folder with a backslash in its name: the sandbox cannot name it
+    // safely, and says so (design §4 listed it as mapping; it is refused,
+    // by name, with the way out).
+    let tmp = TempDir::new("feat-review-backslash");
+    let odd = tmp.path().join("back\\slash");
+    std::fs::create_dir_all(&odd).unwrap();
+    program(&odd, GOOD, Some(USE_FEATURES), "");
+    let target = TargetContext::load(&odd).unwrap();
+    let facts = with_symbols(&odd);
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    let err =
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+            .expect_err("refused")
+            .to_string();
+    assert!(
+        err.contains("move the target to a path without quotes, backslashes"),
+        "{err}"
+    );
+}
+
+/// §4 (§3.3 step 1), review (mutation sweep): `.incbin` in capitals, built
+/// by a C macro from joined literals, and a name nothing resolves (every
+/// probed file goes back).
+#[test]
+fn every_incbin_form_is_seen() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("Mach-O symbol names: skipped here");
+        return;
+    }
+    let tail = "extern const char blob[], blob_end[];\n";
+    for (label, asm) in [
+        (
+            "caps",
+            "__asm__(\".data\\n.globl _blob\\n_blob:\\n.INCBIN \\\"unit.c\\\"\\n.globl _blob_end\\n_blob_end:\\n.text\\n\");\n",
+        ),
+        (
+            "macro",
+            "#define INCBIN(f) __asm__(\".data\\n.globl _blob\\n_blob:\\n.incbin \\\"\" f \"\\\"\\n.globl _blob_end\\n_blob_end:\\n.text\\n\")\nINCBIN(\"unit.c\");\n",
+        ),
+    ] {
+        let (_tmp, map) = map_prepended(&format!("feat-review-incbin-{label}"), &format!("{asm}{tail}"), &[]);
+        let map = map.expect("maps");
+        let reason = map.unwatched_reasons.iter().find(|r| r.id == "unit_add");
+        assert!(
+            reason.is_some_and(|r| r.kind == "data" && r.detail.contains(".incbin")),
+            "{label}: {:?}",
+            map.unwatched_reasons
+        );
+        assert!(
+            !map.unwatched.iter().any(|(f, _)| f == "src/tool/mul.c"),
+            "{label}: only the file it reads"
+        );
+    }
+    // A name nothing resolves: every probed file goes back, the map holds.
+    let (_tmp, map) = map_prepended(
+        "feat-review-incbin-unresolved",
+        "__asm__(\".data\\n.incbin \\\"nowhere/at/all.bin\\\"\\n.text\\n\");\n",
+        &[],
+    );
+    match map {
+        // The assembler cannot find it either: the plain build fails first.
+        Err(e) => assert!(e.to_string().contains("does not build"), "{e}"),
+        Ok(map) => assert!(
+            map.unwatched_reasons.iter().all(|r| r.kind == "data"),
+            "{:?}",
+            map.unwatched_reasons
+        ),
+    }
+}
+
+/// §4 (§3.1 rule 1), review (mutation sweep): definitions under a parse
+/// error are unwatched with the parser reason, in both configurations.
+#[test]
+fn rule_1_holds_in_both_configurations() {
+    let body = "struct C { int a; int b; };\nstruct C cs[] = {\n#ifdef X\n    { 1, 2 },\n#endif\n    { 3, 4 },\n};\n\
+                int later(int x) { return x + cs[0].a; }\n";
+    for (label, head) in [("plain", ""), ("x", "#define X 1\n")] {
+        let (_tmp, map) = map_prepended(
+            &format!("feat-review-rule1-{label}"),
+            &format!("{head}{body}"),
+            &[("src/tool/main.c", "later")],
+        );
+        let map = map.expect("maps");
+        assert!(
+            map.unwatched_reasons
+                .iter()
+                .any(|r| r.id == "later" && r.kind == "parser"),
+            "{label}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+}

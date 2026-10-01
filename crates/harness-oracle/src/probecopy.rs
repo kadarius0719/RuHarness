@@ -76,8 +76,8 @@ pub(crate) struct Reason {
     pub detail: String,
 }
 
-/// The longest detail kept (§3.7).
-pub(crate) const DETAIL_MAX: usize = 160;
+/// The longest detail kept (§3.7): the strict reader's own bound.
+pub(crate) const DETAIL_MAX: usize = harness_core::features::UNWATCHED_DETAIL_BYTES;
 
 impl Reason {
     pub(crate) fn new(kind: Kind, detail: &str) -> Reason {
@@ -316,6 +316,18 @@ pub(crate) struct TextScan {
     pub ends: BTreeMap<u32, usize>,
     /// The files `.incbin` names (`None`: one whose name cannot be read).
     pub incbins: Vec<Option<String>>,
+}
+
+impl TextScan {
+    /// §3.2: the notes whose `{` sits in a branch the build skips while
+    /// their body's end does not — fewer notes than end tokens.
+    pub(crate) fn skipped_branches(&self) -> Vec<u32> {
+        self.ends
+            .iter()
+            .filter(|(n, ends)| self.notes.get(n).copied().unwrap_or(0) < **ends)
+            .map(|(n, _)| *n)
+            .collect()
+    }
 }
 
 /// Read a preprocessed text: line markers and `#pragma` lines skipped,
@@ -929,6 +941,12 @@ mod tests {
         let program = b"const char *s = \"{ }\";\n";
         let copy = b"const char *s = \"{__ruharness_seen[0] = 1; }\";\n";
         assert!(same_code(program, copy, Path::new("/o/fnprobe.h")).is_err());
+        // Review (mutation sweep): two `&` are not `&&`, a decrement is not
+        // two minus signs, and a copy with one more line differs.
+        assert!(same_code(b"x = a & &b;\n", b"x = a && b;\n", Path::new("/o/h")).is_err());
+        assert!(same_code(b"x = a - --b;\n", b"x = a-- - b;\n", Path::new("/o/h")).is_err());
+        assert!(same_code(b"int x;\n", b"int x;\nint y;\n", Path::new("/o/h")).is_err());
+        assert!(same_code(b"int x;\nint y;\n", b"int x;\n", Path::new("/o/h")).is_err());
         // Tokens, not spacing: `- -` is two tokens, `--` one.
         assert!(same_code(b"x = a - -b;\n", b"x = a--b;\n", Path::new("/o/h")).is_err());
         assert_eq!(
@@ -942,6 +960,28 @@ mod tests {
         assert_eq!(same_code(program, copy, Path::new("/o/h")), Ok(()));
         let other = b"int greet(void) {__ruharness_seen[0] = 1; return puts(\"caf\xe8\");  __ruharness_end_0 }\n";
         assert!(same_code(program, other, Path::new("/o/h")).is_err());
+    }
+
+    /// §3.2, §4, review (the count had no test): a note whose `{` the build
+    /// skipped while its end is compiled — the preprocessed text holds the
+    /// end token and not the note — is in a skipped branch; two variants
+    /// sharing an id balance.
+    #[test]
+    fn a_note_in_a_skipped_branch_is_counted() {
+        // `int f(void)\n#if 0\n{__ruharness_seen[0] = 1;\n#else\n{\n#endif\n
+        // return 1;  __ruharness_end_0 }` as -E prints it (the #if 0 lines
+        // gone):
+        let text = b"# 1 \"a.c\"\nint f(void)\n\n\n\n{\n\n return 1; __ruharness_end_0 }\n\
+                     int g(void) {__ruharness_seen[1] = 1; return 2; __ruharness_end_1 }\n";
+        let scan = scan_text(text);
+        assert_eq!(scan.skipped_branches(), [0]);
+        // Two #if variants of one id, both compiled in turn: balanced.
+        let text = b"int h(void) {__ruharness_seen[2] = 1; __ruharness_end_2 }\n\
+                     int h2(void) {__ruharness_seen[2] = 1; __ruharness_end_2 }\n";
+        assert!(scan_text(text).skipped_branches().is_empty());
+        // More notes than ends (a stringized end) is no skipped brace.
+        let text = b"int k(void) {__ruharness_seen[3] = 1; }\n";
+        assert!(scan_text(text).skipped_branches().is_empty());
     }
 
     /// Review (a raw string or a C23 digit separator on the same line): a
@@ -993,9 +1033,49 @@ mod tests {
         let d = detail_text(&long);
         assert!(d.len() <= DETAIL_MAX && d.len() >= DETAIL_MAX - 1);
         assert_eq!(detail_text("a\u{1b}b\nc"), "a?b?c");
+        // Review (mutation sweep): the 160th byte inside a character — the
+        // cut stops there, and a later short character is not appended.
+        let odd = format!("a{}", "é".repeat(100));
+        let d = detail_text(&odd);
+        assert_eq!(d.len(), 159);
+        assert!(d.ends_with('é'));
+        let gap = format!("a{}éa", "é".repeat(79));
+        assert_eq!(detail_text(&gap), format!("a{}", "é".repeat(79)));
+        // C1 controls too.
+        assert_eq!(detail_text("x\u{85}y\u{9b}z"), "x?y?z");
         // Review: a right-to-left override from the target's source, and a
         // zero-width space, never reach the person's terminal.
         assert_eq!(detail_text("x\u{202E}y\u{200B}z"), "x?y?z");
+    }
+
+    /// §3.7, review (mutation sweep): every kind the writer can name is one
+    /// the strict reader accepts, and the two agree on which carry a detail.
+    #[test]
+    fn the_writers_kinds_are_the_readers() {
+        let kinds = [
+            Kind::Parser,
+            Kind::NotABlock,
+            Kind::ConditionalBrace,
+            Kind::SkippedBranch,
+            Kind::Naked,
+            Kind::Stringized,
+            Kind::Data,
+            Kind::Compile,
+            Kind::Elimination,
+            Kind::Link,
+            Kind::FileLimit,
+            Kind::NotChecked,
+        ];
+        let names: BTreeSet<&str> = kinds.iter().map(|k| k.name()).collect();
+        let reader: BTreeSet<&str> = harness_core::features::UNWATCHED_KINDS
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(names, reader);
+        assert_eq!(Kind::of(NoNote::Parser), Kind::Parser);
+        assert_eq!(Kind::of(NoNote::NotABlock), Kind::NotABlock);
+        assert_eq!(Kind::of(NoNote::ConditionalBrace), Kind::ConditionalBrace);
+        assert_eq!(Kind::of(NoNote::Naked), Kind::Naked);
     }
 
     #[test]

@@ -334,7 +334,7 @@ test fixtures.
   one-file program keeps its notes; a header reached twice through a file link under `#pragma
   once` keeps its notes; a stringized note; a file both included and embedded, and a file
   embedding itself (refused by step 4, by name); a target under a folder named with `é`, a
-  no-break space and a backslash (maps); gcc: a file using `__TIMESTAMP__` passes.
+  no-break space (maps) and a backslash (refused by the sandbox, by name — §10); gcc: a file using `__TIMESTAMP__` passes.
 - §3.4 — a pragma macro in each spelling (clang, one round); 200 functions whose notes are
   rejected across a header and the file at the real mirror path (well over 8 KiB of errors: at
   most 2 rounds, exactly those unwatched, no search — a mutation capping stderr at 8 KiB must

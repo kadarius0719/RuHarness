@@ -347,11 +347,9 @@ fn map_inner(
                 }
             }
             // §3.2: a note in a branch the build skips.
-            for (n, ends) in &scan.ends {
-                if scan.notes.get(n).copied().unwrap_or(0) < *ends {
-                    if let Some((file, id)) = index.pairs.get(*n as usize) {
-                        changed |= probe.take_out(file, id, Reason::new(Kind::SkippedBranch, ""));
-                    }
+            for n in scan.skipped_branches() {
+                if let Some((file, id)) = index.pairs.get(n as usize) {
+                    changed |= probe.take_out(file, id, Reason::new(Kind::SkippedBranch, ""));
                 }
             }
             // §3.3 step 1: files `.incbin` reads.

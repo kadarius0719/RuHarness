@@ -496,6 +496,10 @@ fn note_point(
     if brace_is_conditional(&src[from.min(at)..at]) {
         return Err(NoNote::ConditionalBrace);
     }
+    // Rule 1's other form: the body is the next definition's.
+    if heads_run_together(def) {
+        return Err(NoNote::Parser);
+    }
     Ok((at, body.end_byte()))
 }
 
@@ -724,6 +728,45 @@ fn signature_of(def: tree_sitter::Node, src: &[u8]) -> String {
 
 /// Find the identifier of a function definition by descending through
 /// (possibly pointer-wrapped) declarators to the function_declarator.
+/// Whether the parser ran two heads together (review: `int g(void)
+/// NOT_IMPLEMENTED` — a macro that supplies the body — then the next line's
+/// `int after(void) { … }` reads as one definition of `g` with `after`'s
+/// body, no parse error anywhere). After a definition's parameter list come
+/// only attributes, an `asm` label or a macro word; anything else is the
+/// next head, and the body is not this function's — rule 1.
+fn heads_run_together(def: tree_sitter::Node) -> bool {
+    let mut node = match def.child_by_field_name("declarator") {
+        Some(node) => node,
+        None => return false,
+    };
+    while node.kind() != "function_declarator" {
+        match node.child_by_field_name("declarator") {
+            Some(inner) => node = inner,
+            None => return false,
+        }
+    }
+    let Some(parameters) = node.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = node.walk();
+    let trailing = node
+        .named_children(&mut cursor)
+        .skip_while(|c| c.id() != parameters.id())
+        .skip(1)
+        .any(|c| {
+            !matches!(
+                c.kind(),
+                "attribute_specifier"
+                    | "attribute_declaration"
+                    | "gnu_asm_expression"
+                    | "ms_call_modifier"
+                    | "identifier"
+                    | "comment"
+            )
+        });
+    trailing
+}
+
 fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
     let mut node = def.child_by_field_name("declarator")?;
     loop {
