@@ -1149,7 +1149,7 @@ used is a value on every read path (the snapshot's `Invalid`), never an error.
 `{schema, schema_version, inputs {facts, features, program, platform, probe?}, unwatched [[file,
 id]], unwatched_reasons? [{file, id, kind, detail?}], scenarios [{feature, scenario, end,
 stdout_bytes, stderr_bytes, stderr_head, stable, probe_agrees, noted, reason?, functions [[file,
-id]]}]}`. `probe` is the probe that made it (`compiler-guided-2` since its first fix pass; a map from another probe reads "made by another version of the harness"); a map without it reads out of
+id]]}]}`. `probe` is the probe that made it (today `compiler-guided-2`; a map from another probe reads "made by another version of the harness" — its reasons' details shown safely, never refused); a map without it reads out of
 date ("made by an older harness"). `unwatched_reasons` (docs/FEATURES-PROBE-REDESIGN.md §3.7):
 `kind` ∈ `parser | not-a-block | conditional-brace | skipped-branch | naked | stringized | data |
 compile | elimination | link | file-limit | not-checked`, `detail` ≤ 160 bytes with no control

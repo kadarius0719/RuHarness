@@ -30,6 +30,9 @@ pub struct PlacedNote {
     pub n: u32,
     /// The body's byte range in the probed copy, `{` to past `}`.
     pub body: (usize, usize),
+    /// An `extern inline` definition (GNU's inline-only idiom): it may emit
+    /// no symbol, so it explains none (fix pass 2's check).
+    pub inline_only: bool,
 }
 
 /// A probed file.
@@ -45,8 +48,9 @@ pub struct Probed {
 }
 
 /// An insertion into the copy: its position, its text, and — for a note —
-/// the definition's id, number, `{` byte and body end.
-type Insert = (usize, String, Option<(String, u32, usize, usize)>);
+/// the definition's id, number, `{` byte, body end and whether it is
+/// `extern inline`.
+type Insert = (usize, String, Option<(String, u32, usize, usize, bool)>);
 
 /// Probe `source`, the file at `rel_path` (repo-relative, as the facts name
 /// it). `index_of(canonical id)` is the note's number: the index of the
@@ -92,7 +96,15 @@ pub fn probe_source(
         };
         match placed {
             Ok((at, end)) => {
-                inserts.push((at + 1, note(n), Some((id, n, at, end))));
+                let words: Vec<&str> = def
+                    .signature
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .collect();
+                let inline_only = words.contains(&"extern")
+                    && words
+                        .iter()
+                        .any(|w| matches!(*w, "inline" | "__inline" | "__inline__"));
+                inserts.push((at + 1, note(n), Some((id, n, at, end, inline_only))));
                 if options.end_tokens && end > at + 1 && source.get(end - 1) == Some(&b'}') {
                     inserts.push((end - 1, format!(" __ruharness_end_{n} "), None));
                 }
@@ -113,10 +125,11 @@ pub fn probe_source(
     let notes: Vec<PlacedNote> = inserts
         .iter()
         .filter_map(|(_, _, placed)| placed.as_ref())
-        .map(|(id, n, at, end)| PlacedNote {
+        .map(|(id, n, at, end, inline_only)| PlacedNote {
             id: id.clone(),
             n: *n,
             body: (at + shift(*at), end + shift(end - 1)),
+            inline_only: *inline_only,
         })
         .collect();
     let mut out = Vec::with_capacity(source.len() + inserts.len() * 32);
@@ -308,6 +321,163 @@ mod tests {
         assert_eq!(p.notes.len(), 6, "{p:?}");
     }
 
+    /// The definitions the scanner records in `src` (as `src/a.c`).
+    fn defs_of(src: &str) -> Vec<crate::FnDef> {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_c::LANGUAGE.into())
+            .expect("grammar");
+        let tree = parser.parse(src, None).expect("parses");
+        let mut defs = Vec::new();
+        crate::collect_functions(tree.root_node(), src.as_bytes(), "src/a.c", &mut defs);
+        defs
+    }
+
+    /// Fix pass 2's check: two heads run together in any layout — GNU's
+    /// return type on its own line, one line, K&R, `static` on its own
+    /// line, a `…_t` or a typedef'd type, a pointer, a parenthesized or
+    /// nested name — are both recorded and both rule 1; the first head's
+    /// note never lands in the second's body.
+    #[test]
+    fn two_heads_in_any_layout_are_both_recorded_and_unwatched() {
+        let cases = [
+            ("int g(void) NI\n\nint\nafter(void)\n{ return 1; }\n", false),
+            ("int g(void) NI\n\nint\nafter()\n{ return 1; }\n", false),
+            ("int g(void) NI int after(void) { return 1; }\n", false),
+            ("int g(void) NI\nafter(x) int x; { return x; }\n", false),
+            (
+                "int g(void) NI\nstatic\nint after(void) { return 1; }\n",
+                true,
+            ),
+            (
+                "static int g(void) NI\n\nstatic int\nafter(int x, char *y)\n{ return x; }\n",
+                true,
+            ),
+            (
+                "int g(void) NI\nsize_t\nafter(size_t n, const char *s) { return 1; }\n",
+                false,
+            ),
+            ("int g(void) NI\nchar *after(void) { return 0; }\n", false),
+            ("int g(void) NI\nint (after)(void) { return 1; }\n", false),
+            (
+                "int g(void) NI\nvoid (*after(void))(int) { return 0; }\n",
+                false,
+            ),
+            (
+                "int g(void) NI\nmytype\nafter(int x)\n{ return x; }\n",
+                false,
+            ),
+        ];
+        for (src, second_static) in cases {
+            let defs = defs_of(src);
+            let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+            assert_eq!(names, ["g", "after"], "{src}: {defs:?}");
+            assert!(
+                defs.iter().all(|d| d.note_at == Err(NoNote::Parser)),
+                "{src}: {defs:?}"
+            );
+            assert_eq!(defs[1].is_static, second_static, "{src}");
+            let g = if defs[0].is_static { "src/a.c::g" } else { "g" };
+            let after = if second_static {
+                "src/a.c::after"
+            } else {
+                "after"
+            };
+            let p = probe(src, &[g, after]);
+            assert!(p.notes.is_empty(), "{src}: {p:?}");
+        }
+        // The second head's signature is a declaration.
+        let defs = defs_of("int g(void) NI\nstatic\nint after(void) { return 1; }\n");
+        assert_eq!(defs[1].signature, "static int after(void)");
+        let defs = defs_of("int g(void) NI\nchar *after(void) { return 0; }\n");
+        assert_eq!(defs[1].signature, "char *after(void)");
+    }
+
+    /// Fix pass 2's check: annotation macros keep the note — numbers, a
+    /// single name, an address, nested calls — on the parameters' line or
+    /// the next, after an annotation word or alone; no made-up function.
+    #[test]
+    fn annotations_after_the_parameters_keep_the_note() {
+        for src in [
+            "void say(const char *fmt, ...)\n    WARN_UNUSED PRINTF_LIKE(1, 2)\n{ }\n",
+            "int e(void)\n  MACRO __acquires(lock)\n{ return 0; }\n",
+            "int h(void) __releases(&l) __acquires(&l) { return 0; }\n",
+            "int held(void) __must_hold(&lock) { return 0; }\n",
+            "int n(char *p) NONNULL(1) { return 0; }\n",
+            "int q(char *p)\n__nonnull((1))\n{ return 0; }\n",
+            "int v(void)\nAPPLE_ARCHIVE_AVAILABLE(macos(11.0), ios(14.0))\n{ return 0; }\n",
+            "int r(int i) __constant_range(i, 0, 3) { return i; }\n",
+        ] {
+            let defs = defs_of(src);
+            assert_eq!(defs.len(), 1, "{src}: {defs:?}");
+            assert!(defs[0].note_at.is_ok(), "{src}: {defs:?}");
+        }
+    }
+
+    /// Fix pass 2's check: a macro read as the declarator before the real
+    /// name gives the definition the real name, rule 1 — never a function
+    /// named after the macro, and two such definitions never share a note.
+    #[test]
+    fn a_macro_before_the_real_name_is_not_a_function() {
+        let src = "static void * SIZED(size) alloc_a(int size) { return 0; }\n\
+                   static void * SIZED(size) alloc_b(int size) { return 0; }\n\
+                   static void\npg_attribute_unused()\nRT_DUMP_NODE(RT_NODE * node)\n{ }\n";
+        let defs = defs_of(src);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["alloc_a", "alloc_b", "RT_DUMP_NODE"], "{defs:?}");
+        assert!(
+            defs.iter()
+                .all(|d| d.note_at == Err(NoNote::Parser) && d.is_static),
+            "{defs:?}"
+        );
+    }
+
+    #[test]
+    fn a_parameter_list_is_told_from_an_annotations_arguments() {
+        for args in [
+            "(void)",
+            "(int size)",
+            "(size_t n, const char *s)",
+            "(RT_NODE * node)",
+            "(struct s *p)",
+            "(T buf[4])",
+            "(unsigned)",
+        ] {
+            assert!(crate::decl_shaped(args), "{args}");
+        }
+        for args in [
+            "()",
+            "(1, 2)",
+            "(lock)",
+            "(&lock)",
+            "((1))",
+            "(macos(11.0), ios(14.0))",
+            "(printf, 1, 2)",
+            "(\"za\")",
+            "(x)",
+            "(...)",
+        ] {
+            assert!(!crate::decl_shaped(args), "{args}");
+        }
+    }
+
+    /// Fix pass 2's check: a C23 attribute inside the declarator keeps the
+    /// definition and its note; a parameter named `naked` is no attribute.
+    #[test]
+    fn a_c23_attribute_inside_the_declarator_keeps_the_note() {
+        let src = "int f [[gnu::cold]] (void) { return 0; }\n\
+                   static int c [[maybe_unused]] (int x) { return x; }\n\
+                   int *d [[gnu::cold]] (void) { return 0; }\n\
+                   int h(int naked) [[gnu::cold]] { return naked; }\n";
+        let defs = defs_of(src);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["f", "c", "d", "h"], "{defs:?}");
+        assert!(
+            defs.iter().all(|d| d.note_at.is_ok() && !d.naked_head),
+            "{defs:?}"
+        );
+    }
+
     /// Fix pass 1's check: a definition inside a body the parser read
     /// whole — a GNU nested function, a statement macro misread after an
     /// `#endif` — is no file-scope function; the body keeps its note.
@@ -339,6 +509,18 @@ mod tests {
         assert!(!crate::body_misread(
             b"{\n#ifdef A\n if (x) { y(); }\n#else\n z();\n#endif\n}\n"
         ));
+        // Fix pass 2's check: groups whose excess braces cancel inside the
+        // body (a lock taken in one #if, released in a later one) are read
+        // right — no descent, the body keeps its note.
+        let balanced = "int k(int z) {\n#if USE_LOCK\n  if (lock()) {\n#else\n  {\n#endif\n\
+                        int inner(int y) { return y + 1; }\n    z = inner(z);\n\
+                        #if USE_LOCK\n    unlock(); }\n#else\n  }\n#endif\n  return z;\n}\n";
+        assert!(!crate::body_misread(
+            &balanced.as_bytes()[balanced.find('{').expect("body")..]
+        ));
+        let defs = defs_of(balanced);
+        assert_eq!(defs.len(), 1, "{defs:?}");
+        assert!(defs[0].note_at.is_ok(), "{defs:?}");
     }
 
     /// The real-code re-run (sqlite3.c, 23 times): an `else if (` right

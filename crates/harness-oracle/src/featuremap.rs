@@ -108,6 +108,19 @@ fn map_inner(
     // target, out of reach of the copy's -I folders; removed on every way out
     // (docs/FEATURES-PROBE-REDESIGN.md §3.4 "Order").
     let out = MapOut::create()?;
+    // The compiler driver's own temporaries (one object per `.c` of a
+    // compile-and-link, gcc's `.s` files) go in the random folder too, so
+    // they leave with it on every way out, a signal included (fix pass 2's
+    // check: the plain build's objects stayed in $TMPDIR, mode 0644).
+    let tool_tmp = out.path().join("tmp");
+    {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+            .create(&tool_tmp)
+            .map_err(|e| Error::io(&tool_tmp, e))?;
+    }
     let write_dirs = vec![build.clone(), out.path().to_path_buf()];
 
     let host = match sandbox_mode() {
@@ -130,6 +143,7 @@ fn map_inner(
         timeout: base.timeout,
         max_output: exec::DEFAULT_MAX_OUTPUT,
         tool_profile,
+        tool_tmpdir: Some(tool_tmp),
     };
     let confined = Confinement {
         runner: &runner,
@@ -303,8 +317,12 @@ fn map_inner(
         });
     }
     let mut unit_reads: Vec<std::collections::BTreeSet<String>> = Vec::new();
-    // Per top-level file: the notes its preprocessed copy holds as code.
+    // Per top-level file: the notes its preprocessed copy holds as code —
+    // in the last listing pass, and in any pass (a note taken out later is
+    // still a definition the unit compiles).
     let mut copy_notes: Vec<std::collections::BTreeSet<u32>> = Vec::new();
+    let mut notes_ever: Vec<std::collections::BTreeSet<u32>> =
+        vec![std::collections::BTreeSet::new(); c_files.len()];
     for pass in 0.. {
         unit_reads.clear();
         copy_notes.clear();
@@ -384,6 +402,7 @@ fn map_inner(
                 .collect();
             entered.retain(|rel| probe.rels().contains(rel));
             unit_reads.push(entered);
+            notes_ever[n].extend(scan.notes.keys().copied());
             copy_notes.push(scan.notes.keys().copied().collect());
         }
         if !changed {
@@ -479,6 +498,21 @@ fn map_inner(
     // unwatched, never "not run" (review: an #if sibling shares its id). A
     // compiler's clone of it (gcc's `f.isra.0`, `f.part.0`) is its name.
     let name_of = |id: &str| id.rsplit("::").next().unwrap_or(id).to_string();
+    // Definitions a rule kept unwatched before this check: compiled where
+    // their file is entered, though they never had a note (fix pass 2's
+    // check: such a namesake explains the symbol too). Taken before the loop,
+    // so its own reasons do not count.
+    let ruled: std::collections::BTreeSet<(String, String)> = probe
+        .reasons
+        .iter()
+        .filter(|(_, reason)| {
+            matches!(
+                reason.kind,
+                Kind::Parser | Kind::NotABlock | Kind::ConditionalBrace | Kind::Naked
+            )
+        })
+        .map(|(pair, _)| pair.clone())
+        .collect();
     for (n, entered) in unit_reads.iter().enumerate() {
         for rel in entered {
             for (file, id) in index.pairs.iter().filter(|(file, _)| file == rel) {
@@ -493,18 +527,20 @@ fn map_inner(
                     .any(|m| unit_reads[m].contains(rel) && copy_notes[m].contains(&number));
                 let name = name_of(id);
                 let external = !id.contains("::");
-                let defined = built.defined[n].iter().any(|d| {
-                    d.function
-                        && (d.external || !external)
-                        && crate::probebuild::function_name(&d.name) == name
-                });
+                let defined = defines_function(&built.defined[n], &name, external);
+                // Another watched definition of the name compiled in this
+                // unit explains the symbol — never an `extern inline` one,
+                // which may emit none (fix pass 2's check).
                 let explained = || {
                     index.pairs.iter().any(|(other_file, other)| {
                         (other_file, other) != (file, id)
                             && name_of(other) == name
-                            && index
+                            && !probe.inline_only(other_file, other)
+                            && (index
                                 .of(other_file, other)
-                                .is_some_and(|k| copy_notes[n].contains(&k))
+                                .is_some_and(|k| notes_ever[n].contains(&k))
+                                || (entered.contains(other_file)
+                                    && ruled.contains(&(other_file.clone(), other.clone()))))
                     })
                 };
                 if !compiled && defined && !explained() {
@@ -623,21 +659,29 @@ fn compare_reads(c_file: &Path, program: &Reads, copied: &Reads, root: &Path) ->
     Ok(())
 }
 
+/// Whether an object defines a function named `name` — code only (a
+/// variable of the name is not one), external when `external`, a
+/// compiler's clone (gcc's `f.isra.0`, `f.part.0`) counting as `f`.
+fn defines_function(defined: &[crate::objsyms::Defined], name: &str, external: bool) -> bool {
+    defined.iter().any(|d| {
+        d.function && (d.external || !external) && crate::probebuild::function_name(&d.name) == name
+    })
+}
+
 /// The folder a map makes everything in after the mirror
 /// (`$TMPDIR/ruharness-map-<random>`), removed when dropped — on success,
 /// refusal and error — and by [`remove_live_scratch_dirs`] when a signal
 /// ends the harness (the process dies by it, so no drop runs).
 struct MapOut(PathBuf);
 
-/// The random folders of maps in progress.
+/// The random folders of maps in progress, and every run's temp folder.
 static LIVE_DIRS: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
     std::sync::Mutex::new(std::collections::BTreeSet::new());
 
-/// Remove the random folder of every map in progress — the signal handler's
-/// part, after it has killed the children that write there. Final, as the
-/// process registry is: the registry stays locked for good, so no map
-/// makes a folder afterwards while the process is on its way out. Returns
-/// how many it removed.
+/// Remove every registered folder — the signal handler's part, after it has
+/// killed the children that write there. Final, as the process registry is:
+/// the registry stays locked for good, so no folder is made afterwards
+/// while the process is on its way out. Returns how many it removed.
 pub fn remove_live_scratch_dirs() -> usize {
     let live = LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner());
     for dir in live.iter() {
@@ -646,6 +690,45 @@ pub fn remove_live_scratch_dirs() -> usize {
     let n = live.len();
     std::mem::forget(live);
     n
+}
+
+/// Make a folder with `make` and register it for the signal's cleanup —
+/// under the registry's lock, after a check for a signal, so the cleanup
+/// either sees the folder or ran before it (fix pass 2's check: a run's temp
+/// folder outlived a Ctrl-C).
+pub(crate) fn make_live_dir(
+    make: impl FnOnce() -> Result<PathBuf, Error>,
+) -> Result<PathBuf, Error> {
+    let mut live = LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner());
+    if crate::exec::cancelled() {
+        return Err(Error::Interrupted);
+    }
+    let dir = make()?;
+    live.insert(dir.clone());
+    Ok(dir)
+}
+
+/// Whether `dir` is registered for the signal's cleanup (tests).
+#[cfg(test)]
+pub(crate) fn is_live_dir(dir: &Path) -> bool {
+    LIVE_DIRS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(dir)
+}
+
+/// Remove a folder [`make_live_dir`] made, and forget it — after a signal
+/// the registry stays locked for good (see [`remove_live_scratch_dirs`]):
+/// nothing to forget.
+pub(crate) fn drop_live_dir(dir: &Path) {
+    let _ = std::fs::remove_dir_all(dir);
+    if crate::exec::cancelled() {
+        return;
+    }
+    LIVE_DIRS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(dir);
 }
 
 impl MapOut {
@@ -658,42 +741,36 @@ impl MapOut {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        // Made and registered under the registry's lock, after a check for
-        // a signal: the cleanup either sees the folder or ran before it.
-        let mut live = LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner());
-        if crate::exec::cancelled() {
-            return Err(Error::Interrupted);
-        }
-        for _ in 0..1000 {
-            let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let tag = harness_core::hash::bytes_hash(
-                format!("{}-{nanos}-{n}", std::process::id()).as_bytes(),
-            );
-            let hex = tag
-                .strip_prefix(harness_core::hash::HASH_PREFIX)
-                .unwrap_or(&tag);
-            let dir = base.join(format!("ruharness-map-{}", &hex[..16]));
-            // Only the person can read it: it holds the whole preprocessed
-            // program and its binaries (review: a shared /tmp).
-            let made = {
-                let mut builder = std::fs::DirBuilder::new();
-                #[cfg(unix)]
-                std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-                builder.create(&dir)
-            };
-            match made {
-                Ok(()) => {
-                    live.insert(dir.clone());
-                    return Ok(MapOut(dir));
+        make_live_dir(|| {
+            for _ in 0..1000 {
+                let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let tag = harness_core::hash::bytes_hash(
+                    format!("{}-{nanos}-{n}", std::process::id()).as_bytes(),
+                );
+                let hex = tag
+                    .strip_prefix(harness_core::hash::HASH_PREFIX)
+                    .unwrap_or(&tag);
+                let dir = base.join(format!("ruharness-map-{}", &hex[..16]));
+                // Only the person can read it: it holds the whole preprocessed
+                // program and its binaries (review: a shared /tmp).
+                let made = {
+                    let mut builder = std::fs::DirBuilder::new();
+                    #[cfg(unix)]
+                    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+                    builder.create(&dir)
+                };
+                match made {
+                    Ok(()) => return Ok(dir),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(Error::io(&dir, e)),
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(Error::io(&dir, e)),
             }
-        }
-        Err(Error::Invariant(format!(
-            "could not create a fresh folder for the features map under {}",
-            base.display()
-        )))
+            Err(Error::Invariant(format!(
+                "could not create a fresh folder for the features map under {}",
+                base.display()
+            )))
+        })
+        .map(MapOut)
     }
 
     fn path(&self) -> &Path {
@@ -703,16 +780,7 @@ impl MapOut {
 
 impl Drop for MapOut {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-        // After a signal the registry stays locked for good (see
-        // `remove_live_scratch_dirs`): nothing to unregister.
-        if crate::exec::cancelled() {
-            return;
-        }
-        LIVE_DIRS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.0);
+        drop_live_dir(&self.0);
     }
 }
 
@@ -1246,6 +1314,38 @@ fn decode_notes(bytes: &[u8], index: &PairIndex) -> Result<Vec<(String, String)>
 
 #[cfg(test)]
 mod tests {
+    /// Fix pass 2's check: a compiler's clone of a function (gcc's
+    /// `scale.isra.0`, `scale.part.0`) is that function; a variable of the
+    /// name is not; an external id needs an external symbol.
+    #[test]
+    fn a_function_defined_is_read_by_its_c_name_and_kind() {
+        let d = |name: &str, external: bool, function: bool| crate::objsyms::Defined {
+            name: name.to_string(),
+            external,
+            function,
+        };
+        assert!(defines_function(
+            &[d("scale.isra.0", false, true)],
+            "scale",
+            false
+        ));
+        assert!(defines_function(
+            &[d("scale.part.0", false, true)],
+            "scale",
+            false
+        ));
+        assert!(
+            !defines_function(&[d("scale", false, false)], "scale", false),
+            "data"
+        );
+        assert!(
+            !defines_function(&[d("scale", false, true)], "scale", true),
+            "a static"
+        );
+        assert!(defines_function(&[d("scale", true, true)], "scale", true));
+        assert!(!defines_function(&[d("scaler", true, true)], "scale", true));
+    }
+
     use super::*;
     use harness_core::facts::SymbolRecord;
 

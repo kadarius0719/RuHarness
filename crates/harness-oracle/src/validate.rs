@@ -135,6 +135,7 @@ fn run(
         timeout: base.timeout,
         max_output: crate::exec::DEFAULT_MAX_OUTPUT,
         tool_profile,
+        tool_tmpdir: None,
     };
     let cc_version = crate::tool_first_line(&runner, &["cc", "--version"])?;
     let inputs = DriverValidationInputs {

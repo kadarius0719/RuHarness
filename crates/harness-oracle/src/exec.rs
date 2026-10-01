@@ -225,6 +225,10 @@ pub(crate) struct Runner {
     pub max_output: usize,
     /// Sandbox profile for tool invocations (`None` = unsandboxed).
     pub tool_profile: Option<String>,
+    /// `TMPDIR` for tool children, over the person's (the features map's:
+    /// inside its random folder, so a compiler driver's temporaries go with
+    /// it on every way out; fix pass 2's check).
+    pub tool_tmpdir: Option<PathBuf>,
 }
 
 impl Runner {
@@ -262,7 +266,10 @@ impl Runner {
             )));
         }
         let shown = argv.join(" ");
-        let env = tool_env(extra_env);
+        let mut env = tool_env(extra_env);
+        if let Some(tmp) = &self.tool_tmpdir {
+            env.push(("TMPDIR", tmp.as_os_str()));
+        }
         let out = self.spawn(argv, profile, TOOL_ENV, &env, &shown, Wait::Tool)?;
         match out.end {
             ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
@@ -328,7 +335,10 @@ impl Runner {
             )));
         }
         let shown = argv.join(" ");
-        let env = tool_env(&[]);
+        let mut env = tool_env(&[]);
+        if let Some(tmp) = &self.tool_tmpdir {
+            env.push(("TMPDIR", tmp.as_os_str()));
+        }
         self.spawn(
             argv,
             self.tool_profile.as_deref(),
@@ -744,6 +754,7 @@ mod tests {
             timeout,
             max_output: DEFAULT_MAX_OUTPUT,
             tool_profile: None,
+            tool_tmpdir: None,
         }
     }
 
@@ -793,6 +804,18 @@ mod tests {
             "builds are dated alike: {text}"
         );
         assert!(!keys.iter().any(|k| k == "CARGO_MANIFEST_DIR"));
+    }
+
+    /// Fix pass 2's check: a runner's own TMPDIR reaches its tools over the
+    /// person's.
+    #[test]
+    fn a_runners_tmpdir_reaches_its_tools() {
+        let mut r = runner(Duration::from_secs(10));
+        r.tool_tmpdir = Some(PathBuf::from("/nowhere/tmp"));
+        let out = r.tool(&sv(&["env"])).expect("env runs");
+        let text = String::from_utf8_lossy(&out);
+        let tmp: Vec<&str> = text.lines().filter(|l| l.starts_with("TMPDIR=")).collect();
+        assert_eq!(tmp, ["TMPDIR=/nowhere/tmp"], "{text}");
     }
 
     #[test]

@@ -3228,9 +3228,15 @@ fn reason_for<'m>(
 }
 
 /// Check of fix pass 1: every linker lists only some referrers (ld64 seven,
-/// then `...`): the search reaches the objects it leaves out.
+/// then `...`): the search reaches the objects it leaves out — through the
+/// retry over every unit, when the named objects alone cannot explain it.
 #[test]
 fn a_link_search_reaches_the_objects_the_linker_leaves_unlisted() {
+    // clang's inlining threshold (the tipping fixtures): skipped elsewhere.
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
     let (main, files, ids) = shared_tip(8);
     let extra: Vec<(&str, &str)> = files
         .iter()
@@ -3249,6 +3255,11 @@ fn a_link_search_reaches_the_objects_the_linker_leaves_unlisted() {
 /// placed round.
 #[test]
 fn a_search_after_the_last_placed_round_still_runs() {
+    // clang's inlining threshold (the tipping fixtures): skipped elsewhere.
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
     let w = tipping_w(23, 4, true).replace(
         "extern void bad_size(void);",
         "__attribute__((error(\"not constant\"))) extern void bad_size(void);",
@@ -3282,6 +3293,11 @@ fn a_search_after_the_last_placed_round_still_runs() {
 /// file goes back unprobed, no note blamed.
 #[test]
 fn a_search_keeps_within_the_per_file_bound() {
+    // clang's inlining threshold (the tipping fixtures): skipped elsewhere.
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
     let (body, _) = tipping_pairs(1);
     let a = format!("{body}int a_use(void) {{ return f0() + h0(); }}\n");
     let main = "#include \"unit.h\"\n#include \"mul.h\"\nint a_use(void);\n\
@@ -3412,4 +3428,214 @@ fn a_skipped_function_beside_a_variable_of_its_name_is_not_run() {
         "{:?}",
         map.unwatched_reasons
     );
+}
+
+// ---- fix pass 3 (the check of fix pass 2) ----
+
+/// Check of fix pass 2: no top-level file spends more compiles than its
+/// bound (give-up's last compile aside) — the search's first checks and the
+/// restore pass's room included — at any bound.
+#[test]
+fn no_file_compiles_past_its_bound() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let (body, _) = tipping_pairs(2);
+    let a = format!("{body}int a_use(void) {{ return f0() + h0() + f1() + h1(); }}\n");
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nint a_use(void);\n\
+                int main(void) { return unit_add(1, 2) == 3 ? a_use() - 22 : (int)mul_step(0, 1); }\n";
+    let ids = [
+        ("src/tool/a.c", "src/tool/a.c::g0"),
+        ("src/tool/a.c", "src/tool/a.c::g1"),
+        ("src/tool/a.c", "a_use"),
+    ];
+    for bound in 1..=12 {
+        let bounds = harness_oracle::MapBounds {
+            file_compiles: bound,
+            ..DESIGN_BOUNDS
+        };
+        let (_tmp, map, _) = map_program_bounded(
+            &format!("file-bound-{bound}"),
+            main,
+            &[("src/tool/a.c", &a)],
+            &ids,
+            bounds,
+        );
+        map.expect("maps");
+        let most = harness_oracle::last_map_most_file_compiles();
+        assert!(most <= bound, "bound {bound}: a file spent {most} compiles");
+    }
+}
+
+/// Check of fix pass 2: a cut-short list whose referrers all sit in the
+/// object the linker names searches that object alone — never every unit
+/// at once, which the pass bound would turn into every file unprobed.
+#[test]
+fn a_cut_list_in_one_object_searches_that_object() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let (_, files, _) = shared_tip(0);
+    let tip = &files[0].1;
+    let mut u = String::from("#include \"tip.h\"\n");
+    for k in 0..8 {
+        u.push_str(&format!("int fa{k}(void) {{ return w({k}); }}\n"));
+    }
+    let mut extra: Vec<(String, String)> = vec![
+        ("src/tool/tip.h".to_string(), tip.clone()),
+        ("src/tool/u.c".to_string(), u),
+    ];
+    let mut ids: Vec<(String, String)> = vec![(
+        "src/tool/tip.h".to_string(),
+        "src/tool/tip.h::g".to_string(),
+    )];
+    for k in 0..8 {
+        ids.push(("src/tool/u.c".to_string(), format!("fa{k}")));
+        extra.push((
+            format!("src/tool/t{k}.c"),
+            format!("int xf{k}(int x) {{ return x + {k}; }}\n"),
+        ));
+        ids.push((format!("src/tool/t{k}.c"), format!("xf{k}")));
+    }
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nvolatile int sink; volatile int sink2;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1); }\n";
+    let extra: Vec<(&str, &str)> = extra
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let bounds = harness_oracle::MapBounds {
+        pass_compiles: 20,
+        ..DESIGN_BOUNDS
+    };
+    let (_tmp, map, _) = map_program_bounded("cut-in-one-object", main, &extra, &ids, bounds);
+    let map = map.expect("maps");
+    let g = reason_for(&map, "src/tool/tip.h::g").expect("g unwatched");
+    assert_eq!(g.kind, "link", "{:?}", map.unwatched_reasons);
+    for id in ["xf0", "xf7", "unit_add", "main"] {
+        assert!(
+            reason_for(&map, id).is_none(),
+            "{id}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+}
+
+/// Check of fix pass 2: an `extern inline` (gnu_inline) namesake emits no
+/// symbol, so it never explains the one a hidden variant defines — the
+/// visible sibling is unwatched, never "not run".
+#[test]
+fn an_inline_only_namesake_explains_no_symbol() {
+    let h = "extern inline __attribute__((gnu_inline)) int helper(int x) { return x * 5; }\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
+                #if 0\nint helper(int x) { return x - 1; }\n#else\n\
+                __attribute__((noinline)) int (helper)(int x) { return x * 3; }\n#endif\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(1) - 3 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "inline-only-namesake",
+        main,
+        &[("src/tool/h.h", h)],
+        &[("src/tool/h.h", "helper"), ("src/tool/main.c", "helper")],
+    );
+    let map = map.expect("maps");
+    let visible = map
+        .unwatched_reasons
+        .iter()
+        .find(|r| r.file == "src/tool/main.c" && r.id == "helper");
+    assert_eq!(
+        visible.map(|r| r.kind.as_str()),
+        Some("parser"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Check of fix pass 2: a namesake a rule kept unwatched (rule 1 here: a
+/// second head run into the first) is still compiled — it explains the
+/// symbol, so a header's skipped static of the name reads "not run", never
+/// "the one compiled is another definition".
+#[test]
+fn a_ruled_out_namesake_explains_its_symbol() {
+    let h = "#ifdef USE_FAST\nstatic int helper(int x) { return x * 3; }\n#endif\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
+                #define NI { return 1; }\nstatic int other(void) NI\n\
+                __attribute__((noinline)) static int helper(int x) { return x + 7; }\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(0) - 7 + other() - 1 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "ruled-namesake",
+        main,
+        &[("src/tool/h.h", h)],
+        &[
+            ("src/tool/h.h", "src/tool/h.h::helper"),
+            ("src/tool/main.c", "src/tool/main.c::other"),
+            ("src/tool/main.c", "src/tool/main.c::helper"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert!(
+        reason_for(&map, "src/tool/h.h::helper").is_none(),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert_eq!(
+        reason_for(&map, "src/tool/main.c::helper").map(|r| r.kind.as_str()),
+        Some("parser"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Check of fix pass 2: two heads run together in GNU's layout (the return
+/// type on its own line) — both unwatched (rule 1); the first never reads as
+/// run when the second ran.
+#[test]
+fn two_heads_in_gnu_layout_map_honestly() {
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n\
+                #define NOT_IMPLEMENTED { return -1; }\n\
+                int g(void) NOT_IMPLEMENTED\n\nint\nafter(void)\n{\n  return 1;\n}\n\
+                int main(void) { return unit_add(1, 2) == 3 ? after() - 1 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "gnu-layout-heads",
+        main,
+        &[],
+        &[("src/tool/main.c", "g"), ("src/tool/main.c", "after")],
+    );
+    let map = map.expect("maps");
+    for id in ["g", "after"] {
+        assert_eq!(
+            reason_for(&map, id).map(|r| r.kind.as_str()),
+            Some("parser"),
+            "{id}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+}
+
+/// Check of fix pass 2: the pass's compiles never pass the pass bound — the
+/// link search's every-note-out trial and each unit's compile included.
+#[test]
+fn the_pass_never_compiles_past_its_bound() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let (main, files, ids) = shared_tip(8);
+    let extra: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    for bound in [3, 8, 16, 30] {
+        let bounds = harness_oracle::MapBounds {
+            pass_compiles: bound,
+            ..DESIGN_BOUNDS
+        };
+        let (_tmp, map, _) =
+            map_program_bounded(&format!("pass-bound-{bound}"), &main, &extra, &ids, bounds);
+        map.expect("maps");
+        let spent = harness_oracle::last_map_pass_compiles();
+        assert!(spent <= bound, "bound {bound}: the pass spent {spent}");
+    }
 }

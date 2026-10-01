@@ -77,6 +77,7 @@ impl ToolBench {
             timeout: Duration::from_secs(300),
             max_output: DEFAULT_MAX_OUTPUT,
             tool_profile,
+            tool_tmpdir: None,
         };
         let version = runner
             .tool(&["rustc".to_string(), "-V".to_string()])

@@ -128,6 +128,9 @@ pub(crate) struct Probe {
     files: BTreeMap<String, File>,
     /// `(file, id)` → why it has no note.
     pub reasons: BTreeMap<(String, String), Reason>,
+    /// `(file, id)` of every `extern inline` definition a note was ever
+    /// placed in.
+    inline_only: BTreeSet<(String, String)>,
     gcc: bool,
 }
 
@@ -237,6 +240,9 @@ impl Probe {
             (probed.source, probed.notes)
         };
         if !end_tokens && extra.is_empty() {
+            for note in notes.iter().filter(|note| note.inline_only) {
+                self.inline_only.insert((rel.to_string(), note.id.clone()));
+            }
             file.notes = notes;
         }
         crate::featuremap::write_file(&mirror.join(rel), &bytes)
@@ -263,6 +269,13 @@ impl Probe {
         self.files
             .get(rel)
             .is_some_and(|f| !f.unprobed && !f.skip.iter().any(|s| s == id))
+    }
+
+    /// Whether `id` in `rel` is an `extern inline` definition (it may emit no
+    /// symbol).
+    pub(crate) fn inline_only(&self, rel: &str, id: &str) -> bool {
+        self.inline_only
+            .contains(&(rel.to_string(), id.to_string()))
     }
 
     /// Put `id`'s note back in `rel` (the search's restore pass).
@@ -305,53 +318,90 @@ impl Probe {
     }
 }
 
-/// `s` past blanks and block comments.
-fn skip_blanks_and_comments(mut s: &[u8]) -> &[u8] {
-    loop {
-        s = trim_start(s);
-        match s.strip_prefix(b"/*") {
-            Some(rest) => match find(rest, b"*/") {
-                Some(end) => s = &rest[end + 2..],
-                None => return &[],
-            },
-            None => return s,
-        }
-    }
+/// The end of the block comment opening at `at` (`/*`), or the text's end.
+fn comment_end(text: &[u8], at: usize) -> usize {
+    find(&text[at + 2..], b"*/").map_or(text.len(), |end| at + 2 + end + 2)
 }
 
-/// Whether `source` holds a `#line` or line-marker directive, read as the
-/// preprocessor reads directives (fix pass 1's check): lines end at `\n`,
-/// `\r\n` or a lone `\r`; a backslash before a line end splices; blanks and
-/// block comments before and after `#` (or `%:`) are skipped.
+/// Whether `source` holds a `#line` or line-marker directive, read in one
+/// pass as the preprocessor reads directives (fix pass 2's check): a
+/// backslash, then blanks, then a line end splices; lines end at `\n`,
+/// `\r\n` or a lone `\r`; a directive is a `#` or `%:` that is the first
+/// token on its line — blanks and block comments before it (which may run
+/// across lines) do not count, and string and character literals are skipped
+/// whole; after it, blanks and block comments, then `line` or a digit.
 fn holds_line_directive(source: &[u8]) -> bool {
-    let mut joined: Vec<u8> = Vec::with_capacity(source.len());
+    let mut text: Vec<u8> = Vec::with_capacity(source.len());
     let mut i = 0;
     while i < source.len() {
         if source[i] == b'\\' {
-            let rest = &source[i + 1..];
-            let splice = if rest.starts_with(b"\r\n") {
-                3
-            } else if rest.first().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+            let mut j = i + 1;
+            while matches!(source.get(j), Some(b' ' | b'\t' | 0x0b | 0x0c)) {
+                j += 1;
+            }
+            let end = if source[j.min(source.len())..].starts_with(b"\r\n") {
                 2
+            } else if matches!(source.get(j), Some(b'\n' | b'\r')) {
+                1
             } else {
                 0
             };
-            if splice > 0 {
-                i += splice;
+            if end > 0 {
+                i = j + end;
                 continue;
             }
         }
-        joined.push(if source[i] == b'\r' { b'\n' } else { source[i] });
+        text.push(if source[i] == b'\r' { b'\n' } else { source[i] });
         i += 1;
     }
-    joined.split(|b| *b == b'\n').any(|line| {
-        let t = skip_blanks_and_comments(line);
-        let after = t.strip_prefix(b"#").or_else(|| t.strip_prefix(b"%:"));
-        after.is_some_and(|r| {
-            let r = skip_blanks_and_comments(r);
-            r.starts_with(b"line") || r.first().is_some_and(u8::is_ascii_digit)
-        })
-    })
+    let blank = |b: u8| matches!(b, b' ' | b'\t' | 0x0b | 0x0c);
+    let mut at_start = true;
+    let mut i = 0;
+    while i < text.len() {
+        match text[i] {
+            b'\n' => {
+                at_start = true;
+                i += 1;
+            }
+            b if blank(b) => i += 1,
+            b'/' if text.get(i + 1) == Some(&b'*') => i = comment_end(&text, i),
+            b'/' if text.get(i + 1) == Some(&b'/') => {
+                i = text[i..]
+                    .iter()
+                    .position(|b| *b == b'\n')
+                    .map_or(text.len(), |at| i + at);
+            }
+            quote @ (b'"' | b'\'') => {
+                let mut j = i + 1;
+                while j < text.len() && text[j] != quote && text[j] != b'\n' {
+                    j += if text[j] == b'\\' { 2 } else { 1 };
+                }
+                i = (j + 1).min(text.len());
+                at_start = false;
+            }
+            b'#' | b'%' if at_start && (text[i] == b'#' || text.get(i + 1) == Some(&b':')) => {
+                let mut j = i + if text[i] == b'#' { 1 } else { 2 };
+                loop {
+                    match text.get(j) {
+                        Some(b) if blank(*b) => j += 1,
+                        Some(b'/') if text.get(j + 1) == Some(&b'*') => j = comment_end(&text, j),
+                        _ => break,
+                    }
+                }
+                let rest = &text[j.min(text.len())..];
+                if rest.starts_with(b"line") || rest.first().is_some_and(u8::is_ascii_digit) {
+                    return true;
+                }
+                at_start = false;
+                i = j;
+            }
+            _ => {
+                at_start = false;
+                i += 1;
+            }
+        }
+    }
+    false
 }
 
 /// What a listing run's preprocessed text says (§3.2, §3.3).
@@ -747,14 +797,16 @@ impl Line {
     }
 }
 
-/// The length of a Unicode space clang reads as whitespace between tokens
-/// (U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F,
-/// U+3000) at the start of `rest`, or 0 (fix pass 1's check: a no-break space
-/// before `R"` made the raw string part of a word).
+/// The length of a Unicode space clang reads as whitespace between tokens at
+/// the start of `rest`, or 0 (fix pass 1's check: a no-break space before
+/// `R"` made the raw string part of a word). The list is clang's own
+/// (`UnicodeWhitespaceCharRanges` in clang/lib/Lex/UnicodeCharSets.h):
+/// U+0085, U+00A0, U+1680, U+180E, U+2000–U+200A, U+2028, U+2029, U+202F,
+/// U+205F, U+3000.
 fn unicode_space(rest: &[u8]) -> usize {
     match rest {
         [0xc2, 0x85 | 0xa0, ..] => 2,
-        [0xe1, 0x9a, 0x80, ..] => 3,
+        [0xe1, 0x9a, 0x80, ..] | [0xe1, 0xa0, 0x8e, ..] => 3,
         [0xe2, 0x80, 0x80..=0x8a | 0xa8 | 0xa9 | 0xaf, ..] => 3,
         [0xe2, 0x81, 0x9f, ..] => 3,
         [0xe3, 0x80, 0x80, ..] => 3,
@@ -835,7 +887,10 @@ fn lex(text: &[u8]) -> Vec<Line> {
                     {
                         j += 2
                     }
-                    Some(c) if ident_byte(*c) || *c == b'.' => j += 1,
+                    // A Unicode space ends a number as it ends a word.
+                    Some(c) if (ident_byte(*c) && unicode_space(&text[j..]) == 0) || *c == b'.' => {
+                        j += 1
+                    }
                     // A C23 digit separator: `'` then a digit or a letter.
                     Some(b'\'')
                         if text
@@ -1138,6 +1193,47 @@ mod tests {
             );
         }
         assert!(!holds_line_directive(b"int line;\n// #line 4\n"));
+        // Fix pass 2's check: every space clang reads as whitespace keeps the
+        // tokenizer in step before a raw string (U+180E was missing), and a
+        // number ends at one.
+        let spaces = [
+            "\u{85}", "\u{a0}", "\u{1680}", "\u{180e}", "\u{2000}", "\u{2001}", "\u{2002}",
+            "\u{2003}", "\u{2004}", "\u{2005}", "\u{2006}", "\u{2007}", "\u{2008}", "\u{2009}",
+            "\u{200a}", "\u{2028}", "\u{2029}", "\u{202f}", "\u{205f}", "\u{3000}",
+        ];
+        for space in spaces {
+            let copy = format!(
+                "const char *r ={space}R\"(\")\"; const char s[] = \
+                 \"void f(void) {{__ruharness_seen[1] = 1; }}\";\n"
+            );
+            let scan = scan_text(copy.as_bytes());
+            assert_eq!(scan.in_literals, BTreeSet::from([1]), "{space:?}: {scan:?}");
+            assert!(scan.notes.is_empty(), "{space:?}");
+            let copy = format!(
+                "int x = 1{space}'a'; const char s[] = \"void f(void) {{__ruharness_seen[2] = 1; }}\";\n"
+            );
+            assert_eq!(
+                scan_text(copy.as_bytes()).in_literals,
+                BTreeSet::from([2]),
+                "{space:?}"
+            );
+        }
+        // #line after or inside a block comment over lines, after a
+        // backslash-blank splice; never after a token on its line.
+        for spelled in [
+            &b"/* a\n b */ #line 100\n"[..],
+            b"# /* a\n b */ line 200\n",
+            b"#\\ \nline 300\n",
+            b"char *s = \"/*\";\n#line 5\n",
+        ] {
+            assert!(
+                holds_line_directive(spelled),
+                "{:?}",
+                String::from_utf8_lossy(spelled)
+            );
+        }
+        assert!(!holds_line_directive(b"int y; /* a\n b */ #line 400\n"));
+        assert!(!holds_line_directive(b"char *s = \"#line 4\";\n"));
     }
 
     /// Review (`.incbin` split across lines): string literals on several

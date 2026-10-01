@@ -311,7 +311,7 @@ descriptor, and a crash after notes were all recorded; the build re-checks this 
   appear at file scope or at the start of a compound statement)`.
 - The cockpit, where it now says a function is unwatched ("(the probe could not put a note in
   it)"), shows that function's reason instead.
-- The map's inputs gain `probe` (this design's version, `compiler-guided-1`; `compiler-guided-2` after fix pass 1, §10); a map made before
+- The map's inputs gain `probe` (this design's version, `compiler-guided-1`; `compiler-guided-2` after fix pass 2, §10.1); a map made before
   this change reads out of date, "made by an older harness", not current.
 
 ### 3.8 gcc
@@ -466,8 +466,19 @@ test fixtures.
   with the parser reason, and so is the misread function. sqlite3.c: 457 of 4 621 functions
   (winWrite's and decodeIntArray's bodies). Revisit with a preprocessing frontend (libclang).
 - **A hidden variant** (§10): a function the parser cannot read, compiled in place of a visible
-  `#if` sibling of the same id, is caught when a compiled object defines its name; a static
-  inlined everywhere leaves no symbol and still reads "not run".
+  `#if` sibling of the same id, is caught when a compiled object defines a function of its name
+  that no other recorded definition compiled in the unit explains; a static inlined everywhere
+  leaves no symbol and still reads "not run"; a namesake the scan never recorded (made by a
+  macro) cannot explain a symbol, so the sibling then reads unwatched (parser) where "not run"
+  was true (§10.2).
+- **Two heads run together** (§10.2): both are unwatched (rule 1); a second head stays outside the
+  twin rule, so a definition of its id read whole elsewhere in the file (an `#else` branch)
+  loses its note too — unwatched, never a wrong map. A head whose first parameter has a
+  typedef'd type and no type word before it on one line is not caught (the run-together search
+  of real code found 4, in macOS's `malloc.h`).
+- **C23 attributes**: `int f(void) [[gnu::cold]] __attribute__((noinline)) {` (a C23 attribute
+  then a GNU one after the parameters; clang only) is read by tree-sitter-c as a declaration and
+  a block: the definition is not in the facts.
 - **A probed run's time**: +11 % on a call-heavy workload (sqlite3.c); a scenario near
   `timeout_secs` can time out only when probed — recorded as `probe_agrees = false`.
 
@@ -718,3 +729,55 @@ room for two compiles change only how many compiles a file spends at its bound (
 stops it one compile later; no test counts compiles); and with ld64's `...` ignored, the retry
 over every unit still maps the eight-object case, by design — the lib test kills that mutant, and
 with both the `...` and the retry off the map is refused as the reviewer saw.
+
+### 10.2 The check of fix pass 2, and fix pass 3
+
+Three lenses checked fix pass 2 at 4fd10a1 (the tokenizer and scanner; the build and link; the
+hidden variants and the runner), each finding with two verifiers (`wf_b40998a8-a02`,
+`SP/fc2/result.json`): 26 findings, all confirmed by both, none refuted — one high (two heads in
+GNU's layout read as one watched function: a regression of fix pass 2's narrower rule, a silent
+wrong map). Fix pass 3 (the code governs):
+- **Two heads** are found by what follows the first head's parameters, in any layout: a call
+  there is a second head when a type word stands right before it (`int`, `static`, `size_t`; a
+  `*` skipped), a type word follows it (K&R), its arguments read as parameters (`(void)`, `(int
+  size)`, `(RT_NODE * node)`), or its "function" is a type keyword (`int (after)(void)`, `void
+  (*after(void))(int)`); a function declarator nested in another is two heads. Both are recorded,
+  both rule 1; the second's signature runs from its type words and it is static when `static`
+  stands before it. A call whose arguments are numbers, one name, an address or nested calls is an
+  annotation: the definition keeps its note (`WARN_UNUSED PRINTF_LIKE(1, 2)` on the next line,
+  `MACRO __acquires(lock)`, `__must_hold(&lock)`, `APPLE_ARCHIVE_AVAILABLE(macos(11.0))`). A
+  macro read as the declarator before the real name (`SIZED(size) alloc_a(int size)`,
+  `pg_attribute_unused()` then `RT_DUMP_NODE(RT_NODE * node)`) gives the definition the real
+  name, rule 1 — never a function named after the macro, never one note for several.
+- **A misread body** is one whose `#if` groups have two branches that move the brace depth
+  **and** whose first-branch configuration closes its braces somewhere other than at the
+  parser's closing brace: a lock taken in one `#if` and released in a later one is read right.
+  sqlite3.c unchanged (457 and 465).
+- **C23 attributes** inside the declarator (`int f [[gnu::cold]] (void)`) keep the definition;
+  rule 4's parameter list steps through them.
+- **Tokenizer**: U+180E joins clang's other Unicode spaces (the list now cited from clang's
+  `UnicodeWhitespaceCharRanges`); a number ends at one; `#line` is found in one pass (comments over
+  lines, a backslash-blank splice, literals skipped).
+- **Link**: a cut-short list no longer widens the search at once (each trial compiled every unit;
+  under the pass bound the whole program went back unprobed) — the retry over every unit does,
+  when the named objects cannot explain the symbol; the link search checks the pass bound before
+  every compile (its every-note-out trial included), ends at once with no note to take out, and a
+  link failing with no undefined symbol never passes a trial; link rounds are bounded by the notes
+  and probed files (each round takes one out or sends one back), not 32 (the check's case: 218
+  tipped referrers, listed seven a round, were refused as a harness fault).
+- **A killed compiler** is only one ended by a signal from outside (Killed, Terminated,
+  Interrupt, Quit — clang's "unable to execute command: …", gcc's "… signal terminated program",
+  collect2's "terminated with signal 9 [Killed]"), quoted by the line that names it; a crash goes
+  to the search, as before fix pass 2.
+- **Objects**: an ELF section entry size other than 64 is "cannot be read"; an untyped symbol in a
+  section of instructions (a function in assembly without `.type`) is code, as on Mach-O.
+- **Hidden variants**: an `extern inline` namesake (GNU's inline-only idiom) never explains a
+  symbol; a namesake whose note any listing pass held, or that a rule kept unwatched in a file the
+  unit enters, does.
+- **Scratch files**: every run's temp folder is registered for the signal's cleanup as the map's
+  folder is; the map's compiler and linker run with `TMPDIR` inside its folder, so a driver's own
+  temporaries leave with it.
+- **Older maps**: a map of another probe version loads (out of date), its details shown safely.
+- **Tests**: the clang-tuned tests skip off macOS; a compile-count seam
+  (`last_map_most_file_compiles`, hidden) lets a test hold every file to its bound at bounds 1–12
+  (it pins fix pass 2's two live mutants); new tests for each fix.

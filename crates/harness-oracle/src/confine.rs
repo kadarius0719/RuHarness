@@ -480,30 +480,34 @@ fn replace_bytes(hay: &[u8], needle: &[u8], with: &[u8]) -> Vec<u8> {
 struct RunTmp(PathBuf);
 
 impl RunTmp {
+    /// Registered for the signal's cleanup, as a map's random folder is.
     fn create() -> Result<RunTmp, Error> {
         let base_raw = std::env::temp_dir();
         let base = base_raw
             .canonicalize()
             .map_err(|e| Error::io(&base_raw, e))?;
-        for _ in 0..1000 {
-            // Fixed width (review O9): a run's temp dir has the same length
-            // as every other's, so a program that prints its cwd's length
-            // (or pads to it) does not change between the C runs.
-            let dir = base.join(format!(
-                "ruharness-run-{:010}-{:010}",
-                std::process::id(),
-                RUN_COUNTER.fetch_add(1, Ordering::SeqCst)
-            ));
-            match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(RunTmp(dir)),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(Error::io(&dir, e)),
+        crate::featuremap::make_live_dir(|| {
+            for _ in 0..1000 {
+                // Fixed width (review O9): a run's temp dir has the same
+                // length as every other's, so a program that prints its cwd's
+                // length (or pads to it) does not change between the C runs.
+                let dir = base.join(format!(
+                    "ruharness-run-{:010}-{:010}",
+                    std::process::id(),
+                    RUN_COUNTER.fetch_add(1, Ordering::SeqCst)
+                ));
+                match std::fs::create_dir(&dir) {
+                    Ok(()) => return Ok(dir),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(Error::io(&dir, e)),
+                }
             }
-        }
-        Err(Error::Invariant(format!(
-            "could not create a fresh run temp dir under {}",
-            base.display()
-        )))
+            Err(Error::Invariant(format!(
+                "could not create a fresh run temp dir under {}",
+                base.display()
+            )))
+        })
+        .map(RunTmp)
     }
 
     fn path(&self) -> &Path {
@@ -513,7 +517,7 @@ impl RunTmp {
 
 impl Drop for RunTmp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        crate::featuremap::drop_live_dir(&self.0);
     }
 }
 
@@ -523,6 +527,18 @@ mod tests {
     use crate::exec::DEFAULT_MAX_OUTPUT;
     use crate::testutil::TempDir;
     use std::process::Command;
+
+    /// Fix pass 2's check: a run's temp folder is registered for the
+    /// signal's cleanup while it lives, and forgotten when it goes.
+    #[test]
+    fn a_runs_temp_folder_is_registered_while_it_lives() {
+        let tmp = RunTmp::create().expect("made");
+        let path = tmp.path().to_path_buf();
+        assert!(crate::featuremap::is_live_dir(&path));
+        drop(tmp);
+        assert!(!crate::featuremap::is_live_dir(&path));
+        assert!(!path.exists());
+    }
     use std::time::Duration;
 
     /// A probe that reports what it could do, one line per argument:
@@ -600,6 +616,7 @@ int main(int argc, char **argv) {
             timeout: Duration::from_secs(30),
             max_output: DEFAULT_MAX_OUTPUT,
             tool_profile: None,
+            tool_tmpdir: None,
         }
     }
 

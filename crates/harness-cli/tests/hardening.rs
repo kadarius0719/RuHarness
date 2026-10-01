@@ -898,3 +898,80 @@ fn evs_turn_key(unit_dir: &Path, id: &str) -> serde_json::Value {
     let record: serde_json::Value = serde_json::from_str(&text).unwrap();
     record["turns"][0]["request_key"].clone()
 }
+
+/// Fix pass 2's check: every compiler and linker run of a features map gets
+/// its `TMPDIR` inside the map's random folder, so a driver's own
+/// temporaries (an object per `.c`) leave with it on every way out.
+#[cfg(unix)]
+#[test]
+fn a_maps_compilers_keep_their_temporaries_in_its_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = std::env::temp_dir().join(format!("ruharness-map-tmpdir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let target = tmp.join("t");
+    std::fs::create_dir_all(target.join("src")).unwrap();
+    std::fs::create_dir_all(target.join("migration/features")).unwrap();
+    std::fs::write(
+        target.join("harness.toml"),
+        "schema_version = 1\n[target]\nname = \"p\"\nsource_dir = \"src\"\n\n\
+         [oracle]\nallowlist = [\"cc\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        target.join("src/main.c"),
+        "int f(int x) { return x + 1; }\nint main(void) { return f(-1); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        target.join("migration/features/features.toml"),
+        "schema_version = 1\n[[feature]]\nid = \"run\"\nname = \"Run\"\n\
+         [[scenario]]\nfeature = \"run\"\nid = \"none\"\nargs = []\n",
+    )
+    .unwrap();
+    let own_tmp = tmp.join("tmp");
+    std::fs::create_dir_all(&own_tmp).unwrap();
+    let own_tmp = own_tmp.canonicalize().unwrap();
+    let log = own_tmp.join("cc.log");
+    let fake = tmp.join("bin");
+    std::fs::create_dir_all(&fake).unwrap();
+    let cc = fake.join("cc");
+    std::fs::write(
+        &cc,
+        format!(
+            "#!/bin/sh\necho \"$TMPDIR\" >> '{}'\nexec /usr/bin/cc \"$@\"\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&cc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = Command::new(&cc)
+        .arg("--version")
+        .env("TMPDIR", &own_tmp)
+        .output();
+    std::fs::remove_file(&log).unwrap();
+    let t = target.to_str().unwrap();
+    let r = harness(&["scan", "--target", t]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["features", "map", "--allow-unsandboxed", "--target", t])
+        .env("PATH", format!("{}:/usr/bin:/bin", fake.display()))
+        .env("TMPDIR", &own_tmp)
+        .output()
+        .expect("spawn harness");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let logged = std::fs::read_to_string(&log).expect("cc ran");
+    let prefix = format!("{}/ruharness-map-", own_tmp.display());
+    assert!(!logged.trim().is_empty());
+    for line in logged.lines() {
+        assert!(
+            line.starts_with(&prefix) && line.ends_with("/tmp"),
+            "a compiler ran with TMPDIR {line}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}

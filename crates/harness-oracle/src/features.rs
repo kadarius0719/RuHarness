@@ -359,6 +359,7 @@ mod tests {
             timeout: std::time::Duration::from_secs(30),
             max_output: crate::exec::DEFAULT_MAX_OUTPUT,
             tool_profile: None,
+            tool_tmpdir: None,
         };
         let confined = Confinement {
             runner: &runner,

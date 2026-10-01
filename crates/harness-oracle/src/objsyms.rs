@@ -138,7 +138,9 @@ const SHN_UNDEF: u16 = 0;
 const SHN_ABS: u16 = 0xfff1;
 const SHN_COMMON: u16 = 0xfff2;
 const STB_LOCAL: u8 = 0;
+const STT_NOTYPE: u8 = 0;
 const STT_FUNC: u8 = 2;
+const SHF_EXECINSTR: u64 = 0x4;
 const STT_SECTION: u8 = 3;
 const STT_FILE: u8 = 4;
 const STT_GNU_IFUNC: u8 = 10;
@@ -153,6 +155,12 @@ fn elf(b: &[u8]) -> Result<Vec<Defined>, String> {
     let size_of = |v: u64, what: &str| usize::try_from(v).map_err(|_| bad(what));
     let shoff = size_of(u64_at(b, 0x28).ok_or_else(|| bad("header"))?, "header")?;
     let shentsize = u16_at(b, 0x3a).ok_or_else(|| bad("header"))? as usize;
+    // An Elf64_Shdr is 64 bytes (the fields below assume it); any other size
+    // with a section table is a malformed object, never a long loop over one
+    // header (fix pass 2's check).
+    if shoff != 0 && shentsize != 64 {
+        return Err(bad("section headers"));
+    }
     let section = |i: usize| -> Result<usize, String> {
         i.checked_mul(shentsize)
             .and_then(|o| o.checked_add(shoff))
@@ -217,10 +225,21 @@ fn elf(b: &[u8]) -> Result<Vec<Defined>, String> {
             {
                 continue;
             }
+            // Code: a function, or an untyped symbol in a section of
+            // instructions (a function written in assembly without `.type`,
+            // as Mach-O's section rule reads it; fix pass 2's check).
+            let in_code = || -> Result<bool, String> {
+                let shndx = shndx as usize;
+                if shndx >= shnum {
+                    return Ok(false);
+                }
+                Ok(u64_at(b, at(section(shndx)?, 0x08)?).is_some_and(|f| f & SHF_EXECINSTR != 0))
+            };
             out.push(Defined {
                 name: name_at(strings, name as usize).ok_or_else(|| bad("names"))?,
                 external: info >> 4 != STB_LOCAL,
-                function: matches!(kind, STT_FUNC | STT_GNU_IFUNC),
+                function: matches!(kind, STT_FUNC | STT_GNU_IFUNC)
+                    || (kind == STT_NOTYPE && in_code()?),
             });
         }
         return Ok(out);
@@ -340,5 +359,25 @@ mod tests {
         assert_eq!(defined(&elf_object(0, 0)), Ok(want), "extended numbering");
         assert!(defined(&elf_object(3, u64::MAX - 16)).is_err());
         assert!(defined(&elf_object(3, 1 << 40)).is_err());
+        // Fix pass 2's check: a section entry size of 0 is malformed, never a
+        // long loop over one header.
+        let mut zero = elf_object(0, 0);
+        zero[0x3a..0x3c].copy_from_slice(&0u16.to_le_bytes());
+        assert!(defined(&zero).is_err());
+        // An untyped symbol in a section of instructions is code; in a data
+        // section it is not.
+        let mut asm = elf_object(3, 0);
+        let shoff = u64::from_le_bytes(asm[0x28..0x30].try_into().unwrap()) as usize;
+        let symtab = shoff + 64;
+        let symbols =
+            u64::from_le_bytes(asm[symtab + 0x18..symtab + 0x20].try_into().unwrap()) as usize;
+        // f becomes STT_NOTYPE in section 1 (the symbol table's own header).
+        asm[symbols + 28] = 1 << 4;
+        let found = defined(&asm).unwrap();
+        assert!(!found[0].function, "section 1 is not code: {found:?}");
+        asm[symtab + 0x08..symtab + 0x10].copy_from_slice(&SHF_EXECINSTR.to_le_bytes());
+        let found = defined(&asm).unwrap();
+        assert!(found[0].function, "{found:?}");
+        assert!(!found[1].function, "an object stays data: {found:?}");
     }
 }

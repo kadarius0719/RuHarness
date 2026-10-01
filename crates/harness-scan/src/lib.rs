@@ -396,13 +396,21 @@ fn collect_functions_in(
                 });
             }
             let recorded = defs.len() > at;
-            // The second head of two that ran together (see
-            // heads_run_together): a function of its own, recorded with rule
-            // 1, never lost from the facts.
+            // Two heads run together: the second is a function of its own,
+            // recorded with rule 1, never lost from the facts; a macro before
+            // the real name gives the definition the real name (see [`heads`]).
             if recorded {
-                if let Some(second) = second_head(child, src, file) {
-                    defs[at].calls.clear();
-                    defs.push(second);
+                match heads(child, src) {
+                    Heads::Two { name, call } => {
+                        defs[at].calls.clear();
+                        let second = second_head(child, name, call, src, file);
+                        defs.push(second);
+                    }
+                    Heads::MacroFirst { name } => {
+                        defs[at].name = name;
+                        defs[at].note_at = Err(NoNote::Parser);
+                    }
+                    Heads::One | Heads::Unreadable => {}
                 }
             }
             // Only a body the parser misread — an #if group with two branches
@@ -514,8 +522,9 @@ fn note_point(
     if brace_is_conditional(&src[from.min(at)..at]) {
         return Err(NoNote::ConditionalBrace);
     }
-    // Rule 1's other form: the body is the next definition's.
-    if heads_run_together(def) {
+    // Rule 1's other form: the body is the next definition's, or the head is
+    // a macro's.
+    if !matches!(heads(def, src), Heads::One) {
         return Err(NoNote::Parser);
     }
     Ok((at, body.end_byte()))
@@ -729,7 +738,7 @@ fn parameter_list(declarator: tree_sitter::Node) -> Option<tree_sitter::Node> {
         if d.kind() == "function_declarator" {
             return d.child_by_field_name("parameters");
         }
-        d = d.child_by_field_name("declarator")?;
+        d = inner_declarator(d)?;
     }
 }
 
@@ -744,100 +753,270 @@ fn signature_of(def: tree_sitter::Node, src: &[u8]) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Find the identifier of a function definition by descending through
-/// (possibly pointer-wrapped) declarators to the function_declarator.
-/// Whether the parser ran two heads together (review: `int g(void)
-/// NOT_IMPLEMENTED` — a macro that supplies the body — then the next line's
-/// `int after(void) { … }` reads as one definition of `g` with `after`'s
-/// body, no parse error anywhere). After a definition's parameter list come
-/// only attributes, an `asm` label or a macro word; anything else is the
-/// next head, and the body is not this function's — rule 1.
-fn heads_run_together(def: tree_sitter::Node) -> bool {
-    let mut node = match def.child_by_field_name("declarator") {
-        Some(node) => node,
-        None => return false,
+/// How a definition's head reads after its parameter list.
+enum Heads<'t> {
+    /// One head: the function its declarator names.
+    One,
+    /// Two heads ran together (review: `int g(void) NOT_IMPLEMENTED` — a
+    /// macro that supplies the body — then `int after(void) { … }`, read as
+    /// one definition of `g` with `after`'s body): the first has no body of
+    /// its own, the second is `call`, named `name`. Both rule 1.
+    Two {
+        name: String,
+        call: tree_sitter::Node<'t>,
+    },
+    /// The declarator is a macro (`SIZED(size) alloc_a(int size)`,
+    /// `pg_attribute_unused()` then `RT_DUMP_NODE(RT_NODE * node)`): the
+    /// definition is the function the call after it names — rule 1, under
+    /// that name (never the macro's).
+    MacroFirst { name: String },
+    /// Something after the parameters the parser could not read: rule 1.
+    Unreadable,
+}
+
+/// C's type and storage words: a return type's, before a second head.
+const TYPE_WORDS: &[&str] = &[
+    "void",
+    "char",
+    "short",
+    "int",
+    "long",
+    "float",
+    "double",
+    "signed",
+    "unsigned",
+    "_Bool",
+    "bool",
+    "const",
+    "volatile",
+    "struct",
+    "union",
+    "enum",
+    "static",
+    "extern",
+    "inline",
+    "register",
+    "restrict",
+    "_Atomic",
+    "_Noreturn",
+];
+
+/// A word that can only be (part of) a type: a type or storage keyword, or
+/// a `…_t` name.
+fn type_word(word: &str) -> bool {
+    TYPE_WORDS.contains(&word) || (word.len() > 2 && word.ends_with("_t"))
+}
+
+/// Whether an argument list's text reads as a parameter list: `(void)`, a
+/// first item starting with a type word (`int size`), or two or more names
+/// with only `*` between (`size_t n`, `RT_NODE * node`). An annotation's
+/// arguments (`(1, 2)`, `(lock)`, `(&lock)`, `(macos(11.0))`) never do (fix
+/// pass 2's check).
+fn decl_shaped(args: &str) -> bool {
+    let inner = args.trim();
+    let inner = inner
+        .strip_prefix('(')
+        .and_then(|r| r.strip_suffix(')'))
+        .unwrap_or(inner);
+    let mut depth = 0i32;
+    let first = inner
+        .split(|c: char| {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth -= 1,
+                _ => {}
+            }
+            c == ',' && depth == 0
+        })
+        .next()
+        .unwrap_or("")
+        .trim();
+    if first.is_empty() {
+        return false;
+    }
+    let first = first.split('[').next().unwrap_or(first);
+    let mut words = 0;
+    for token in first.split(|c: char| c.is_whitespace() || c == '*') {
+        if token.is_empty() {
+            continue;
+        }
+        let word = token
+            .chars()
+            .enumerate()
+            .all(|(k, c)| c == '_' || c.is_ascii_alphabetic() || (k > 0 && c.is_ascii_digit()));
+        if !word {
+            return false;
+        }
+        if words == 0 && type_word(token) {
+            return true;
+        }
+        words += 1;
+    }
+    words >= 2
+}
+
+/// What follows a definition's parameter list (fix pass 3: the second head
+/// in any layout — GNU's return type on its own line, one line, K&R, a
+/// pointer or parenthesized name — while annotation macros keep the note).
+/// A call after the parameters is a head when a type word stands right
+/// before it (`int`, `static`, `size_t`; `*` skipped), a type word follows
+/// it (K&R), its arguments read as parameters, or its "function" is a type
+/// keyword (`int (after)(void)`, `void (*after(void))(int)`). A declarator
+/// whose declarator is another function declarator (no C function returns
+/// a function) is two heads.
+fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
+    let Some(mut node) = def.child_by_field_name("declarator") else {
+        return Heads::One;
     };
     while node.kind() != "function_declarator" {
         match inner_declarator(node) {
             Some(inner) => node = inner,
-            None => return false,
+            None => return Heads::One,
         }
     }
-    let Some(parameters) = node.child_by_field_name("parameters") else {
-        return false;
-    };
-    trailing_head(node, parameters).is_some() || {
-        let mut cursor = node.walk();
-        let error = node
-            .named_children(&mut cursor)
-            .skip_while(|c| c.id() != parameters.id())
-            .skip(1)
-            .any(|c| c.is_error());
-        error
+    let mut nested = false;
+    while let Some(inner) = node
+        .child_by_field_name("declarator")
+        .filter(|d| d.kind() == "function_declarator")
+    {
+        node = inner;
+        nested = true;
     }
-}
-
-/// The second head after a function declarator's parameters: a call shape
-/// (`after(void)`) on a later line than the parameters, right after a word on
-/// its own line (`int`, `size_t`) — a return type, never an annotation macro
-/// (`int f(void) ATTR(x) {` keeps its call on the parameters' line; fix pass
-/// 1's check).
-fn trailing_head<'t>(
-    declarator: tree_sitter::Node<'t>,
-    parameters: tree_sitter::Node<'t>,
-) -> Option<tree_sitter::Node<'t>> {
-    let mut cursor = declarator.walk();
-    let trailing: Vec<tree_sitter::Node> = declarator
+    let Some(parameters) = node.child_by_field_name("parameters") else {
+        return Heads::One;
+    };
+    let mut cursor = node.walk();
+    let trailing: Vec<tree_sitter::Node> = node
         .named_children(&mut cursor)
         .skip_while(|c| c.id() != parameters.id())
         .skip(1)
         .collect();
-    trailing.iter().enumerate().find_map(|(k, c)| {
-        let row = c.start_position().row;
-        let typed = k > 0
-            && matches!(
-                trailing[k - 1].kind(),
-                "identifier" | "primitive_type" | "type_identifier" | "sized_type_specifier"
-            )
-            && trailing[k - 1].start_position().row == row;
-        (c.kind() == "call_expression" && row > parameters.end_position().row && typed)
-            .then_some(*c)
-    })
+    let star =
+        |n: &tree_sitter::Node| n.is_error() && text(*n, src).trim().chars().all(|c| c == '*');
+    let word_node = |n: &tree_sitter::Node| {
+        matches!(
+            n.kind(),
+            "identifier" | "primitive_type" | "type_identifier" | "sized_type_specifier"
+        )
+    };
+    for (k, call) in trailing.iter().enumerate() {
+        if call.kind() != "call_expression" {
+            continue;
+        }
+        let before: Vec<&tree_sitter::Node> = trailing[..k].iter().filter(|n| !star(n)).collect();
+        let word_before = before
+            .last()
+            .is_some_and(|n| word_node(n) && type_word(text(**n, src)));
+        let knr = trailing
+            .get(k + 1)
+            .is_some_and(|n| word_node(n) && type_word(text(*n, src)));
+        let args = call.child_by_field_name("arguments");
+        let decl = args.is_some_and(|a| decl_shaped(text(a, src)));
+        let function = call.child_by_field_name("function");
+        let keyword_fn = function.is_some_and(|f| C_KEYWORDS.contains(&text(f, src)));
+        if !(word_before || knr || decl || keyword_fn) {
+            continue;
+        }
+        let name = if keyword_fn {
+            args.and_then(|a| named_inside(a, src))
+        } else {
+            function
+                .filter(|f| f.kind() == "identifier")
+                .map(|f| text(f, src).to_string())
+        }
+        .filter(|n| !C_KEYWORDS.contains(&n.as_str()));
+        let Some(name) = name else {
+            return Heads::Unreadable;
+        };
+        let macro_first = decl
+            && !word_before
+            && !knr
+            && !keyword_fn
+            && !nested
+            && before.is_empty()
+            && !decl_shaped(text(parameters, src));
+        return if macro_first {
+            Heads::MacroFirst { name }
+        } else {
+            Heads::Two { name, call: *call }
+        };
+    }
+    if nested || trailing.iter().any(|c| c.is_error()) {
+        Heads::Unreadable
+    } else {
+        Heads::One
+    }
 }
 
-/// The function a second head names (see [`trailing_head`]), with the body
-/// the parser gave the first: recorded, unwatched (rule 1).
-fn second_head(def: tree_sitter::Node, src: &[u8], file: &str) -> Option<FnDef> {
-    let mut node = def.child_by_field_name("declarator")?;
-    while node.kind() != "function_declarator" {
-        node = inner_declarator(node)?;
-    }
-    let parameters = node.child_by_field_name("parameters")?;
-    let call = trailing_head(node, parameters)?;
-    let name = call.child_by_field_name("function")?;
-    if name.kind() != "identifier" {
-        return None;
-    }
-    let name = text(name, src).to_string();
-    if C_KEYWORDS.contains(&name.as_str()) {
-        return None;
-    }
-    let head = &src[src[..call.start_byte()]
-        .iter()
-        .rposition(|b| *b == b'\n')
-        .map_or(0, |at| at + 1)..call.start_byte()];
-    let is_static = head
+/// The function named inside a keyword-headed call's arguments: `(after)`
+/// or `(*after(void))`.
+fn named_inside(args: tree_sitter::Node, src: &[u8]) -> Option<String> {
+    let mut cursor = args.walk();
+    let found = args
+        .named_children(&mut cursor)
+        .find_map(|n| match n.kind() {
+            "identifier" => Some(text(n, src).to_string()),
+            "call_expression" => n
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "identifier")
+                .map(|f| text(f, src).to_string()),
+            _ => None,
+        });
+    found
+}
+
+/// The second of two heads (see [`heads`]), with the body the parser gave
+/// the first: recorded, unwatched (rule 1). Its signature runs from the type
+/// words right before it; it is static when `static` stands between the
+/// first head's parameters and it.
+fn second_head(
+    def: tree_sitter::Node,
+    name: String,
+    call: tree_sitter::Node,
+    src: &[u8],
+    file: &str,
+) -> FnDef {
+    let parameters_end = def
+        .child_by_field_name("declarator")
+        .and_then(parameter_list)
+        .map_or(def.start_byte(), |p| p.end_byte());
+    let between = &src[parameters_end.min(call.start_byte())..call.start_byte()];
+    let words: Vec<&[u8]> = between
         .split(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
-        .any(|w| w == b"static");
+        .filter(|w| !w.is_empty())
+        .collect();
+    let is_static = words.contains(&&b"static"[..]);
+    // The return type: the trailing run of type words (and `*`) before it.
+    let mut start = call.start_byte();
+    let mut at = call.start_byte();
+    loop {
+        let head = &src[parameters_end.min(at)..at];
+        let trimmed = head.trim_ascii_end();
+        if let Some(b'*') = trimmed.last() {
+            at = parameters_end + trimmed.len() - 1;
+            continue;
+        }
+        let word_at = trimmed
+            .iter()
+            .rposition(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
+            .map_or(0, |p| p + 1);
+        let word = String::from_utf8_lossy(&trimmed[word_at..]);
+        if word.is_empty() || !type_word(&word) {
+            break;
+        }
+        at = parameters_end + word_at;
+        start = at;
+    }
+    let raw = String::from_utf8_lossy(&src[start..call.end_byte()]);
     let mut calls = BTreeSet::new();
     if let Some(body) = def.child_by_field_name("body") {
         collect_calls(body, src, &mut calls);
     }
-    Some(FnDef {
+    FnDef {
         name,
         file: file.to_string(),
         is_static,
-        signature: String::from_utf8_lossy(&src[call.start_byte()..call.end_byte()]).into_owned(),
+        signature: raw.split_whitespace().collect::<Vec<_>>().join(" "),
         span: (
             (call.start_position().row + 1) as u32,
             (def.end_position().row + 1) as u32,
@@ -846,7 +1025,7 @@ fn second_head(def: tree_sitter::Node, src: &[u8], file: &str) -> Option<FnDef> 
         note_at: Err(NoNote::Parser),
         naked_head: false,
         nested: false,
-    })
+    }
 }
 
 /// The declarator inside `node` (a pointer, parenthesized or C23
@@ -864,9 +1043,19 @@ fn inner_declarator(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
 /// Whether a function body as the parser read it holds an `#if` group with
 /// two or more branches that each change the brace depth — the parser reads
 /// every branch, so it runs the body on (sqlite3.c's winWrite and
-/// decodeIntArray). Comments, string and character literals and line splices
-/// are skipped.
+/// decodeIntArray) — **and** one configuration (the first branch of every
+/// group) does not read the same body: its braces close before the parser's
+/// closing brace, or not at it. Groups whose excess braces cancel inside the
+/// body (a lock taken in one `#if` and released in a later one) are read
+/// right (fix pass 2's check). Comments, string and character literals and
+/// line splices are skipped.
 fn body_misread(body: &[u8]) -> bool {
+    let mut two_branch = false;
+    // Per open group: whether the current branch is not its first.
+    let mut later_branch: Vec<bool> = Vec::new();
+    let mut depth = 0i64;
+    let mut closed_early = false;
+    let last_brace = body.iter().rposition(|c| *c == b'}');
     let mut groups: Vec<Vec<i64>> = Vec::new();
     let mut i = 0;
     let mut line_start = true;
@@ -921,10 +1110,16 @@ fn body_misread(body: &[u8]) -> bool {
                     .copied()
                     .collect();
                 match word.as_slice() {
-                    b"if" | b"ifdef" | b"ifndef" => groups.push(vec![0]),
+                    b"if" | b"ifdef" | b"ifndef" => {
+                        groups.push(vec![0]);
+                        later_branch.push(false);
+                    }
                     b"elif" | b"elifdef" | b"elifndef" | b"else" => {
                         if let Some(g) = groups.last_mut() {
                             g.push(0);
+                        }
+                        if let Some(later) = later_branch.last_mut() {
+                            *later = true;
                         }
                     }
                     b"endif" => {
@@ -932,8 +1127,9 @@ fn body_misread(body: &[u8]) -> bool {
                             .pop()
                             .is_some_and(|g| g.iter().filter(|d| **d != 0).count() >= 2)
                         {
-                            return true;
+                            two_branch = true;
                         }
+                        later_branch.pop();
                     }
                     _ => {}
                 }
@@ -944,8 +1140,15 @@ fn body_misread(body: &[u8]) -> bool {
                 continue;
             }
             b'{' | b'}' => {
-                if let Some(depth) = groups.last_mut().and_then(|g| g.last_mut()) {
-                    *depth += if b == b'{' { 1 } else { -1 };
+                let step = if b == b'{' { 1 } else { -1 };
+                if let Some(group_depth) = groups.last_mut().and_then(|g| g.last_mut()) {
+                    *group_depth += step;
+                }
+                if !later_branch.iter().any(|later| *later) {
+                    depth += step;
+                    if depth == 0 && Some(i) != last_brace {
+                        closed_early = true;
+                    }
                 }
             }
             _ => {}
@@ -953,7 +1156,7 @@ fn body_misread(body: &[u8]) -> bool {
         line_start = false;
         i += 1;
     }
-    false
+    two_branch && (closed_early || depth != 0)
 }
 
 fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
@@ -961,7 +1164,18 @@ fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
     loop {
         match node.kind() {
             "function_declarator" => {
-                let decl = node.child_by_field_name("declarator")?;
+                let mut decl = node.child_by_field_name("declarator")?;
+                // C23: `int f [[gnu::cold]] (void)`.
+                while decl.kind() == "attributed_declarator" {
+                    decl = decl.named_child(0)?;
+                }
+                // Two heads run together (`int g(void) NI` then `int
+                // (after)(void)`): the first head's name.
+                if decl.kind() == "function_declarator" {
+                    node = decl;
+                    continue;
+                }
+                // A parenthesized name stays unread (the hidden-variant check).
                 return if decl.kind() == "identifier" {
                     Some(text(decl, src).to_string())
                 } else {

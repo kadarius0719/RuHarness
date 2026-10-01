@@ -242,10 +242,29 @@ const BOUNDS: MapBounds = MapBounds {
     file_compiles: 64,
     pass_compiles: 400,
 };
-const LINK_ROUNDS: usize = 32;
 
 thread_local! {
     static BOUNDS_HERE: std::cell::Cell<MapBounds> = const { std::cell::Cell::new(BOUNDS) };
+    /// The most compiles one file's settling spent in this thread's last map
+    /// (give-up's last compile aside): a test reads it against the bound.
+    static MOST_FILE_COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The compiles this thread's last map counted against the pass bound.
+    static PASS_COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The compiles this thread's last features map counted against the pass
+/// bound (§3.4 step 6: at most that bound). A test seam.
+#[doc(hidden)]
+pub fn last_map_pass_compiles() -> usize {
+    PASS_COMPILES.with(std::cell::Cell::get)
+}
+
+/// The most compiles one top-level file's settling spent in this thread's
+/// last features map, give-up's last compile aside (§3.4 step 6: at most
+/// the per-file bound). A test seam.
+#[doc(hidden)]
+pub fn last_map_most_file_compiles() -> usize {
+    MOST_FILE_COMPILES.with(std::cell::Cell::get)
 }
 
 /// The bounds a map on this thread uses.
@@ -436,23 +455,39 @@ impl Build<'_> {
         progress: &mut dyn MapProgress,
         again: bool,
     ) -> Result<(), Error> {
+        let mut compiles = 0;
+        let settled = self.settle_counted(n, probe, pass, progress, again, &mut compiles);
+        MOST_FILE_COMPILES.with(|most| most.set(most.get().max(compiles)));
+        settled
+    }
+
+    /// [`Build::settle`], counting the file's compiles (give-up's last one
+    /// aside) in `compiles`.
+    fn settle_counted(
+        &self,
+        n: usize,
+        probe: &mut Probe,
+        pass: &mut usize,
+        progress: &mut dyn MapProgress,
+        again: bool,
+        compiles: &mut usize,
+    ) -> Result<(), Error> {
         let bounds = self.bounds;
         // Rounds that placed a note (the per-file bound), and every round
         // (what the person sees).
         let mut placed_rounds = 0;
         let mut round = 0;
-        let mut compiles = 0;
         let rels = &self.reads[n];
         let mut eliminated: Vec<(String, String)> = Vec::new();
         let mut last: Vec<u8> = Vec::new();
         loop {
-            if compiles > 0 {
-                if compiles >= bounds.file_compiles || *pass >= bounds.pass_compiles {
+            if *compiles > 0 {
+                if *compiles >= bounds.file_compiles || *pass >= bounds.pass_compiles {
                     return self.give_up(n, probe, &last);
                 }
                 *pass += 1;
             }
-            compiles += 1;
+            *compiles += 1;
             round += 1;
             // A file compiled again (a file it reads lost notes, or the
             // link took one out) says so: its rounds start over.
@@ -468,20 +503,21 @@ impl Build<'_> {
                     // within the bounds, room left for the compile that takes
                     // it out again; past them the rest stay out.
                     for (rel, id) in std::mem::take(&mut eliminated) {
-                        if compiles + 2 > bounds.file_compiles || *pass + 2 > bounds.pass_compiles {
+                        if *compiles + 2 > bounds.file_compiles || *pass + 2 > bounds.pass_compiles
+                        {
                             break;
                         }
                         let reason = probe.reasons.get(&(rel.clone(), id.clone())).cloned();
                         probe.put_back(&rel, &id);
                         self.rewrite(probe, rels, &[])?;
-                        compiles += 1;
+                        *compiles += 1;
                         *pass += 1;
                         if !matches!(self.compile(n, false)?, Outcome::Ok) {
                             if let Some(reason) = reason {
                                 probe.take_out(&rel, &id, reason);
                             }
                             self.rewrite(probe, rels, &[])?;
-                            compiles += 1;
+                            *compiles += 1;
                             *pass += 1;
                             if !matches!(self.compile(n, false)?, Outcome::Ok) {
                                 return Err(Error::Invariant(format!(
@@ -527,7 +563,7 @@ impl Build<'_> {
                 continue;
             }
             let why = unplaced.unwrap_or_else(|| crate::exec::stderr_excerpt(&last));
-            match self.search(n, probe, &why, &mut compiles, pass)? {
+            match self.search(n, probe, &why, compiles, pass)? {
                 Search::Found(pair) => eliminated.push(pair),
                 // A search a bound stopped has found nothing: the file goes
                 // back unprobed, no note blamed.
@@ -655,7 +691,21 @@ impl Build<'_> {
         probe: &mut Probe,
         progress: &mut dyn MapProgress,
     ) -> Result<Probed, Error> {
+        MOST_FILE_COMPILES.with(|most| most.set(0));
+        PASS_COMPILES.with(|count| count.set(0));
         let mut pass = 0usize;
+        let ran = self.run_counted(probe, progress, &mut pass);
+        PASS_COMPILES.with(|count| count.set(pass));
+        ran
+    }
+
+    /// [`Build::run`], counting the pass's compiles in `pass`.
+    fn run_counted(
+        &self,
+        probe: &mut Probe,
+        progress: &mut dyn MapProgress,
+        pass: &mut usize,
+    ) -> Result<Probed, Error> {
         let notes_of = |probe: &Probe| -> BTreeMap<String, usize> {
             probe
                 .rels()
@@ -671,7 +721,7 @@ impl Build<'_> {
         // bound, only the others go back unprobed.
         let mut checked: BTreeSet<String> = BTreeSet::new();
         for n in 0..self.units.len() {
-            if pass >= self.bounds.pass_compiles {
+            if *pass >= self.bounds.pass_compiles {
                 let unchecked: BTreeSet<String> =
                     self.reads[n].difference(&checked).cloned().collect();
                 for rel in &unchecked {
@@ -679,11 +729,21 @@ impl Build<'_> {
                 }
                 self.rewrite(probe, &unchecked, &[])?;
             }
-            self.settle(n, probe, &mut pass, progress, false)?;
+            self.settle(n, probe, pass, progress, false)?;
             checked.extend(self.reads[n].iter().cloned());
             compiled_with.push(notes_of(probe));
         }
-        for _ in 0..LINK_ROUNDS {
+        // Every link round that does not link takes a note out or sends a
+        // file back unprobed (fix pass 2's check: a fixed 32 rounds refused
+        // programs whose tipped referrers the linker lists seven at a time),
+        // so the notes and the probed files bound the rounds.
+        let rounds = probe
+            .rels()
+            .iter()
+            .map(|rel| probe.notes(rel).len() + 1)
+            .sum::<usize>()
+            + 1;
+        for _ in 0..rounds {
             // Re-compiles: a file whose probed files lost notes after it
             // compiled, or whose object a link search left in a trial state.
             loop {
@@ -699,11 +759,11 @@ impl Build<'_> {
                     break;
                 }
                 for n in stale {
-                    self.settle(n, probe, &mut pass, progress, true)?;
+                    self.settle(n, probe, pass, progress, true)?;
                     compiled_with[n] = notes_of(probe);
                 }
             }
-            match self.link(probe, &mut pass)? {
+            match self.link(probe, pass)? {
                 Linked::Program(probed) => return Ok(probed),
                 Linked::Changed(dirty) => {
                     for n in dirty {
@@ -808,11 +868,10 @@ impl Build<'_> {
         let mut unresolved: Option<(String, BTreeSet<usize>)> = None;
         for u in &undefined {
             let why = format!("{} is undefined", u.symbol);
-            let units = if u.cut {
-                (0..self.units.len()).collect()
-            } else {
-                self.units_named(&u.refs)
-            };
+            // A list the linker cut short widens the search only through the
+            // retry below, when the named objects alone cannot explain it
+            // (fix pass 2's check: widening at once compiled every unit).
+            let units = self.units_named(&u.refs);
             // (a) a function of the program: an external one, whose id is
             // its name (a static is never an undefined symbol).
             if self.functions.iter().any(|(_, id)| *id == u.symbol) {
@@ -874,9 +933,18 @@ impl Build<'_> {
         };
         let mut rels = rels_of(&units);
         let mut searched = self.link_search(probe, &symbol, &units, &rels, &program, pass)?;
-        // A list the linker cut short in words this reader does not know:
-        // every unit, once, before the map is refused.
-        if searched.is_none() && units.len() < self.units.len() {
+        // The linker named only some referrers (a list cut short, in words
+        // this reader knows or not): every unit, once, before the map is
+        // refused — unless the pass bound is spent, when every unit's files
+        // go back unprobed instead.
+        if searched.is_none()
+            && units.len() < self.units.len()
+            && *pass >= self.bounds.pass_compiles
+        {
+            units = (0..self.units.len()).collect();
+            rels = rels_of(&units);
+            searched = Some(LinkSearch::Cut);
+        } else if searched.is_none() && units.len() < self.units.len() {
             units = (0..self.units.len()).collect();
             rels = rels_of(&units);
             searched = self.link_search(probe, &symbol, &units, &rels, &program, pass)?;
@@ -916,34 +984,47 @@ impl Build<'_> {
                 ns.into_iter().map(move |note| (rel.clone(), note.id))
             })
             .collect();
-        let trial = |k: usize, probe: &mut Probe, pass: &mut usize| -> Result<bool, Error> {
-            self.rewrite(probe, rels, &notes[..k])?;
-            for n in units {
-                *pass += 1;
-                if !matches!(self.compile(*n, false)?, Outcome::Ok) {
-                    return Ok(false);
-                }
-            }
-            Ok(match self.link_once(program)? {
-                None => true,
-                Some(stderr) => !undefined_symbols(&stderr)
-                    .iter()
-                    .any(|u| u.symbol == symbol),
-            })
-        };
-        if !trial(notes.len(), probe, pass)? {
+        // No note to take out: the objects as they stand are the failing
+        // link's (a cut here would loop round after round).
+        if notes.is_empty() {
             return Ok(None);
+        }
+        // One trial: `None` when the pass bound stops it before a compile
+        // (fix pass 2's check: the every-note-out trial and each unit's
+        // compile ran past it). A link that fails with no undefined symbol
+        // at all never passes a trial.
+        let trial =
+            |k: usize, probe: &mut Probe, pass: &mut usize| -> Result<Option<bool>, Error> {
+                self.rewrite(probe, rels, &notes[..k])?;
+                for n in units {
+                    if *pass >= self.bounds.pass_compiles {
+                        return Ok(None);
+                    }
+                    *pass += 1;
+                    if !matches!(self.compile(*n, false)?, Outcome::Ok) {
+                        return Ok(Some(false));
+                    }
+                }
+                Ok(Some(match self.link_once(program)? {
+                    None => true,
+                    Some(stderr) => {
+                        let undefined = undefined_symbols(&stderr);
+                        !undefined.is_empty() && !undefined.iter().any(|u| u.symbol == symbol)
+                    }
+                }))
+            };
+        match trial(notes.len(), probe, pass)? {
+            None => return Ok(Some(LinkSearch::Cut)),
+            Some(false) => return Ok(None),
+            Some(true) => {}
         }
         let (mut lo, mut hi) = (0usize, notes.len());
         while hi - lo > 1 {
-            if *pass >= self.bounds.pass_compiles {
-                return Ok(Some(LinkSearch::Cut));
-            }
             let mid = lo + (hi - lo) / 2;
-            if trial(mid, probe, pass)? {
-                hi = mid;
-            } else {
-                lo = mid;
+            match trial(mid, probe, pass)? {
+                None => return Ok(Some(LinkSearch::Cut)),
+                Some(true) => hi = mid,
+                Some(false) => lo = mid,
             }
         }
         Ok(Some(match notes.get(hi.saturating_sub(1)) {
@@ -1031,13 +1112,31 @@ fn killed_child(stderr: &[u8]) -> Option<String> {
             let message = ["error: ", "fatal error: ", "internal compiler error: "]
                 .iter()
                 .find_map(|kind| rest.strip_prefix(kind));
-            driver
-                && message.is_some_and(|m| {
-                    m.starts_with("unable to execute command: Killed")
-                        || m.contains("failed due to signal")
-                        || m.starts_with("Killed signal terminated program")
-                        || m.starts_with("Killed (program")
-                })
+            // Only a signal sent from outside (fix pass 2's check: a
+            // compiler that crashes — SIGSEGV, an assertion's trap — goes to
+            // the search, whose every-note-out trial tells a note's crash
+            // from a broken compiler): clang's "unable to execute command:
+            // Killed", gcc's "Killed signal terminated program" and
+            // "internal compiler error: Killed (program cc1)", collect2's
+            // "ld terminated with signal 9 [Killed]".
+            const OUTSIDE: [&str; 4] = ["Killed", "Terminated", "Interrupt", "Quit"];
+            let outside = |m: &str| {
+                OUTSIDE.iter().any(|sig| {
+                    m.strip_prefix("unable to execute command: ")
+                        .is_some_and(|r| r.starts_with(sig))
+                        || m.strip_prefix(sig).is_some_and(|r| {
+                            r.starts_with(" signal terminated program")
+                                || r.starts_with(" (program")
+                        })
+                }) || m
+                    .split_once(" terminated with signal ")
+                    .is_some_and(|(program, r)| {
+                        !program.is_empty()
+                            && !program.contains(' ')
+                            && OUTSIDE.iter().any(|sig| r.contains(&format!("[{sig}")))
+                    })
+            };
+            driver && message.is_some_and(outside)
         })
         .map(|line| line.trim().to_string())
 }
@@ -1352,18 +1451,44 @@ mod tests {
     /// driver's own lines.
     #[test]
     fn a_killed_child_of_the_driver_is_told_apart() {
-        for stderr in [
-            "clang: error: unable to execute command: Killed: 9\nclang: error: clang frontend command failed due to signal (use -v to see invocation)\n",
-            "cc: error: clang frontend command failed due to signal (use -v to see invocation)\n",
-            "gcc: fatal error: Killed signal terminated program cc1\ncompilation terminated.\n",
-            "x86_64-linux-gnu-gcc-12: internal compiler error: Killed (program cc1)\n",
-            "clang: error: linker command failed due to signal (use -v to see invocation)\n",
+        for (stderr, quoted) in [
+            (
+                "clang: error: unable to execute command: Killed: 9\nclang: error: clang frontend command failed due to signal (use -v to see invocation)\n",
+                "clang: error: unable to execute command: Killed: 9",
+            ),
+            (
+                "clang: error: unable to execute command: Terminated: 15\n",
+                "clang: error: unable to execute command: Terminated: 15",
+            ),
+            (
+                "gcc: fatal error: Killed signal terminated program cc1\ncompilation terminated.\n",
+                "gcc: fatal error: Killed signal terminated program cc1",
+            ),
+            (
+                "gcc: fatal error: Terminated signal terminated program cc1\n",
+                "gcc: fatal error: Terminated signal terminated program cc1",
+            ),
+            (
+                "x86_64-linux-gnu-gcc-12: internal compiler error: Killed (program cc1)\n",
+                "x86_64-linux-gnu-gcc-12: internal compiler error: Killed (program cc1)",
+            ),
+            (
+                "collect2: fatal error: ld terminated with signal 9 [Killed]\ncompilation terminated.\n",
+                "collect2: fatal error: ld terminated with signal 9 [Killed]",
+            ),
         ] {
-            assert!(killed_child(stderr.as_bytes()).is_some(), "{stderr}");
+            assert_eq!(killed_child(stderr.as_bytes()).as_deref(), Some(quoted), "{stderr}");
         }
+        // Fix pass 2's check: a crash is no kill — it goes to the search.
         for stderr in [
             "/m/src/a.c:3:1: error: unable to execute command: Killed\n",
             "    3 | clang: error: failed due to signal\n",
+            "clang: error: unable to execute command: Segmentation fault: 11\nclang: error: clang frontend command failed due to signal (use -v to see invocation)\n",
+            "cc: error: clang frontend command failed due to signal (use -v to see invocation)\n",
+            "clang: error: linker command failed due to signal (use -v to see invocation)\n",
+            "gcc: internal compiler error: Segmentation fault signal terminated program cc1\n",
+            "collect2: fatal error: ld terminated with signal 11 [Segmentation fault]\n",
+            "collect2: error: ld returned 1 exit status\n",
             "clang: error: linker command failed with exit code 1 (use -v to see invocation)\n",
             "a.c:2:5: error: expected ';' after expression\n",
         ] {

@@ -253,6 +253,7 @@ impl Scorer {
             timeout: BUILD_TIMEOUT,
             max_output: crate::exec::DEFAULT_MAX_OUTPUT,
             tool_profile: build_profile.clone(),
+            tool_tmpdir: None,
         };
         let vendor_str = crate::path_str(&vendor)?;
         builder.tool_with_env(
@@ -266,6 +267,7 @@ impl Scorer {
             timeout: Duration::from_secs(120),
             max_output: crate::exec::DEFAULT_MAX_OUTPUT,
             tool_profile: None, // rendered per case (its run root is the write dir)
+            tool_tmpdir: None,
         };
         let mut environment = environment(&tools)?;
         let sanitized = match asan_runtime(&tools, &suite_dir, host.as_ref())? {
@@ -590,6 +592,7 @@ impl Scorer {
             timeout: VECTOR_TIMEOUT,
             max_output: crate::exec::DEFAULT_MAX_OUTPUT,
             tool_profile: None,
+            tool_tmpdir: None,
         };
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let mut env = vec![("TMPDIR", tmp.path().as_os_str())];

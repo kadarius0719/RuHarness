@@ -90,7 +90,9 @@ pub use boundary::{BoundaryReport, ParamFigures};
 pub use exec::{cancelled, kill_live_process_groups};
 pub use featuremap::{map_features, remove_live_scratch_dirs, MapProgress, FEATURES_BUILD_DIR};
 #[doc(hidden)]
-pub use probebuild::{with_map_bounds, MapBounds};
+pub use probebuild::{
+    last_map_most_file_compiles, last_map_pass_compiles, with_map_bounds, MapBounds,
+};
 pub use sandbox::sandbox_mode;
 pub use validate::validate_driver;
 
@@ -493,6 +495,7 @@ impl CAbiDifferential {
             timeout: prep.base.timeout,
             max_output: exec::DEFAULT_MAX_OUTPUT,
             tool_profile,
+            tool_tmpdir: None,
         };
         let confined = Confinement {
             runner: &runner,
@@ -819,6 +822,7 @@ impl CAbiDifferential {
             timeout: prep.base.timeout,
             max_output: exec::DEFAULT_MAX_OUTPUT,
             tool_profile,
+            tool_tmpdir: None,
         };
         let confined = Confinement {
             runner: &runner,
@@ -1511,6 +1515,7 @@ pub fn build_crate_staticlib(target: &TargetContext, crate_dir: &Path) -> Result
         timeout: timeout_secs(target)?,
         max_output: exec::DEFAULT_MAX_OUTPUT,
         tool_profile: profile.clone(),
+        tool_tmpdir: None,
     };
     build_staticlib(&runner, profile.as_deref(), &crate_dir, &target_dir)
 }
@@ -1657,6 +1662,7 @@ mod tests {
             timeout: Duration::from_secs(60),
             max_output: exec::DEFAULT_MAX_OUTPUT,
             tool_profile: None,
+            tool_tmpdir: None,
         };
         let confined = Confinement {
             runner: &runner,

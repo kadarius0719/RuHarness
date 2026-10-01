@@ -978,6 +978,33 @@ pub fn load_map(root: &Path, facts: &crate::Facts) -> MapState {
             );
         }
     }
+    // A map made by another version of the probe reads out of date ("made
+    // by another version of the harness"), never unreadable, for a detail
+    // that version wrote raw (fix pass 2's check): its unsafe characters
+    // shown as `?`, an over-long detail cut. The other rules hold.
+    if map.inputs.probe != MAP_PROBE {
+        for r in &mut map.unwatched_reasons {
+            let mut detail: String = r
+                .detail
+                .chars()
+                .map(|c| {
+                    if crate::text::unsafe_to_show(c) {
+                        '?'
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            if detail.len() > UNWATCHED_DETAIL_BYTES {
+                let mut end = UNWATCHED_DETAIL_BYTES;
+                while !detail.is_char_boundary(end) {
+                    end -= 1;
+                }
+                detail.truncate(end);
+            }
+            r.detail = detail;
+        }
+    }
     // Each reason strictly: a kind the harness writes, a short detail with
     // nothing unsafe to show (and none for a kind whose words take none),
     // its pair in the map's own `unwatched` list, one reason per pair.
@@ -2373,6 +2400,29 @@ args = ["-h"]
         assert!(
             matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
             "every kind, maximal"
+        );
+        // Fix pass 2's check: a map of another probe version holding a
+        // detail its harness wrote raw reads out of date, its detail shown
+        // safely — never unreadable.
+        let mut m = a_map();
+        m.inputs.probe = "compiler-guided-1".into();
+        m.unwatched_reasons = vec![reason(
+            "compile",
+            &format!("a\u{202E}b{}", "x".repeat(200)),
+            "src/a.c::odd",
+        )];
+        write(&m);
+        match load_map(&dir, &map_facts()) {
+            MapState::Loaded { map, .. } => {
+                let detail = &map.unwatched_reasons[0].detail;
+                assert!(detail.starts_with("a?b"), "{detail}");
+                assert!(detail.len() <= UNWATCHED_DETAIL_BYTES);
+            }
+            other => panic!("another version's map: {other:?}"),
+        }
+        assert!(
+            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            "another version, loaded"
         );
         // Review: one reason per pair.
         let mut m = a_map();
