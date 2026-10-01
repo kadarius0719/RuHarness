@@ -105,7 +105,8 @@ pub struct RowWords {
     /// The short form, at most [`SHORT_WIDTH`] columns.
     pub short: String,
     /// The worst-first order's key: lower is worse; ties by `rank.1`,
-    /// higher first.
+    /// higher first — for slower kinds the shift, for faster kinds the
+    /// signed shift (negative), so a smaller gain counts as worse.
     pub rank: (u8, f64),
     /// The MCP answer, from a closed set.
     pub answer: &'static str,
@@ -1038,7 +1039,9 @@ fn time_short(
             } else {
                 full
             };
-            (s, (17, -x), "faster")
+            // The faster kinds' key is the signed shift: a smaller gain is
+            // the worse row, so it comes first.
+            (s, (17, x), "faster")
         }
         Answer::CloseCall { slower: true } => (
             format!("close call: ≈{} % slower", pct(x)),
@@ -1047,7 +1050,7 @@ fn time_short(
         ),
         Answer::CloseCall { slower: false } => (
             format!("close call: ≈{} % faster", pct(-x)),
-            (15, -x),
+            (15, x),
             "close-call-faster",
         ),
         Answer::Probably { slower: true } => (
@@ -1057,7 +1060,7 @@ fn time_short(
         ),
         Answer::Probably { slower: false } => (
             format!("probably faster ≈{} %", pct(-x)),
-            (16, -x),
+            (16, x),
             "probably-faster",
         ),
         Answer::NoClearDifference => (
@@ -2349,6 +2352,46 @@ mod tests {
                 pair[1]
             );
         }
+        // Within a kind, the worse row first: the bigger slowdown, and the
+        // smaller gain — never the fastest row first among faster ones.
+        let shift = |p: f64| {
+            let d = (1.0 + p / 100.0).ln();
+            Shift {
+                estimate: d,
+                lo: d,
+                hi: d,
+                m: 15,
+                n: 15,
+            }
+        };
+        let k = |a: Answer, p: f64| r(time_short(a, Some(&shift(p)), false).1);
+        for (a, worse, better) in [
+            (Answer::Slower, 20.0, 5.0),
+            (Answer::Faster, -5.0, -20.0),
+            (Answer::Probably { slower: false }, -2.0, -8.0),
+            (Answer::CloseCall { slower: false }, -0.5, -1.5),
+            (Answer::Probably { slower: true }, 8.0, 2.0),
+            (Answer::CloseCall { slower: true }, 1.5, 0.5),
+        ] {
+            assert_eq!(
+                worst_first(&k(a, worse), &k(a, better)),
+                std::cmp::Ordering::Less,
+                "{a:?}: {worse} % before {better} %"
+            );
+        }
+        // Through the words: a unit 5 % faster before one 20 % faster.
+        let five = words(
+            &row(flat(15), at(1e9, &[-5.0; 15]), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        let twenty = words(
+            &row(flat(15), at(1e9, &[-20.0; 15]), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!((five.answer, twenty.answer), ("faster", "faster"));
+        let mut both = [twenty, five];
+        both.sort_by(worst_first);
+        assert_eq!(both[0].short, "faster 5.0 % (5.0 %)");
     }
 
     #[test]
