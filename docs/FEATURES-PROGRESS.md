@@ -146,7 +146,13 @@ new finding; result → save to `SP/perf/revision2-check.json`). Then revise, th
 Was: CHECK THE REVISION — running as
 workflow `wf_0f90338d-b1d` (per-lens dispositions of every finding against rev 1, three fresh lenses
 on the new mechanisms, two verifiers per new finding); then revise (revision 2), then build in the §5 steps. Spike notes, code survey and launcher prototype:
-`SP/perf/`.
+`SP/perf/`. REVISION 2's CHECK FINISHED (`wf_89198fcc-3e6`; `SP/perf/revision2-check.json`, digest
+`SP/perf/rev2-digest.md`): of 118 changes 36 done, 73 in part, 2 not done, 7 wrong; 35 new
+confirmed (two high: the every-run metric rule answers almost no loaded row; the shared C pair
+undoes C, other, C), 1 disputed, 0 refuted. REVISION 3 written (1b27d10) answering each; its CHECK
+RUNNING: workflow `wf_d21b13f6-ea1` (script `SP/perf-rev3-check.js`; dispositions of the open items +
+three fresh lenses, two verifiers each; experiments in `SP/design-check3/`). Then: revise if it asks,
+and build in §5's order (b, c, a, d, e, f, g) with the full process.
 
 Known gaps, judged acceptable (§R5): Next-step rule 6 has no project-menu Re-check item (a
 project-level Re-check would be refused: it needs the unit on screen); migrate turns do not
