@@ -115,7 +115,7 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    The 101 bench targets' facts byte-identical; sqlite3.c unchanged. Full tests passed (17
    suites). RUNNING: mutation check (`SP/mutfix3.py` in SP/mut1, log `SP/mutfix3.log`) and the
    CHECK OF FIX PASS 3, workflow `wf_6d4c61e3-bf5` (script `SP/fix-pass-3-check.js`, base
-   `SP/fc3/base`, work `SP/fc3/work`). Perf revision 4's check `wf_8aea486a-f12` also running. Was: at e846261 (base copy
+   `SP/fc3/base`, work `SP/fc3/work`). Mutation check DONE: 35 mutants, 33 killed (design §10.2). Was: at e846261 (base copy
    `SP/fc1/base`; lenses tokenizer, build-link, scanner-variant, runner-ux; two verifiers each). Was planned as: lenses over the diff
    665495b..HEAD — the tokenizer and same-code check, probebuild bounds/search/link, objsyms and
    the runtime-names check, the scanner's nested/keyword/run-together rules, featuremap memory and
@@ -167,8 +167,11 @@ confirmed (two high: the every-run metric rule answers almost no loaded row; the
 undoes C, other, C), 1 disputed, 0 refuted. REVISION 3 written (1b27d10); its check FINISHED (`wf_d21b13f6-ea1`;
 `SP/perf/revision3-check.json`, digest `SP/perf/rev3-digest.md`): 74 done, 43 in part, 1 wrong; 30
 new (1 high: perfrun's own timeout read as a crash), 1 disputed (taken), 0 refuted. REVISION 4
-written (f7a4905); its CHECK RUNNING: workflow `wf_8aea486a-f12` (script `SP/perf-rev4-check.js`,
-experiments `SP/design-check4/`). DECIDED (process, recorded in DECISIONS at the probe's close):
+written (f7a4905); its check FINISHED (`wf_8aea486a-f12`; `SP/perf/revision4-check.json`, digest
+`SP/perf/rev4-digest.md`): 38 done, 35 in part, 2 wrong; 31 new (one high: the go-ahead pipe took
+perfrun's stdout), 2 by one verifier, 1 refuted. By the rule below, REVISION 5 written (728e82e);
+its CHECK RUNNING: `wf_2b416222-f83` (script `SP/perf-rev5-check.js`, experiments
+`SP/design-check5/`; dispositions + two fresh lenses). DECIDED (process, recorded in DECISIONS at the probe's close):
 revision 4's check is the last design round — what it confirms below high severity goes into the
 build's revision 5 notes and the build's tests; a high finding (a mechanism that fails) gets one
 more revision and check. Then build in §5's order (b, c, a, d, e, f, g) with the full process.
