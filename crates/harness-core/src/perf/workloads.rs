@@ -212,30 +212,42 @@ pub fn parse(text: &str, path: &Path) -> Result<Workloads, ParseError> {
     let table = doc.get_ref();
     let mut version: Option<&Spanned> = None;
     let mut list: Option<&Spanned> = None;
+    let mut unknown: Option<(&str, std::ops::Range<usize>)> = None;
     for (key, value) in table.iter() {
         match key.get_ref().as_ref() {
             "schema_version" => version = Some(value),
             "workload" => list = Some(value),
             other => {
-                return Err(at(
-                    text,
-                    key.span(),
-                    format!("unknown key {other:?} (the keys are schema_version and [[workload]])"),
-                ))
+                if unknown.is_none() {
+                    unknown = Some((other, key.span()));
+                }
             }
         }
+    }
+    // A newer file first, whatever its keys: a key this harness does not
+    // know is what a newer version adds, so it is told to upgrade, never to
+    // fix the file.
+    if let Some(n) = version
+        .and_then(|v| integer(v.get_ref()))
+        .filter(|n| *n > WORKLOADS_SCHEMA_VERSION)
+    {
+        return Err(ParseError::TooNew(Error::SchemaTooNew {
+            path: path.to_path_buf(),
+            found: n as u64,
+            supported: WORKLOADS_SCHEMA_VERSION as u64,
+        }));
+    }
+    if let Some((other, span)) = unknown {
+        return Err(at(
+            text,
+            span,
+            format!("unknown key {other:?} (the keys are schema_version and [[workload]])"),
+        ));
     }
     match version {
         None => return Err(at(text, 0..0, "`schema_version = 1` is missing".into())),
         Some(v) => match integer(v.get_ref()) {
             Some(n) if n == WORKLOADS_SCHEMA_VERSION => {}
-            Some(n) if n > WORKLOADS_SCHEMA_VERSION => {
-                return Err(ParseError::TooNew(Error::SchemaTooNew {
-                    path: path.to_path_buf(),
-                    found: n as u64,
-                    supported: WORKLOADS_SCHEMA_VERSION as u64,
-                }))
-            }
             _ => return Err(at(text, v.span(), "schema_version must be 1".into())),
         },
     }
@@ -754,11 +766,28 @@ mod tests {
                 .as_str()
             )
         );
-        // A newer schema is its own error, not a rule.
-        assert!(matches!(
-            parse("schema_version = 2\n", Path::new("w.toml")),
-            Err(ParseError::TooNew(_))
-        ));
+        // A newer schema is its own error, not a rule — also when it has a
+        // key or a table this harness does not know, before or after the
+        // version.
+        for newer in [
+            "schema_version = 2\n",
+            "schema_version = 2\nprofile = 1\n",
+            "profile = 1\nschema_version = 2\n",
+            "schema_version = 2\n[settings]\nwarm = true\n",
+            "schema_version = 2\n[[workload]]\nid = \"a\"\nwarmup = 3\n",
+        ] {
+            assert!(
+                matches!(
+                    parse(newer, Path::new("w.toml")),
+                    Err(ParseError::TooNew(_))
+                ),
+                "{newer:?}"
+            );
+        }
+        // A misspelt version is named where it is.
+        let e = rule("schema_versoin = 1\n");
+        assert_eq!((e.line, e.column), (1, 1), "{e}");
+        assert!(e.message.contains("unknown key \"schema_versoin\""), "{e}");
         assert!(rule("[[workload]]\nid = \"a\"\n")
             .message
             .contains("schema_version"));
@@ -839,6 +868,13 @@ mod tests {
                 && words.ends_with("— fix it, or Edit the workloads file"),
             "{words}"
         );
+        // A newer file with a key of its own: upgrade the harness, not "fix
+        // it".
+        std::fs::write(workloads_path(&dir), "schema_version = 2\nprofile = 1\n").expect("write");
+        assert!(matches!(
+            load(&dir),
+            Err(Error::SchemaTooNew { found: 2, .. })
+        ));
         std::fs::write(
             workloads_path(&dir),
             "schema_version = 1\n[[workload]]\nid = \"a\"\n",
