@@ -98,9 +98,15 @@ below are history.
   gives each reason's token; `out_of_date` its words), results' OUTCOMES / PLATFORM_METRICS /
   LEFT_OUT_REASONS; `environment_checked: false`. (The design's `cant-tell-busy` is not an
   answer the words give: busy is a detail.)
-  NEXT: step (g) — SCHEMAS (results rows, perf-row event, the MCP speed fields; results are
-  forgeable like every ledger file), the tutorial's Speed part, the testing guide's Part 11 on
-  liblzg; then the code review (workflow), fix passes each checked, mutation checks, DECISIONS
+- Step (g) DONE: SCHEMAS "C-vs-Rust speed" (workloads.toml, results files and the replace rule,
+  currency tokens, CLI, perf-row, harness-mcp fields, trust boundaries — forgeable and
+  non-canonical — and writer rows); TUTORIAL "Speed" part + two words; TESTING-GUIDE Part 11
+  (liblzg: big input from the sources, two workloads, save with --expect none, measure, show and
+  out of date, the cockpit, commit). Part 11 was NOT run on liblzg here (liblzg is not on this
+  machine; downloading it needs the person's OK): its fixed lines come from the code and a real
+  run on a zopfli copy (scratchpad zperf/: refusals, init, measure, show, out of date all as
+  written); numbers are `<n.nn>` placeholders.
+  NEXT: the perf code review (workflow), fix passes each checked, mutation checks, DECISIONS
   (incl. the Linux refusal), merge to main, push. Then (g) SCHEMAS, tutorial, the
   testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 

@@ -110,6 +110,8 @@ Whichever you use, the model only ever writes two files for a unit — the trans
 | Provider | The way the harness reaches an AI model: the chat, a hand-off, a local model, or a cloud service. |
 | Sandbox | A locked-down space where model-written code is built and run: no network, no access to your personal files, and a time limit. |
 | Benchmark | A fixed set of public C programs used to measure how well RuHarness migrates, scored on tests it never saw. |
+| Workload | One run of the whole program, with your options and input, that Speed times on the C and on the Rust. |
+| As it stands | The program with every verified unit's Rust in place at once — what you would ship today. |
 
 ## Before you start
 
@@ -370,6 +372,45 @@ argument is a flag or a word, never a path.
 
 Each piece is still checked with only its own Rust swapped in: a feature's own view says so
 when it "holds so far". Commit `migration/features/` with your work.
+
+## Speed: is the Rust as fast as the C?
+
+The judge checks that the Rust does the same thing as the C. **Speed** tells you whether it does
+it as fast. It is never part of a verdict: a slower unit is still a correct one — you decide
+whether the difference matters.
+
+You describe a few **workloads**: runs of the whole program the way it is really used, each with
+your own options and, if you like, one input file of yours inside the project (a real file, at
+most 64 MiB, committed with the project). perf runs each workload as the original C, then with
+each verified unit's Rust swapped in on its own, then with every verified unit together ("the
+program as it stands"). The C and the Rust take turns, many times each (15 by default), on the
+same computer, and perf says which was faster and by how much — or honestly that it cannot tell.
+
+- **Write them.** On the Speed row in the tree, press Enter and choose *Write your workloads
+  file*. It works like the features file: your editor opens a private copy, the cockpit checks
+  it when you come back, and asks before saving it. A run should take the C half a second or
+  more; shorter ones read "too short to time".
+- **Measure.** Choose *Measure speed* (or, on a verified unit, *Measure this unit's speed*). The
+  dialog says how many runs it will make and about how long it takes, and what it writes. Keep
+  the computer quiet while it measures: other work makes the numbers noisier. Cancel keeps the
+  rows already finished.
+- **Read the results.** The Speed view lists the C, the program as it stands and each unit,
+  worst first: "about as fast", "slower 6.2 % (4.1–8.3 %)" — the best guess and the range it
+  surely lies in — "probably slower", "close call", "can't tell" (measure again with 31 runs on a
+  quiet computer), "too short to time". Move to a row to read its full sentence. A row turns
+  "out of date" when the C, the Rust or the workload changed since; measure again.
+- **Behaves differently.** perf also compares what the program prints and how it ends. If the
+  Rust prints or ends differently on one of your workloads, that row says so in red on the unit,
+  and *Compare the outputs* shows both around the first difference. The judge's checks do not
+  run your workloads, so this is something only perf can find.
+- **If a unit is slower and speed matters,** the unit's view says what to do, by how its Rust was
+  made: Modify the model's attempt with a note about speed and Replace (and back, if it is not
+  faster), Hand edit it, or — for Rust written outside the cockpit — commit it, edit it and
+  verify it in a terminal. Note the numbers first, or commit `migration/perf/`: measuring again
+  replaces a row.
+
+Numbers are of one computer at one time; commit `migration/perf/` with your work to keep a
+history. Speed runs on macOS for now.
 
 ## Your first migration, step by step
 
