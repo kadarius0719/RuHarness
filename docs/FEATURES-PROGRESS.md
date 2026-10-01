@@ -61,8 +61,14 @@ below are history.
   loads plan/facts/workloads, resolves perf_dir). Not yet exercised with real verified units —
   that is step (e)'s end-to-end test (a mini target with two accepted units, zopfli's u001).
   `harness_core::perf::manifest_profile` added (note 25).
-  NEXT: step (e), the CLI: `harness perf run|init|save|show` (+ --json `perf-row` events, the
-  summary line, exit codes 0/1/2), and its end-to-end tests.
+- Step (e) DONE: `crates/harness-cli/src/perf.rs` + `tests/perf.rs`; `harness_core::perf::
+  currency::out_of_date`; oracle `perf_measurable`, `perf_computer_if_cached`. Real result on
+  zopfli (800 KB text, 5 runs): the C 2.20 s / 35.1 MB / 3.30e10 instructions; u001-katajainen
+  "about as fast as the C (within 2 %)", 1.9 % more instructions. A two-verified-unit end-to-end
+  target does not exist yet (zopfli has one): the as-it-stands path is tested at the oracle level.
+  NEXT: step (f), the cockpit (Speed group and View, the generalised Edit flow for workloads, the
+  cached input hashing in Snapshot::load, the MCP Speed fact); then (g) SCHEMAS, tutorial, the
+  testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
 `.claude/worktrees/rust-migration-harness-7d1c42`), NOT yet merged to main or pushed. This
