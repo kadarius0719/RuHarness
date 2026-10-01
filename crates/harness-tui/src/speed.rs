@@ -113,8 +113,12 @@ pub struct Advice {
 }
 
 /// How to change a unit's Rust, from its provenance (§3.11 *A slower row's
-/// next step*): Modify the model's attempt and Replace (and back), a hand
-/// edit, or — for code the cockpit did not record — commit, edit, verify.
+/// next step*, build notes 22 and 30): Modify the model's attempt and
+/// Replace (and back); Hand edit the crate and Replace (and back) — a hand
+/// edit alone is recorded, never accepted, so perf would time the same
+/// crate —; or, for code the cockpit did not record, commit, edit, verify.
+/// Each act named changes the crate perf measures (the unit's verified
+/// crate). Without a provider Modify is greyed, in the cockpit's own words.
 pub fn change_words(unit: &UnitView, has_provider: bool) -> String {
     let id = &unit.unit.id;
     let model_made = match &unit.provenance {
@@ -128,26 +132,32 @@ pub fn change_words(unit: &UnitView, has_provider: bool) -> String {
     if let Some(a) = model_made {
         let a = short_id(&a);
         let modify = format!(
-            "{a} with a note about speed (give these numbers), then Replace {id}'s verified crate \
-             with the new attempt, measure this unit again — and if it is not faster, Replace it \
-             back with {a}"
+            "Modify {a} with a note about speed (give these numbers), then Replace {id}'s \
+             verified crate with the new attempt, measure this unit again — and if it is not \
+             faster, Replace it back with {a}"
         );
         return if has_provider {
-            format!("Modify {modify}")
+            modify
         } else {
             format!(
-                "Connect a model to Modify (start the cockpit with --provider), then modify \
-                 {modify}"
+                "Modify is greyed: {} — with one, {modify}",
+                crate::model::NO_PROVIDER
             )
         };
     }
-    let hand_editable = matches!(unit.provenance, ProvenanceView::Human { .. })
-        && unit
-            .crate_dir
-            .as_ref()
-            .is_some_and(|d| d.join("src/logic.rs").is_file() && d.join("src/ffi.rs").is_file());
-    if hand_editable {
-        return format!("Hand edit {id}, then measure again");
+    let in_use = match &unit.provenance {
+        ProvenanceView::Human { attempt, .. } => Some(short_id(attempt)),
+        _ => None,
+    };
+    let hand_editable = unit
+        .crate_dir
+        .as_ref()
+        .is_some_and(|d| d.join("src/logic.rs").is_file() && d.join("src/ffi.rs").is_file());
+    if let Some(a) = in_use.filter(|_| hand_editable) {
+        return format!(
+            "Hand edit {id}'s crate, then Replace {id}'s verified crate with the new attempt and \
+             measure this unit again — and if it is not faster, Replace it back with {a}"
+        );
     }
     format!(
         "Commit the unit's crate first (git) — replacing it deletes it; edit it in your editor, \

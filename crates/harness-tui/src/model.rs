@@ -39,6 +39,11 @@ pub fn short_id(id: &str) -> String {
     format!("{cut}{sample}")
 }
 
+/// Why Migrate and Modify are greyed when no provider is allowed — the
+/// cockpit's own words, which the Speed advice repeats word for word
+/// (docs/PERF-DESIGN.md §10 build note 30).
+pub const NO_PROVIDER: &str = "no provider is allowed (start with --provider <name>)";
+
 /// Which recorded attempt produced the unit crate (R-5), by id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProvenanceView {

@@ -405,8 +405,9 @@ same computer, and perf says which was faster and by how much — or honestly th
   run your workloads, so this is something only perf can find.
 - **If a unit is slower and speed matters,** the unit's view says what to do, by how its Rust was
   made: Modify the model's attempt with a note about speed and Replace (and back, if it is not
-  faster), Hand edit it, or — for Rust written outside the cockpit — commit it, edit it and
-  verify it in a terminal. Note the numbers first, or commit `migration/perf/`: measuring again
+  faster), Hand edit its crate and Replace (and back — a hand edit alone is recorded, never
+  accepted, so measuring again would time the same crate), or — for Rust written outside the
+  cockpit — commit it, edit it and verify it in a terminal. Note the numbers first, or commit `migration/perf/`: measuring again
   replaces a row.
 
 Numbers are of one computer at one time; commit `migration/perf/` with your work to keep a

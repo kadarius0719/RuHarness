@@ -2981,7 +2981,9 @@ const HELP_SPEED: &[&str] = &[
     "When a unit's Rust is slower and speed matters, change the Rust the way it was made: \
      made by a model — Modify its attempt with a note about speed, Replace the verified crate \
      with the new attempt, measure again, and Replace it back if it is not faster; a hand \
-     edit — Hand edit it, then measure again; written outside the cockpit — commit the crate \
+     edit — Hand edit its crate, Replace the verified crate with the new attempt, measure \
+     again, and Replace it back if it is not faster (a hand edit alone is recorded, never \
+     accepted: perf would time the same crate); written outside the cockpit — commit the crate \
      first (git), edit it in your editor, run harness verify <unit> in a terminal, then \
      measure again.",
 ];
@@ -6598,9 +6600,34 @@ mod tests {
              verified crate with the new attempt, measure this unit again — and if it is not \
              faster, Replace it back with a-13c9"
         );
-        assert!(change_words(&unit, false).starts_with(
-            "Connect a model to Modify (start the cockpit with --provider), then modify a-13c9"
+        // No provider: Modify is greyed, said in the cockpit's own words
+        // (build note 30) — the very reason the greyed item gives.
+        let mut no_provider = App::new(
+            crate::app::Config {
+                providers: Vec::new(),
+                ..app.config.clone()
+            },
+            crate::load::read(&app.config.target).unwrap(),
+        );
+        no_provider.select(Selection::Attempt(
+            "u-lib".into(),
+            crate::app::tests::PROVENANCE.into(),
         ));
+        let modify = no_provider
+            .menu_items()
+            .into_iter()
+            .find(|i| i.label == "Modify with a note")
+            .expect("Modify offered, greyed");
+        assert_eq!(modify.greyed.as_deref(), Some(crate::model::NO_PROVIDER));
+        assert_eq!(
+            change_words(&unit, false),
+            format!(
+                "Modify is greyed: {} — with one, Modify a-13c9 with a note about speed (give \
+                 these numbers), then Replace u-lib's verified crate with the new attempt, \
+                 measure this unit again — and if it is not faster, Replace it back with a-13c9",
+                crate::model::NO_PROVIDER
+            )
+        );
         unit.provenance = P::Ambiguous(vec!["a-28d8aaaa".into(), "a-13c9bbbb".into()]);
         assert!(
             change_words(&unit, true).starts_with("Modify a-13c9 "),
@@ -6611,13 +6638,17 @@ mod tests {
         std::fs::write(dir.join("src/logic.rs"), "").unwrap();
         std::fs::write(dir.join("src/ffi.rs"), "").unwrap();
         unit.crate_dir = Some(dir.clone());
+        // A recorded hand edit: the edit alone is never accepted, so the
+        // words name Replace (and the way back to the attempt in use now) —
+        // build note 22; tests/speed_change.rs runs each act.
         unit.provenance = P::Human {
-            attempt: "a-77".into(),
-            origin: "a-77".into(),
+            attempt: "a-77b2aaaa".into(),
+            origin: "a-66c1bbbb".into(),
         };
         assert_eq!(
             change_words(&unit, true),
-            "Hand edit u-lib, then measure again"
+            "Hand edit u-lib's crate, then Replace u-lib's verified crate with the new attempt \
+             and measure this unit again — and if it is not faster, Replace it back with a-77b2"
         );
         std::fs::remove_file(dir.join("src/ffi.rs")).unwrap();
         assert!(change_words(&unit, true).starts_with("Commit the unit's crate first (git)"));

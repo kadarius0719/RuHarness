@@ -2027,7 +2027,7 @@ impl App {
                     .config
                     .providers
                     .first()
-                    .ok_or("no provider is allowed (start with --provider <name>)")?;
+                    .ok_or(crate::model::NO_PROVIDER)?;
                 let mut from = os("--from=");
                 from.push(&r.id);
                 let mut steer = os("--steer=");
