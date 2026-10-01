@@ -32,6 +32,11 @@ fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
 ## Open (in order) — resume here (session 17c366c0…, 2026-09-30 → 10-01; continues after context compactions)
 
+**NOW (2026-10-01, after 56cd090 on main):** the probe review is closed and pushed. Next: BUILD the
+C-vs-Rust performance baselines from docs/PERF-DESIGN.md (revision 5 + §10's 30 build notes) in
+§5's order (b, c, a, d, e, f, g), with the full process; then the briefing's M5. The probe items
+below are history.
+
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
 `.claude/worktrees/rust-migration-harness-7d1c42`), NOT yet merged to main or pushed. This
 session's commits on top of 665495b: 3ed89be 1a0efb0 31610cf 6a03a6d 9bc83d3 7615200 667654b
