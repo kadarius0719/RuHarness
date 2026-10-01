@@ -271,6 +271,56 @@ mod tests {
     }
 
     #[test]
+    fn the_interval_is_read_at_the_ranks_the_design_names() {
+        // Every pairwise difference distinct, so each end is exactly one
+        // of them and a slip of one rank at either end shows: other − base
+        // = 10i − j for i, j = 1..5 gives 5..9, 15..19, …, 45..49. At m =
+        // n = 5, c = 2: [D(3), D(23)] = [7, 47], the median D(13) = 27.
+        let base: Vec<Option<f64>> = (1..=5).map(|j| Some(j as f64)).collect();
+        let five: Vec<Option<f64>> = (1..=5).map(|i| Some(10.0 * i as f64)).collect();
+        assert_eq!(critical_value(5, 5), Some(2));
+        let s = hodges_lehmann_linear(&base, &five).expect("five a side");
+        assert_eq!((s.lo, s.estimate, s.hi, s.m, s.n), (7.0, 27.0, 47.0, 5, 5));
+        // The same in log space: e^j against e^(10i).
+        let exp =
+            |v: &[Option<f64>]| -> Vec<Option<f64>> { v.iter().map(|x| x.map(f64::exp)).collect() };
+        let close = |s: Shift, lo: f64, est: f64, hi: f64| {
+            for (got, want) in [(s.lo, lo), (s.estimate, est), (s.hi, hi)] {
+                assert!((got - want).abs() < 1e-9, "{got} against {want}");
+            }
+        };
+        close(
+            hodges_lehmann(&exp(&base), &exp(&five)).expect("five a side"),
+            7.0,
+            27.0,
+            47.0,
+        );
+        // Unequal sizes, m = 5 and n = 7, c = 5: the 35 differences are,
+        // counting from 1, D(k) = 10·⌊(k−1)/5⌋ + 5 + (k−1) mod 5 — so
+        // [D(6), D(30)] = [15, 59] and the median D(18) = 37.
+        let seven: Vec<Option<f64>> = (1..=7).map(|i| Some(10.0 * i as f64)).collect();
+        assert_eq!(critical_value(5, 7), Some(5));
+        assert_eq!(critical_value(7, 5), Some(5));
+        let s = hodges_lehmann_linear(&base, &seven).expect("values");
+        assert_eq!((s.lo, s.estimate, s.hi, s.m, s.n), (15.0, 37.0, 59.0, 5, 7));
+        close(
+            hodges_lehmann(&exp(&base), &exp(&seven)).expect("values"),
+            15.0,
+            37.0,
+            59.0,
+        );
+        // The other way round (m = 7, n = 5): the mirror.
+        let s = hodges_lehmann_linear(&seven, &base).expect("values");
+        assert_eq!((s.lo, s.estimate, s.hi), (-59.0, -37.0, -15.0));
+        close(
+            hodges_lehmann(&exp(&seven), &exp(&base)).expect("values"),
+            -59.0,
+            -37.0,
+            -15.0,
+        );
+    }
+
+    #[test]
     fn the_interval_narrows_as_runs_grow() {
         // A deterministic spread: the same quantiles at every n.
         let sample = |n: usize, scale: f64| -> Vec<Option<f64>> {
