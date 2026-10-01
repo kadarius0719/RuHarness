@@ -1321,15 +1321,20 @@ computer | compilers`, and the cockpit's own `measuring | too-large | input-unus
 
 `harness_status.speed`: `null` without a workloads file, else `{state: no-workload | file-error |
 not-yet-run | c-only | units, units_measured, units_measurable, measuring, c_alone [row],
-as_it_stands {units, left_out [{id, reason}], rows [row]}}`; each unit's `speed` is its worst row;
-`harness_unit.speed` all of the unit's rows, worst first. A row: `workload`, `answer` (closed:
+as_it_stands {units, units_omitted?, left_out [{id, reason}], left_out_omitted?, rows [row]}}` —
+`units_measured` the units with a row perf timed or ran (not only set-up rows), `units_measurable`
+those it would measure now; the held and left-out units listed up to 20 each, with how many more;
+rows only of workloads still in the workloads file (one each, so at most 16 a side) — bounded
+whatever the plan holds. Each unit's `speed` is its worst row; `harness_unit.speed` all of the
+unit's rows, worst first. A row: `workload`, `answer` (closed:
 `about-as-fast | slower | faster | probably-slower | probably-faster | close-call-slower |
 close-call-faster | no-clear-difference | cant-tell-estimate | cant-tell-short-run |
 cant-tell-too-few | cant-tell-slow-cores | baseline | too-short | behaves-differently |
 stopped-by-sigkill | run-failed-timeout | run-failed-exit | run-failed-signal` and the C's and the
 set-up's outcomes), `outcome`, `platform_metrics`, `short`, `runs`, `shift_percent {estimate,
-low, high}` (only when the answer tells), `current`, `out_of_date` (the closed tokens above),
-`environment_checked: false`; the C alone's adds `cpu_seconds` and `memory_bytes` (medians).
+low, high}` (only when the answer tells), `current`, `out_of_date` (the closed tokens above, each
+once), `environment_checked: false`; the C alone's adds `cpu_seconds` and `memory_bytes`
+(medians).
 Ids and the workload are fenced as untrusted text; everything else is closed or a number.
 
 ## Trust boundaries

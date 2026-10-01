@@ -199,7 +199,10 @@ pub fn speed_row(r: &SpeedRow, c_alone: bool) -> Value {
         "short": row.short,
         "runs": row.runs,
         "current": r.out_of_date.is_empty(),
-        "out_of_date": r.out_of_date_tokens.iter()
+        // Each reason once: a token says what changed, never which unit, so
+        // its repeats (one per unit accepted since) would only grow the row.
+        "out_of_date": harness_core::perf::currency::REASONS.iter()
+            .filter(|t| r.out_of_date_tokens.contains(t))
             .map(|t| closed("out-of-date reason", t, harness_core::perf::currency::REASONS))
             .collect::<Vec<_>>(),
         "environment_checked": false,
@@ -223,32 +226,51 @@ pub fn speed_row(r: &SpeedRow, c_alone: bool) -> Value {
     v
 }
 
+/// The rows of `rows` whose workload is in the workloads file — at most one
+/// per workload, so at most 16 a side (`MAX_WORKLOADS`): rows of a workload
+/// no longer in the file (perf drops them on its next write, and a forged
+/// file could hold any number) are left out of the fact.
+fn known_rows<'r>(model: &SpeedModel, rows: &'r [SpeedRow]) -> Vec<&'r SpeedRow> {
+    rows.iter()
+        .filter(|r| model.workloads.iter().any(|(id, _)| *id == r.workload))
+        .collect()
+}
+
 /// The speed's head for `harness_status`: the group's state, the C alone's
-/// rows, the program as it stands's (its held and left-out units), and
-/// whether a perf run is measuring — `null` without a workloads file.
+/// rows, the program as it stands's (its held and left-out units, the
+/// first [`MAX_LISTED`] of each with how many more), and whether a perf run
+/// is measuring — `null` without a workloads file. Bounded whatever the
+/// plan's size, so the units' page always has room.
 fn speed_head(model: &SpeedModel) -> Value {
-    let (state, measured, of) = match &model.group {
+    let (state, measured) = match &model.group {
         speed::Group::NoFile => return Value::Null,
-        speed::Group::NoWorkload => ("no-workload", 0, 0),
-        speed::Group::FileError(_) => ("file-error", 0, 0),
-        speed::Group::NotYetRun => ("not-yet-run", 0, 0),
-        speed::Group::COnly => ("c-only", 0, model.measurable.len()),
-        speed::Group::Units { measured, of } => ("units", *measured, *of),
+        speed::Group::NoWorkload => ("no-workload", 0),
+        speed::Group::FileError(_) => ("file-error", 0),
+        speed::Group::NotYetRun => ("not-yet-run", 0),
+        speed::Group::COnly => ("c-only", 0),
+        speed::Group::Units { measured, .. } => ("units", *measured),
     };
+    let mut as_it_stands = json!({
+        "units": model.held.iter().take(MAX_LISTED).map(|id| short("unit id", id)).collect::<Vec<_>>(),
+        "left_out": model.left_out.iter().take(MAX_LISTED).map(|(id, reason)| json!({
+            "id": short("unit id", id),
+            "reason": closed("left-out reason", reason, harness_core::perf::results::LEFT_OUT_REASONS),
+        })).collect::<Vec<_>>(),
+        "rows": known_rows(model, &model.program_rows).into_iter().map(|r| speed_row(r, false)).collect::<Vec<_>>(),
+    });
+    if model.held.len() > MAX_LISTED {
+        as_it_stands["units_omitted"] = json!(model.held.len() - MAX_LISTED);
+    }
+    if model.left_out.len() > MAX_LISTED {
+        as_it_stands["left_out_omitted"] = json!(model.left_out.len() - MAX_LISTED);
+    }
     json!({
         "state": state,
         "units_measured": measured,
-        "units_measurable": of,
+        "units_measurable": model.measurable.len(),
         "measuring": model.measuring,
-        "c_alone": model.c_rows.iter().map(|r| speed_row(r, true)).collect::<Vec<_>>(),
-        "as_it_stands": {
-            "units": model.held.iter().map(|id| short("unit id", id)).collect::<Vec<_>>(),
-            "left_out": model.left_out.iter().map(|(id, reason)| json!({
-                "id": short("unit id", id),
-                "reason": closed("left-out reason", reason, harness_core::perf::results::LEFT_OUT_REASONS),
-            })).collect::<Vec<_>>(),
-            "rows": model.program_rows.iter().map(|r| speed_row(r, false)).collect::<Vec<_>>(),
-        },
+        "c_alone": known_rows(model, &model.c_rows).into_iter().map(|r| speed_row(r, true)).collect::<Vec<_>>(),
+        "as_it_stands": as_it_stands,
     })
 }
 
@@ -256,7 +278,12 @@ fn speed_head(model: &SpeedModel) -> Value {
 fn unit_speed(model: &SpeedModel, id: &str) -> Vec<Value> {
     model
         .unit(id)
-        .map(|u| u.rows.iter().map(|r| speed_row(r, false)).collect())
+        .map(|u| {
+            known_rows(model, &u.rows)
+                .into_iter()
+                .map(|r| speed_row(r, false))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1188,6 +1215,428 @@ mod tests {
             .unwrap()
             .contains(&json!("rust")));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- the Speed fact on what the cockpit cannot tell, reads while a
+    // perf run measures, and a head bounded whatever the plan (§3.11, §4).
+
+    /// A scratch zopfli with a workloads file: each workload `id` runs on
+    /// its own input `bench/<id>.txt`. Removed on drop.
+    struct SpeedTarget(PathBuf);
+
+    impl Drop for SpeedTarget {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn speed_target(tag: &str, workloads: &[&str]) -> SpeedTarget {
+        fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+            std::fs::create_dir_all(dst).unwrap();
+            for e in std::fs::read_dir(src).unwrap().flatten() {
+                let name = e.file_name();
+                if ["build", "target", ".git", ".lock"].contains(&name.to_string_lossy().as_ref()) {
+                    continue;
+                }
+                let (from, to) = (e.path(), dst.join(&name));
+                if from.is_dir() {
+                    copy_dir(&from, &to);
+                } else {
+                    std::fs::copy(&from, &to).unwrap();
+                }
+            }
+        }
+        let root = std::env::temp_dir().join(format!("mcp-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        copy_dir(&repo().join("targets/zopfli"), &root);
+        let root = root.canonicalize().unwrap();
+        let _ = std::fs::remove_dir_all(root.join("migration/perf"));
+        let perf = harness_core::perf::perf_dir(&root);
+        std::fs::create_dir_all(perf.join(harness_core::perf::results::UNITS_DIR)).unwrap();
+        std::fs::create_dir_all(root.join("bench")).unwrap();
+        let mut toml = String::from("schema_version = 1\n");
+        for w in workloads {
+            std::fs::write(
+                root.join(format!("bench/{w}.txt")),
+                format!("{w} ").repeat(50),
+            )
+            .unwrap();
+            toml.push_str(&format!(
+                "[[workload]]\nid = \"{w}\"\nargs = [\"-c\", \"{{input}}\"]\n\
+                 input = \"bench/{w}.txt\"\nruns = 15\n"
+            ));
+        }
+        std::fs::write(perf.join("workloads.toml"), toml).unwrap();
+        SpeedTarget(root)
+    }
+
+    const U001: &str = "u001-katajainen";
+
+    /// A row's inputs with today's digests (`rust`: a unit row's).
+    fn speed_inputs(
+        snap: &Snapshot,
+        w: &str,
+        rust: bool,
+    ) -> harness_core::perf::results::RowInputs {
+        use harness_core::perf::results::{Compilers, Computer, CrateDigest, RowInputs};
+        let Some(harness_tui::perfread::InputNow::Digest(workload)) =
+            snap.perf.inputs.get(w).cloned()
+        else {
+            panic!("{:?}", snap.perf.inputs)
+        };
+        let krate = harness_core::hash::unit_crate_file_set_hash(
+            &snap.root,
+            &snap
+                .root
+                .join("migration/units")
+                .join(U001)
+                .join("katajainen_rs"),
+        )
+        .unwrap();
+        RowInputs {
+            workload,
+            program: snap.perf.program_now.clone().unwrap(),
+            crates: rust.then(|| {
+                vec![CrateDigest {
+                    id: U001.into(),
+                    digest: krate,
+                }]
+            }),
+            replaces: rust.then(|| snap.unit(U001).unwrap().unit.oracle_param_list("replaces")),
+            program_name: snap.program_name.clone(),
+            units: None,
+            left_out: None,
+            recipe: harness_core::perf::PERF_RECIPE.into(),
+            launcher: harness_core::perf::PERF_LAUNCHER.into(),
+            computer: Computer {
+                os: "15.6".into(),
+                build: "24G84".into(),
+                arch: "arm64".into(),
+                cpu: "Apple M3".into(),
+                two_kinds: true,
+                fast_cores: 4,
+            },
+            compilers: Compilers {
+                cc: "cc".into(),
+                rustc: rust.then(|| "rustc 1.94.1".into()),
+            },
+        }
+    }
+
+    /// 15 runs around 4e9 cycles, ±1 %; `slow`: mostly on the slower cores.
+    fn speed_runs(slow: bool) -> Vec<harness_core::perf::results::Run> {
+        (0..15u64)
+            .map(|i| {
+                let c = 4_000_000_000 + (i * 80_000_000) / 14 - 40_000_000;
+                harness_core::perf::results::Run {
+                    instructions: Some(4_000_000_000),
+                    cycles: Some(c),
+                    cpu_us: Some(c / 3_200),
+                    wall_us: Some(c / 3_200 + 5_000),
+                    memory: Some(12_400_000),
+                    p_instructions: Some(if slow { 1_000_000_000 } else { 4_000_000_000 }),
+                    p_cycles: Some(if slow { c / 4 } else { c }),
+                    load: Some(if slow { 1_400 } else { 150 }),
+                    end: "exit 0".into(),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    /// A timed row: the C alone's baseline (`other` `None`) or a unit's.
+    fn speed_row_of(
+        snap: &Snapshot,
+        w: &str,
+        other: Option<Vec<harness_core::perf::results::Run>>,
+        metric: &str,
+        short: bool,
+    ) -> harness_core::perf::results::Row {
+        let rust = other.is_some();
+        harness_core::perf::results::Row {
+            workload: w.into(),
+            outcome: if rust { "measured" } else { "baseline" }.into(),
+            short: Some(short),
+            runs: Some(15),
+            platform_metrics: Some(metric.into()),
+            inputs: speed_inputs(snap, w, rust),
+            c: Some(speed_runs(metric == "macos-v6-share")),
+            other,
+            std: rust.then_some(true),
+            fat_lto: None,
+            profile: None,
+            step1: None,
+            failed_run: None,
+            setup: None,
+            first_difference: None,
+            found_before: None,
+            last_try: None,
+        }
+    }
+
+    fn write_speed(
+        t: &SpeedTarget,
+        program: harness_core::perf::results::ProgramResults,
+        unit_rows: Vec<harness_core::perf::results::Row>,
+    ) {
+        use harness_core::perf::results as res;
+        let perf = harness_core::perf::perf_dir(&t.0);
+        res::write_program(&res::program_path(&perf), &program).unwrap();
+        let mut file = res::UnitResults::new(U001);
+        file.rows = unit_rows;
+        res::write_unit(&res::unit_path(&perf, U001), &file).unwrap();
+    }
+
+    fn speed_rows_by_workload(rows: &Value) -> std::collections::BTreeMap<String, Value> {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["workload"]["text"].as_str().unwrap().to_string(),
+                    r.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// The answer field on rows the words cannot tell (§3.11 [p27], build
+    /// notes 11 and 19): a share-rule row mostly on the slower cores under
+    /// load, and a short run — each its closed answer, no shift exported;
+    /// nor on the C alone's baseline.
+    #[test]
+    fn the_speed_fact_exports_no_shift_where_it_cannot_tell() {
+        let t = speed_target("speed-cant-tell", &["share", "short"]);
+        let snap = Snapshot::load(&t.0).unwrap();
+        write_speed(
+            &t,
+            harness_core::perf::results::ProgramResults {
+                c_alone: vec![
+                    speed_row_of(&snap, "share", None, "macos-v6-cycles", false),
+                    speed_row_of(&snap, "short", None, "macos-v6-cycles", true),
+                ],
+                ..Default::default()
+            },
+            vec![
+                speed_row_of(
+                    &snap,
+                    "share",
+                    Some(speed_runs(true)),
+                    "macos-v6-share",
+                    false,
+                ),
+                speed_row_of(
+                    &snap,
+                    "short",
+                    Some(speed_runs(false)),
+                    "macos-v6-cycles",
+                    true,
+                ),
+            ],
+        );
+        let snap = Snapshot::load(&t.0).unwrap();
+        let v = unit(&snap, U001, None, None).unwrap();
+        let rows = speed_rows_by_workload(&v["speed"]);
+        assert_eq!(
+            rows["share"]["answer"], "cant-tell-slow-cores",
+            "{}",
+            rows["share"]
+        );
+        assert_eq!(
+            rows["short"]["answer"], "cant-tell-short-run",
+            "{}",
+            rows["short"]
+        );
+        for r in rows.values() {
+            assert!(r.get("shift_percent").is_none(), "{r}");
+            assert_eq!(r["current"], true, "{r}");
+        }
+        let s = status(&snap, json!({}), Value::Null, None).unwrap();
+        for c in s["speed"]["c_alone"].as_array().unwrap() {
+            assert_eq!(c["answer"], "baseline");
+            assert!(c.get("shift_percent").is_none(), "{c}");
+        }
+    }
+
+    /// The holder read inside `Snapshot::load` (§3.11, §4): while a perf run
+    /// holds the writer lock, no input is hashed and a changed one reads
+    /// "measuring"; another writer is no perf run. And on day one, before
+    /// a plan, the C alone's rows are still judged.
+    #[test]
+    fn the_speed_fact_while_measuring_and_before_a_plan() {
+        let t = speed_target("speed-measuring", &["big"]);
+        let snap = Snapshot::load(&t.0).unwrap();
+        write_speed(
+            &t,
+            harness_core::perf::results::ProgramResults {
+                c_alone: vec![speed_row_of(&snap, "big", None, "macos-v6-cycles", false)],
+                ..Default::default()
+            },
+            Vec::new(),
+        );
+        let c_alone = |snap: &Snapshot| {
+            let s = status(snap, json!({}), Value::Null, None).unwrap();
+            (
+                s["speed"]["measuring"].clone(),
+                s["speed"]["c_alone"][0].clone(),
+            )
+        };
+        let (measuring, c) = c_alone(&Snapshot::load(&t.0).unwrap());
+        assert_eq!(
+            (measuring, c["current"].clone()),
+            (json!(false), json!(true)),
+            "{c}"
+        );
+        let lock = harness_core::ledger::Ledger::new(&t.0).lock_path();
+        let holder = |command: &str| {
+            format!(
+                "{{\"pid\":{},\"command\":\"{command}\",\"started\":\"2026-09-25T00:00:00Z\"}}\n",
+                std::process::id()
+            )
+        };
+        std::fs::write(
+            &lock,
+            holder(&format!("{} --target .", harness_core::perf::PERF_RUN_LOCK)),
+        )
+        .unwrap();
+        std::fs::write(t.0.join("bench/big.txt"), "changed while measuring").unwrap();
+        let (measuring, c) = c_alone(&Snapshot::load(&t.0).unwrap());
+        assert_eq!(measuring, true);
+        assert_eq!(c["current"], false);
+        assert_eq!(c["out_of_date"], json!(["measuring"]));
+        std::fs::write(&lock, holder("verify u001-katajainen")).unwrap();
+        let (measuring, c) = c_alone(&Snapshot::load(&t.0).unwrap());
+        assert_eq!(measuring, false);
+        assert_eq!(c["out_of_date"], json!(["workload"]));
+        std::fs::remove_file(&lock).unwrap();
+        // Day one: no plan yet.
+        std::fs::remove_file(t.0.join("migration/plan.toml")).unwrap();
+        let (_, c) = c_alone(&Snapshot::load(&t.0).unwrap());
+        assert_eq!(c["current"], false, "{c}");
+        assert_eq!(c["out_of_date"], json!(["workload"]));
+    }
+
+    /// The status head is bounded whatever the plan or a forged results
+    /// file holds (§3.11 "fenced as the features facts are"): held and
+    /// left-out units listed up to a cap with how many more, each reason
+    /// once per row, rows of workloads no longer in the file left out — so
+    /// the result fits its budget and the units' page shows units.
+    #[test]
+    fn the_speed_head_is_bounded_whatever_the_plan() {
+        use harness_core::perf::results::{LeftOut, ProgramResults, UnitRef};
+        let t = speed_target("speed-bounded", &["big"]);
+        let snap = Snapshot::load(&t.0).unwrap();
+        let fake = format!("blake3:{}", "f".repeat(64));
+        let mut c_alone = vec![speed_row_of(&snap, "big", None, "macos-v6-cycles", false)];
+        for i in 0..400 {
+            let mut r = c_alone[0].clone();
+            r.workload = format!("gone-{i:04}");
+            c_alone.push(r);
+        }
+        let mut ais = speed_row_of(
+            &snap,
+            "big",
+            Some(speed_runs(false)),
+            "macos-v6-cycles",
+            false,
+        );
+        ais.inputs.crates = None;
+        ais.inputs.replaces = None;
+        ais.inputs.units = Some(
+            (0..300)
+                .map(|i| UnitRef {
+                    id: format!("u-held-{i:03}"),
+                    crate_digest: fake.clone(),
+                })
+                .collect(),
+        );
+        ais.inputs.left_out = Some(
+            (0..30)
+                .map(|i| LeftOut {
+                    id: format!("u-left-{i:03}"),
+                    crate_digest: String::new(),
+                    reason: "not-fresh".into(),
+                })
+                .collect(),
+        );
+        let mut unit_rows = vec![speed_row_of(
+            &snap,
+            "big",
+            Some(speed_runs(false)),
+            "macos-v6-cycles",
+            false,
+        )];
+        for i in 0..100 {
+            let mut r = unit_rows[0].clone();
+            r.workload = format!("gone-{i:04}");
+            unit_rows.push(r);
+        }
+        write_speed(
+            &t,
+            ProgramResults {
+                c_alone,
+                as_it_stands: vec![ais],
+                ..Default::default()
+            },
+            unit_rows,
+        );
+        let snap = Snapshot::load(&t.0).unwrap();
+        let s = status(&snap, json!({}), Value::Null, None).unwrap();
+        assert!(
+            fence::size(&s) <= fence::RESULT_BUDGET,
+            "{}",
+            fence::size(&s)
+        );
+        assert!(!s["units"].as_array().unwrap().is_empty(), "{s}");
+        assert!(s.pointer("/omitted/oversized").is_none(), "{s}");
+        let sp = &s["speed"];
+        assert_eq!(sp["c_alone"].as_array().unwrap().len(), 1, "{sp}");
+        let ais = &sp["as_it_stands"];
+        assert_eq!(ais["units"].as_array().unwrap().len(), MAX_LISTED);
+        assert_eq!(ais["units_omitted"], 300 - MAX_LISTED);
+        assert_eq!(ais["left_out"].as_array().unwrap().len(), MAX_LISTED);
+        assert_eq!(ais["left_out_omitted"], 30 - MAX_LISTED);
+        let reasons = ais["rows"][0]["out_of_date"].as_array().unwrap();
+        let mut unique = reasons.clone();
+        unique.dedup();
+        assert_eq!(&unique, reasons, "each reason once");
+        assert!(reasons.contains(&json!("left-out")), "{reasons:?}");
+        let v = unit(&snap, U001, None, None).unwrap();
+        assert_eq!(v["speed"].as_array().unwrap().len(), 1, "{}", v["speed"]);
+        assert!(fence::size(&v) <= fence::RESULT_BUDGET);
+    }
+
+    /// A unit whose only row is a set-up row is not counted as measured;
+    /// `units_measurable` is the units perf would measure now (§3.11).
+    #[test]
+    fn a_set_up_row_alone_is_not_a_measured_unit() {
+        let t = speed_target("speed-set-up", &["big"]);
+        let snap = Snapshot::load(&t.0).unwrap();
+        let mut set_up = speed_row_of(&snap, "big", Some(Vec::new()), "macos-v6-cycles", false);
+        set_up.outcome = "not-verified".into();
+        set_up.short = None;
+        set_up.runs = None;
+        set_up.platform_metrics = None;
+        set_up.c = None;
+        set_up.other = None;
+        set_up.std = None;
+        set_up.setup = Some(harness_core::perf::results::SetupFacts {
+            reason: Some("not-fresh".into()),
+            ..Default::default()
+        });
+        write_speed(
+            &t,
+            harness_core::perf::results::ProgramResults {
+                c_alone: vec![speed_row_of(&snap, "big", None, "macos-v6-cycles", false)],
+                ..Default::default()
+            },
+            vec![set_up],
+        );
+        let snap = Snapshot::load(&t.0).unwrap();
+        let s = status(&snap, json!({}), Value::Null, None).unwrap();
+        assert_eq!(s["speed"]["state"], "units");
+        assert_eq!(s["speed"]["units_measured"], 0);
+        assert_eq!(s["speed"]["units_measurable"], 1);
     }
 
     #[test]
