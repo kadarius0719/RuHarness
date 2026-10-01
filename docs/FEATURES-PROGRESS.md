@@ -104,8 +104,7 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    #line, kept for agreement with the design, §10.1).
    CHECK OF FIX PASS 2 FINISHED (`wf_b40998a8-a02`, `SP/fc2/result.json`, digest `SP/fc2/digest.md`):
    26 confirmed by both verifiers, 0 refuted; one high (two heads in GNU's layout read as one
-   watched function — fix pass 2's narrower rule). FIX PASS 3 written (design §10.2), uncommitted
-   at the time of this note: the scanner's `heads()` (type word before, K&R after, parameter-shaped
+   watched function — fix pass 2's narrower rule). FIX PASS 3 COMMITTED (4f79938; design §10.2): the scanner's `heads()` (type word before, K&R after, parameter-shaped
    arguments, keyword-function calls, nested declarators; a macro before the real name), the
    misread-body configuration walk, C23 attributes in declarators, U+180E and the one-pass #line,
    link search (no widening on a cut list, bound before every compile, no-note → None, rounds by
@@ -113,9 +112,10 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    inline-only and ruled-out namesakes, notes from every listing pass, run folders registered for
    the signal's cleanup, the map's tools' TMPDIR in its folder, older maps loaded safely, tests
    gated to macOS, compile-count seams (`last_map_most_file_compiles`, `last_map_pass_compiles`).
-   The 101 bench targets' facts byte-identical; sqlite3.c unchanged. NEXT: full tests, commit,
-   mutation check (`SP/mutfix3.py` in SP/mut1), then the check of fix pass 3 (as
-   `SP/fix-pass-2-check.js`, base copy `SP/fc3/base`). Was: at e846261 (base copy
+   The 101 bench targets' facts byte-identical; sqlite3.c unchanged. Full tests passed (17
+   suites). RUNNING: mutation check (`SP/mutfix3.py` in SP/mut1, log `SP/mutfix3.log`) and the
+   CHECK OF FIX PASS 3, workflow `wf_6d4c61e3-bf5` (script `SP/fix-pass-3-check.js`, base
+   `SP/fc3/base`, work `SP/fc3/work`). Perf revision 4's check `wf_8aea486a-f12` also running. Was: at e846261 (base copy
    `SP/fc1/base`; lenses tokenizer, build-link, scanner-variant, runner-ux; two verifiers each). Was planned as: lenses over the diff
    665495b..HEAD — the tokenizer and same-code check, probebuild bounds/search/link, objsyms and
    the runtime-names check, the scanner's nested/keyword/run-together rules, featuremap memory and
