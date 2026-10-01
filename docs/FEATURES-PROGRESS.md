@@ -46,9 +46,18 @@ below are history.
 - Step (c) DONE: `crates/harness-oracle/src/perf/{build,archive}.rs` (whole_cc_into shared with
   verify, compile_objects, link_side, Slot, Hashed, kept_c_files (verify uses it), perf_scratch /
   perf_out / perf_logs, the ar reader + ArchiveFacts). `#![allow(dead_code)]` in perf/mod.rs
-  until step (d) wires it — REMOVE then. NEXT: step (a), the launcher (perfrun.c, perfgo.c
-  embedded; the cache with locks and the root-owned compiler; the perf profile) and the
-  harness's run_measured (control socket, go-ahead G, bye B) + SIGTERM-then-SIGKILL.
+  until step (d) wires it — REMOVE then (also the two `#[allow(dead_code)]` on sandbox.rs's
+  PerfSpec / render_perf_profile).
+- Step (a) DONE (c418809): `perf/{perfrun.c,perfgo.c,launcher.rs}` — find_compiler (root-owned
+  paths), launcher()/launcher_in() (cache in ~/Library/Caches/ruharness/perf, 0700, flock with
+  identity re-check, hashes, stale removal), parse_record (strict), computer_facts,
+  run_measured (control socket, G/B, SIGTERM→SIGKILL, program group killed first via exec's
+  ordered LIVE registry); sandbox: HostDirs.perf_cache, every profile ends with a deny-write on
+  it, render_perf_profile. DECIDED here (to record in DECISIONS at the perf close): Linux is
+  refused by name ("perf runs on macOS only for now — the Linux launcher is not built yet"):
+  no Linux machine to compile or test on, CI's Linux job red since 2026-09-17.
+  NEXT: step (d), rows and measurement in harness-oracle (§3.2 selection, §3.5 running a row,
+  §3.6 C alone, judging per §3.3, the replace rule, kept outputs, results written).
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
 `.claude/worktrees/rust-migration-harness-7d1c42`), NOT yet merged to main or pushed. This
