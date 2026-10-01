@@ -751,8 +751,14 @@ pub fn check_row(row: &Row, kind: RowKind) -> Result<(), String> {
         check_difference(d)?;
     }
     if let Some(t) = &row.last_try {
-        let ok = is_set_up(&t.outcome) || (kind == RowKind::CAlone && is_c_side(&t.outcome));
-        if !ok || is_set_up(o) || (kind == RowKind::CAlone && (is_c_side(o) || o == "too-short")) {
+        // The replace rule's own rows (§3.7, note 23): a set-up outcome is
+        // kept beside any row that is not itself a set-up row — a too-short
+        // or C-side row on the C alone among them; the C's own outcome is
+        // kept beside a C-alone row only where it does not replace it, so
+        // never beside a too-short or C-side row.
+        let c_try = kind == RowKind::CAlone && is_c_side(&t.outcome);
+        let ok = is_set_up(&t.outcome) || c_try;
+        if !ok || is_set_up(o) || (c_try && (is_c_side(o) || o == "too-short")) {
             return Err(
                 "last_try is a later set-up (or the C's) outcome beside an earlier row".into(),
             );
@@ -1362,6 +1368,52 @@ mod tests {
             merge(Some(&other(c, "c-crashed", None)), unstable.clone(), c),
             unstable
         );
+    }
+
+    #[test]
+    fn a_set_up_try_is_kept_beside_a_too_short_or_c_side_c_alone_row() {
+        // A missing input, or a launcher failure, after a C-alone row that
+        // was too short or one of the C's own: the row stays, the try goes
+        // beside it, and the files take it (a run goes on to the next
+        // workload).
+        let c = RowKind::CAlone;
+        let missing = other(
+            c,
+            "input-unusable",
+            Some(SetupFacts {
+                input: Some("missing".into()),
+                ..SetupFacts::default()
+            }),
+        );
+        let unmeasurable = other(c, "run-failed: unmeasurable", None);
+        let dir = std::env::temp_dir().join(format!("perf-t-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let p = program_path(&dir);
+        for earlier in std::iter::once("too-short").chain(C_SIDE.iter().copied()) {
+            let old = other(c, earlier, None);
+            for new in [&missing, &unmeasurable] {
+                let m = merge(Some(&old), new.clone(), c);
+                assert_eq!(m.outcome, earlier);
+                assert_eq!(
+                    m.last_try.as_ref().map(|t| t.outcome.as_str()),
+                    Some(new.outcome.as_str())
+                );
+                check_row(&m, c).unwrap_or_else(|e| panic!("{earlier} + {}: {e}", new.outcome));
+                let mut program = ProgramResults::default();
+                program.c_alone.push(m);
+                write_program(&p, &program).expect("written");
+                assert_eq!(read_program(&p).expect("read"), Some(program));
+            }
+        }
+        // The C's own outcome never sits beside such a row: it replaces it.
+        let mut m = other(c, "too-short", None);
+        m.last_try = Some(LastTry {
+            outcome: "c-crashed".into(),
+            setup: None,
+            units: None,
+        });
+        assert!(check_row(&m, c).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
