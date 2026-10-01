@@ -774,11 +774,7 @@ fn measured(row: &Row, cx: &Context) -> RowWords {
         }
     };
     let headline = time_headline(answer, shift.as_ref(), share_note.as_deref());
-    let offers = runs < stats::MAX_RUNS as u32
-        && matches!(
-            answer,
-            Answer::CloseCall { .. } | Answer::Probably { .. } | Answer::CantTellEstimate
-        );
+    let offers = offers_more_runs(answer, runs);
     if let Some(n) = metric_note(metric) {
         details.push(format!("measured in {n}"));
     }
@@ -853,6 +849,17 @@ fn measured(row: &Row, cx: &Context) -> RowWords {
         }),
         offers_more_runs: offers,
     }
+}
+
+/// Whether a row's words offer "measure again with 31 runs" (§3.8, build
+/// note 12): below 31 runs, on probably, a close call and "can't tell: the
+/// estimate" — never on an answer, a short run, too few or slow cores.
+fn offers_more_runs(answer: Answer, runs: u32) -> bool {
+    runs < stats::MAX_RUNS as u32
+        && matches!(
+            answer,
+            Answer::CloseCall { .. } | Answer::Probably { .. } | Answer::CantTellEstimate
+        )
 }
 
 /// The share rule (§3.8, build note 11): both metrics on the same runs; a
@@ -1599,6 +1606,107 @@ mod tests {
         assert_eq!(branch(-3.0, 4.0, m, 15, true), Answer::ShortRun);
     }
 
+    /// `n` (15 or 31) percents whose interval against [`flat`] is exactly
+    /// [`lo`, `hi`] with estimate `est` (see [`at`]); the rest spread
+    /// around them in order.
+    fn known(n: usize, lo: f64, est: f64, hi: f64) -> Vec<f64> {
+        let (a, e, b) = if n == 31 { (11, 15, 19) } else { (4, 7, 10) };
+        (0..n)
+            .map(|i| match i {
+                i if i < a => lo - 0.1 * (a - i) as f64,
+                i if i == a => lo,
+                i if i < e => lo + (est - lo) * (i - a) as f64 / (e - a) as f64,
+                i if i == e => est,
+                i if i < b => est + (hi - est) * (i - e) as f64 / (b - e) as f64,
+                i if i == b => hi,
+                i => hi + 0.1 * (i - b) as f64,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_branch_from_constructed_samples_with_the_31_run_offer() {
+        // Each row's interval is known by hand (see `at`), so the whole
+        // headline is: the answer, both ends, and the offer exactly on
+        // probably, close call and can't tell below 31 runs (note 12).
+        let (cc, pr) = (
+            "too close to the 2 % line to call",
+            "not clearly past the 2 % line",
+        );
+        let short = "can't tell on a run this short — use a bigger input";
+        // (runs, [lo, estimate, hi] %, short, answer, headline, the offer)
+        #[rustfmt::skip]
+        let cases = [
+            (15, [-1.0, 0.2, 1.5], false, "about-as-fast",
+             "about as fast as the C (within 2 %)".to_string(), false),
+            (15, [4.1, 6.2, 8.3], false, "slower", "slower by 6.2 % (4.1–8.3 %)".into(), false),
+            (15, [-14.0, -12.0, -10.0], false, "faster",
+             "faster: takes 12 % less time (10–14 %)".into(), false),
+            (15, [0.6, 2.3, 3.4], false, "close-call-slower",
+             format!("about 2.3 % slower (0.6–3.4 %) — {cc}"), true),
+            (15, [-3.4, -2.3, -0.6], false, "close-call-faster",
+             format!("about 2.3 % faster (0.6–3.4 %) — {cc}"), true),
+            (15, [0.5, 3.1, 5.5], false, "probably-slower",
+             format!("probably slower, by about 3.1 % (0.5–5.5 %) — {pr}"), true),
+            (15, [-5.5, -3.1, -0.5], false, "probably-faster",
+             format!("probably faster, by about 3.1 % (0.5–5.5 %) — {pr}"), true),
+            (15, [-3.0, 0.5, 4.0], false, "cant-tell-estimate",
+             "can't tell: the estimate is ±4.0 %".into(), true),
+            (31, [-3.0, 0.5, 4.0], false, "no-clear-difference",
+             "no clear difference: within ±4.0 %".into(), false),
+            (31, [0.5, 3.1, 5.5], false, "probably-slower",
+             format!("probably slower, by about 3.1 % (0.5–5.5 %) — {pr}"), false),
+            (31, [-3.4, -2.3, -0.6], false, "close-call-faster",
+             format!("about 2.3 % faster (0.6–3.4 %) — {cc}"), false),
+            (15, [-1.0, 0.2, 1.5], true, "cant-tell-short-run", short.into(), false),
+            (15, [-3.0, 0.5, 4.0], true, "cant-tell-short-run", short.into(), false),
+            (15, [0.6, 2.3, 3.4], true, "close-call-slower",
+             format!("about 2.3 % slower (0.6–3.4 %) — {cc}"), true),
+        ];
+        for (n, [lo, est, hi], short, answer, headline, offer) in cases {
+            let r = row(
+                flat(n),
+                at(1e9, &known(n, lo, est, hi)),
+                "macos-v6-cycles",
+                short,
+            );
+            let w = words(&r, &UNIT);
+            assert_eq!(
+                (w.answer, w.headline.as_str(), w.offers_more_runs),
+                (answer, headline.as_str(), offer),
+                "n = {n}, [{lo}, {hi}]"
+            );
+            if let Some((x, a, b)) = w.shift {
+                for (got, want) in [(x, est), (a, lo), (b, hi)] {
+                    assert!((got - want).abs() < 1e-9, "{got} against {want}");
+                }
+            }
+        }
+        // The offer's set, every answer, either side of 31 runs.
+        for a in [
+            Answer::AboutAsFast,
+            Answer::Slower,
+            Answer::Faster,
+            Answer::CloseCall { slower: true },
+            Answer::CloseCall { slower: false },
+            Answer::Probably { slower: true },
+            Answer::Probably { slower: false },
+            Answer::NoClearDifference,
+            Answer::CantTellEstimate,
+            Answer::ShortRun,
+            Answer::TooFew,
+            Answer::SlowCores,
+        ] {
+            let set = matches!(
+                a,
+                Answer::CloseCall { .. } | Answer::Probably { .. } | Answer::CantTellEstimate
+            );
+            assert_eq!(offers_more_runs(a, 15), set, "{a:?}");
+            assert_eq!(offers_more_runs(a, 30), set, "{a:?}");
+            assert!(!offers_more_runs(a, 31), "{a:?}");
+        }
+    }
+
     #[test]
     fn rounding_keeps_off_each_boundary() {
         assert_eq!(pct(6.24), "6.2");
@@ -1795,7 +1903,9 @@ mod tests {
                     "macos-v6-pnorm",
                     false,
                 );
-                *counts.entry(words(&r, &UNIT).answer).or_insert(0) += 1;
+                let w = words(&r, &UNIT);
+                assert!(!w.offers_more_runs, "never at 31 runs: {}", w.headline);
+                *counts.entry(w.answer).or_insert(0) += 1;
                 total += 1;
             }
         }
@@ -1895,9 +2005,14 @@ mod tests {
         for r in few.other.as_mut().expect("runs").iter_mut().take(11) {
             r.p_cycles = Some(0);
         }
+        let w = words(&few, &UNIT);
         assert_eq!(
-            words(&few, &UNIT).headline,
+            w.headline,
             "can't tell — too few runs gave a value; measure again"
+        );
+        assert!(
+            !w.offers_more_runs,
+            "too few is not the estimate's can't tell"
         );
     }
 
