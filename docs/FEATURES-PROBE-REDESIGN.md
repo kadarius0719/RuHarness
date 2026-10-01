@@ -43,9 +43,21 @@ this revision's changes:
 | 42 files of the 294-file corpus that compile as they are (sqlite ×2, blake3, tree-sitter, zopfli, …) | 42/42 → 42/42 | **3 044 → 6** | 1 |
 | 37 Python/Ruby extension files that compile with the Python headers | 37/37 → 37/37 | **1 162 → 129** | 1 |
 
-The prototype read each compile's whole error output and used `-fsyntax-only`; the build (§8)
-re-runs all four through `harness features map` itself and replaces this table. On real code the
-compiler rejected no note: sqlite3.c goes from ~1 500 unwatched functions to 0.
+**The build's own re-run (§8), through `harness features map`** (one-file mini-targets with a stub
+`main` and link stubs; the extensions with Python 3.14's headers copied in as `include_dirs`; the
+-DA set as copies with `#define A 1` prepended — harness.toml has no cflags):
+
+| input | the copy builds (today → prototype → built) | functions left unwatched (today → prototype → built) | compiles a file |
+|---|---|---|---|
+| 24 adversarial repro files | 17/24 → 24/24 → **24/24** | 2 930 → 2 567 → **2 567** (all kind `compile`, the prototype's functions by name) | ≤ 2 |
+| the same with `-DA` (25) | 18/25 → 25/25 → **25/25** | 2 140 → 1 999 → **1 999** | ≤ 2 |
+| 42 corpus files | 42/42 → 42/42 → **42/42** | 3 044 → 6 → **928** — 922 are sqlite functions inside two bodies the parser misreads (§6); the old rules and the prototype counted none of them because the scan never recorded them (§10) | 1 |
+| 37 extension files | 37/37 → 37/37 → **35/37** (numpy's `cpu_popcnt.c` ×2 do not build plainly at `-O2` on arm64; the earlier columns were `-fsyntax-only`) | 1 162 → 129 → **136** in their own files (109 nkf.c parser, 27 rule 3), plus 650 in the copied Python headers (parser, in headers no extension includes) | 1 |
+| zopfli (13 files, 8 scenarios) | yes | 0 → 0 → **0**; map.json byte-identical | 1 |
+
+On real code the compiler rejected no note. Costs measured on the build: compile +4 %
+instructions, peak memory +16.8 MiB, object +12.5 %; a probed run +1–2 % on zopfli, +11 % cycles
+and instructions on a call-heavy sqlite3.c workload.
 
 What the compiler judges, and what it does not. It tells whether a note **compiles** where it
 stands: on Apple clang 21 every pragma that must open a block (`STDC FENV_ACCESS`,
@@ -560,3 +572,77 @@ with those numbers.
 | the table's numbering | §5 |
 | the runner's two polls and an overflow that sleeps | §5 #12, #18; §4 "The runner" |
 | words a person cannot act on | §3.7, and refusals that say what to do or that the fault is the harness's |
+
+## 10. The build's code review and fix pass 1 (2026-09-30)
+
+**The review.** The review started at the pause (b943926) lost two of its four lenses and almost
+all verifiers to an expired sign-in. It was re-run at 665495b: the two lost lenses (runner,
+runtime and sandbox; formats and what the person sees), a lens on the token comparison of
+665495b, two mutation sweeps of §3's rules (87 + 59 mutants), and two verifiers for every
+finding — the first review's 22 and the new ones (about 75 in all). A §8 re-run went beside it.
+Findings came in four kinds: silent wrong maps, wrong refusals, costs, and tests the design named
+that did not exist or passed for the wrong reason.
+
+**What the build now does that the text above does not say, or says otherwise** (the code
+governs):
+- **The copy is read with a tokenizer** (§3.2, §3.3): the whole preprocessed text, once — raw
+  strings (which may span lines), C23 digit separators, encoding prefixes, the longest
+  punctuator. Literals are whole tokens, so a note inside one is seen there whatever quotes came
+  before it; `.incbin`'s literals are joined across lines and line markers; the same-code check
+  compares each line's tokens (bytes, never lossy text) and quotes the copy's line as written.
+- **The bounds** (§3.4 step 6) count compiles beyond each file's first and the re-compiles; past
+  the pass bound only files no settled compile has checked go back unprobed; a search is not a
+  placed round; a search a bound stops blames no note (file-limit); the restore pass's compiles
+  count. A test seam (`with_map_bounds`, hidden) lowers them.
+- **The search** (§3.4 step 4) checks once whether the chased error shows with `-fsyntax-only`
+  and then compiles its trials so; gcc's byte-order-mark rule is built.
+- **The link** (§3.4 step 5): rule (a) only for an *external* function of the program (also when
+  it carries no note any more); rule (b) only in the files the named object reads; when neither has
+  a note left, the search runs over the named objects' notes with the relink as its test (the C99
+  inline case with a callee tipping it, a static tipped by an inlined callee). GNU ld: a data
+  reference names no function, gcc's clone suffixes, "In function" in any case. **No link map is
+  written**: §3.5's check reads the objects' own symbol tables (`objsyms.rs`, safe Rust, Mach-O and
+  ELF) and counts only external definitions (a static `close` maps; `fstat$INODE64` is fstat;
+  `environ` is worded as a variable). Nothing passes a path through `-Wl,` any more.
+- **A hidden variant**: a watched function whose note no compile holds, in a file the compiles
+  enter, while an object defines its name — the parser could not read the definition compiled in
+  its place (a macro made it, or a parenthesized name) — is unwatched (kind parser), never "not run".
+- **The scanner** searches definitions' bodies: a body the parser misreads (an `#if` whose branches
+  each open a brace — sqlite3.c's winWrite holds 19 700 lines) no longer hides the definitions it
+  swallows; they are recorded and unwatched (rule 1), and so is the misread body; a misread twin
+  never takes the note of a definition read whole; a keyword (`else if (` read as `if(…){`) is
+  never a function. A head whose body a macro supplies runs into the next head (`int g(void)
+  NOT_IMPLEMENTED` then `int after(void) {…}`): anything after a definition's parameter list but
+  attributes, an asm label or a macro word makes it rule 1 (checked after rule 3).
+- **The random folder** is 0700, named with 16 hex digits, registered so the signal handler
+  removes it (a Ctrl-C or the cockpit's Stop left the whole preprocessed program in $TMPDIR); the
+  listing texts stay on disk and are compared one file at a time (1.76 GB → 75 MB peak on a
+  300-file program). A listing that times out says so. The tool sandbox lets a compile read back
+  its own write folders and a TMPDIR under the home folder.
+- **Words**: one rule for text that never reaches a terminal as itself (`harness_core::text`:
+  controls, bidirectional and invisible characters), shared by the cockpit, the CLI and the
+  reasons; map.json read strictly (one reason per function, no detail on a kind whose words take
+  none); the link reason's detail is the name; the parser reason may carry a detail; "made by
+  another version of the harness" for a newer probe; a killed compiler refused in its own words;
+  the main() hint only for a link that failed on main; the cockpit's per-kind lines in words; "again,
+  round N" on a re-compile.
+- **Tests the review found missing**, added: rule 1 (signal-hook's initializer shape, both
+  configurations), rule 3's remaining spellings with strict assertions, the end-token count, the
+  data rule's remaining spellings and negatives, every `.incbin` form, placement by kind and round,
+  two include levels, a renumbering `#line`, the search's culprit and restore, the link order
+  (weak functions), rules (a) and (b), the bounds, a compile and a listing that hang, the
+  runtime's guards and build rules, a fork before setup, setup's switch before merge (pinned in
+  the source: a race test is flaky either way), the merge test fixed (it linked the runtime first,
+  so nothing needed merging). The design's round-bound fixture (`#pragma clang diagnostic fatal`)
+  is silenced by the probed compile's `-w`; the test uses a parse error that hides a
+  code-generation error. A folder with a backslash is refused by the sandbox by name (§4 said it
+  maps). Rule 2 (not a block) cannot trigger on tree-sitter-c 0.24.2: kept as a defensive check,
+  its test dropped.
+- **Outside the probe**, found on the way: the long-flaky ledger test's cause (a sibling test
+  spawned `mkfifo`; the fork held the lock — moved to core_tests.rs, 0 of 40 fail); driver
+  validation times only its later runs (macOS's first-exec check took 4–5 s and failed correct
+  drivers).
+
+**Mutation check of the fix pass**: 49 mutants of the fixes, 48 killed, 1 equivalent (encoding
+prefixes: a prefix read as a word before the literal compares the same on both sides).
+
