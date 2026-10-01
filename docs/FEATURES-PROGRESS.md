@@ -143,9 +143,10 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    parameters too (6b59ed8; mutant killed). THE PROBE REVIEW IS CLOSED (design §10.6).
    Item 4 DONE (6b59ed8): full `cargo test --workspace --no-fail-fast` 1 075 passed, 2 failed
    under load (harness-tui chat_e2e `a_panic_ends_the_chats_group`, `new_chat_twice_ends_both`:
-   "timed out waiting for the chat's runtime") — both pass alone (7/7). Item 5 RUNNING: `bench
-   check --replay --suite targets/tractor` with the release build (log `SP/bench-replay.{out,err}`).
-   DECISIONS entry drafted at `SP/decisions-draft.md` (fill in the replay's result). Was: fix those four,
+   "timed out waiting for the chat's runtime") — both pass alone (7/7). Item 5 DONE: `bench check
+   --replay --suite targets/tractor` (release build, 25 min): 198 reproduce (1 conformant, 197
+   drifted), 2 expected divergences, 0 problems; "bench check: OK — no regression". Item 7: the
+   DECISIONS entry written (2026-10-01); merged to main and pushed. Was: fix those four,
    the lows (misread walk over all branch combinations, capped; K&R function-typed parameter
    `int cb(int)` outranking `after(cb)`; folded second head's static; non-nested signature ends at
    the call; `static Count (after)(void)` named `Count`), the missing tests (by-shape ranking,

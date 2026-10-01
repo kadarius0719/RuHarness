@@ -2626,3 +2626,49 @@ per scenario and none unwatched. Found while building: the one-byte note shows n
 on clang 21 (the C99-inline link case could not be provoked); the map loader would have refused
 the new "setup did not run" reason (fixed, tested). Open: the §8 premise re-run and the code
 review (both running at the pause), fix passes, mutation checks — docs/FEATURES-PROGRESS.md.
+
+## 2026-10-01 — Compiler-guided probe: code review closed after seven fix passes; performance design closed
+
+**The review.** The probe's code review was re-run at 665495b: five reviewers looking from
+different angles (the runner and sandbox, what the person sees, the copy check, and two hunting
+for untested rules), 72 findings, each reproduced by two independent verifiers. Seven fix passes
+followed. Each was checked by a fresh review of its own changes, every finding reproduced twice
+before it counted, and each pass had a mutation check (every new rule switched off in turn; a
+test had to fail). Findings per check: 26, 26, 21, 13, 4, 4.
+
+**What was wrong, in plain words, and is fixed** (design §10–§10.6 has the detail):
+- The map could say a function ran when it did not, or "not run" when it did, where two
+  functions are written so the parser reads them as one (a macro that supplies a whole body,
+  written straight before another definition), where a function body's `#if` branches each open
+  a brace, and where a hidden `#if` variant was "explained" by a same-named function that the
+  compiler actually built under another name.
+- The link step could refuse a program that can be mapped, search past its compile bounds, or
+  unprobe files that never mattered.
+- The copy check's tokenizer missed rare spellings (Unicode spaces, `#line` after comments,
+  unclosed quotes); the object reader missed rare ELF layouts.
+- Scratch folders could be left behind on a signal; older map files were refused instead of
+  read; Linux-only test paths were untested.
+
+**Checked on real code after every pass:** the 101 benchmark targets' facts byte-identical,
+sqlite3.c unchanged (4 621 functions, 457 unwatched inside its two misread bodies), the premise
+re-run identical (79 of 79). At the close: 194 789 real definitions read identically before and
+after the last two passes; the full test suite 1 077 tests, all passing (two chat-pane timing
+tests failed once under load and passed alone); `bench check --replay`: 198
+reproduce (1 conformant, 197 drifted), 2 expected divergences, 0 problems — no regression.
+
+**Decided (process): the review stops after fix pass 7.** The last two checks found only rarer
+spellings of one situation — a body-supplying macro written straight before another definition,
+read without a preprocessor — with no instance in about 195 000 real definitions. Chasing
+spellings has no end; design §6 names the class and what it costs (the first function can read
+as run when the second ran, or the second is lost from the facts and an `#if` twin of it can read
+"not run"), to revisit with a preprocessing frontend (libclang). Fix pass 7 got
+a check that its fixes hold and regress nothing, not another open search. That check found
+one of its rules (ranking an empty-parentheses head by where its line starts) broke shapes read
+right before, so it was reverted and its target shape named in §6 too.
+
+**Decided (process): the performance design is closed** after revision 5's check found no
+mechanism that fails (no high finding); its 30 build notes (docs/PERF-DESIGN.md §10) answer the
+rest and become the build's tests. It is built next in §5's order with the full process.
+
+**Revisit when:** a real program shows the two-heads class (then: a preprocessing frontend), or
+the premise re-run disagrees with §2's table.
