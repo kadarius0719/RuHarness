@@ -678,7 +678,11 @@ verifiers: 26 findings. Fix pass 2 answers them (the code governs):
   the same function (prefixed, `.text`) stays that function's. lld: an undefined hidden,
   protected or internal symbol, and lld run as `ld`.
 - **gcc's `#line`**: a `#line` in any probed file a unit reads sends that unit's errors to the
-  search (it could name another probed file's line), as §3.4 step 3 says.
+  search, as §3.4 step 3 says. Both verifiers of this finding showed it unreachable in practice
+  (a relative or absolute `#line` name resolves into the original tree, never the copy, so the
+  error already went to the search; only a name spelled into the harness's own scratch copy
+  misplaced): the change makes the code agree with the design, at the cost of a search for a
+  gcc error in a unit whose header holds a `#line`.
 - **A killed compiler** whose driver survives (clang's `cc1` child: "unable to execute command:
   Killed", "… failed due to signal"; gcc's "Killed signal terminated program") is refused in the
   driver's words with no search, compile or link; clang's probed compiles pass
