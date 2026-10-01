@@ -105,9 +105,36 @@ pub fn preflight(target: &Path) -> Result<(), String> {
     retained += regular_len(&features_file).min(harness_core::features::MAX_FEATURES_BYTES);
     retained += regular_len(&harness_core::features::map_path(target))
         .min(harness_core::features::MAX_MAP_BYTES);
+    // perf's files (docs/PERF-DESIGN.md §3.9: the results files count in
+    // this budget): the workloads file, program.json and every
+    // units/<id>.json, each up to its reader's cap — counted here, never
+    // refused here (a bad file is a value). A linked perf or units folder
+    // is not followed: its readers refuse it.
+    let perf = migration.join(harness_core::perf::PERF_DIR);
+    let workloads_file = harness_core::perf::workloads::workloads_path(target);
+    let perf_meta = std::fs::symlink_metadata(&perf).ok();
+    // The program digest is hashed with a workloads file, or when the
+    // perf folder cannot be read (a value the read model still judges).
+    let has_workloads = perf_meta
+        .as_ref()
+        .is_some_and(|m| !m.is_dir() || std::fs::symlink_metadata(&workloads_file).is_ok());
+    if perf_meta.is_some_and(|m| m.is_dir()) {
+        use harness_core::perf::results::{self as res, MAX_RESULTS_BYTES};
+        retained +=
+            own_len(&workloads_file).min(harness_core::perf::workloads::MAX_WORKLOADS_BYTES);
+        retained += own_len(&res::program_path(&perf)).min(MAX_RESULTS_BYTES);
+        let results = perf.join(res::UNITS_DIR);
+        if std::fs::symlink_metadata(&results).is_ok_and(|m| m.is_dir()) {
+            for file in entries(&results)? {
+                if file.extension().is_some_and(|e| e == "json") {
+                    retained += own_len(&file).min(MAX_RESULTS_BYTES);
+                }
+            }
+        }
+    }
     if retained > MAX_RETAINED_BYTES {
         return Err(format!(
-            "the ledger holds {retained} bytes of records and verdicts (> \
+            "the ledger holds {retained} bytes of records, verdicts and results (> \
              {MAX_RETAINED_BYTES}); not read"
         ));
     }
@@ -141,10 +168,11 @@ pub fn preflight(target: &Path) -> Result<(), String> {
                 "hash more than {MAX_HASHED_BYTES} bytes"
             )));
         }
-        // With a features file, the program digest hashes the program's
-        // files once per read (review T1): each file once, however many
-        // paths reach it, as the digest reads it.
-        if has_features {
+        // With a features file or a perf file (docs/PERF-DESIGN.md §3.11),
+        // the program digest hashes the program's files once per read
+        // (review T1): each file once, however many paths reach it, as the
+        // digest reads it.
+        if has_features || has_workloads {
             if let Ok(ctx) = harness_core::TargetContext::load(target) {
                 let paths = harness_core::features::program_paths(&ctx, &facts);
                 if paths.len() > MAX_PROGRAM_FILES {
@@ -231,6 +259,12 @@ pub fn preflight(target: &Path) -> Result<(), String> {
 /// The length of `path` when it is a regular file (followed), else 0.
 fn regular_len(path: &Path) -> u64 {
     std::fs::metadata(path).map_or(0, |m| if m.is_file() { m.len() } else { 0 })
+}
+
+/// The length of `path` when it is itself a regular file (never followed:
+/// its reader refuses a link), else 0.
+fn own_len(path: &Path) -> u64 {
+    std::fs::symlink_metadata(path).map_or(0, |m| if m.is_file() { m.len() } else { 0 })
 }
 
 /// The entries of `dir` (none when it is absent or vanished).
@@ -500,6 +534,13 @@ mod tests {
         // Without a features file the program is not hashed.
         std::fs::remove_dir_all(t.join("migration/features")).unwrap();
         preflight(&t).unwrap();
+        // A workloads file hashes it too (perf's currency, PERF-DESIGN
+        // §3.11): the same budget.
+        let workloads = harness_core::perf::workloads::workloads_path(&t);
+        std::fs::create_dir_all(workloads.parent().unwrap()).unwrap();
+        std::fs::write(&workloads, harness_core::perf::workloads::STARTER).unwrap();
+        let err = preflight(&t).unwrap_err();
+        assert!(err.contains("hash more than"), "{err}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -772,6 +813,21 @@ mod tests {
                     );
                 }
             }),
+            (
+                "too many perf results in all",
+                "records, verdicts and results",
+                |t| {
+                    // perf's results count in the budget (PERF-DESIGN §3.9).
+                    use harness_core::perf::results::MAX_RESULTS_BYTES;
+                    let n = MAX_RETAINED_BYTES / MAX_RESULTS_BYTES + 1;
+                    for i in 0..n {
+                        sparse(
+                            &t.join(format!("migration/perf/units/u-{i}.json")),
+                            MAX_RESULTS_BYTES,
+                        );
+                    }
+                },
+            ),
         ];
         for (i, (what, why, spoil)) in cases.into_iter().enumerate() {
             let t = zopfli_copy(&base.join(format!("case-{i}/zopfli")));
@@ -783,6 +839,22 @@ mod tests {
             assert!(err.contains(why), "{what}: {err}");
             let _ = std::fs::remove_dir_all(base.join(format!("case-{i}")));
         }
+        // A linked perf units folder is not followed (its reader refuses
+        // it as a value): what is behind it is not counted, and the read
+        // goes on.
+        let t = zopfli_copy(&base.join("linked-perf/zopfli"));
+        let outside = base.join("linked-perf/outside");
+        let n = MAX_RETAINED_BYTES / harness_core::perf::results::MAX_RESULTS_BYTES + 1;
+        for i in 0..n {
+            sparse(
+                &outside.join(format!("u-{i}.json")),
+                harness_core::perf::results::MAX_RESULTS_BYTES,
+            );
+        }
+        let _ = std::fs::remove_dir_all(t.join("migration/perf/units"));
+        std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+        std::os::unix::fs::symlink(&outside, t.join("migration/perf/units")).unwrap();
+        assert_eq!(preflight(&t), Ok(()));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

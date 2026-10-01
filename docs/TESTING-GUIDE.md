@@ -3737,7 +3737,7 @@ The first time, it also says `building the launcher…`: perf builds its own sma
 | Answer | Meaning |
 |---|---|
 | `about as fast as the C (within 2 %)` | The difference, whichever way, is under 2 %. |
-| `slower by about 6.2 % (4.1–8.3 %)` | The best guess, and the range it surely lies in. `faster` is the mirror. |
+| `slower by about 6.2 % (4.1–8.3 %)` | The best guess, and the range it lies in (perf is at least 95 % sure of it). `faster` is the mirror. |
 | `probably slower …` / `close call …` | Slower, but not clearly past the 2 % line — or too close to it to call. |
 | `can't tell: the estimate is ±Y %` | The runs varied too much. It ends with the command to measure again with 31 runs. |
 | `too short to time` | The C ran too briefly. It says how many times bigger the input should be. |
@@ -3800,8 +3800,8 @@ harness-tui --target targets/lzg
 ```
 
 1. **The Speed row** is below Features in the tree, labelled `Speed (2 of 2)`: both verified units are measured.
-2. **The Speed view.** Select it. It starts with the computer and compilers the rows were measured with, then `The original C`, `As it stands (2 units)` and each unit, worst first, each workload with its short answer. Press `Tab` to move into the view, then `↓` onto a row: its full sentence shows below the list.
-3. **A unit.** Select `u-checksum`. Below its verdict lines it shows `Speed: <answer> on <workload>`, and on the next line how many of the workloads say the same. If a row is slower, a `Next:` line says what you could do about it.
+2. **The Speed view.** Select it. It starts with the computer and compilers the rows were measured with, then `The original C`, `As it stands (2 units)` and each unit, worst first, each workload with its short answer. Press `Tab` to move into the view, then `↓` onto a row: its full sentence shows below the list, with the computer and compilers that row was measured with.
+3. **A unit.** Select `u-checksum`. Below its verdict lines it shows `Speed: <answer> on <workload>`, and on the next line its range (when the answer has one), `parallel` when the program uses several cores, and how many of the workloads say the same. If a row is slower, a `Next:` line says what you could do about it.
 4. **The actions.** Back on the Speed row, press `Enter`: **Edit the workloads file**, **Measure speed** and **Measure the program as it stands**. Each dialog says how many runs it makes, about how long it takes, and what it writes. Press `Esc` to close it without running anything.
 5. **Help.** Press `?` and scroll to **Speed** for the words and what they mean.
 6. **Quit** with `q`.

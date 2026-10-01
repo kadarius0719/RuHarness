@@ -675,7 +675,7 @@ impl App {
             .config
             .providers
             .first()
-            .ok_or("no provider is allowed (start with --provider <name>)")?;
+            .ok_or(crate::model::NO_PROVIDER)?;
         let m = if provider == EXTERNAL_PROVIDER {
             model.to_string()
         } else {

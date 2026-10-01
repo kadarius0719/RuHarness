@@ -8,7 +8,7 @@ use crate::model::{short_id, ProvenanceView, Snapshot, UnitView};
 use crate::perfread::InputNow;
 use harness_core::perf::currency::{self, Today};
 use harness_core::perf::estimate::{self, Job};
-use harness_core::perf::results::{Difference, Row, RowKind};
+use harness_core::perf::results::{self, Difference, Row, RowKind};
 use harness_core::perf::words::{self as words, RowWords, Side};
 use harness_core::perf::workloads::WorkloadsState;
 use std::collections::BTreeMap;
@@ -60,6 +60,10 @@ pub struct SpeedRow {
     pub out_of_date: Vec<String>,
     /// The same reasons' tokens (`harness_core::perf::currency::REASONS`).
     pub out_of_date_tokens: Vec<&'static str>,
+    /// The computer and compilers the row records, in words ("measured on
+    /// Apple M3, 15.6 24G84, with rustc 1.94.1 and Apple clang …") — what
+    /// the View's "see each row" points to; not checked here.
+    pub measured_on: String,
     /// Where the outputs differed: the row's own (behaves-differently), or
     /// the one found before that a later measure did not clear.
     pub difference: Option<Difference>,
@@ -113,8 +117,12 @@ pub struct Advice {
 }
 
 /// How to change a unit's Rust, from its provenance (§3.11 *A slower row's
-/// next step*): Modify the model's attempt and Replace (and back), a hand
-/// edit, or — for code the cockpit did not record — commit, edit, verify.
+/// next step*, build notes 22 and 30): Modify the model's attempt and
+/// Replace (and back); Hand edit the crate and Replace (and back) — a hand
+/// edit alone is recorded, never accepted, so perf would time the same
+/// crate —; or, for code the cockpit did not record, commit, edit, verify.
+/// Each act named changes the crate perf measures (the unit's verified
+/// crate). Without a provider Modify is greyed, in the cockpit's own words.
 pub fn change_words(unit: &UnitView, has_provider: bool) -> String {
     let id = &unit.unit.id;
     let model_made = match &unit.provenance {
@@ -128,26 +136,32 @@ pub fn change_words(unit: &UnitView, has_provider: bool) -> String {
     if let Some(a) = model_made {
         let a = short_id(&a);
         let modify = format!(
-            "{a} with a note about speed (give these numbers), then Replace {id}'s verified crate \
-             with the new attempt, measure this unit again — and if it is not faster, Replace it \
-             back with {a}"
+            "Modify {a} with a note about speed (give these numbers), then Replace {id}'s \
+             verified crate with the new attempt, measure this unit again — and if it is not \
+             faster, Replace it back with {a}"
         );
         return if has_provider {
-            format!("Modify {modify}")
+            modify
         } else {
             format!(
-                "Connect a model to Modify (start the cockpit with --provider), then modify \
-                 {modify}"
+                "Modify is greyed: {} — with one, {modify}",
+                crate::model::NO_PROVIDER
             )
         };
     }
-    let hand_editable = matches!(unit.provenance, ProvenanceView::Human { .. })
-        && unit
-            .crate_dir
-            .as_ref()
-            .is_some_and(|d| d.join("src/logic.rs").is_file() && d.join("src/ffi.rs").is_file());
-    if hand_editable {
-        return format!("Hand edit {id}, then measure again");
+    let in_use = match &unit.provenance {
+        ProvenanceView::Human { attempt, .. } => Some(short_id(attempt)),
+        _ => None,
+    };
+    let hand_editable = unit
+        .crate_dir
+        .as_ref()
+        .is_some_and(|d| d.join("src/logic.rs").is_file() && d.join("src/ffi.rs").is_file());
+    if let Some(a) = in_use.filter(|_| hand_editable) {
+        return format!(
+            "Hand edit {id}'s crate, then Replace {id}'s verified crate with the new attempt and \
+             measure this unit again — and if it is not faster, Replace it back with {a}"
+        );
     }
     format!(
         "Commit the unit's crate first (git) — replacing it deletes it; edit it in your editor, \
@@ -182,14 +196,18 @@ pub struct SpeedModel {
     pub units: Vec<UnitSpeed>,
     /// Results files that could not be read, in words.
     pub errors: Vec<String>,
-    /// Units no longer in the plan that still have a results file.
+    /// Units no longer in the plan that still have a results file (the
+    /// first names).
     pub orphans: Vec<String>,
+    /// How many more such files there are.
+    pub orphans_more: usize,
     /// The View's header lines (computers and compilers the rows record).
     pub header: Vec<String>,
     /// A perf run holds the lock now.
     pub measuring: bool,
-    /// The units perf would measure now (verified or merged, verdict green
-    /// and fresh, no interrupted Accept), in plan order.
+    /// The units perf would measure now (verified or merged, no interrupted
+    /// Accept, verdict green and fresh, the plan's `replaces` still the
+    /// verdict's, a crate folder: [`left_out_today`]), in plan order.
     pub measurable: Vec<String>,
     /// Each workload's id and runs a side, in file order.
     pub workloads: Vec<(String, u32)>,
@@ -197,6 +215,9 @@ pub struct SpeedModel {
     /// C-alone row, else from the C's runs on another of its rows (for the
     /// estimate).
     pub c_clock: BTreeMap<String, f64>,
+    /// Why perf cannot measure, in the words `perf run` refuses with (the
+    /// workloads file's state, §3.1): `None` when it can.
+    pub blocker: Option<String>,
 }
 
 impl SpeedModel {
@@ -370,13 +391,17 @@ impl SpeedModel {
         self.units.iter().find(|u| u.id == id)
     }
 
-    /// A unit's header (§3.11): `Speed: <short> on <workload>` and, on its
-    /// own line, the interval or detail and "k of n workloads" — each within
-    /// 54 columns.
+    /// A unit's header (§3.11, build note 16): `Speed: <short> on
+    /// <workload>` — the short form without its interval or "· parallel" —
+    /// and, on its own line, the interval (whether or not the 26-column
+    /// short form had room for it), "parallel" when the row uses several
+    /// cores, "k of n workloads" and "out of date" — each within 54 columns.
     pub fn unit_header(&self, id: &str) -> Option<(String, String)> {
         let u = self.unit(id)?;
         let worst = u.rows.first()?;
-        let (head, interval) = split_interval(&worst.words.short);
+        let short = worst.words.short.as_str();
+        let short = short.strip_suffix(" · parallel").unwrap_or(short);
+        let (head, _) = split_interval(short);
         let first = format!("Speed: {head} on {}", worst.workload);
         let n = u.rows.len();
         let alike = u
@@ -384,15 +409,21 @@ impl SpeedModel {
             .iter()
             .filter(|r| r.words.answer == worst.words.answer)
             .count();
-        let count = format!("{alike} of {n} workload{}", if n == 1 { "" } else { "s" });
-        let mut second = match interval {
-            Some(i) => format!("{i} · {count}"),
-            None => count,
-        };
-        if !worst.out_of_date.is_empty() {
-            second.push_str(" · out of date");
+        let mut second: Vec<String> = Vec::new();
+        if let Some(i) = headline_interval(&worst.words) {
+            second.push(i.to_string());
         }
-        Some((cut(&first, 54), cut(&second, 54)))
+        if is_parallel(&worst.words) {
+            second.push("parallel".into());
+        }
+        second.push(format!(
+            "{alike} of {n} workload{}",
+            if n == 1 { "" } else { "s" }
+        ));
+        if !worst.out_of_date.is_empty() {
+            second.push("out of date".into());
+        }
+        Some((cut(&first, 54), cut(&second.join(" · "), 54)))
     }
 
     /// The project summary's line (§3.11), or `None` without a workloads
@@ -464,7 +495,7 @@ fn summary_kind(answer: &str) -> &'static str {
         "faster" => "faster",
         "behaves-differently" => "behaves differently",
         "no-clear-difference" => "no clear difference",
-        "too-short" | "short-run" => "too short",
+        "too-short" | "cant-tell-short-run" => "too short",
         a if a.starts_with("cant-tell") => "can't tell",
         _ => "not measured",
     }
@@ -475,6 +506,45 @@ pub fn is_parallel(w: &RowWords) -> bool {
     w.details
         .iter()
         .any(|d| d.starts_with("uses several cores"))
+}
+
+/// The computer and compilers `row` records, in words (each value through
+/// `safe_line`): what tells rows from different computers apart.
+fn measured_on(row: &Row) -> String {
+    let safe = |s: &str| harness_core::text::safe_line(s).to_string();
+    let c = &row.inputs.computer;
+    let mut compilers = Vec::new();
+    if let Some(r) = &row.inputs.compilers.rustc {
+        compilers.push(safe(r.split(" (").next().unwrap_or(r)));
+    }
+    compilers.push(safe(&row.inputs.compilers.cc));
+    format!(
+        "measured on {}, {} {}, with {} (not checked here)",
+        safe(&c.cpu),
+        safe(&c.os),
+        safe(&c.build),
+        compilers.join(" and ")
+    )
+}
+
+/// The interval a time answer's headline gives — `(4.1–8.3 %)`, or
+/// `(3.6–3.8×)` at 2× and more — the same text the words made; `None` for
+/// an answer without one (about as fast, no clear difference, can't tell).
+fn headline_interval(w: &RowWords) -> Option<&str> {
+    if !matches!(
+        w.answer,
+        "slower"
+            | "faster"
+            | "probably-slower"
+            | "probably-faster"
+            | "close-call-slower"
+            | "close-call-faster"
+    ) {
+        return None;
+    }
+    let start = w.headline.find(" (")? + 1;
+    let len = w.headline[start..].find(')')? + 1;
+    Some(&w.headline[start..start + len])
 }
 
 /// A short form split into its words and its parenthesised interval
@@ -495,6 +565,32 @@ fn cut(text: &str, width: usize) -> String {
     s
 }
 
+/// Why perf would leave a verified or merged unit out today, as its
+/// `left_out` reason — §3.2's selection, every condition perf's own
+/// checks (build note 24): an interrupted Accept, a verdict not green and
+/// fresh, the plan's `replaces` no longer the verdict's, no crate folder.
+/// `None`: perf would measure it. Built from what the snapshot holds:
+/// nothing more is read.
+pub fn left_out_today(u: &UnitView) -> Option<&'static str> {
+    if u.report.promotion_interrupted.is_some() {
+        return Some("accept-interrupted");
+    }
+    if !u.report.fresh_green() {
+        return Some("not-fresh");
+    }
+    match &u.verdict {
+        Some(v) if v.inputs.replaces != u.unit.oracle_param_list("replaces") => {
+            return Some("replaces-changed")
+        }
+        Some(_) => {}
+        None => return Some("not-fresh"),
+    }
+    if u.crate_dir.is_none() {
+        return Some("not-fresh");
+    }
+    None
+}
+
 /// Build Speed from `snapshot`.
 pub fn build(snapshot: &Snapshot) -> SpeedModel {
     let perf = &snapshot.perf;
@@ -505,29 +601,33 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         held: Vec::new(),
         left_out: Vec::new(),
         units: Vec::new(),
-        errors: Vec::new(),
+        errors: perf.errors.clone(),
         orphans: perf.orphans.clone(),
+        orphans_more: perf.orphans_more,
         header: Vec::new(),
         measuring: perf.measuring,
         measurable: Vec::new(),
         workloads: Vec::new(),
         c_clock: BTreeMap::new(),
+        blocker: None,
     };
     let workloads = match &perf.workloads {
-        Ok(WorkloadsState::NoFile) => return model,
-        Ok(WorkloadsState::NoWorkload) => {
-            model.group = Group::NoWorkload;
+        Ok(WorkloadsState::Ready(w)) => w,
+        Ok(state) => {
+            model.blocker = state.blocker();
+            model.group = match state {
+                WorkloadsState::NoWorkload => Group::NoWorkload,
+                WorkloadsState::Invalid(e) => Group::FileError(e.to_string()),
+                _ => Group::NoFile,
+            };
             return model;
         }
-        Ok(WorkloadsState::Invalid(e)) => {
-            model.group = Group::FileError(e.to_string());
-            return model;
-        }
+        // A file perf cannot load at all: its error, as `perf run` prints it.
         Err(e) => {
+            model.blocker = Some(e.clone());
             model.group = Group::FileError(e.clone());
             return model;
         }
-        Ok(WorkloadsState::Ready(w)) => w,
     };
     let order = |id: &str| {
         workloads
@@ -537,7 +637,6 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
             .unwrap_or(usize::MAX)
     };
     let input_of = |id: &str| workloads.get(id).and_then(|w| w.input.clone());
-    let program_now = perf.program_now.clone().unwrap_or_default();
     let program_name = snapshot.program_name.clone();
     let crate_digest = |id: &str| perf.crates.get(id).cloned();
     let measurable: Vec<String> = snapshot
@@ -549,7 +648,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 harness_core::UnitStatus::Verified | harness_core::UnitStatus::Merged
             )
         })
-        .filter(|u| u.report.fresh_green() && u.report.promotion_interrupted.is_none())
+        .filter(|u| left_out_today(u).is_none())
         .map(|u| u.unit.id.clone())
         .collect();
     model.measurable = measurable.clone();
@@ -576,9 +675,13 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 }
                 _ => None,
             };
+            // Without facts the C cannot be hashed here: only that one
+            // comparison is skipped (the header says so) — the workload, the
+            // recipe, the launcher and the Rust are still judged.
+            let program_today = perf.program_now.as_deref().unwrap_or(&row.inputs.program);
             let today = Today {
                 workload: today_workload.as_deref(),
-                program: &program_now,
+                program: program_today,
                 crate_digest: &crate_digest,
                 replaces: replaces.as_deref(),
                 program_name: &program_name,
@@ -586,11 +689,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 computer: None,
                 compilers: None,
             };
-            let mut why: Vec<currency::Reason> = if program_now.is_empty() {
-                Vec::new()
-            } else {
-                currency::reasons(row, kind, &today)
-            };
+            let mut why: Vec<currency::Reason> = currency::reasons(row, kind, &today);
             let reason = |token: &'static str, words: String| currency::Reason { token, words };
             match perf.inputs.get(&row.workload) {
                 Some(InputNow::WhileMeasuring) => {
@@ -616,6 +715,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 words,
                 out_of_date,
                 out_of_date_tokens,
+                measured_on: measured_on(row),
                 difference: row
                     .first_difference
                     .clone()
@@ -736,20 +836,38 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
             Group::COnly
         }
     } else {
-        Group::Units {
-            measured: model.units.len(),
-            of: measurable.len().max(model.units.len()),
-        }
+        // Measured: a unit with a row perf timed or ran (not only set-up
+        // rows, which say "not measured"); of: those measurable today and
+        // every unit with rows.
+        let measured = model
+            .units
+            .iter()
+            .filter(|u| u.rows.iter().any(|r| !results::is_set_up(&r.outcome)))
+            .count();
+        let of = model
+            .units
+            .iter()
+            .filter(|u| !measurable.contains(&u.id))
+            .count()
+            + measurable.len();
+        Group::Units { measured, of }
     };
     let on = match computers.len() {
         0 => String::new(),
         1 => format!("measured on {}", computers[0]),
-        n => format!("measured on {n} kinds of computer — see each row"),
+        n => format!("measured on {n} kinds of computer"),
     };
     let with = match compilers.len() {
         0 => String::new(),
         1 => format!(" with rustc {} (not checked here)", compilers[0]),
-        n => format!(" with {n} compilers — see each row"),
+        n => format!(" with {n} compilers"),
+    };
+    // Rows from different computers or compilers: each row names its own
+    // (its details), said once.
+    let with = if computers.len() > 1 || compilers.len() > 1 {
+        format!("{with} — see each row")
+    } else {
+        with
     };
     let each = match runs.as_slice() {
         [n] => format!(" · {n} runs each"),
@@ -759,6 +877,11 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         model.header.push(format!(
             "{on}{with} · as verify builds them{each} · compares what the program prints and how it ends"
         ));
+        if perf.program_now.is_none() {
+            model
+                .header
+                .push("the C is not checked here: no facts — run harness scan".into());
+        }
     }
     model
 }
@@ -827,11 +950,13 @@ mod tests {
             units: Vec::new(),
             errors: Vec::new(),
             orphans: Vec::new(),
+            orphans_more: 0,
             header: Vec::new(),
             measuring: false,
             measurable: Vec::new(),
             workloads: Vec::new(),
             c_clock: BTreeMap::new(),
+            blocker: None,
         };
         for g in [
             Group::NoFile,

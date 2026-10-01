@@ -1459,12 +1459,13 @@ fn speed_row_lines(row: &speed::SpeedRow, column: usize, width: usize) -> Vec<Li
         ));
     }
     let mut lines = vec![Line::from(clipped(spans, width))];
+    // Under its row, wrapped whole at a shallow indent: never cut mid-word
+    // beside a wide workload column.
     for d in &row.words.details {
         if d.starts_with("last try:") || d.starts_with("a difference found before") {
-            lines.push(Line::from(clipped(
-                vec![Span::styled(format!("  {}{d}", " ".repeat(column)), dim())],
-                width,
-            )));
+            for part in word_wrap(d, width.saturating_sub(4)) {
+                lines.push(Line::from(Span::styled(format!("    {part}"), dim())));
+            }
         }
     }
     lines
@@ -1605,11 +1606,22 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         column,
         width,
     };
-    if model.c_rows.is_empty() {
+    if model.group == speed::Group::NotYetRun {
         section.lines.extend(wrapped(
             "Nothing measured yet — on this row, press Enter and choose Measure speed.",
             width,
             bold(),
+        ));
+    } else if model.c_rows.is_empty() {
+        // Units measured alone (`--unit`): the C alone is not, yet.
+        section
+            .lines
+            .push(Line::from(Span::styled("The original C", bold())));
+        section.lines.extend(wrapped(
+            "not measured yet — Measure speed on this row measures the C alone; measuring one \
+             unit does not",
+            width,
+            dim(),
         ));
     } else {
         section.push(
@@ -1653,10 +1665,14 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     }
     let sentences = section.sentences;
     if !model.orphans.is_empty() {
+        let more = match model.orphans_more {
+            0 => String::new(),
+            n => format!(" and {n} more"),
+        };
         lines.push(Line::from(""));
         lines.extend(wrapped(
             &format!(
-                "Results of units no longer in the plan (in migration/perf/units/): {}",
+                "Results of units no longer in the plan (in migration/perf/units/): {}{more}",
                 model.orphans.join(", ")
             ),
             width,
@@ -1684,6 +1700,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         for d in &row.words.details {
             lines.extend(wrapped(d, width, dim()));
         }
+        lines.extend(wrapped(&row.measured_on, width, dim()));
         if !row.out_of_date.is_empty() {
             lines.extend(wrapped(
                 &format!("out of date: {}", row.out_of_date.join(", ")),
@@ -2981,7 +2998,9 @@ const HELP_SPEED: &[&str] = &[
     "When a unit's Rust is slower and speed matters, change the Rust the way it was made: \
      made by a model — Modify its attempt with a note about speed, Replace the verified crate \
      with the new attempt, measure again, and Replace it back if it is not faster; a hand \
-     edit — Hand edit it, then measure again; written outside the cockpit — commit the crate \
+     edit — Hand edit its crate, Replace the verified crate with the new attempt, measure \
+     again, and Replace it back if it is not faster (a hand edit alone is recorded, never \
+     accepted: perf would time the same crate); written outside the cockpit — commit the crate \
      first (git), edit it in your editor, run harness verify <unit> in a terminal, then \
      measure again.",
 ];
@@ -2990,7 +3009,7 @@ const HELP_SPEED_WORDS: &[(&str, &str)] = &[
     ("about as fast", "within 2 % of the C, either way"),
     (
         "slower 6.2 % (4.1–8.3 %)",
-        "the best guess, and the range it surely lies in",
+        "the best guess, and the range it lies in (perf is at least 95 % sure of it)",
     ),
     (
         "probably slower",
@@ -2998,8 +3017,26 @@ const HELP_SPEED_WORDS: &[(&str, &str)] = &[
     ),
     ("close call", "too close to the 2 % line to call"),
     (
-        "can't tell",
-        "the runs vary too much — measure again with 31 runs, on a quiet computer",
+        "can't tell: ±3.4 %",
+        "the runs varied too much — measure again with 31 runs, on a quiet computer",
+    ),
+    (
+        "can't tell: slow cores",
+        "many runs ran mostly on the slower cores — the computer may have been busy (close \
+         other work and measure again), or the program runs there by design",
+    ),
+    (
+        "can't tell: too few",
+        "too few runs gave a value — measure again",
+    ),
+    (
+        "short run: can't tell",
+        "the run is too short to tell a difference this small — use a bigger input; more runs \
+         will not settle it",
+    ),
+    (
+        "no clear diff ±1.2 %",
+        "31 runs found no difference bigger than that",
     ),
     (
         "too short to time",
@@ -6245,24 +6282,120 @@ mod tests {
         crate::app::tests::app_of_path(&root)
     }
 
+    /// The workload whose id is the longest allowed (24 characters).
+    const LONG_WORKLOAD: &str = "compress-a-big-text-file";
+
+    /// [`write_speed_results`] and what the Speed View's golden must show
+    /// (§4 *The cockpit*, build notes 16, 23 and 28): a workload whose id is
+    /// 24 characters, its C-alone line at 12.41 s and 124.3 MB with a C-side
+    /// last try beside it, a unit row on several cores, and the program as
+    /// it stands built with a second rustc.
+    fn write_speed_golden(app: &App) -> App {
+        use harness_core::perf::results::{self as res, LastTry};
+        let app = write_speed_results(app, false);
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        assert_eq!(LONG_WORKLOAD.len(), 24);
+        let workloads = perf.join("workloads.toml");
+        let mut text = std::fs::read_to_string(&workloads).unwrap();
+        text.push_str(&format!(
+            "[[workload]]\nid = \"{LONG_WORKLOAD}\"\nargs = [\"--i10\", \"{{input}}\"]\n\
+             input = \"bench/big.txt\"\n"
+        ));
+        std::fs::write(&workloads, text).unwrap();
+        let read = crate::load::read(&root).unwrap();
+        let Some(crate::perfread::InputNow::Digest(digest)) =
+            read.snapshot.perf.inputs.get(LONG_WORKLOAD).cloned()
+        else {
+            panic!("{:?}", read.snapshot.perf.inputs)
+        };
+        let path = res::program_path(&perf);
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        let mut c = program.c_alone[0].clone();
+        c.workload = LONG_WORKLOAD.into();
+        c.inputs.workload = digest.clone();
+        for r in c.c.iter_mut().flatten() {
+            r.cpu_us = Some(12_410_000);
+            r.wall_us = Some(12_415_000);
+            r.memory = Some(124_300_000);
+        }
+        c.last_try = Some(LastTry {
+            outcome: "c-unstable".into(),
+            setup: None,
+            units: None,
+        });
+        program.c_alone.push(c);
+        for r in &mut program.as_it_stands {
+            r.inputs.compilers.rustc = Some("rustc 1.95.0 (0a1b2c3d4 2026-05-14)".into());
+        }
+        res::write_program(&path, &program).unwrap();
+        let id = "u001-katajainen";
+        let path = res::unit_path(&perf, id);
+        let mut unit = res::read_unit(&path, id).unwrap().unwrap();
+        let mut u = unit.rows[0].clone();
+        u.workload = LONG_WORKLOAD.into();
+        u.inputs.workload = digest;
+        for r in u.other.iter_mut().flatten() {
+            r.wall_us = r.cpu_us.map(|c| c / 4);
+        }
+        unit.rows.push(u);
+        res::write_unit(&path, &unit).unwrap();
+        crate::app::tests::app_of_path(&root)
+    }
+
     #[test]
     fn the_speed_view_at_54_columns() {
         let app = app_of("targets/zopfli", "speed-view");
-        let mut app = write_speed_results(&app, false);
+        let mut app = write_speed_golden(&app);
         assert!(
             app.snapshot.perf.units.values().all(Result::is_ok),
             "{:?}",
             app.snapshot.perf.units
         );
+        assert!(
+            matches!(app.snapshot.perf.program, Ok(Some(_))),
+            "{:?}",
+            app.snapshot.perf.program
+        );
         app.select(Selection::Speed);
         let buffer = render(&mut app, 80, 40);
         golden("speed-54.txt", &app, &buffer);
-        // The focused row's full sentence below the list.
+        let screen = text(&buffer);
+        // The 24-character id whole, its short forms whole beside it at
+        // column 2 + 26, the last try under its row, the header's compilers.
+        let view: Vec<&str> = screen.lines().filter_map(|l| l.split('│').nth(3)).collect();
+        for (short, at) in [("CPU 12.4 s · 124 MB", 0), ("slower 6.2 % · parallel", 1)] {
+            let line = view
+                .iter()
+                .filter(|l| l.starts_with(&format!("  {LONG_WORKLOAD}  ")))
+                .nth(at)
+                .unwrap_or_else(|| panic!("{screen}"));
+            assert_eq!(line.trim_end(), format!("  {LONG_WORKLOAD}  {short}"));
+        }
+        let c = view
+            .iter()
+            .position(|l| l.starts_with(&format!("  {LONG_WORKLOAD}  CPU")))
+            .unwrap();
+        assert!(
+            view[c + 1].starts_with("    last try: the C ends or prints"),
+            "{screen}"
+        );
+        assert!(
+            view.iter()
+                .any(|l| l.contains("with 2 compilers — see each row")),
+            "{screen}"
+        );
+        // The focused row's full sentence below the list, and the computer
+        // and compilers it records.
         app.focus = Focus::View;
-        app.link = Some(5);
-        let screen = text(&render(&mut app, 80, 40));
+        app.link = Some(6);
+        let screen = text(&render(&mut app, 80, 60));
         assert!(
             screen.contains("u001-katajainen on big-text — slower"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("measured on Apple M3, 15.6 24G84, with rustc 1.94.1"),
             "{screen}"
         );
         // The unit's header and the project summary.
@@ -6273,13 +6406,20 @@ mod tests {
             "{screen}"
         );
         assert!(
-            screen.contains("(5.6–6.8 %) · 1 of 2 workloads"),
+            screen.contains("(5.6–6.8 %) · 2 of 3 workloads"),
             "{screen}"
         );
         app.select(Selection::Project);
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("Speed: 1 of 1 unit measured — 1 slower — see Speed"),
+            screen.contains("Speed: 1 of 1 unit measured — 1 slower, 1 parallel — see Speed"),
+            "{screen}"
+        );
+        let mut app = write_speed_results(&app, false);
+        app.select(Selection::Unit("u001-katajainen".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("(5.6–6.8 %) · 1 of 2 workloads"),
             "{screen}"
         );
         // Stale digests: every row says why, dimmed.
@@ -6518,6 +6658,112 @@ mod tests {
         );
     }
 
+    /// A behaves-differently fact is kept through an Accept (§3.11 [m25]):
+    /// it clears only when a re-measure ends measured or too-short; after
+    /// the unit's crate changed it stays, "found before the unit's Rust
+    /// changed", with its next step and the outputs still to compare — and
+    /// a later measure that ended another way keeps it as found before.
+    #[test]
+    fn a_difference_is_kept_through_an_accept() {
+        use harness_core::perf::results::{self as res, Difference, KeptFile};
+        let app = app_of("targets/zopfli", "speed-differs-accept");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        let id = "u001-katajainen";
+        let path = res::unit_path(&perf, id);
+        let mut file = res::read_unit(&path, id).unwrap().unwrap();
+        let kept_dir = harness_core::perf::kept_outputs_dir(&root, Some(id));
+        std::fs::create_dir_all(&kept_dir).unwrap();
+        let mut kept = Vec::new();
+        for (name, bytes) in [
+            ("big-text.c.stdout", &b"line one\nline two\n"[..]),
+            ("big-text.other.stdout", &b"line one\nline 2\n"[..]),
+        ] {
+            std::fs::write(kept_dir.join(name), bytes).unwrap();
+            kept.push(KeptFile {
+                name: name.into(),
+                size: bytes.len() as u64,
+                blake3: harness_core::hash::bytes_hash(bytes),
+            });
+        }
+        let difference = Difference {
+            stream: "stdout".into(),
+            c_len: 18,
+            other_len: 16,
+            offset: 14,
+            c_end: "exit 0".into(),
+            other_end: "exit 0".into(),
+            over_cap: false,
+            kept,
+        };
+        let r = &mut file.rows[0];
+        r.outcome = "behaves-differently".into();
+        r.c = None;
+        r.other = None;
+        r.runs = None;
+        r.short = None;
+        r.platform_metrics = None;
+        r.std = None;
+        r.first_difference = Some(difference.clone());
+        // The state an Accept leaves: today's crate is not the one the row
+        // measured (the verdict stays green and fresh).
+        for c in r.inputs.crates.iter_mut().flatten() {
+            c.digest = format!("blake3:{}", "e".repeat(64));
+        }
+        res::write_unit(&path, &file).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        let unit = app.snapshot.unit(id).unwrap().clone();
+        let fact =
+            "With u001-katajainen's Rust the program prints differently (stdout, byte 15) on \
+                    big-text — verify does not run this workload";
+        let next = "Compare the outputs; then change the unit's Rust (below) and measure this \
+                    unit again";
+        let advice = app.speed.advice(&unit, true);
+        assert_eq!(
+            advice.differences,
+            [format!(
+                "{fact} — found before the unit's Rust changed — measure this unit again to \
+                 check"
+            )]
+        );
+        assert_eq!(advice.next.as_deref(), Some(next));
+        app.select(Selection::Unit(id.into()));
+        let screen = text(&render(&mut app, 300, 50));
+        assert!(
+            screen.contains("found before the unit's Rust changed"),
+            "{screen}"
+        );
+        assert!(
+            app.menu_items()
+                .iter()
+                .any(|i| i.label == "Compare the outputs (big-text)"),
+            "the outputs are still there to compare"
+        );
+        // A later measure that ended another way (a set-up row): kept as
+        // found before.
+        let mut file = res::read_unit(&path, id).unwrap().unwrap();
+        let today = file.rows[1].inputs.crates.clone();
+        let r = &mut file.rows[0];
+        r.outcome = "not-verified".into();
+        r.first_difference = None;
+        r.found_before = Some(difference);
+        r.setup = Some(res::SetupFacts {
+            reason: Some("not-fresh".into()),
+            ..res::SetupFacts::default()
+        });
+        r.inputs.crates = today;
+        res::write_unit(&path, &file).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(
+            app.speed.advice(&unit, true).differences,
+            [format!(
+                "{fact} — found before; the last measure ended another way — measure again to \
+                 check"
+            )]
+        );
+    }
+
     /// The program as it stands printing differently: on its heading and
     /// in the summary, with which unit to measure alone.
     #[test]
@@ -6598,9 +6844,34 @@ mod tests {
              verified crate with the new attempt, measure this unit again — and if it is not \
              faster, Replace it back with a-13c9"
         );
-        assert!(change_words(&unit, false).starts_with(
-            "Connect a model to Modify (start the cockpit with --provider), then modify a-13c9"
+        // No provider: Modify is greyed, said in the cockpit's own words
+        // (build note 30) — the very reason the greyed item gives.
+        let mut no_provider = App::new(
+            crate::app::Config {
+                providers: Vec::new(),
+                ..app.config.clone()
+            },
+            crate::load::read(&app.config.target).unwrap(),
+        );
+        no_provider.select(Selection::Attempt(
+            "u-lib".into(),
+            crate::app::tests::PROVENANCE.into(),
         ));
+        let modify = no_provider
+            .menu_items()
+            .into_iter()
+            .find(|i| i.label == "Modify with a note")
+            .expect("Modify offered, greyed");
+        assert_eq!(modify.greyed.as_deref(), Some(crate::model::NO_PROVIDER));
+        assert_eq!(
+            change_words(&unit, false),
+            format!(
+                "Modify is greyed: {} — with one, Modify a-13c9 with a note about speed (give \
+                 these numbers), then Replace u-lib's verified crate with the new attempt, \
+                 measure this unit again — and if it is not faster, Replace it back with a-13c9",
+                crate::model::NO_PROVIDER
+            )
+        );
         unit.provenance = P::Ambiguous(vec!["a-28d8aaaa".into(), "a-13c9bbbb".into()]);
         assert!(
             change_words(&unit, true).starts_with("Modify a-13c9 "),
@@ -6611,13 +6882,17 @@ mod tests {
         std::fs::write(dir.join("src/logic.rs"), "").unwrap();
         std::fs::write(dir.join("src/ffi.rs"), "").unwrap();
         unit.crate_dir = Some(dir.clone());
+        // A recorded hand edit: the edit alone is never accepted, so the
+        // words name Replace (and the way back to the attempt in use now) —
+        // build note 22; tests/speed_change.rs runs each act.
         unit.provenance = P::Human {
-            attempt: "a-77".into(),
-            origin: "a-77".into(),
+            attempt: "a-77b2aaaa".into(),
+            origin: "a-66c1bbbb".into(),
         };
         assert_eq!(
             change_words(&unit, true),
-            "Hand edit u-lib, then measure again"
+            "Hand edit u-lib's crate, then Replace u-lib's verified crate with the new attempt \
+             and measure this unit again — and if it is not faster, Replace it back with a-77b2"
         );
         std::fs::remove_file(dir.join("src/ffi.rs")).unwrap();
         assert!(change_words(&unit, true).starts_with("Commit the unit's crate first (git)"));
@@ -6680,6 +6955,561 @@ mod tests {
         assert!(
             screen.contains("Speed: not measured yet — see Speed"),
             "{screen}"
+        );
+    }
+
+    /// "Measurable today" is perf's own selection (§3.2, build note 24): a
+    /// unit whose plan `replaces` changed since its verdict — which stays
+    /// green and fresh — is left out, its Measure greyed in perf's words,
+    /// and the program as it stands is judged against that.
+    #[test]
+    fn measurable_today_follows_every_condition_of_perfs_selection() {
+        use harness_core::perf::results::{self as res, LeftOut};
+        let app = app_of("targets/zopfli", "speed-measurable");
+        let app = write_speed_results(&app, false);
+        let id = "u001-katajainen";
+        let root = app.config.target.clone();
+        assert_eq!(app.speed.measurable, [id]);
+        assert!(
+            app.speed.program_rows[0].out_of_date.is_empty(),
+            "{:?}",
+            app.speed.program_rows[0].out_of_date
+        );
+        // The plan's replaces edited after verify.
+        let plan = root.join("migration/plan.toml");
+        let text = std::fs::read_to_string(&plan).unwrap();
+        let edited = text.replace(
+            r#"replaces = ["src/zopfli/katajainen.c"]"#,
+            r#"replaces = ["src/zopfli/katajainen.c", "src/zopfli/util.c"]"#,
+        );
+        assert_ne!(edited, text);
+        std::fs::write(&plan, edited).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert!(app.snapshot.unit(id).unwrap().report.fresh_green());
+        assert!(
+            app.speed.measurable.is_empty(),
+            "{:?}",
+            app.speed.measurable
+        );
+        // Held by the row, left out now.
+        assert_eq!(
+            app.speed.program_rows[0].out_of_date,
+            ["u001-katajainen is left out now"]
+        );
+        app.select(Selection::Unit(id.into()));
+        let this = app
+            .menu_items()
+            .into_iter()
+            .find(|i| i.label == "Measure this unit's speed")
+            .expect("on a verified unit");
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                this.greyed.as_deref(),
+                Some("u001-katajainen's replaced files changed since verify — Re-check it")
+            );
+        }
+        // A row that left it out for that reason is current: nothing was
+        // verified since.
+        let perf = harness_core::perf::perf_dir(&root);
+        let path = res::program_path(&perf);
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        for r in &mut program.as_it_stands {
+            let held = r.inputs.units.take().unwrap();
+            r.inputs.units = Some(Vec::new());
+            r.inputs.left_out.as_mut().unwrap().push(LeftOut {
+                id: id.into(),
+                crate_digest: held[0].crate_digest.clone(),
+                reason: "replaces-changed".into(),
+            });
+        }
+        res::write_program(&path, &program).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        for r in &app.speed.program_rows {
+            assert!(r.out_of_date.is_empty(), "{:?}", r.out_of_date);
+        }
+    }
+
+    /// A unit's header (§3.11, build note 16): line 1 the short form without
+    /// its interval or "· parallel"; line 2 the interval the headline gives
+    /// (the × one at 2× and more), "parallel" whenever the row uses several
+    /// cores — even where the short form had no room for it —, the count.
+    #[test]
+    fn the_unit_header_carries_the_interval_and_parallel() {
+        use harness_core::perf::results as res;
+        let app = app_of("targets/zopfli", "speed-header");
+        let app = write_speed_golden(&app);
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        let id = "u001-katajainen";
+        let path = res::unit_path(&perf, id);
+        // The other side `f` times the C's cycles, on four cores.
+        let header = |f: f64| {
+            let mut file = res::read_unit(&path, id).unwrap().unwrap();
+            file.rows.retain(|r| r.workload == LONG_WORKLOAD);
+            let c = file.rows[0].c.clone().unwrap();
+            for (o, c) in file.rows[0].other.iter_mut().flatten().zip(&c) {
+                let cycles = (c.cycles.unwrap() as f64 * f) as u64;
+                o.cycles = Some(cycles);
+                o.p_cycles = Some(cycles);
+                o.cpu_us = Some(cycles / 3_200);
+                o.wall_us = Some(cycles / 3_200 / 4);
+            }
+            res::write_unit(&path, &file).unwrap();
+            let app = crate::app::tests::app_of_path(&root);
+            let (a, b) = app.speed.unit_header(id).unwrap();
+            assert!(a.chars().count() <= 54 && b.chars().count() <= 54);
+            (
+                app.speed.unit(id).unwrap().rows[0].words.short.clone(),
+                a,
+                b,
+            )
+        };
+        let (short, a, b) = header(1.062);
+        assert_eq!(short, "slower 6.2 % · parallel");
+        assert_eq!(a, format!("Speed: slower 6.2 % on {LONG_WORKLOAD}"));
+        assert_eq!(b, "(5.6–6.8 %) · parallel · 1 of 1 workload");
+        let (short, a, b) = header(3.7);
+        assert_eq!(short, "3.7× as slow · parallel");
+        assert_eq!(a, format!("Speed: 3.7× as slow on {LONG_WORKLOAD}"));
+        assert!(
+            b.starts_with('(') && b.ends_with("×) · parallel · 1 of 1 workload"),
+            "{b}"
+        );
+        // No room for "· parallel" in a close call's short form: the
+        // header's second line still says it.
+        let (short, a, b) = header(1.021);
+        assert!(short.starts_with("close call: ≈"), "{short}");
+        assert!(!short.contains("parallel"), "{short}");
+        assert!(a.starts_with("Speed: close call: ≈"), "{a}");
+        assert!(
+            b.starts_with('(') && b.ends_with("%) · parallel · 1 of 1 workload"),
+            "{b}"
+        );
+    }
+
+    /// A unit whose only rows are set-up rows ("not measured") is counted
+    /// among those that could be, never as measured (§3.11 summary).
+    #[test]
+    fn a_unit_with_only_set_up_rows_is_not_counted_as_measured() {
+        use harness_core::perf::results as res;
+        let app = app_of("targets/zopfli", "speed-set-up-only");
+        let mut app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        let id = "u001-katajainen";
+        let path = res::unit_path(&perf, id);
+        let mut file = res::read_unit(&path, id).unwrap().unwrap();
+        let mut set_up = file.rows[0].clone();
+        set_up.outcome = "not-verified".into();
+        set_up.short = None;
+        set_up.runs = None;
+        set_up.platform_metrics = None;
+        set_up.c = None;
+        set_up.other = None;
+        set_up.std = None;
+        set_up.setup = Some(res::SetupFacts {
+            reason: Some("not-fresh".into()),
+            ..res::SetupFacts::default()
+        });
+        file.rows = vec![set_up];
+        res::write_unit(&path, &file).unwrap();
+        app = crate::app::tests::app_of_path(&root);
+        assert_eq!(app.speed.label(), "Speed (0 of 1)");
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("Speed: 0 of 1 unit measured — 1 not measured — see Speed"),
+            "{screen}"
+        );
+    }
+
+    /// Unit rows with no C-alone rows (a first `--unit` measure): the view
+    /// says the C alone is not measured yet, never "Nothing measured yet"
+    /// above the rows it lists.
+    #[test]
+    fn units_measured_alone_say_the_c_is_not_measured_yet() {
+        let app = app_of("targets/zopfli", "speed-units-only");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        std::fs::remove_file(harness_core::perf::results::program_path(
+            &harness_core::perf::perf_dir(&root),
+        ))
+        .unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        app.select(Selection::Speed);
+        let screen = text(&render(&mut app, 80, 40));
+        assert!(!screen.contains("Nothing measured yet"), "{screen}");
+        assert!(screen.contains("The original C"), "{screen}");
+        assert!(
+            screen.contains("not measured yet — Measure speed on this row measures"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("big-text    slower 6.2 % (5.6–6.8 %)"),
+            "{screen}"
+        );
+    }
+
+    /// Rows from different computers and compilers: the header points to
+    /// the rows once, and each row names its own (§3.11, build note 28).
+    #[test]
+    fn rows_from_other_computers_name_their_own() {
+        use harness_core::perf::results as res;
+        let app = app_of("targets/zopfli", "speed-computers");
+        let app = write_speed_golden(&app);
+        let root = app.config.target.clone();
+        let path = res::program_path(&harness_core::perf::perf_dir(&root));
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        for r in &mut program.c_alone {
+            r.inputs.computer.cpu = "Apple M1".into();
+        }
+        res::write_program(&path, &program).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert_eq!(app.speed.header.len(), 1);
+        let header = &app.speed.header[0];
+        assert!(
+            header.starts_with("measured on 2 kinds of computer with 2 compilers — see each row"),
+            "{header}"
+        );
+        assert_eq!(header.matches("see each row").count(), 1, "{header}");
+        assert!(app
+            .speed
+            .row(&crate::speed::SideKey::C, "big-text")
+            .unwrap()
+            .measured_on
+            .starts_with("measured on Apple M1, 15.6 24G84, with Apple clang"));
+        app.select(Selection::Speed);
+        app.focus = Focus::View;
+        app.link = Some(0);
+        let screen = text(&render(&mut app, 120, 60));
+        assert!(
+            screen.contains("measured on Apple M1, 15.6 24G84, with Apple clang version 17.0.0"),
+            "{screen}"
+        );
+    }
+
+    /// Every short form, at its longest, whole beside a 24-character
+    /// workload id within 54 columns; a last-try line wrapped whole under
+    /// its row, never cut mid-word.
+    #[test]
+    fn short_forms_fit_beside_the_longest_workload_id() {
+        let app = app_of("targets/zopfli", "speed-widths");
+        let app = write_speed_golden(&app);
+        let mut row = app
+            .speed
+            .row(&crate::speed::SideKey::C, LONG_WORKLOAD)
+            .unwrap()
+            .clone();
+        let column = LONG_WORKLOAD.len() + 2;
+        for short in [
+            "slower 12 % (10.1–14.6 %)",
+            "faster 12 % (10.1–14.6 %)",
+            "close call: ≈9.9 % slower",
+            "probably slower ≈9.9 %",
+            "about as fast · parallel",
+            "slower 9.9 % · parallel",
+            "can't tell: slow cores",
+            "short run: can't tell",
+            "too short · Rust 99× CPU",
+            "no clear diff ±99 %",
+            "CPU 12.4 s · 124 MB",
+        ] {
+            row.words.short = short.into();
+            let lines = speed_row_lines(&row, column, 54);
+            let first: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+            assert_eq!(first, format!("  {LONG_WORKLOAD}  {short}"));
+            assert!(width_of(&first) <= 54, "{first}");
+            // The last try: whole, in rows of at most 54 columns.
+            let rest: Vec<String> = lines[1..]
+                .iter()
+                .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                .collect();
+            assert!(rest.iter().all(|l| width_of(l) <= 54), "{rest:?}");
+            let joined = rest.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+            assert_eq!(
+                joined,
+                "last try: the C ends or prints differently from one run to the next"
+            );
+        }
+    }
+
+    /// Help's glossary has an entry for each can't-tell short form, each
+    /// with its own next step (more runs only where they can settle it).
+    #[test]
+    fn the_glossary_names_each_kind_of_cant_tell() {
+        let (rows, _) = help_rows(1000, true, None);
+        let help: String = rows
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        for (short, next) in [
+            ("can't tell: ±", "measure again with 31 runs"),
+            ("can't tell: slow cores", "may have been busy"),
+            ("can't tell: too few", "measure again"),
+            (
+                "short run: can't tell",
+                "use a bigger input; more runs will not settle it",
+            ),
+            ("no clear diff ±", "31 runs found no difference"),
+        ] {
+            let line = help
+                .lines()
+                .find(|l| l.trim_start().starts_with(short))
+                .unwrap_or_else(|| panic!("{short}: {help}"));
+            assert!(line.contains(next), "{line}");
+        }
+        assert!(help.contains("at least 95 % sure"), "{help}");
+        assert!(!help.contains("surely"), "{help}");
+    }
+
+    /// A unit the program as it stands left out with its crate's digest
+    /// (its own link failed) is judged by that crate — hashed even with no
+    /// results file of its own, as after an as-it-stands-only measure.
+    #[test]
+    fn a_unit_left_out_is_judged_by_its_own_crate() {
+        use harness_core::perf::results::{self as res, LeftOut};
+        let app = app_of("targets/zopfli", "speed-left-out");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        let id = "u001-katajainen";
+        let perf = harness_core::perf::perf_dir(&root);
+        let path = res::program_path(&perf);
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        for r in &mut program.as_it_stands {
+            let held = r.inputs.units.take().unwrap();
+            r.inputs.units = Some(Vec::new());
+            r.inputs.left_out.as_mut().unwrap().push(LeftOut {
+                id: id.into(),
+                crate_digest: held[0].crate_digest.clone(),
+                reason: "does-not-link".into(),
+            });
+        }
+        res::write_program(&path, &program).unwrap();
+        std::fs::remove_file(res::unit_path(&perf, id)).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert!(app.snapshot.perf.crates.contains_key(id));
+        for r in &app.speed.program_rows {
+            assert!(r.out_of_date.is_empty(), "{:?}", r.out_of_date);
+        }
+    }
+
+    /// The inputs the cockpit hashes (§3.11): never while a perf run holds
+    /// the lock — the holder read inside `Snapshot::load` —, "can't check"
+    /// past the load's budget, and perf's own words for an input it refuses
+    /// (the target still opens).
+    #[test]
+    fn the_cockpit_hashes_no_input_while_measuring_and_says_what_it_cannot_check() {
+        use crate::perfread::InputNow;
+        use crate::speed::SideKey;
+        let app = app_of("targets/zopfli", "speed-inputs");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        let lock = harness_core::ledger::Ledger::new(&root).lock_path();
+        let holder = |command: &str| {
+            format!(
+                "{{\"pid\":{},\"command\":\"{command}\",\"started\":\"2026-09-25T00:00:00Z\"}}\n",
+                std::process::id()
+            )
+        };
+        let big = |app: &App| app.speed.row(&SideKey::C, "big-text").unwrap().clone();
+        std::fs::write(
+            &lock,
+            holder(&format!("{} --target .", harness_core::perf::PERF_RUN_LOCK)),
+        )
+        .unwrap();
+        std::fs::write(root.join("bench/big.txt"), "changed while measuring").unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert!(app.snapshot.perf.measuring);
+        assert_eq!(
+            app.snapshot.perf.inputs["big-text"],
+            InputNow::WhileMeasuring
+        );
+        assert!(
+            matches!(app.snapshot.perf.inputs["many-small"], InputNow::Digest(_)),
+            "unchanged: its cached digest"
+        );
+        assert_eq!(big(&app).out_of_date, ["can't check while measuring"]);
+        assert_eq!(big(&app).out_of_date_tokens, ["measuring"]);
+        app.select(Selection::Speed);
+        let screen = text(&render(&mut app, 80, 40));
+        assert!(screen.contains("A perf run is measuring now"), "{screen}");
+        // Another writer is no perf run: the input is hashed.
+        std::fs::write(&lock, holder("verify u001-katajainen")).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert!(!app.snapshot.perf.measuring);
+        assert_eq!(big(&app).out_of_date_tokens, ["workload"]);
+        std::fs::remove_file(&lock).unwrap();
+        // Past the load's budget: "can't check", the row's digest kept.
+        let mut snapshot = app.snapshot.clone();
+        snapshot
+            .perf
+            .inputs
+            .insert("big-text".into(), InputNow::TooLarge);
+        let model = crate::speed::build(&snapshot);
+        let row = model.row(&SideKey::C, "big-text").unwrap();
+        assert_eq!(
+            row.out_of_date,
+            ["can't check: inputs too large to hash here"]
+        );
+        assert_eq!(row.out_of_date_tokens, ["too-large"]);
+        // An input perf refuses (over 64 MiB): its words, unread; the
+        // target opens.
+        std::fs::File::create(root.join("bench/huge.bin"))
+            .unwrap()
+            .set_len(harness_core::perf::workloads::MAX_INPUT_BYTES + 1)
+            .unwrap();
+        let workloads = harness_core::perf::workloads::workloads_path(&root);
+        let text = std::fs::read_to_string(&workloads).unwrap();
+        std::fs::write(&workloads, text.replace("bench/big.txt", "bench/huge.bin")).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(
+            big(&app).out_of_date,
+            ["bench/huge.bin is over 64 MiB — use a smaller input"]
+        );
+        assert_eq!(big(&app).out_of_date_tokens, ["input-unusable"]);
+    }
+
+    /// Day one (§3.6): the C alone measured before a plan is judged as any
+    /// row is; without facts only the C goes unchecked, and the header says
+    /// so.
+    #[test]
+    fn the_c_alone_is_judged_before_a_plan() {
+        use crate::speed::SideKey;
+        let app = app_of("targets/zopfli", "speed-day-one");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        std::fs::remove_file(root.join("migration/plan.toml")).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(app.snapshot.note.as_deref(), Some(crate::model::NO_PLAN));
+        let big = |app: &App| app.speed.row(&SideKey::C, "big-text").unwrap().clone();
+        assert!(
+            big(&app).out_of_date.is_empty(),
+            "{:?}",
+            big(&app).out_of_date
+        );
+        std::fs::write(root.join("bench/big.txt"), "another input").unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(big(&app).out_of_date, ["your workload changed"]);
+        // Without facts: the C cannot be hashed here; the rest is judged.
+        std::fs::remove_file(root.join("migration/facts.jsonl")).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(big(&app).out_of_date_tokens, ["workload"]);
+        assert!(
+            app.speed
+                .header
+                .iter()
+                .any(|h| h == "the C is not checked here: no facts — run harness scan"),
+            "{:?}",
+            app.speed.header
+        );
+    }
+
+    /// Measure is greyed in the words `perf run` refuses with: the
+    /// workloads file's state (§3.1), an interrupted Accept (§3.2), and the
+    /// program as it stands's 31 runs with one measurable unit (§3.10).
+    #[test]
+    fn measure_is_greyed_with_perfs_own_words() {
+        use harness_core::perf::results as res;
+        use harness_core::perf::workloads::{self as wl, WorkloadsState};
+        if !cfg!(target_os = "macos") {
+            return; // greyed "macOS only" first.
+        }
+        let greyed = |app: &mut App, sel: Selection, label: &str| -> Option<String> {
+            app.select(sel);
+            app.menu_items()
+                .into_iter()
+                .find(|i| i.label == label)
+                .unwrap_or_else(|| panic!("{label}"))
+                .greyed
+        };
+        let mut app = app_of("targets/zopfli", "speed-greyed");
+        let root = app.config.target.clone();
+        assert_eq!(
+            greyed(&mut app, Selection::Speed, "Measure speed"),
+            WorkloadsState::NoFile.blocker()
+        );
+        let dir = harness_core::perf::perf_dir(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("workloads.toml"), wl::STARTER).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert_eq!(
+            greyed(&mut app, Selection::Speed, "Measure speed"),
+            WorkloadsState::NoWorkload.blocker()
+        );
+        std::fs::write(
+            dir.join("workloads.toml"),
+            "schema_version = 1\n[[workload]]\nid = \"w\"\nruns = 99\n",
+        )
+        .unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        let words = greyed(&mut app, Selection::Speed, "Measure speed").unwrap();
+        assert_eq!(Some(words.clone()), wl::load(&root).unwrap().blocker());
+        assert!(
+            words.contains("workloads.toml line 4, column")
+                && words.ends_with("— fix it, or Edit the workloads file"),
+            "{words}"
+        );
+        // An interrupted Accept: perf's own words for it.
+        write_speed_results(&app, false);
+        let id = "u001-katajainen";
+        let marker = root
+            .join("migration/units")
+            .join(id)
+            .join(".promote-a-1234");
+        std::fs::create_dir_all(&marker).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert_eq!(
+            greyed(
+                &mut app,
+                Selection::Unit(id.into()),
+                "Measure this unit's speed"
+            )
+            .as_deref(),
+            Some(
+                "an Accept of a-1234 was interrupted — Re-check u001-katajainen (or run harness \
+                 verify u001-katajainen) to finish or undo it; Measure does not"
+            )
+        );
+        std::fs::remove_dir(&marker).unwrap();
+        // The program as it stands asks for 31 runs, but only one unit is
+        // measurable: perf would build everything, then refuse.
+        let path = res::program_path(&dir);
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        for (i, r) in program.as_it_stands[0]
+            .other
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            let f = if i % 2 == 0 { 0.88 } else { 1.14 };
+            r.cycles = Some((3.9e9 * f) as u64);
+            r.p_cycles = r.cycles;
+        }
+        res::write_program(&path, &program).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert_eq!(app.speed.measurable, [id]);
+        assert_eq!(
+            app.speed.more_runs(&crate::speed::SideKey::AsItStands),
+            ["big-text"]
+        );
+        assert_eq!(
+            greyed(
+                &mut app,
+                Selection::Speed,
+                "Measure the program as it stands again with 31 runs"
+            )
+            .as_deref(),
+            Some(
+                "the program as it stands needs two verified units — with one, that unit's own \
+                 row measures the same program"
+            )
         );
     }
 
