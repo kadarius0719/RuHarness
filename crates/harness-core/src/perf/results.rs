@@ -990,7 +990,7 @@ fn check_setup(outcome: &str, setup: Option<&SetupFacts>) -> Result<(), String> 
             }
         }
         "replaces-mismatch" => {
-            if !s.index.is_some_and(|i| i < MAX_REPLACES_INDEX) {
+            if s.index.is_none_or(|i| i >= MAX_REPLACES_INDEX) {
                 return Err(format!(
                     "replaces-mismatch names the entry's index, below {MAX_REPLACES_INDEX}"
                 ));
