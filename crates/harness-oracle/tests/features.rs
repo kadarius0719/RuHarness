@@ -2265,6 +2265,14 @@ fn the_c99_inline_link_case() {
         "{:?}",
         map.unwatched_reasons
     );
+    // The detail is the name; the words say the rest once.
+    assert!(
+        map.unwatched_reasons
+            .iter()
+            .any(|r| r.id == "w" && r.detail == "w is undefined"),
+        "{:?}",
+        map.unwatched_reasons
+    );
     assert_eq!(
         kind_of(&map, "src/tool/other.c::w"),
         None,
