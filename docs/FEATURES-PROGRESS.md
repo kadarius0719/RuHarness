@@ -108,9 +108,9 @@ all confirmed but three wording points. Revision 1 (00f2e23) answers them (§7, 
 premise (`SP/perf/premise2/launch.c`: counting from the program's exec under sandbox-exec via
 kqueue NOTE_EXEC works; RUSAGE_INFO_V6 P-core fields filled) and a link check (two Rust staticlibs
 link into one C program on macOS: `SP/perf/twolibs`). The review finished: 46 confirmed, 2 by one
-verifier, 1 refuted (`SP/perf/design-review-result.json`). Next: CHECK THE REVISION (a workflow
-launched after 44bee5d — the newest run under workflows/), then (independent agents: each confirmed finding against rev 1's text, plus new findings),
-revise, then build in the §5 steps. Spike notes, code survey and launcher prototype:
+verifier, 1 refuted (`SP/perf/design-review-result.json`). Next: CHECK THE REVISION — running as
+workflow `wf_0f90338d-b1d` (per-lens dispositions of every finding against rev 1, three fresh lenses
+on the new mechanisms, two verifiers per new finding); then revise (revision 2), then build in the §5 steps. Spike notes, code survey and launcher prototype:
 `SP/perf/`.
 
 Known gaps, judged acceptable (§R5): Next-step rule 6 has no project-menu Re-check item (a
