@@ -258,6 +258,30 @@ mod tests {
             "a misread twin demoted it: {p:?}"
         );
         assert!(p.notes.iter().any(|n| n.id == "os_init"), "{p:?}");
+        // The misread body itself: its bounds are a guess.
+        assert!(unwatched.contains(&"src/a.c::w"), "{p:?}");
+    }
+
+    /// The real-code re-run (sqlite3.c, 23 times): an `else if (` right
+    /// after an `#ifndef` is read as a definition named `if`. A keyword is
+    /// never a function's name — not in the facts, and the body it sits in
+    /// keeps its note.
+    #[test]
+    fn a_keyword_is_never_a_function() {
+        let src = "static int k(int z) {\n  if( z>0 ){\n    z = 1;\n  }\n#ifndef OMIT\n\
+                   else if( z<0 ){\n    z = 2;\n  }\n#endif\n  return z;\n}\n";
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_c::LANGUAGE.into())
+            .expect("grammar");
+        let tree = parser.parse(src, None).expect("parses");
+        let mut defs = Vec::new();
+        crate::collect_functions(tree.root_node(), src.as_bytes(), "src/a.c", &mut defs);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["k"], "{defs:?}");
+        let p = probe(src, &["src/a.c::k"]);
+        assert!(p.unwatched.is_empty(), "{p:?}");
+        assert_eq!(p.notes.len(), 1);
     }
 
     /// Rule 3 in each directive spelling, with the depth form: only a `{`

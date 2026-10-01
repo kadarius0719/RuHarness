@@ -2388,3 +2388,61 @@ fn a_header_rejected_in_a_later_file_compiles_the_earlier_one_again() {
         "{messages:?}"
     );
 }
+
+/// Review (token comparison): a raw string spanning lines holds text the
+/// parser reads as a function; its note lands inside the string. The
+/// whole text is one literal to the tokenizer, so the note is seen there —
+/// the function is unwatched and the map records what ran.
+#[test]
+fn a_function_shaped_line_in_a_raw_string_never_changes_the_program() {
+    let main = "#include <stdio.h>\n#include <string.h>\n#include \"unit.h\"\n#include \"mul.h\"\n\
+                static const char *tmpl = R\"(\nvoid g(void);\nint f(void) { return 1;}\n)\";\n\
+                void longer(void) { puts(\"x\"); }\nvoid shorter(void) { puts(\"x\"); }\n\
+                int main(void) { if (unit_add(1, 2) != 3) return (int)mul_step(0, 1);\n\
+                if (strlen(tmpl) > 50) longer(); else shorter(); return 0; }\n";
+    let (_tmp, map) = map_program(
+        "feat-review-raw-template",
+        main,
+        &[],
+        &[
+            ("src/tool/main.c", "f"),
+            ("src/tool/main.c", "longer"),
+            ("src/tool/main.c", "shorter"),
+        ],
+    );
+    let map = map.expect("maps");
+    let ran = ran(&map);
+    assert!(
+        ran.contains(&"shorter") && !ran.contains(&"longer"),
+        "{ran:?}"
+    );
+    assert!(kind_of(&map, "f").is_some(), "{:?}", map.unwatched_reasons);
+}
+
+/// Review (token comparison): an odd quote inside a raw string on a body's
+/// line left the end token in (the map refused an ordinary program), or
+/// took a later note for a stringized one.
+#[test]
+fn an_odd_quote_in_a_raw_string_maps() {
+    let main = "#include <stdio.h>\n#include \"unit.h\"\n#include \"mul.h\"\n\
+                static const char *quote(void) { return R\"(\")\"; }\n\
+                static const char *q = R\"(\")\"; static int f(void) { return q[0]; }\n\
+                int main(void) { if (unit_add(1, 2) != 3) return (int)mul_step(0, 1);\n\
+                printf(\"%s %d\\n\", quote(), f()); return 0; }\n";
+    let (_tmp, map) = map_program(
+        "feat-review-raw-quote",
+        main,
+        &[],
+        &[
+            ("src/tool/main.c", "src/tool/main.c::quote"),
+            ("src/tool/main.c", "src/tool/main.c::f"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert!(map.unwatched.is_empty(), "{:?}", map.unwatched_reasons);
+    let ran = ran(&map);
+    assert!(
+        ran.contains(&"src/tool/main.c::quote") && ran.contains(&"src/tool/main.c::f"),
+        "{ran:?}"
+    );
+}

@@ -368,7 +368,11 @@ fn collect_functions_in(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "function_definition" {
-            if let Some(name) = function_name(child, src) {
+            let at = defs.len();
+            // A keyword "name" (`if( rc==0 ){` misread as a definition) is a
+            // statement, not a function: never recorded, only searched.
+            let name = function_name(child, src).filter(|n| !C_KEYWORDS.contains(&n.as_str()));
+            if let Some(name) = name {
                 let mut c = child.walk();
                 let is_static = child
                     .children(&mut c)
@@ -391,13 +395,78 @@ fn collect_functions_in(
                     nested,
                 });
             }
+            let recorded = defs.len() > at;
             collect_functions_in(child, src, file, under_error, true, defs);
+            // A body holding a definition was misread: its bounds are a
+            // guess, as under a parse error (rule 1).
+            if recorded && defs.len() > at + 1 {
+                defs[at].note_at = Err(NoNote::Parser);
+            }
         } else {
             let error = under_error || child.is_error();
             collect_functions_in(child, src, file, error, nested, defs);
         }
     }
 }
+
+/// C's keywords: never a function's name.
+const C_KEYWORDS: &[&str] = &[
+    "auto",
+    "break",
+    "case",
+    "char",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extern",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "register",
+    "restrict",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "while",
+    "_Alignas",
+    "_Alignof",
+    "_Atomic",
+    "_Bool",
+    "_Complex",
+    "_Generic",
+    "_Imaginary",
+    "_Noreturn",
+    "_Static_assert",
+    "_Thread_local",
+    "alignas",
+    "alignof",
+    "bool",
+    "constexpr",
+    "false",
+    "nullptr",
+    "static_assert",
+    "thread_local",
+    "true",
+    "typeof",
+    "typeof_unqual",
+];
 
 /// Where a note can go in `def` (see [`FnDef::note_at`]): rules 1–3 of
 /// docs/FEATURES-PROBE-REDESIGN.md §3.1 — nothing else is guessed.

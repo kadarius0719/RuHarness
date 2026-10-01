@@ -533,13 +533,12 @@ pub(crate) fn same_code(program: &[u8], copy: &[u8], header: &Path) -> Result<()
     let n = program_lines.len().max(copy_lines.len());
     for i in 0..n {
         let (a, b) = (program_lines.get(i), copy_lines.get(i));
-        if a != b {
+        if a.map(|l| &l.tokens) != b.map(|l| &l.tokens) {
             let shown = match (b, a) {
-                (Some(line), _) => String::from_utf8_lossy(line).into_owned(),
-                (None, Some(line)) => format!(
-                    "(the copy ends; the program has: {})",
-                    String::from_utf8_lossy(line)
-                ),
+                (Some(line), _) => line.shown.clone(),
+                (None, Some(line)) => {
+                    format!("(the copy ends; the program has: {})", line.shown)
+                }
                 (None, None) => String::new(),
             };
             return Err(detail_text(&shown));
@@ -548,10 +547,18 @@ pub(crate) fn same_code(program: &[u8], copy: &[u8], header: &Path) -> Result<()
     Ok(())
 }
 
+/// One code line: its tokens joined by one space (what is compared), and
+/// the line as written, notes and end tokens out and blanks as one space
+/// (what a refusal quotes, so the person finds it in their source).
+struct CodeLine {
+    tokens: Vec<u8>,
+    shown: String,
+}
+
 /// The code lines of a preprocessed text, each as its tokens joined by one
 /// space: markers and blank lines dropped, the probe header's region (for
 /// the copy) skipped, notes and end tokens taken out.
-fn code_lines(text: &[u8], header: Option<&[u8]>) -> Vec<Vec<u8>> {
+fn code_lines(text: &[u8], header: Option<&[u8]>) -> Vec<CodeLine> {
     let mut out = Vec::new();
     let mut depth: usize = 0;
     let mut in_header: Option<usize> = None;
@@ -576,6 +583,8 @@ fn code_lines(text: &[u8], header: Option<&[u8]>) -> Vec<Vec<u8>> {
             continue;
         }
         let mut joined: Vec<u8> = Vec::new();
+        let mut shown: Vec<u8> = Vec::new();
+        let mut last_end: Option<usize> = None;
         let mut k = 0;
         while k < line.toks.len() {
             if header.is_some() {
@@ -588,14 +597,25 @@ fn code_lines(text: &[u8], header: Option<&[u8]>) -> Vec<Vec<u8>> {
                     continue;
                 }
             }
+            let tok = &line.toks[k];
             if !joined.is_empty() {
                 joined.push(b' ');
             }
-            joined.extend_from_slice(line.toks[k].text(text));
+            joined.extend_from_slice(tok.text(text));
+            if let Some(end) = last_end {
+                if text[end..tok.start].iter().any(u8::is_ascii_whitespace) {
+                    shown.push(b' ');
+                }
+            }
+            shown.extend_from_slice(tok.text(text));
+            last_end = Some(tok.end);
             k += 1;
         }
         if !joined.is_empty() {
-            out.push(joined);
+            out.push(CodeLine {
+                tokens: joined,
+                shown: String::from_utf8_lossy(&shown).into_owned(),
+            });
         }
     }
     out
@@ -891,7 +911,7 @@ mod tests {
             b"# 1 \"/m/src/a.c\"\nint f(void) {__ruharness_seen[0] = 1; return 2; }\nint x = 3;\n";
         assert_eq!(
             same_code(program, different, Path::new("/o/fnprobe.h")),
-            Err("int f ( void ) { return 2 ; }".to_string())
+            Err("int f(void) { return 2; }".to_string())
         );
         // An empty body: the note and end token out, `{ }` is `{}`.
         let program = b"void f(void) {}\nint x;\n";
