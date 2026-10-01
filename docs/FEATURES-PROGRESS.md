@@ -62,8 +62,8 @@ never functions, heads run together rule 1; the ledger flake's cause (mkfifo for
 core_tests; driver validation times runs 2–3 only; many §4 tests.
 
 **Still to do for the probe, in order:**
-1. Collect `wf_d2c3d9f7-615`'s verdicts (above). Then the rest of mutants-build-runtime: tests
-   still missing — the search with its restore pass (asm "i" fixture), the weak-function link order,
+1. Collect `wf_d2c3d9f7-615`'s verdicts (above). The build/runtime sweep's missing tests: DONE
+   (44bee5d, ten adapted from its kill-tests.diff). Before that these were missing — the search with its restore pass (asm "i" fixture), the weak-function link order,
    placement tests asserting kind `compile` and round counts (renumbering `#line`, two include
    levels, a `..` include), `Cc::detect` parse unit test, gcc-runnable `__label__` cases split out
    of the macOS-only tests, the runtime compiled without `-I` and the probe header left out by exact
@@ -107,8 +107,9 @@ its adversarial review — workflow `wf_fe7fb255-d44`, 4 lenses, 55 findings (le
 all confirmed but three wording points. Revision 1 (00f2e23) answers them (§7, §9), with a second
 premise (`SP/perf/premise2/launch.c`: counting from the program's exec under sandbox-exec via
 kqueue NOTE_EXEC works; RUSAGE_INFO_V6 P-core fields filled) and a link check (two Rust staticlibs
-link into one C program on macOS: `SP/perf/twolibs`). Next: collect the verdicts, then CHECK THE
-REVISION (independent agents: each confirmed finding against rev 1's text, plus new findings),
+link into one C program on macOS: `SP/perf/twolibs`). The review finished: 46 confirmed, 2 by one
+verifier, 1 refuted (`SP/perf/design-review-result.json`). Next: CHECK THE REVISION (a workflow
+launched after 44bee5d — the newest run under workflows/), then (independent agents: each confirmed finding against rev 1's text, plus new findings),
 revise, then build in the §5 steps. Spike notes, code survey and launcher prototype:
 `SP/perf/`.
 
