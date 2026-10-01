@@ -30,36 +30,87 @@ fails under load and passes alone — listed in DECISIONS "still separate").
 Review reports and verdicts (scratchpad, not in the repo): code-review/<lens>/{findings,verdicts}.md,
 fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
-## Open (in order) — the next session starts here
+## Open (in order) — resume here (session 17c366c0…, 2026-09-30; continues after a context compaction)
 
-**Session 2026-09-30 (17c366c0…), in progress.** The pause's code review (`wf_833f5d1a-f42`)
-had lost two of its four lenses and nearly all verifiers to an expired sign-in. Re-run at
-665495b as Workflow `wf_d2c3d9f7-615` (this session's subagents/workflows): the two lost lenses,
-a token-comparison lens, two mutation-sweep lenses, two verifiers per finding (old and new), and
-the §8 premise re-run. Review files: scratchpad `rv/` (existing.json = the first review's 22
-findings; runner-lens.json; premise-*.json).
+**Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
+`.claude/worktrees/rust-migration-harness-7d1c42`), NOT yet merged to main or pushed. This
+session's commits on top of 665495b: 3ed89be 1a0efb0 31610cf 6a03a6d 9bc83d3 7615200 667654b
+b5f1e02 1b19786 a5179d6 (probe fix pass 1, parts 1–6 and tests), 6cf7906 (this file), 0b64bba
+and 00f2e23 (perf design draft and revision 1). Scratchpad `SP` = `/private/tmp/claude-501/-Users-beaumorton-code-RuHarness--claude-worktrees-rust-migration-harness-7d1c42/17c366c0-a0e0-4aed-a9a5-7011af990c70/scratchpad`;
+workflow journals under `/Users/beaumorton/.claude/projects/-Users-beaumorton-code-RuHarness--claude-worktrees-rust-migration-harness-7d1c42/17c366c0-a0e0-4aed-a9a5-7011af990c70/subagents/workflows/<run>/journal.jsonl`.
 
-Fix pass 1, committed on branch claude/rust-migration-harness-f7665f (not yet on main):
-3ed89be, 1a0efb0, 31610cf, 6a03a6d, 9bc83d3, 7615200, 667654b — a whole-text tokenizer for the
-copy check (raw strings, digit separators), the bounds as designed, link rules (a)/(b) and the
-link search, the runtime-names check from the objects' symbol tables (objsyms.rs; no link map),
-the hidden #if variant, scratch-folder cleanup on a signal, 0700 and one text in memory, the
-scanner's swallowed definitions (sqlite3.c: 349 compiled functions were missing from the facts),
-safe text everywhere, the ledger flake's cause, driver validation's first-exec timing. Mutation
-check of the fixes: 40 mutants, 39 killed, 1 equivalent (encoding prefixes).
+**The probe's code review (re-run).** Workflow `wf_d2c3d9f7-615` at 665495b: lenses
+runner-runtime-sandbox (10 findings), format-ux (12), token-compare (3), mutants-scan-copy (13),
+mutants-build-runtime (14), plus 2 verifiers for each of the first review's 22 findings
+(`SP/rv/existing.json`) and each new one. Lens results saved: `SP/rv/{runner-lens,
+mutants-scan-copy,mutants-build-runtime}.json`; format-ux and token-compare are in the journal
+(labels `review:format-ux`, `review:token-compare`). Verifiers were still running at the
+compaction; so far only the Latin-1 finding (silent-wrong-map#2) was not reproduced — 665495b had
+already fixed it. When the workflow's notification arrives (or by reading the journal): list
+every finding with fewer than 2 confirmations and reconsider its fix.
 
-§8 premise re-run (with the fixed harness, 9bc83d3): adversarial repros 24/24 and 25/25 map,
-2 567 and 1 999 unwatched (the prototype's numbers, the same functions); corpus 42/42 map, 928
-unwatched (465 + 457 sqlite functions inside two misread bodies, 6 signal-hook parser); extensions
-35/37 (numpy popcnt ×2 do not build plainly on arm64), 136 in their own files; zopfli's map
-byte-identical. Costs: compile +4 % instructions, +16.8 MiB, object +12.5 %; a probed run +1–2 %
-(zopfli) to +11 % (sqlite3.c workload).
+**Fix pass 1 — done and committed** (each fix with a test; mutation check `SP/mutfix.py` on the
+copy `SP/mut1`: 49 mutants, 48 killed, 1 equivalent — encoding prefixes): the whole-text
+tokenizer for the copy check (raw strings, digit separators, `.incbin` across lines); bounds as
+designed (+ `with_map_bounds` test seam); link rules (a)/(b) by object, the link search, GNU ld
+parsing; runtime names from object symbol tables (`objsyms.rs`, no link map); the hidden #if
+variant (kind parser); scratch-folder cleanup on a signal, 0700, one text in memory (1.76 GB →
+75 MB); listing timeouts worded; tool profile reads its own write dirs/TMPDIR under home; safe text
+everywhere (`harness_core::text`); strict map.json reasons; killed compiler worded; main() hint;
+the scanner: swallowed definitions recorded (nested, rule 1; outer misread body rule 1), keywords
+never functions, heads run together rule 1; the ledger flake's cause (mkfifo fork) moved to
+core_tests; driver validation times runs 2–3 only; many §4 tests.
 
-Next: collect the rest of `wf_d2c3d9f7-615` (two mutation lenses, ~60 verifiers), fix what they
-confirm, record §10 in the redesign doc and replace §2's table, then a check of the whole fix
-pass (independent agents), then `bench check --replay`, the live chat tests, the handoff and
-the push to main. Running beside it: the perf design's review (`wf_fe7fb255-d44`, docs/PERF-DESIGN.md
-draft 0b64bba).
+**Still to do for the probe, in order:**
+1. Collect `wf_d2c3d9f7-615`'s verdicts (above). Then the rest of mutants-build-runtime: tests
+   still missing — the search with its restore pass (asm "i" fixture), the weak-function link order,
+   placement tests asserting kind `compile` and round counts (renumbering `#line`, two include
+   levels, a `..` include), `Cc::detect` parse unit test, gcc-runnable `__label__` cases split out
+   of the macOS-only tests, the runtime compiled without `-I` and the probe header left out by exact
+   path only, an earlier constructor changing TMPDIR, the progress lines. The reviewer left 14
+   working tests: `SP/rv/work/mutants-build-runtime/mut/kill-tests.diff` (written against 665495b:
+   adapt, keep only what is still missing). Mutation-check each new test (`SP/mutfix.py`, add
+   entries; run `python3 -u SP/mutfix.py SP/mut1 <names>` after `git archive HEAD | tar -x -C
+   SP/mut1`).
+2. Write design §10 in docs/FEATURES-PROBE-REDESIGN.md (the review record and every place the
+   build differs from the text — see the "Built (§10)" notes already in §3.3–§3.5, §4, §6) and
+   replace §2's table with the build's premise numbers: adversarial repros 24/24 and 25/25 map,
+   2 567 and 1 999 unwatched (same as the prototype, all kind compile, ≤ 2 compiles); corpus 42/42,
+   928 unwatched (465 + 457 sqlite functions inside two misread bodies — before the scanner fix
+   349 of them per copy were missing from the facts — and 6 signal-hook parser); extensions 35/37
+   (numpy popcnt ×2 do not build plainly on arm64), 136 in own files (109 nkf parser, 27 rule 3),
+   650 in copied Python headers; zopfli byte-identical. Costs: compile +4 % instructions,
+   +16.8 MiB, object +12.5 %; a probed run +1–2 % (zopfli) to +11 % (sqlite3.c). Re-run
+   `SP/premise-fix1/run.py` with the final binary for the final numbers (it copies the binary
+   given in its HARNESS line).
+3. Check the whole fix pass with independent agents (a Workflow: lenses over the diff
+   665495b..HEAD — the tokenizer and same-code check, probebuild bounds/search/link, objsyms and
+   the runtime-names check, the scanner's nested/keyword/run-together rules, featuremap memory and
+   cleanup, the sandbox read roots; two verifiers per finding), fix what it confirms, check again.
+4. Full `cargo test --workspace --no-fail-fast` on a quiet machine. Load-sensitive tests seen
+   failing only under load: validate_driver (fixed: first exec), zopfli_verify u001 driver
+   self-validation, harness-tui chat_e2e and `an_exited_leaders_pipes_are_read_first`,
+   harness-mcp protocol drains, `a_fifo_named_like_a_c_file_is_a_skip_not_a_wait` (bound now
+   100 s). Re-run each alone if it fails.
+5. `bench check --replay` (quiet machine, ~29 min; `.bench/` and `.scorer-vendor/` are present in
+   this worktree's targets/tractor). Expect 198 reproduce (1 conformant, 197 drifted), 2 expected
+   divergences, 0 problems, "no regression". All 101 bench targets re-scan to byte-identical facts
+   with the new scanner (checked).
+6. Live chat tests: DONE this session, 4/4 inside Claude Code and 4/4 with
+   `RUHARNESS_LIVE_CHAT_HOST=plain` (re-run only if the chat's protocol changes).
+7. DECISIONS.md entry closing the probe review (plain words; what was found, fixed, checked), then
+   merge to main and push (the person's standing rule: commit to main and push at milestones).
+
+**Performance baselines (next track, started).** docs/PERF-DESIGN.md: the draft (0b64bba) had
+its adversarial review — workflow `wf_fe7fb255-d44`, 4 lenses, 55 findings (lens results:
+`SP/perf/design-review-lenses.json`), 2 verifiers each, still finishing at the compaction; so far
+all confirmed but three wording points. Revision 1 (00f2e23) answers them (§7, §9), with a second
+premise (`SP/perf/premise2/launch.c`: counting from the program's exec under sandbox-exec via
+kqueue NOTE_EXEC works; RUSAGE_INFO_V6 P-core fields filled) and a link check (two Rust staticlibs
+link into one C program on macOS: `SP/perf/twolibs`). Next: collect the verdicts, then CHECK THE
+REVISION (independent agents: each confirmed finding against rev 1's text, plus new findings),
+revise, then build in the §5 steps. Spike notes, code survey and launcher prototype:
+`SP/perf/`.
 
 Known gaps, judged acceptable (§R5): Next-step rule 6 has no project-menu Re-check item (a
 project-level Re-check would be refused: it needs the unit on screen); migrate turns do not
