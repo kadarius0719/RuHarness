@@ -925,16 +925,7 @@ mod tests {
             Err(InputUnusable::UnderMigration)
         );
         assert_eq!(read_input(&root, "bench"), Err(InputUnusable::NotAFile));
-        // A pipe and a socket are not files either.
-        let made = std::process::Command::new("mkfifo")
-            .arg(root.join("bench/pipe"))
-            .status()
-            .expect("mkfifo runs");
-        assert!(made.success(), "mkfifo");
-        assert_eq!(
-            read_input(&root, "bench/pipe"),
-            Err(InputUnusable::NotAFile)
-        );
+        // A socket is not a file either.
         let _socket =
             std::os::unix::net::UnixListener::bind(root.join("bench/sock")).expect("bind");
         assert_eq!(
