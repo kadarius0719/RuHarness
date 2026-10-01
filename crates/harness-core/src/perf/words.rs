@@ -379,7 +379,7 @@ fn pnorm(r: &Run) -> Option<f64> {
 /// Whether a run had at least half its cycles on the performance cores.
 fn mostly_fast(r: &Run) -> bool {
     match (r.p_cycles, r.cycles) {
-        (Some(p), Some(c)) if c > 0 => p * 2 >= c,
+        (Some(p), Some(c)) if c > 0 => p.saturating_mul(2) >= c,
         _ => false,
     }
 }
@@ -429,8 +429,8 @@ pub fn choose_metric(
     if fast * 4 < all.len() * 3 {
         return "macos-v6-share";
     }
-    let p_total: u64 = all.iter().filter_map(|r| r.p_cycles).sum();
-    let total: u64 = all.iter().filter_map(|r| r.cycles).sum();
+    let p_total: u128 = all.iter().filter_map(|r| r.p_cycles).map(u128::from).sum();
+    let total: u128 = all.iter().filter_map(|r| r.cycles).map(u128::from).sum();
     if total > 0 && p_total as f64 >= 0.97 * total as f64 {
         return "macos-v6-pnorm";
     }
@@ -635,7 +635,7 @@ pub fn set_up_words(o: &str, setup: Option<&SetupFacts>, cx: &Context) -> String
         },
         "replaces-mismatch" => format!(
             "{unit}'s replaces entry {} names no top-level C file of the program — Re-check it",
-            s.index.map(|i| i + 1).unwrap_or(1)
+            s.index.map_or(1, |i| i.saturating_add(1))
         ),
         "crate-does-not-build" => format!("{unit}'s crate does not build{log}"),
         "does-not-link" => {
@@ -1262,7 +1262,9 @@ fn too_short(row: &Row, cx: &Context) -> RowWords {
         c_second.and_then(|r| r.cpu_us),
         other.and_then(|r| r.cpu_us),
     ) {
-        (Some(a), Some(b), Some(o)) if a.min(b) >= 20_000 && o >= 20_000 && o > 2 * a.max(b) => {
+        (Some(a), Some(b), Some(o))
+            if a.min(b) >= 20_000 && o >= 20_000 && o > a.max(b).saturating_mul(2) =>
+        {
             Some(o as f64 / a.max(b) as f64)
         }
         _ => None,
@@ -1310,10 +1312,12 @@ pub fn difference_words(d: &Difference) -> String {
             d.other_end, d.c_end
         );
     }
+    // A committed file can be forged: a stored offset is never trusted to
+    // leave room for the 1-based byte.
     format!(
         "prints differently ({}, byte {})",
         d.stream,
-        grouped(d.offset + 1)
+        grouped(d.offset.saturating_add(1))
     )
 }
 
@@ -2514,6 +2518,155 @@ mod tests {
                 assert!(ANSWERS.contains(&w.answer), "{o}: {}", w.answer);
             }
         }
+    }
+
+    #[test]
+    fn odd_and_forged_numbers_never_panic() {
+        // Every metric over runs a real record can hold (a V4 record with
+        // no P fields, p_instructions = 0, a program that backgrounds
+        // itself part-way) and ones only a forged file can (a stored 0,
+        // every number at its largest): words, never a panic.
+        let base = side(15, 4e9, 0.01);
+        let map = |f: &dyn Fn(usize, &mut Run)| -> Vec<Run> {
+            base.iter()
+                .cloned()
+                .enumerate()
+                .map(|(i, mut r)| {
+                    f(i, &mut r);
+                    r
+                })
+                .collect()
+        };
+        let max = u64::MAX;
+        let sides: Vec<(&str, Vec<Run>)> = vec![
+            (
+                "V4, no P fields",
+                map(&|_, r| {
+                    r.p_cycles = None;
+                    r.p_instructions = None;
+                }),
+            ),
+            ("p_instructions 0", map(&|_, r| r.p_instructions = Some(0))),
+            (
+                "backgrounds itself",
+                map(&|i, r| {
+                    if i >= 5 {
+                        r.p_cycles = r.cycles.map(|v| v / 50);
+                        r.p_instructions = r.instructions.map(|v| v / 50);
+                    }
+                }),
+            ),
+            (
+                "a stored 0",
+                map(&|_, r| {
+                    *r = Run {
+                        instructions: Some(0),
+                        cycles: Some(0),
+                        cpu_us: Some(0),
+                        wall_us: Some(0),
+                        memory: Some(0),
+                        p_instructions: Some(0),
+                        p_cycles: Some(0),
+                        load: Some(0),
+                        ..r.clone()
+                    }
+                }),
+            ),
+            (
+                "the largest",
+                map(&|_, r| {
+                    *r = Run {
+                        instructions: Some(max),
+                        cycles: Some(max),
+                        cpu_us: Some(max),
+                        wall_us: Some(max),
+                        memory: Some(max),
+                        p_instructions: Some(max),
+                        p_cycles: Some(max),
+                        load: Some(u32::MAX),
+                        ..r.clone()
+                    }
+                }),
+            ),
+        ];
+        for (name, odd) in &sides {
+            for platform in [
+                Platform::MacV6,
+                Platform::MacV4,
+                Platform::Linux,
+                Platform::LinuxHybrid,
+            ] {
+                for two_kinds in [true, false] {
+                    let _ = choose_metric(&base, odd, platform, two_kinds);
+                    let _ = choose_metric(odd, odd, platform, two_kinds);
+                }
+            }
+            for metric in super::super::results::PLATFORM_METRICS {
+                for (c, o) in [(&base, odd), (odd, &base), (odd, odd)] {
+                    for short in [false, true] {
+                        let w = words(&row(c.clone(), o.clone(), metric, short), &UNIT);
+                        assert!(ANSWERS.contains(&w.answer), "{name}, {metric}");
+                    }
+                }
+            }
+            let mut b = row(odd.clone(), Vec::new(), "macos-v6-pnorm", false);
+            b.outcome = "baseline".into();
+            b.other = None;
+            let cx = Context {
+                side: Side::C,
+                ..UNIT
+            };
+            assert_eq!(words(&b, &cx).answer, "baseline", "{name}");
+        }
+        // A forged step 1, difference, set-up index and failed run.
+        let mut r = row(Vec::new(), Vec::new(), "macos-v6-pnorm", false);
+        r.c = None;
+        r.other = None;
+        r.short = None;
+        r.runs = None;
+        r.platform_metrics = None;
+        for (c, o) in [(max, max), (max / 2 + 1, max), (0, 0), (20_000, max)] {
+            let mut t = r.clone();
+            t.outcome = "too-short".into();
+            t.step1 = Some(step1(c, c, o, o));
+            assert_eq!(words(&t, &UNIT).answer, "too-short");
+        }
+        let d = Difference {
+            stream: "stdout".into(),
+            c_len: max,
+            other_len: max,
+            offset: max,
+            c_end: "exit 0".into(),
+            other_end: "exit 0".into(),
+            over_cap: false,
+            kept: Vec::new(),
+        };
+        assert_eq!(
+            difference_words(&d),
+            "prints differently (stdout, byte 18 446 744 073 709 551 615)"
+        );
+        let mut t = r.clone();
+        t.outcome = "behaves-differently".into();
+        t.first_difference = Some(d.clone());
+        t.found_before = Some(d);
+        assert_eq!(words(&t, &UNIT).answer, "behaves-differently");
+        let facts = SetupFacts {
+            index: Some(u32::MAX),
+            ..SetupFacts::default()
+        };
+        assert_eq!(
+            set_up_words("replaces-mismatch", Some(&facts), &UNIT),
+            "u001's replaces entry 4294967295 names no top-level C file of the program — \
+             Re-check it"
+        );
+        let mut t = r;
+        t.outcome = "run-failed: exit".into();
+        t.failed_run = Some(super::super::results::FailedRun {
+            side: "other".into(),
+            index: u32::MAX,
+            end: "exit 1".into(),
+        });
+        assert_eq!(words(&t, &UNIT).answer, "run-failed-exit");
     }
 
     #[test]
