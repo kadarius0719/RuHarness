@@ -137,10 +137,15 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    §10.6). DECIDED (process, §10.6): the review STOPS here — findings fell 26, 26, 21, 13, 4, 4,
    the last two rounds only rarer spellings of one class (two heads run together after a
    body-supplying macro, read without a preprocessor), none in real code; the class is named in
-   §6 with "revisit with a preprocessing frontend". RUNNING: the BOUNDED CHECK of fix pass 7,
-   workflow `wf_3d782237-429` (script `SP/fix-pass-7-check.js`, base `SP/fc7/base` at 264164b;
-   one closure verifier per fix + a regression sweep; save to `SP/fc7/result.json`). If the fixes
-   hold and nothing regressed: items 4–7. Was: fix those four,
+   §6 with "revisit with a preprocessing frontend". The BOUNDED CHECK of fix pass 7 FINISHED
+   (`wf_3d782237-429`, `SP/fc7/result.json`): every fix held, tests 327/327, real code unchanged;
+   the line-start rank regressed hand-made shapes → REVERTED, comments blanked in the head's own
+   parameters too (6b59ed8; mutant killed). THE PROBE REVIEW IS CLOSED (design §10.6).
+   Item 4 DONE (6b59ed8): full `cargo test --workspace --no-fail-fast` 1 075 passed, 2 failed
+   under load (harness-tui chat_e2e `a_panic_ends_the_chats_group`, `new_chat_twice_ends_both`:
+   "timed out waiting for the chat's runtime") — both pass alone (7/7). Item 5 RUNNING: `bench
+   check --replay --suite targets/tractor` with the release build (log `SP/bench-replay.{out,err}`).
+   DECISIONS entry drafted at `SP/decisions-draft.md` (fill in the replay's result). Was: fix those four,
    the lows (misread walk over all branch combinations, capped; K&R function-typed parameter
    `int cb(int)` outranking `after(cb)`; folded second head's static; non-nested signature ends at
    the call; `static Count (after)(void)` named `Count`), the missing tests (by-shape ranking,
