@@ -36,6 +36,14 @@ fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 C-vs-Rust performance baselines from docs/PERF-DESIGN.md (revision 5 + §10's 30 build notes) in
 §5's order (b, c, a, d, e, f, g), with the full process; then the briefing's M5. The probe items
 below are history.
+- Step (b) DONE (0540415, 8e67a30, and the words commit after): `crates/harness-core/src/perf/`
+  — `stats.rs` (exact Mann–Whitney null, Hodges–Lehmann), `workloads.rs` (strict reader with
+  line/column, starter, digest, the confined input read and its words), `results.rs` (rows,
+  strict reader, atomic writer, the replace rule), `words.rs` (all of §3.8 and notes 10–21),
+  `mod.rs` (PERF_LAUNCHER, PERF_RUN_LOCK, PERF_RECIPE, interrupted-Accept words);
+  `status::promotion_marker` public; the cockpit's `Cause::PromotionInterrupted {attempt,
+  unit}` words = perf's. NEXT: step (c), the shared build refactors (`whole_cc_into`, objects
+  once, the `replaces` helper, the `.perf`/`.perf-out` helpers, slots, hashes, the ar reader).
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
 `.claude/worktrees/rust-migration-harness-7d1c42`), NOT yet merged to main or pushed. This
