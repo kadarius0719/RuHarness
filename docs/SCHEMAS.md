@@ -407,7 +407,8 @@ shadowing forging green — all fixed below).
   target root and the Rust toolchain dirs; writes confined to the unit's build/
   attempt dirs and temp. All oracle child processes get a scrubbed environment
   (`PATH`, `HOME`, `TMPDIR`, `CARGO_HOME`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` only) and
-  a wall-clock timeout (`[oracle] timeout_secs`, default 120; expiry = failed
+  a wall-clock timeout (`[oracle] timeout_secs`, default 120, from 1 to 604 800 — a week; a
+  value outside that is refused at load; expiry = failed
   check). The mode applied is recorded in the verdict (`inputs.toolchain` gains
   `sandbox: <mode>`). Built-binary runs additionally deny `process-exec` of anything
   but the binary itself, and a timeout kills the child's whole process group. Where
@@ -1157,7 +1158,7 @@ events or harness-mcp), each pair in `unwatched`. `end` ∈ `exit N | signal N |
 much output | could not start`; `noted` ∈ `complete | unavailable` (`reason`: `none written |
 unreadable | the probe's setup did not run`); `stdout_bytes`/`stderr_bytes` count the first run's streams with paths as `$TMPDIR`/`$PROGDIR`
 and no `$$` escape (for a program that prints no path, its own bytes);
-`stderr_head` printable ASCII, ≤ 100 bytes, from the rewritten stream (`$TMPDIR`, `$PROGDIR`, `$$`). Current iff all four inputs equal
+`stderr_head` printable ASCII, ≤ 100 bytes, from the rewritten stream (`$TMPDIR`, `$PROGDIR`, `$$`). Current iff all five inputs equal
 today's. Read strictly (hostile, committed); pairs today's facts do not know are dropped.
 
 ## Verdict and attempt additions

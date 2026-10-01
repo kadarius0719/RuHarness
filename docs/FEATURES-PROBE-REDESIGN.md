@@ -398,7 +398,7 @@ test fixtures.
 | 18 | an unsandboxed scenario's forked child kept or killed by chance | fix: built-program and scenario runs keep the fixed 50 ms poll |
 | 19 | the process-group timeout test flakes | fix: its timeout (a fresh binary's first exec under load) |
 | 20 | `a_scenario_run_ends_as_data` flakes | fix: its timeout, as #19 |
-| 21 | a huge `timeout_secs` overflows the deadline | fix: clamped at load, with a message |
+| 21 | a huge `timeout_secs` overflows the deadline | fix: refused at load, the message naming the range 1 to 604 800 (built so; the code governs, §10) |
 | 22 | the poll ramp's later wake-ups for 32–100 ms children | fixed with #12 (tool runs only) |
 | 23 | doc comments still describe a fixed 50 ms poll | fixed with #12 and #18 |
 | 24–29 | the split guard's one line, `#include`/`#pragma` inside a split, `#elif` closing it early, keyword-led splits, the leading-edge walk, `FENV_ON;` read as a type | removed rules (§3.1); the compiler decides |

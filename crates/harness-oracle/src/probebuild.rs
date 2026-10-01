@@ -333,6 +333,16 @@ impl Build<'_> {
         let run = self.runner.tool_run(&argv)?;
         match run.end {
             ChildEnd::Exited(status) if status.success() => Ok(Outcome::Ok),
+            // Killed from outside (out of memory, say): not the copy's
+            // error — refused in its own words, no search (§3.4 step 2).
+            ChildEnd::Exited(status) if killed_by(&status).is_some() => {
+                Err(Error::Invariant(format!(
+                    "the scratch copy's compile of {} was killed by signal {} (out of memory?) — \
+                     try again",
+                    self.shown(&self.units[n]),
+                    killed_by(&status).unwrap_or(0)
+                )))
+            }
             ChildEnd::Exited(_) => Ok(Outcome::Failed(run.stderr)),
             ChildEnd::TimedOut => Err(Error::Invariant(format!(
                 "the scratch copy's compile of {} did not finish in {} s — raise [oracle] \
@@ -402,6 +412,7 @@ impl Build<'_> {
         probe: &mut Probe,
         pass: &mut usize,
         progress: &mut dyn MapProgress,
+        again: bool,
     ) -> Result<(), Error> {
         let bounds = self.bounds;
         // Rounds that placed a note (the per-file bound), and every round
@@ -414,9 +425,12 @@ impl Build<'_> {
         let mut eliminated: Vec<(String, String)> = Vec::new();
         loop {
             round += 1;
+            // A file compiled again (a file it reads lost notes, or the
+            // link took one out) says so: its rounds start over.
             progress.message(&format!(
-                "Checking where the notes compile… {} (round {round})",
+                "Checking where the notes compile… {} ({}round {round})",
                 self.shown(&self.units[n]),
+                if again { "again, " } else { "" },
             ));
             if compiles > 0 {
                 *pass += 1;
@@ -547,7 +561,7 @@ impl Build<'_> {
                 "the scratch copy of {} does not compile even without notes: {} — a fault in the \
                  harness, not your program; please report it",
                 self.shown(&self.units[n]),
-                crate::probecopy::detail_text(why)
+                words_or_none(&crate::probecopy::detail_text(why))
             )));
         }
         let (mut lo, mut hi) = (0usize, notes.len());
@@ -592,7 +606,7 @@ impl Build<'_> {
                 "the scratch copy of {} does not compile even without notes: {} — a fault in the \
                  harness, not your program; please report it",
                 self.shown(&self.units[n]),
-                crate::exec::stderr_excerpt(&stderr)
+                words_or_none(&crate::exec::stderr_excerpt(&stderr))
             ))),
         }
     }
@@ -629,7 +643,7 @@ impl Build<'_> {
                 }
                 self.rewrite(probe, &unchecked, &[])?;
             }
-            self.settle(n, probe, &mut pass, progress)?;
+            self.settle(n, probe, &mut pass, progress, false)?;
             checked.extend(self.reads[n].iter().cloned());
             compiled_with.push(notes_of(probe));
         }
@@ -649,7 +663,7 @@ impl Build<'_> {
                     break;
                 }
                 for n in stale {
-                    self.settle(n, probe, &mut pass, progress)?;
+                    self.settle(n, probe, &mut pass, progress, true)?;
                     compiled_with[n] = notes_of(probe);
                 }
             }
@@ -686,6 +700,12 @@ impl Build<'_> {
         let run = self.runner.tool_run(&argv)?;
         match run.end {
             ChildEnd::Exited(status) if status.success() => Ok(None),
+            ChildEnd::Exited(status) if killed_by(&status).is_some() => {
+                Err(Error::Invariant(format!(
+                    "the scratch copy's link was killed by signal {} (out of memory?) — try again",
+                    killed_by(&status).unwrap_or(0)
+                )))
+            }
             ChildEnd::Exited(_) => Ok(Some(run.stderr)),
             _ => Err(Error::Invariant(format!(
                 "the scratch copy's link did not finish: {}",
@@ -911,6 +931,28 @@ enum Linked {
 enum LinkSearch {
     Found(String, String),
     Cut,
+}
+
+/// A refusal's words, or that the compiler printed none.
+fn words_or_none(words: &str) -> &str {
+    if words.trim().is_empty() {
+        "(the compiler printed nothing)"
+    } else {
+        words
+    }
+}
+
+/// The signal that ended a child, if one did.
+fn killed_by(status: &std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        std::os::unix::process::ExitStatusExt::signal(status)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
 }
 
 /// The names the probe's runtime uses (docs/FEATURES-PROBE-REDESIGN.md
@@ -1154,6 +1196,17 @@ mod tests {
         assert_eq!(runtime_name_defined(&objects), Some("fstat".to_string()));
         let objects = vec![vec![d("environ", true)]];
         assert_eq!(runtime_name_defined(&objects), Some("environ".to_string()));
+    }
+
+    /// Review: a compiler killed from outside is not a compile error.
+    #[cfg(unix)]
+    #[test]
+    fn a_killed_compiler_is_told_apart() {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(killed_by(&std::process::ExitStatus::from_raw(9)), Some(9));
+        assert_eq!(killed_by(&std::process::ExitStatus::from_raw(1 << 8)), None);
+        assert_eq!(words_or_none("  "), "(the compiler printed nothing)");
+        assert_eq!(words_or_none("x"), "x");
     }
 
     #[test]

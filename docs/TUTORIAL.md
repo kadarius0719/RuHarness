@@ -364,7 +364,9 @@ argument is a flag or a word, never a path.
   the program it runs, which of those are already in Rust, and whether its checks passed there
   — and each piece says how many of your features run it, and names any that failed on it. A
   piece that none of your features runs is said plainly: its checks pass whatever its Rust
-  does, so you may want a scenario that reaches it.
+  does, so you may want a scenario that reaches it. A few functions cannot carry a note (the
+  compiler refuses one where it stands, or the parser cannot read the function): they are left
+  unwatched, never counted as "not run", and the cockpit shows the reason beside each.
 
 Each piece is still checked with only its own Rust swapped in: a feature's own view says so
 when it "holds so far". Commit `migration/features/` with your work.

@@ -88,12 +88,17 @@ impl Reason {
     }
 }
 
-/// `text` as a reason's detail: Unicode control characters as `?`, cut on a
-/// character boundary to at most [`DETAIL_MAX`] bytes.
+/// `text` as a reason's detail: control, bidirectional and invisible
+/// characters as `?` (`harness_core::text`), cut on a character boundary to
+/// at most [`DETAIL_MAX`] bytes.
 pub(crate) fn detail_text(text: &str) -> String {
     let mut out = String::new();
     for c in text.chars() {
-        let c = if c.is_control() { '?' } else { c };
+        let c = if harness_core::text::unsafe_to_show(c) {
+            '?'
+        } else {
+            c
+        };
         if out.len() + c.len_utf8() > DETAIL_MAX {
             break;
         }
@@ -968,6 +973,9 @@ mod tests {
         let d = detail_text(&long);
         assert!(d.len() <= DETAIL_MAX && d.len() >= DETAIL_MAX - 1);
         assert_eq!(detail_text("a\u{1b}b\nc"), "a?b?c");
+        // Review: a right-to-left override from the target's source, and a
+        // zero-width space, never reach the person's terminal.
+        assert_eq!(detail_text("x\u{202E}y\u{200B}z"), "x?y?z");
     }
 
     #[test]

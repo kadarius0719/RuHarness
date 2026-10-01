@@ -80,7 +80,7 @@ fn write_line(line: &str) {
 pub fn terminal_safe(text: &str) -> String {
     text.chars()
         .map(|c| {
-            if c.is_control() && c != '\n' && c != '\t' {
+            if harness_core::text::unsafe_to_show(c) && c != '\n' && c != '\t' {
                 '?'
             } else {
                 c

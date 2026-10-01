@@ -2337,3 +2337,46 @@ fn the_runtimes_names_are_external_definitions() {
     let err = map.expect_err("refused").to_string();
     assert!(err.contains("the program defines environ,"), "{err}");
 }
+
+/// §3.4 step 7, and review: a header's note rejected only in a later file
+/// makes the earlier file that entered it compile again — and the progress
+/// says "again" instead of restarting at round 1 unexplained.
+#[test]
+fn a_header_rejected_in_a_later_file_compiles_the_earlier_one_again() {
+    let h = "static inline int hf(int x) { HF_BODY }\n";
+    let a =
+        "#define HF_BODY return x + 1;\n#include \"hf.h\"\nint a_use(int x) { return hf(x); }\n";
+    let b = "#define HF_BODY __label__ out; if (x) goto out; return 0; out: return 1;\n\
+             #include \"hf.h\"\nint b_use(int x) { return hf(x); }\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nint a_use(int); int b_use(int);\n\
+                int main(void) { return unit_add(1, 2) == 3 ? a_use(0) - 1 + b_use(0) : (int)mul_step(0, 1); }\n";
+    let (_tmp, map, messages) = map_program_bounded(
+        "feat-review-again",
+        main,
+        &[
+            ("src/tool/hf.h", h),
+            ("src/tool/a.c", a),
+            ("src/tool/b.c", b),
+        ],
+        &[
+            ("src/tool/hf.h", "src/tool/hf.h::hf"),
+            ("src/tool/a.c", "a_use"),
+            ("src/tool/b.c", "b_use"),
+        ],
+        DESIGN_BOUNDS,
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        kind_of(&map, "src/tool/hf.h::hf"),
+        Some("compile"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert_eq!(map.scenarios[0].noted, "complete");
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.ends_with("src/tool/a.c (again, round 1)")),
+        "{messages:?}"
+    );
+}

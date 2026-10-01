@@ -133,9 +133,10 @@ pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
     let map = match harness_oracle::map_features(&ctx, &facts, &features, &digest, &mut progress) {
         Ok(map) => map,
         Err(e) => {
-            // Only when the refusal is about main (check 7: a unity build's
-            // other refusals are not).
-            if main_count(&ctx, &facts) != 1 && e.to_string().contains("main") {
+            // Only when the program's link failed on main (check 7: a unity
+            // build's other refusals are not; review: nor a refusal that
+            // merely names main.c).
+            if main_count(&ctx, &facts) != 1 && link_failed_on_main(&e.to_string()) {
                 out("features: features need a program with one main()".into());
             }
             return Err(e.into());
@@ -162,7 +163,12 @@ pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
                 example.id,
             )
         } else {
-            format!("features: {count} function{plural} unwatched ({kind})")
+            // The kind's words without the detail: a person reads these in
+            // the cockpit, and they quote no source text.
+            format!(
+                "features: {count} function{plural} unwatched — {}",
+                features::unwatched_words(kind, "")
+            )
         });
     }
     let path = features::map_path(&ctx.root);
@@ -254,9 +260,50 @@ fn main_count(ctx: &TargetContext, facts: &Facts) -> usize {
     files.len()
 }
 
+/// Whether a refusal is the plain build's link failing on `main` — none, or
+/// more than one (ld64, GNU ld and lld spellings).
+fn link_failed_on_main(refusal: &str) -> bool {
+    refusal.contains("the C program does not build")
+        && [
+            "'_main'",
+            "\"_main\"",
+            "`main'",
+            "'main'",
+            "symbol: main",
+            "symbol: _main",
+        ]
+        .iter()
+        .any(|m| refusal.contains(m))
+}
+
 fn display(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .display()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review: the main() hint is for a link that failed on main, not for
+    /// any refusal whose words name a file such as src/main.c.
+    #[test]
+    fn the_main_hint_is_for_a_link_that_failed_on_main() {
+        for refusal in [
+            "the C program does not build: duplicate symbol '_main' in: a.o b.o",
+            "the C program does not build: Undefined symbols for architecture arm64:\n  \"_main\", referenced from:",
+            "the C program does not build: /usr/bin/ld: b.o: multiple definition of `main'; a.o: first defined here",
+            "the C program does not build: ld.lld: error: duplicate symbol: main",
+        ] {
+            assert!(link_failed_on_main(refusal), "{refusal}");
+        }
+        for refusal in [
+            "the scratch copy of src/main.c is not the same program near: int x;",
+            "the C program does not build: src/main.c:3:1: error: expected ';'",
+        ] {
+            assert!(!link_failed_on_main(refusal), "{refusal}");
+        }
+    }
 }

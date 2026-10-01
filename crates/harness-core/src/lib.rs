@@ -24,6 +24,7 @@ pub mod planner;
 pub mod risk;
 pub mod runtime_view;
 pub mod status;
+pub mod text;
 pub mod traces;
 pub mod traits;
 pub mod verdict;

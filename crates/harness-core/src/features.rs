@@ -716,6 +716,17 @@ pub const UNWATCHED_KINDS: &[&str] = &[
     "not-checked",
 ];
 
+/// The kinds whose words carry a detail (a file, a compiler's message, a
+/// symbol); the others are written with none.
+pub const UNWATCHED_DETAIL_KINDS: &[&str] = &[
+    "parser",
+    "data",
+    "compile",
+    "elimination",
+    "link",
+    "file-limit",
+];
+
 /// An unwatched function's reason in plain words
 /// (docs/FEATURES-PROBE-REDESIGN.md §3.7): the kind's words, with the
 /// detail where it has one.
@@ -968,18 +979,22 @@ pub fn load_map(root: &Path, facts: &crate::Facts) -> MapState {
         }
     }
     // Each reason strictly: a kind the harness writes, a short detail with
-    // no control character, its pair in the map's own `unwatched` list.
+    // nothing unsafe to show (and none for a kind whose words take none),
+    // its pair in the map's own `unwatched` list, one reason per pair.
     {
         let pairs: std::collections::BTreeSet<(&str, &str)> = map
             .unwatched
             .iter()
             .map(|(f, n)| (f.as_str(), n.as_str()))
             .collect();
+        let mut seen = std::collections::BTreeSet::new();
         let bad = map.unwatched_reasons.iter().any(|r| {
             !UNWATCHED_KINDS.contains(&r.kind.as_str())
                 || r.detail.len() > UNWATCHED_DETAIL_BYTES
-                || r.detail.chars().any(char::is_control)
+                || r.detail.chars().any(crate::text::unsafe_to_show)
+                || (!r.detail.is_empty() && !UNWATCHED_DETAIL_KINDS.contains(&r.kind.as_str()))
                 || !pairs.contains(&(r.file.as_str(), r.id.as_str()))
+                || !seen.insert((r.file.as_str(), r.id.as_str()))
         });
         if bad {
             return MapState::Unreadable(
@@ -2323,11 +2338,27 @@ args = ["-h"]
                 "a control character",
             ),
             (reason("compile", "", "main"), "a pair not in unwatched"),
+            // Review: what the cockpit filters, the reader refuses too.
+            (
+                reason("compile", "a\u{202E}b", "src/a.c::odd"),
+                "a bidirectional override",
+            ),
+            (
+                reason("skipped-branch", "words", "src/a.c::odd"),
+                "a detail on a kind whose words take none",
+            ),
         ] {
             let mut m = a_map();
             m.unwatched_reasons = vec![bad];
             assert!(unreadable(m), "{why}");
         }
+        // Review: one reason per pair.
+        let mut m = a_map();
+        m.unwatched_reasons = vec![
+            reason("compile", "x", "src/a.c::odd"),
+            reason("link", "y is undefined", "src/a.c::odd"),
+        ];
+        assert!(unreadable(m), "two reasons for one function");
         let mut m = a_map();
         m.scenarios[0].noted = "unavailable".into();
         m.scenarios[0].reason = Some("the probe's setup did not run".into());

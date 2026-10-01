@@ -20,45 +20,6 @@ pub const TAB_WIDTH: usize = 8;
 /// Longest raw line rendered, in bytes.
 pub const MAX_LINE_BYTES: usize = 4096;
 
-/// Bidirectional formatting characters (Trojan-Source): rendered as `?`.
-fn is_bidi_control(c: char) -> bool {
-    matches!(
-        c,
-        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-    )
-}
-
-/// Invisible format characters (a soft hyphen, zero-width spaces and
-/// joiners, word joiners, line and paragraph separators, the byte-order
-/// mark, the tag block): rendered as `?`, so two target names never look
-/// alike on screen while differing (review SAFE-13).
-fn is_invisible_format(c: char) -> bool {
-    // Unicode's Default_Ignorable_Code_Point set, less what is filtered
-    // elsewhere (controls, bidi): invisible when rendered (review SAFE-13).
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{034F}'
-            | '\u{115F}'
-            | '\u{1160}'
-            | '\u{17B4}'
-            | '\u{17B5}'
-            | '\u{180B}'..='\u{180F}'
-            | '\u{200B}'..='\u{200D}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{2060}'..='\u{206F}'
-            | '\u{3164}'
-            | '\u{FE00}'..='\u{FE0F}'
-            | '\u{FEFF}'
-            | '\u{FFA0}'
-            | '\u{FFF0}'..='\u{FFFB}'
-            | '\u{1BCA0}'..='\u{1BCA3}'
-            | '\u{1D173}'..='\u{1D17A}'
-            | '\u{E0000}'..='\u{E0FFF}'
-    )
-}
-
 /// `raw` without a trailing `\r`, cut to [`MAX_LINE_BYTES`] on a char
 /// boundary.
 pub fn cut(raw: &str) -> &str {
@@ -98,7 +59,7 @@ impl Sanitizer {
                 let spaces = TAB_WIDTH - self.col % TAB_WIDTH;
                 out.extend(std::iter::repeat_n(' ', spaces));
                 self.col += spaces;
-            } else if c.is_control() || is_bidi_control(c) || is_invisible_format(c) {
+            } else if harness_core::text::unsafe_to_show(c) {
                 out.push('?');
                 self.col += 1;
             } else {
