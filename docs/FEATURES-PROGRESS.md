@@ -62,7 +62,8 @@ never functions, heads run together rule 1; the ledger flake's cause (mkfifo for
 core_tests; driver validation times runs 2–3 only; many §4 tests.
 
 **Still to do for the probe, in order:**
-1. Collect `wf_d2c3d9f7-615`'s verdicts (above). The build/runtime sweep's missing tests: DONE
+1. DONE: `wf_d2c3d9f7-615` FINISHED (`SP/rv/result.json`): 71 findings confirmed by both verifiers,
+   1 by its one verifier, 1 refuted (the Latin-1 one, fixed at 665495b before the review). The build/runtime sweep's missing tests: DONE
    (44bee5d, ten adapted from its kill-tests.diff). Before that these were missing — the search with its restore pass (asm "i" fixture), the weak-function link order,
    placement tests asserting kind `compile` and round counts (renumbering `#line`, two include
    levels, a `..` include), `Cc::detect` parse unit test, gcc-runnable `__label__` cases split out
