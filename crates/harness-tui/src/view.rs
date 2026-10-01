@@ -6207,6 +6207,119 @@ mod tests {
     }
 
     #[test]
+    fn speed_menus_build_the_measure_commands() {
+        use crate::speed::SideKey;
+        let find = |items: &[crate::menu::Item], label: &str| {
+            items.iter().find(|i| i.label.starts_with(label)).cloned()
+        };
+        let mut app = app_of("targets/zopfli", "speed-menu");
+        app.select(Selection::Speed);
+        let items = app.menu_items();
+        assert!(
+            find(&items, "Write your workloads file (in ").is_some(),
+            "{items:?}"
+        );
+        let measure = find(&items, "Measure speed").expect("Measure speed");
+        assert!(measure.greyed.is_some(), "no workloads file: {measure:?}");
+        let mut app = write_speed_results(&app, false);
+        app.select(Selection::Speed);
+        let items = app.menu_items();
+        assert!(
+            find(&items, "Edit the workloads file (in ").is_some(),
+            "{items:?}"
+        );
+        let measure = find(&items, "Measure speed").unwrap();
+        if !cfg!(target_os = "macos") {
+            assert!(
+                measure
+                    .greyed
+                    .as_deref()
+                    .is_some_and(|g| g.contains("macOS only")),
+                "{measure:?}"
+            );
+            return;
+        }
+        assert_eq!(measure.greyed, None, "{measure:?}");
+        let p = measure.pending.unwrap();
+        let target = format!("--target={}", app.config.target.display());
+        assert_eq!(
+            crate::app::tests::strs(&p.argv),
+            [crate::app::tests::HARNESS, "--json", "perf", "run", &target]
+        );
+        assert!(
+            find(&items, "Measure the program as it stands").is_none(),
+            "one measurable unit: {items:?}"
+        );
+        let (title, body) = app.dialog_words(&p);
+        assert_eq!(title, "Measure speed?");
+        assert_eq!(
+            body[0],
+            "Runs your program on 2 workloads (big-text, many-small): the C alone, then the \
+             program with each verified unit's Rust alone (u001-katajainen) — 15 runs a side."
+        );
+        assert!(
+            body[1].starts_with("Takes about ") && body[1].contains("builds included"),
+            "{body:?}"
+        );
+        assert!(
+            body.iter().any(|l| l.starts_with("No verdict changes")),
+            "{body:?}"
+        );
+        assert!(
+            body.iter()
+                .any(|l| l.starts_with("Keep the computer quiet")),
+            "{body:?}"
+        );
+        // A unit: its own command; nothing asks for more runs yet.
+        app.select(Selection::Unit("u001-katajainen".into()));
+        let items = app.menu_items();
+        let this = find(&items, "Measure this unit's speed").expect("on a verified unit");
+        let argv = crate::app::tests::strs(&this.pending.unwrap().argv);
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some("--unit=u001-katajainen")
+        );
+        assert!(find(&items, "Measure again with 31 runs").is_none());
+        app.select(Selection::Unit("u-cache".into()));
+        assert!(
+            find(&app.menu_items(), "Measure this unit's speed").is_none(),
+            "a unit still in C has no speed of its own"
+        );
+        // A row that cannot tell asks for 31 runs on its workload only.
+        let perf = harness_core::perf::perf_dir(&app.config.target);
+        let path = harness_core::perf::results::unit_path(&perf, "u001-katajainen");
+        let mut file = harness_core::perf::results::read_unit(&path, "u001-katajainen")
+            .unwrap()
+            .unwrap();
+        for (i, r) in file.rows[0].other.as_mut().unwrap().iter_mut().enumerate() {
+            let f = if i % 2 == 0 { 0.88 } else { 1.14 };
+            r.cycles = Some((3.9e9 * f) as u64);
+            r.p_cycles = r.cycles;
+        }
+        harness_core::perf::results::write_unit(&path, &file).unwrap();
+        let mut app = crate::app::tests::app_of_path(&app.config.target);
+        let side = SideKey::Unit("u001-katajainen".into());
+        assert_eq!(
+            app.speed.more_runs(&side),
+            ["big-text"],
+            "{:?}",
+            app.speed.unit("u001-katajainen")
+        );
+        app.select(Selection::Unit("u001-katajainen".into()));
+        let items = app.menu_items();
+        let more = find(&items, "Measure again with 31 runs (big-text)").expect("offered");
+        let p = more.pending.unwrap();
+        let argv = crate::app::tests::strs(&p.argv);
+        assert_eq!(
+            argv[5..],
+            ["--unit=u001-katajainen", "--workload=big-text", "--runs=31"]
+        );
+        let (title, body) = app.dialog_words(&p);
+        assert_eq!(title, "Measure u001-katajainen again with 31 runs?");
+        assert!(body[0].contains("on 1 workload (big-text)"), "{body:?}");
+    }
+
+    #[test]
     fn the_speed_group_says_its_state() {
         let mut app = app_of("targets/zopfli", "speed-states");
         assert_eq!(app.speed.label(), "Speed (no file)");

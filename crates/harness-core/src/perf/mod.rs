@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod currency;
+pub mod estimate;
 pub mod results;
 pub mod stats;
 pub mod words;

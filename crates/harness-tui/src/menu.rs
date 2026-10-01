@@ -49,6 +49,11 @@ pub enum Action {
     EditFeatures,
     /// Discard the kept features draft.
     DiscardFeaturesDraft,
+    /// Write or edit the workloads file (docs/PERF-DESIGN.md §3.11), or
+    /// continue the kept draft.
+    EditWorkloads,
+    /// Discard the kept workloads draft.
+    DiscardWorkloadsDraft,
 }
 
 /// One menu item.
@@ -99,7 +104,9 @@ pub fn recommended(
         features_want.and_then(|want| find(&|i: &Item| i.action == want && i.greyed.is_none()));
     match sel {
         Selection::Project => next_step.and_then(act).or(open).unwrap_or(0),
-        Selection::Features | Selection::Feature(_) => wanted.or(open).unwrap_or(0),
+        Selection::Features | Selection::Feature(_) | Selection::Speed => {
+            wanted.or(open).unwrap_or(0)
+        }
         _ => open.unwrap_or(0),
     }
 }
@@ -154,6 +161,110 @@ impl App {
                 if n == 1 { "" } else { "s" }
             )
         })
+    }
+
+    /// Speed's items (docs/PERF-DESIGN.md §3.11): Write / Edit the
+    /// workloads file or Continue the kept draft, Measure speed, and the
+    /// program as it stands's own.
+    fn speed_items(&self, items: &mut Vec<Item>) {
+        use crate::speed::{Group, SideKey};
+        let name = crate::app::features_edit::editor_name(&self.features_editor());
+        let start = items.len();
+        if self.workloads_draft.is_some() {
+            items.push(item(
+                "Continue my workloads draft",
+                Action::EditWorkloads,
+                None,
+            ));
+            items.push(item(
+                "Discard my workloads draft",
+                Action::DiscardWorkloadsDraft,
+                None,
+            ));
+        } else if self.speed.group == Group::NoFile {
+            items.push(item(
+                format!("Write your workloads file (in {name})"),
+                Action::EditWorkloads,
+                None,
+            ));
+        } else {
+            items.push(item(
+                format!("Edit the workloads file (in {name})"),
+                Action::EditWorkloads,
+                None,
+            ));
+        }
+        if self.running {
+            for it in &mut items[start..] {
+                it.greyed = Some("a command is running (one at a time)".into());
+            }
+        }
+        let scanned = |mut it: Item| {
+            if it.greyed.is_none() {
+                it.greyed = self.facts_gate().map(|_| {
+                    "the facts are missing or out of date — Scan the project first".into()
+                });
+            }
+            it
+        };
+        items.push(scanned(self.act_item(
+            Act::Measure.label().into(),
+            Act::Measure,
+            None,
+            None,
+        )));
+        if self.speed.measurable.len() >= 2 {
+            items.push(scanned(self.act_item(
+                Act::MeasureProgram.label().into(),
+                Act::MeasureProgram,
+                None,
+                None,
+            )));
+        }
+        if !self.speed.more_runs(&SideKey::AsItStands).is_empty() {
+            items.push(scanned(self.act_item(
+                "Measure the program as it stands again with 31 runs".into(),
+                Act::MeasureMore,
+                None,
+                None,
+            )));
+        }
+    }
+
+    /// A verified unit's speed items: Measure this unit's speed, and
+    /// Measure again with 31 runs when its rows ask for it.
+    fn unit_speed_items(&self, u: usize, items: &mut Vec<Item>) {
+        let unit = &self.snapshot.units[u];
+        if !matches!(
+            unit.unit.status,
+            harness_core::UnitStatus::Verified | harness_core::UnitStatus::Merged
+        ) {
+            return;
+        }
+        let scanned = |mut it: Item| {
+            if it.greyed.is_none() {
+                it.greyed = self.facts_gate().map(|_| {
+                    "the facts are missing or out of date — Scan the project first".into()
+                });
+            }
+            it
+        };
+        items.push(scanned(self.act_item(
+            "Measure this unit's speed".into(),
+            Act::Measure,
+            Some(unit),
+            None,
+        )));
+        let side = crate::speed::SideKey::Unit(unit.unit.id.clone());
+        let more = self.speed.more_runs(&side);
+        if !more.is_empty() {
+            items.push(scanned(self.act_item(
+                format!("Measure again with 31 runs ({})", more.join(", ")),
+                Act::MeasureMore,
+                Some(unit),
+                None,
+            )));
+        }
     }
 
     /// An act item: its argv (or why not), greyed while busy.
@@ -407,6 +518,9 @@ impl App {
             }
             items.push(it);
         }
+        if matches!(sel, Selection::Speed) {
+            self.speed_items(&mut items);
+        }
         let owner = self.owning_unit(sel);
         match sel {
             Selection::File(_) | Selection::Function(..) => {
@@ -422,6 +536,10 @@ impl App {
                 }
             }
             _ => {}
+        }
+        // After the unit's own items: its speed (docs/PERF-DESIGN.md §3.11).
+        if let (Selection::Unit(_), Some(u)) = (sel, owner) {
+            self.unit_speed_items(u, &mut items);
         }
         if let (Selection::Crate(_) | Selection::Attempt(..), Some(_)) = (sel, owner) {
             let mut it = item("Hand edit", Action::HandEdit, Some("e"));
@@ -666,7 +784,9 @@ mod tests {
                 "Open",
                 "Re-read the project",
                 "Show the checks",
-                "Re-check with the oracle"
+                "Re-check with the oracle",
+                // Greyed: no workloads file yet.
+                "(Measure this unit's speed)"
             ]
         );
         assert_eq!(

@@ -1,25 +1,146 @@
-//! Writing the person's features file from the cockpit
-//! (docs/FEATURES-DESIGN.md §7.2): the file (or the starter) is copied into
-//! a private draft, a dialog says which editor opens and how to leave it,
-//! the draft is validated on return, and a confirmed `harness features save`
-//! — the text on its stdin, `--expect` the bytes the edit started from —
-//! writes it. The cockpit never writes the ledger itself; the draft is kept
-//! (named on quit) until it is saved or discarded.
+//! Writing the person's own files from the cockpit — the features file
+//! (docs/FEATURES-DESIGN.md §7.2) and the workloads file
+//! (docs/PERF-DESIGN.md §3.11), one flow for both: the file (or its starter)
+//! is copied into a private draft, a dialog says which editor opens and how
+//! to leave it, the draft is validated on return, and a confirmed
+//! `harness features save` or `harness perf save` — the text on its stdin,
+//! `--expect` the bytes the edit started from — writes it. The cockpit never
+//! writes the ledger itself; a draft is kept (named on quit) until it is
+//! saved or discarded.
 
 use super::{notice, Act, App, Command, Mode, Pending, Purpose};
 use crate::dialog::{Choice, Dialog, Kind};
 use crate::handedit;
 use harness_core::features;
+use harness_core::perf::workloads;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// A features draft being written.
+/// Which of the person's files a draft is of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DraftKind {
+    /// `migration/features/features.toml`.
+    #[default]
+    Features,
+    /// `migration/perf/workloads.toml`.
+    Workloads,
+}
+
+impl DraftKind {
+    /// The file's word: "the features file", "your workloads draft".
+    pub fn noun(self) -> &'static str {
+        match self {
+            DraftKind::Features => "features",
+            DraftKind::Workloads => "workloads",
+        }
+    }
+
+    /// The file, target-relative, as the dialogs name it.
+    pub fn rel_path(self) -> &'static str {
+        match self {
+            DraftKind::Features => "migration/features/features.toml",
+            DraftKind::Workloads => "migration/perf/workloads.toml",
+        }
+    }
+
+    fn dir(self, root: &Path) -> PathBuf {
+        match self {
+            DraftKind::Features => features::features_dir(root),
+            DraftKind::Workloads => harness_core::perf::perf_dir(root),
+        }
+    }
+
+    fn path(self, root: &Path) -> PathBuf {
+        match self {
+            DraftKind::Features => features::features_path(root),
+            DraftKind::Workloads => workloads::workloads_path(root),
+        }
+    }
+
+    fn max_bytes(self) -> u64 {
+        match self {
+            DraftKind::Features => features::MAX_FEATURES_BYTES,
+            DraftKind::Workloads => workloads::MAX_WORKLOADS_BYTES,
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            DraftKind::Features => features::FEATURES_FILE,
+            DraftKind::Workloads => workloads::WORKLOADS_FILE,
+        }
+    }
+
+    /// The name every such draft's private dir starts with (named on quit).
+    pub fn prefix(self) -> &'static str {
+        match self {
+            DraftKind::Features => DRAFT_DIR_PREFIX,
+            DraftKind::Workloads => WORKLOADS_DRAFT_DIR_PREFIX,
+        }
+    }
+
+    fn starter(self, root: &Path) -> String {
+        match self {
+            DraftKind::Features => harness_core::TargetConfig::load(root)
+                .map(|c| features::starter(&c))
+                .unwrap_or_default(),
+            DraftKind::Workloads => workloads::STARTER.to_string(),
+        }
+    }
+
+    /// Whether `text` validates: else the reader's words and the line they
+    /// name.
+    fn check(self, text: &str, file: &Path) -> Result<(), (String, Option<u32>)> {
+        match self {
+            DraftKind::Features => features::parse(text, file).map(|_| ()).map_err(|e| {
+                let message = match e {
+                    harness_core::Error::InvalidPlan(m) => m,
+                    other => other.to_string(),
+                };
+                let line = error_line(&message);
+                (message, line)
+            }),
+            DraftKind::Workloads => match workloads::parse(text, file) {
+                Ok(_) => Ok(()),
+                Err(workloads::ParseError::Rule(e)) => Err((e.to_string(), Some(e.line as u32))),
+                Err(workloads::ParseError::TooNew(e)) => Err((e.to_string(), None)),
+            },
+        }
+    }
+
+    /// The act that saves it.
+    pub fn save_act(self) -> Act {
+        match self {
+            DraftKind::Features => Act::SaveFeatures,
+            DraftKind::Workloads => Act::SaveWorkloads,
+        }
+    }
+
+    /// The draft an act saves, if it saves one.
+    pub fn of_act(act: Act) -> Option<DraftKind> {
+        match act {
+            Act::SaveFeatures => Some(DraftKind::Features),
+            Act::SaveWorkloads => Some(DraftKind::Workloads),
+            _ => None,
+        }
+    }
+
+    /// "Continue my features draft": the menu item a kept draft offers.
+    pub fn continue_words(self) -> String {
+        format!("Continue my {} draft", self.noun())
+    }
+}
+
+/// A draft being written.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FeaturesDraft {
+pub struct Draft {
+    /// Which file it is of.
+    pub kind: DraftKind,
     /// Its private temp dir (0700).
     pub tmp: PathBuf,
-    /// `<tmp>/features.toml`, the file the editor opens.
+    /// `<tmp>/features.toml` (or `workloads.toml`), the file the editor
+    /// opens.
     pub file: PathBuf,
     /// What `--expect` names: the blake3 of the file's bytes when the edit
     /// started, or `none` when there was no file.
@@ -36,8 +157,11 @@ pub struct FeaturesDraft {
     pub started: Option<Instant>,
 }
 
-/// The name every draft's private dir starts with (named on quit).
+/// The name every features draft's private dir starts with (named on quit).
 pub const DRAFT_DIR_PREFIX: &str = "harness-tui-features";
+
+/// The name every workloads draft's private dir starts with.
+pub const WORKLOADS_DRAFT_DIR_PREFIX: &str = "harness-tui-workloads";
 
 /// Editors that take `+N` to open at a line.
 const LINE_EDITORS: [&str; 7] = ["nano", "pico", "vi", "vim", "nvim", "emacs", "micro"];
@@ -115,21 +239,45 @@ fn error_line(message: &str) -> Option<u32> {
 }
 
 impl App {
-    /// The editor this session's features Edit opens.
+    /// The editor this session's Edit opens.
     pub fn features_editor(&self) -> String {
         features_editor(std::env::var_os("VISUAL"), std::env::var_os("EDITOR"))
     }
 
-    /// Menu: Write / Edit the features file, or continue the kept draft —
-    /// the dialog that says which editor opens and how to leave it.
+    /// The kept draft of `kind`.
+    pub fn draft(&self, kind: DraftKind) -> Option<&Draft> {
+        match kind {
+            DraftKind::Features => self.features_draft.as_ref(),
+            DraftKind::Workloads => self.workloads_draft.as_ref(),
+        }
+    }
+
+    fn draft_slot(&mut self, kind: DraftKind) -> &mut Option<Draft> {
+        match kind {
+            DraftKind::Features => &mut self.features_draft,
+            DraftKind::Workloads => &mut self.workloads_draft,
+        }
+    }
+
+    /// Menu: Write / Edit the features file, or continue the kept draft.
     pub fn start_features_edit(&mut self) -> Command {
+        self.start_edit(DraftKind::Features)
+    }
+
+    /// Menu: Write / Edit the `kind` file, or continue its kept draft —
+    /// the dialog that says which editor opens and how to leave it.
+    pub fn start_edit(&mut self, kind: DraftKind) -> Command {
+        self.editing = kind;
+        let noun = kind.noun();
         if self.running {
-            self.notice = notice("a command is running — edit the features file when it is done");
+            self.notice = notice(format!(
+                "a command is running — edit the {noun} file when it is done"
+            ));
             return Command::None;
         }
         let root = self.config.target.clone();
-        let dir = features::features_dir(&root);
-        let path = features::features_path(&root);
+        let dir = kind.dir(&root);
+        let path = kind.path(&root);
         for p in [&dir, &path] {
             if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
                 self.notice = notice(format!(
@@ -139,38 +287,33 @@ impl App {
                 return Command::None;
             }
         }
-        if self.features_draft.is_none() {
-            let (text, expect) =
-                match harness_core::ledger::read_regular(&path, features::MAX_FEATURES_BYTES) {
-                    Ok(bytes) => (
-                        String::from_utf8_lossy(&bytes).into_owned(),
-                        harness_core::hash::bytes_hash(&bytes),
-                    ),
-                    Err(e) if e.is_not_found() => {
-                        let starter = harness_core::TargetConfig::load(&root)
-                            .map(|c| features::starter(&c))
-                            .unwrap_or_default();
-                        (starter, "none".to_string())
-                    }
-                    Err(e) => {
-                        self.notice = notice(format!("the features file cannot be read: {e}"));
-                        return Command::None;
-                    }
-                };
-            let tmp = match handedit::private_dir(&std::env::temp_dir(), DRAFT_DIR_PREFIX) {
+        if self.draft(kind).is_none() {
+            let (text, expect) = match harness_core::ledger::read_regular(&path, kind.max_bytes()) {
+                Ok(bytes) => (
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                    harness_core::hash::bytes_hash(&bytes),
+                ),
+                Err(e) if e.is_not_found() => (kind.starter(&root), "none".to_string()),
+                Err(e) => {
+                    self.notice = notice(format!("the {noun} file cannot be read: {e}"));
+                    return Command::None;
+                }
+            };
+            let tmp = match handedit::private_dir(&std::env::temp_dir(), kind.prefix()) {
                 Ok(t) => t,
                 Err(e) => {
                     self.notice = notice(format!("no private draft directory: {e}"));
                     return Command::None;
                 }
             };
-            let file = tmp.join(features::FEATURES_FILE);
+            let file = tmp.join(kind.file_name());
             if let Err(e) = std::fs::write(&file, &text) {
                 let _ = std::fs::remove_dir_all(&tmp);
                 self.notice = notice(format!("the draft cannot be written: {e}"));
                 return Command::None;
             }
-            self.features_draft = Some(FeaturesDraft {
+            *self.draft_slot(kind) = Some(Draft {
+                kind,
                 tmp,
                 file,
                 expect,
@@ -185,13 +328,14 @@ impl App {
     }
 
     fn open_editor_dialog(&mut self) {
+        let kind = self.editing;
         let editor = self.features_editor();
         let name = editor_name(&editor);
-        let title = format!("Open the features file in {name}?");
+        let title = format!("Open the {} file in {name}?", kind.noun());
         let body = vec![
             format!(
-                "The cockpit steps aside and {name} opens a private copy of \
-                 migration/features/features.toml."
+                "The cockpit steps aside and {name} opens a private copy of {}.",
+                kind.rel_path()
             ),
             editor_instructions(&name),
             "When you come back, the cockpit checks it and asks before saving it.".into(),
@@ -214,12 +358,27 @@ impl App {
         }));
     }
 
+    /// The draft's words for a notice: "your workloads draft is kept in … —
+    /// the menu offers Continue my workloads draft".
+    fn kept_words(&self, kind: DraftKind) -> String {
+        match self.draft(kind) {
+            Some(d) => format!(
+                "your {} draft is kept in {} — the menu offers {}",
+                kind.noun(),
+                d.file.display(),
+                kind.continue_words()
+            ),
+            None => format!("your {} draft is gone", kind.noun()),
+        }
+    }
+
     /// The editor dialog closed (or the edit-again, discard or changed-file
     /// one).
     pub(super) fn close_features_dialog(&mut self, purpose: Purpose, choice: Choice) -> Command {
+        let kind = self.editing;
         match (purpose, choice) {
             (Purpose::OpenEditor | Purpose::EditAgain, Choice::Run) => {
-                let Some(draft) = self.features_draft.as_mut() else {
+                let Some(draft) = self.draft_slot(kind).as_mut() else {
                     return Command::None;
                 };
                 draft.started = Some(Instant::now());
@@ -232,24 +391,24 @@ impl App {
             // §7.2 step 5: the draft stays kept (named on quit); a fresh one
             // starts from the file as it is now.
             (Purpose::FeaturesChanged, Choice::Run) => {
-                let Some(old) = self.features_draft.take() else {
+                let Some(old) = self.draft_slot(kind).take() else {
                     return Command::None;
                 };
-                let command = self.start_features_edit();
-                if self.features_draft.is_some() {
+                let command = self.start_edit(kind);
+                if self.draft(kind).is_some() {
                     self.kept_drafts.push(old.tmp);
                 } else {
                     // The new edit could not start (its notice says why):
                     // the old draft stays the one the menu offers (N1).
-                    self.features_draft = Some(old);
+                    *self.draft_slot(kind) = Some(old);
                 }
                 command
             }
             (Purpose::EditAgain | Purpose::FeaturesChanged, Choice::Discard) => {
-                self.discard_features_draft()
+                self.discard_draft(kind)
             }
             (purpose, _) => {
-                let Some(d) = &self.features_draft else {
+                let Some(d) = self.draft(kind) else {
                     return Command::None;
                 };
                 // A Cancel before the editor opened, with nothing of the
@@ -258,12 +417,9 @@ impl App {
                 if purpose == Purpose::OpenEditor
                     && std::fs::read_to_string(&d.file).is_ok_and(|t| t == d.origin)
                 {
-                    return self.discard_quietly();
+                    return self.discard_quietly(kind);
                 }
-                self.notice = notice(format!(
-                    "your features draft is kept in {} — the menu offers Continue my features draft",
-                    d.file.display()
-                ));
+                self.notice = notice(self.kept_words(kind));
                 Command::None
             }
         }
@@ -272,28 +428,40 @@ impl App {
     /// Menu: Discard my features draft — asked first, as a hand edit's
     /// discard is (review C9).
     pub fn ask_discard_features_draft(&mut self) -> Command {
-        let Some(d) = &self.features_draft else {
+        self.ask_discard_draft(DraftKind::Features)
+    }
+
+    /// Menu: Discard my `kind` draft — asked first.
+    pub fn ask_discard_draft(&mut self, kind: DraftKind) -> Command {
+        let Some(d) = self.draft(kind) else {
             return Command::None;
         };
+        let body = vec![
+            format!("It is kept in {}.", d.file.display()),
+            "Discard deletes it; Edit again opens it; Esc keeps it for later.".into(),
+        ];
+        self.editing = kind;
         let mut dialog = Dialog::new(Kind::EditAgain, self.now);
         dialog.chat_rules = false;
         self.mode = Mode::Dialog(Box::new(super::Confirm {
             dialog,
-            title: "Discard your features draft?".into(),
-            body: vec![
-                format!("It is kept in {}.", d.file.display()),
-                "Discard deletes it; Edit again opens it; Esc keeps it for later.".into(),
-            ],
+            title: format!("Discard your {} draft?", kind.noun()),
+            body,
             purpose: Purpose::EditAgain,
         }));
         Command::None
     }
 
-    /// Discard the kept draft.
+    /// Discard the kept features draft.
     pub fn discard_features_draft(&mut self) -> Command {
-        match self.features_draft.take() {
+        self.discard_draft(DraftKind::Features)
+    }
+
+    /// Discard the kept `kind` draft.
+    pub fn discard_draft(&mut self, kind: DraftKind) -> Command {
+        match self.draft_slot(kind).take() {
             Some(d) => {
-                self.notice = notice("features draft discarded");
+                self.notice = notice(format!("{} draft discarded", kind.noun()));
                 Command::Cleanup(d.tmp)
             }
             None => Command::None,
@@ -306,7 +474,8 @@ impl App {
         &mut self,
         status: std::io::Result<std::process::ExitStatus>,
     ) -> Command {
-        let Some(draft) = self.features_draft.clone() else {
+        let kind = self.editing;
+        let Some(draft) = self.draft(kind).cloned() else {
             return Command::None;
         };
         let quick = draft
@@ -350,7 +519,7 @@ impl App {
                 }
             ));
             return if untouched {
-                self.discard_quietly()
+                self.discard_quietly(kind)
             } else {
                 Command::None
             };
@@ -359,23 +528,18 @@ impl App {
         // that came back unchanged is checked and offered again (review C1).
         if untouched {
             self.notice = notice("No change.");
-            return self.discard_quietly();
+            return self.discard_quietly(kind);
         }
-        match features::parse(&text, &draft.file) {
-            Err(e) => {
-                let message = match e {
-                    harness_core::Error::InvalidPlan(m) => m,
-                    other => other.to_string(),
-                };
-                let line = error_line(&message);
-                if let Some(d) = self.features_draft.as_mut() {
+        match kind.check(&text, &draft.file) {
+            Err((message, line)) => {
+                if let Some(d) = self.draft_slot(kind).as_mut() {
                     d.error_line = line;
                 }
                 let mut dialog = Dialog::new(Kind::EditAgain, self.now);
                 dialog.chat_rules = false;
                 self.mode = Mode::Dialog(Box::new(super::Confirm {
                     dialog,
-                    title: "Your features file has an error".into(),
+                    title: format!("Your {} file has an error", kind.noun()),
                     body: vec![
                         message,
                         format!(
@@ -388,11 +552,11 @@ impl App {
                 }));
                 Command::None
             }
-            Ok(_) => {
-                if let Some(d) = self.features_draft.as_mut() {
+            Ok(()) => {
+                if let Some(d) = self.draft_slot(kind).as_mut() {
                     d.error_line = None;
                 }
-                match self.save_features_pending(&draft, &text) {
+                match self.save_draft_pending(&draft, &text) {
                     Ok(p) => {
                         self.ask(p);
                         Command::None
@@ -406,27 +570,32 @@ impl App {
         }
     }
 
-    fn discard_quietly(&mut self) -> Command {
-        match self.features_draft.take() {
+    fn discard_quietly(&mut self, kind: DraftKind) -> Command {
+        match self.draft_slot(kind).take() {
             Some(d) => Command::Cleanup(d.tmp),
             None => Command::None,
         }
     }
 
-    /// The confirmed save: `harness features save --expect … --bytes N`, the
-    /// text on its stdin.
-    fn save_features_pending(&self, draft: &FeaturesDraft, text: &str) -> Result<Pending, String> {
+    /// The confirmed save: `harness features save` (or `harness perf
+    /// save`) `--expect … --bytes N`, the text on its stdin.
+    fn save_draft_pending(&self, draft: &Draft, text: &str) -> Result<Pending, String> {
+        let sub = match draft.kind {
+            DraftKind::Features => "features",
+            DraftKind::Workloads => "perf",
+        };
+        let act = draft.kind.save_act();
         let argv = self.harness_argv(&[
-            OsString::from("features"),
+            OsString::from(sub),
             OsString::from("save"),
             OsString::from(format!("--expect={}", draft.expect)),
             OsString::from(format!("--bytes={}", text.len())),
             self.target_arg(),
         ])?;
         Ok(Pending {
-            act: Act::SaveFeatures,
+            act,
             argv,
-            label: Act::SaveFeatures.label().to_string(),
+            label: act.label().to_string(),
             unit: None,
             attempt: None,
             cleanup: Some(draft.tmp.clone()),
@@ -470,38 +639,73 @@ impl App {
         ("Save the features file?".into(), body)
     }
 
+    /// The workloads Save dialog's words (docs/PERF-DESIGN.md §3.11).
+    pub(super) fn save_workloads_words(&self, p: &Pending) -> (String, Vec<String>) {
+        let text = p.stdin.clone().unwrap_or_default();
+        let title = "Save the workloads file?".to_string();
+        let Ok(new) = workloads::parse(&text, Path::new(workloads::WORKLOADS_FILE)) else {
+            return (title, vec![]);
+        };
+        let n = new.workloads.len();
+        let mut body = vec![if n == 0 {
+            "No workload yet: perf has nothing to measure until you add one.".to_string()
+        } else {
+            format!(
+                "{n} workload{}: {}.",
+                if n == 1 { "" } else { "s" },
+                new.workloads
+                    .iter()
+                    .map(|w| w.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }];
+        body.push(
+            "Nothing is measured now. Rows measured before on a workload you changed read \"out \
+             of date: your workload changed\" until measured again."
+                .into(),
+        );
+        body.push("Writes migration/perf/workloads.toml — commit it with your work.".into());
+        (title, body)
+    }
+
     /// A save ended: saved → the draft goes; refused → it stays, said; refused
     /// because the file changed since the edit started → §7.2 step 5's choice
     /// (review C2: the same `--expect` could never succeed).
     /// `saved`: the text the save wrote — the draft goes only when it still
     /// holds exactly that (fix check P1: it may have moved on meanwhile).
-    pub(super) fn features_save_ended(&mut self, success: bool, saved: &str) -> Option<PathBuf> {
+    pub(super) fn features_save_ended(
+        &mut self,
+        kind: DraftKind,
+        success: bool,
+        saved: &str,
+    ) -> Option<PathBuf> {
+        let noun = kind.noun();
         if success {
-            let d = self.features_draft.as_ref()?;
+            let d = self.draft(kind)?;
             if std::fs::read_to_string(&d.file).is_ok_and(|now| now == saved) {
-                return self.features_draft.take().map(|d| d.tmp);
+                return self.draft_slot(kind).take().map(|d| d.tmp);
             }
             self.notice = notice(format!(
-                "saved — your draft has changed since, and is kept in {} — the menu offers \
-                 Continue my features draft",
-                d.file.display()
+                "saved — your draft has changed since, and is kept in {} — the menu offers {}",
+                d.file.display(),
+                kind.continue_words()
             ));
             return None;
         }
-        let Some(d) = &self.features_draft else {
-            return None;
-        };
-        let changed = self
-            .features_file_digest()
-            .is_some_and(|now| now != d.expect);
+        let d = self.draft(kind)?;
+        let expect = d.expect.clone();
+        let file = d.file.clone();
+        let changed = self.file_digest(kind).is_some_and(|now| now != expect);
         if changed && matches!(self.mode, Mode::Normal) {
+            self.editing = kind;
             let mut dialog = Dialog::new(Kind::FeaturesChanged, self.now);
             dialog.chat_rules = false;
             self.mode = Mode::Dialog(Box::new(super::Confirm {
                 dialog,
-                title: "The features file changed since you started editing".into(),
+                title: format!("The {noun} file changed since you started editing"),
                 body: vec![
-                    format!("Your draft is kept at {}.", d.file.display()),
+                    format!("Your draft is kept at {}.", file.display()),
                     "Edit the new file opens the file as it is now — your draft stays kept, \
                      named when you quit; Discard my draft drops it; Esc keeps it for later."
                         .into(),
@@ -511,22 +715,22 @@ impl App {
             return None;
         }
         self.notice = notice(format!(
-            "not saved{} — your draft is kept in {} — the menu offers Continue my features draft",
+            "not saved{} — {}",
             if changed {
-                " (the features file changed since you started editing)"
+                format!(" (the {noun} file changed since you started editing)")
             } else {
-                ""
+                String::new()
             },
-            d.file.display()
+            self.kept_words(kind)
         ));
         None
     }
 
-    /// The blake3 of the features file's bytes now, `none` when there is
-    /// none, `None` when it cannot be read.
-    fn features_file_digest(&self) -> Option<String> {
-        let path = features::features_path(&self.config.target);
-        match harness_core::ledger::read_regular(&path, features::MAX_FEATURES_BYTES + 1) {
+    /// The blake3 of the `kind` file's bytes now, `none` when there is none,
+    /// `None` when it cannot be read.
+    fn file_digest(&self, kind: DraftKind) -> Option<String> {
+        let path = kind.path(&self.config.target);
+        match harness_core::ledger::read_regular(&path, kind.max_bytes() + 1) {
             Ok(bytes) => Some(harness_core::hash::bytes_hash(&bytes)),
             Err(e) if e.is_not_found() => Some("none".into()),
             Err(_) => None,
@@ -640,7 +844,10 @@ mod tests {
         assert!(!harness_core::features::features_path(&app.config.target).exists());
         // Saved: the draft goes.
         let tmp = app.features_draft.as_ref().unwrap().tmp.clone();
-        assert_eq!(app.features_save_ended(true, GOOD), Some(tmp));
+        assert_eq!(
+            app.features_save_ended(DraftKind::Features, true, GOOD),
+            Some(tmp)
+        );
         assert!(app.features_draft.is_none());
     }
 
@@ -689,7 +896,7 @@ mod tests {
         app.features_edited(ok());
         app.mode = Mode::Normal;
         assert_eq!(
-            app.features_save_ended(false, GOOD),
+            app.features_save_ended(DraftKind::Features, false, GOOD),
             None,
             "a refused save keeps the draft"
         );
@@ -779,7 +986,10 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let theirs = GOOD.replace("Show the help", "Their help");
         std::fs::write(&path, &theirs).unwrap();
-        assert_eq!(app.features_save_ended(false, GOOD), None);
+        assert_eq!(
+            app.features_save_ended(DraftKind::Features, false, GOOD),
+            None
+        );
         assert_eq!(purpose(&app), Purpose::FeaturesChanged);
         // Edit the new file: the old draft is kept (named on quit), a new
         // one starts from their file, with its digest as --expect.
@@ -799,7 +1009,10 @@ mod tests {
         std::fs::write(&file, GOOD).unwrap();
         app.features_edited(ok());
         close(&mut app, Choice::Run);
-        assert_eq!(app.features_save_ended(false, GOOD), None);
+        assert_eq!(
+            app.features_save_ended(DraftKind::Features, false, GOOD),
+            None
+        );
         assert!(matches!(app.mode, Mode::Normal));
         assert!(app
             .notice
@@ -874,7 +1087,10 @@ mod tests {
         assert!(app.try_again.is_none(), "{:?}", app.try_again);
         assert!(app.features_draft.is_some());
         std::fs::write(&file, GOOD.replace("Show the help", "Help me")).unwrap();
-        assert_eq!(app.features_save_ended(true, GOOD), None);
+        assert_eq!(
+            app.features_save_ended(DraftKind::Features, true, GOOD),
+            None
+        );
         assert!(app.features_draft.is_some(), "the newer text is kept");
         assert!(app.notice.as_ref().unwrap().text.contains("changed since"));
     }
@@ -892,7 +1108,7 @@ mod tests {
         let path = harness_core::features::features_path(&app.config.target);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, GOOD.replace("Show the help", "Theirs")).unwrap();
-        app.features_save_ended(false, GOOD);
+        app.features_save_ended(DraftKind::Features, false, GOOD);
         assert_eq!(purpose(&app), Purpose::FeaturesChanged);
         // Before the choice, the file becomes a link: the new edit cannot
         // start.
@@ -930,5 +1146,105 @@ mod tests {
         assert_eq!(app.start_features_edit(), Command::None);
         assert!(app.features_draft.is_none());
         assert!(app.notice.as_ref().unwrap().text.contains("symlink"));
+    }
+
+    /// The workloads file goes through the same flow: its starter, its
+    /// reader's line, `perf save` with the text on stdin.
+    #[test]
+    fn the_workloads_file_is_written_through_the_same_flow() {
+        let mut app = crate::app::tests::app_of("targets/zopfli", "workloads-write");
+        assert_eq!(app.start_edit(DraftKind::Workloads), Command::None);
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("the editor dialog: {:?}", app.mode)
+        };
+        assert!(
+            c.title.starts_with("Open the workloads file in "),
+            "{}",
+            c.title
+        );
+        assert!(
+            c.body[0].contains("migration/perf/workloads.toml"),
+            "{:?}",
+            c.body
+        );
+        let confirm = match std::mem::replace(&mut app.mode, Mode::Normal) {
+            Mode::Dialog(c) => *c,
+            _ => unreachable!(),
+        };
+        let file = match app.close_features_dialog(confirm.purpose, Choice::Run) {
+            Command::EditFeatures { file, .. } => file,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            harness_core::perf::workloads::STARTER
+        );
+        assert!(file
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(WORKLOADS_DRAFT_DIR_PREFIX));
+        assert!(app.features_draft.is_none(), "the features draft is apart");
+        // A rule broken: its line, Edit again opens there.
+        std::fs::write(&file, "schema_version = 1\n[[workload]]\nid = \"W\"\n").unwrap();
+        assert_eq!(app.features_edited(ok()), Command::None);
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("the error dialog: {:?}", app.mode)
+        };
+        assert_eq!(c.title, "Your workloads file has an error");
+        assert!(c.body[0].contains("line 3, column 6"), "{:?}", c.body);
+        assert_eq!(app.workloads_draft.as_ref().unwrap().error_line, Some(3));
+        app.mode = Mode::Normal;
+        // Valid: the save's dialog and argv.
+        let good = "schema_version = 1\n[[workload]]\nid = \"help\"\nargs = [\"-h\"]\n";
+        std::fs::write(&file, good).unwrap();
+        assert_eq!(app.features_edited(ok()), Command::None);
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("the save dialog: {:?}", app.mode)
+        };
+        let Purpose::Act(p) = &c.purpose else {
+            panic!()
+        };
+        assert_eq!(p.act, Act::SaveWorkloads);
+        assert_eq!(c.title, "Save the workloads file?");
+        assert!(
+            c.body.iter().any(|l| l == "1 workload: help."),
+            "{:?}",
+            c.body
+        );
+        let argv = crate::app::tests::strs(&p.argv);
+        assert_eq!(
+            argv[..5],
+            [
+                crate::app::tests::HARNESS,
+                "--json",
+                "perf",
+                "save",
+                "--expect=none"
+            ]
+        );
+        assert!(argv.contains(&format!("--bytes={}", good.len())));
+        // Refused: the draft stays, named with its own words.
+        assert_eq!(
+            app.features_save_ended(DraftKind::Workloads, false, good),
+            None
+        );
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|n| n.text.contains("Continue my workloads draft")),
+            "{:?}",
+            app.notice
+        );
+        // Saved: it goes.
+        let tmp = app.workloads_draft.as_ref().unwrap().tmp.clone();
+        assert_eq!(
+            app.features_save_ended(DraftKind::Workloads, true, good),
+            Some(tmp.clone())
+        );
+        assert!(app.workloads_draft.is_none());
+        let _ = std::fs::remove_dir_all(tmp);
     }
 }

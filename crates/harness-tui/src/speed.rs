@@ -7,9 +7,11 @@
 use crate::model::Snapshot;
 use crate::perfread::InputNow;
 use harness_core::perf::currency::{self, Today};
+use harness_core::perf::estimate::{self, Job};
 use harness_core::perf::results::{Row, RowKind};
 use harness_core::perf::words::{self as words, RowWords, Side};
 use harness_core::perf::workloads::WorkloadsState;
+use std::collections::BTreeMap;
 
 /// The Speed group's state (its tree label, build note 28).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +92,14 @@ pub struct SpeedModel {
     pub header: Vec<String>,
     /// A perf run holds the lock now.
     pub measuring: bool,
+    /// The units perf would measure now (verified or merged, verdict green
+    /// and fresh, no interrupted Accept), in plan order.
+    pub measurable: Vec<String>,
+    /// Each workload's id and runs a side, in file order.
+    pub workloads: Vec<(String, u32)>,
+    /// The C's clock time on each workload, in seconds, from its stored
+    /// C-alone row (for the estimate).
+    pub c_clock: BTreeMap<String, f64>,
 }
 
 impl SpeedModel {
@@ -102,6 +112,50 @@ impl SpeedModel {
             Group::NotYetRun => "Speed (not yet run)".into(),
             Group::COnly => "Speed (C only)".into(),
             Group::Units { measured, of } => format!("Speed ({measured} of {of})"),
+        }
+    }
+
+    /// The workloads whose `side` rows ask to be measured again with 31
+    /// runs (could not tell, "probably", a close call), in file order.
+    pub fn more_runs(&self, side: &SideKey) -> Vec<String> {
+        let rows: &[SpeedRow] = match side {
+            SideKey::C => &[],
+            SideKey::AsItStands => &self.program_rows,
+            SideKey::Unit(id) => self.unit(id).map_or(&[][..], |u| &u.rows),
+        };
+        self.workloads
+            .iter()
+            .map(|(id, _)| id)
+            .filter(|id| {
+                rows.iter()
+                    .any(|r| r.workload == **id && r.words.offers_more_runs)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// What a perf command over `only` (all workloads when `None`) at
+    /// `runs` (each workload's own when `None`) measures, for its estimate.
+    pub fn job(
+        &self,
+        only: Option<&[String]>,
+        runs: Option<u32>,
+        c_alone: bool,
+        rows: u32,
+        crates: u32,
+        links: u32,
+    ) -> Job {
+        Job {
+            workloads: self
+                .workloads
+                .iter()
+                .filter(|(id, _)| only.is_none_or(|o| o.contains(id)))
+                .map(|(id, n)| (runs.unwrap_or(*n), self.c_clock.get(id).copied()))
+                .collect(),
+            c_alone,
+            rows,
+            crates,
+            links,
         }
     }
 
@@ -249,6 +303,9 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         orphans: perf.orphans.clone(),
         header: Vec::new(),
         measuring: perf.measuring,
+        measurable: Vec::new(),
+        workloads: Vec::new(),
+        c_clock: BTreeMap::new(),
     };
     let workloads = match &perf.workloads {
         Ok(WorkloadsState::NoFile) => return model,
@@ -288,6 +345,12 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         })
         .filter(|u| u.report.fresh_green() && u.report.promotion_interrupted.is_none())
         .map(|u| u.unit.id.clone())
+        .collect();
+    model.measurable = measurable.clone();
+    model.workloads = workloads
+        .workloads
+        .iter()
+        .map(|w| (w.id.clone(), w.runs))
         .collect();
     let word =
         |row: &Row, side: Side<'_>, kind: RowKind, replaces: Option<Vec<String>>| -> SpeedRow {
@@ -368,6 +431,9 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         Ok(Some(p)) => {
             for r in &p.c_alone {
                 note(r);
+                if let Some(c) = estimate::c_clock(r) {
+                    model.c_clock.insert(r.workload.clone(), c);
+                }
                 model.c_rows.push(word(r, Side::C, RowKind::CAlone, None));
             }
             for r in &p.as_it_stands {
@@ -486,6 +552,9 @@ mod tests {
             orphans: Vec::new(),
             header: Vec::new(),
             measuring: false,
+            measurable: Vec::new(),
+            workloads: Vec::new(),
+            c_clock: BTreeMap::new(),
         };
         for g in [
             Group::NoFile,

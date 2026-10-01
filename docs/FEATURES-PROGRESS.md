@@ -73,9 +73,15 @@ below are history.
   units worst first, header, unit_header, summary_line); tree `Selection::Speed` (a leaf after
   Features); the Speed View (golden `tests/golden/speed-54.txt`; each row a link, the focused
   row's full sentence below); the unit header's two Speed lines; the summary's Speed line.
-  NEXT: (f2) acts — Write / Edit / Continue workloads (generalise features_edit.rs, draft slot
-  "harness-tui-workloads"), Measure speed / this unit / again with 31 runs, confirm dialogs with
-  the estimate; (f3) behaves-differently fact + Compare outputs, slower row's next step by
+- Step (f2) DONE: `harness_core::perf::estimate` (Job/Estimate per §6, c_clock, crate_cold per
+  note 27; the CLI's 31-run figure uses it); `app/features_edit.rs` generalised (DraftKind
+  Features | Workloads, Draft, App.workloads_draft + App.editing, start_edit / ask_discard_draft /
+  discard_draft, Act::SaveWorkloads → `perf save`), quit names kept workloads drafts;
+  `app/speed_acts.rs` (speed_gate, measure_argv: Act::Measure [unit], MeasureProgram,
+  MeasureMore `--workload=… --runs=31`; measure_words); menu items on Speed and on a verified
+  unit; events `PerfRow` (activity line; narrator ends "Measured N rows — see Speed"; MCP
+  ignores it).
+  NEXT: (f3) behaves-differently fact + Compare outputs, slower row's next step by
   provenance, Help's Speed section; (f4) the MCP Speed fact. Then (g) SCHEMAS, tutorial, the
   testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 

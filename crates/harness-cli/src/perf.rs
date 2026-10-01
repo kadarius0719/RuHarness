@@ -221,19 +221,26 @@ fn more_runs_command(side: Side<'_>, workload: &str) -> String {
     }
 }
 
-/// About how long a row at 31 runs takes (§6): 3 + 62 runs at the C's
-/// median clock time plus a tenth of a second.
-fn seconds_a_row(row: &Row) -> u64 {
-    let clock = row
-        .c
-        .as_deref()
-        .and_then(|runs| {
-            let v: Vec<Option<f64>> = runs.iter().map(|r| r.wall_us.map(|w| w as f64)).collect();
-            harness_core::perf::stats::median(&v)
-        })
-        .unwrap_or(1e6)
-        / 1e6;
-    ((3.0 + 62.0) * (clock + 0.1)).ceil() as u64
+/// About how long the "31 runs" command for a row's side takes (§6): its
+/// 65 runs at the C's clock time, the first execs, the C compile, the
+/// crates built and the link.
+fn seconds_a_row(row: &Row, side: Side<'_>) -> u64 {
+    use harness_core::perf::estimate::{c_clock, Estimate, Job};
+    let crates = match side {
+        Side::AsItStands => row.inputs.units.as_ref().map_or(0, Vec::len) as u32,
+        _ => 1,
+    };
+    let job = Job {
+        workloads: vec![(31, Some(c_clock(row).unwrap_or(1.0)))],
+        c_alone: false,
+        rows: 1,
+        crates,
+        links: 1,
+    };
+    match job.estimate() {
+        Estimate::Seconds(s) => s,
+        Estimate::Runs { .. } => 0,
+    }
 }
 
 /// The words of one row, with the 31-run offer when it applies.
@@ -250,7 +257,10 @@ fn row_words(row: &Row, side: Side<'_>, input: Option<&str>) -> words::RowWords 
         w.headline = format!(
             "{} {}",
             w.headline,
-            words::more_runs_words(&more_runs_command(side, &row.workload), seconds_a_row(row))
+            words::more_runs_words(
+                &more_runs_command(side, &row.workload),
+                seconds_a_row(row, side)
+            )
         );
     }
     w
