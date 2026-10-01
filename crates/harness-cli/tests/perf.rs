@@ -144,6 +144,13 @@ fn rows_of(stdout: &str) -> Vec<String> {
     rows
 }
 
+/// The one row that starts with `start`.
+fn row<'a>(rows: &'a [String], start: &str) -> &'a str {
+    let found: Vec<&String> = rows.iter().filter(|r| r.starts_with(start)).collect();
+    assert_eq!(found.len(), 1, "{start}: {rows:#?}");
+    found[0]
+}
+
 /// The `perf-row` events of a `--json` run.
 fn perf_rows(stdout: &str) -> Vec<serde_json::Value> {
     stdout
@@ -550,5 +557,278 @@ fn show_reads_only_and_refuses_linked_folders() {
             .contains("migration/perf: must be a directory (a link is refused)"),
         "{}",
         r.stderr
+    );
+}
+
+/// u-util (zopfli's util.c, `ZopfliInitOptions`) in Rust: the same as the
+/// C, except that options whose `verbose` is 0x5BE5 make it print 65 MiB
+/// first — something the judge never tries (its driver zeroes the options).
+const UTIL_RS: &str = r#"//! zopfli's util.c in Rust (a perf test's second unit).
+
+use std::io::Write;
+
+/// zopfli's `ZopfliOptions`, field for field.
+#[repr(C)]
+pub struct ZopfliOptions {
+    verbose: i32,
+    verbose_more: i32,
+    numiterations: i32,
+    blocksplitting: i32,
+    blocksplittinglast: i32,
+    blocksplittingmax: i32,
+}
+
+/// # Safety
+/// `options` points at a writable, initialised `ZopfliOptions`.
+#[no_mangle]
+pub unsafe extern "C" fn ZopfliInitOptions(options: *mut ZopfliOptions) {
+    let o = &mut *options;
+    if o.verbose == 0x5BE5 {
+        let chunk = vec![b'x'; 1 << 20];
+        let mut out = std::io::stdout().lock();
+        for _ in 0..65 {
+            let _ = out.write_all(&chunk);
+        }
+        let _ = out.flush();
+    }
+    o.verbose = 0;
+    o.verbose_more = 0;
+    o.numiterations = 15;
+    o.blocksplitting = 1;
+    o.blocksplittinglast = 0;
+    o.blocksplittingmax = 15;
+}
+"#;
+
+/// u-util's differential driver.
+const UTIL_DRIVER: &str = "#include <stdio.h>\n#include \"zopfli.h\"\n\n\
+int main(void) {\n  ZopfliOptions o = {0};\n  ZopfliInitOptions(&o);\n  \
+printf(\"%d %d %d %d %d %d\\n\", o.verbose, o.verbose_more, o.numiterations,\n         \
+o.blocksplitting, o.blocksplittinglast, o.blocksplittingmax);\n  return 0;\n}\n";
+
+/// The zopfli copy with a second verified unit (u-util, through `harness
+/// verify`) and a C that, given `--crash`, aborts; given `--time`, prints
+/// the time; given `--spew`, hands the options' defaulting a `verbose` of
+/// 0x5BE5.
+fn two_units(tag: &str) -> PathBuf {
+    let t = zopfli(tag);
+    let target = t.to_str().unwrap();
+    let unit = t.join("migration/units/u-util");
+    std::fs::create_dir_all(unit.join("util_rs/src")).unwrap();
+    std::fs::write(
+        unit.join("util_rs/Cargo.toml"),
+        "[package]\nname = \"util_rs\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [lib]\ncrate-type = [\"staticlib\"]\n\n[workspace]\n",
+    )
+    .unwrap();
+    std::fs::write(unit.join("util_rs/src/lib.rs"), UTIL_RS).unwrap();
+    std::fs::write(unit.join("driver.c"), UTIL_DRIVER).unwrap();
+    let ends = "symbols = [\"ZopfliInitOptions\"]\n\
+                interface = [\"void ZopfliInitOptions(ZopfliOptions* options)\"]\n\
+                depends_on = []\ntest_strategy = \"\"\ndone_criteria = \"\"\n";
+    edit(
+        &t.join("migration/plan.toml"),
+        ends,
+        &format!(
+            "{ends}\n[unit.oracle]\nkind = \"c-abi-differential\"\n\
+             driver = \"migration/units/u-util/driver.c\"\nrust_crate = \"util_rs\"\n\
+             replaces = [\"src/zopfli/util.c\"]\n"
+        ),
+    );
+    let main = t.join("src/zopfli/zopfli_bin.c");
+    edit(
+        &main,
+        "#include <string.h>\n",
+        "#include <string.h>\n#include <sys/time.h>\n",
+    );
+    edit(
+        &main,
+        "  ZopfliInitOptions(&options);\n",
+        "  memset(&options, 0, sizeof(options));\n\
+         \x20 if (argc > 1 && StringsEqual(argv[1], \"--spew\")) options.verbose = 0x5BE5;\n\
+         \x20 ZopfliInitOptions(&options);\n\
+         \x20 if (argc > 1 && StringsEqual(argv[1], \"--crash\")) abort();\n\
+         \x20 if (argc > 1 && StringsEqual(argv[1], \"--time\")) {\n\
+         \x20   struct timeval tv;\n\
+         \x20   gettimeofday(&tv, 0);\n\
+         \x20   printf(\"%ld.%06ld\\n\", (long)tv.tv_sec, (long)tv.tv_usec);\n\
+         \x20   return 0;\n\
+         \x20 }\n",
+    );
+    let r = harness(&["scan", "--target", target], None);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let r = harness(&["verify", "u-util", "--target", target], None);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    t
+}
+
+/// §4's end to end on two verified units (zopfli's u001 and u-util): the
+/// program as it stands holds both in plan order; a crashing C is shown
+/// only under the C; a C that prints the time is never "behaves
+/// differently" on any side; output over the cap on the Rust side only is
+/// "prints too much"; and after one unit's Rust changes, `perf show` says
+/// so on that unit's rows and the program as it stands's.
+#[test]
+fn two_units_end_to_end() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = two_units("two");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("bench")).unwrap();
+    std::fs::write(t.join("bench/tiny.txt"), "hi\n").unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(
+        t.join("migration/perf/workloads.toml"),
+        "schema_version = 1\n\
+         [[workload]]\nid = \"tiny\"\nargs = [\"-c\", \"{input}\"]\ninput = \"bench/tiny.txt\"\nruns = 5\n\
+         [[workload]]\nid = \"crash\"\nargs = [\"--crash\"]\nruns = 5\n\
+         [[workload]]\nid = \"time\"\nargs = [\"--time\"]\nruns = 5\n\
+         [[workload]]\nid = \"spew\"\nargs = [\"--spew\"]\nruns = 5\n",
+    )
+    .unwrap();
+    let r = harness(&["perf", "run", "--target", target, "--json"], None);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout
+            .contains("the program as it stands — u001-katajainen, u-util"),
+        "{}",
+        r.stdout
+    );
+    let events = perf_rows(&r.stdout);
+    let on = |workload: &str| -> Vec<&serde_json::Value> {
+        events
+            .iter()
+            .filter(|e| e["workload"] == workload)
+            .collect()
+    };
+    let program = harness_core::perf::results::read_program(&t.join("migration/perf/program.json"))
+        .unwrap()
+        .unwrap();
+    let unit_rows = |id: &str| {
+        harness_core::perf::results::read_unit(
+            &t.join(format!("migration/perf/units/{id}.json")),
+            id,
+        )
+        .unwrap()
+        .unwrap()
+        .rows
+    };
+    let (u001, util) = (unit_rows("u001-katajainen"), unit_rows("u-util"));
+    let stored = |rows: &[harness_core::perf::results::Row], workload: &str| {
+        rows.iter().find(|r| r.workload == workload).cloned()
+    };
+
+    // The program as it stands: both units, in plan order, none left out.
+    assert!(!program.as_it_stands.is_empty());
+    for row in &program.as_it_stands {
+        let ids: Vec<&str> = row
+            .inputs
+            .units
+            .iter()
+            .flatten()
+            .map(|u| u.id.as_str())
+            .collect();
+        assert_eq!(ids, ["u001-katajainen", "u-util"], "{}", row.workload);
+        assert!(row.inputs.left_out.iter().flatten().next().is_none());
+    }
+
+    // A crashing C: its row says so, and only ever under the C.
+    let crash = on("crash");
+    assert!(!crash.is_empty(), "{events:?}");
+    for e in &crash {
+        assert_eq!(e["side"], "c", "{e}");
+        assert_eq!(e["outcome"], "c-crashed", "{e}");
+        assert!(
+            e["words"]
+                .as_str()
+                .unwrap()
+                .contains("the C crashes on crash"),
+            "{e}"
+        );
+    }
+    assert_eq!(
+        stored(&program.c_alone, "crash").unwrap().outcome,
+        "c-crashed"
+    );
+    for rows in [&u001, &util, &program.as_it_stands] {
+        assert!(stored(rows, "crash").is_none());
+    }
+
+    // A C that prints the time cannot be compared against, and no side
+    // reads "behaves differently" for it.
+    assert_eq!(
+        stored(&program.c_alone, "time").unwrap().outcome,
+        "c-unstable"
+    );
+    for e in on("time") {
+        assert_ne!(e["outcome"], "behaves-differently", "{e}");
+    }
+    for rows in [&u001, &util, &program.as_it_stands] {
+        assert!(stored(rows, "time").is_none_or(|r| r.outcome != "behaves-differently"));
+    }
+
+    // Output over the cap on the Rust side only: u-util and the program as
+    // it stands print too much; the C alone and u001 do not.
+    for (side, rows) in [("unit", &util), ("program", &program.as_it_stands)] {
+        let e = on("spew")
+            .into_iter()
+            .find(|e| e["side"] == side && (side == "program" || e["unit"] == "u-util"))
+            .unwrap_or_else(|| panic!("{side}: {events:?}"))
+            .clone();
+        assert_eq!(e["outcome"], "behaves-differently", "{e}");
+        assert!(
+            e["words"].as_str().unwrap().contains("more than 64 MiB"),
+            "{e}"
+        );
+        let row = stored(rows, "spew").unwrap();
+        assert_eq!(row.outcome, "behaves-differently");
+        assert!(row.first_difference.as_ref().is_some_and(|d| d.over_cap));
+    }
+    assert_ne!(
+        stored(&u001, "spew").unwrap().outcome,
+        "behaves-differently"
+    );
+    assert_ne!(
+        stored(&program.c_alone, "spew").unwrap().outcome,
+        "behaves-differently"
+    );
+
+    // Just measured: every row current, and the words rebuilt.
+    let show = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(show.code, 0, "{}", show.stderr);
+    assert!(!show.stdout.contains("out of date"), "{}", show.stdout);
+    let rows = rows_of(&show.stdout);
+    assert!(row(&rows, "perf: u-util on spew — ").contains("more than 64 MiB"));
+
+    // u-util's Rust changes: its rows and the program as it stands's say
+    // so; u001's stay current; the plan's order did not change.
+    let lib = t.join("migration/units/u-util/util_rs/src/lib.rs");
+    let mut text = std::fs::read_to_string(&lib).unwrap();
+    text.push_str("\n// an edit\n");
+    std::fs::write(&lib, text).unwrap();
+    let show = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(show.code, 0, "{}", show.stderr);
+    let rows = rows_of(&show.stdout);
+    for start in [
+        "perf: u-util on tiny — ",
+        "perf: the program as it stands on tiny — ",
+    ] {
+        assert!(
+            row(&rows, start).contains("u-util's Rust changed since"),
+            "{}",
+            show.stdout
+        );
+    }
+    assert!(
+        !row(&rows, "perf: u001-katajainen on tiny — ").contains("out of date"),
+        "{}",
+        show.stdout
+    );
+    assert!(
+        !show.stdout.contains("the plan's order changed"),
+        "{}",
+        show.stdout
     );
 }
