@@ -77,12 +77,7 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
             return Ok(());
         }
     };
-    if !ctx
-        .prep
-        .replaces
-        .iter()
-        .all(|(_, canon)| c_files.contains(canon))
-    {
+    if crate::perf::build::kept_c_files(&c_files, &crate::replace_paths(ctx.prep)).is_err() {
         skip_all(ctx, SkipReason::NotInProgram);
         return Ok(());
     }
