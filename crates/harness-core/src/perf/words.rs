@@ -563,10 +563,17 @@ fn side_subject(cx: &Context) -> String {
     }
 }
 
+/// The end of the C's step-1 run that crashed — the first of the two that
+/// ended by a signal, which need not be the first run.
 fn c_end_words(row: &Row) -> String {
     row.step1
         .as_ref()
-        .map(|s| format!(" ({})", s.c_first.end))
+        .and_then(|s| {
+            [&s.c_first, &s.c_second]
+                .into_iter()
+                .find(|r| r.end.starts_with("signal "))
+        })
+        .map(|r| format!(" ({})", r.end))
         .unwrap_or_default()
 }
 
@@ -2196,5 +2203,48 @@ mod tests {
         for l in &lines[1..] {
             assert!(l.starts_with("      "), "{l:?}");
         }
+    }
+
+    /// "The C crashes" quotes the run that crashed: when only the second
+    /// step-1 run did, its signal — never the first run's normal end.
+    #[test]
+    fn the_c_crash_quotes_the_run_that_crashed() {
+        let step = |end: &str| Step1Run {
+            instructions: None,
+            cpu_us: None,
+            end: end.into(),
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+        };
+        let mut r = row(Vec::new(), Vec::new(), "macos-v6-pnorm", false);
+        r.outcome = "c-crashed".into();
+        r.c = None;
+        r.other = None;
+        r.short = None;
+        r.runs = None;
+        r.platform_metrics = None;
+        r.step1 = Some(Step1 {
+            c_first: step("exit 0"),
+            other: None,
+            c_second: step("signal 11"),
+        });
+        let cx = Context {
+            side: Side::C,
+            workload: "big-text",
+            input: None,
+        };
+        assert_eq!(
+            words(&r, &cx).headline,
+            "the C crashes on big-text (signal 11)"
+        );
+        r.step1 = Some(Step1 {
+            c_first: step("signal 6"),
+            other: None,
+            c_second: step("signal 11"),
+        });
+        assert_eq!(
+            words(&r, &cx).headline,
+            "the C crashes on big-text (signal 6)"
+        );
     }
 }
