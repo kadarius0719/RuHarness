@@ -192,8 +192,11 @@ pub struct SpeedModel {
     pub units: Vec<UnitSpeed>,
     /// Results files that could not be read, in words.
     pub errors: Vec<String>,
-    /// Units no longer in the plan that still have a results file.
+    /// Units no longer in the plan that still have a results file (the
+    /// first names).
     pub orphans: Vec<String>,
+    /// How many more such files there are.
+    pub orphans_more: usize,
     /// The View's header lines (computers and compilers the rows record).
     pub header: Vec<String>,
     /// A perf run holds the lock now.
@@ -544,8 +547,9 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         held: Vec::new(),
         left_out: Vec::new(),
         units: Vec::new(),
-        errors: Vec::new(),
+        errors: perf.errors.clone(),
         orphans: perf.orphans.clone(),
+        orphans_more: perf.orphans_more,
         header: Vec::new(),
         measuring: perf.measuring,
         measurable: Vec::new(),
@@ -813,6 +817,7 @@ mod tests {
             units: Vec::new(),
             errors: Vec::new(),
             orphans: Vec::new(),
+            orphans_more: 0,
             header: Vec::new(),
             measuring: false,
             measurable: Vec::new(),

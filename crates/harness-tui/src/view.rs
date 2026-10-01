@@ -1653,10 +1653,14 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     }
     let sentences = section.sentences;
     if !model.orphans.is_empty() {
+        let more = match model.orphans_more {
+            0 => String::new(),
+            n => format!(" and {n} more"),
+        };
         lines.push(Line::from(""));
         lines.extend(wrapped(
             &format!(
-                "Results of units no longer in the plan (in migration/perf/units/): {}",
+                "Results of units no longer in the plan (in migration/perf/units/): {}{more}",
                 model.orphans.join(", ")
             ),
             width,
@@ -6783,6 +6787,113 @@ mod tests {
         for r in &app.speed.program_rows {
             assert!(r.out_of_date.is_empty(), "{:?}", r.out_of_date);
         }
+    }
+
+    /// A unit the program as it stands left out with its crate's digest
+    /// (its own link failed) is judged by that crate — hashed even with no
+    /// results file of its own, as after an as-it-stands-only measure.
+    #[test]
+    fn a_unit_left_out_is_judged_by_its_own_crate() {
+        use harness_core::perf::results::{self as res, LeftOut};
+        let app = app_of("targets/zopfli", "speed-left-out");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        let id = "u001-katajainen";
+        let perf = harness_core::perf::perf_dir(&root);
+        let path = res::program_path(&perf);
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        for r in &mut program.as_it_stands {
+            let held = r.inputs.units.take().unwrap();
+            r.inputs.units = Some(Vec::new());
+            r.inputs.left_out.as_mut().unwrap().push(LeftOut {
+                id: id.into(),
+                crate_digest: held[0].crate_digest.clone(),
+                reason: "does-not-link".into(),
+            });
+        }
+        res::write_program(&path, &program).unwrap();
+        std::fs::remove_file(res::unit_path(&perf, id)).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert!(app.snapshot.perf.crates.contains_key(id));
+        for r in &app.speed.program_rows {
+            assert!(r.out_of_date.is_empty(), "{:?}", r.out_of_date);
+        }
+    }
+
+    /// The inputs the cockpit hashes (§3.11): never while a perf run holds
+    /// the lock — the holder read inside `Snapshot::load` —, "can't check"
+    /// past the load's budget, and perf's own words for an input it refuses
+    /// (the target still opens).
+    #[test]
+    fn the_cockpit_hashes_no_input_while_measuring_and_says_what_it_cannot_check() {
+        use crate::perfread::InputNow;
+        use crate::speed::SideKey;
+        let app = app_of("targets/zopfli", "speed-inputs");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        let lock = harness_core::ledger::Ledger::new(&root).lock_path();
+        let holder = |command: &str| {
+            format!(
+                "{{\"pid\":{},\"command\":\"{command}\",\"started\":\"2026-09-25T00:00:00Z\"}}\n",
+                std::process::id()
+            )
+        };
+        let big = |app: &App| app.speed.row(&SideKey::C, "big-text").unwrap().clone();
+        std::fs::write(
+            &lock,
+            holder(&format!("{} --target .", harness_core::perf::PERF_RUN_LOCK)),
+        )
+        .unwrap();
+        std::fs::write(root.join("bench/big.txt"), "changed while measuring").unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert!(app.snapshot.perf.measuring);
+        assert_eq!(
+            app.snapshot.perf.inputs["big-text"],
+            InputNow::WhileMeasuring
+        );
+        assert!(
+            matches!(app.snapshot.perf.inputs["many-small"], InputNow::Digest(_)),
+            "unchanged: its cached digest"
+        );
+        assert_eq!(big(&app).out_of_date, ["can't check while measuring"]);
+        assert_eq!(big(&app).out_of_date_tokens, ["measuring"]);
+        app.select(Selection::Speed);
+        let screen = text(&render(&mut app, 80, 40));
+        assert!(screen.contains("A perf run is measuring now"), "{screen}");
+        // Another writer is no perf run: the input is hashed.
+        std::fs::write(&lock, holder("verify u001-katajainen")).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert!(!app.snapshot.perf.measuring);
+        assert_eq!(big(&app).out_of_date_tokens, ["workload"]);
+        std::fs::remove_file(&lock).unwrap();
+        // Past the load's budget: "can't check", the row's digest kept.
+        let mut snapshot = app.snapshot.clone();
+        snapshot
+            .perf
+            .inputs
+            .insert("big-text".into(), InputNow::TooLarge);
+        let model = crate::speed::build(&snapshot);
+        let row = model.row(&SideKey::C, "big-text").unwrap();
+        assert_eq!(
+            row.out_of_date,
+            ["can't check: inputs too large to hash here"]
+        );
+        assert_eq!(row.out_of_date_tokens, ["too-large"]);
+        // An input perf refuses (over 64 MiB): its words, unread; the
+        // target opens.
+        std::fs::File::create(root.join("bench/huge.bin"))
+            .unwrap()
+            .set_len(harness_core::perf::workloads::MAX_INPUT_BYTES + 1)
+            .unwrap();
+        let workloads = harness_core::perf::workloads::workloads_path(&root);
+        let text = std::fs::read_to_string(&workloads).unwrap();
+        std::fs::write(&workloads, text.replace("bench/big.txt", "bench/huge.bin")).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(
+            big(&app).out_of_date,
+            ["bench/huge.bin is over 64 MiB — use a smaller input"]
+        );
+        assert_eq!(big(&app).out_of_date_tokens, ["input-unusable"]);
     }
 
     /// Day one (§3.6): the C alone measured before a plan is judged as any
