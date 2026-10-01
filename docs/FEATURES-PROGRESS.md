@@ -109,7 +109,14 @@ all confirmed but three wording points. Revision 1 (00f2e23) answers them (§7, 
 premise (`SP/perf/premise2/launch.c`: counting from the program's exec under sandbox-exec via
 kqueue NOTE_EXEC works; RUSAGE_INFO_V6 P-core fields filled) and a link check (two Rust staticlibs
 link into one C program on macOS: `SP/perf/twolibs`). The review finished: 46 confirmed, 2 by one
-verifier, 1 refuted (`SP/perf/design-review-result.json`). Next: CHECK THE REVISION — running as
+verifier, 1 refuted (`SP/perf/design-review-result.json`). The check of revision 1 FINISHED (`wf_0f90338d-b1d`; result `SP/perf/revision1-check.json`): of
+the draft's findings 7 resolved, 41 in part, 1 made worse; 33 new confirmed (launcher built through
+the shared temp folder and run unsandboxed; the program can setsid out of the group kill;
+argv[0] cannot be set through sandbox-exec; NOTE_EXEC coalescing races the baseline; memory's
+minimum-of-n calls identical programs different; P-core-normalised cycles unsound; the 5e8 floor
+where Rust's start-up equals the margins; …). Next: revision 2 from a condensed change list
+(`SP/perf/rev2-changes.md`, written by an agent from both result files), then check it again.
+Was: CHECK THE REVISION — running as
 workflow `wf_0f90338d-b1d` (per-lens dispositions of every finding against rev 1, three fresh lenses
 on the new mechanisms, two verifiers per new finding); then revise (revision 2), then build in the §5 steps. Spike notes, code survey and launcher prototype:
 `SP/perf/`.
