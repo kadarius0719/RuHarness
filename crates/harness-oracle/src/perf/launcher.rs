@@ -398,6 +398,25 @@ pub(crate) fn launcher_in(
     Ok(launcher)
 }
 
+/// The launcher when its cache is current — never built here (`perf show`,
+/// §3.9): `None` when there is none, or it would need building.
+pub(crate) fn existing_launcher(host: &HostDirs) -> Option<Launcher> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let root = host.perf_cache.canonicalize().ok()?;
+    refuse_cache(&root, host).is_none().then_some(())?;
+    let compiler = find_compiler().ok()?;
+    let dir = root.join(version_name(&compiler));
+    let shared = lock_file(&dir.join(".lock"), false).ok()?;
+    let (perfrun, perfgo) = load_built(&dir)?;
+    Some(Launcher {
+        perfrun,
+        perfgo,
+        _shared: shared,
+    })
+}
+
 /// The built binaries when the folder holds both and their hashes match.
 fn load_built(dir: &Path) -> Option<(Hashed, Hashed)> {
     let text = std::fs::read_to_string(dir.join(HASHES_FILE)).ok()?;

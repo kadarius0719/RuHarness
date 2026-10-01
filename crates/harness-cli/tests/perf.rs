@@ -1,0 +1,303 @@
+//! `harness perf init | save | run | show` (docs/PERF-DESIGN.md §3.10) on a
+//! temp copy of the vendored zopfli target, whose u001 is verified: the
+//! refusals in their words and exit codes, the starter, the save's
+//! `--expect`, the C alone and the unit measured end to end through the
+//! launcher, `perf-row` events, and `perf show` with its currency.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+fn copy_dir(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == "build" || name_str == "target" || name_str == ".git" {
+            continue;
+        }
+        let from = entry.path();
+        let to = dst.join(&name);
+        if from.is_dir() {
+            copy_dir(&from, &to);
+        } else {
+            std::fs::copy(&from, &to).unwrap();
+        }
+    }
+}
+
+struct Run {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+fn harness(args: &[&str], stdin: Option<&[u8]>) -> Run {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(args)
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn harness");
+    if let Some(bytes) = stdin {
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    Run {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+fn zopfli(tag: &str) -> PathBuf {
+    let dst = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("perf-cli-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dst);
+    copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../targets/zopfli"),
+        &dst,
+    );
+    let _ = std::fs::remove_dir_all(dst.join("migration/perf"));
+    dst
+}
+
+/// A pseudo-random text input of about `words` words.
+fn text_input(path: &Path, words: usize) {
+    let vocab = [
+        "alpha", "beta", "gamma", "delta", "zopfli", "deflate", "huffman", "tree",
+    ];
+    let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut out = String::with_capacity(words * 7);
+    for _ in 0..words {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        out.push_str(vocab[(state % vocab.len() as u64) as usize]);
+        out.push(' ');
+    }
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, out).unwrap();
+}
+
+fn blake3_of(path: &Path) -> String {
+    harness_core::hash::file_hash(path).unwrap()
+}
+
+#[test]
+fn init_writes_a_starter_once_and_save_guards_the_file() {
+    let t = zopfli("init");
+    let target = t.to_str().unwrap();
+    let path = t.join("migration/perf/workloads.toml");
+    let r = harness(&["perf", "init", "--target", target], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        harness_core::perf::workloads::STARTER
+    );
+    let again = harness(&["perf", "init", "--target", target], None);
+    assert_eq!(again.code, 1);
+    assert!(
+        again.stderr.contains("never overwrites it"),
+        "{}",
+        again.stderr
+    );
+    // Save: the --expect guard, the rule's line and column, the cap.
+    let text = "schema_version = 1\n[[workload]]\nid = \"text\"\nargs = [\"-c\"]\n";
+    let bytes = text.len().to_string();
+    let stale = harness(
+        &[
+            "perf", "save", "--target", target, "--expect", "none", "--bytes", &bytes,
+        ],
+        Some(text.as_bytes()),
+    );
+    assert_eq!(stale.code, 1, "{}", stale.stderr);
+    assert!(
+        stale.stderr.contains("changed since the edit started"),
+        "{}",
+        stale.stderr
+    );
+    let expect = blake3_of(&path);
+    let bad = "schema_version = 1\n[[workload]]\nid = \"Text\"\n";
+    let r = harness(
+        &[
+            "perf",
+            "save",
+            "--target",
+            target,
+            "--expect",
+            &expect,
+            "--bytes",
+            &bad.len().to_string(),
+        ],
+        Some(bad.as_bytes()),
+    );
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("line 3, column 6"), "{}", r.stderr);
+    let r = harness(
+        &[
+            "perf", "save", "--target", target, "--expect", &expect, "--bytes", &bytes,
+        ],
+        Some(text.as_bytes()),
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+}
+
+#[test]
+fn run_refuses_by_name() {
+    let t = zopfli("refuse");
+    let target = t.to_str().unwrap();
+    // No file, the starter, a broken file: exit 1 with the state's words.
+    let r = harness(&["perf", "run", "--target", target], None);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr
+            .contains("write your workloads file first — harness perf init gives a starter"),
+        "{}",
+        r.stderr
+    );
+    harness(&["perf", "init", "--target", target], None);
+    let r = harness(&["perf", "run", "--target", target], None);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr
+            .contains("add a [[workload]] to migration/perf/workloads.toml"),
+        "{}",
+        r.stderr
+    );
+    std::fs::write(
+        t.join("migration/perf/workloads.toml"),
+        "schema_version = 1\n[[workload]]\nid = \"w\"\nruns = 40\n",
+    )
+    .unwrap();
+    let r = harness(&["perf", "run", "--target", target], None);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains("line 4, column 8")
+            && r.stderr.contains("— fix it, or Edit the workloads file"),
+        "{}",
+        r.stderr
+    );
+    // A usage error is exit 2.
+    let r = harness(&["perf", "run", "--target", target, "--runs", "4"], None);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    // An unknown unit is named beside the known ones.
+    std::fs::write(
+        t.join("migration/perf/workloads.toml"),
+        "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = [\"-h\"]\n",
+    )
+    .unwrap();
+    if cfg!(target_os = "macos") {
+        let r = harness(
+            &["perf", "run", "--target", target, "--unit", "u-nope"],
+            None,
+        );
+        assert_eq!(r.code, 1, "{}", r.stderr);
+        assert!(r.stderr.contains("u001-katajainen"), "{}", r.stderr);
+    }
+}
+
+#[test]
+fn zopfli_measured_end_to_end() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("run");
+    let target = t.to_str().unwrap();
+    text_input(&t.join("bench/text.txt"), 60_000);
+    std::fs::write(t.join("bench/tiny.txt"), "hi\n").unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(
+        t.join("migration/perf/workloads.toml"),
+        "schema_version = 1\n\
+         [[workload]]\nid = \"text\"\nargs = [\"-c\", \"{input}\"]\ninput = \"bench/text.txt\"\nruns = 5\n\
+         [[workload]]\nid = \"tiny\"\nargs = [\"-c\", \"{input}\"]\ninput = \"bench/tiny.txt\"\nruns = 5\n",
+    )
+    .unwrap();
+    let r = harness(&["perf", "run", "--target", target, "--json"], None);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let events: Vec<serde_json::Value> = r
+        .stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .filter(|v: &serde_json::Value| v["k"] == "perf-row")
+        .collect();
+    let find = |side: &str, workload: &str| {
+        events
+            .iter()
+            .find(|e| e["side"] == side && e["workload"] == workload)
+            .unwrap_or_else(|| panic!("{side} {workload}: {events:?}"))
+            .clone()
+    };
+    assert_eq!(find("c", "tiny")["outcome"], "too-short");
+    assert!(find("c", "tiny")["words"]
+        .as_str()
+        .unwrap()
+        .starts_with("too short to time: the C ran"));
+    let c = find("c", "text");
+    assert!(matches!(c["outcome"].as_str(), Some("baseline")), "{c}");
+    let unit = find("unit", "text");
+    assert_eq!(unit["unit"], "u001-katajainen");
+    assert!(
+        matches!(
+            unit["outcome"].as_str(),
+            Some("measured") | Some("too-short")
+        ),
+        "{unit}"
+    );
+    // The results files read back strictly.
+    let program = harness_core::perf::results::read_program(&t.join("migration/perf/program.json"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(program.c_alone.len(), 2);
+    let unit_file = harness_core::perf::results::read_unit(
+        &t.join("migration/perf/units/u001-katajainen.json"),
+        "u001-katajainen",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(unit_file.rows.len(), 2);
+    // `perf show` rebuilds the words; the computer is checked through the
+    // current launcher cache; --no-check says nothing of either.
+    let show = harness(&["perf", "show", "--target", target], None);
+    assert_eq!(show.code, 0, "{}", show.stderr);
+    assert!(
+        show.stdout.contains("perf: the C on text — CPU about "),
+        "{}",
+        show.stdout
+    );
+    assert!(
+        show.stdout.contains("perf: u001-katajainen on text — "),
+        "{}",
+        show.stdout
+    );
+    assert!(
+        !show.stdout.contains("computer not checked"),
+        "{}",
+        show.stdout
+    );
+    assert!(!show.stdout.contains("out of date"), "{}", show.stdout);
+    // An edit to the C makes every row out of date, each with its reason.
+    let main = t.join("src/zopfli/zopfli_bin.c");
+    let mut text = std::fs::read_to_string(&main).unwrap();
+    text.push_str("\n/* an edit */\n");
+    std::fs::write(&main, text).unwrap();
+    let show = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert!(
+        show.stdout.contains("out of date: the C changed"),
+        "{}",
+        show.stdout
+    );
+    // And `perf run` refuses stale facts: scan first.
+    let r = harness(&["perf", "run", "--target", target], None);
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("scan the project first"), "{}", r.stderr);
+}

@@ -90,7 +90,10 @@ mod validate;
 pub use boundary::{BoundaryReport, ParamFigures};
 pub use exec::{cancelled, kill_live_process_groups};
 pub use featuremap::{map_features, remove_live_scratch_dirs, MapProgress, FEATURES_BUILD_DIR};
-pub use perf::measure::{perf_run, PerfProgress, PerfRequest, PerfSummary, RowSide};
+pub use perf::measure::{
+    perf_computer_if_cached, perf_measurable, perf_run, PerfProgress, PerfRequest, PerfSummary,
+    RowSide,
+};
 #[doc(hidden)]
 pub use probebuild::{
     last_map_most_file_compiles, last_map_pass_compiles, with_map_bounds, MapBounds,

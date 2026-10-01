@@ -9,6 +9,7 @@ mod bench;
 mod features;
 mod gen_driver;
 mod hand_edit;
+mod perf;
 mod promote;
 mod report;
 
@@ -76,6 +77,12 @@ enum Cmd {
     Features {
         #[command(subcommand)]
         cmd: FeaturesCmd,
+    },
+    /// The C against the Rust in use, on the person's workloads: CPU time,
+    /// instructions, memory (docs/PERF-DESIGN.md) — information only
+    Perf {
+        #[command(subcommand)]
+        cmd: PerfCmd,
     },
     /// Run the hazard detectors and regenerate observer findings
     Detect {
@@ -274,6 +281,64 @@ enum FeaturesCmd {
 }
 
 #[derive(Subcommand)]
+enum PerfCmd {
+    /// Measure: the C alone, the program as it stands and every measurable
+    /// unit on each workload (writes migration/perf/)
+    Run {
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Only this unit (repeatable)
+        #[arg(long = "unit")]
+        units: Vec<String>,
+        /// Only this workload (repeatable)
+        #[arg(long = "workload")]
+        workloads: Vec<String>,
+        /// Runs a side, 5 to 31 (over each workload's own)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(5..=31))]
+        runs: Option<u32>,
+        /// Only the program as it stands
+        #[arg(long)]
+        as_it_stands_only: bool,
+        /// Accepted for symmetry; perf always runs the program in its own
+        /// sandbox (macOS)
+        #[arg(long)]
+        allow_unsandboxed: bool,
+    },
+    /// Write a starter migration/perf/workloads.toml (never over one)
+    Init {
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+    },
+    /// Save a new workloads.toml read from stdin, when it validates and the
+    /// file is still the one --expect names
+    Save {
+        /// The blake3 of the file's current bytes, or `none` when there is none
+        #[arg(long)]
+        expect: String,
+        /// The new file's length in bytes (a read cut short is refused)
+        #[arg(long)]
+        bytes: u64,
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+    },
+    /// Show every stored row's words and whether it is current
+    Show {
+        /// Target repository root
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Skip checking the computer and the compilers
+        #[arg(long)]
+        no_check: bool,
+        /// Accepted for symmetry (show runs no target code)
+        #[arg(long)]
+        allow_unsandboxed: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum StateCmd {
     /// Staleness report: facts vs tree, plan vs tree, verdicts vs tree
     Status {
@@ -390,6 +455,27 @@ fn main() -> ExitCode {
                 target,
                 allow_unsandboxed,
             } => features::cmd_map(target, allow_unsandboxed),
+        },
+        Cmd::Perf { cmd } => match cmd {
+            PerfCmd::Run {
+                target,
+                units,
+                workloads,
+                runs,
+                as_it_stands_only,
+                allow_unsandboxed: _,
+            } => perf::cmd_run(target, units, workloads, runs, as_it_stands_only),
+            PerfCmd::Init { target } => perf::cmd_init(target),
+            PerfCmd::Save {
+                expect,
+                bytes,
+                target,
+            } => perf::cmd_save(target, expect, bytes),
+            PerfCmd::Show {
+                target,
+                no_check,
+                allow_unsandboxed: _,
+            } => perf::cmd_show(target, no_check),
         },
         Cmd::Detect { target } => cmd_detect(target),
         Cmd::Observe { target } => cmd_observe(target),

@@ -974,6 +974,27 @@ pub fn perf_run(
             &mut log,
         )?
     };
+    if matches!(program, Program::None) && req.units.is_empty() && !req.as_it_stands_only {
+        let left: Vec<String> = left_out
+            .iter()
+            .map(|l| format!("{} left out: {}", l.id, l.reason))
+            .collect();
+        let tail = if left.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", left.join("; "))
+        };
+        progress.message(&match held.len() {
+            0 => format!("no accepted unit to compare yet{tail}"),
+            _ => format!(
+                "one unit measured ({}){tail} — the program as it stands needs two",
+                held.iter()
+                    .map(|u| u.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        });
+    }
     if req.as_it_stands_only && matches!(program, Program::None) {
         let why = match built.len() {
             0 => "no accepted unit to compare yet".to_string(),
@@ -1279,6 +1300,40 @@ pub fn perf_run(
     // Rows of units now named only as left out stay as they were.
     let _ = (&held, &left_out);
     Ok(summary)
+}
+
+/// The units perf could measure today, in plan order (read-only: no lock,
+/// no build) — for `perf show`'s currency of the program as it stands.
+pub fn perf_measurable(
+    target: &TargetContext,
+    plan: &Plan,
+    facts: &Facts,
+) -> Result<Vec<String>, Error> {
+    let ledger = Ledger::new(target.root.clone());
+    Ok(select(target, &ledger, facts, plan)?
+        .into_iter()
+        .filter_map(|s| match s {
+            Selected::Ready(c) => Some(c.id),
+            Selected::NotVerified { .. } => None,
+        })
+        .collect())
+}
+
+/// The computer's facts when perf's launcher cache is current (never
+/// building it): `None` → "computer not checked — run harness perf run
+/// once" (§3.9).
+pub fn perf_computer_if_cached() -> Option<res::Computer> {
+    let host = HostDirs::from_env().ok()?;
+    let launcher = launcher::existing_launcher(&host)?;
+    let f = launcher::computer_facts(&launcher).ok()?;
+    Some(res::Computer {
+        os: f.os,
+        build: f.build,
+        arch: f.arch,
+        cpu: f.cpu,
+        two_kinds: f.two_kinds,
+        fast_cores: f.fast_cores,
+    })
 }
 
 fn empty_digest() -> String {
@@ -2320,6 +2375,143 @@ mod tests {
         };
         assert_eq!(row.outcome, "c-unstable");
         res::check_row(&row, RowKind::CAlone).expect("valid on the C alone");
+    }
+
+    /// The program as it stands (§3.2) from two hand-built units: mixed
+    /// panic runtimes are refused in words before the link (naming each
+    /// unit's runtime); matching ones link, every unit's staticlib in, every
+    /// replaced C file out.
+    #[test]
+    fn the_program_as_it_stands_links_or_says_why() {
+        let bench = crate::testutil::ToolBench::new("perf-ais");
+        let root = bench.root().canonicalize().expect("root");
+        let put = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().expect("parent")).expect("dir");
+            std::fs::write(&p, text).expect("write");
+        };
+        put(
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"tool\"\nsource_dir = \"src\"\n\
+             [oracle]\nallowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n",
+        );
+        put("src/main.c", "#include <stdio.h>\nint a(void); int b(void);\nint main(void) { printf(\"%d\\n\", a() + b()); return 0; }\n");
+        put("src/a.c", "int a(void) { return 1; }\n");
+        put("src/b.c", "int b(void) { return 2; }\n");
+        let target = harness_core::TargetContext::load(&root).expect("target");
+        let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
+        let scratch = build::perf_scratch(&root).expect("scratch");
+        let obj = build::sub_folder(&scratch, "obj").expect("obj");
+        let c_files = program_c_files_in(&base, "perf").expect("files");
+        let objects = build::compile_objects(&base, bench.runner(), &c_files, &obj)
+            .expect("runs")
+            .expect("compiles");
+        let kept_objects = |kept: &[PathBuf]| -> Vec<PathBuf> {
+            c_files
+                .iter()
+                .zip(&objects)
+                .filter(|(c, _)| kept.contains(c))
+                .map(|(_, o)| o.path.clone())
+                .collect()
+        };
+        let unit = |id: &str, func: &str, value: i32, abort: bool, file: &str| -> UnitSide {
+            let crate_dir = crate::testutil::fixture_crate(
+                &root,
+                id,
+                abort,
+                &format!("#[no_mangle] pub extern \"C\" fn {func}() -> i32 {{ {value} }}\n"),
+            );
+            let lib = bench.build(&crate_dir);
+            let facts = archive_facts(&std::fs::read(&lib).expect("lib")).expect("facts");
+            UnitSide::Built {
+                candidate: Candidate {
+                    id: id.into(),
+                    position: 1,
+                    replaces_rel: vec![format!("src/{file}")],
+                    replaces: vec![root.join("src").join(file).canonicalize().expect("c")],
+                    crate_dir,
+                    verdict_crate: String::new(),
+                },
+                bin: Hashed {
+                    path: root.join("unused"),
+                    digest: String::new(),
+                },
+                staticlib: lib,
+                facts,
+                crate_digest: harness_core::hash::bytes_hash(id.as_bytes()),
+                profile: Vec::new(),
+            }
+        };
+        let ua = unit("ua", "a", 10, true, "a.c");
+        let ub_unwind = unit("ub", "b", 20, false, "b.c");
+        let held = vec![
+            UnitRef {
+                id: "ua".into(),
+                crate_digest: harness_core::hash::bytes_hash(b"ua"),
+            },
+            UnitRef {
+                id: "ub".into(),
+                crate_digest: harness_core::hash::bytes_hash(b"ub"),
+            },
+        ];
+        let mut log = String::new();
+        let out = build::sub_folder(&scratch, "bin/pall")
+            .expect("slot")
+            .join("tool");
+        let p = as_it_stands(
+            &[&ua, &ub_unwind],
+            &held,
+            &c_files,
+            &base,
+            &[],
+            bench.runner(),
+            &out,
+            &kept_objects,
+            "x.log",
+            &mut log,
+        )
+        .expect("runs");
+        let Program::SetUp { outcome, setup, .. } = p else {
+            panic!("mixed-panic")
+        };
+        assert_eq!(outcome, "mixed-panic");
+        let words = perf_words::set_up_words(
+            outcome,
+            Some(&setup),
+            &perf_words::Context {
+                side: perf_words::Side::AsItStands,
+                workload: "w",
+                input: None,
+            },
+        );
+        assert!(words.starts_with("ua aborts; ub unwinds — "), "{words}");
+        assert!(
+            words.ends_with("to ub's Cargo.toml, then run harness verify ub"),
+            "{words}"
+        );
+        // Both abort: the program links, both units in, a.c and b.c out.
+        let ub = unit("ub2", "b", 20, true, "b.c");
+        let p = as_it_stands(
+            &[&ua, &ub],
+            &held,
+            &c_files,
+            &base,
+            &[],
+            bench.runner(),
+            &out,
+            &kept_objects,
+            "x.log",
+            &mut log,
+        )
+        .expect("runs");
+        let Program::Built { bin, .. } = p else {
+            panic!("links: {log}")
+        };
+        let printed = std::process::Command::new(&bin.path)
+            .output()
+            .expect("runs")
+            .stdout;
+        assert_eq!(printed, b"30\n");
     }
 
     #[test]
