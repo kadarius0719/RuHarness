@@ -1,9 +1,10 @@
 //! `harness perf show`'s compiler check (docs/PERF-DESIGN.md §3.9): `cc
 //! --version` and `rustc -V` as tool runs — the target's allowlist, the
 //! tool environment, the tool sandbox profile and `[oracle] timeout_secs` —
-//! exactly as `perf run` reads them, so the two always compare equal.
-//! Never a plain process: the target picks which `rustc` runs (a
-//! `rust-toolchain.toml`), so its compilers are target code.
+//! the way `perf run` reads them (the same environment, the same first
+//! line), so unchanged compilers compare equal. Never a plain process: the
+//! target picks which `rustc` runs (a `rust-toolchain.toml`), so its
+//! compilers are target code.
 
 use crate::exec::Runner;
 use crate::sandbox::{self, HostDirs, ProfileSpec};
