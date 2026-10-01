@@ -48,6 +48,29 @@ pub(crate) struct HostDirs {
     pub rustup_home: Option<PathBuf>,
     /// `TMPDIR`, when set and existing.
     pub tmpdir: Option<PathBuf>,
+    /// perf's launcher cache (docs/PERF-DESIGN.md §3.2): no profile may
+    /// write under it (build note 5).
+    pub perf_cache: PathBuf,
+}
+
+/// perf's launcher cache root under `home`: `~/Library/Caches/ruharness/
+/// perf`, with `Library/Caches` canonical when it exists.
+pub(crate) fn perf_cache_root(home: &Path) -> PathBuf {
+    let caches = home.join("Library").join("Caches");
+    caches
+        .canonicalize()
+        .unwrap_or(caches)
+        .join("ruharness")
+        .join("perf")
+}
+
+/// The line every rendered profile ends its write rules with: nothing a
+/// sandboxed child runs may write perf's launcher cache (build note 5).
+fn perf_cache_tail(host: &HostDirs) -> Result<String, Error> {
+    Ok(format!(
+        "(deny file-write* (subpath {}))\n",
+        sbpl_string(&host.perf_cache)?
+    ))
 }
 
 impl HostDirs {
@@ -72,6 +95,7 @@ impl HostDirs {
             p.canonicalize().ok()
         };
         Ok(HostDirs {
+            perf_cache: perf_cache_root(&home),
             cargo_home: or_default("CARGO_HOME", ".cargo"),
             rustup_home: or_default("RUSTUP_HOME", ".rustup"),
             tmpdir: std::env::var_os("TMPDIR")
@@ -211,6 +235,7 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
     out.push_str(
         " (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n",
     );
+    out.push_str(&perf_cache_tail(spec.host)?);
     Ok(out)
 }
 
@@ -259,6 +284,57 @@ pub(crate) fn render_run_profile(spec: &RunSpec<'_>) -> Result<String, Error> {
         "(deny file-write* (subpath \"/\"))\n(allow file-write* (subpath {tmp}) \
          (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
     ));
+    out.push_str(&perf_cache_tail(spec.host)?);
+    Ok(out)
+}
+
+/// What one perf run may touch (docs/PERF-DESIGN.md §3.4).
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // perf's measurement uses it from step (d) of PERF-DESIGN §5.
+pub(crate) struct PerfSpec<'a> {
+    /// Host directories (the home directory is denied).
+    pub host: &'a HostDirs,
+    /// Canonical target root (denied, wherever it lives).
+    pub target_root: &'a Path,
+    /// Canonical path of the side's program.
+    pub bin: &'a Path,
+    /// Canonical path of perfgo, in the launcher cache.
+    pub perfgo: &'a Path,
+    /// The run's fresh, canonical temp dir: the only writable location.
+    pub tmpdir: &'a Path,
+}
+
+/// The perf profile (§3.4): the scenario profile with `exec` allowed for
+/// exactly perfgo and the side's program, reads of exactly those two and
+/// the run's temp dir under the home folder and the target, no signal but
+/// to itself, and a fork killed on trying.
+#[allow(dead_code)] // perf's measurement uses it from step (d) of PERF-DESIGN §5.
+pub(crate) fn render_perf_profile(spec: &PerfSpec<'_>) -> Result<String, Error> {
+    let bin = sbpl_string(spec.bin)?;
+    let perfgo = sbpl_string(spec.perfgo)?;
+    let tmp = sbpl_string(spec.tmpdir)?;
+    let mut out = String::new();
+    out.push_str("(version 1)\n(allow default)\n(deny network*)\n");
+    out.push_str("(deny process-exec*)\n");
+    out.push_str(&format!(
+        "(allow process-exec (literal {perfgo}) (literal {bin}))\n"
+    ));
+    out.push_str(&format!(
+        "(deny file-read* (subpath {}) (subpath {}))\n",
+        sbpl_string(&spec.host.home)?,
+        sbpl_string(spec.target_root)?
+    ));
+    out.push_str(&format!(
+        "(allow file-read* (literal {bin}) (literal {perfgo}) (subpath {tmp}))\n"
+    ));
+    out.push_str(&format!(
+        "(deny file-write* (subpath \"/\"))\n(allow file-write* (subpath {tmp}) \
+         (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
+    ));
+    out.push_str(&perf_cache_tail(spec.host)?);
+    out.push_str(
+        "(deny signal)\n(allow signal (target self))\n(deny process-fork (with send-signal SIGKILL))\n",
+    );
     Ok(out)
 }
 
@@ -328,7 +404,41 @@ mod tests {
             cargo_home: Some(PathBuf::from("/Users/u/.cargo")),
             rustup_home: Some(PathBuf::from("/Users/u/.rustup")),
             tmpdir: Some(PathBuf::from("/private/var/folders/xy/T")),
+            perf_cache: PathBuf::from("/Users/u/Library/Caches/ruharness/perf"),
         }
+    }
+
+    /// The perf profile (docs/PERF-DESIGN.md §3.4): exec of exactly perfgo
+    /// and the side's program, reads of exactly those and the temp dir,
+    /// writes only the temp dir and never the launcher cache, no signal out,
+    /// a fork killed.
+    #[test]
+    fn the_perf_profile() {
+        let host = host();
+        let text = render_perf_profile(&PerfSpec {
+            host: &host,
+            target_root: Path::new("/Users/u/t"),
+            bin: Path::new("/Users/u/t/migration/build/.perf/bin/p001/tool"),
+            perfgo: Path::new("/Users/u/Library/Caches/ruharness/perf/perf-launcher-1-ab/perfgo"),
+            tmpdir: Path::new("/private/var/folders/xy/T/ruharness-perf-1"),
+        })
+        .expect("renders");
+        let expected = "\
+(version 1)
+(allow default)
+(deny network*)
+(deny process-exec*)
+(allow process-exec (literal \"/Users/u/Library/Caches/ruharness/perf/perf-launcher-1-ab/perfgo\") (literal \"/Users/u/t/migration/build/.perf/bin/p001/tool\"))
+(deny file-read* (subpath \"/Users/u\") (subpath \"/Users/u/t\"))
+(allow file-read* (literal \"/Users/u/t/migration/build/.perf/bin/p001/tool\") (literal \"/Users/u/Library/Caches/ruharness/perf/perf-launcher-1-ab/perfgo\") (subpath \"/private/var/folders/xy/T/ruharness-perf-1\"))
+(deny file-write* (subpath \"/\"))
+(allow file-write* (subpath \"/private/var/folders/xy/T/ruharness-perf-1\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
+(deny signal)
+(allow signal (target self))
+(deny process-fork (with send-signal SIGKILL))
+";
+        assert_eq!(text, expected);
     }
 
     #[test]
@@ -368,6 +478,7 @@ mod tests {
 (deny file-read* (literal \"/Users/u/.cargo/credentials.toml\") (literal \"/Users/u/.cargo/credentials\"))
 (deny file-write* (subpath \"/\"))
 (allow file-write* (subpath \"/Users/u/t/migration/build/u1\") (subpath \"/Users/u/t/migration/units/u1/c/target\") (literal \"/Users/u/t/migration/units/u1/c/Cargo.lock\") (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (subpath \"/private/var/folders/xy/T\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
 ";
         assert_eq!(text, expected);
     }
@@ -532,6 +643,7 @@ mod tests {
 (allow file-read* (literal \"/Users/u/t/migration/build/u1/drv_rs\") (literal \"/Users/u/t/migration/build/u1/sample_text.txt\") (subpath \"/private/var/folders/xy/T/ruharness-run-1-0\"))
 (deny file-write* (subpath \"/\"))
 (allow file-write* (subpath \"/private/var/folders/xy/T/ruharness-run-1-0\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
 ";
         assert_eq!(text, expected);
 

@@ -109,10 +109,18 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// The process groups of every live child (each child leads its own group,
-/// so its pid is its pgid). Spawning happens under this lock, so
+/// so its pid is its pgid), each with its kill order: a perf program's group
+/// ([`PROGRAM_FIRST`]) before any other (its launcher's among them;
+/// docs/PERF-DESIGN.md build note 7). Spawning happens under this lock, so
 /// [`kill_live_process_groups`] — which keeps the lock until the process is
 /// gone — can never miss a child that is about to be spawned.
-static LIVE: Mutex<std::collections::BTreeSet<u32>> = Mutex::new(std::collections::BTreeSet::new());
+static LIVE: Mutex<std::collections::BTreeSet<(u8, u32)>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// The kill order of a perf program's group: before every other.
+pub(crate) const PROGRAM_FIRST: u8 = 0;
+/// The kill order of every other child's group.
+pub(crate) const OTHER: u8 = 1;
 
 /// Cancel the harness's children: mark the harness cancelled, then SIGKILL
 /// every live process group, returning how many were signalled. The
@@ -123,7 +131,7 @@ pub fn kill_live_process_groups() -> usize {
     CANCELLED.store(true, Ordering::SeqCst);
     let live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
     #[cfg(unix)]
-    for pgid in live.iter() {
+    for (_, pgid) in live.iter() {
         kill_process_group(*pgid);
     }
     let n = live.len();
@@ -136,8 +144,9 @@ pub fn cancelled() -> bool {
     CANCELLED.load(Ordering::SeqCst)
 }
 
-/// A live child's registry entry, removed on drop.
-struct Registered(u32);
+/// A live child's registry entry, removed on drop. Never dropped while
+/// the caller holds a [`LiveLock`] (the drop takes the lock).
+pub(crate) struct Registered((u8, u32));
 
 impl Drop for Registered {
     fn drop(&mut self) {
@@ -150,6 +159,29 @@ impl Drop for Registered {
         LIVE.lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&self.0);
+    }
+}
+
+/// The registry, locked: spawn under it and register the child's group, so
+/// a cancellation either happened before (nothing is spawned) or finds the
+/// group registered.
+pub(crate) struct LiveLock(std::sync::MutexGuard<'static, std::collections::BTreeSet<(u8, u32)>>);
+
+/// Take the registry's lock; [`Error::Interrupted`] once cancelled.
+pub(crate) fn live_lock() -> Result<LiveLock, Error> {
+    let guard = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+    if cancelled() {
+        return Err(Error::Interrupted);
+    }
+    Ok(LiveLock(guard))
+}
+
+impl LiveLock {
+    /// Register `pgid` with its kill `order` ([`PROGRAM_FIRST`] or
+    /// [`OTHER`]).
+    pub(crate) fn register(&mut self, pgid: u32, order: u8) -> Registered {
+        self.0.insert((order, pgid));
+        Registered((order, pgid))
     }
 }
 
@@ -573,9 +605,21 @@ pub(crate) fn scrubbed_command(
 /// Spawned as `/bin/kill -KILL -- -<pgid>`; any failure is ignored (the
 /// group may already be gone).
 #[cfg(unix)]
-fn kill_process_group(pgid: u32) {
+pub(crate) fn kill_process_group(pgid: u32) {
     let _ = Command::new("/bin/kill")
         .args(["-KILL", "--", &format!("-{pgid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Best-effort SIGTERM of one process (`/bin/kill -TERM <pid>`; no
+/// `unsafe`): perfrun's own end (docs/PERF-DESIGN.md §3.3 step 6).
+#[cfg(unix)]
+pub(crate) fn terminate(pid: u32) {
+    let _ = Command::new("/bin/kill")
+        .args(["-TERM", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -606,8 +650,8 @@ pub(crate) fn run_with_timeout(
             .spawn()
             .map_err(|e| Error::Invariant(format!("spawning `{shown}`: {e}")))?;
         let id = child.id();
-        live.insert(id);
-        (child, Registered(id))
+        live.insert((OTHER, id));
+        (child, Registered((OTHER, id)))
     };
     // The child leads its own group (see `scrubbed_command`), so its pid is
     // also its pgid — the group to kill on timeout/overflow.
@@ -706,7 +750,7 @@ pub(crate) fn run_with_timeout(
 /// Read `pipe` to EOF on a new thread, appending into `buf` (shared so a
 /// partial capture survives if the thread is abandoned). Past `cap` bytes the
 /// thread raises `overflow` and stops reading.
-fn drain<R: Read + Send + 'static>(
+pub(crate) fn drain<R: Read + Send + 'static>(
     mut pipe: R,
     buf: &Arc<Mutex<Vec<u8>>>,
     cap: usize,
@@ -736,7 +780,7 @@ fn drain<R: Read + Send + 'static>(
     });
 }
 
-fn take(buf: &Arc<Mutex<Vec<u8>>>) -> Vec<u8> {
+pub(crate) fn take(buf: &Arc<Mutex<Vec<u8>>>) -> Vec<u8> {
     match buf.lock() {
         Ok(mut guard) => std::mem::take(&mut *guard),
         Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
@@ -1073,7 +1117,7 @@ mod tests {
             runner(Duration::from_secs(60)).tool(&sv(&["sh", "-c", "sleep 30"]))
         });
         let pgid = loop {
-            if let Some(p) = LIVE.lock().unwrap().iter().next().copied() {
+            if let Some((_, p)) = LIVE.lock().unwrap().iter().next().copied() {
                 break p;
             }
             std::thread::sleep(Duration::from_millis(10));
