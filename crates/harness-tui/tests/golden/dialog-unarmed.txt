@@ -8,7 +8,7 @@
 │  ▾ Units (1)                 ││20         9.53674316e-07f / 3,     7.56› │  14     scfcod: *mut u8,                  │
 │    ▸ ✓ u-lib         migrated││21         6.00777173e-07f / 3,     9.53› │  15     bands: i32,                       │
 │    Features (none ye┌ Re-check u-lib with the oracle? ─────────────────────────────────────────┐,                    │
-│                     │Builds u-lib's Rust and runs it against the C in the sandbox.             │                     │
+│    Speed (no file)  │Builds u-lib's Rust and runs it against the C in the sandbox.             │                     │
 │                     │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │usize = if bands > 0›│
 │                     │when green) and u-lib's status in plan.toml: green → verified; red → a    │                     │
 │                     │verified unit becomes "in progress" (a merged one keeps its status).      │: &[u8] = if pba.is_›│

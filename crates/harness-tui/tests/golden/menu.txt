@@ -8,7 +8,7 @@
 │  ▾ Units (1)                 ││  ! test_case/src/lib.c  changed since scan                                           │
 │    ▸ ⚠ u-lib  needs attention││                                                                                      │
 │    Features (none yet)       ││                                                                                      │
-│                              ││                                                                                      │
+│    Speed (no file)           ││                                                                                      │
 │                           ┌ harness-tui-gmenu-0000000000 ────────────────────────────────┐                           │
 │                           │  Open                                                        │                           │
 │                           │  Re-read the project                                        g│                           │

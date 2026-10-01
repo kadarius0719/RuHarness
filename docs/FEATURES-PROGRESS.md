@@ -66,8 +66,17 @@ below are history.
   zopfli (800 KB text, 5 runs): the C 2.20 s / 35.1 MB / 3.30e10 instructions; u001-katajainen
   "about as fast as the C (within 2 %)", 1.9 % more instructions. A two-verified-unit end-to-end
   target does not exist yet (zopfli has one): the as-it-stands path is tested at the oracle level.
-  NEXT: step (f), the cockpit (Speed group and View, the generalised Edit flow for workloads, the
-  cached input hashing in Snapshot::load, the MCP Speed fact); then (g) SCHEMAS, tutorial, the
+- Step (f1) DONE: `harness-tui/src/perfread.rs` (Snapshot.perf: workloads state, results files,
+  orphans, inputs hashed off a process-wide cache keyed by (dev, ino, size, mtime, identity),
+  never while a `perf run` holds the lock, 256 MiB budget; crates' digests; program_now) and
+  `speed.rs` (SpeedModel: group label ≤ 19 cols, rows worded by harness-core with currency,
+  units worst first, header, unit_header, summary_line); tree `Selection::Speed` (a leaf after
+  Features); the Speed View (golden `tests/golden/speed-54.txt`; each row a link, the focused
+  row's full sentence below); the unit header's two Speed lines; the summary's Speed line.
+  NEXT: (f2) acts — Write / Edit / Continue workloads (generalise features_edit.rs, draft slot
+  "harness-tui-workloads"), Measure speed / this unit / again with 31 runs, confirm dialogs with
+  the estimate; (f3) behaves-differently fact + Compare outputs, slower row's next step by
+  provenance, Help's Speed section; (f4) the MCP Speed fact. Then (g) SCHEMAS, tutorial, the
   testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree

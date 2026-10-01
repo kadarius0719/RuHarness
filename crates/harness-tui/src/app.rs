@@ -677,6 +677,9 @@ pub struct App {
     /// The person's features as the cockpit shows them
     /// (docs/FEATURES-DESIGN.md §8.1).
     pub features: featmap::FeatureModel,
+    /// The C-vs-Rust speed as the cockpit shows it
+    /// (docs/PERF-DESIGN.md §3.11).
+    pub speed: crate::speed::SpeedModel,
     /// What is selected.
     pub selection: Selection,
     /// Which nodes are folded or opened.
@@ -904,6 +907,7 @@ impl App {
     pub fn new(config: Config, read: Read) -> App {
         let files = files::build(&read.snapshot, &read.walk);
         let features = featmap::build(&read.snapshot, &files, &read.map, read.map_now.as_ref());
+        let speed = crate::speed::build(&read.snapshot);
         let target = config.target.clone();
         let holder = read.holder;
         let migrate_model = read.migrate_model;
@@ -914,6 +918,7 @@ impl App {
             walk: read.walk,
             files,
             features,
+            speed,
             selection: Selection::Project,
             expansion: Expansion::default(),
             rows: Vec::new(),
@@ -1177,6 +1182,7 @@ impl App {
             &read.map,
             read.map_now.as_ref(),
         );
+        self.speed = crate::speed::build(&self.snapshot);
         self.selection =
             tree::surviving(&self.snapshot, &self.files, &self.features, &self.selection);
         // A finished (or vanished) attempt no longer awaits anything.
@@ -4370,6 +4376,11 @@ impl App {
             Selection::Project | Selection::Dir(_) | Selection::Units => ("", String::new()),
             Selection::Features => match &self.features.group {
                 featmap::Group::Invalid(_) => ("⚠", "error".into()),
+                _ => ("", String::new()),
+            },
+            Selection::Speed => match &self.speed.group {
+                crate::speed::Group::FileError(_) => ("⚠", "error".into()),
+                _ if self.speed.measuring => ("", "measuring".into()),
                 _ => ("", String::new()),
             },
             Selection::Feature(id) => match self.features.feature(id) {

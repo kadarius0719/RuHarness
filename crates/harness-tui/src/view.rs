@@ -18,6 +18,7 @@ use crate::highlight::{Class, Pieces};
 use crate::menu::MODEL_SEPARATOR;
 use crate::model::UnitView;
 use crate::narrate::{check_words, elapsed_words};
+use crate::speed;
 use crate::tree::{Row, RowKind, Selection};
 use ratatui::buffer::CellWidth;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -516,6 +517,7 @@ fn node_name(app: &App, sel: &Selection) -> String {
             featmap::Group::Valid => format!("Features ({})", app.features.features.len()),
         },
         Selection::Feature(id) => feature_row_name(app, id),
+        Selection::Speed => app.speed.label(),
     }
 }
 
@@ -552,7 +554,7 @@ fn row_label(app: &App, sel: &Selection) -> (&'static str, String) {
     match sel {
         Selection::Project => ("", app.files.rollup("").text()),
         Selection::Dir(d) => ("", app.files.rollup(d).text()),
-        Selection::Units | Selection::Features => app.node_label(sel),
+        Selection::Units | Selection::Features | Selection::Speed => app.node_label(sel),
         Selection::Attempt(u, a) => {
             let (_, word) = app.node_label(sel);
             let glyph = match app
@@ -627,7 +629,7 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     let mut name_style = if internal { dim() } else { Style::default() };
     if matches!(
         sel,
-        Selection::Project | Selection::Units | Selection::Features
+        Selection::Project | Selection::Units | Selection::Features | Selection::Speed
     ) {
         name_style = name_style.add_modifier(Modifier::BOLD);
     }
@@ -853,6 +855,13 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     }
     if let Some(line) = unit_features_line(app, &unit.unit.id) {
         lines.extend(wrapped(&line, width, Style::default().fg(Color::Cyan)));
+    }
+    if let Some((first, second)) = app.speed.unit_header(&unit.unit.id) {
+        lines.push(Line::from(clipped(vec![Span::raw(first)], width)));
+        lines.push(Line::from(clipped(
+            vec![Span::styled(second, dim())],
+            width,
+        )));
     }
     lines
 }
@@ -1271,6 +1280,8 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
     }
     let start = lines.len();
     lines.extend(summary_features(app, width, links, start));
+    let start = lines.len();
+    lines.extend(summary_speed(app, width, links, start));
     // (The read model's own note — "no plan — run `harness plan`" — is the
     // CLI's wording; the Next step above says it the cockpit's way.)
     if let Some(h) = &app.holder {
@@ -1383,6 +1394,286 @@ fn summary_features(
     let mut lines = vec![Line::from("")];
     links.push((start + lines.len(), Selection::Features));
     lines.extend(wrapped(&text, width, Style::default()));
+    lines
+}
+
+/// The project summary's Speed line (docs/PERF-DESIGN.md §3.11), a link to
+/// the group; nothing without a workloads file.
+fn summary_speed(
+    app: &App,
+    width: usize,
+    links: &mut Vec<(usize, Selection)>,
+    start: usize,
+) -> Vec<Line<'static>> {
+    let Some(text) = app.speed.summary_line() else {
+        return Vec::new();
+    };
+    links.push((start, Selection::Speed));
+    wrapped(&text, width, Style::default())
+}
+
+/// How a row's sentence names its side.
+fn speed_side_label(side: &speed::SideKey) -> String {
+    match side {
+        speed::SideKey::C => "the C".into(),
+        speed::SideKey::AsItStands => "the program as it stands".into(),
+        speed::SideKey::Unit(id) => id.clone(),
+    }
+}
+
+/// One row of the Speed View: the workload, its short form (dimmed with
+/// "out of date: …" when stale), and its last-try or found-before line.
+fn speed_row_lines(row: &speed::SpeedRow, column: usize, width: usize) -> Vec<Line<'static>> {
+    let name = ellipsis(
+        &display::line(&row.workload),
+        column.saturating_sub(2).max(4),
+    );
+    let pad = column.saturating_sub(width_of(&name));
+    let mut spans = vec![Span::raw(format!("  {name}{}", " ".repeat(pad)))];
+    if row.out_of_date.is_empty() {
+        spans.push(Span::raw(row.words.short.clone()));
+    } else {
+        spans.push(Span::styled(row.words.short.clone(), dim()));
+        spans.push(Span::styled(
+            format!(" · out of date: {}", row.out_of_date.join(", ")),
+            dim(),
+        ));
+    }
+    let mut lines = vec![Line::from(clipped(spans, width))];
+    for d in &row.words.details {
+        if d.starts_with("last try:") || d.starts_with("a difference found before") {
+            lines.push(Line::from(clipped(
+                vec![Span::styled(format!("  {}{d}", " ".repeat(column)), dim())],
+                width,
+            )));
+        }
+    }
+    lines
+}
+
+/// The Speed View's sections as they are laid out: each row a link, its
+/// sentence kept for the focused row.
+struct SpeedSection<'l, 'r> {
+    lines: &'l mut Vec<Line<'static>>,
+    links: &'l mut Vec<(usize, Selection)>,
+    sentences: Vec<Option<(speed::SideKey, &'r speed::SpeedRow)>>,
+    column: usize,
+    width: usize,
+}
+
+impl<'r> SpeedSection<'_, 'r> {
+    fn push(
+        &mut self,
+        heading: Line<'static>,
+        heading_link: Option<Selection>,
+        side: speed::SideKey,
+        rows: &'r [speed::SpeedRow],
+    ) {
+        if let Some(sel) = heading_link {
+            self.links.push((self.lines.len(), sel));
+            self.sentences.push(None);
+        }
+        self.lines.push(heading);
+        for row in rows {
+            let link = match &side {
+                speed::SideKey::Unit(id) => Selection::Unit(id.clone()),
+                _ => Selection::Speed,
+            };
+            self.links.push((self.lines.len(), link));
+            self.sentences.push(Some((side.clone(), row)));
+            self.lines
+                .extend(speed_row_lines(row, self.column, self.width));
+        }
+    }
+}
+
+/// The Speed View (docs/PERF-DESIGN.md §3.11): the header the rows record,
+/// the C alone, the program as it stands, each unit worst first; the
+/// focused row's full sentence below.
+fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<Line<'static>> {
+    let model = &app.speed;
+    let mut lines = Vec::new();
+    match &model.group {
+        speed::Group::NoFile => {
+            lines.extend(wrapped(
+                "Speed compares the C against the Rust in use: the program runs your \
+                 workloads — inputs you choose — first as the C, then with each unit's \
+                 Rust, many times each, and perf says which is faster and by how much.",
+                width,
+                Style::default(),
+            ));
+            lines.push(Line::from(""));
+            lines.extend(wrapped(
+                "On this row, press Enter and choose Write your workloads file.",
+                width,
+                bold(),
+            ));
+            return lines;
+        }
+        speed::Group::NoWorkload => {
+            lines.extend(wrapped(
+                "Your workloads file has no workload yet.",
+                width,
+                Style::default(),
+            ));
+            lines.push(Line::from(""));
+            lines.extend(wrapped(
+                "On this row, press Enter and choose Edit the workloads file.",
+                width,
+                bold(),
+            ));
+            return lines;
+        }
+        speed::Group::FileError(why) => {
+            lines.extend(wrapped(
+                // The error names the file, its line and column.
+                &display::line(why),
+                width,
+                Style::default().fg(Color::Yellow),
+            ));
+            lines.push(Line::from(""));
+            lines.extend(wrapped(
+                "On this row, press Enter and choose Edit the workloads file.",
+                width,
+                bold(),
+            ));
+            lines.extend(wrapped(
+                "Until it is fixed, perf cannot measure — verify and migrations still work.",
+                width,
+                dim(),
+            ));
+            return lines;
+        }
+        _ => {}
+    }
+    lines.extend(wrapped(
+        "Speed — your workloads, the C against the Rust in use",
+        width,
+        bold(),
+    ));
+    for h in &model.header {
+        lines.extend(wrapped(h, width, dim()));
+    }
+    if model.measuring {
+        lines.extend(wrapped(
+            "A perf run is measuring now — rows appear as each finishes.",
+            width,
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    for e in &model.errors {
+        lines.extend(wrapped(e, width, Style::default().fg(Color::Yellow)));
+    }
+    lines.push(Line::from(""));
+    // The workload column: the longest workload id + 2.
+    let all_rows = model
+        .c_rows
+        .iter()
+        .chain(&model.program_rows)
+        .chain(model.units.iter().flat_map(|u| &u.rows));
+    let column = all_rows
+        .map(|r| width_of(&display::line(&r.workload)))
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let column = column.min(width.saturating_sub(2 + 26).max(6));
+    // Each row is a link (its unit, or Speed itself) so the focused one's
+    // full sentence shows below.
+    let mut section = SpeedSection {
+        lines: &mut lines,
+        links,
+        sentences: Vec::new(),
+        column,
+        width,
+    };
+    if model.c_rows.is_empty() {
+        section.lines.extend(wrapped(
+            "Nothing measured yet — on this row, press Enter and choose Measure speed.",
+            width,
+            bold(),
+        ));
+    } else {
+        section.push(
+            Line::from(Span::styled("The original C", bold())),
+            None,
+            speed::SideKey::C,
+            &model.c_rows,
+        );
+    }
+    if !model.program_rows.is_empty() {
+        let held = model.held.len();
+        let left = model.left_out.len();
+        let heading = if left == 0 {
+            format!("As it stands ({held} unit{})", plural_s(held))
+        } else {
+            format!(
+                "As it stands ({held} of {} units — {left} left out)",
+                held + left
+            )
+        };
+        section.push(
+            Line::from(clipped(vec![Span::styled(heading, bold())], width)),
+            None,
+            speed::SideKey::AsItStands,
+            &model.program_rows,
+        );
+    }
+    for u in &model.units {
+        section.push(
+            Line::from(clipped(vec![Span::styled(u.id.clone(), bold())], width)),
+            Some(Selection::Unit(u.id.clone())),
+            speed::SideKey::Unit(u.id.clone()),
+            &u.rows,
+        );
+    }
+    let sentences = section.sentences;
+    if !model.orphans.is_empty() {
+        lines.push(Line::from(""));
+        lines.extend(wrapped(
+            &format!(
+                "Results of units no longer in the plan (in migration/perf/units/): {}",
+                model.orphans.join(", ")
+            ),
+            width,
+            dim(),
+        ));
+    }
+    // The focused row's full sentence and details.
+    let focused = (app.focus == Focus::View)
+        .then_some(app.link)
+        .flatten()
+        .and_then(|l| sentences.get(l))
+        .and_then(|s| s.as_ref());
+    if let Some((side, row)) = focused {
+        lines.push(Line::from(""));
+        lines.extend(wrapped(
+            &format!(
+                "{} on {} — {}",
+                speed_side_label(side),
+                display::line(&row.workload),
+                row.words.headline
+            ),
+            width,
+            Style::default(),
+        ));
+        for d in &row.words.details {
+            lines.extend(wrapped(d, width, dim()));
+        }
+        if !row.out_of_date.is_empty() {
+            lines.extend(wrapped(
+                &format!("out of date: {}", row.out_of_date.join(", ")),
+                width,
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+    } else if !sentences.is_empty() {
+        lines.push(Line::from(""));
+        lines.extend(wrapped(
+            "Move to a row (Tab, then ↓) to read its full words.",
+            width,
+            dim(),
+        ));
+    }
     lines
 }
 
@@ -2096,6 +2387,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         Selection::Features => Some(features_view(app, width, &mut links)),
         Selection::Feature(id) => Some(feature_view(app, id, width, &mut links)),
+        Selection::Speed => Some(speed_view(app, width, &mut links)),
         _ => None,
     };
     if let Some(lines) = list {
@@ -5654,6 +5946,321 @@ mod tests {
             map.to_bytes().unwrap(),
         )
         .unwrap();
+    }
+
+    /// Speed results on a copy of zopfli: the C alone, the program as it
+    /// stands and u001, each on two workloads, with today's digests (or
+    /// `stale` ones).
+    fn write_speed_results(app: &App, stale: bool) -> App {
+        use harness_core::perf::results::{
+            self as res, Compilers, Computer, CrateDigest, LeftOut, ProgramResults, Row, RowInputs,
+            Run, Step1, Step1Run, UnitRef, UnitResults,
+        };
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        std::fs::create_dir_all(root.join("bench")).unwrap();
+        std::fs::write(root.join("bench/big.txt"), "big ".repeat(1000)).unwrap();
+        std::fs::write(root.join("bench/small.txt"), "small\n").unwrap();
+        std::fs::create_dir_all(&perf).unwrap();
+        std::fs::write(
+            perf.join("workloads.toml"),
+            "schema_version = 1\n\
+             [[workload]]\nid = \"big-text\"\nargs = [\"-c\", \"{input}\"]\ninput = \"bench/big.txt\"\n\
+             [[workload]]\nid = \"many-small\"\nargs = [\"-c\", \"{input}\"]\ninput = \"bench/small.txt\"\n",
+        )
+        .unwrap();
+        // A first read gives today's digests.
+        let id = "u001-katajainen";
+        let fake = format!("blake3:{}", "f".repeat(64));
+        std::fs::create_dir_all(perf.join(res::UNITS_DIR)).unwrap();
+        let mut file = UnitResults::new(id);
+        file.rows.push(Row {
+            workload: "big-text".into(),
+            outcome: "not-verified".into(),
+            short: None,
+            runs: None,
+            platform_metrics: None,
+            inputs: RowInputs {
+                workload: fake.clone(),
+                program: fake.clone(),
+                crates: None,
+                replaces: None,
+                program_name: "zopfli".into(),
+                units: None,
+                left_out: None,
+                recipe: harness_core::perf::PERF_RECIPE.into(),
+                launcher: harness_core::perf::PERF_LAUNCHER.into(),
+                computer: Computer {
+                    os: "15.6".into(),
+                    build: "24G84".into(),
+                    arch: "arm64".into(),
+                    cpu: "Apple M3".into(),
+                    two_kinds: true,
+                    fast_cores: 4,
+                },
+                compilers: Compilers {
+                    cc: "Apple clang version 17.0.0".into(),
+                    rustc: Some("rustc 1.94.1 (e408947bf 2026-03-25)".into()),
+                },
+            },
+            c: None,
+            other: None,
+            std: None,
+            fat_lto: None,
+            profile: None,
+            step1: None,
+            failed_run: None,
+            setup: Some(res::SetupFacts {
+                reason: Some("not-fresh".into()),
+                ..res::SetupFacts::default()
+            }),
+            first_difference: None,
+            found_before: None,
+            last_try: None,
+        });
+        res::write_unit(&res::unit_path(&perf, id), &file).unwrap();
+        let read = crate::load::read(&root).unwrap();
+        let p = &read.snapshot.perf;
+        let digest = |w: &str| match p.inputs.get(w) {
+            Some(crate::perfread::InputNow::Digest(d)) if !stale => d.clone(),
+            _ => fake.clone(),
+        };
+        let program = if stale {
+            fake.clone()
+        } else {
+            p.program_now.clone().expect("the program's digest")
+        };
+        let krate = p.crates.get(id).expect("u001's crate digest").clone();
+        let program_name = read.snapshot.program_name.clone();
+        // Runs around `base` cycles, spread ±1 % evenly.
+        let side = |base: f64| -> Vec<Run> {
+            (0..15)
+                .map(|i| {
+                    let c = base * (1.0 + 0.01 * (i as f64 / 7.0 - 1.0));
+                    Run {
+                        instructions: Some(33_000_000_000),
+                        cycles: Some(c as u64),
+                        cpu_us: Some((c / 3_200.0) as u64),
+                        wall_us: Some((c / 3_200.0) as u64 + 5_000),
+                        memory: Some(12_400_000),
+                        p_instructions: Some(33_000_000_000),
+                        p_cycles: Some(c as u64),
+                        load: Some(150),
+                        end: "exit 0".into(),
+                        ..Run::default()
+                    }
+                })
+                .collect()
+        };
+        let short = |cpu: u64| Step1 {
+            c_first: Step1Run {
+                instructions: Some(2_000_000),
+                cpu_us: Some(cpu),
+                end: "exit 0".into(),
+                stdout_bytes: 30,
+                stderr_bytes: 0,
+            },
+            other: None,
+            c_second: Step1Run {
+                instructions: Some(2_000_000),
+                cpu_us: Some(cpu),
+                end: "exit 0".into(),
+                stdout_bytes: 30,
+                stderr_bytes: 0,
+            },
+        };
+        let base = file.rows[0].clone();
+        let inputs = |w: &str, rust: bool| RowInputs {
+            workload: digest(w),
+            program: program.clone(),
+            program_name: program_name.clone(),
+            compilers: Compilers {
+                cc: base.inputs.compilers.cc.clone(),
+                rustc: rust.then(|| base.inputs.compilers.rustc.clone().unwrap()),
+            },
+            ..base.inputs.clone()
+        };
+        let measured = |w: &str, rust: bool, slower: Option<f64>| Row {
+            workload: w.into(),
+            outcome: if slower.is_some() {
+                "measured"
+            } else {
+                "baseline"
+            }
+            .into(),
+            short: Some(false),
+            runs: Some(15),
+            platform_metrics: Some("macos-v6-cycles".into()),
+            inputs: inputs(w, rust),
+            c: Some(side(3.9e9)),
+            other: slower.map(|s| side(3.9e9 * (1.0 + s))),
+            std: rust.then_some(true),
+            setup: None,
+            ..base.clone()
+        };
+        let too_short = |w: &str, rust: bool| Row {
+            workload: w.into(),
+            outcome: "too-short".into(),
+            inputs: inputs(w, rust),
+            step1: Some(Step1 {
+                other: rust.then(|| short(1_100).c_first),
+                ..short(1_000)
+            }),
+            setup: None,
+            ..base.clone()
+        };
+        let mut unit = UnitResults::new(id);
+        let mut u_big = measured("big-text", true, Some(0.062));
+        u_big.inputs.crates = Some(vec![CrateDigest {
+            id: id.into(),
+            digest: krate.clone(),
+        }]);
+        u_big.inputs.replaces = Some(
+            read.snapshot
+                .unit(id)
+                .unwrap()
+                .unit
+                .oracle_param_list("replaces"),
+        );
+        let mut u_small = too_short("many-small", true);
+        u_small.inputs.crates = u_big.inputs.crates.clone();
+        u_small.inputs.replaces = u_big.inputs.replaces.clone();
+        unit.rows = vec![u_big, u_small];
+        res::write_unit(&res::unit_path(&perf, id), &unit).unwrap();
+        let held = |mut r: Row| {
+            r.inputs.units = Some(vec![UnitRef {
+                id: id.into(),
+                crate_digest: krate.clone(),
+            }]);
+            r.inputs.left_out = Some(vec![LeftOut {
+                id: "u-zopfli_bin".into(),
+                crate_digest: String::new(),
+                reason: "does-not-link".into(),
+            }]);
+            r
+        };
+        let program_file = ProgramResults {
+            c_alone: vec![
+                measured("big-text", false, None),
+                too_short("many-small", false),
+            ],
+            as_it_stands: vec![
+                held(measured("big-text", true, Some(0.062))),
+                held(too_short("many-small", true)),
+            ],
+            ..ProgramResults::default()
+        };
+        res::write_program(&res::program_path(&perf), &program_file).unwrap();
+        crate::app::tests::app_of_path(&root)
+    }
+
+    #[test]
+    fn the_speed_view_at_54_columns() {
+        let app = app_of("targets/zopfli", "speed-view");
+        let mut app = write_speed_results(&app, false);
+        assert!(
+            app.snapshot.perf.units.values().all(Result::is_ok),
+            "{:?}",
+            app.snapshot.perf.units
+        );
+        app.select(Selection::Speed);
+        let buffer = render(&mut app, 80, 40);
+        golden("speed-54.txt", &app, &buffer);
+        // The focused row's full sentence below the list.
+        app.focus = Focus::View;
+        app.link = Some(5);
+        let screen = text(&render(&mut app, 80, 40));
+        assert!(
+            screen.contains("u001-katajainen on big-text — slower"),
+            "{screen}"
+        );
+        // The unit's header and the project summary.
+        app.select(Selection::Unit("u001-katajainen".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("Speed: slower 6.2 % on big-text"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("(5.6–6.8 %) · 1 of 2 workloads"),
+            "{screen}"
+        );
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("Speed: 1 of 1 unit measured — 1 slower — see Speed"),
+            "{screen}"
+        );
+        // Stale digests: every row says why, dimmed.
+        let mut app = write_speed_results(&app, true);
+        app.select(Selection::Speed);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains(
+                "slower 6.2 % (5.6–6.8 %) · out of date: your workload changed, the C changed"
+            ),
+            "{screen}"
+        );
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains("· 1 out of date — see Speed"), "{screen}");
+    }
+
+    #[test]
+    fn the_speed_group_says_its_state() {
+        let mut app = app_of("targets/zopfli", "speed-states");
+        assert_eq!(app.speed.label(), "Speed (no file)");
+        app.select(Selection::Speed);
+        let screen = text(&render(&mut app, 80, 40));
+        assert!(
+            screen.contains("press Enter and choose Write your"),
+            "{screen}"
+        );
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            !screen.contains("Speed:"),
+            "no workloads file, no line: {screen}"
+        );
+        let dir = harness_core::perf::perf_dir(&app.config.target);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("workloads.toml"),
+            harness_core::perf::workloads::STARTER,
+        )
+        .unwrap();
+        let app = crate::app::tests::app_of_path(&app.config.target);
+        assert_eq!(app.speed.label(), "Speed (no workload)");
+        std::fs::write(
+            dir.join("workloads.toml"),
+            "schema_version = 1\n[[workload]]\nid = \"W\"\n",
+        )
+        .unwrap();
+        let mut app = crate::app::tests::app_of_path(&app.config.target);
+        assert_eq!(app.speed.label(), "Speed (file error)");
+        assert_eq!(
+            app.node_label(&Selection::Speed),
+            ("⚠", "error".to_string())
+        );
+        app.select(Selection::Speed);
+        let screen = text(&render(&mut app, 80, 40));
+        assert!(
+            screen.contains("workloads.toml line 3, column 6:"),
+            "{screen}"
+        );
+        std::fs::write(
+            dir.join("workloads.toml"),
+            "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = [\"-h\"]\n",
+        )
+        .unwrap();
+        let mut app = crate::app::tests::app_of_path(&app.config.target);
+        assert_eq!(app.speed.label(), "Speed (not yet run)");
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("Speed: not measured yet — see Speed"),
+            "{screen}"
+        );
     }
 
     /// The committed zopfli (the dogfood): its features, its map, u001

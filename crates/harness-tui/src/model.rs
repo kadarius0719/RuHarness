@@ -169,6 +169,8 @@ pub struct Snapshot {
     pub source_dir: String,
     /// The file name the program runs under in a scenario.
     pub program_name: String,
+    /// perf's files and today's inputs (docs/PERF-DESIGN.md §3.11).
+    pub perf: crate::perfread::PerfRead,
 }
 
 impl Snapshot {
@@ -186,7 +188,26 @@ impl Snapshot {
             features_now: None,
             source_dir: ctx.config.target.source_dir.clone(),
             program_name: harness_core::features::program_name(&ctx.config),
+            perf: crate::perfread::PerfRead::default(),
         };
+        // perf's files: the live lock holder read here (as `unit_report`
+        // does) — while a perf run holds it no input is hashed.
+        let holder = status::live_holder(&ledger).ok().flatten();
+        let holder_command = holder.as_ref().map(|h| h.command.clone());
+        let perf_units: Vec<(String, Option<String>)> = Plan::load(&ledger.plan_path())
+            .map(|p| {
+                p.units
+                    .iter()
+                    .map(|u| {
+                        (
+                            u.id.clone(),
+                            u.oracle_param_str("rust_crate").map(str::to_string),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        snapshot.perf = crate::perfread::read(&ctx.root, &perf_units, holder_command.as_deref());
         let facts = match Facts::load(&ledger.facts_path()) {
             Ok(f) => f,
             Err(e) if e.is_not_found() => {
@@ -224,6 +245,17 @@ impl Snapshot {
             snapshot
                 .units
                 .push(unit_view(&ctx, &ledger, &facts, unit, now.as_ref())?);
+        }
+        // The program's digest for perf's currency: the features' when
+        // computed, else hashed here — only with a workloads file.
+        if !matches!(
+            snapshot.perf.workloads,
+            Ok(harness_core::perf::workloads::WorkloadsState::NoFile)
+        ) {
+            snapshot.perf.program_now = Some(match &now {
+                Some(n) => n.program.clone(),
+                None => harness_core::features::program_digest_now(&ctx, &facts),
+            });
         }
         snapshot.features_now = now;
         snapshot.facts = Some(facts);

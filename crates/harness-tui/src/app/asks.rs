@@ -1726,6 +1726,7 @@ impl App {
                 format!("the feature {id}")
             }
             Selection::Feature(_) => "a feature".into(),
+            Selection::Speed => "the speed of the C against the Rust".into(),
             Selection::Unit(id) => unit_word(id),
             Selection::Crate(id) => format!("the crate of {}", unit_word(id)),
             Selection::Attempt(u, a) => {

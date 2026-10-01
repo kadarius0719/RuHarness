@@ -21,8 +21,10 @@ pub mod files;
 pub mod load;
 pub mod model;
 pub mod pairs;
+pub mod perfread;
 pub mod preflight;
 pub mod spawn;
+pub mod speed;
 
 #[cfg(feature = "tui")]
 pub mod app;
