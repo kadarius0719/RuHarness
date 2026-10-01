@@ -1540,6 +1540,197 @@ mod tests {
         assert_eq!(m.stdout, b"dfl 1 empty 1\n", "{:?}", m.seen);
     }
 
+    /// Whether a process (not a zombie) runs the executable named `name`,
+    /// polled for up to a second until none does.
+    fn still_running(name: &str) -> bool {
+        for _ in 0..40 {
+            let out = Command::new("ps")
+                .args(["-axo", "stat=,ucomm="])
+                .output()
+                .expect("ps");
+            let any = String::from_utf8_lossy(&out.stdout).lines().any(|l| {
+                let mut words = l.split_whitespace();
+                let stat = words.next().unwrap_or("");
+                words.collect::<Vec<_>>().join(" ") == name && !stat.starts_with('Z')
+            });
+            if !any {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        true
+    }
+
+    /// Every way to start a process is killed on trying — a SIGKILL perfrun
+    /// did not send — and nothing it would have started is left running.
+    /// §3.12's "nothing the program starts outlives its run" rests on this
+    /// rule on macOS: perfrun kills the program's group only on its
+    /// deadline, a SIGTERM or the harness's end, never after a normal end.
+    #[test]
+    fn every_way_to_start_a_process_is_killed() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-spawns");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        // A started copy of the program would sleep, so a survivor shows.
+        let head =
+            "#include <spawn.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\
+                    #include <unistd.h>\nextern char **environ;\nint main(int c, char **v) {\n\
+                    if (c > 1 && strcmp(v[1], \"child\") == 0) { sleep(30); return 0; }\n";
+        for (name, body) in [
+            ("bysystem", "system(\"true\");"),
+            ("bypopen", "FILE *f = popen(\"true\", \"r\"); if (f) pclose(f);"),
+            (
+                "byspawn",
+                "pid_t p; char *a[] = { v[1], \"child\", 0 }; posix_spawn(&p, v[1], 0, 0, a, environ);",
+            ),
+            (
+                "byvfork",
+                "char *a[] = { v[1], \"child\", 0 }; if (vfork() == 0) { execv(v[1], a); _exit(0); }",
+            ),
+        ] {
+            let bin = program(&dir, name, &format!("{head}{body}\nreturn 0; }}\n"));
+            // Its own path, the one exec the profile allows.
+            let o = Opts {
+                args: vec![bin.to_string_lossy().into_owned()],
+                ..opts(60, true)
+            };
+            let m = run_with(&l, &bin, &o);
+            let r = record(&m);
+            assert_eq!(
+                (&r.status, r.end, r.killed),
+                (&Status::Ok, Some(End::Signal(9)), false),
+                "{name}: {r:?}"
+            );
+            assert_eq!(m.launcher_exit, Some(0), "{name}");
+            assert!(!still_running(name), "{name}: a started copy outlived the run");
+        }
+    }
+
+    /// No signal leaves the sandbox — not to perfrun (the program's parent),
+    /// not to the harness, both the person's own processes — only to the
+    /// program itself (§3.4). Signal 0 is checked like any other.
+    #[test]
+    fn no_signal_leaves_the_sandbox() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-signal-out");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let bin = program(
+            &dir,
+            "signaller",
+            "#include <errno.h>\n#include <signal.h>\n#include <stdio.h>\n#include <stdlib.h>\n\
+             #include <unistd.h>\nstatic int try_kill(pid_t p) { return kill(p, 0) == 0 ? 0 : errno; }\n\
+             int main(int c, char **v) { printf(\"self %d parent %d harness %d\\n\", \
+             try_kill(getpid()), try_kill(getppid()), try_kill((pid_t)atoi(v[1]))); return 0; }\n",
+        );
+        let o = Opts {
+            args: vec![std::process::id().to_string()],
+            ..opts(60, true)
+        };
+        let m = run_with(&l, &bin, &o);
+        assert_eq!(
+            String::from_utf8_lossy(&m.stdout),
+            "self 0 parent 1 harness 1\n",
+            "{:?}",
+            m.seen
+        );
+    }
+
+    /// A run cannot read the other side's binary under the target, only
+    /// its own (§3.4): the profile's target root is a real one here, with
+    /// both sides' slots in it.
+    #[test]
+    fn a_run_cannot_read_the_other_side() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-sides");
+        let target = tmp.path().join("t");
+        let slots = target.join("migration/build/.perf/bin");
+        let ours = slots.join("p000");
+        let theirs = slots.join("p012");
+        std::fs::create_dir_all(&ours).expect("p000");
+        std::fs::create_dir_all(&theirs).expect("p012");
+        let reader = program(
+            &ours,
+            "reader",
+            "#include <errno.h>\n#include <fcntl.h>\n#include <stdio.h>\n\
+             static int try_open(const char *p) { int fd = open(p, O_RDONLY); return fd >= 0 ? 0 : errno; }\n\
+             int main(int c, char **v) { printf(\"other %d own %d\\n\", try_open(v[1]), try_open(v[2])); return 0; }\n",
+        );
+        let other = theirs.join("reader");
+        std::fs::copy(&reader, &other).expect("the other side");
+        let o = Opts {
+            args: vec![
+                other.to_string_lossy().into_owned(),
+                reader.to_string_lossy().into_owned(),
+            ],
+            target_root: &target,
+            ..opts(60, true)
+        };
+        let m = run_with(&l, &reader, &o);
+        assert_eq!(
+            String::from_utf8_lossy(&m.stdout),
+            "other 1 own 0\n",
+            "{:?}",
+            m.seen
+        );
+    }
+
+    /// Nothing is opened or started for the program by the system (§3.12):
+    /// LaunchServices' open, Apple events and a launchd job are refused,
+    /// and so is reaching the services that do them — while an ordinary
+    /// service stays reachable. The sandbox is only asked: nothing opens.
+    #[test]
+    fn nothing_opens_or_starts_outside_the_sandbox() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-no-open");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let names = [
+            "com.apple.coreservices.launchservicesd",
+            "com.apple.CoreServices.coreservicesd",
+            "com.apple.coreservices.appleevents",
+            "com.apple.lsd.open",
+            "com.apple.xpc.smd",
+            "com.apple.xpc.loginitemregisterd",
+            "com.apple.system.opendirectoryd.libinfo",
+        ];
+        let quoted: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
+        let probe = program(
+            &dir,
+            "opener",
+            &format!(
+                "#include <servers/bootstrap.h>\n#include <stdio.h>\n#include <unistd.h>\n\
+                 int sandbox_check(pid_t pid, const char *operation, int type, ...);\n\
+                 int main(void) {{\n\
+                 const char *ops[] = {{ \"lsopen\", \"appleevent-send\", \"job-creation\" }};\n\
+                 for (int i = 0; i < 3; i++) printf(\"%s %d\\n\", ops[i], sandbox_check(getpid(), ops[i], 0));\n\
+                 const char *names[] = {{ {} }};\n\
+                 for (int i = 0; i < {}; i++) {{ mach_port_t p = MACH_PORT_NULL;\n\
+                 printf(\"%s %d\\n\", names[i], bootstrap_look_up(bootstrap_port, names[i], &p) == BOOTSTRAP_NOT_PRIVILEGED); }}\n\
+                 return 0; }}\n",
+                quoted.join(", "),
+                names.len()
+            ),
+        );
+        let m = run(&l, &probe, 60, true);
+        let mut expected = "lsopen 1\nappleevent-send 1\njob-creation 1\n".to_string();
+        for n in names {
+            // 1: refused by the sandbox; the last is an ordinary service.
+            let refused = !n.starts_with("com.apple.system.");
+            expected.push_str(&format!("{n} {}\n", u8::from(refused)));
+        }
+        assert_eq!(String::from_utf8_lossy(&m.stdout), expected, "{:?}", m.seen);
+    }
+
     /// Run by [`a_cancel_while_the_program_runs_leaves_nothing`] in its own
     /// process (a cancellation is for the whole process); a no-op otherwise.
     #[test]

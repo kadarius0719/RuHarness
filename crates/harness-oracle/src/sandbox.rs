@@ -306,7 +306,8 @@ pub(crate) struct PerfSpec<'a> {
 /// The perf profile (§3.4): the scenario profile with `exec` allowed for
 /// exactly perfgo and the side's program, reads of exactly those two and
 /// the run's temp dir under the home folder and the target, no signal but
-/// to itself, and a fork killed on trying.
+/// to itself, a fork killed on trying, and no program started for it by the
+/// system ([`NO_STARTS_THROUGH_THE_SYSTEM`]).
 pub(crate) fn render_perf_profile(spec: &PerfSpec<'_>) -> Result<String, Error> {
     let bin = sbpl_string(spec.bin)?;
     let perfgo = sbpl_string(spec.perfgo)?;
@@ -333,8 +334,26 @@ pub(crate) fn render_perf_profile(spec: &PerfSpec<'_>) -> Result<String, Error> 
     out.push_str(
         "(deny signal)\n(allow signal (target self))\n(deny process-fork (with send-signal SIGKILL))\n",
     );
+    out.push_str(NO_STARTS_THROUGH_THE_SYSTEM);
     Ok(out)
 }
+
+/// What stops a sandboxed program from having the system start a program
+/// for it — started by launchd, outside the sandbox and the program's group,
+/// so it would outlive the run with the person's own rights: opening an app,
+/// a document or a web address (LaunchServices), sending Apple events, and
+/// submitting a launchd job are denied, and so is reaching the services
+/// that do them (LaunchServices and Core Services, the Apple event server,
+/// login items and helper registration). A plain C or Rust program uses
+/// none of them; other same-user services stay reachable (named in
+/// SCHEMAS' perf trust boundaries). The perf profile ends with it.
+pub(crate) const NO_STARTS_THROUGH_THE_SYSTEM: &str = "\
+(deny lsopen appleevent-send job-creation)
+(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") \
+(global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") \
+(global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") \
+(global-name \"com.apple.xpc.loginitemregisterd\"))
+";
 
 /// The scenario run's profile (docs/FEATURES-DESIGN.md §4.1 step 4): the run
 /// profile, plus no signal to any process but itself (`(target others)`
@@ -409,7 +428,8 @@ mod tests {
     /// The perf profile (docs/PERF-DESIGN.md §3.4): exec of exactly perfgo
     /// and the side's program, reads of exactly those and the temp dir,
     /// writes only the temp dir and never the launcher cache, no signal out,
-    /// a fork killed.
+    /// a fork killed, nothing opened or started through the system (what
+    /// macOS does with these rules is tested live in `perf::launcher`).
     #[test]
     fn the_perf_profile() {
         let host = host();
@@ -435,6 +455,8 @@ mod tests {
 (deny signal)
 (allow signal (target self))
 (deny process-fork (with send-signal SIGKILL))
+(deny lsopen appleevent-send job-creation)
+(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") (global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") (global-name \"com.apple.xpc.loginitemregisterd\"))
 ";
         assert_eq!(text, expected);
     }

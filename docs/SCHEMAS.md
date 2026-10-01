@@ -1340,7 +1340,10 @@ differently). They gate nothing — no verdict, no promotion, no plan state — 
 (hostile, committed). The program runs only under perf's profile through the harness-owned
 launcher (`perfrun`, outside the sandbox) and trampoline (`perfgo`, inside it): no fork (killed on
 trying), no signal out, no network, no reads under the home folder or the target beyond its
-binary, writes only its temp dir; nothing it starts outlives its run. Kept outputs are the
+binary, writes only its temp dir, and nothing started for it by the system — opening an app, a
+document or a web address (LaunchServices), Apple events and launchd jobs are denied, and so is
+reaching the services that do them; nothing it starts outlives its run. Other services of the
+same user stay reachable (the profile starts from "allow by default"). Kept outputs are the
 program's own bytes: shown only after their size and blake3 match the row, control characters
 escaped. The launcher cache is per user, outside the target, built only from harness sources
 with a compiler found through root-owned paths, and every sandbox profile denies writes to it.
