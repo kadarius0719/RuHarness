@@ -42,8 +42,13 @@ below are history.
   strict reader, atomic writer, the replace rule), `words.rs` (all of §3.8 and notes 10–21),
   `mod.rs` (PERF_LAUNCHER, PERF_RUN_LOCK, PERF_RECIPE, interrupted-Accept words);
   `status::promotion_marker` public; the cockpit's `Cause::PromotionInterrupted {attempt,
-  unit}` words = perf's. NEXT: step (c), the shared build refactors (`whole_cc_into`, objects
-  once, the `replaces` helper, the `.perf`/`.perf-out` helpers, slots, hashes, the ar reader).
+  unit}` words = perf's.
+- Step (c) DONE: `crates/harness-oracle/src/perf/{build,archive}.rs` (whole_cc_into shared with
+  verify, compile_objects, link_side, Slot, Hashed, kept_c_files (verify uses it), perf_scratch /
+  perf_out / perf_logs, the ar reader + ArchiveFacts). `#![allow(dead_code)]` in perf/mod.rs
+  until step (d) wires it — REMOVE then. NEXT: step (a), the launcher (perfrun.c, perfgo.c
+  embedded; the cache with locks and the root-owned compiler; the perf profile) and the
+  harness's run_measured (control socket, go-ahead G, bye B) + SIGTERM-then-SIGKILL.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
 `.claude/worktrees/rust-migration-harness-7d1c42`), NOT yet merged to main or pushed. This
