@@ -2755,6 +2755,34 @@ mod tests {
         let w = words(&r, &cx);
         assert!(w.headline.contains("1.1×"), "{}", w.headline);
         assert_eq!(w.short, "too short to time");
+        // The gap (build note 14) only when the Rust is slower by more
+        // than 2× against both step-1 C runs, both sides at least 20 ms:
+        // (the C's first and second CPU, the Rust's) → its short form.
+        let mut gap = |a: u64, b: u64, o: u64| {
+            let mut s = step1(a, 140_000_000, o, 1_260_000_000);
+            s.c_second.cpu_us = Some(b);
+            r.step1 = Some(s);
+            let w = words(&r, &cx);
+            (w.short, w.rank)
+        };
+        let none = ("too short to time".to_string(), (13, 0.0));
+        // Start-up noise: a 3 ms C and a 9 ms Rust.
+        assert_eq!(gap(3_000, 3_000, 9_000), none);
+        // Either side of 20 ms.
+        assert_eq!(gap(19_999, 19_999, 60_000), none);
+        assert_eq!(
+            gap(20_000, 20_000, 60_000),
+            ("too short · Rust 3× CPU".to_string(), (5, 3.0))
+        );
+        // 20 ms is the faster C run's: 15 and 25 ms, the Rust at 100 ms.
+        assert_eq!(gap(15_000, 25_000, 100_000), none);
+        assert_eq!(gap(25_000, 15_000, 100_000), none);
+        // More than 2× against both: 40 and 200 ms, the Rust at 360 ms is
+        // 9× the faster run but under 2× the slower.
+        assert_eq!(gap(40_000, 200_000, 360_000), none);
+        assert_eq!(gap(200_000, 40_000, 360_000), none);
+        // The Rust the slower side only: a C 9× the Rust is no gap.
+        assert_eq!(gap(360_000, 360_000, 40_000), none);
     }
 
     #[test]
