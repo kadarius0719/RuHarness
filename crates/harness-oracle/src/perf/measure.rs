@@ -3886,6 +3886,12 @@ mod tests {
                 "a build script wrote another unit's target"
             );
         }
+        // The pending unit is never measured, recorded or named.
+        assert!(!first.rows.iter().any(|(side, _)| side == "up"));
+        assert!(!first.messages.iter().any(|m| m
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|word| word == "up")));
+        assert!(!res::unit_path(&perf_dir, "up").exists());
         // The left-out units, in words.
         assert!(
             says(
