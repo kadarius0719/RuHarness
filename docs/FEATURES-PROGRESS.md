@@ -127,12 +127,15 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    lower findings are fixed directly or named in §6. FIX PASS 5 COMMITTED (8ccd4ad, test 793bdc4;
    design §10.4, §6): all 13 answered (fixed, or named in §6); 101 bench facts identical,
    sqlite3.c same; oracle 145 + features 80, scanner 57 pass. MUTATION CHECK DONE (807ba2b): 28
-   mutants, 27 killed (7 after tests added), 1 guarded twice by design (design §10.4). RUNNING:
-   the short CHECK OF FIX PASS 5, workflow `wf_37778f58-b30` (script `SP/fix-pass-5-check.js`,
-   base `SP/fc5/base` at 807ba2b, work `SP/fc5/work`; three lenses: closure of each fc4 finding,
-   and new silent wrong maps / false refusals / crashes / real-code regressions only; result →
-   save to `SP/fc5/result.json`). If it finds none of those, the probe review is CLOSED: go to
-   items 4–7. Was: fix those four,
+   mutants, 27 killed (7 after tests added), 1 guarded twice by design (design §10.4). The short
+   CHECK OF FIX PASS 5 FINISHED (`wf_37778f58-b30`, `SP/fc5/result.json`): all 13 closed; 4 new,
+   narrower (comments in heads; an empty-call macro taking the real head's place; folded first
+   heads returning pointers; a namesake holding the name as a parameter or tag) — FIX PASS 6
+   COMMITTED (bf6dfec; mutation 13/13 after two listing tests, 1dee223; design §10.5). RUNNING:
+   the short CHECK OF FIX PASS 6, workflow `wf_d449beca-415` (script `SP/fix-pass-6-check.js`,
+   base `SP/fc6/base` at 1dee223; two lenses; result → save to `SP/fc6/result.json`). If it finds
+   no silent wrong map, false refusal, crash or real-code regression, the probe review is
+   CLOSED: go to items 4–7. Findings per round so far: 26, 26, 21, 13, 4 (all narrower). Was: fix those four,
    the lows (misread walk over all branch combinations, capped; K&R function-typed parameter
    `int cb(int)` outranking `after(cb)`; folded second head's static; non-nested signature ends at
    the call; `static Count (after)(void)` named `Count`), the missing tests (by-shape ranking,
