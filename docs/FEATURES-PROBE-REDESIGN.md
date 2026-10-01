@@ -933,3 +933,8 @@ confirmed (one medium, three low), all narrower cases of shapes fix pass 5 fixed
   (or `typeof`, `_Alignas` and the like) is no declarator.
 - **Tests** for each; the 101 bench targets' facts byte-identical; sqlite3.c unchanged; oracle 145
   + features 82, scanner 58 pass.
+
+**Mutation check of fix pass 6**: 13 mutants, all killed — two after listing tests were added (an
+attribute after a K&R parameter declaration's `)` makes it no declarator; a head a macro turns
+into a parenthesized name still declares it — the second has no effect on the map by itself, since
+the scanner never records a function written as `(name)`).

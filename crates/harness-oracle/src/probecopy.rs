@@ -1422,6 +1422,19 @@ mod tests {
         assert!(words(6).contains("helper_alt"), "{scan:?}");
         assert!(!words(6).contains("helper"), "{scan:?}");
         assert!(!words(7).contains("f"), "{scan:?}");
+        // Fix pass 5's check: an attribute after a K&R parameter
+        // declaration's `)` makes it no declarator.
+        let scan = scan_text(
+            b"static int h(x, cb)\n int x;\n int (*cb)(int) __attribute__((unused));\n\
+              {__ruharness_seen[8] = 1; return x; }\n",
+        );
+        let names = scan.note_heads.get(&8).cloned().unwrap_or_default();
+        assert!(names.contains("h"), "{scan:?}");
+        // A head a macro turns into a parenthesized name (`#define h (h)`)
+        // still declares it.
+        let scan = scan_text(b"int (h)(int x) {__ruharness_seen[9] = 1; return x; }\n");
+        let names = scan.note_heads.get(&9).cloned().unwrap_or_default();
+        assert!(names.contains("h"), "{scan:?}");
         // Fix pass 3's check: an unclosed literal keeps its line end.
         for spelled in [
             &b"#warning don't\n#line 4\n"[..],
