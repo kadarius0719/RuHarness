@@ -110,13 +110,32 @@ below are history.
   42 medium, 31 low), 2 split (build note 30's Modify words; unreachable today), 0 refuted. Saved:
   `SP/perfrv/result.json`; every finding in full, numbered by severity: `SP/perfrv/findings.md`
   ("## N [severity] lens — title").
-- Fix pass 1 RUNNING: workflow `wf_4260dd05-3f0` — six agents, each in its own git worktree based
-  on d8d6d11, one area each (core-words, core-files, launcher, measure, cli, cockpit-mcp), every
-  finding with a test, committed on their own branches (not merged). Bumps: PERF_LAUNCHER →
-  perf-launcher-2 (perfrun no longer spins), PERF_RECIPE → perf-recipe-2 (short = under both
-  legs of the floor). When it ends: merge each branch into this one (cherry-pick), resolve
-  conflicts, full tests + clippy, commit; then the fix check (a verify workflow over all 82 +
-  regressions); then mutation checks, DECISIONS (incl. the Linux refusal), merge to main, push. Then (g) SCHEMAS, tutorial, the
+- Fix pass 1 DONE: workflow `wf_4260dd05-3f0` (six agents, own worktrees from d8d6d11), merged
+  here as six merge commits (core-files, core-words, launcher, measure, cli, cockpit-mcp; one
+  SCHEMAS conflict merged by hand). Every one of the 82 confirmed findings was handled (per-agent
+  results: `SP/fix1/result.json`). PERF_LAUNCHER is now perf-launcher-2 (perfrun no longer spins
+  a core), PERF_RECIPE perf-recipe-2 (a run is short only under BOTH legs of the floor): every
+  stored row reads out of date until measured again. The perf sandbox also refuses starting
+  programs through the system (LaunchServices). New: `harness_oracle::perf_compilers` (perf
+  show's compilers as sandboxed tool runs), `harness-tui/tests/speed_change.rs` (build note 22).
+  Left open, small (do them in fix pass 2, after the reset):
+  1. verify's own run / scenario / tool sandbox profiles share the LaunchServices gap the perf
+     profile closed (`sandbox.rs` NO_STARTS_THROUGH_THE_SYSTEM is ready to append) — a
+     pre-existing verify issue, security: do first;
+  2. `perf show` with no facts says "the C changed" on every row (the cockpit side is fixed);
+  3. the results reader should cap the lengths of `replaces`, `units`, `left_out` lists;
+  4. `perf show` and the writer's Store::put still follow a linked migration/perf/units folder
+     (the cockpit refuses it);
+  5. the dialogs' estimate cannot add the launcher build: the cockpit needs a cheap public
+     "is the launcher cache current" check in harness-oracle;
+  6. optional: `perf run --as-it-stands-only` could refuse before building when fewer than two
+     units are measurable;
+  7. add `assert_eq!(crash.len(), 1)` (and for "time") to harness-cli tests/perf.rs
+     two_units_end_to_end now that the C-fails-in-step-1 rule is merged.
+  AFTER THE WEEKLY RESET (2026-10-07; the person chose to stop here at 75 % weekly usage): the
+  fix check (re-verify all 82 against the merged code + regressions — or, cheaper, the 9 high
+  ones), fix pass 2 (the list above), mutation checks, DECISIONS (incl. the Linux refusal), merge
+  to main, push. Then (g) SCHEMAS, tutorial, the
   testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
