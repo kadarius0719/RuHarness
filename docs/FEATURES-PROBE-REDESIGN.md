@@ -896,3 +896,11 @@ one a regression, so by the rule set before that check fix pass 5 followed (the 
   more files adds only the objects that reference the symbol; an extended index read from its own
   table; renamed, K&R inline-only and K&R namesakes; the listing's head words. The 101 bench
   targets' facts byte-identical; sqlite3.c unchanged.
+
+**Mutation check of fix pass 5**: 28 mutants; 20 killed at once, 7 more once tests were added (a
+macro naming the next head before a type word, macro-made nested names after a base type or an
+annotation, a two-argument macro in a nested head, the head chosen before a nested macro-made name,
+the folded prototype of macOS's Kernel `string.h` keeping its `static`, a misread only a later
+branch combination shows). One lives at the map's level only, by design: reading a K&R head with
+its parameter declarations is also guarded by the compiled-name check (a K&R head read without
+them names nothing, so it explains nothing either); the listing test kills it.

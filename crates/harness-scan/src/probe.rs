@@ -516,6 +516,9 @@ mod tests {
             // A K&R parameter of function type is declared, not a head.
             "int g(void) NI\nCount\nafter(cb)\n\tint cb(int);\n{ return cb(1); }\n",
             "int g(void) NI\nstatic Count\nafter(cb)\n\tint cb(int);\n{ return cb(1); }\n",
+            // A macro naming the next head, a type word after it: only a
+            // K&R head's parse error makes its arguments parameters.
+            "int g(void) FWD(after)\nint after(void) { return 1; }\n",
         ] {
             let defs = defs_of(src);
             let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
@@ -577,6 +580,26 @@ mod tests {
             assert_eq!(defs[1].signature, signature, "{src}");
             assert_eq!(defs[1].is_static, signature.starts_with("static"), "{src}");
         }
+        // A macro-made nested name (`int PREFIX(scanLit)(…)`, after a base
+        // type) is never named after the macro's argument, nor after an
+        // annotation's before it; a macro with two arguments in a nested
+        // head is no parenthesized name.
+        for src in [
+            "int g(void) NI\nstatic int PREFIX(scanLit)(int open)\n{ return open; }\n",
+            "int g(void) LOCKED(x)\nstatic int PREFIX(scanLit)(int open)\n{ return open; }\n",
+            "int g(void) NI\nstatic Count API_UNAVAILABLE(ios, tvos)(void) { return 1; }\n",
+        ] {
+            let defs = defs_of(src);
+            let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+            assert!(
+                !names.iter().any(|n| ["scanLit", "x", "ios"].contains(n)),
+                "{src}: {defs:?}"
+            );
+        }
+        // The head chosen before a nested macro-made name ends at its call.
+        let defs = defs_of("int g(void) NI\nint b(void) NI\nint PREFIX(c)(void) { return 1; }\n");
+        let b = defs.iter().find(|d| d.name == "b").expect("b");
+        assert_eq!(b.signature, "int b(void)", "{defs:?}");
     }
 
     /// Fix pass 4's mutation check: a stray parse error between a head and
@@ -725,6 +748,12 @@ mod tests {
                 "{src}: {p:?}"
             );
         }
+        // A misread only a later combination shows: a balanced two-branch
+        // group comes first.
+        let later = "{\n#ifdef X\n  { g = 1; }\n#else\n  { g = 2; }\n#endif\n\
+                     #ifdef A\n  if (x) {\n#else\n  return 0;\n}\n\
+                     static int helper(int y) {\n  if (y) {\n#endif\n    g++;\n  }\n  return 0;\n}\n";
+        assert!(crate::body_misread(later.as_bytes()));
         // Past the cap of combinations a body counts as misread.
         let mut many = String::from("{\n#if A\n if (x) {\n#else\n {\n#endif\n");
         for k in 0..13 {
@@ -807,6 +836,14 @@ mod tests {
             assert_eq!(d.is_static, is_static, "{src}: {defs:?}");
             assert_eq!(d.signature, signature, "{src}");
         }
+        // A whole prototype folded before a definition (macOS's Kernel
+        // string.h) is no first head: the prototype's `static` still makes
+        // the definition static.
+        let src = "static int f(const char *s1, const char *s2) PURE;\nINLINE PURE\nint\n\
+                   f(const char *const s1 OVERLOAD, const char *const s2)\n{ return 0; }\n";
+        let defs = defs_of(src);
+        let f = defs.iter().find(|d| d.name == "f").expect("f");
+        assert!(f.is_static, "{defs:?}");
     }
 
     /// The real-code re-run (sqlite3.c, 23 times): an `else if (` right
