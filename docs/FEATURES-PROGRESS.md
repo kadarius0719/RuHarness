@@ -106,14 +106,17 @@ below are history.
   machine; downloading it needs the person's OK): its fixed lines come from the code and a real
   run on a zopfli copy (scratchpad zperf/: refusals, init, measure, show, out of date all as
   written); numbers are `<n.nn>` placeholders.
-- Perf code review RUNNING: workflow `wf_f4b82b8e-a61` (script under the session's
-  workflows/scripts/perf-code-review-*.js): six lenses (stats-words, files-currency,
-  launcher-sandbox, measure, cli-cockpit-mcp, tests-vs-design), two skeptical verifiers per
-  finding; returns confirmed / split / refuted / unverified. Its journal:
-  `<session>/subagents/workflows/wf_f4b82b8e-a61/journal.jsonl`. When it ends: save the result to
-  `SP/perfrv/result.json`, plan fix passes from the confirmed (and reconsider the split) findings.
-  NEXT after it: fix passes each checked, mutation checks, DECISIONS (incl. the Linux refusal),
-  merge to main, push. Then (g) SCHEMAS, tutorial, the
+- Perf code review DONE: `wf_f4b82b8e-a61` — 84 findings, 82 confirmed by both verifiers (9 high,
+  42 medium, 31 low), 2 split (build note 30's Modify words; unreachable today), 0 refuted. Saved:
+  `SP/perfrv/result.json`; every finding in full, numbered by severity: `SP/perfrv/findings.md`
+  ("## N [severity] lens — title").
+- Fix pass 1 RUNNING: workflow `wf_4260dd05-3f0` — six agents, each in its own git worktree based
+  on d8d6d11, one area each (core-words, core-files, launcher, measure, cli, cockpit-mcp), every
+  finding with a test, committed on their own branches (not merged). Bumps: PERF_LAUNCHER →
+  perf-launcher-2 (perfrun no longer spins), PERF_RECIPE → perf-recipe-2 (short = under both
+  legs of the floor). When it ends: merge each branch into this one (cherry-pick), resolve
+  conflicts, full tests + clippy, commit; then the fix check (a verify workflow over all 82 +
+  regressions); then mutation checks, DECISIONS (incl. the Linux refusal), merge to main, push. Then (g) SCHEMAS, tutorial, the
   testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
