@@ -479,26 +479,31 @@ test fixtures.
   head with empty parentheses (`NI` then `after()`, C89 only: clang and gcc 14 reject implicit
   int in C99 and later), and one whose only parameter is `...` after a typedef'd return type —
   the first head then keeps a note in the second's body. Caught too widely: two annotation words
-  then an empty call (`ATTR1 ATTR2 NAME()`) read as a second head `NAME` — both rule 1, never a
-  wrong map, though the phantom name reaches the facts. A parenthesized second head after a
+  then an empty call (`ATTR1 ATTR2 NAME()`) read as a second head `NAME` — both unwatched (rule
+  1), never read as run or not run, though the phantom name reaches the facts; a real second head
+  after it keeps its name (§10.5). A parenthesized second head after a
   typedef'd type whose `static` is a macro (`STATIC Count (after)(void)`) is recorded public.
 - **C23 attributes**: `int f(void) [[gnu::cold]] __attribute__((noinline)) {` (a C23 attribute
   then a GNU one after the parameters; clang only) is read by tree-sitter-c as a declaration and
   a block: the definition is not in the facts.
-- **Hidden variants, conservatively** (§10.3, §10.4): a namesake that only a rule keeps
+- **Hidden variants, conservatively** (§10.3–§10.5): a namesake that only a rule keeps
   unwatched, any `extern inline` namesake (C99's emits its symbol, GNU's inline-only idiom does
   not; the probe cannot tell them apart), or one whose compiled head (macros expanded) does not
-  hold the name, explains no symbol, so a skipped sibling beside it reads unwatched (parser) where
-  "not run" may be true. The reverse — "not run" for a function that ran — needs a namesake
-  compiled under its name that does not define it, which C does not allow in one unit.
+  declare the name, explains no symbol, so a skipped sibling beside it reads unwatched (parser)
+  where "not run" may be true. The reverse — "not run" for a function that ran — needs a namesake
+  whose compiled head declares the name but defines another function: a renamed head holding a
+  function-typed parameter spelled like it (`int helper_impl(int helper(int))`), or an attribute
+  argument written as a call of that name — contrived; C allows one definition of a name in a
+  unit otherwise.
 - **Macro-made names**: `static int PREFIX(scanLit)(int open, …)` (expat, ppport.h) is not in the
   facts — the parser reads the macro as the name; recording it under the macro's name would merge
   every such function into one id.
 - **A second head behind `**` or `* const *`, or one `*` after a typedef'd or struct return
   type** (`int g(void) NI` then `char **after(void) {`, `static Count *after(int x) {`):
   tree-sitter folds the first head into a parse error before the declarator — the second is
-  watched in its own body (right), with its own `static` and signature (§10.4); the first is not
-  in the facts. `static Count *(after)(void)` after a first head records neither.
+  watched in its own body (right), with its own `static` and signature (§10.4; a first head
+  returning a pointer or a function pointer too, §10.5); the first is not in the facts. `static
+  Count *(after)(void)` after a first head records neither.
 - **A probed run's time**: +11 % on a call-heavy workload (sqlite3.c); a scenario near
   `timeout_secs` can time out only when probed — recorded as `probe_agrees = false`.
 
@@ -904,3 +909,27 @@ the folded prototype of macOS's Kernel `string.h` keeping its `static`, a misrea
 branch combination shows). One lives at the map's level only, by design: reading a K&R head with
 its parameter declarations is also guarded by the compiled-name check (a K&R head read without
 them names nothing, so it explains nothing either); the listing test kills it.
+
+### 10.5 The check of fix pass 5, and fix pass 6
+
+A short check of fix pass 5 at 807ba2b (`wf_37778f58-b30`, `SP/fc5/result.json`; three lenses,
+asked only whether each of the 13 findings was closed and for new silent wrong maps, false
+refusals, crashes or regressions on real code): all 13 closed (each repro re-run; the link fix
+maps at every bound from 0 to 400 where 66fa62d refused from 3 up; real code unchanged — 161 390
+and 179 754 definitions on two corpora, zopfli's and sqlite3.c's maps the same). Four new, each
+confirmed (one medium, three low), all narrower cases of shapes fix pass 5 fixed. Fix pass 6
+(the code governs):
+- **Comments** are no part of a head: dropped from what follows the first head's parameters, an
+  argument list of comments only is empty, and a comment inside a parenthesized name is not a
+  second item (`after(/* void */)`, `Count /* r */ after()`, `(after /* c */)`).
+- **An empty call after words** ranks with the calls that qualify by shape: a body macro spelled
+  `STUB_BODY()` never takes a later head's place, and after a head that names its parameters an
+  empty call is an annotation.
+- **A folded first head returning a pointer or a function pointer** (its parse error sits inside
+  the definition's pointer declarator) is found too, and comments between the heads are no words.
+- **Hidden variants**: a namesake explains only when its compiled head *declares* the name (a
+  word right before `(`, or the word of `( word ) (`), not when the name is a parameter or a
+  struct tag (`stat` and `struct stat`); a K&R parameter declaration starting with an attribute
+  (or `typeof`, `_Alignas` and the like) is no declarator.
+- **Tests** for each; the 101 bench targets' facts byte-identical; sqlite3.c unchanged; oracle 145
+  + features 82, scanner 58 pass.

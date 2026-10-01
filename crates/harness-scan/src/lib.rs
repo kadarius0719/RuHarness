@@ -1036,10 +1036,13 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
         _ => false,
     };
     let mut cursor = node.walk();
+    // Comments are no part of a head (fix pass 5's check: `after(/* void
+    // */)`, `Count /* r */ after()`).
     let trailing: Vec<tree_sitter::Node> = node
         .named_children(&mut cursor)
         .skip_while(|c| c.id() != parameters.id())
         .skip(1)
+        .filter(|c| c.kind() != "comment")
         .collect();
     let star =
         |n: &tree_sitter::Node| n.is_error() && text(*n, src).trim().chars().all(|c| c == '*');
@@ -1062,6 +1065,11 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
     // A K&R head's parameter names: a later `int cb(int)` declares one of
     // them, not a head (fix pass 4's check).
     let mut knr_params: Vec<String> = Vec::new();
+    // Whether the by-shape head names its parameters (`(void)`, `(int x)`,
+    // K&R names): an empty call after it is an annotation (`after(void) A
+    // B NAME()`), where after `STUB(int)` it is the head (`Count after()`;
+    // fix pass 5's check).
+    let mut by_shape_named = false;
     for (k, call) in trailing.iter().enumerate() {
         if call.kind() != "call_expression" {
             continue;
@@ -1079,14 +1087,17 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
         // the parameters: a typedef or tag return type (`Count\nafter()`,
         // `struct s after()`; fix pass 4's check). One annotation word then
         // `NAME()` keeps the note.
-        let empty_after_word = args.is_some_and(|a| a.named_child_count() == 0)
-            && !args_text.contains("...")
+        let empty_after_word = args.is_some_and(|a| {
+            let mut c = a.walk();
+            let none = a.named_children(&mut c).all(|n| n.kind() == "comment");
+            none
+        }) && !args_text.contains("...")
             && typed.len() >= 2
             && typed.last().is_some_and(|n| word_node(n));
-        let word_before = typed
+        let typed_type_word = typed
             .last()
-            .is_some_and(|n| word_node(n) && type_word(text(**n, src)))
-            || empty_after_word;
+            .is_some_and(|n| word_node(n) && type_word(text(**n, src)));
+        let word_before = typed_type_word || empty_after_word;
         let words_after: Vec<&str> = trailing[k + 1..]
             .iter()
             .filter(|n| word_node(n))
@@ -1109,7 +1120,10 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
         // PREFIX(name)(void)` is a macro-made name.
         let one_inside = args.is_some_and(|a| {
             let mut c = a.walk();
-            let inside = a.named_children(&mut c).filter(|n| !n.is_error()).count();
+            let inside = a
+                .named_children(&mut c)
+                .filter(|n| !n.is_error() && n.kind() != "comment")
+                .count();
             inside == 1
         });
         let paren_head = nested
@@ -1153,11 +1167,34 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
         let candidate = (name, *call, macro_first);
         if paren_head {
             by_position = Some(candidate);
+        } else if empty_after_word && !typed_type_word && !keyword_fn {
+            // An empty call after words ranks with the calls that qualify
+            // by shape: a body macro spelled `STUB_BODY()` never takes a
+            // later head's place (fix pass 5's check).
+            if !by_shape_named {
+                by_shape = Some(candidate);
+            }
         } else if word_before || keyword_fn {
             if by_position.is_none() {
                 by_position = Some(candidate);
             }
         } else {
+            let inner = args_text.trim();
+            let inner = inner
+                .strip_prefix('(')
+                .and_then(|r| r.strip_suffix(')'))
+                .unwrap_or(inner);
+            by_shape_named = inner.trim() == "void"
+                || (knr && plain_names(args_text))
+                || (!inner.trim().is_empty()
+                    && top_level_items(inner).iter().all(|item| {
+                        *item == "..."
+                            || item
+                                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                                .filter(|w| !w.is_empty())
+                                .count()
+                                >= 2
+                    }));
             by_shape = Some(candidate);
         }
     }
@@ -1288,20 +1325,46 @@ fn return_type_start(src: &[u8], floor: usize, at: usize) -> usize {
 /// **after(int x)`, is none), and a `;` after it means a declaration stood
 /// there (SDK prototypes): `None`, read as before.
 fn folded_head(def: tree_sitter::Node, src: &[u8]) -> Option<(bool, usize)> {
-    let declarator = def.child_by_field_name("declarator")?;
-    let mut c = def.walk();
-    let error = def
-        .children(&mut c)
-        .find(|n| n.is_error() && n.end_byte() <= declarator.start_byte())?;
+    // A first head returning a pointer (`int *g(void) NI`) leaves its parse
+    // error inside the definition's pointer declarator: look before each
+    // declarator down that chain (fix pass 5's check).
+    let mut scope = def;
+    let mut declarator = def.child_by_field_name("declarator")?;
+    let error = loop {
+        let mut c = scope.walk();
+        let found = scope
+            .children(&mut c)
+            .find(|n| n.is_error() && n.end_byte() <= declarator.start_byte());
+        if let Some(found) = found {
+            break found;
+        }
+        if declarator.kind() != "pointer_declarator" {
+            return None;
+        }
+        scope = declarator;
+        declarator = declarator.child_by_field_name("declarator")?;
+    };
     let mut e = error.walk();
     let head = error
         .named_children(&mut e)
         .find(|n| n.kind() == "function_declarator")?;
     let parameters = head.child_by_field_name("parameters")?;
     let params = text(parameters, src);
-    let named = head
-        .child_by_field_name("declarator")
-        .is_some_and(|d| d.kind() == "identifier");
+    // The first head names a function: an identifier, or one inside a
+    // parenthesized declarator (`int (*g(void))(int)`, a function pointer).
+    let first = head.child_by_field_name("declarator");
+    let mut inner = first;
+    while let Some(n) = inner.filter(|n| {
+        matches!(
+            n.kind(),
+            "parenthesized_declarator" | "pointer_declarator" | "function_declarator"
+        )
+    }) {
+        inner = inner_declarator(n);
+    }
+    let named = first.is_some_and(|d| d.kind() == "identifier")
+        || (first.is_some_and(|d| d.kind() == "parenthesized_declarator")
+            && inner.is_some_and(|d| d.kind() == "identifier"));
     let empty = params.split_whitespace().collect::<String>() == "()";
     if !named || !(decl_shaped(params) || empty) {
         return None;
@@ -1311,6 +1374,8 @@ fn folded_head(def: tree_sitter::Node, src: &[u8]) -> Option<(bool, usize)> {
     if gap.contains(&b';') {
         return None;
     }
+    // A comment between the heads is no word of either.
+    let gap = &blank_comments(gap)[..];
     let mut is_static = false;
     let mut first_type = None;
     let mut last_word = None;
@@ -1336,6 +1401,33 @@ fn folded_head(def: tree_sitter::Node, src: &[u8]) -> Option<(bool, usize)> {
         .or(last_word)
         .map_or(declarator.start_byte(), |w| first_end + w);
     Some((is_static, start))
+}
+
+/// `gap` with its comments turned to spaces (offsets kept).
+fn blank_comments(gap: &[u8]) -> Vec<u8> {
+    let mut out = gap.to_vec();
+    let mut i = 0;
+    while i < out.len() {
+        let end = if out[i] == b'/' && out.get(i + 1) == Some(&b'*') {
+            out[i + 2..]
+                .windows(2)
+                .position(|w| w == b"*/")
+                .map_or(out.len(), |at| i + 2 + at + 2)
+        } else if out[i] == b'/' && out.get(i + 1) == Some(&b'/') {
+            out[i..]
+                .iter()
+                .position(|c| *c == b'\n')
+                .map_or(out.len(), |at| i + at)
+        } else {
+            i += 1;
+            continue;
+        };
+        for b in &mut out[i..end] {
+            *b = b' ';
+        }
+        i = end;
+    }
+    out
 }
 
 /// The declarator inside `node` (a pointer, parenthesized or C23

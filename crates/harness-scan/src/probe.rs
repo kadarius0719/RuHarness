@@ -385,6 +385,23 @@ mod tests {
                 "int g(void) NI\nint __attribute__((noinline))\nafter()\n{ return 1; }\n",
                 false,
             ),
+            // Fix pass 5's check: comments are no part of a head.
+            (
+                "Count g(void) NI\n\nCount\nafter(/* void */)\n{ return 1; }\n",
+                false,
+            ),
+            (
+                "int g(void) NI\nint /* r */ after()\n{ return 1; }\n",
+                false,
+            ),
+            (
+                "int g(void) NI\nstatic int\n/* the one in use */ after()\n{ return 1; }\n",
+                true,
+            ),
+            (
+                "int g(void) NI\nCount /* ret */\nafter()\n{ return 1; }\n",
+                false,
+            ),
         ];
         for (src, second_static) in cases {
             let defs = defs_of(src);
@@ -428,6 +445,7 @@ mod tests {
             // One annotation word, then an empty call: no second head.
             "int f(void) ATTR NAME() { return 1; }\n",
             "int f(void) __attribute__((cold)) NAME() { return 1; }\n",
+            "int f(void) /* x */ ATTR NAME() { return 1; }\n",
         ] {
             let defs = defs_of(src);
             assert_eq!(defs.len(), 1, "{src}: {defs:?}");
@@ -564,6 +582,10 @@ mod tests {
                 "int g(void) NOT_IMPL(-1)\nstatic Count (after)(void) { return 1; }\n",
                 "static Count (after)(void)",
             ),
+            (
+                "int g(void) NI\nstatic Count (after /* c */)(void) { return 1; }\n",
+                "static Count (after /* c */)(void)",
+            ),
             // A head that is not nested ends at its call, whatever follows.
             (
                 "int g(void) NI\nint after(void) ATTR\n{ return 1; }\n",
@@ -600,6 +622,36 @@ mod tests {
         let defs = defs_of("int g(void) NI\nint b(void) NI\nint PREFIX(c)(void) { return 1; }\n");
         let b = defs.iter().find(|d| d.name == "b").expect("b");
         assert_eq!(b.signature, "int b(void)", "{defs:?}");
+    }
+
+    /// Fix pass 5's check: an empty call after words ranks with the calls
+    /// that qualify by shape — a body macro spelled `STUB_BODY()` never takes
+    /// the real second head's place, and an empty call after the second
+    /// head's own parameters is an annotation.
+    #[test]
+    fn an_empty_call_before_the_second_head_never_takes_its_name() {
+        for src in [
+            "int g(void) A B NOT_IMPL()\nint after(void)\n{ return 1; }\n",
+            "int g(void) NOT_IMPL(-1) NI2 STUB()\nint after(void)\n{ return 1; }\n",
+            "int g(void) A B NOT_IMPL()\nCount\nafter(x)\n\tint x;\n{ return x; }\n",
+            "int g(void) UNUSED DEPRECATED STUB_BODY()\nint after(void)\n{\n\treturn 41;\n}\n",
+            "int g(void) NI\nCount\nafter(void) A B NAME()\n{ return 1; }\n",
+            "int g(void) NI\nCount\nafter(void) ATTR NAME()\n{ return 1; }\n",
+            // After a body macro whose arguments name no parameter, the empty
+            // call is the head.
+            "int g(void) STUB(int)\nCount\nafter()\n{ return 1; }\n",
+        ] {
+            let defs = defs_of(src);
+            let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+            assert_eq!(names, ["g", "after"], "{src}: {defs:?}");
+            assert!(
+                defs.iter().all(|d| d.note_at == Err(NoNote::Parser)),
+                "{src}: {defs:?}"
+            );
+        }
+        let defs = defs_of("int g(void) NI\nCount b() NI\nint c(void)\n{ return 1; }\n");
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["g", "c"], "{defs:?}");
     }
 
     /// Fix pass 4's mutation check: a stray parse error between a head and
@@ -817,6 +869,39 @@ mod tests {
                 "after",
                 false,
                 "Count *after(int x)",
+            ),
+            // Fix pass 5's check: a first head returning a pointer (its parse
+            // error sits inside the definition's pointer declarator), or a
+            // function pointer; a comment between the heads is no word.
+            (
+                "int *g(void) NI\nstatic char **after(void)\n{ return 0; }\n",
+                "after",
+                true,
+                "static char **after(void)",
+            ),
+            (
+                "static char *g(void) NI\nchar **after(void)\n{ return 0; }\n",
+                "after",
+                false,
+                "char **after(void)",
+            ),
+            (
+                "Count *g(void) NI\nstatic Count *\nafter(int x)\n{ return h(); }\n",
+                "after",
+                true,
+                "static Count * after(int x)",
+            ),
+            (
+                "int (*g(void))(int) NI\nstatic char **after(void)\n{ return 0; }\n",
+                "after",
+                true,
+                "static char **after(void)",
+            ),
+            (
+                "int g(void) NI\n/* not static: exported */\nchar **after(void)\n{ return 0; }\n",
+                "after",
+                false,
+                "char **after(void)",
             ),
             // An attribute macro is no first head: the `static` before it is
             // the definition's.

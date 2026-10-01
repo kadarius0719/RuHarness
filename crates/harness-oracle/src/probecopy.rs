@@ -427,10 +427,11 @@ pub(crate) struct TextScan {
     /// expanded), says `extern` and `inline` — GNU's inline-only idiom, which
     /// may emit no symbol (fix pass 3's check: glibc's `__extern_inline`).
     pub inline_notes: BTreeSet<u32>,
-    /// Note number → the words of its definition's head as the compiler
-    /// sees it (macros expanded): the name it is compiled under is among
-    /// them (fix pass 4's check: a namesake a macro renames is compiled
-    /// under another name).
+    /// Note number → the names its definition's head declares as the
+    /// compiler sees it (macros expanded: a word right before `(`, or the
+    /// word of `( word ) (`): the name it is compiled under is among them
+    /// (fix pass 4's check: a namesake a macro renames is compiled under
+    /// another name; fix pass 5's: not a parameter or tag of that name).
     pub note_heads: BTreeMap<u32, BTreeSet<String>>,
 }
 
@@ -462,16 +463,54 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
     // The words since the last `;`, `{` or `}` (a definition's head, macros
     // expanded); the `;`-ended segments since the last `{` or `}`, each
     // marked when a word follows one of its outermost `)` — a K&R head's
-    // declarator (`int h(x) int x;`); a `{` right after a `;` closes the
-    // K&R head, read from the last marked segment on (fix pass 4's check).
-    // And the head before the last `{`, with whether it was inline-only.
+    // declarator (`int h(x) int x;`), never an attribute's, `typeof`'s or
+    // the like's group (fix pass 5's check) — with the names each declares;
+    // a `{` right after a `;` closes the K&R head, read from the last marked
+    // segment on (fix pass 4's check). And the head before the last `{`,
+    // with whether it was inline-only.
     let mut head: Vec<&[u8]> = Vec::new();
     let mut depth = 0i32;
     let mut after_close = false;
     let mut declarator = false;
-    let mut segments: Vec<(Vec<&[u8]>, bool)> = Vec::new();
+    // A segment: its words, whether it holds a declarator, its names.
+    type Segment<'t> = (Vec<&'t [u8]>, bool, Vec<&'t [u8]>);
+    let mut segments: Vec<Segment> = Vec::new();
     let mut after_semicolon = false;
     let mut brace_head: Vec<&[u8]> = Vec::new();
+    // The names a head declares — a word right before `(`, or the word of
+    // `( word ) (` — not every word of it: a parameter or a struct tag may
+    // be spelled like the function (fix pass 5's check); and the last three
+    // tokens (spelling, is a word).
+    let mut head_names: Vec<&[u8]> = Vec::new();
+    let mut brace_names: Vec<&[u8]> = Vec::new();
+    let mut last: [Option<(&[u8], bool)>; 3] = [None; 3];
+    let mut group_kw = false;
+    let mut closed_kw = false;
+    const GROUP_KW: &[&[u8]] = &[
+        b"__attribute__",
+        b"__attribute",
+        b"__typeof__",
+        b"__typeof",
+        b"typeof",
+        b"typeof_unqual",
+        b"__typeof_unqual__",
+        b"_Alignas",
+        b"alignas",
+        b"__declspec",
+        b"_Atomic",
+        b"_BitInt",
+        b"__asm__",
+        b"__asm",
+        b"asm",
+    ];
+    const AFTER_KW: &[&[u8]] = &[
+        b"__attribute__",
+        b"__attribute",
+        b"__asm__",
+        b"__asm",
+        b"asm",
+        b"__declspec",
+    ];
     let mut inline_head = false;
     for line in lex(text) {
         if line.directive {
@@ -513,7 +552,7 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
                     scan.inline_notes.insert(n);
                 }
                 scan.note_heads.entry(n).or_default().extend(
-                    brace_head
+                    brace_names
                         .iter()
                         .map(|w| String::from_utf8_lossy(w).into_owned()),
                 );
@@ -525,35 +564,59 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
             after_close = false;
             match tok.kind {
                 TokKind::Word => {
-                    declarator |= closed;
+                    declarator |= closed && !closed_kw && !AFTER_KW.contains(&spelled);
                     head.push(spelled);
                 }
-                TokKind::Punct if spelled == b"(" => depth += 1,
+                TokKind::Punct if spelled == b"(" => {
+                    match last {
+                        [Some((w, true)), ..] => head_names.push(w),
+                        [Some((b")", false)), Some((w, true)), Some((b"(", false))] => {
+                            head_names.push(w)
+                        }
+                        _ => {}
+                    }
+                    if depth == 0 {
+                        group_kw = matches!(last[0], Some((w, true)) if GROUP_KW.contains(&w));
+                    }
+                    depth += 1
+                }
                 TokKind::Punct if spelled == b")" => {
                     depth -= 1;
                     after_close = depth == 0;
+                    closed_kw = group_kw;
                 }
                 TokKind::Punct if spelled == b";" => {
-                    segments.push((std::mem::take(&mut head), declarator));
+                    segments.push((
+                        std::mem::take(&mut head),
+                        declarator,
+                        std::mem::take(&mut head_names),
+                    ));
                     brace_head.clear();
+                    brace_names.clear();
                     inline_head = false;
                     depth = 0;
                     declarator = false;
                 }
                 TokKind::Punct if matches!(spelled, b"{" | b"}") => {
-                    brace_head = if spelled == b"}" {
-                        Vec::new()
+                    (brace_head, brace_names) = if spelled == b"}" {
+                        (Vec::new(), Vec::new())
                     } else if after_semicolon {
                         let from = segments
                             .iter()
-                            .rposition(|(_, declarator)| *declarator)
+                            .rposition(|(_, declarator, _)| *declarator)
                             .unwrap_or(segments.len().saturating_sub(1));
-                        segments[from..]
-                            .iter()
-                            .flat_map(|(words, _)| words.iter().copied())
-                            .collect()
+                        (
+                            segments[from..]
+                                .iter()
+                                .flat_map(|(words, _, _)| words.iter().copied())
+                                .collect(),
+                            segments[from..]
+                                .iter()
+                                .flat_map(|(_, _, names)| names.iter().copied())
+                                .collect(),
+                        )
                     } else {
-                        std::mem::take(&mut head)
+                        (std::mem::take(&mut head), std::mem::take(&mut head_names))
                     };
                     inline_head = spelled == b"{"
                         && brace_head.contains(&&b"extern"[..])
@@ -561,12 +624,18 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
                             .iter()
                             .any(|w| matches!(*w, b"inline" | b"__inline" | b"__inline__"));
                     head.clear();
+                    head_names.clear();
                     segments.clear();
                     depth = 0;
                     declarator = false;
                 }
                 _ => {}
             }
+            last = [
+                Some((spelled, matches!(tok.kind, TokKind::Word))),
+                last[0],
+                last[1],
+            ];
             after_semicolon = spelled == b";";
             if let Some(n) = end_token(text, tok) {
                 *scan.ends.entry(n).or_insert(0) += 1;
@@ -1346,7 +1415,7 @@ mod tests {
         assert_eq!(scan.inline_notes, BTreeSet::from([5]), "{scan:?}");
         let words = |n: u32| scan.note_heads.get(&n).cloned().unwrap_or_default();
         assert!(
-            words(5).contains("h") && words(5).contains("x") && words(5).contains("y"),
+            words(5).contains("h") && !words(5).contains("x") && !words(5).contains("y"),
             "{scan:?}"
         );
         assert!(!words(5).contains("other"), "{scan:?}");

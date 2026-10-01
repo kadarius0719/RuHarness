@@ -4113,3 +4113,79 @@ fn a_knr_namesake_still_explains() {
         map.unwatched_reasons
     );
 }
+
+/// Fix pass 5's check: a namesake a function-like macro renames whose head
+/// still holds the name — as a parameter, or as a struct tag (`stat` and
+/// `struct stat`) — is compiled under another name and explains no symbol.
+#[test]
+fn a_renamed_namesake_holding_the_name_elsewhere_explains_no_symbol() {
+    a_hidden_variant_beside(
+        "renamed-namesake-param",
+        "int helper(int x);\n#define helper(x) helper_impl(x)\n\
+         int helper(int helper) { return helper + 7; }\n",
+        "#include \"hn.h\"\n",
+    );
+    a_hidden_variant_beside(
+        "renamed-namesake-tag",
+        "struct helper { int v; };\nint helper(int x);\n#define helper(p) helper_impl(p)\n\
+         int helper(struct helper *p) { return p->v + 7; }\n",
+        "#include \"hn.h\"\n",
+    );
+}
+
+/// Fix pass 5's check: a K&R parameter declaration that starts with an
+/// attribute is no declarator: a macro-spelled inline-only K&R namesake
+/// still reads as inline-only, and a K&R namesake still explains.
+#[test]
+fn a_knr_parameter_declaration_with_an_attribute_is_no_head() {
+    let h = "#define EXTERN_INLINE extern __inline __attribute__((__gnu_inline__))\n\
+             struct helper { int v; };\n\
+             EXTERN_INLINE int helper(x, p)\n  int x;\n  __attribute__((unused)) struct helper *p;\n\
+             { return x * 5; }\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"hn.h\"\n\
+                #if 0\nint helper(int x, struct helper *p) { return x - 1; }\n#else\n\
+                __attribute__((noinline)) int (helper)(int x, struct helper *p) { return x * 3; }\n\
+                #endif\n\
+                static volatile int seed = 1;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(seed, 0) - 3 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "knr-attr-inline-only",
+        main,
+        &[("src/tool/hn.h", h)],
+        &[("src/tool/hn.h", "helper"), ("src/tool/main.c", "helper")],
+    );
+    let map = map.expect("maps");
+    assert_eq!(map.scenarios[0].end, "exit 0", "{:?}", map.scenarios);
+    assert_eq!(
+        map.unwatched_reasons
+            .iter()
+            .find(|r| r.file == "src/tool/main.c" && r.id == "helper")
+            .map(|r| r.kind.as_str()),
+        Some("parser"),
+        "ran {:?}, unwatched {:?}",
+        map.scenarios[0].functions,
+        map.unwatched_reasons
+    );
+    let h = "#ifdef USE_FAST\nstatic int helper(int x) { return x * 3; }\n#endif\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
+                __attribute__((noinline)) static int helper(x, y)\n  int x;\n  \
+                __attribute__((unused)) int y;\n{ return x + 7; }\n\
+                static volatile int seed;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(seed, 0) - 7 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "knr-attr-namesake",
+        main,
+        &[("src/tool/h.h", h)],
+        &[
+            ("src/tool/h.h", "src/tool/h.h::helper"),
+            ("src/tool/main.c", "src/tool/main.c::helper"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(map.scenarios[0].end, "exit 0");
+    assert!(
+        reason_for(&map, "src/tool/h.h::helper").is_none(),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
