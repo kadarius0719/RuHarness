@@ -135,7 +135,12 @@ below are history.
   AFTER THE WEEKLY RESET (2026-10-07; the person chose to stop here at 75 % weekly usage): the
   fix check (re-verify all 82 against the merged code + regressions — or, cheaper, the 9 high
   ones), fix pass 2 (the list above), mutation checks, DECISIONS (incl. the Linux refusal), merge
-  to main, push. Then (g) SCHEMAS, tutorial, the
+  to main, push.
+- ROADMAP (recorded 2026-10-01, not designed): real project layouts (several folders, several
+  programs, the project's own build files; a deterministic project map + link closures, a model
+  bins the ambiguous part, the harness checks, the person accepts) and a fuller C–Rust boundary
+  (non-leaf units, shared code across tools, one Rust library per program). See
+  docs/PROJECT-MAP-ROADMAP.md. Design it after the speed work is merged; weigh against M5. Then (g) SCHEMAS, tutorial, the
   testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
