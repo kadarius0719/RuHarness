@@ -1339,13 +1339,16 @@ mod tests {
         // declarations (their `;` stands before the body), and each note
         // keeps the words of its head — the name it is compiled under.
         let scan = scan_text(
-            b"int other(int);\nextern __inline int h(x)\n int x;\n{__ruharness_seen[5] = 1; return x; }\n\
+            b"int other(int);\nextern __inline int h(x, y)\n int x;\n char *y;\n{__ruharness_seen[5] = 1; return x; }\n\
               static int helper_alt(int x) {__ruharness_seen[6] = 1; return x; }\n\
               int f(int a) { a++; {__ruharness_seen[7] = 1; } return a; }\n",
         );
         assert_eq!(scan.inline_notes, BTreeSet::from([5]), "{scan:?}");
         let words = |n: u32| scan.note_heads.get(&n).cloned().unwrap_or_default();
-        assert!(words(5).contains("h") && words(5).contains("x"), "{scan:?}");
+        assert!(
+            words(5).contains("h") && words(5).contains("x") && words(5).contains("y"),
+            "{scan:?}"
+        );
         assert!(!words(5).contains("other"), "{scan:?}");
         assert!(words(6).contains("helper_alt"), "{scan:?}");
         assert!(!words(6).contains("helper"), "{scan:?}");
