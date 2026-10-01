@@ -183,11 +183,8 @@ fn clang_version(clang: &Path) -> Result<String, Error> {
 /// A built, checked launcher, held with a shared lock for the run.
 #[derive(Debug)]
 pub(crate) struct Launcher {
-    pub dir: PathBuf,
     pub perfrun: Hashed,
     pub perfgo: Hashed,
-    /// The compiler it was built with.
-    pub compiler: Compiler,
     /// The shared lock on the version folder's `.lock`, held while it lives.
     _shared: File,
 }
@@ -393,10 +390,8 @@ pub(crate) fn launcher_in(
     remove_stale(canonical, &dir);
     drop(exclusive);
     let launcher = Launcher {
-        dir,
         perfrun,
         perfgo,
-        compiler,
         _shared: shared,
     };
     launcher.check()?;
@@ -1212,7 +1207,11 @@ mod tests {
         let (tmp, l) = test_launcher("perf-launcher");
         // The cache is reused: no rebuild, the same binaries.
         let again = launcher_in(
-            l.dir.parent().expect("root"),
+            l.perfrun
+                .path
+                .parent()
+                .and_then(Path::parent)
+                .expect("root"),
             std::fs::metadata(tmp.path()).expect("m").uid(),
             &mut |w: &str| {
                 assert_ne!(

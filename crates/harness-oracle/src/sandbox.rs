@@ -290,7 +290,6 @@ pub(crate) fn render_run_profile(spec: &RunSpec<'_>) -> Result<String, Error> {
 
 /// What one perf run may touch (docs/PERF-DESIGN.md §3.4).
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // perf's measurement uses it from step (d) of PERF-DESIGN §5.
 pub(crate) struct PerfSpec<'a> {
     /// Host directories (the home directory is denied).
     pub host: &'a HostDirs,
@@ -308,7 +307,6 @@ pub(crate) struct PerfSpec<'a> {
 /// exactly perfgo and the side's program, reads of exactly those two and
 /// the run's temp dir under the home folder and the target, no signal but
 /// to itself, and a fork killed on trying.
-#[allow(dead_code)] // perf's measurement uses it from step (d) of PERF-DESIGN §5.
 pub(crate) fn render_perf_profile(spec: &PerfSpec<'_>) -> Result<String, Error> {
     let bin = sbpl_string(spec.bin)?;
     let perfgo = sbpl_string(spec.perfgo)?;

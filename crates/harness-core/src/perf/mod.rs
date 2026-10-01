@@ -46,9 +46,62 @@ pub fn accept_interrupted_words(attempt: &str, unit: &str) -> String {
     format!("{what} was interrupted — Re-check {unit} (or run harness verify {unit}) to finish or undo it")
 }
 
+/// A crate manifest's `[profile.release]` settings away from Cargo's
+/// defaults — `opt-level`, `lto`, `codegen-units`, `panic` — as (key, value
+/// as written), named on its rows (docs/PERF-DESIGN.md build note 25). A
+/// value over 32 characters or holding a character unsafe to show is left
+/// out; `.cargo/config.toml` is not read (a §6 residual).
+pub fn manifest_profile(manifest: &str) -> Vec<(String, String)> {
+    let Ok(doc) = manifest.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(release) = doc
+        .get("profile")
+        .and_then(|p| p.get("release"))
+        .and_then(|r| r.as_table())
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (key, default) in [
+        ("opt-level", "3"),
+        ("lto", "false"),
+        ("codegen-units", "16"),
+        ("panic", "unwind"),
+    ] {
+        if let Some(v) = release.get(key) {
+            let shown = match v {
+                toml::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let safe = shown.len() <= 32 && !shown.chars().any(crate::text::unsafe_to_show);
+            if shown != default && safe {
+                out.push((key.to_string(), shown));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_manifests_release_profile_away_from_the_defaults() {
+        let m = "[package]\nname = \"u\"\n[profile.release]\nlto = \"thin\"\nopt-level = 3\n\
+                 panic = \"abort\"\ncodegen-units = 1\n";
+        assert_eq!(
+            manifest_profile(m),
+            vec![
+                ("lto".to_string(), "thin".to_string()),
+                ("codegen-units".to_string(), "1".to_string()),
+                ("panic".to_string(), "abort".to_string()),
+            ]
+        );
+        assert!(manifest_profile("[package]\nname = \"u\"\n").is_empty());
+        assert!(manifest_profile("not toml [").is_empty());
+    }
 
     #[test]
     fn the_interrupted_accept_words() {
