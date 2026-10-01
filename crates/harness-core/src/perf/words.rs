@@ -2364,14 +2364,15 @@ mod tests {
 
     #[test]
     fn instructions_memory_and_parallel_details() {
-        // The start-up note: a std unit, 1e7 more instructions on a 1e9 C.
+        // The start-up note: a std unit, 1.04e7 ± 0.3e7 more instructions
+        // on a 1e9 C.
         let mut c = side(15, 4e9, 0.004);
         let mut o = side(15, 4e9, 0.004);
         for (i, r) in c.iter_mut().enumerate() {
-            r.instructions = Some(1_000_000_000 + (i as u64 % 3) * 1_000_000);
+            r.instructions = Some(1_000_000_000 - 3_000_000 + (i as u64 % 3) * 3_000_000);
         }
         for (i, r) in o.iter_mut().enumerate() {
-            r.instructions = Some(1_010_400_000 + (i as u64 % 3) * 1_000_000);
+            r.instructions = Some(1_010_400_000 - 3_000_000 + (i as u64 % 3) * 3_000_000);
         }
         let w = words(&row(c.clone(), o.clone(), "macos-v6-pnorm", false), &UNIT);
         assert!(
@@ -2422,6 +2423,225 @@ mod tests {
             w.details
         );
         assert_eq!(w.short, "about as fast · parallel");
+    }
+
+    /// 15 runs of `base` × `ratio` instructions, spread ±`spread` (a
+    /// fraction) evenly — at 15 runs against a steady C, the interval's
+    /// ends are the ratio × (1 ∓ 0.4 × spread).
+    fn counted(base: f64, ratio: f64, spread: f64) -> Vec<Run> {
+        (0..15)
+            .map(|i| Run {
+                instructions: Some(
+                    (base * ratio * (1.0 + spread * ((i as f64 + 0.5) / 15.0 - 0.5) * 2.0)) as u64,
+                ),
+                ..run(1e9)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_instruction_words_either_side_of_the_line() {
+        let c = counted(4e9, 1.0, 0.0);
+        let w = |ratio: f64, spread: f64| {
+            instruction_words(&c, &counted(4e9, ratio, spread), false, &UNIT)
+        };
+        let close = "too close to the 1.5 % line to call";
+        for (ratio, spread, want) in [
+            (
+                1.018,
+                0.002,
+                "1.8 % more instructions (1.7–1.9 %)".to_string(),
+            ),
+            (0.982, 0.002, "1.8 % fewer instructions (1.7–1.9 %)".into()),
+            (
+                1.015,
+                0.012,
+                format!("about 1.5 % more instructions — {close}"),
+            ),
+            (
+                0.985,
+                0.012,
+                format!("about 1.5 % fewer instructions — {close}"),
+            ),
+            (
+                1.0,
+                0.004,
+                "about the same instructions (within 1.5 %)".into(),
+            ),
+            // Either side of the 1.5 % line, nearly the same every run.
+            (
+                1.014,
+                0.0,
+                "about the same instructions (within 1.5 %)".into(),
+            ),
+            (1.016, 0.0, "1.6 % more instructions (1.6 %)".into()),
+            (
+                0.986,
+                0.0,
+                "about the same instructions (within 1.5 %)".into(),
+            ),
+            (0.984, 0.0, "1.6 % fewer instructions (1.6 %)".into()),
+            // Just past the line: the end shows two decimals, off it.
+            (1.01504, 0.0, "1.5 % more instructions (1.51 %)".into()),
+            // Holding 0 and wide: can't tell.
+            (1.0, 0.04, "instructions: can't tell".into()),
+            // Clear of 0 but wide ([+0.5, +5.5] %): instructions have no
+            // "probably" — can't tell.
+            (1.03, 0.0607, "instructions: can't tell".into()),
+        ] {
+            assert_eq!(w(ratio, spread), want, "×{ratio} ±{spread}");
+        }
+    }
+
+    #[test]
+    fn the_start_up_note_needs_an_interval_ending_by_2_6e7() {
+        // 15 runs a side: run i at base + (i/14 − ½) × width.
+        let at_ins = |base: f64, width: f64| -> Vec<Option<f64>> {
+            (0..15)
+                .map(|i| Some(base + (i as f64 / 14.0 - 0.5) * width))
+                .collect()
+        };
+        let runs = |v: &[Option<f64>]| -> Vec<Run> {
+            v.iter()
+                .map(|x| Run {
+                    instructions: x.map(|x| x as u64),
+                    ..run(1e9)
+                })
+                .collect()
+        };
+        let note = |c: &[Option<f64>], o: &[Option<f64>]| {
+            instruction_words(&runs(c), &runs(o), true, &UNIT)
+                .ends_with("(about Rust's fixed start-up)")
+        };
+        // A std unit at 1.04e7 ± 0.3e7 on a 4e9 C, and on a 1e9 C.
+        for base in [4e9, 1e9] {
+            let (c, o) = (at_ins(base, 6e6), at_ins(base + 1.04e7, 6e6));
+            assert!(note(&c, &o), "a {base} C");
+            // Never on the C alone, never on a no-std unit.
+            assert!(!instruction_words(
+                &runs(&c),
+                &runs(&o),
+                true,
+                &Context {
+                    side: Side::C,
+                    ..UNIT
+                }
+            )
+            .contains("start-up"));
+            assert!(!instruction_words(&runs(&c), &runs(&o), false, &UNIT).contains("start-up"));
+        }
+        // 0.9 % real work on a 4e9 C: the interval holds 1.04e7 but runs
+        // on to about 6.5e7 — real work, never the start-up.
+        let (c, o) = (at_ins(4e9, 1e8), at_ins(4.036e9, 1e8));
+        let d = stats::hodges_lehmann_linear(&c, &o).expect("values");
+        assert!(d.lo <= STARTUP_INSTRUCTIONS && STARTUP_INSTRUCTIONS <= d.hi);
+        assert!(d.hi > STARTUP_UPPER, "{}", d.hi);
+        assert!(!note(&c, &o));
+        // Either side of the upper end: a steady C, the Rust's 11th
+        // smallest difference (the interval's top) at 2.59e7 and 2.61e7.
+        let flat_c = at_ins(4e9, 0.0);
+        let tops = |top: f64| -> Vec<Option<f64>> {
+            let mut d = [
+                1e6, 2e6, 3e6, 4e6, 5e6, 7e6, 9e6, 1.04e7, 1.5e7, 2e7, top, 3e7, 3.1e7, 3.2e7,
+                3.3e7,
+            ];
+            d.sort_by(f64::total_cmp);
+            d.iter().map(|x| Some(4e9 + x)).collect()
+        };
+        assert!(note(&flat_c, &tops(2.59e7)));
+        assert!(!note(&flat_c, &tops(2.61e7)));
+    }
+
+    #[test]
+    fn memory_never_gives_identical_code_a_direction() {
+        let mem = |v: &[u64]| -> Vec<Run> {
+            v.iter()
+                .map(|m| Run {
+                    memory: Some(*m),
+                    ..run(1e9)
+                })
+                .collect()
+        };
+        let varied = "memory: can't tell — memory varied from run to run";
+        let (lo, hi) = (12_400_000u64, 13_900_000u64);
+        // The same allocating binary on both sides under load: its
+        // footprint lands in one of two clusters, both sides from the
+        // same mix. Only "about the same" or "varied" — never a direction
+        // or any near-the-line words.
+        let mut seen_varied = 0;
+        for seed in 0..12u64 {
+            for p in [0.3, 0.5, 0.7] {
+                let mut rng = Rng(0xA076_1D64_78BD_642F ^ (seed + 1) * 0x9E37_79B9);
+                let mut draw = || -> Vec<u64> {
+                    (0..15)
+                        .map(|_| if rng.next() < p { hi } else { lo })
+                        .collect()
+                };
+                let (c, o) = (draw(), draw());
+                let got = memory_words(&mem(&c), &mem(&o)).expect("memory");
+                for word in ["more", "less", "too close", "probably", "slower", "faster"] {
+                    assert!(!got.contains(word), "seed {seed}, p {p}: {got}");
+                }
+                assert!(
+                    got.starts_with("about the same memory (within ") || got == varied,
+                    "seed {seed}, p {p}: {got}"
+                );
+                seen_varied += usize::from(got == varied);
+            }
+        }
+        assert!(seen_varied > 0, "the varied words were never reached");
+        // A two-cluster sample: one side mostly low, the other mostly high.
+        let two = |highs: usize| -> Vec<u64> {
+            (0..15).map(|i| if i < highs { hi } else { lo }).collect()
+        };
+        assert_eq!(
+            memory_words(&mem(&two(5)), &mem(&two(10))).as_deref(),
+            Some(varied)
+        );
+        // Stand-ins for the design's recorded windows: zopfli's clusters
+        // near 12.7 and 14.7 MB (an interval one margin wide that holds
+        // 0), and a pair at 12.9–14.2 against 13.9–14.9 MB (about [+4.0,
+        // +8.7] % against a 7.7 % margin).
+        let z = |highs: usize| -> Vec<u64> {
+            (0..15)
+                .map(|i| if i < highs { 14_700_000 } else { 12_700_000 })
+                .collect()
+        };
+        assert_eq!(
+            memory_words(&mem(&z(5)), &mem(&z(9))).as_deref(),
+            Some(varied)
+        );
+        let spread = |from: f64, to: f64| -> Vec<u64> {
+            (0..15)
+                .map(|i| (from + (to - from) * i as f64 / 14.0) as u64)
+                .collect()
+        };
+        assert_eq!(
+            memory_words(&mem(&spread(12.9e6, 14.2e6)), &mem(&spread(13.9e6, 14.9e6))).as_deref(),
+            Some(varied)
+        );
+        // The margin: max(5 %, min(1 MiB, 20 %)) of the C's median.
+        let same = |m: u64, other: u64| memory_words(&mem(&[m; 15]), &mem(&[other; 15]));
+        assert_eq!(
+            same(lo, lo).as_deref(),
+            Some("about the same memory (within 8.5 %)")
+        );
+        assert_eq!(
+            same(1_000_000, 1_150_000).as_deref(),
+            Some("about the same memory (within 20 %)")
+        );
+        assert_eq!(
+            same(100_000_000, 104_000_000).as_deref(),
+            Some("about the same memory (within 5 %)")
+        );
+        assert_eq!(
+            same(100_000_000, 115_000_000).as_deref(),
+            Some("uses about 15 % more memory (15 %)")
+        );
+        assert_eq!(
+            same(100_000_000, 85_000_000).as_deref(),
+            Some("uses about 15 % less memory (15 %)")
+        );
     }
 
     #[test]
