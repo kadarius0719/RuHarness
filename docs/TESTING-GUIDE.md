@@ -3613,7 +3613,7 @@ Your numbers will not match anyone else's: they belong to your computer, on this
 
 ### Step 11.1 — Make a big input file
 
-**Why.** A run has to be long enough to time: half a second or more of the C's CPU time. The harness's sample files are far too small for that, so you make a bigger one by repeating liblzg's own sources. The command gives the same bytes every time you run it, so you do not need to commit the file.
+**Why.** A run has to be long enough to time: half a second or more of the C's CPU time, or at least a billion instructions (a run under both reads `too short to time`). The harness's sample files are far too small for that, so you make a bigger one by repeating liblzg's own sources. The command gives the same bytes every time you run it, so you do not need to commit the file.
 
 **Run.**
 
@@ -3746,6 +3746,8 @@ The first time, it also says `building the launcher…`: perf builds its own sma
 **If it looks different.**
 
 - `too short to time` on a workload: your computer is faster than expected. Run Step 11.1 again with `seq 1 900`, and measure again.
+- `perf: the other rows on best are not run — the C failed there`: the original C crashed, timed out, printed too much or was stopped on that workload (the line above it says which), so perf has nothing to compare the Rust against there. Check the workload's options and input.
+- `perf: one unit measured (u-checksum) — u-version left out: verify it first — the program as it stands needs two`: that unit's verdict is no longer fresh. Re-check it in the cockpit (or run `harness verify u-version --target targets/lzg`), then measure again.
 - `error: the program's C changed since the scan: scan the project first, then measure`: run `harness scan --target targets/lzg`, and try again.
 - `error:` naming a command that holds the writer lock: another harness command is running on this target. Wait for it, and try again.
 

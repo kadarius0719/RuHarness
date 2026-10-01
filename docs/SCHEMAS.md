@@ -1275,20 +1275,28 @@ defaults), `step1`, `failed_run`, `setup` (closed facts: `runtimes`, `cause` ∈
 two-no-std | lto | two-lto | unknown`, `units`, `index`, `log`, `input`, `reason` ∈ `not-fresh |
 replaces-changed | rust-changed | accept-interrupted`, `attempt`, `never_started`),
 `first_difference` / `found_before` (`stream` ∈ `stdout | stderr | exit`, `c_len`, `other_len`,
-`offset`, `c_end`, `other_end`, `over_cap`, `kept [{name, size, blake3}]`), `last_try`
-(`{outcome, setup}`). `inputs`: `workload`, `program` (the features' program digest), `crates
-[{id, digest}]` (unit rows), `replaces` (unit rows), `program_name`, `units [{id,
-crate_digest}]` and `left_out [{id, crate_digest, reason}]` (as-it-stands rows; reasons
-`not-fresh | replaces-mismatch | replaces-changed | crate-does-not-build | does-not-link |
-accept-interrupted`), `recipe` (`perf-recipe-1`), `launcher` (`perf-launcher-1`), `computer {os,
-build, arch, cpu, two_kinds, fast_cores}`, `compilers {cc, rustc?}`. **Strict** (unknown fields
-refused; every field checked against its outcome); free text ≤ 160 bytes, no control character.
+`offset`, `c_end`, `other_end`, `over_cap`, `kept [{name, size, blake3}]`; with `over_cap`,
+`stream` is the stream that passed the 64 MiB cap, `c_len` the C's length on it, `offset` 0 and
+`other_end` `signal 9`, the kill that stopped the run, as in its `step1`), `last_try`
+(`{outcome, setup}`). `short` is true when one side's step-1 run was under both legs of the
+floor (fewer than 1e9 instructions and under half a second of CPU); never on the C alone.
+`inputs`: `workload`, `program` (the features' program digest), `crates [{id, digest}]` (unit
+rows; a crate that does not build records its real digest), `replaces` (unit rows),
+`program_name`, `units [{id, crate_digest}]` and `left_out [{id, crate_digest, reason}]`
+(every as-it-stands row, set-up ones included; reasons `not-fresh | replaces-mismatch |
+replaces-changed | crate-does-not-build | does-not-link | accept-interrupted`), `recipe`
+(`perf-recipe-2`: rows of `perf-recipe-1`, whose short runs were judged by either leg of the
+floor, read out of date), `launcher` (`perf-launcher-1`), `computer {os, build, arch, cpu,
+two_kinds, fast_cores}`, `compilers {cc, rustc?}`. **Strict** (unknown fields refused; every
+field checked against its outcome); free text ≤ 160 bytes, no control character.
 
 **The replace rule** (one, in `harness-core`): a set-up outcome never replaces an earlier row that
 is not itself a set-up row — it is kept beside it as `last_try`; on the C-alone rows the C's own
 outcomes replace a C-side or too-short row and are otherwise kept as `last_try`; a
 behaves-differently finding survives every re-measure that does not end `measured` or
-`too-short`, kept as `found_before`. Rows of workloads no longer in the file are dropped on the
+`too-short`, kept as `found_before`. A SIGKILL perf did not send that a unit's or the program's
+step 1 meets on the C is written to the C alone's row only when no baseline is there (perf
+says when it keeps the baseline). Rows of workloads no longer in the file are dropped on the
 next write.
 
 **Current** iff every input equals today's: the workload's digest, the program digest, the
@@ -1311,7 +1319,14 @@ computer | compilers`, and the cockpit's own `measuring | too-large | input-unus
   command); refuses without workloads, with stale facts ("scan the project first"), unknown ids
   (naming the known ones). Without `--unit` / `--as-it-stands-only`: the C alone, each measurable
   unit (verified or merged, verdict green and fresh, no interrupted Accept), and the program as it
-  stands. Exit 0 when it ran (a difference is a row, not a failure), 1 refused, 2 usage.
+  stands; `--unit` alone builds and links only the units named. Each build step may write only
+  its own folder (the compiles `.perf/obj`, each link its slot, each crate build its `target/`
+  and `Cargo.lock`), and every object and staticlib is checked against its hash before each link.
+  When the C fails on a workload in step 1 (one of its own outcomes, or a SIGKILL perf did not
+  send), that workload's other rows are not run and keep their earlier rows. The progress names
+  each left-out unit in words ("u-tree left out: its crate does not build"); the summary counts
+  only what this run measured, and a row the replace rule kept is said to be kept. Exit 0 when
+  it ran (a difference is a row, not a failure), 1 refused, 2 usage.
 - `harness perf show [--target] [--no-check] [--allow-unsandboxed]` — every stored row's words,
   rebuilt, with why it is out of date. Reads only; never builds the launcher.
 - Events (`--json`): `perf-row {side: c | program | unit, unit (unit rows), workload, outcome,
