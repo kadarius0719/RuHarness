@@ -94,13 +94,12 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    `SP/race2/race3.py <harness> <scanned zopfli copy> copy|spawn <ms,…> <runs>`), tests on Linux
    (--allow-unsandboxed, -fmax-errors=0), the lld main hint, the incbin-macro test, zopfli's
    map.json regenerated; committed 617f75f, 4fd10a1). Recorded in design §10.1. Mutation check
-   RUNNING: `SP/mutfix2.py` (35 mutants) in SP/mut1, log `SP/mutfix2.log` (so far all killed but
-   search-precheck-off: equivalent in the map — the next check stops the search one compile
-   later). The CHECK of fix pass 2 RUNNING: workflow `wf_b40998a8-a02` (script
+   DONE: 37 mutants, 34 killed, 3 live and explained in §10.1 (`SP/mutfix2.py`, `SP/mutfix2b.py`,
+   logs in SP). The CHECK of fix pass 2 RUNNING: workflow `wf_b40998a8-a02` (script
    `SP/fix-pass-2-check.js`, base copy `SP/fc2/base` at 4fd10a1's code, work `SP/fc2/work`;
    lenses tokenizer-scanner, build-link, variant-runner; two verifiers each). The fix-pass-1
-   check's verifiers: 24 findings confirmed by both, the gcc #line one refuted by both (kept for
-   agreement with the design, §10.1), tokenizer#3 one verifier, tokenizer#5 pending.
+   check FINISHED (`SP/fc1/result.json`): 25 confirmed by both verifiers, 1 refuted by both (gcc
+   #line, kept for agreement with the design, §10.1).
    Then check fix pass 2 likewise. Was: at e846261 (base copy
    `SP/fc1/base`; lenses tokenizer, build-link, scanner-variant, runner-ux; two verifiers each). Was planned as: lenses over the diff
    665495b..HEAD — the tokenizer and same-code check, probebuild bounds/search/link, objsyms and

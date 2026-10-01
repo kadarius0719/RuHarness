@@ -707,3 +707,10 @@ verifiers: 26 findings. Fix pass 2 answers them (the code governs):
   eight objects past ld64's list, a search after the last placed round, the per-file bound, a
   skipped static beside its namesake, a hidden variant with an unused parameter — gcc names it
   `.isra`, clang keeps the name, and only clang is on this machine; CLI: a killed `cc1`).
+
+**Mutation check of fix pass 2**: 37 mutants of its rules, 34 killed. Three live, none hiding a
+wrong map: the bound check before the search's `-fsyntax-only` compile and the restore pass's
+room for two compiles change only how many compiles a file spends at its bound (the next check
+stops it one compile later; no test counts compiles); and with ld64's `...` ignored, the retry
+over every unit still maps the eight-object case, by design — the lib test kills that mutant, and
+with both the `...` and the retry off the map is refused as the reviewer saw.
