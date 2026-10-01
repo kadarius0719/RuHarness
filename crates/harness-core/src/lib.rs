@@ -19,6 +19,7 @@ pub mod features;
 pub mod hash;
 pub mod ledger;
 pub mod observer;
+pub mod perf;
 pub mod plan;
 pub mod planner;
 pub mod risk;

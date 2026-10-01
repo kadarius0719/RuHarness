@@ -10,6 +10,13 @@ pub fn unsafe_to_show(c: char) -> bool {
     c.is_control() || is_bidi_control(c) || is_invisible_format(c)
 }
 
+/// `s` as it may be shown: every [`unsafe_to_show`] character as `?`.
+pub fn safe_line(s: &str) -> String {
+    s.chars()
+        .map(|c| if unsafe_to_show(c) { '?' } else { c })
+        .collect()
+}
+
 /// Bidirectional formatting characters.
 fn is_bidi_control(c: char) -> bool {
     matches!(
