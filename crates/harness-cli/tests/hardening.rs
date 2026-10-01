@@ -826,36 +826,54 @@ fn a_probed_compile_that_hangs_is_refused_by_name() {
          [[scenario]]\nfeature = \"run\"\nid = \"none\"\nargs = []\n",
     )
     .unwrap();
-    let fake = tmp.join("bin");
-    std::fs::create_dir_all(&fake).unwrap();
-    let cc = fake.join("cc");
-    std::fs::write(
-        &cc,
-        "#!/bin/sh\ncase \" $* \" in\n  *\" -ferror-limit=0 \"*) sleep 100; exit 0 ;;\nesac\n\
-         exec /usr/bin/cc \"$@\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&cc, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // A fresh script's first exec can take seconds here (the system's
-    // first-run check): run it once before the timed map.
-    let _ = Command::new(&cc).arg("--version").output();
     let t = target.to_str().unwrap();
     let r = harness(&["scan", "--target", t]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
-    let path = format!("{}:/usr/bin:/bin", fake.display());
-    let started = std::time::Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
-        .args(["features", "map", "--target", t])
-        .env("PATH", &path)
-        .output()
-        .expect("spawn harness");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(
-        stderr.contains("src/main.c did not finish in 5 s — raise [oracle] timeout_secs"),
-        "{stderr}"
-    );
-    assert!(started.elapsed() < std::time::Duration::from_secs(60));
+    // Which compile hangs: a probed compile (the only ones with
+    // -ferror-limit=0), then the copy's listing (-E with the probe header).
+    for (name, pattern, words) in [
+        (
+            "probed",
+            "*\" -ferror-limit=0 \"*",
+            "src/main.c did not finish in 5 s — raise [oracle] timeout_secs",
+        ),
+        (
+            "listing",
+            "*\" -include \"*\" -E \"*",
+            "the compiler's listing of main.c did not finish in 5 s — raise [oracle] timeout_secs",
+        ),
+    ] {
+        let fake = tmp.join(format!("bin-{name}"));
+        std::fs::create_dir_all(&fake).unwrap();
+        let cc = fake.join("cc");
+        std::fs::write(
+            &cc,
+            format!(
+                "#!/bin/sh\ncase \" $* \" in\n  {pattern}) sleep 100; exit 0 ;;\nesac\n\
+                 exec /usr/bin/cc \"$@\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&cc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A fresh script's first exec can take seconds here (the system's
+        // first-run check): run it once before the timed map.
+        let _ = Command::new(&cc).arg("--version").output();
+        let path = format!("{}:/usr/bin:/bin", fake.display());
+        let started = std::time::Instant::now();
+        let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+            .args(["features", "map", "--target", t])
+            .env("PATH", &path)
+            .output()
+            .expect("spawn harness");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}: {stderr}");
+        assert!(stderr.contains(words), "{name}: {stderr}");
+        assert!(
+            !stderr.contains("cannot find what the program includes"),
+            "{stderr}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(60));
+    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
