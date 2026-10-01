@@ -399,8 +399,9 @@ pub enum Platform {
 }
 
 /// The time metric a measured row uses (§3.8, build note 10): CPU time
-/// without counters; raw cycles without two kinds of cores; the share rule
-/// when fewer than three quarters of the 2n runs ran mostly on the
+/// without counters; raw cycles without two kinds of cores, or when no run
+/// has performance-core counts (read as V4, as the oracle does); the share
+/// rule when fewer than three quarters of the 2n runs ran mostly on the
 /// performance cores; else normalised cycles when the P-core cost per
 /// instruction is steady (or ≥ 97 % of the cycles were on the performance
 /// cores), raw cycles ("phases") when it is not.
@@ -423,6 +424,7 @@ pub fn choose_metric(
         Platform::Linux => return "linux-cycles",
         Platform::LinuxHybrid => return "linux-hybrid-summed",
         Platform::MacV6 if !two_kinds => return "macos-v6-cycles",
+        Platform::MacV6 if all.iter().all(|r| r.p_cycles.is_none()) => return "macos-v4-cycles",
         Platform::MacV6 => {}
     }
     let fast = all.iter().filter(|r| mostly_fast(r)).count();
@@ -2148,6 +2150,101 @@ mod tests {
             choose_metric(&phased, &phased, Platform::MacV6, true),
             "macos-v6-cycles-phases"
         );
+        // An Intel-style record (no P fields): never the share rule — raw
+        // cycles on a computer with one kind of core, and read as V4 when
+        // a computer with two kinds recorded no P counts at all.
+        let intel: Vec<Run> = slow
+            .iter()
+            .map(|r| Run {
+                p_cycles: None,
+                p_instructions: None,
+                ..r.clone()
+            })
+            .collect();
+        assert_eq!(
+            choose_metric(&intel, &intel, Platform::MacV6, false),
+            "macos-v6-cycles"
+        );
+        assert_eq!(
+            choose_metric(&intel, &intel, Platform::MacV6, true),
+            "macos-v4-cycles"
+        );
+        let w = words(&row(c.clone(), intel, "macos-v6-cycles", false), &UNIT);
+        assert_eq!(w.answer, "about-as-fast", "{}", w.headline);
+        assert!(w.details.iter().any(|d| d == "measured in cycles"));
+    }
+
+    #[test]
+    fn a_real_cost_slowdown_keeps_normalisation_and_phases_never_differ() {
+        // Both sides with about 70 % of their cycles on the fast cores, the
+        // share wandering 0.68–0.72 from run to run, so raw cycles wander
+        // while each side's P-core cost per instruction is steady. The
+        // other side costs 1.1× per P-core instruction, which adds only to
+        // its P-core cycles (build note 10: it keeps normalisation and
+        // reads slower). Each side's own spread decides: pooled, the two
+        // sides' costs would look unsteady and call it phases.
+        let p_ins = 2_800_000_000.0;
+        let make = |cost: f64| -> Vec<Run> {
+            (0..15)
+                .map(|i| {
+                    let share = 0.68 + 0.04 * ((i * 7) % 15) as f64 / 14.0;
+                    let noise = 1.0 + 0.0005 * (((i * 11) % 15) as f64 / 14.0 - 0.5);
+                    let fast = p_ins * noise;
+                    let rest = fast / share - fast;
+                    let p_cycles = fast * cost;
+                    Run {
+                        p_cycles: Some(p_cycles as u64),
+                        p_instructions: Some(p_ins as u64),
+                        ..run(p_cycles + rest)
+                    }
+                })
+                .collect()
+        };
+        let (c, o) = (make(1.0), make(1.1));
+        let metric = choose_metric(&c, &o, Platform::MacV6, true);
+        assert_eq!(metric, "macos-v6-pnorm");
+        let w = words(&row(c, o, metric, false), &UNIT);
+        assert_eq!(w.answer, "slower", "{}", w.headline);
+        assert!(w.headline.starts_with("slower by 10 % ("), "{}", w.headline);
+        assert!(!w.details.iter().any(|d| d.contains("phases")));
+        // Identical phased programs (a shuffle, then a chase), each side
+        // its own runs: raw cycles, never slower or faster.
+        let phased = |offset: usize| -> Vec<Run> {
+            side(15, 4e9, 0.01)
+                .into_iter()
+                .enumerate()
+                .map(|(i, mut r)| {
+                    let k = i + offset;
+                    let share = 0.6 + 0.03 * (k % 5) as f64;
+                    r.p_cycles = r.cycles.map(|v| (v as f64 * share) as u64);
+                    r.p_instructions = r
+                        .instructions
+                        .map(|v| (v as f64 * (0.95 - 0.2 * (k % 3) as f64)) as u64);
+                    r
+                })
+                .collect()
+        };
+        let (c, o) = (phased(0), phased(1));
+        let metric = choose_metric(&c, &o, Platform::MacV6, true);
+        assert_eq!(metric, "macos-v6-cycles-phases");
+        let w = words(&row(c, o, metric, false), &UNIT);
+        assert!(
+            !matches!(
+                w.answer,
+                "slower"
+                    | "faster"
+                    | "probably-slower"
+                    | "probably-faster"
+                    | "close-call-slower"
+                    | "close-call-faster"
+            ),
+            "{}",
+            w.headline
+        );
+        assert!(w
+            .details
+            .iter()
+            .any(|d| d == "measured in cycles — the program's phases differ in speed"));
     }
 
     #[test]
