@@ -106,8 +106,14 @@ below are history.
   machine; downloading it needs the person's OK): its fixed lines come from the code and a real
   run on a zopfli copy (scratchpad zperf/: refusals, init, measure, show, out of date all as
   written); numbers are `<n.nn>` placeholders.
-  NEXT: the perf code review (workflow), fix passes each checked, mutation checks, DECISIONS
-  (incl. the Linux refusal), merge to main, push. Then (g) SCHEMAS, tutorial, the
+- Perf code review RUNNING: workflow `wf_f4b82b8e-a61` (script under the session's
+  workflows/scripts/perf-code-review-*.js): six lenses (stats-words, files-currency,
+  launcher-sandbox, measure, cli-cockpit-mcp, tests-vs-design), two skeptical verifiers per
+  finding; returns confirmed / split / refuted / unverified. Its journal:
+  `<session>/subagents/workflows/wf_f4b82b8e-a61/journal.jsonl`. When it ends: save the result to
+  `SP/perfrv/result.json`, plan fix passes from the confirmed (and reconsider the split) findings.
+  NEXT after it: fix passes each checked, mutation checks, DECISIONS (incl. the Linux refusal),
+  merge to main, push. Then (g) SCHEMAS, tutorial, the
   testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
