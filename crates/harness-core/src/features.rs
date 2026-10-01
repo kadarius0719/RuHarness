@@ -697,7 +697,7 @@ pub fn map_path(root: &Path) -> PathBuf {
 }
 
 /// The probe a map is made by (docs/FEATURES-PROBE-REDESIGN.md §3.7).
-pub const MAP_PROBE: &str = "compiler-guided-1";
+pub const MAP_PROBE: &str = "compiler-guided-2";
 
 /// The kinds of reason a function has no note
 /// (docs/FEATURES-PROBE-REDESIGN.md §3.7), as `map.json` names them.

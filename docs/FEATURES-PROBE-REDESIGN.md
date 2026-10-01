@@ -311,7 +311,7 @@ descriptor, and a crash after notes were all recorded; the build re-checks this 
   appear at file scope or at the start of a compound statement)`.
 - The cockpit, where it now says a function is unwatched ("(the probe could not put a note in
   it)"), shows that function's reason instead.
-- The map's inputs gain `probe` (this design's version, `compiler-guided-1`); a map made before
+- The map's inputs gain `probe` (this design's version, `compiler-guided-1`; `compiler-guided-2` after fix pass 1, §10); a map made before
   this change reads out of date, "made by an older harness", not current.
 
 ### 3.8 gcc

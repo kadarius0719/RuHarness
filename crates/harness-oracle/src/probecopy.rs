@@ -287,21 +287,64 @@ impl Probe {
     /// Whether `rel`'s original holds a `#line` or line-marker directive
     /// (gcc reports such a file's errors at presumed places, §3.4 step 3).
     pub(crate) fn has_line_directives(&self, rel: &str) -> bool {
-        self.files.get(rel).is_some_and(|f| {
-            f.original.split(|b| *b == b'\n').any(|line| {
-                let t = trim_start(line);
-                t.strip_prefix(b"#").is_some_and(|r| {
-                    let r = trim_start(r);
-                    r.starts_with(b"line") || r.first().is_some_and(u8::is_ascii_digit)
-                })
-            })
-        })
+        self.files
+            .get(rel)
+            .is_some_and(|f| holds_line_directive(&f.original))
     }
 
     /// The unwatched pairs, sorted.
     pub(crate) fn unwatched(&self) -> Vec<(String, String)> {
         self.reasons.keys().cloned().collect()
     }
+}
+
+/// `s` past blanks and block comments.
+fn skip_blanks_and_comments(mut s: &[u8]) -> &[u8] {
+    loop {
+        s = trim_start(s);
+        match s.strip_prefix(b"/*") {
+            Some(rest) => match find(rest, b"*/") {
+                Some(end) => s = &rest[end + 2..],
+                None => return &[],
+            },
+            None => return s,
+        }
+    }
+}
+
+/// Whether `source` holds a `#line` or line-marker directive, read as the
+/// preprocessor reads directives (fix pass 1's check): lines end at `\n`,
+/// `\r\n` or a lone `\r`; a backslash before a line end splices; blanks and
+/// block comments before and after `#` (or `%:`) are skipped.
+fn holds_line_directive(source: &[u8]) -> bool {
+    let mut joined: Vec<u8> = Vec::with_capacity(source.len());
+    let mut i = 0;
+    while i < source.len() {
+        if source[i] == b'\\' {
+            let rest = &source[i + 1..];
+            let splice = if rest.starts_with(b"\r\n") {
+                3
+            } else if rest.first().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                2
+            } else {
+                0
+            };
+            if splice > 0 {
+                i += splice;
+                continue;
+            }
+        }
+        joined.push(if source[i] == b'\r' { b'\n' } else { source[i] });
+        i += 1;
+    }
+    joined.split(|b| *b == b'\n').any(|line| {
+        let t = skip_blanks_and_comments(line);
+        let after = t.strip_prefix(b"#").or_else(|| t.strip_prefix(b"%:"));
+        after.is_some_and(|r| {
+            let r = skip_blanks_and_comments(r);
+            r.starts_with(b"line") || r.first().is_some_and(u8::is_ascii_digit)
+        })
+    })
 }
 
 /// What a listing run's preprocessed text says (§3.2, §3.3).
@@ -345,8 +388,20 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
     };
     for line in lex(text) {
         if line.directive {
+            // A line marker or a `#pragma` (the compiler drops both before it
+            // joins literals) keeps a run of literals going; a pragma's own
+            // literals can still hold a note turned into text (`_Pragma(#x)`).
             if line_marker(line.row(text)).is_none() {
-                flush(&mut run, &mut scan);
+                for tok in &line.toks {
+                    if let TokKind::Literal { raw, .. } = tok.kind {
+                        let body = tok.body(text);
+                        scan.in_literals.extend(note_numbers(body));
+                        if !raw {
+                            scan.in_literals
+                                .extend(note_numbers(&decode_c_string(body)));
+                        }
+                    }
+                }
             }
             continue;
         }
@@ -685,6 +740,21 @@ impl Line {
     }
 }
 
+/// The length of a Unicode space clang reads as whitespace between tokens
+/// (U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F,
+/// U+3000) at the start of `rest`, or 0 (fix pass 1's check: a no-break space
+/// before `R"` made the raw string part of a word).
+fn unicode_space(rest: &[u8]) -> usize {
+    match rest {
+        [0xc2, 0x85 | 0xa0, ..] => 2,
+        [0xe1, 0x9a, 0x80, ..] => 3,
+        [0xe2, 0x80, 0x80..=0x8a | 0xa8 | 0xa9 | 0xaf, ..] => 3,
+        [0xe2, 0x81, 0x9f, ..] => 3,
+        [0xe3, 0x80, 0x80, ..] => 3,
+        _ => 0,
+    }
+}
+
 fn ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
 }
@@ -716,12 +786,17 @@ fn lex(text: &[u8]) -> Vec<Line> {
             i += 1;
             continue;
         }
+        let space = unicode_space(&text[i..]);
+        if space > 0 {
+            i += space;
+            continue;
+        }
         if line.toks.is_empty() && b == b'#' {
             line.directive = true;
         }
         let tok = if ident_byte(b) && !b.is_ascii_digit() {
             let mut j = i + 1;
-            while j < text.len() && ident_byte(text[j]) {
+            while j < text.len() && ident_byte(text[j]) && unicode_space(&text[j..]) == 0 {
                 j += 1;
             }
             let word = &text[i..j];
@@ -838,7 +913,15 @@ fn raw_string(text: &[u8], start: usize, quote: usize) -> Option<Tok> {
     let delim = &text[from..open];
     if delim
         .iter()
-        .any(|b| b.is_ascii_whitespace() || matches!(b, b')' | b'\\' | b'"'))
+        // The d-char rule: any byte but space, the parentheses, a backslash
+        // and the blanks that end a line (clang and gcc accept `"` and `'` —
+        // fix pass 1's check: refusing them put the tokenizer out of step).
+        .any(|b| {
+            matches!(
+                b,
+                b' ' | b'(' | b')' | b'\\' | b'\t' | 0x0b | 0x0c | b'\n' | b'\r'
+            )
+        })
     {
         return None;
     }
@@ -1013,6 +1096,41 @@ mod tests {
         let scan = scan_text(copy);
         assert_eq!(scan.in_literals, BTreeSet::from([5]));
         assert!(scan.notes.is_empty());
+    }
+
+    /// Fix pass 1's check: a raw-string delimiter may hold `"`; a no-break
+    /// space before `R"` is whitespace; a #pragma between literals keeps the
+    /// run; a note turned into text on a pragma line is seen; #line in every
+    /// spelling.
+    #[test]
+    fn the_tokenizer_reads_what_clang_reads() {
+        let copy = b"const char *r = R\"\"(say \")\"\"; const char s[] = \
+                     \"void f(void) {__ruharness_seen[0] = 1; }\";\n";
+        let scan = scan_text(copy);
+        assert_eq!(scan.in_literals, BTreeSet::from([0]), "{scan:?}");
+        assert!(scan.notes.is_empty());
+        let copy = b"const char *r =\xc2\xa0R\"(\")\"; const char s[] = \
+                     \"void f(void) {__ruharness_seen[1] = 1; }\";\n";
+        assert_eq!(scan_text(copy).in_literals, BTreeSet::from([1]));
+        let text = b"__asm__(\".inc\"\n#pragma clang diagnostic push\n\"bin \\\"u.c\\\"\");\n";
+        assert_eq!(scan_text(text).incbins, vec![Some("u.c".to_string())]);
+        let text = b"#pragma message(\"void f(void) {__ruharness_seen[2] = 1; }\")\nint x;\n";
+        assert_eq!(scan_text(text).in_literals, BTreeSet::from([2]));
+        for spelled in [
+            &b"#line 4 \"x.y\"\n"[..],
+            b"%:line 4\n",
+            b"#/**/line 4\n",
+            b"#\\\nline 4\n",
+            b"int a;\r#line 4\r",
+            b"  /* x */ # 12 \"y\"\n",
+        ] {
+            assert!(
+                holds_line_directive(spelled),
+                "{:?}",
+                String::from_utf8_lossy(spelled)
+            );
+        }
+        assert!(!holds_line_directive(b"int line;\n// #line 4\n"));
     }
 
     /// Review (`.incbin` split across lines): string literals on several

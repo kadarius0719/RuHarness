@@ -282,16 +282,63 @@ mod tests {
     fn a_head_run_into_the_next_one_gets_no_note() {
         let p = probe(
             "int g(void) NOT_IMPLEMENTED\nint after(void) { return 1; }\n",
-            &["g"],
+            &["g", "after"],
         );
-        assert_eq!(p.unwatched, [("g".to_string(), NoNote::Parser)], "{p:?}");
+        // Both heads recorded, both rule 1 (fix pass 1's check: the second
+        // was lost from the facts).
+        assert_eq!(
+            p.unwatched,
+            [
+                ("g".to_string(), NoNote::Parser),
+                ("after".to_string(), NoNote::Parser)
+            ],
+            "{p:?}"
+        );
         assert!(p.notes.is_empty(), "{p:?}");
+        // An annotation macro with arguments after the parameters is no
+        // second head (fix pass 1's check), on the same line or the next.
         let fine = "int a(void) __attribute__((noinline)) { return 1; }\n\
                     void b(void) UNUSED_MACRO\n{ }\n\
-                    int c(x) int x; { return x; }\n";
-        let p = probe(fine, &["a", "b", "c"]);
+                    int c(x) int x; { return x; }\n\
+                    int d(void) ATTR(x) { return 1; }\n\
+                    int e(void)\n  __acquires(lock)\n{ return 0; }\n\
+                    int f(void) [[deprecated]] { return 1; }\n";
+        let p = probe(fine, &["a", "b", "c", "d", "e", "f"]);
         assert!(p.unwatched.is_empty(), "{p:?}");
-        assert_eq!(p.notes.len(), 3);
+        assert_eq!(p.notes.len(), 6, "{p:?}");
+    }
+
+    /// Fix pass 1's check: a definition inside a body the parser read
+    /// whole — a GNU nested function, a statement macro misread after an
+    /// `#endif` — is no file-scope function; the body keeps its note.
+    #[test]
+    fn only_a_misread_body_holds_definitions() {
+        for src in [
+            "int outer(int x) {\n  int inner(int y) { return y + 1; }\n  return inner(x);\n}\n",
+            "int k(int z) {\n  if (z) {\n    z = 1;\n  }\n#ifndef OMIT\n  else LOOP_MACRO(z) {\n    z = 2;\n  }\n#endif\n  return z;\n}\n",
+        ] {
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_c::LANGUAGE.into())
+                .expect("grammar");
+            let tree = parser.parse(src, None).expect("parses");
+            let mut defs = Vec::new();
+            crate::collect_functions(tree.root_node(), src.as_bytes(), "src/a.c", &mut defs);
+            assert_eq!(defs.len(), 1, "{src}: {defs:?}");
+            assert!(defs[0].note_at.is_ok(), "{src}: {defs:?}");
+        }
+        assert!(crate::body_misread(
+            b"{\n#if A\n if (x) {\n#else\n {\n#endif\n y();\n}\n"
+        ));
+        assert!(crate::body_misread(
+            b"{ if (x) {\n#if A\n }\n#else\n }\n#endif\n"
+        ));
+        assert!(!crate::body_misread(
+            b"{\n#if A\n f(\"{\"); /* { */\n#else\n g();\n#endif\n}\n"
+        ));
+        assert!(!crate::body_misread(
+            b"{\n#ifdef A\n if (x) { y(); }\n#else\n z();\n#endif\n}\n"
+        ));
     }
 
     /// The real-code re-run (sqlite3.c, 23 times): an `else if (` right
@@ -352,8 +399,12 @@ mod tests {
         // gives the other name.
         let src = "#if PY_MAJOR_VERSION >= 3\nPyMODINIT_FUNC PyInit_m(void)\n#else\n\
                    PyMODINIT_FUNC initm(void)\n#endif\n{ return 0; }\n";
-        let p = probe(src, &["PyInit_m"]);
-        assert_eq!(p.unwatched.len(), 1, "{p:?}");
+        let p = probe(src, &["PyInit_m", "initm"]);
+        assert_eq!(
+            p.unwatched.len(),
+            2,
+            "both names recorded, unwatched: {p:?}"
+        );
         assert!(p.notes.is_empty(), "{p:?}");
         // Wholly in the head: watched.
         let watched = [

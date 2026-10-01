@@ -396,11 +396,29 @@ fn collect_functions_in(
                 });
             }
             let recorded = defs.len() > at;
-            collect_functions_in(child, src, file, under_error, true, defs);
-            // A body holding a definition was misread: its bounds are a
-            // guess, as under a parse error (rule 1).
-            if recorded && defs.len() > at + 1 {
-                defs[at].note_at = Err(NoNote::Parser);
+            // The second head of two that ran together (see
+            // heads_run_together): a function of its own, recorded with rule
+            // 1, never lost from the facts.
+            if recorded {
+                if let Some(second) = second_head(child, src, file) {
+                    defs[at].calls.clear();
+                    defs.push(second);
+                }
+            }
+            // Only a body the parser misread — an #if group with two branches
+            // that each move the brace depth, read by the parser as both —
+            // holds definitions of its own (fix pass 1's check: a statement
+            // macro or a GNU nested function is no file-scope definition).
+            let misread = child
+                .child_by_field_name("body")
+                .is_some_and(|b| body_misread(&src[b.start_byte()..b.end_byte()]));
+            if misread {
+                let before = defs.len();
+                collect_functions_in(child, src, file, under_error, true, defs);
+                // Its bounds are a guess, as under a parse error (rule 1).
+                if recorded && defs.len() > before {
+                    defs[at].note_at = Err(NoNote::Parser);
+                }
             }
         } else {
             let error = under_error || child.is_error();
@@ -740,7 +758,7 @@ fn heads_run_together(def: tree_sitter::Node) -> bool {
         None => return false,
     };
     while node.kind() != "function_declarator" {
-        match node.child_by_field_name("declarator") {
+        match inner_declarator(node) {
             Some(inner) => node = inner,
             None => return false,
         }
@@ -748,23 +766,194 @@ fn heads_run_together(def: tree_sitter::Node) -> bool {
     let Some(parameters) = node.child_by_field_name("parameters") else {
         return false;
     };
-    let mut cursor = node.walk();
-    let trailing = node
+    trailing_head(node, parameters).is_some() || {
+        let mut cursor = node.walk();
+        let error = node
+            .named_children(&mut cursor)
+            .skip_while(|c| c.id() != parameters.id())
+            .skip(1)
+            .any(|c| c.is_error());
+        error
+    }
+}
+
+/// The second head after a function declarator's parameters: a call shape
+/// (`after(void)`) on a later line than the parameters, right after a word on
+/// its own line (`int`, `size_t`) — a return type, never an annotation macro
+/// (`int f(void) ATTR(x) {` keeps its call on the parameters' line; fix pass
+/// 1's check).
+fn trailing_head<'t>(
+    declarator: tree_sitter::Node<'t>,
+    parameters: tree_sitter::Node<'t>,
+) -> Option<tree_sitter::Node<'t>> {
+    let mut cursor = declarator.walk();
+    let trailing: Vec<tree_sitter::Node> = declarator
         .named_children(&mut cursor)
         .skip_while(|c| c.id() != parameters.id())
         .skip(1)
-        .any(|c| {
-            !matches!(
-                c.kind(),
-                "attribute_specifier"
-                    | "attribute_declaration"
-                    | "gnu_asm_expression"
-                    | "ms_call_modifier"
-                    | "identifier"
-                    | "comment"
+        .collect();
+    trailing.iter().enumerate().find_map(|(k, c)| {
+        let row = c.start_position().row;
+        let typed = k > 0
+            && matches!(
+                trailing[k - 1].kind(),
+                "identifier" | "primitive_type" | "type_identifier" | "sized_type_specifier"
             )
-        });
-    trailing
+            && trailing[k - 1].start_position().row == row;
+        (c.kind() == "call_expression" && row > parameters.end_position().row && typed)
+            .then_some(*c)
+    })
+}
+
+/// The function a second head names (see [`trailing_head`]), with the body
+/// the parser gave the first: recorded, unwatched (rule 1).
+fn second_head(def: tree_sitter::Node, src: &[u8], file: &str) -> Option<FnDef> {
+    let mut node = def.child_by_field_name("declarator")?;
+    while node.kind() != "function_declarator" {
+        node = inner_declarator(node)?;
+    }
+    let parameters = node.child_by_field_name("parameters")?;
+    let call = trailing_head(node, parameters)?;
+    let name = call.child_by_field_name("function")?;
+    if name.kind() != "identifier" {
+        return None;
+    }
+    let name = text(name, src).to_string();
+    if C_KEYWORDS.contains(&name.as_str()) {
+        return None;
+    }
+    let head = &src[src[..call.start_byte()]
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map_or(0, |at| at + 1)..call.start_byte()];
+    let is_static = head
+        .split(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
+        .any(|w| w == b"static");
+    let mut calls = BTreeSet::new();
+    if let Some(body) = def.child_by_field_name("body") {
+        collect_calls(body, src, &mut calls);
+    }
+    Some(FnDef {
+        name,
+        file: file.to_string(),
+        is_static,
+        signature: String::from_utf8_lossy(&src[call.start_byte()..call.end_byte()]).into_owned(),
+        span: (
+            (call.start_position().row + 1) as u32,
+            (def.end_position().row + 1) as u32,
+        ),
+        calls,
+        note_at: Err(NoNote::Parser),
+        naked_head: false,
+        nested: false,
+    })
+}
+
+/// The declarator inside `node` (a pointer, parenthesized or C23
+/// attributed declarator).
+fn inner_declarator(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    node.child_by_field_name("declarator").or_else(|| {
+        let mut cursor = node.walk();
+        let found = node
+            .named_children(&mut cursor)
+            .find(|c| c.kind().ends_with("declarator"));
+        found
+    })
+}
+
+/// Whether a function body as the parser read it holds an `#if` group with
+/// two or more branches that each change the brace depth — the parser reads
+/// every branch, so it runs the body on (sqlite3.c's winWrite and
+/// decodeIntArray). Comments, string and character literals and line splices
+/// are skipped.
+fn body_misread(body: &[u8]) -> bool {
+    let mut groups: Vec<Vec<i64>> = Vec::new();
+    let mut i = 0;
+    let mut line_start = true;
+    while i < body.len() {
+        let b = body[i];
+        match b {
+            b'\n' => {
+                line_start = true;
+                i += 1;
+                continue;
+            }
+            b' ' | b'\t' | b'\r' | 0x0b | 0x0c => {
+                i += 1;
+                continue;
+            }
+            b'\\' if matches!(body.get(i + 1), Some(b'\n' | b'\r')) => {
+                i += 2;
+                continue;
+            }
+            b'/' if body.get(i + 1) == Some(&b'*') => {
+                i = body[i + 2..]
+                    .windows(2)
+                    .position(|w| w == b"*/")
+                    .map_or(body.len(), |at| i + 2 + at + 2);
+                continue;
+            }
+            b'/' if body.get(i + 1) == Some(&b'/') => {
+                i = body[i..]
+                    .iter()
+                    .position(|c| *c == b'\n')
+                    .map_or(body.len(), |at| i + at);
+                continue;
+            }
+            b'"' | b'\'' => {
+                let mut j = i + 1;
+                while j < body.len() && body[j] != b && body[j] != b'\n' {
+                    j += if body[j] == b'\\' { 2 } else { 1 };
+                }
+                i = (j + 1).min(body.len());
+                line_start = false;
+                continue;
+            }
+            b'#' if line_start => {
+                let rest = &body[i + 1..];
+                let word_at = rest
+                    .iter()
+                    .position(|c| !matches!(c, b' ' | b'\t'))
+                    .unwrap_or(rest.len());
+                let word: Vec<u8> = rest[word_at..]
+                    .iter()
+                    .take_while(|c| c.is_ascii_alphabetic())
+                    .copied()
+                    .collect();
+                match word.as_slice() {
+                    b"if" | b"ifdef" | b"ifndef" => groups.push(vec![0]),
+                    b"elif" | b"elifdef" | b"elifndef" | b"else" => {
+                        if let Some(g) = groups.last_mut() {
+                            g.push(0);
+                        }
+                    }
+                    b"endif" => {
+                        if groups
+                            .pop()
+                            .is_some_and(|g| g.iter().filter(|d| **d != 0).count() >= 2)
+                        {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+                // The rest of the directive line, splices joined.
+                while i < body.len() && body[i] != b'\n' {
+                    i += if body[i] == b'\\' { 2 } else { 1 };
+                }
+                continue;
+            }
+            b'{' | b'}' => {
+                if let Some(depth) = groups.last_mut().and_then(|g| g.last_mut()) {
+                    *depth += if b == b'{' { 1 } else { -1 };
+                }
+            }
+            _ => {}
+        }
+        line_start = false;
+        i += 1;
+    }
+    false
 }
 
 fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
@@ -779,7 +968,7 @@ fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
                     None
                 };
             }
-            "pointer_declarator" | "parenthesized_declarator" => {
+            "pointer_declarator" | "parenthesized_declarator" | "attributed_declarator" => {
                 let next = match node.child_by_field_name("declarator") {
                     Some(n) => Some(n),
                     None => {
