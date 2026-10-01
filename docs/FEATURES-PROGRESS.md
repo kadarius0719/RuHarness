@@ -32,35 +32,34 @@ fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
 ## Open (in order) — the next session starts here
 
-The compiler-guided probe (docs/FEATURES-PROBE-REDESIGN.md rev 3) is BUILT, steps a–f, on main:
-9a8ed37 (runner), f18e161 (rules, note, runtime), 2955dfc (listings, same-code check, per-file
-compile-and-retry, link, map.json reasons; zopfli re-mapped: same functions, none unwatched),
-b943926 (CLI/cockpit reasons, runtime-names refusal, small fixes). 978 tests green.
+**Session 2026-09-30 (17c366c0…), in progress.** The pause's code review (`wf_833f5d1a-f42`)
+had lost two of its four lenses and nearly all verifiers to an expired sign-in. Re-run at
+665495b as Workflow `wf_d2c3d9f7-615` (this session's subagents/workflows): the two lost lenses,
+a token-comparison lens, two mutation-sweep lenses, two verifiers per finding (old and new), and
+the §8 premise re-run. Review files: scratchpad `rv/` (existing.json = the first review's 22
+findings; runner-lens.json; premise-*.json).
 
-1. **Collect two runs started at the pause** (scratchpad of session f2454ac1…, may be gone):
-   - the §8 premise re-run through the real map: `scratchpad/premise8/run.log`, `results.json`
-     (mini-targets per corpus file with generated link stubs) — replace §2's table with it;
-   - the adversarial code review of the build, Workflow run `wf_833f5d1a-f42`
-     (4 lenses, 2 verifiers per finding; journal under the session's subagents/workflows).
-   **The §8 re-run finished**: 45 of 79 mini-targets mapped — corpus 24 (8 unwatched now;
-   prototype 6; old rules 3 006), extensions 21 (0; 0; 3). It found a real bug, fixed after
-   b943926 (see the commit after the handoff): the same-code check refused every function with
-   an empty body `{}` (the note and end token removed left `{ }`); code is now compared as
-   tokens. The other refusals were the mini-targets' own (missing Python/tree-sitter headers,
-   CPU-feature flags) — re-run §8 after the fix and replace §2's table. The code review ran on
-   b943926, before this fix.
-   If gone, re-run both (the review script is in the session's workflows/scripts folder, or
-   rebuild it: lenses silent-wrong-map, retry-mechanics, runner-runtime-sandbox, format-ux-tests).
-2. **Fix what the review confirms**, each fix with a test; check every fix pass (process);
-   mutation-check the rules of design §3 (the review's format lens lists surviving mutants).
-3. Known gaps of the build to weigh in the fix pass: link rule (b)'s search over the named
-   objects is not built (it refuses instead); the search's `-fsyntax-only` trials are not used;
-   the include chain is carried per diagnostics() call, not strictly "printed last"; no map-level
-   test of the C99-inline link case (the one-byte note shows no inlining window on clang 21).
-4. Then: `bench check --replay` (quiet machine, ~29 min); the live chat tests (the person signs
-   in to `claude` first); close the features entry in DECISIONS.
-5. Next track: the C-vs-Rust performance baselines — spike done (DECISIONS 2026-09-30), the
-   `perfrun` launcher premise holds; write the design. Then the briefing's M5.
+Fix pass 1, committed on branch claude/rust-migration-harness-f7665f (not yet on main):
+3ed89be, 1a0efb0, 31610cf, 6a03a6d, 9bc83d3, 7615200, 667654b — a whole-text tokenizer for the
+copy check (raw strings, digit separators), the bounds as designed, link rules (a)/(b) and the
+link search, the runtime-names check from the objects' symbol tables (objsyms.rs; no link map),
+the hidden #if variant, scratch-folder cleanup on a signal, 0700 and one text in memory, the
+scanner's swallowed definitions (sqlite3.c: 349 compiled functions were missing from the facts),
+safe text everywhere, the ledger flake's cause, driver validation's first-exec timing. Mutation
+check of the fixes: 40 mutants, 39 killed, 1 equivalent (encoding prefixes).
+
+§8 premise re-run (with the fixed harness, 9bc83d3): adversarial repros 24/24 and 25/25 map,
+2 567 and 1 999 unwatched (the prototype's numbers, the same functions); corpus 42/42 map, 928
+unwatched (465 + 457 sqlite functions inside two misread bodies, 6 signal-hook parser); extensions
+35/37 (numpy popcnt ×2 do not build plainly on arm64), 136 in their own files; zopfli's map
+byte-identical. Costs: compile +4 % instructions, +16.8 MiB, object +12.5 %; a probed run +1–2 %
+(zopfli) to +11 % (sqlite3.c workload).
+
+Next: collect the rest of `wf_d2c3d9f7-615` (two mutation lenses, ~60 verifiers), fix what they
+confirm, record §10 in the redesign doc and replace §2's table, then a check of the whole fix
+pass (independent agents), then `bench check --replay`, the live chat tests, the handoff and
+the push to main. Running beside it: the perf design's review (`wf_fe7fb255-d44`, docs/PERF-DESIGN.md
+draft 0b64bba).
 
 Known gaps, judged acceptable (§R5): Next-step rule 6 has no project-menu Re-check item (a
 project-level Re-check would be refused: it needs the unit on screen); migrate turns do not
