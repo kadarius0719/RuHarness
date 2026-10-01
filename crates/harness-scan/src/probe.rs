@@ -666,24 +666,16 @@ mod tests {
                 "{src}: {defs:?}"
             );
         }
-        // Fix pass 6's check: an empty head that starts its line (GNU's
-        // layout) keeps its name ahead of a later empty call or a
-        // parameter-like macro; a named head's annotations on their own line,
-        // or a body macro on its own line before the head, never take it.
+        // A named head's annotations on their own line, or a body macro on
+        // its own line before the head, never take its name. (An empty head
+        // followed by a macro call, `Count\nafter() A B NAME()`, is named in
+        // §6: fix pass 7's attempt at it broke the shapes below.)
         for src in [
-            "int g(void) NI\nCount\nafter() A B NAME()\n{ return 1; }\n",
-            "int g(void) NI\nCount\nafter() ATTR NAME()\n{ return 1; }\n",
-            "int g(void) NI\nstruct s *\nafter() A B NAME()\n{ return 0; }\n",
-            "int g(void) NI\nCount\nafter() LOCKS(int x)\n{ return 1; }\n",
-            "int g(void) NI\nstatic Count\nafter() A B NAME()\n{ return 1; }\n",
-            "int g(void) NI\nCount\nafter()\n  A B NAME()\n{ return 1; }\n",
             "int g(void) NI\nCount\nafter(void)\n  A B NAME()\n{ return 1; }\n",
             "int g(void) NI\nCount\nafter(int x)\n  A B NAME()\n{ return 1; }\n",
             "int g(void)\n  A B STUB_BODY()\nCount\nafter()\n{ return 1; }\n",
-            // An annotation that starts its own line, after a named head or
-            // after an empty head that started its line, never takes it.
+            // An annotation that starts its own line after a named head.
             "int g(void) NI\nCount\nafter(void) A B\nNAME()\n{ return 1; }\n",
-            "int g(void) NI\nCount\nafter() A\nNAME()\n{ return 1; }\n",
         ] {
             let defs = defs_of(src);
             let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
@@ -696,6 +688,77 @@ mod tests {
         let defs = defs_of("int g(void) NI\nCount b() NI\nint c(void)\n{ return 1; }\n");
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, ["g", "c"], "{defs:?}");
+    }
+
+    /// Fix pass 7's check: an empty call that is not the head — a body macro
+    /// after annotation words, the middle head of three, an annotation
+    /// between the type and the name — never takes the real head's name.
+    #[test]
+    fn an_empty_call_before_the_real_head_never_takes_its_name() {
+        for (src, want) in [
+            (
+                "int g(void)\n  A B\n  STUB_BODY()\nCount\nafter()\n{ return 1; }\n",
+                "after",
+            ),
+            (
+                "int g(void)\n  A B\n  STUB_BODY()\nCount\nafter(int x)\n{ return x; }\n",
+                "after",
+            ),
+            (
+                "int g(void)\n  A B\n  STUB_BODY()\nCount\nafter(void)\n{ return 1; }\n",
+                "after",
+            ),
+            (
+                "int g(void) A B\nSTUB()\nCount after(int x)\n{ return x; }\n",
+                "after",
+            ),
+            (
+                "int g(void) A B\nNAME()\nstatic Count\nafter(void)\n{ return 1; }\n",
+                "after",
+            ),
+            (
+                "int g(void) NI\nCount\nEXPORT()\nafter(int x)\n{ return x; }\n",
+                "after",
+            ),
+            (
+                "int g(void) NI\nCount\nb() NI\nCount\nc()\n{ return 1; }\n",
+                "c",
+            ),
+            (
+                "int g(void) NI\nCount\nb() NI\nCount\nc(void)\n{ return 1; }\n",
+                "c",
+            ),
+            (
+                "int g(void) NI\nCount\nb() NI\nCount\nc(int x)\n{ return x; }\n",
+                "c",
+            ),
+            (
+                "int g(void) NI\nCount\nb() NI\nCount c(int x)\n{ return x; }\n",
+                "c",
+            ),
+            (
+                "int g(void) NI\nCount\nb() NI\nCount\nc(x)\n\tint x;\n{ return x; }\n",
+                "c",
+            ),
+        ] {
+            let defs = defs_of(src);
+            let mut names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+            names.sort_unstable();
+            let mut expect = vec!["g", want];
+            expect.sort_unstable();
+            assert_eq!(names, expect, "{src}: {defs:?}");
+        }
+        // Comments in the head's own parameters are read as in the
+        // annotation's arguments: an annotation naming the parameters keeps
+        // the note.
+        for src in [
+            "void *f(size_t n /* count */, size_t size) ALLOC(n /* items */ * size) { return 0; }\n",
+            "void *f(size_t n, size_t size /* bytes */) __sized_by(n /* x */ * size) { return 0; }\n",
+        ] {
+            let defs = defs_of(src);
+            assert_eq!(defs.len(), 1, "{src}: {defs:?}");
+            assert!(defs[0].note_at.is_ok(), "{src}: {defs:?}");
+        }
     }
 
     /// Fix pass 4's mutation check: a stray parse error between a head and

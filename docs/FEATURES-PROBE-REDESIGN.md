@@ -476,10 +476,13 @@ test fixtures.
   functions as one; the scanner tells them apart by the shape of what follows the first head's
   parameters. Six review rounds each found rarer spellings that escape (typedef'd and tag return
   types, K&R parameters, empty parentheses, comments, macros whose arguments look like
-  parameters, pointer returns); none occurs in the 161 390 real definitions the checks read, and
-  more surely exist. Where one escapes, the first function keeps a note in the second's body: it
-  reads as run when the second ran. Further spellings are named here, not chased; revisit with a
-  preprocessing frontend (libclang), which reads the macro.
+  parameters, pointer returns, an empty-parentheses second head followed by a macro call —
+  `Count\nafter() A B NAME()`); none occurs in the 194 789 real definitions the checks read, and
+  more surely exist. Where one escapes, either the first function keeps a note in the second's
+  body (it reads as run when the second ran), or the real second head is lost and a phantom named
+  after a macro is recorded in its place (an `#if` twin of the lost head can then read "not run").
+  Further spellings are named here, not chased; revisit with a preprocessing frontend (libclang),
+  which reads the macro.
 - **Two heads run together** (§10.2): both are unwatched (rule 1); a second head stays outside the
   twin rule, so a definition of its id read whole elsewhere in the file (an `#else` branch)
   loses its note too — unwatched, never a wrong map. A head whose first parameter has a
@@ -488,9 +491,9 @@ test fixtures.
   head with empty parentheses (`NI` then `after()`, C89 only: clang and gcc 14 reject implicit
   int in C99 and later), and one whose only parameter is `...` after a typedef'd return type —
   the first head then keeps a note in the second's body. Caught too widely: two annotation words
-  then an empty call (`ATTR1 ATTR2 NAME()`) read as a second head `NAME` — both unwatched (rule
-  1), never read as run or not run, though the phantom name reaches the facts; a real second head
-  after it keeps its name (§10.5). A parenthesized second head after a
+  then an empty call (`ATTR1 ATTR2 NAME()`), or an annotation whose arguments read as parameters
+  (`int f(int x) ANNOT(int y)`), read as a second head named after the macro — the function is
+  unwatched (rule 1) and the phantom name reaches the facts. A parenthesized second head after a
   typedef'd type whose `static` is a macro (`STATIC Count (after)(void)`) is recorded public.
 - **C23 attributes**: `int f(void) [[gnu::cold]] __attribute__((noinline)) {` (a C23 attribute
   then a GNU one after the parameters; clang only) is read by tree-sitter-c as a declaration and
@@ -955,9 +958,13 @@ A short check of fix pass 6 at 1dee223 (`wf_d449beca-415`, `SP/fc6/result.json`;
 definitions, the bench, zopfli, tractor and sqlite3.c byte-identical with each fix). Fix pass 7
 (the code governs):
 - **Comments in a parameter list** are blanked before it is read (`after(/* in */ int x)`).
-- **An empty head that starts its line** (GNU's layout, `Count\nafter()`) ranks ahead of the
-  calls that qualify by shape, unless a head that names its parameters came first: a macro call
-  after it is an annotation.
+- **An empty head that starts its line** (GNU's layout, `Count\nafter()`) ranked ahead of the
+  calls that qualify by shape — REVERTED after the bounded check below: it took the name from an
+  earlier empty call that starts its line (a body macro on its own line, the middle of three
+  heads), shapes 1dee223 read right, and could read an `#if` twin "not run". The shape it was for
+  (an empty head followed by a macro call) is named in §6's class instead.
+- **Comments in the head's own parameters** are blanked too, so both sides read alike (the
+  bounded check: blanking only the annotation's side lost a right reading).
 - **A folded first head** leaves its body macro between it and the second head: with no word
   there (`static char * M(void) **after(void)`) it is no first head.
 - **A K&R head with an attribute after its parameters** (clang only) is read from its own
@@ -972,3 +979,11 @@ fixes hold and regress nothing (tests, real code), not another open-ended search
 **Mutation check of fix pass 7**: 7 mutants, all killed — two after shapes were added (an
 annotation starting its own line after a named head, and after an empty head that started its
 line).
+
+**The bounded check of fix pass 7** (`wf_3d782237-429`, `SP/fc7/result.json`; a verifier per fix and
+a regression sweep): every fix held; tests 327 of 327; real code unchanged (194 789 definitions in
+11 279 files including seven sqlite3.c copies, 173 107 listing heads, zopfli's and sqlite3.c's maps
+byte-identical). On hand-made shapes it found the line-start rank's regression (reverted, above)
+and one-sided comment blanking (fixed, above); the others are the comment-free readings of the
+same text, named in §6 ("caught too widely"). The reverted rank and the blanking were re-checked
+against the verifiers' shapes and real code; that closes the review.

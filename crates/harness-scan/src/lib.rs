@@ -1017,7 +1017,11 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
     let Some(parameters) = node.child_by_field_name("parameters") else {
         return Heads::One;
     };
-    let first_params = text(parameters, src);
+    // Comments blanked, as in the calls' arguments below (fix pass 7's
+    // check: read both sides alike).
+    let first_owned =
+        String::from_utf8(blank_comments(text(parameters, src).as_bytes())).unwrap_or_default();
+    let first_params = first_owned.as_str();
     let own_names = parameter_names(first_params);
     // A stray parse error between the declarator and the body: K&R
     // declarations the parser could not read — a second head's (fix pass 3's
@@ -1070,10 +1074,6 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
     // B NAME()`), where after `STUB(int)` it is the head (`Count after()`;
     // fix pass 5's check).
     let mut by_shape_named = false;
-    // An empty call that starts its line (GNU's layout, `Count\nafter()`)
-    // ranks ahead of the calls that qualify by shape: a macro call after it
-    // is an annotation (fix pass 6's check).
-    let mut by_line: Option<Candidate> = None;
     for (k, call) in trailing.iter().enumerate() {
         if call.kind() != "call_expression" {
             continue;
@@ -1175,25 +1175,8 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
             && (!decl_shaped(first_params)
                 || names_only(first_params, &parameter_names(args_text)));
         let candidate = (name, *call, macro_first);
-        let starts_line = {
-            let at = call.start_byte();
-            let line_start = src[..at]
-                .iter()
-                .rposition(|b| *b == b'\n')
-                .map_or(0, |p| p + 1);
-            src[line_start..at].iter().all(|b| b.is_ascii_whitespace())
-        };
         if paren_head {
             by_position = Some(candidate);
-        } else if empty_after_word
-            && !typed_type_word
-            && !keyword_fn
-            && !by_shape_named
-            && starts_line
-        {
-            if by_line.is_none() {
-                by_line = Some(candidate);
-            }
         } else if empty_after_word && !typed_type_word && !keyword_fn {
             // An empty call after words ranks with the calls that qualify
             // by shape: a body macro spelled `STUB_BODY()` never takes a
@@ -1225,7 +1208,7 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
             by_shape = Some(candidate);
         }
     }
-    if let Some((name, call, macro_first)) = by_position.or(by_line).or(by_shape) {
+    if let Some((name, call, macro_first)) = by_position.or(by_shape) {
         let Some(name) = name else {
             return Heads::Unreadable;
         };
