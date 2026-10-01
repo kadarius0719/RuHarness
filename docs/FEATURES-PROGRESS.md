@@ -56,8 +56,13 @@ below are history.
   it, render_perf_profile. DECIDED here (to record in DECISIONS at the perf close): Linux is
   refused by name ("perf runs on macOS only for now — the Linux launcher is not built yet"):
   no Linux machine to compile or test on, CI's Linux job red since 2026-09-17.
-  NEXT: step (d), rows and measurement in harness-oracle (§3.2 selection, §3.5 running a row,
-  §3.6 C alone, judging per §3.3, the replace rule, kept outputs, results written).
+- Step (d) DONE: `perf/measure.rs` — `harness_oracle::perf_run(target, plan, facts, workloads,
+  perf_dir, &PerfRequest, &mut dyn PerfProgress) -> PerfSummary` (the CLI holds the writer lock,
+  loads plan/facts/workloads, resolves perf_dir). Not yet exercised with real verified units —
+  that is step (e)'s end-to-end test (a mini target with two accepted units, zopfli's u001).
+  `harness_core::perf::manifest_profile` added (note 25).
+  NEXT: step (e), the CLI: `harness perf run|init|save|show` (+ --json `perf-row` events, the
+  summary line, exit codes 0/1/2), and its end-to-end tests.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
 `.claude/worktrees/rust-migration-harness-7d1c42`), NOT yet merged to main or pushed. This
