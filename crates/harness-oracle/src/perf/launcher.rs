@@ -114,8 +114,13 @@ fn developer_folders() -> Vec<PathBuf> {
 
 /// Find the launcher's compiler; `Err` in the words of §3.2 step 1.
 pub(crate) fn find_compiler() -> Result<Compiler, Error> {
+    find_compiler_in(&developer_folders())
+}
+
+/// [`find_compiler`] among `folders`, the selected one first.
+fn find_compiler_in(folders: &[PathBuf]) -> Result<Compiler, Error> {
     let mut first_failure: Option<PathBuf> = None;
-    for (i, dev) in developer_folders().iter().enumerate() {
+    for (i, dev) in folders.iter().enumerate() {
         let Some(paths) = layout(dev) else {
             continue;
         };
@@ -2502,5 +2507,165 @@ mod tests {
             root_owned(&mine).is_err(),
             "a temp folder of the user's is not root's"
         );
+    }
+
+    /// Stale version folders go, but never one a perf run holds, and the
+    /// newest other one stays: two worktrees in turn do not rebuild each
+    /// other's launcher (build note 4).
+    #[test]
+    fn stale_launchers_go_but_never_one_in_use() {
+        let tmp = crate::testutil::TempDir::new("perf-stale");
+        let root = tmp.path();
+        let current = root.join("perf-launcher-2-cccc");
+        // Oldest first.
+        let others = [
+            "perf-launcher-1-aaaa",
+            "perf-launcher-1-nolock",
+            "perf-launcher-1-bbbb",
+            "perf-launcher-1-dddd",
+        ];
+        for name in others.iter().chain(&["perf-launcher-2-cccc"]) {
+            let d = root.join(name);
+            std::fs::create_dir(&d).expect("folder");
+            std::fs::write(d.join(HASHES_FILE), "perfrun x\nperfgo y\n").expect("hashes");
+            if !name.ends_with("nolock") {
+                std::fs::write(d.join(".lock"), "").expect("lock");
+            }
+        }
+        std::fs::create_dir(root.join("other")).expect("not a launcher");
+        let start = std::time::SystemTime::now() - Duration::from_secs(3600);
+        for (i, name) in others.iter().enumerate() {
+            File::open(root.join(name))
+                .expect("open")
+                .set_modified(start + Duration::from_secs(60 * i as u64))
+                .expect("mtime");
+        }
+        let held = File::open(root.join("perf-launcher-1-aaaa/.lock")).expect("open");
+        held.lock_shared().expect("a run holds it");
+        remove_stale(root, &current);
+        let left = |name: &str| root.join(name).exists();
+        for kept in [
+            "perf-launcher-2-cccc",
+            "perf-launcher-1-dddd",
+            "perf-launcher-1-aaaa",
+            "other",
+        ] {
+            assert!(left(kept), "{kept} is kept");
+        }
+        for gone in ["perf-launcher-1-bbbb", "perf-launcher-1-nolock"] {
+            assert!(!left(gone), "{gone} is removed");
+        }
+        drop(held);
+        remove_stale(root, &current);
+        assert!(!left("perf-launcher-1-aaaa"), "removed once free");
+        assert!(left("perf-launcher-1-dddd") && left("perf-launcher-2-cccc"));
+    }
+
+    /// A version folder a perf run holds is never rebuilt under it — perf
+    /// says so instead — and once free it is; stale folders go only then,
+    /// under perf's lock, keeping the newest other and any held one.
+    #[test]
+    fn a_launcher_in_use_is_never_rebuilt() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-in-use");
+        let owner = std::fs::metadata(tmp.path()).expect("meta").uid();
+        let version = l.perfrun.path.parent().expect("version").to_path_buf();
+        let root = version.parent().expect("root").to_path_buf();
+        std::fs::write(version.join(HASHES_FILE), "junk\n").expect("needs rebuilding");
+        let err = launcher_in(&root, owner, &mut |_: &str| {}).expect_err("refused");
+        assert!(
+            err.to_string().contains("in use by another perf run"),
+            "{err}"
+        );
+        assert!(l.perfgo.path.exists(), "the folder in use is kept");
+        // Other versions' folders: the newest kept, a held one kept.
+        let start = std::time::SystemTime::now() - Duration::from_secs(3600);
+        for (i, name) in [
+            "perf-launcher-0-held",
+            "perf-launcher-0-old",
+            "perf-launcher-0-new",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let d = root.join(name);
+            std::fs::create_dir(&d).expect("folder");
+            std::fs::write(d.join(".lock"), "").expect("lock");
+            File::open(&d)
+                .expect("open")
+                .set_modified(start + Duration::from_secs(60 * i as u64))
+                .expect("mtime");
+        }
+        let held = File::open(root.join("perf-launcher-0-held/.lock")).expect("open");
+        held.lock_shared().expect("a run holds it");
+        drop(l);
+        let mut said = Vec::new();
+        let again = launcher_in(&root, owner, &mut |w: &str| said.push(w.to_string()))
+            .expect("rebuilt once free");
+        assert!(
+            said.iter().any(|w| w == "building the launcher…"),
+            "{said:?}"
+        );
+        assert!(again.check().is_ok());
+        assert!(root.join("perf-launcher-0-held").exists());
+        assert!(root.join("perf-launcher-0-new").exists());
+        assert!(!root.join("perf-launcher-0-old").exists());
+    }
+
+    /// perf's lock is never held through a link (build note 4).
+    #[test]
+    fn a_lock_that_is_a_link_is_refused() {
+        let tmp = crate::testutil::TempDir::new("perf-lock-link");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::write(&elsewhere, "").expect("file");
+        let lock = tmp.path().join(".lock");
+        std::os::unix::fs::symlink(&elsewhere, &lock).expect("link");
+        let err = lock_file(&lock, true).expect_err("refused");
+        assert!(err.to_string().contains("perf's lock is a link"), "{err}");
+    }
+
+    /// A compiler in a developer folder the person owns is refused with its
+    /// words (§3.2 step 1); when the selected folder fails and the Command
+    /// Line Tools pass, they are used and the progress line says so (build
+    /// note 9).
+    #[test]
+    fn a_compiler_the_person_owns_is_refused_with_its_words() {
+        let tmp = crate::testutil::TempDir::new("perf-own-xcode");
+        let dev = tmp.path().join("Developer");
+        for file in [
+            "usr/bin/clang",
+            "usr/bin/ld",
+            "usr/lib/libLTO.dylib",
+            "SDKs/MacOSX.sdk/SDKSettings.json",
+        ] {
+            let path = dev.join(file);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+            std::fs::write(&path, "").expect("file");
+        }
+        let err = find_compiler_in(std::slice::from_ref(&dev)).expect_err("refused");
+        assert_eq!(
+            err.to_string(),
+            Error::Invariant(format!(
+                "your compiler at {} is not owned by the system — install Xcode or the \
+                 Command Line Tools with Apple's installer",
+                dev.join("usr/bin/clang").display()
+            ))
+            .to_string()
+        );
+        let clt = PathBuf::from(COMMAND_LINE_TOOLS);
+        let clt_passes =
+            layout(&clt).is_some_and(|paths| paths.iter().all(|p| root_owned(p).is_ok()));
+        if cfg!(target_os = "macos") && clt_passes {
+            let c = find_compiler_in(&[dev, clt]).expect("the Command Line Tools");
+            assert_eq!(
+                c.note.as_deref(),
+                Some(
+                    "the selected developer folder is not owned by the system — using the \
+                     Command Line Tools at /Library/Developer/CommandLineTools"
+                )
+            );
+        }
     }
 }
