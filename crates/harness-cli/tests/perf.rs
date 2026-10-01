@@ -4,9 +4,11 @@
 //! `--expect`, the C alone and the unit measured end to end through the
 //! launcher, `perf-row` events, and `perf show` with its currency.
 
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
@@ -34,8 +36,14 @@ struct Run {
 }
 
 fn harness(args: &[&str], stdin: Option<&[u8]>) -> Run {
+    harness_env(args, stdin, &[])
+}
+
+/// [`harness`] with these variables set over the test's own.
+fn harness_env(args: &[&str], stdin: Option<&[u8]>, env: &[(&str, &OsStr)]) -> Run {
     let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
         .args(args)
+        .envs(env.iter().copied())
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {
@@ -88,6 +96,61 @@ fn text_input(path: &Path, words: usize) {
 
 fn blake3_of(path: &Path) -> String {
     harness_core::hash::file_hash(path).unwrap()
+}
+
+/// An executable shell script at `path`.
+fn script(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// The test's PATH with `dir` first.
+fn path_with(dir: &Path) -> OsString {
+    let mut dirs = vec![dir.to_path_buf()];
+    dirs.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(dirs).unwrap()
+}
+
+/// `text` with `from` replaced by `to`, which must be there exactly once.
+fn edit(path: &Path, from: &str, to: &str) {
+    let text = std::fs::read_to_string(path).unwrap();
+    assert_eq!(
+        text.matches(from).count(),
+        1,
+        "{}: {from:?}",
+        path.display()
+    );
+    std::fs::write(path, text.replace(from, to)).unwrap();
+}
+
+/// `perf show`'s and `perf run`'s rows: each `perf:` line with the lines
+/// that continue it, joined with single spaces.
+fn rows_of(stdout: &str) -> Vec<String> {
+    let mut rows: Vec<String> = Vec::new();
+    for line in stdout.lines() {
+        let words = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        match rows.last_mut() {
+            Some(last) if !line.starts_with("perf: ") => {
+                last.push(' ');
+                last.push_str(&words);
+            }
+            _ => rows.push(words),
+        }
+    }
+    rows
+}
+
+/// The `perf-row` events of a `--json` run.
+fn perf_rows(stdout: &str) -> Vec<serde_json::Value> {
+    stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .filter(|v: &serde_json::Value| v["k"] == "perf-row")
+        .collect()
 }
 
 #[test]
@@ -224,12 +287,7 @@ fn zopfli_measured_end_to_end() {
     .unwrap();
     let r = harness(&["perf", "run", "--target", target, "--json"], None);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
-    let events: Vec<serde_json::Value> = r
-        .stdout
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .filter(|v: &serde_json::Value| v["k"] == "perf-row")
-        .collect();
+    let events = perf_rows(&r.stdout);
     let find = |side: &str, workload: &str| {
         events
             .iter()
@@ -284,7 +342,31 @@ fn zopfli_measured_end_to_end() {
         "{}",
         show.stdout
     );
+    // perf show reads the compilers as perf run did (tool runs, the tool
+    // environment): the same lines, so no row is out of date.
+    assert!(!show.stdout.contains("compilers not checked"));
     assert!(!show.stdout.contains("out of date"), "{}", show.stdout);
+    // Another `cc` first on the PATH is another compiler: every row says so.
+    let bin = t.join("stand-in/bin");
+    script(&bin.join("cc"), "echo 'cc 1.0 (stand-in)'\n");
+    let path = path_with(&bin);
+    let show = harness_env(
+        &["perf", "show", "--target", target],
+        None,
+        &[("PATH", &path)],
+    );
+    assert_eq!(show.code, 0, "{}", show.stderr);
+    let text_rows: Vec<String> = rows_of(&show.stdout)
+        .into_iter()
+        .filter(|r| r.contains(" on text — "))
+        .collect();
+    assert_eq!(text_rows.len(), 2, "{}", show.stdout);
+    for r in &text_rows {
+        assert!(
+            r.contains("out of date: measured with other compilers"),
+            "{r}"
+        );
+    }
     // An edit to the C makes every row out of date, each with its reason.
     let main = t.join("src/zopfli/zopfli_bin.c");
     let mut text = std::fs::read_to_string(&main).unwrap();
@@ -300,4 +382,111 @@ fn zopfli_measured_end_to_end() {
     let r = harness(&["perf", "run", "--target", target], None);
     assert_eq!(r.code, 1);
     assert!(r.stderr.contains("scan the project first"), "{}", r.stderr);
+}
+
+/// True when every tool profile may write under `path` anyway (the temp
+/// folders), so a write there proves nothing about the sandbox.
+fn in_a_temp_folder(path: &Path) -> bool {
+    let path = path.canonicalize().unwrap();
+    let tmpdir = std::env::var_os("TMPDIR").and_then(|d| PathBuf::from(d).canonicalize().ok());
+    [
+        PathBuf::from("/private/tmp"),
+        PathBuf::from("/private/var/folders"),
+    ]
+    .into_iter()
+    .chain(tmpdir)
+    .any(|d| path.starts_with(d))
+}
+
+/// `perf show` checks the compilers as tool runs (§3.9): in the tool
+/// sandbox, with the tool environment, stopped at `[oracle] timeout_secs`.
+/// The target picks which compilers run (its `rust-toolchain.toml`, or the
+/// PATH as here), so they are target code. Without a launcher cache the
+/// computer is not checked, in those words; `--no-check` runs neither.
+#[test]
+fn show_checks_the_compilers_in_the_sandbox() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("compilers");
+    let target = t.to_str().unwrap();
+    let bin = t.join("stand-in/bin");
+    let marker = t.join("written-by-rustc");
+    script(&bin.join("cc"), "echo 'cc 1.0 (stand-in)'\n");
+    script(
+        &bin.join("rustc"),
+        &format!(
+            "echo outside > '{}'\necho 'rustc 1.0.0 (stand-in)'\n",
+            marker.display()
+        ),
+    );
+    let path = path_with(&bin);
+    let r = harness_env(
+        &["perf", "show", "--target", target],
+        None,
+        &[("PATH", &path)],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains("compilers not checked"), "{}", r.stdout);
+    if in_a_temp_folder(&t) {
+        eprintln!("the target is in a temp folder: the sandbox's write rule not checked");
+    } else {
+        assert!(
+            !marker.exists(),
+            "rustc wrote in the target: it ran unsandboxed"
+        );
+    }
+
+    // A compiler that never answers is stopped at the target's timeout.
+    script(&bin.join("rustc"), "exec sleep 60\n");
+    edit(
+        &t.join("harness.toml"),
+        "allowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n",
+        "allowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\ntimeout_secs = 2\n",
+    );
+    let started = Instant::now();
+    let r = harness_env(
+        &["perf", "show", "--target", target],
+        None,
+        &[("PATH", &path)],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        r.stdout.contains("perf: compilers not checked"),
+        "{}",
+        r.stdout
+    );
+
+    // No launcher cache (a home folder without one): the computer is not
+    // checked, and the words say how to check it.
+    script(&bin.join("rustc"), "echo 'rustc 1.0.0 (stand-in)'\n");
+    let home = t.with_extension("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let env: [(&str, &OsStr); 2] = [("PATH", &path), ("HOME", home.as_os_str())];
+    let r = harness_env(&["perf", "show", "--target", target], None, &env);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains("perf: computer not checked — run harness perf run once"),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("compilers not checked"), "{}", r.stdout);
+    let r = harness_env(
+        &["perf", "show", "--target", target, "--no-check"],
+        None,
+        &env,
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        !r.stdout.contains("not checked"),
+        "--no-check checks neither: {}",
+        r.stdout
+    );
 }

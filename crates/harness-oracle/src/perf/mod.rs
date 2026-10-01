@@ -7,3 +7,4 @@ pub(crate) mod archive;
 pub(crate) mod build;
 pub(crate) mod launcher;
 pub mod measure;
+pub(crate) mod tools;

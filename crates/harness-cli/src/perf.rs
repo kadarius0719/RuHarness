@@ -330,9 +330,9 @@ impl harness_oracle::PerfProgress for Progress<'_> {
 
 /// `harness perf show` (§3.9): every stored row's words, rebuilt, with why
 /// it is out of date; the computer checked only when the launcher cache is
-/// current, the compilers only as allowlisted tool runs; `--no-check`
-/// skips both.
-pub(crate) fn cmd_show(target: PathBuf, no_check: bool) -> Result<u8> {
+/// current, the compilers only as tool runs (sandboxed; without a sandbox
+/// only with `--allow-unsandboxed`); `--no-check` skips both.
+pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool) -> Result<u8> {
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
     let dir = perf_dir(&ctx)?;
@@ -359,7 +359,11 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool) -> Result<u8> {
     } else {
         harness_oracle::perf_computer_if_cached()
     };
-    let compilers = if no_check { None } else { compilers(&ctx) };
+    let compilers = if no_check {
+        None
+    } else {
+        harness_oracle::perf_compilers(&ctx, allow_unsandboxed)
+    };
     if !no_check && computer.is_none() {
         out("perf: computer not checked — run harness perf run once".into());
     }
@@ -456,37 +460,4 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool) -> Result<u8> {
         out("perf: nothing measured yet — run harness perf run".into());
     }
     Ok(0)
-}
-
-/// `cc --version` and `rustc -V`'s first lines, as tool runs, when the
-/// target's allowlist has them.
-fn compilers(ctx: &TargetContext) -> Option<(String, String)> {
-    let allow: Vec<&str> = ctx
-        .config
-        .oracle
-        .get("allowlist")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|t| t.as_str()).collect())
-        .unwrap_or_default();
-    if !allow.contains(&"cc") || !allow.contains(&"rustc") {
-        return None;
-    }
-    let first = |cmd: &str, arg: &str| -> Option<String> {
-        let out = std::process::Command::new(cmd)
-            .arg(arg)
-            .current_dir(&ctx.root)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .ok()?;
-        Some(
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .next()?
-                .trim()
-                .chars()
-                .take(160)
-                .collect(),
-        )
-    };
-    Some((first("cc", "--version")?, first("rustc", "-V")?))
 }

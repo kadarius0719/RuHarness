@@ -332,7 +332,9 @@ enum PerfCmd {
         /// Skip checking the computer and the compilers
         #[arg(long)]
         no_check: bool,
-        /// Accepted for symmetry (show runs no target code)
+        /// Where no sandbox is available, still check the compilers
+        /// (`cc --version` and `rustc -V` run as tool runs; on macOS they
+        /// always run in the tool sandbox)
         #[arg(long)]
         allow_unsandboxed: bool,
     },
@@ -474,8 +476,8 @@ fn main() -> ExitCode {
             PerfCmd::Show {
                 target,
                 no_check,
-                allow_unsandboxed: _,
-            } => perf::cmd_show(target, no_check),
+                allow_unsandboxed,
+            } => perf::cmd_show(target, no_check, allow_unsandboxed),
         },
         Cmd::Detect { target } => cmd_detect(target),
         Cmd::Observe { target } => cmd_observe(target),

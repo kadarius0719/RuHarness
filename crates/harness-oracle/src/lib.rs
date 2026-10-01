@@ -94,6 +94,7 @@ pub use perf::measure::{
     perf_computer_if_cached, perf_measurable, perf_run, PerfProgress, PerfRequest, PerfSummary,
     RowSide,
 };
+pub use perf::tools::perf_compilers;
 #[doc(hidden)]
 pub use probebuild::{
     last_map_most_file_compiles, last_map_pass_compiles, with_map_bounds, MapBounds,

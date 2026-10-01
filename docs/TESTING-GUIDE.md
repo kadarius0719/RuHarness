@@ -3751,7 +3751,7 @@ The first time, it also says `building the launcher…`: perf builds its own sma
 
 ### Step 11.4 — Read them again, and watch one go out of date
 
-**Run.** `perf show` rebuilds every row's words from the stored numbers. It runs nothing.
+**Run.** `perf show` rebuilds every row's words from the stored numbers. It builds nothing. Besides asking perf's launcher which computer this is, the only things it runs are `cc --version` and `rustc -V`, inside the sandbox, to see whether your compilers changed since the rows were measured (`--no-check` skips both checks).
 
 ```bash
 harness perf show --target targets/lzg
