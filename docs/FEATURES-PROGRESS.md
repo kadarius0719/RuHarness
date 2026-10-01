@@ -119,7 +119,8 @@ sandbox-exec inside the scenario-like profile (exec of perfgo and the program on
 signals the launcher through a pipe, waits for its go, sets RLIMIT_CPU, then execs the program with
 argv[0] = its bare name — the baseline is read while perfgo waits (no race; ≈ 7.5e7), argv[0] is
 `prog` on both sides from different folders, an empty program ≈ 1.1e7 instructions, a busy loop
-6.13–6.16e8; the launcher and trampoline built with TMPDIR inside their own folder. Next: revision
+6.13–6.16e8; the launcher and trampoline built with TMPDIR inside their own folder. REVISION 2 WRITTEN (cd1f79b, from `SP/perf/rev2-changes.md`, 118 changes). Next: check revision 2
+(independent agents, as for revision 1), revise, then build. Was: revision
 2 from a condensed change list
 (`SP/perf/rev2-changes.md`, written by an agent from both result files), then check it again.
 Was: CHECK THE REVISION — running as
