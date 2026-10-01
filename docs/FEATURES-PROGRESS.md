@@ -112,14 +112,16 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    inline-only and ruled-out namesakes, notes from every listing pass, run folders registered for
    the signal's cleanup, the map's tools' TMPDIR in its folder, older maps loaded safely, tests
    gated to macOS, compile-count seams (`last_map_most_file_compiles`, `last_map_pass_compiles`).
-   The 101 bench targets' facts byte-identical; sqlite3.c unchanged. Full tests passed (17
-   suites). RUNNING: mutation check (`SP/mutfix3.py` in SP/mut1, log `SP/mutfix3.log`) and the
-   CHECK OF FIX PASS 3, workflow `wf_6d4c61e3-bf5` (script `SP/fix-pass-3-check.js`, base
-   `SP/fc3/base`, work `SP/fc3/work`). Mutation check DONE: 35 mutants, 33 killed (design §10.2). Was: at e846261 (base copy
-   `SP/fc1/base`; lenses tokenizer, build-link, scanner-variant, runner-ux; two verifiers each). Was planned as: lenses over the diff
-   665495b..HEAD — the tokenizer and same-code check, probebuild bounds/search/link, objsyms and
-   the runtime-names check, the scanner's nested/keyword/run-together rules, featuremap memory and
-   cleanup, the sandbox read roots; two verifiers per finding), fix what it confirms, check again.
+   The 101 bench targets' facts byte-identical; sqlite3.c unchanged; mutation 35/33.
+   CHECK OF FIX PASS 3 FINISHED (`wf_6d4c61e3-bf5`, `SP/fc3/result.json`, digest
+   `SP/fc3/digest.md`): 21 confirmed, 0 refuted, none high (6 medium). FIX PASS 4 COMMITTED
+   (bfb2c7d, tests 7e40ef1; design §10.3): second heads ranked, every misread configuration, the
+   spread case (objsyms undefined symbols), inline-only from the listing, ruled namesakes no
+   longer explain (conservative), scorer folders registered, newer maps loaded; mutation 23/21
+   (2 without effect). 101 bench facts identical; sqlite3.c same. RUNNING: the CHECK OF FIX PASS 4,
+   `wf_49dab672-ae0` (script `SP/fix-pass-4-check.js`, base `SP/fc4/base`). RULE (set before
+   it): the last probe review round unless it finds a silent wrong map or a high finding; lower
+   findings are fixed directly or named in §6. Then items 4–7 below.
 4. Full `cargo test --workspace --no-fail-fast` on a quiet machine. Load-sensitive tests seen
    failing only under load: validate_driver (fixed: first exec), zopfli_verify u001 driver
    self-validation, harness-tui chat_e2e and `an_exited_leaders_pipes_are_read_first`,
