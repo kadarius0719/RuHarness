@@ -4189,3 +4189,48 @@ fn a_knr_parameter_declaration_with_an_attribute_is_no_head() {
         map.unwatched_reasons
     );
 }
+
+/// Fix pass 6's check: a K&R head with an attribute right after its
+/// identifier list (clang only) is read from its own declaration, never an
+/// earlier one (a cast initializer, then a prototype of the original name):
+/// renamed by a macro, it explains no symbol.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_knr_head_with_an_attribute_after_its_parameters_is_read_whole() {
+    a_hidden_variant_beside(
+        "knr-attr-after-params",
+        "struct hn_s { int v; };\nstatic const int hn_k = (int) sizeof(struct hn_s);\n\
+         int helper(int x);\n#define helper(x) helper_impl(x)\n\
+         int helper(x) __attribute__((noinline)) int x; { return x + hn_k; }\n",
+        "#include \"hn.h\"\n",
+    );
+    // A genuine K&R namesake spelled so still explains.
+    let h = "#ifdef USE_FAST\nstatic int helper(int x) { return x * 3; }\n#endif\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n#include \"h.h\"\n\
+                __attribute__((noinline)) static int helper(x, y) __attribute__((cold))\n  \
+                int x;\n  int y;\n{ return x + 7; }\n\
+                static volatile int seed;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? helper(seed, 0) - 7 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "knr-attr-after-params-namesake",
+        main,
+        &[("src/tool/h.h", h)],
+        &[
+            ("src/tool/h.h", "src/tool/h.h::helper"),
+            ("src/tool/main.c", "src/tool/main.c::helper"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(map.scenarios[0].end, "exit 0");
+    assert!(
+        ran(&map).contains(&"src/tool/main.c::helper"),
+        "{:?} {:?}",
+        ran(&map),
+        map.unwatched_reasons
+    );
+    assert!(
+        reason_for(&map, "src/tool/h.h::helper").is_none(),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}

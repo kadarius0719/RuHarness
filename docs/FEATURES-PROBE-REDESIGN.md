@@ -471,6 +471,15 @@ test fixtures.
   leaves no symbol and still reads "not run"; a namesake the scan never recorded (made by a
   macro) cannot explain a symbol, so the sibling then reads unwatched (parser) where "not run"
   was true (§10.2).
+- **Two heads run together — the class** (§10.2–§10.6): a macro that supplies a whole body (`int
+  g(void) NOT_IMPLEMENTED`) written straight before another definition makes the parser read two
+  functions as one; the scanner tells them apart by the shape of what follows the first head's
+  parameters. Six review rounds each found rarer spellings that escape (typedef'd and tag return
+  types, K&R parameters, empty parentheses, comments, macros whose arguments look like
+  parameters, pointer returns); none occurs in the 161 390 real definitions the checks read, and
+  more surely exist. Where one escapes, the first function keeps a note in the second's body: it
+  reads as run when the second ran. Further spellings are named here, not chased; revisit with a
+  preprocessing frontend (libclang), which reads the macro.
 - **Two heads run together** (§10.2): both are unwatched (rule 1); a second head stays outside the
   twin rule, so a definition of its id read whole elsewhere in the file (an `#else` branch)
   loses its note too — unwatched, never a wrong map. A head whose first parameter has a
@@ -938,3 +947,24 @@ confirmed (one medium, three low), all narrower cases of shapes fix pass 5 fixed
 attribute after a K&R parameter declaration's `)` makes it no declarator; a head a macro turns
 into a parenthesized name still declares it — the second has no effect on the map by itself, since
 the scanner never records a function written as `(name)`).
+
+### 10.6 The check of fix pass 6, and fix pass 7 (the last)
+
+A short check of fix pass 6 at 1dee223 (`wf_d449beca-415`, `SP/fc6/result.json`; two lenses): all
+4 closed; 4 new, each confirmed (one medium, three low), none seen on real code (161 390
+definitions, the bench, zopfli, tractor and sqlite3.c byte-identical with each fix). Fix pass 7
+(the code governs):
+- **Comments in a parameter list** are blanked before it is read (`after(/* in */ int x)`).
+- **An empty head that starts its line** (GNU's layout, `Count\nafter()`) ranks ahead of the
+  calls that qualify by shape, unless a head that names its parameters came first: a macro call
+  after it is an annotation.
+- **A folded first head** leaves its body macro between it and the second head: with no word
+  there (`static char * M(void) **after(void)`) it is no first head.
+- **A K&R head with an attribute after its parameters** (clang only) is read from its own
+  declaration: the attribute defers the declarator mark to the next word after its group.
+
+**Decided (process): the review stops here.** The findings per round fell 26, 26, 21, 13, 4, 4, and
+the last two rounds found only rarer spellings of one class — two heads run together after a
+body-supplying macro, read without a preprocessor — with no instance in real code. That class is
+named in §6 with its revisit condition. Fix pass 7 gets a mutation check and a check that its four
+fixes hold and regress nothing (tests, real code), not another open-ended search.

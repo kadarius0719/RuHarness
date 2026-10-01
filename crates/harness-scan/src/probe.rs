@@ -402,6 +402,23 @@ mod tests {
                 "int g(void) NI\nCount /* ret */\nafter()\n{ return 1; }\n",
                 false,
             ),
+            // Fix pass 6's check: comments inside a parameter list.
+            (
+                "int g(void) NI\nCount\nafter(/* in */ int x)\n{ return x; }\n",
+                false,
+            ),
+            (
+                "int g(void) NI\nCount\nafter(Count x /* n */)\n{ return 1; }\n",
+                false,
+            ),
+            (
+                "int g(void) NI\nCount\nafter(Count /* n */ x)\n{ return 1; }\n",
+                false,
+            ),
+            (
+                "int g(void) NI\nCount\nafter(/*@out@*/ Count *x)\n{ return 1; }\n",
+                false,
+            ),
         ];
         for (src, second_static) in cases {
             let defs = defs_of(src);
@@ -640,6 +657,29 @@ mod tests {
             // After a body macro whose arguments name no parameter, the empty
             // call is the head.
             "int g(void) STUB(int)\nCount\nafter()\n{ return 1; }\n",
+        ] {
+            let defs = defs_of(src);
+            let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+            assert_eq!(names, ["g", "after"], "{src}: {defs:?}");
+            assert!(
+                defs.iter().all(|d| d.note_at == Err(NoNote::Parser)),
+                "{src}: {defs:?}"
+            );
+        }
+        // Fix pass 6's check: an empty head that starts its line (GNU's
+        // layout) keeps its name ahead of a later empty call or a
+        // parameter-like macro; a named head's annotations on their own line,
+        // or a body macro on its own line before the head, never take it.
+        for src in [
+            "int g(void) NI\nCount\nafter() A B NAME()\n{ return 1; }\n",
+            "int g(void) NI\nCount\nafter() ATTR NAME()\n{ return 1; }\n",
+            "int g(void) NI\nstruct s *\nafter() A B NAME()\n{ return 0; }\n",
+            "int g(void) NI\nCount\nafter() LOCKS(int x)\n{ return 1; }\n",
+            "int g(void) NI\nstatic Count\nafter() A B NAME()\n{ return 1; }\n",
+            "int g(void) NI\nCount\nafter()\n  A B NAME()\n{ return 1; }\n",
+            "int g(void) NI\nCount\nafter(void)\n  A B NAME()\n{ return 1; }\n",
+            "int g(void) NI\nCount\nafter(int x)\n  A B NAME()\n{ return 1; }\n",
+            "int g(void)\n  A B STUB_BODY()\nCount\nafter()\n{ return 1; }\n",
         ] {
             let defs = defs_of(src);
             let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
@@ -902,6 +942,20 @@ mod tests {
                 "after",
                 false,
                 "char **after(void)",
+            ),
+            // Fix pass 6's check: an empty-parentheses macro right before
+            // `**name` leaves no body macro between: no first head.
+            (
+                "static char * M(void) **after(void)\n{ return 0; }\n",
+                "after",
+                true,
+                "static char * M(void) **after(void)",
+            ),
+            (
+                "static int M() **after(int x)\n{ return 0; }\n",
+                "after",
+                true,
+                "static int M() **after(int x)",
             ),
             // An attribute macro is no first head: the `static` before it is
             // the definition's.

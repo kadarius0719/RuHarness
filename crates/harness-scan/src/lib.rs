@@ -1070,6 +1070,10 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
     // B NAME()`), where after `STUB(int)` it is the head (`Count after()`;
     // fix pass 5's check).
     let mut by_shape_named = false;
+    // An empty call that starts its line (GNU's layout, `Count\nafter()`)
+    // ranks ahead of the calls that qualify by shape: a macro call after it
+    // is an annotation (fix pass 6's check).
+    let mut by_line: Option<Candidate> = None;
     for (k, call) in trailing.iter().enumerate() {
         if call.kind() != "call_expression" {
             continue;
@@ -1082,7 +1086,13 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
             .filter(|n| n.kind() != "attribute_specifier")
             .collect();
         let args = call.child_by_field_name("arguments");
-        let args_text = args.map(|a| text(a, src)).unwrap_or("");
+        // Comments blanked: `after(/* in */ int x)` reads as parameters (fix
+        // pass 6's check).
+        let args_owned = String::from_utf8(blank_comments(
+            args.map(|a| text(a, src)).unwrap_or("").as_bytes(),
+        ))
+        .unwrap_or_default();
+        let args_text = args_owned.as_str();
         // An empty parameter list after a word that is not the first after
         // the parameters: a typedef or tag return type (`Count\nafter()`,
         // `struct s after()`; fix pass 4's check). One annotation word then
@@ -1165,8 +1175,25 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
             && (!decl_shaped(first_params)
                 || names_only(first_params, &parameter_names(args_text)));
         let candidate = (name, *call, macro_first);
+        let starts_line = {
+            let at = call.start_byte();
+            let line_start = src[..at]
+                .iter()
+                .rposition(|b| *b == b'\n')
+                .map_or(0, |p| p + 1);
+            src[line_start..at].iter().all(|b| b.is_ascii_whitespace())
+        };
         if paren_head {
             by_position = Some(candidate);
+        } else if empty_after_word
+            && !typed_type_word
+            && !keyword_fn
+            && !by_shape_named
+            && starts_line
+        {
+            if by_line.is_none() {
+                by_line = Some(candidate);
+            }
         } else if empty_after_word && !typed_type_word && !keyword_fn {
             // An empty call after words ranks with the calls that qualify
             // by shape: a body macro spelled `STUB_BODY()` never takes a
@@ -1198,7 +1225,7 @@ fn heads<'t>(def: tree_sitter::Node<'t>, src: &[u8]) -> Heads<'t> {
             by_shape = Some(candidate);
         }
     }
-    if let Some((name, call, macro_first)) = by_position.or(by_shape) {
+    if let Some((name, call, macro_first)) = by_position.or(by_line).or(by_shape) {
         let Some(name) = name else {
             return Heads::Unreadable;
         };
@@ -1397,6 +1424,10 @@ fn folded_head(def: tree_sitter::Node, src: &[u8]) -> Option<(bool, usize)> {
             at += 1;
         }
     }
+    // A first head leaves its body macro between it and the second head: an
+    // empty-parentheses macro right before `**name` is no first head (fix
+    // pass 6's check).
+    last_word?;
     let start = first_type
         .or(last_word)
         .map_or(declarator.start_byte(), |w| first_end + w);

@@ -486,6 +486,8 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
     let mut last: [Option<(&[u8], bool)>; 3] = [None; 3];
     let mut group_kw = false;
     let mut closed_kw = false;
+    // An attribute after a declarator's `)`, waiting for its group to end.
+    let mut pending = false;
     const GROUP_KW: &[&[u8]] = &[
         b"__attribute__",
         b"__attribute",
@@ -564,7 +566,25 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
             after_close = false;
             match tok.kind {
                 TokKind::Word => {
-                    declarator |= closed && !closed_kw && !AFTER_KW.contains(&spelled);
+                    // A word after an ordinary group's `)` marks a K&R
+                    // declarator; an attribute there (`h(x)
+                    // __attribute__((cold)) int x;`) defers the mark to the
+                    // first other word after its group (fix pass 6's check).
+                    let after_kw = AFTER_KW.contains(&spelled);
+                    if closed && !closed_kw {
+                        if after_kw {
+                            pending = true;
+                        } else {
+                            declarator = true;
+                        }
+                    } else if closed && closed_kw && pending {
+                        if !after_kw {
+                            declarator = true;
+                            pending = false;
+                        }
+                    } else if depth == 0 && !(after_kw && pending) {
+                        pending = false;
+                    }
                     head.push(spelled);
                 }
                 TokKind::Punct if spelled == b"(" => {
@@ -596,6 +616,7 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
                     inline_head = false;
                     depth = 0;
                     declarator = false;
+                    pending = false;
                 }
                 TokKind::Punct if matches!(spelled, b"{" | b"}") => {
                     (brace_head, brace_names) = if spelled == b"}" {
@@ -628,6 +649,7 @@ pub(crate) fn scan_text(text: &[u8]) -> TextScan {
                     segments.clear();
                     depth = 0;
                     declarator = false;
+                    pending = false;
                 }
                 _ => {}
             }
