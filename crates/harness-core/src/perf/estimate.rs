@@ -2,8 +2,10 @@
 //! note 27): the figure the cockpit's dialogs and the CLI's "measure again
 //! with 31 runs" words show. Runs per workload: the C alone 2 + n, each
 //! row 3 + 2n; seconds = runs × (the C's clock time + 0.1 s) + 10 s per new
-//! binary + the builds. A row that turns out too short stops after its 3
-//! step-1 runs, so the figure is an upper guess, never a promise.
+//! binary + the builds (the C's compile and link every time; each crate
+//! and row link; the launcher when its cache is stale). A row that turns
+//! out too short stops after its 3 step-1 runs, so the figure is an upper
+//! guess, never a promise.
 
 use super::results::Row;
 use super::stats::median;
@@ -18,6 +20,8 @@ pub const C_COMPILE_SECONDS: f64 = 3.0;
 pub const CRATE_BUILD_SECONDS: f64 = 15.0;
 /// One link.
 pub const LINK_SECONDS: f64 = 1.0;
+/// Building perf's launcher, when its cache is stale.
+pub const LAUNCHER_BUILD_SECONDS: f64 = 5.0;
 /// What each run costs beyond the program's own clock time.
 pub const RUN_OVERHEAD_SECONDS: f64 = 0.1;
 
@@ -65,7 +69,8 @@ pub struct Job {
     pub rows: u32,
     /// Crates built (each warm).
     pub crates: u32,
-    /// Links (each unit's, the program as it stands's).
+    /// The rows' links (each unit's, the program as it stands's); the C's
+    /// own link is always counted.
     pub links: u32,
 }
 
@@ -76,11 +81,11 @@ pub enum Estimate {
     Seconds(u64),
     /// The C's time is not known on some workload: the runs only.
     Runs {
-        /// The C alone's runs per workload, when every workload has the
-        /// same n (else the formula's words).
-        c_alone: Option<u32>,
-        /// A row's runs per workload, likewise.
-        row: Option<u32>,
+        /// The C alone is measured first (its runs are said too).
+        c_alone: bool,
+        /// The runs a side, when every workload has the same n (else the
+        /// formula's words).
+        n: Option<u32>,
     },
 }
 
@@ -95,15 +100,26 @@ impl Job {
             .sum()
     }
 
-    /// About how long it takes.
+    /// About how long it takes, perf's launcher cache current.
     pub fn estimate(&self) -> Estimate {
+        self.figure(false)
+    }
+
+    /// About how long it takes when perf's launcher is built first (its
+    /// cache missing or another version's): the build, and the first execs
+    /// of perfrun and perfgo, on top.
+    pub fn estimate_building_launcher(&self) -> Estimate {
+        self.figure(true)
+    }
+
+    fn figure(&self, launcher: bool) -> Estimate {
         let mut seconds = 0.0;
         for (n, clock) in &self.workloads {
             let Some(clock) = clock else {
                 let same = self.workloads.iter().all(|(m, _)| m == n);
                 return Estimate::Runs {
-                    c_alone: same.then(|| c_alone_runs(*n)),
-                    row: same.then(|| row_runs(*n)),
+                    c_alone: self.c_alone,
+                    n: same.then_some(*n),
                 };
             };
             let runs = (if self.c_alone { c_alone_runs(*n) } else { 0 }) + self.rows * row_runs(*n);
@@ -111,9 +127,14 @@ impl Job {
         }
         // A new binary a side: the C's and each row's.
         seconds += FIRST_EXEC_SECONDS * (1 + self.rows) as f64;
+        // The C is compiled and linked into its own slot on every run.
         seconds += C_COMPILE_SECONDS
+            + LINK_SECONDS
             + CRATE_BUILD_SECONDS * self.crates as f64
             + LINK_SECONDS * self.links as f64;
+        if launcher {
+            seconds += LAUNCHER_BUILD_SECONDS + 2.0 * FIRST_EXEC_SECONDS;
+        }
         Estimate::Seconds(seconds.ceil() as u64)
     }
 }
@@ -125,14 +146,35 @@ impl Estimate {
             Estimate::Seconds(s) if *s < 120 => format!("about {s} s"),
             Estimate::Seconds(s) => format!("about {} minutes", (*s as f64 / 60.0).round() as u64),
             Estimate::Runs {
-                c_alone: Some(c),
-                row: Some(r),
+                c_alone: true,
+                n: Some(n),
             } => format!(
-                "the C's time is not known yet: about {c} runs of your program, then {r} for each \
-                 row, per workload"
+                "the C's time is not known yet: about {} runs of your program, then {} for each \
+                 row, per workload",
+                c_alone_runs(*n),
+                row_runs(*n)
             ),
-            Estimate::Runs { .. } => "the C's time is not known yet: about 2 + n runs of your \
-                                      program, then 3 + 2n for each row, per workload"
+            Estimate::Runs {
+                c_alone: true,
+                n: None,
+            } => "the C's time is not known yet: about 2 + n runs of your program, then 3 + 2n \
+                  for each row, per workload"
+                .into(),
+            // No C-alone step (one unit, or the program as it stands): the
+            // rows' runs only.
+            Estimate::Runs {
+                c_alone: false,
+                n: Some(n),
+            } => format!(
+                "the C's time is not known yet: about {} runs of your program for each row, per \
+                 workload",
+                row_runs(*n)
+            ),
+            Estimate::Runs {
+                c_alone: false,
+                n: None,
+            } => "the C's time is not known yet: about 3 + 2n runs of your program for each row, \
+                  per workload"
                 .into(),
         }
     }
@@ -197,7 +239,7 @@ mod tests {
     #[test]
     fn the_designs_example() {
         // A 1.2 s C (clock 1.3 s) at n = 15: the C alone ≈ 34 s with its
-        // first exec, plus the C compile.
+        // first exec, plus the C's compile and its link.
         let c = Job {
             workloads: vec![(15, Some(1.3))],
             c_alone: true,
@@ -206,7 +248,7 @@ mod tests {
             links: 0,
         };
         assert_eq!(c.runs(), 17);
-        assert_eq!(c.estimate(), Estimate::Seconds(37));
+        assert_eq!(c.estimate(), Estimate::Seconds(38));
         let unit = Job {
             workloads: vec![(31, Some(1.3))],
             c_alone: false,
@@ -214,12 +256,20 @@ mod tests {
             crates: 1,
             links: 1,
         };
-        // 65 runs ≈ 91 s + 20 s of first execs + the C compile, the crate
-        // build and a link.
+        // The "31 runs" command for one unit: 65 runs ≈ 91 s + 20 s of
+        // first execs + the C compile, the crate build and two links (the
+        // C's and the unit's).
         assert_eq!(unit.runs(), 65);
-        assert_eq!(unit.estimate(), Estimate::Seconds(91 + 20 + 3 + 15 + 1));
+        assert_eq!(unit.estimate(), Estimate::Seconds(91 + 20 + 3 + 15 + 2));
         assert_eq!(unit.estimate().words(), "about 2 minutes");
         assert_eq!(Estimate::Seconds(56).words(), "about 56 s");
+        // The first time, or after an update: the launcher's build (about
+        // 5 s) and perfrun's and perfgo's first execs (10 s each) on top.
+        assert_eq!(
+            unit.estimate_building_launcher(),
+            Estimate::Seconds(91 + 20 + 3 + 15 + 2 + 5 + 20)
+        );
+        assert_eq!(c.estimate_building_launcher(), Estimate::Seconds(38 + 25));
     }
 
     #[test]
@@ -258,8 +308,46 @@ mod tests {
         );
         let mixed = Job {
             workloads: vec![(15, None), (5, None)],
-            ..job
+            ..job.clone()
         };
-        assert!(mixed.estimate().words().contains("2 + n runs"));
+        assert_eq!(
+            mixed.estimate().words(),
+            "the C's time is not known yet: about 2 + n runs of your program, then 3 + 2n for \
+             each row, per workload"
+        );
+        // No C-alone step (one unit, or the 31-run command): only the
+        // rows' runs, the same count the job runs.
+        let unit = Job {
+            workloads: vec![(15, None)],
+            c_alone: false,
+            rows: 1,
+            crates: 1,
+            links: 1,
+        };
+        assert_eq!(unit.runs(), 33);
+        assert_eq!(
+            unit.estimate().words(),
+            "the C's time is not known yet: about 33 runs of your program for each row, per \
+             workload"
+        );
+        let more = Job {
+            workloads: vec![(31, None)],
+            ..unit.clone()
+        };
+        assert_eq!(more.runs(), 65);
+        assert_eq!(
+            more.estimate().words(),
+            "the C's time is not known yet: about 65 runs of your program for each row, per \
+             workload"
+        );
+        let mixed = Job {
+            workloads: vec![(15, None), (31, Some(1.0))],
+            ..unit
+        };
+        assert_eq!(
+            mixed.estimate().words(),
+            "the C's time is not known yet: about 3 + 2n runs of your program for each row, per \
+             workload"
+        );
     }
 }

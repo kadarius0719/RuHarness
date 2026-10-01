@@ -222,8 +222,9 @@ fn more_runs_command(side: Side<'_>, workload: &str) -> String {
 }
 
 /// About how long the "31 runs" command for a row's side takes (§6): its
-/// 65 runs at the C's clock time, the first execs, the C compile, the
-/// crates built and the link.
+/// 65 runs at the C's clock time, the first execs, the C's compile and
+/// link, the crates built and the row's link. The words follow a run (or
+/// `perf show`), so the launcher counts as built.
 fn seconds_a_row(row: &Row, side: Side<'_>) -> u64 {
     use harness_core::perf::estimate::{c_clock, Estimate, Job};
     let crates = match side {

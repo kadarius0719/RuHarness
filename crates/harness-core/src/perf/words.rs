@@ -105,7 +105,8 @@ pub struct RowWords {
     /// The short form, at most [`SHORT_WIDTH`] columns.
     pub short: String,
     /// The worst-first order's key: lower is worse; ties by `rank.1`,
-    /// higher first.
+    /// higher first — for slower kinds the shift, for faster kinds the
+    /// signed shift (negative), so a smaller gain counts as worse.
     pub rank: (u8, f64),
     /// The MCP answer, from a closed set.
     pub answer: &'static str,
@@ -230,15 +231,45 @@ pub fn end(v: f64, boundaries: &[f64]) -> String {
     for b in boundaries {
         let crossed = (v > *b && shown <= *b) || (v < *b && shown >= *b);
         if crossed {
-            let away = if v > *b {
-                (v * 100.0).ceil() / 100.0
-            } else {
-                (v * 100.0).floor() / 100.0
-            };
-            return fmt_fixed(away, 2);
+            return fmt_fixed(away_from(v, *b), 2);
         }
     }
     near
+}
+
+/// `v` at two decimals, rounded away from `b` — a value already on the
+/// 0.01 step stays put (1.52 shows 1.52, not 1.53), and one a hair past
+/// `b` still shows a step past it, never on it.
+fn away_from(v: f64, b: f64) -> f64 {
+    if v > b {
+        let up = ((v * 100.0) - 1e-9).ceil() / 100.0;
+        if up <= b {
+            up + 0.01
+        } else {
+            up
+        }
+    } else {
+        let down = ((v * 100.0) + 1e-9).floor() / 100.0;
+        if down >= b {
+            down - 0.01
+        } else {
+            down
+        }
+    }
+}
+
+/// An end of the "3.7× as slow" form: the ratio `1 + p/100` at one
+/// decimal, unless that would put it on or under `line` (the 2 % line as a
+/// ratio) from above: then two decimals, rounded up (build note 13).
+fn ratio_end(p: f64, line: f64) -> String {
+    let r = 1.0 + p / 100.0;
+    let near = fmt_fixed(r, 1);
+    let shown: f64 = near.parse().unwrap_or(r);
+    if r > line && shown <= line {
+        fmt_fixed(away_from(r, line), 2)
+    } else {
+        near
+    }
 }
 
 /// "(a–b %)" from two shown ends; one number when they show equal.
@@ -358,7 +389,7 @@ fn pnorm(r: &Run) -> Option<f64> {
 /// Whether a run had at least half its cycles on the performance cores.
 fn mostly_fast(r: &Run) -> bool {
     match (r.p_cycles, r.cycles) {
-        (Some(p), Some(c)) if c > 0 => p * 2 >= c,
+        (Some(p), Some(c)) if c > 0 => p.saturating_mul(2) >= c,
         _ => false,
     }
 }
@@ -378,8 +409,9 @@ pub enum Platform {
 }
 
 /// The time metric a measured row uses (§3.8, build note 10): CPU time
-/// without counters; raw cycles without two kinds of cores; the share rule
-/// when fewer than three quarters of the 2n runs ran mostly on the
+/// without counters; raw cycles without two kinds of cores, or when no run
+/// has performance-core counts (read as V4, as the oracle does); the share
+/// rule when fewer than three quarters of the 2n runs ran mostly on the
 /// performance cores; else normalised cycles when the P-core cost per
 /// instruction is steady (or ≥ 97 % of the cycles were on the performance
 /// cores), raw cycles ("phases") when it is not.
@@ -402,14 +434,15 @@ pub fn choose_metric(
         Platform::Linux => return "linux-cycles",
         Platform::LinuxHybrid => return "linux-hybrid-summed",
         Platform::MacV6 if !two_kinds => return "macos-v6-cycles",
+        Platform::MacV6 if all.iter().all(|r| r.p_cycles.is_none()) => return "macos-v4-cycles",
         Platform::MacV6 => {}
     }
     let fast = all.iter().filter(|r| mostly_fast(r)).count();
     if fast * 4 < all.len() * 3 {
         return "macos-v6-share";
     }
-    let p_total: u64 = all.iter().filter_map(|r| r.p_cycles).sum();
-    let total: u64 = all.iter().filter_map(|r| r.cycles).sum();
+    let p_total: u128 = all.iter().filter_map(|r| r.p_cycles).map(u128::from).sum();
+    let total: u128 = all.iter().filter_map(|r| r.cycles).map(u128::from).sum();
     if total > 0 && p_total as f64 >= 0.97 * total as f64 {
         return "macos-v6-pnorm";
     }
@@ -614,7 +647,7 @@ pub fn set_up_words(o: &str, setup: Option<&SetupFacts>, cx: &Context) -> String
         },
         "replaces-mismatch" => format!(
             "{unit}'s replaces entry {} names no top-level C file of the program — Re-check it",
-            s.index.map(|i| i + 1).unwrap_or(1)
+            s.index.map_or(1, |i| i.saturating_add(1))
         ),
         "crate-does-not-build" => format!("{unit}'s crate does not build{log}"),
         "does-not-link" => {
@@ -708,9 +741,10 @@ fn baseline(row: &Row, _cx: &Context) -> RowWords {
         _ => "measured".into(),
     };
     let mut details = vec![format!("{} runs", row.runs.unwrap_or(0))];
+    // A short run is under both legs of the floor (§3.5 step 2).
     if row.short == Some(true) {
         details.push(
-            "a short run: under 1e9 instructions or half a second of CPU — use a bigger input"
+            "a short run: under 1e9 instructions and half a second of CPU — use a bigger input"
                 .into(),
         );
     }
@@ -750,11 +784,7 @@ fn measured(row: &Row, cx: &Context) -> RowWords {
         }
     };
     let headline = time_headline(answer, shift.as_ref(), share_note.as_deref());
-    let offers = runs < stats::MAX_RUNS as u32
-        && matches!(
-            answer,
-            Answer::CloseCall { .. } | Answer::Probably { .. } | Answer::CantTellEstimate
-        );
+    let offers = offers_more_runs(answer, runs);
     if let Some(n) = metric_note(metric) {
         details.push(format!("measured in {n}"));
     }
@@ -792,8 +822,9 @@ fn measured(row: &Row, cx: &Context) -> RowWords {
     }
     details.push(format!("{runs} runs each"));
     if short {
-        details
-            .push("a short run: under 1e9 instructions or half a second of CPU on one side".into());
+        details.push(
+            "a short run: under 1e9 instructions and half a second of CPU on one side".into(),
+        );
     }
     let parallel = several_cores(c, o);
     if let Some(p) = &parallel {
@@ -830,6 +861,17 @@ fn measured(row: &Row, cx: &Context) -> RowWords {
     }
 }
 
+/// Whether a row's words offer "measure again with 31 runs" (§3.8, build
+/// note 12): below 31 runs, on probably, a close call and "can't tell: the
+/// estimate" — never on an answer, a short run, too few or slow cores.
+fn offers_more_runs(answer: Answer, runs: u32) -> bool {
+    runs < stats::MAX_RUNS as u32
+        && matches!(
+            answer,
+            Answer::CloseCall { .. } | Answer::Probably { .. } | Answer::CantTellEstimate
+        )
+}
+
 /// The share rule (§3.8, build note 11): both metrics on the same runs; a
 /// difference only when both agree past the line.
 fn share_rule(c: &[Run], o: &[Run], row: &Row) -> (Answer, Option<Shift>, Option<String>) {
@@ -838,18 +880,24 @@ fn share_rule(c: &[Run], o: &[Run], row: &Row) -> (Answer, Option<Shift>, Option
     let all: Vec<&Run> = c.iter().chain(o.iter()).collect();
     let slow = all.iter().filter(|r| !mostly_fast(r)).count();
     let of = all.len();
-    let (Some(raw), Some(norm)) = (raw, norm) else {
+    // Too few only when the runs gave too few cycles. A program kept off
+    // the performance cores (a low priority, say) has no normalised value
+    // at all: the two metrics cannot agree, so it reads as slow cores with
+    // its cause — measuring again would find the same.
+    let Some(raw) = raw else {
         return (Answer::TooFew, None, None);
     };
     let (rl, rh) = raw.percent_interval();
-    let (nl, nh) = norm.percent_interval();
     let m = TIME_MARGIN;
     let note = format!("{slow} of the {of} runs ran mostly on the slower cores");
-    if rl > m && nl > m {
-        return (Answer::Slower, Some(raw), Some(format!("cycles; {note}")));
-    }
-    if rh < -m && nh < -m {
-        return (Answer::Faster, Some(raw), Some(format!("cycles; {note}")));
+    if let Some(norm) = norm {
+        let (nl, nh) = norm.percent_interval();
+        if rl > m && nl > m {
+            return (Answer::Slower, Some(raw), Some(format!("cycles; {note}")));
+        }
+        if rh < -m && nh < -m {
+            return (Answer::Faster, Some(raw), Some(format!("cycles; {note}")));
+        }
     }
     let load = stats::median(
         &all.iter()
@@ -900,29 +948,32 @@ fn time_headline(answer: Answer, shift: Option<&Shift>, share: Option<&str>) -> 
     };
     let x = s.percent();
     let (lo, hi) = s.percent_interval();
+    // Both ends of slower, faster and a close call keep off ±M: the far
+    // end too, so a narrow interval just past the line never reads
+    // backwards, and a close call's far end never shows inside the line.
+    let line = 1.0 + m / 100.0;
     match answer {
         Answer::AboutAsFast => format!("about as fast as the C (within {} %)", margin(m)),
         Answer::Slower if x >= 99.95 => suffix(format!(
-            "{}× as slow ({}–{}×)",
+            "{}× as slow {}",
             fmt_fixed(1.0 + x / 100.0, 1),
-            fmt_fixed(1.0 + lo / 100.0, 1),
-            fmt_fixed(1.0 + hi / 100.0, 1)
+            interval(&ratio_end(lo, line), &ratio_end(hi, line), "×")
         )),
         Answer::Slower => suffix(format!(
             "slower by {} % {}",
             pct(x),
-            interval(&end(lo, &[m]), &end(hi, &[]), " %")
+            interval(&end(lo, &[m]), &end(hi, &[m]), " %")
         )),
         Answer::Faster => suffix(format!(
             "faster: takes {} % less time {}",
             pct(-x),
-            interval(&end(-hi, &[m]), &end(-lo, &[]), " %")
+            interval(&end(-hi, &[m]), &end(-lo, &[m]), " %")
         )),
         Answer::CloseCall { slower } => {
             let (a, b, word) = if slower {
-                (end(lo, &[0.0, m]), end(hi, &[]), "slower")
+                (end(lo, &[0.0, m]), end(hi, &[m]), "slower")
             } else {
-                (end(-hi, &[0.0, m]), end(-lo, &[]), "faster")
+                (end(-hi, &[0.0, m]), end(-lo, &[m]), "faster")
             };
             format!(
                 "about {} % {word} {} — too close to the {} % line to call",
@@ -995,7 +1046,7 @@ fn time_short(
             let full = format!(
                 "slower {} % {}",
                 pct(x),
-                interval(&end(lo, &[m]), &end(hi, &[]), " %")
+                interval(&end(lo, &[m]), &end(hi, &[m]), " %")
             );
             let s = if parallel {
                 with_parallel(format!("slower {} %", pct(x)))
@@ -1008,14 +1059,16 @@ fn time_short(
             let full = format!(
                 "faster {} % {}",
                 pct(-x),
-                interval(&end(-hi, &[m]), &end(-lo, &[]), " %")
+                interval(&end(-hi, &[m]), &end(-lo, &[m]), " %")
             );
             let s = if parallel {
                 with_parallel(format!("faster {} %", pct(-x)))
             } else {
                 full
             };
-            (s, (17, -x), "faster")
+            // The faster kinds' key is the signed shift: a smaller gain is
+            // the worse row, so it comes first.
+            (s, (17, x), "faster")
         }
         Answer::CloseCall { slower: true } => (
             format!("close call: ≈{} % slower", pct(x)),
@@ -1024,7 +1077,7 @@ fn time_short(
         ),
         Answer::CloseCall { slower: false } => (
             format!("close call: ≈{} % faster", pct(-x)),
-            (15, -x),
+            (15, x),
             "close-call-faster",
         ),
         Answer::Probably { slower: true } => (
@@ -1034,7 +1087,7 @@ fn time_short(
         ),
         Answer::Probably { slower: false } => (
             format!("probably faster ≈{} %", pct(-x)),
-            (16, -x),
+            (16, x),
             "probably-faster",
         ),
         Answer::NoClearDifference => (
@@ -1075,12 +1128,12 @@ fn instruction_words(c: &[Run], o: &[Run], std: bool, cx: &Context) -> String {
         Answer::Slower => format!(
             "{} % more instructions {}",
             pct(x),
-            interval(&end(lo, &[m]), &end(hi, &[]), " %")
+            interval(&end(lo, &[m]), &end(hi, &[m]), " %")
         ),
         Answer::Faster => format!(
             "{} % fewer instructions {}",
             pct(-x),
-            interval(&end(-hi, &[m]), &end(-lo, &[]), " %")
+            interval(&end(-hi, &[m]), &end(-lo, &[m]), " %")
         ),
         Answer::CloseCall { slower } => format!(
             "about {} % {} instructions — too close to the {} % line to call",
@@ -1120,13 +1173,13 @@ fn memory_words(c: &[Run], o: &[Run]) -> Option<String> {
         format!(
             "uses about {} % more memory {}",
             pct(x),
-            interval(&end(lo, &[margin]), &end(hi, &[]), " %")
+            interval(&end(lo, &[margin]), &end(hi, &[margin]), " %")
         )
     } else if hi < -margin {
         format!(
             "uses about {} % less memory {}",
             pct(-x),
-            interval(&end(-hi, &[margin]), &end(-lo, &[]), " %")
+            interval(&end(-hi, &[margin]), &end(-lo, &[margin]), " %")
         )
     } else {
         "memory: can't tell — memory varied from run to run".into()
@@ -1228,7 +1281,9 @@ fn too_short(row: &Row, cx: &Context) -> RowWords {
         c_second.and_then(|r| r.cpu_us),
         other.and_then(|r| r.cpu_us),
     ) {
-        (Some(a), Some(b), Some(o)) if a.min(b) >= 20_000 && o >= 20_000 && o > 2 * a.max(b) => {
+        (Some(a), Some(b), Some(o))
+            if a.min(b) >= 20_000 && o >= 20_000 && o > a.max(b).saturating_mul(2) =>
+        {
             Some(o as f64 / a.max(b) as f64)
         }
         _ => None,
@@ -1276,10 +1331,12 @@ pub fn difference_words(d: &Difference) -> String {
             d.other_end, d.c_end
         );
     }
+    // A committed file can be forged: a stored offset is never trusted to
+    // leave room for the 1-based byte.
     format!(
         "prints differently ({}, byte {})",
         d.stream,
-        grouped(d.offset + 1)
+        grouped(d.offset.saturating_add(1))
     )
 }
 
@@ -1513,6 +1570,24 @@ mod tests {
             .collect()
     }
 
+    /// One run of `base` cycles per percent, each scaled by it. Against a
+    /// C side of equal runs every pairwise difference is one of these, so
+    /// the interval is known by hand: at 15 runs its ends are the 5th and
+    /// 11th smallest percents and the estimate the 8th (c = 64 of 225
+    /// pairs); at 31 runs the 12th and 20th, the estimate the 16th (c =
+    /// 341 of 961).
+    fn at(base: f64, percents: &[f64]) -> Vec<Run> {
+        percents
+            .iter()
+            .map(|p| run(base * (1.0 + p / 100.0)))
+            .collect()
+    }
+
+    /// A C side of `n` equal runs at 1e9 cycles.
+    fn flat(n: usize) -> Vec<Run> {
+        at(1e9, &vec![0.0; n])
+    }
+
     #[test]
     fn each_branch_from_constructed_intervals() {
         let m = TIME_MARGIN;
@@ -1541,6 +1616,107 @@ mod tests {
         assert_eq!(branch(-3.0, 4.0, m, 15, true), Answer::ShortRun);
     }
 
+    /// `n` (15 or 31) percents whose interval against [`flat`] is exactly
+    /// [`lo`, `hi`] with estimate `est` (see [`at`]); the rest spread
+    /// around them in order.
+    fn known(n: usize, lo: f64, est: f64, hi: f64) -> Vec<f64> {
+        let (a, e, b) = if n == 31 { (11, 15, 19) } else { (4, 7, 10) };
+        (0..n)
+            .map(|i| match i {
+                i if i < a => lo - 0.1 * (a - i) as f64,
+                i if i == a => lo,
+                i if i < e => lo + (est - lo) * (i - a) as f64 / (e - a) as f64,
+                i if i == e => est,
+                i if i < b => est + (hi - est) * (i - e) as f64 / (b - e) as f64,
+                i if i == b => hi,
+                i => hi + 0.1 * (i - b) as f64,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_branch_from_constructed_samples_with_the_31_run_offer() {
+        // Each row's interval is known by hand (see `at`), so the whole
+        // headline is: the answer, both ends, and the offer exactly on
+        // probably, close call and can't tell below 31 runs (note 12).
+        let (cc, pr) = (
+            "too close to the 2 % line to call",
+            "not clearly past the 2 % line",
+        );
+        let short = "can't tell on a run this short — use a bigger input";
+        // (runs, [lo, estimate, hi] %, short, answer, headline, the offer)
+        #[rustfmt::skip]
+        let cases = [
+            (15, [-1.0, 0.2, 1.5], false, "about-as-fast",
+             "about as fast as the C (within 2 %)".to_string(), false),
+            (15, [4.1, 6.2, 8.3], false, "slower", "slower by 6.2 % (4.1–8.3 %)".into(), false),
+            (15, [-14.0, -12.0, -10.0], false, "faster",
+             "faster: takes 12 % less time (10–14 %)".into(), false),
+            (15, [0.6, 2.3, 3.4], false, "close-call-slower",
+             format!("about 2.3 % slower (0.6–3.4 %) — {cc}"), true),
+            (15, [-3.4, -2.3, -0.6], false, "close-call-faster",
+             format!("about 2.3 % faster (0.6–3.4 %) — {cc}"), true),
+            (15, [0.5, 3.1, 5.5], false, "probably-slower",
+             format!("probably slower, by about 3.1 % (0.5–5.5 %) — {pr}"), true),
+            (15, [-5.5, -3.1, -0.5], false, "probably-faster",
+             format!("probably faster, by about 3.1 % (0.5–5.5 %) — {pr}"), true),
+            (15, [-3.0, 0.5, 4.0], false, "cant-tell-estimate",
+             "can't tell: the estimate is ±4.0 %".into(), true),
+            (31, [-3.0, 0.5, 4.0], false, "no-clear-difference",
+             "no clear difference: within ±4.0 %".into(), false),
+            (31, [0.5, 3.1, 5.5], false, "probably-slower",
+             format!("probably slower, by about 3.1 % (0.5–5.5 %) — {pr}"), false),
+            (31, [-3.4, -2.3, -0.6], false, "close-call-faster",
+             format!("about 2.3 % faster (0.6–3.4 %) — {cc}"), false),
+            (15, [-1.0, 0.2, 1.5], true, "cant-tell-short-run", short.into(), false),
+            (15, [-3.0, 0.5, 4.0], true, "cant-tell-short-run", short.into(), false),
+            (15, [0.6, 2.3, 3.4], true, "close-call-slower",
+             format!("about 2.3 % slower (0.6–3.4 %) — {cc}"), true),
+        ];
+        for (n, [lo, est, hi], short, answer, headline, offer) in cases {
+            let r = row(
+                flat(n),
+                at(1e9, &known(n, lo, est, hi)),
+                "macos-v6-cycles",
+                short,
+            );
+            let w = words(&r, &UNIT);
+            assert_eq!(
+                (w.answer, w.headline.as_str(), w.offers_more_runs),
+                (answer, headline.as_str(), offer),
+                "n = {n}, [{lo}, {hi}]"
+            );
+            if let Some((x, a, b)) = w.shift {
+                for (got, want) in [(x, est), (a, lo), (b, hi)] {
+                    assert!((got - want).abs() < 1e-9, "{got} against {want}");
+                }
+            }
+        }
+        // The offer's set, every answer, either side of 31 runs.
+        for a in [
+            Answer::AboutAsFast,
+            Answer::Slower,
+            Answer::Faster,
+            Answer::CloseCall { slower: true },
+            Answer::CloseCall { slower: false },
+            Answer::Probably { slower: true },
+            Answer::Probably { slower: false },
+            Answer::NoClearDifference,
+            Answer::CantTellEstimate,
+            Answer::ShortRun,
+            Answer::TooFew,
+            Answer::SlowCores,
+        ] {
+            let set = matches!(
+                a,
+                Answer::CloseCall { .. } | Answer::Probably { .. } | Answer::CantTellEstimate
+            );
+            assert_eq!(offers_more_runs(a, 15), set, "{a:?}");
+            assert_eq!(offers_more_runs(a, 30), set, "{a:?}");
+            assert!(!offers_more_runs(a, 31), "{a:?}");
+        }
+    }
+
     #[test]
     fn rounding_keeps_off_each_boundary() {
         assert_eq!(pct(6.24), "6.2");
@@ -1565,6 +1741,143 @@ mod tests {
         assert_eq!(bytes(2_100_000_000.0), "2.10 GB");
         assert_eq!(count(1.21e10), "1.21e10");
         assert_eq!(grouped(40_961), "40 961");
+        // A value already on the 0.01 step stays put, float noise or not.
+        assert_eq!(end(1.520_000_000_000_01, &[INSTRUCTIONS_MARGIN]), "1.52");
+        assert_eq!(end(2.010_000_000_000_000_2, &[TIME_MARGIN]), "2.01");
+        assert_eq!(end(2.04, &[TIME_MARGIN]), "2.04");
+        assert_eq!(end(2.03, &[TIME_MARGIN]), "2.03");
+        // A hair past a line still shows a step past it, never on it.
+        assert_eq!(end(1e-12, &[0.0]), "0.01");
+        assert_eq!(end(2.0 + 1e-12, &[TIME_MARGIN]), "2.01");
+        assert_eq!(end(-2.0 - 1e-12, &[-TIME_MARGIN]), "-2.01");
+        // Memory's margin is off the 0.01 step: the nearest step past it.
+        assert_eq!(end(8.447, &[8.446]), "8.45");
+    }
+
+    #[test]
+    fn an_interval_just_past_the_line_never_reads_backwards() {
+        // Time: every ratio 1.02005 — before, "(2.01–2.0 %)".
+        let w = words(
+            &row(flat(15), at(1e9, &[2.005; 15]), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "slower");
+        assert_eq!(w.headline, "slower by 2.0 % (2.01 %)");
+        assert_eq!(w.short, "slower 2.0 % (2.01 %)");
+        // An ordered pair when the ends differ: 2.01 … 2.04.
+        let mut p = [2.01; 15];
+        p[10..].copy_from_slice(&[2.04; 5]);
+        let w = words(&row(flat(15), at(1e9, &p), "macos-v6-cycles", false), &UNIT);
+        assert_eq!(w.headline, "slower by 2.0 % (2.01–2.04 %)");
+        assert_eq!(w.short, "slower 2.0 % (2.01–2.04 %)");
+        assert!(w.short.chars().count() <= SHORT_WIDTH);
+        // Faster, the mirror: 2.01 % less time on every run.
+        let w = words(
+            &row(flat(15), at(1e9, &[-2.01; 15]), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "faster");
+        assert_eq!(w.headline, "faster: takes 2.0 % less time (2.01 %)");
+        assert_eq!(w.short, "faster 2.0 % (2.01 %)");
+        // Instructions, nearly the same on every run: 1.52 % more and
+        // fewer — before, "(1.53–1.5 %)".
+        let ins = |v: f64| -> Vec<Run> {
+            (0..15)
+                .map(|_| Run {
+                    instructions: Some(v as u64),
+                    ..run(1e9)
+                })
+                .collect()
+        };
+        assert_eq!(
+            instruction_words(&ins(4.0e9), &ins(4.0608e9), false, &UNIT),
+            "1.5 % more instructions (1.52 %)"
+        );
+        assert_eq!(
+            instruction_words(&ins(4.0e9), &ins(3.9392e9), false, &UNIT),
+            "1.5 % fewer instructions (1.52 %)"
+        );
+        // Memory: a 30 MB C (margin 5 %) and 5.02 % more on every run.
+        let mem = |v: u64| -> Vec<Run> {
+            (0..15)
+                .map(|_| Run {
+                    memory: Some(v),
+                    ..run(1e9)
+                })
+                .collect()
+        };
+        assert_eq!(
+            memory_words(&mem(30_000_000), &mem(31_506_000)).as_deref(),
+            Some("uses about 5.0 % more memory (5.02 %)")
+        );
+        assert_eq!(
+            memory_words(&mem(30_000_000), &mem(28_494_000)).as_deref(),
+            Some("uses about 5.0 % less memory (5.02 %)")
+        );
+    }
+
+    #[test]
+    fn the_times_form_rounds_its_low_end_off_the_line_and_shows_equal_ends_once() {
+        let w = |percents: &[f64]| {
+            words(
+                &row(flat(15), at(1e9, percents), "macos-v6-cycles", false),
+                &UNIT,
+            )
+        };
+        // The design's example: the interval [+240, +300] %.
+        let wide: Vec<f64> = (0..15).map(|i| 200.0 + 10.0 * i as f64).collect();
+        assert_eq!(w(&wide).headline, "3.7× as slow (3.4–4.0×)");
+        // Every run exactly twice the C: one number.
+        assert_eq!(w(&[100.0; 15]).headline, "2.0× as slow (2.0×)");
+        // A narrow 3.7×: one number, the whole headline.
+        let narrow = words(
+            &row(
+                side(15, 4e9, 0.004),
+                side(15, 1.48e10, 0.004),
+                "macos-v6-pnorm",
+                false,
+            ),
+            &UNIT,
+        );
+        assert_eq!(narrow.headline, "3.7× as slow (3.7×)");
+        assert_eq!(narrow.short, "3.7× as slow");
+        // A two-cluster Rust: [+3, +250] %, estimate +200 % — the low end
+        // shows 1.03×, never "1.0×", which reads as the same speed.
+        let bimodal = [
+            1.0, 1.0, 1.0, 1.0, 3.0, 100.0, 150.0, 200.0, 210.0, 220.0, 250.0, 260.0, 270.0, 280.0,
+            290.0,
+        ];
+        let b = w(&bimodal);
+        assert_eq!(b.answer, "slower");
+        assert_eq!(b.headline, "3.0× as slow (1.03–3.5×)");
+    }
+
+    #[test]
+    fn a_close_call_shows_its_far_end_past_the_line() {
+        // [+0.5, +2.03] %, estimate +1.2 %: before, "(0.5–2.0 %)", an
+        // interval inside the line, which is what "about as fast" means.
+        let slower = [
+            0.1, 0.2, 0.3, 0.4, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 2.03, 2.5, 2.6, 2.7, 2.8,
+        ];
+        let w = words(
+            &row(flat(15), at(1e9, &slower), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "close-call-slower");
+        assert_eq!(
+            w.headline,
+            "about 1.2 % slower (0.5–2.03 %) — too close to the 2 % line to call"
+        );
+        let faster: Vec<f64> = slower.iter().rev().map(|p| -p).collect();
+        let w = words(
+            &row(flat(15), at(1e9, &faster), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "close-call-faster");
+        assert_eq!(
+            w.headline,
+            "about 1.2 % faster (0.5–2.03 %) — too close to the 2 % line to call"
+        );
     }
 
     #[test]
@@ -1603,7 +1916,9 @@ mod tests {
                     "macos-v6-pnorm",
                     false,
                 );
-                *counts.entry(words(&r, &UNIT).answer).or_insert(0) += 1;
+                let w = words(&r, &UNIT);
+                assert!(!w.offers_more_runs, "never at 31 runs: {}", w.headline);
+                *counts.entry(w.answer).or_insert(0) += 1;
                 total += 1;
             }
         }
@@ -1703,9 +2018,14 @@ mod tests {
         for r in few.other.as_mut().expect("runs").iter_mut().take(11) {
             r.p_cycles = Some(0);
         }
+        let w = words(&few, &UNIT);
         assert_eq!(
-            words(&few, &UNIT).headline,
+            w.headline,
             "can't tell — too few runs gave a value; measure again"
+        );
+        assert!(
+            !w.offers_more_runs,
+            "too few is not the estimate's can't tell"
         );
     }
 
@@ -1760,6 +2080,144 @@ mod tests {
                 w.headline
             );
         }
+    }
+
+    /// `runs` with `fast` (a fraction) of their cycles and instructions on
+    /// the performance cores, every run at `load` (hundredths), and
+    /// `threads` the CPU time over the clock time.
+    fn on_slow_cores(runs: Vec<Run>, fast: f64, load: Option<u32>, threads: u64) -> Vec<Run> {
+        runs.into_iter()
+            .map(|mut r| {
+                r.p_cycles = r.cycles.map(|v| (v as f64 * fast) as u64);
+                r.p_instructions = r.instructions.map(|v| (v as f64 * fast) as u64);
+                r.load = load;
+                if threads > 1 {
+                    r.wall_us = r.cpu_us.map(|v| v.div_ceil(threads));
+                }
+                r
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_share_rules_cause_puts_busy_first_only_past_the_programs_own_threads() {
+        let w = |fast: f64, load: Option<u32>, threads: u64| {
+            let side = || on_slow_cores(side(15, 4e9, 0.01), fast, load, threads);
+            words(&row(side(), side(), "macos-v6-share", false), &UNIT)
+        };
+        let design = "the program may run there by design (several threads, a low priority)";
+        let busy =
+            |l: u32| format!("the computer may have been busy (load about {l} on 8 fast cores)");
+        let cases = [
+            // One thread at load 14 on 8 fast cores: 14 − 1 ≥ 8, busy first.
+            (Some(1400), 1, format!("{}, or {design}", busy(14))),
+            // Eight threads at load 14: 14 − 8 < 8, by design first.
+            (Some(1400), 8, format!("{design}, or {}", busy(14))),
+            // One thread at load 3 (a background-priority harness).
+            (Some(300), 1, format!("{design}, or {}", busy(3))),
+            // Two threads at load 10: 10 − 2 is exactly 8, busy first;
+            // at load 9 it is 7, by design first.
+            (Some(1000), 2, format!("{}, or {design}", busy(10))),
+            (Some(900), 2, format!("{design}, or {}", busy(9))),
+            // No load recorded: the design's cause alone.
+            (None, 1, design.to_string()),
+        ];
+        for (load, threads, cause) in cases {
+            let got = w(0.25, load, threads);
+            assert_eq!(got.answer, "cant-tell-slow-cores", "{}", got.headline);
+            assert_eq!(
+                got.headline,
+                format!("can't tell — 30 of the 30 runs ran mostly on the slower cores — {cause}"),
+                "load {load:?}, {threads} threads"
+            );
+            assert_eq!(got.short, "can't tell: slow cores");
+            assert!(!got.offers_more_runs, "never on a slow-cores row");
+        }
+    }
+
+    #[test]
+    fn a_program_kept_off_the_fast_cores_reads_slow_cores_never_too_few() {
+        // A background-priority harness: every run on the slower cores, no
+        // performance-core cycles at all — so no normalised value.
+        let zero = |runs: Vec<Run>, load: u32| on_slow_cores(runs, 0.0, Some(load), 1);
+        let w = words(
+            &row(
+                zero(side(15, 4e9, 0.01), 150),
+                zero(side(15, 4e9, 0.01), 150),
+                "macos-v6-share",
+                false,
+            ),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "cant-tell-slow-cores", "{}", w.headline);
+        assert_eq!(
+            w.headline,
+            "can't tell — 30 of the 30 runs ran mostly on the slower cores — the program may run \
+             there by design (several threads, a low priority), or the computer may have been \
+             busy (load about 2 on 8 fast cores)"
+        );
+        assert_eq!(w.short, "can't tell: slow cores");
+        assert!(!w.offers_more_runs);
+        // Busy: the busy clause first.
+        let w = words(
+            &row(
+                zero(side(15, 4e9, 0.01), 1400),
+                zero(side(15, 4e9, 0.01), 1400),
+                "macos-v6-share",
+                false,
+            ),
+            &UNIT,
+        );
+        assert!(
+            w.headline.contains(
+                "slower cores — the computer may have been busy (load about 14 on 8 fast cores), \
+                 or the program may run there by design"
+            ),
+            "{}",
+            w.headline
+        );
+        // A Rust 3.7× the cycles: the metrics cannot agree — never "slower",
+        // never "too few".
+        let w = words(
+            &row(
+                zero(side(15, 4e9, 0.01), 150),
+                zero(side(15, 1.48e10, 0.01), 150),
+                "macos-v6-share",
+                false,
+            ),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "cant-tell-slow-cores", "{}", w.headline);
+        // A few runs on the fast cores, fewer than five a side: the same.
+        let some = |runs: Vec<Run>| -> Vec<Run> {
+            let mut runs = zero(runs, 150);
+            for r in runs.iter_mut().take(3) {
+                r.p_cycles = r.cycles.map(|v| v / 4);
+                r.p_instructions = r.instructions.map(|v| v / 4);
+            }
+            runs
+        };
+        let w = words(
+            &row(
+                some(side(15, 4e9, 0.01)),
+                some(side(15, 4e9, 0.01)),
+                "macos-v6-share",
+                false,
+            ),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "cant-tell-slow-cores", "{}", w.headline);
+        // Too few still means too few cycles: under five runs with cycles.
+        let mut c = zero(side(15, 4e9, 0.01), 150);
+        for r in c.iter_mut().take(11) {
+            r.cycles = None;
+        }
+        let w = words(
+            &row(c, zero(side(15, 4e9, 0.01), 150), "macos-v6-share", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "cant-tell-too-few", "{}", w.headline);
+        assert!(!w.offers_more_runs);
     }
 
     #[test]
@@ -1820,18 +2278,114 @@ mod tests {
             choose_metric(&phased, &phased, Platform::MacV6, true),
             "macos-v6-cycles-phases"
         );
+        // An Intel-style record (no P fields): never the share rule — raw
+        // cycles on a computer with one kind of core, and read as V4 when
+        // a computer with two kinds recorded no P counts at all.
+        let intel: Vec<Run> = slow
+            .iter()
+            .map(|r| Run {
+                p_cycles: None,
+                p_instructions: None,
+                ..r.clone()
+            })
+            .collect();
+        assert_eq!(
+            choose_metric(&intel, &intel, Platform::MacV6, false),
+            "macos-v6-cycles"
+        );
+        assert_eq!(
+            choose_metric(&intel, &intel, Platform::MacV6, true),
+            "macos-v4-cycles"
+        );
+        let w = words(&row(c.clone(), intel, "macos-v6-cycles", false), &UNIT);
+        assert_eq!(w.answer, "about-as-fast", "{}", w.headline);
+        assert!(w.details.iter().any(|d| d == "measured in cycles"));
+    }
+
+    #[test]
+    fn a_real_cost_slowdown_keeps_normalisation_and_phases_never_differ() {
+        // Both sides with about 70 % of their cycles on the fast cores, the
+        // share wandering 0.68–0.72 from run to run, so raw cycles wander
+        // while each side's P-core cost per instruction is steady. The
+        // other side costs 1.1× per P-core instruction, which adds only to
+        // its P-core cycles (build note 10: it keeps normalisation and
+        // reads slower). Each side's own spread decides: pooled, the two
+        // sides' costs would look unsteady and call it phases.
+        let p_ins = 2_800_000_000.0;
+        let make = |cost: f64| -> Vec<Run> {
+            (0..15)
+                .map(|i| {
+                    let share = 0.68 + 0.04 * ((i * 7) % 15) as f64 / 14.0;
+                    let noise = 1.0 + 0.0005 * (((i * 11) % 15) as f64 / 14.0 - 0.5);
+                    let fast = p_ins * noise;
+                    let rest = fast / share - fast;
+                    let p_cycles = fast * cost;
+                    Run {
+                        p_cycles: Some(p_cycles as u64),
+                        p_instructions: Some(p_ins as u64),
+                        ..run(p_cycles + rest)
+                    }
+                })
+                .collect()
+        };
+        let (c, o) = (make(1.0), make(1.1));
+        let metric = choose_metric(&c, &o, Platform::MacV6, true);
+        assert_eq!(metric, "macos-v6-pnorm");
+        let w = words(&row(c, o, metric, false), &UNIT);
+        assert_eq!(w.answer, "slower", "{}", w.headline);
+        assert!(w.headline.starts_with("slower by 10 % ("), "{}", w.headline);
+        assert!(!w.details.iter().any(|d| d.contains("phases")));
+        // Identical phased programs (a shuffle, then a chase), each side
+        // its own runs: raw cycles, never slower or faster.
+        let phased = |offset: usize| -> Vec<Run> {
+            side(15, 4e9, 0.01)
+                .into_iter()
+                .enumerate()
+                .map(|(i, mut r)| {
+                    let k = i + offset;
+                    let share = 0.6 + 0.03 * (k % 5) as f64;
+                    r.p_cycles = r.cycles.map(|v| (v as f64 * share) as u64);
+                    r.p_instructions = r
+                        .instructions
+                        .map(|v| (v as f64 * (0.95 - 0.2 * (k % 3) as f64)) as u64);
+                    r
+                })
+                .collect()
+        };
+        let (c, o) = (phased(0), phased(1));
+        let metric = choose_metric(&c, &o, Platform::MacV6, true);
+        assert_eq!(metric, "macos-v6-cycles-phases");
+        let w = words(&row(c, o, metric, false), &UNIT);
+        assert!(
+            !matches!(
+                w.answer,
+                "slower"
+                    | "faster"
+                    | "probably-slower"
+                    | "probably-faster"
+                    | "close-call-slower"
+                    | "close-call-faster"
+            ),
+            "{}",
+            w.headline
+        );
+        assert!(w
+            .details
+            .iter()
+            .any(|d| d == "measured in cycles — the program's phases differ in speed"));
     }
 
     #[test]
     fn instructions_memory_and_parallel_details() {
-        // The start-up note: a std unit, 1e7 more instructions on a 1e9 C.
+        // The start-up note: a std unit, 1.04e7 ± 0.3e7 more instructions
+        // on a 1e9 C.
         let mut c = side(15, 4e9, 0.004);
         let mut o = side(15, 4e9, 0.004);
         for (i, r) in c.iter_mut().enumerate() {
-            r.instructions = Some(1_000_000_000 + (i as u64 % 3) * 1_000_000);
+            r.instructions = Some(1_000_000_000 - 3_000_000 + (i as u64 % 3) * 3_000_000);
         }
         for (i, r) in o.iter_mut().enumerate() {
-            r.instructions = Some(1_010_400_000 + (i as u64 % 3) * 1_000_000);
+            r.instructions = Some(1_010_400_000 - 3_000_000 + (i as u64 % 3) * 3_000_000);
         }
         let w = words(&row(c.clone(), o.clone(), "macos-v6-pnorm", false), &UNIT);
         assert!(
@@ -1884,6 +2438,294 @@ mod tests {
         assert_eq!(w.short, "about as fast · parallel");
     }
 
+    /// 15 runs of `base` × `ratio` instructions, spread ±`spread` (a
+    /// fraction) evenly — at 15 runs against a steady C, the interval's
+    /// ends are the ratio × (1 ∓ 0.4 × spread).
+    fn counted(base: f64, ratio: f64, spread: f64) -> Vec<Run> {
+        (0..15)
+            .map(|i| Run {
+                instructions: Some(
+                    (base * ratio * (1.0 + spread * ((i as f64 + 0.5) / 15.0 - 0.5) * 2.0)) as u64,
+                ),
+                ..run(1e9)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_instruction_words_either_side_of_the_line() {
+        let c = counted(4e9, 1.0, 0.0);
+        let w = |ratio: f64, spread: f64| {
+            instruction_words(&c, &counted(4e9, ratio, spread), false, &UNIT)
+        };
+        let close = "too close to the 1.5 % line to call";
+        for (ratio, spread, want) in [
+            (
+                1.018,
+                0.002,
+                "1.8 % more instructions (1.7–1.9 %)".to_string(),
+            ),
+            (0.982, 0.002, "1.8 % fewer instructions (1.7–1.9 %)".into()),
+            (
+                1.015,
+                0.012,
+                format!("about 1.5 % more instructions — {close}"),
+            ),
+            (
+                0.985,
+                0.012,
+                format!("about 1.5 % fewer instructions — {close}"),
+            ),
+            (
+                1.0,
+                0.004,
+                "about the same instructions (within 1.5 %)".into(),
+            ),
+            // Either side of the 1.5 % line, nearly the same every run.
+            (
+                1.014,
+                0.0,
+                "about the same instructions (within 1.5 %)".into(),
+            ),
+            (1.016, 0.0, "1.6 % more instructions (1.6 %)".into()),
+            (
+                0.986,
+                0.0,
+                "about the same instructions (within 1.5 %)".into(),
+            ),
+            (0.984, 0.0, "1.6 % fewer instructions (1.6 %)".into()),
+            // Just past the line: the end shows two decimals, off it.
+            (1.01504, 0.0, "1.5 % more instructions (1.51 %)".into()),
+            // Holding 0 and wide: can't tell.
+            (1.0, 0.04, "instructions: can't tell".into()),
+            // Clear of 0 but wide ([+0.5, +5.5] %): instructions have no
+            // "probably" — can't tell.
+            (1.03, 0.0607, "instructions: can't tell".into()),
+        ] {
+            assert_eq!(w(ratio, spread), want, "×{ratio} ±{spread}");
+        }
+    }
+
+    #[test]
+    fn the_start_up_note_needs_an_interval_ending_by_2_6e7() {
+        // 15 runs a side: run i at base + (i/14 − ½) × width.
+        let at_ins = |base: f64, width: f64| -> Vec<Option<f64>> {
+            (0..15)
+                .map(|i| Some(base + (i as f64 / 14.0 - 0.5) * width))
+                .collect()
+        };
+        let runs = |v: &[Option<f64>]| -> Vec<Run> {
+            v.iter()
+                .map(|x| Run {
+                    instructions: x.map(|x| x as u64),
+                    ..run(1e9)
+                })
+                .collect()
+        };
+        let note = |c: &[Option<f64>], o: &[Option<f64>]| {
+            instruction_words(&runs(c), &runs(o), true, &UNIT)
+                .ends_with("(about Rust's fixed start-up)")
+        };
+        // A std unit at 1.04e7 ± 0.3e7 on a 4e9 C, and on a 1e9 C.
+        for base in [4e9, 1e9] {
+            let (c, o) = (at_ins(base, 6e6), at_ins(base + 1.04e7, 6e6));
+            assert!(note(&c, &o), "a {base} C");
+            // Never on the C alone, never on a no-std unit.
+            assert!(!instruction_words(
+                &runs(&c),
+                &runs(&o),
+                true,
+                &Context {
+                    side: Side::C,
+                    ..UNIT
+                }
+            )
+            .contains("start-up"));
+            assert!(!instruction_words(&runs(&c), &runs(&o), false, &UNIT).contains("start-up"));
+        }
+        // 0.9 % real work on a 4e9 C: the interval holds 1.04e7 but runs
+        // on to about 6.5e7 — real work, never the start-up.
+        let (c, o) = (at_ins(4e9, 1e8), at_ins(4.036e9, 1e8));
+        let d = stats::hodges_lehmann_linear(&c, &o).expect("values");
+        assert!(d.lo <= STARTUP_INSTRUCTIONS && STARTUP_INSTRUCTIONS <= d.hi);
+        assert!(d.hi > STARTUP_UPPER, "{}", d.hi);
+        assert!(!note(&c, &o));
+        // Either side of the upper end: a steady C, the Rust's 11th
+        // smallest difference (the interval's top) at 2.59e7 and 2.61e7.
+        let flat_c = at_ins(4e9, 0.0);
+        let tops = |top: f64| -> Vec<Option<f64>> {
+            let mut d = [
+                1e6, 2e6, 3e6, 4e6, 5e6, 7e6, 9e6, 1.04e7, 1.5e7, 2e7, top, 3e7, 3.1e7, 3.2e7,
+                3.3e7,
+            ];
+            d.sort_by(f64::total_cmp);
+            d.iter().map(|x| Some(4e9 + x)).collect()
+        };
+        assert!(note(&flat_c, &tops(2.59e7)));
+        assert!(!note(&flat_c, &tops(2.61e7)));
+    }
+
+    #[test]
+    fn memory_never_gives_identical_code_a_direction() {
+        let mem = |v: &[u64]| -> Vec<Run> {
+            v.iter()
+                .map(|m| Run {
+                    memory: Some(*m),
+                    ..run(1e9)
+                })
+                .collect()
+        };
+        let varied = "memory: can't tell — memory varied from run to run";
+        let (lo, hi) = (12_400_000u64, 13_900_000u64);
+        // The same allocating binary on both sides under load: its
+        // footprint lands in one of two clusters, both sides from the
+        // same mix. Only "about the same" or "varied" — never a direction
+        // or any near-the-line words.
+        let mut seen_varied = 0;
+        for seed in 0..12u64 {
+            for p in [0.3, 0.5, 0.7] {
+                let mut rng = Rng(0xA076_1D64_78BD_642F ^ ((seed + 1) * 0x9E37_79B9));
+                let mut draw = || -> Vec<u64> {
+                    (0..15)
+                        .map(|_| if rng.next() < p { hi } else { lo })
+                        .collect()
+                };
+                let (c, o) = (draw(), draw());
+                let got = memory_words(&mem(&c), &mem(&o)).expect("memory");
+                for word in ["more", "less", "too close", "probably", "slower", "faster"] {
+                    assert!(!got.contains(word), "seed {seed}, p {p}: {got}");
+                }
+                assert!(
+                    got.starts_with("about the same memory (within ") || got == varied,
+                    "seed {seed}, p {p}: {got}"
+                );
+                seen_varied += usize::from(got == varied);
+            }
+        }
+        assert!(seen_varied > 0, "the varied words were never reached");
+        // A two-cluster sample: one side mostly low, the other mostly high.
+        let two = |highs: usize| -> Vec<u64> {
+            (0..15).map(|i| if i < highs { hi } else { lo }).collect()
+        };
+        assert_eq!(
+            memory_words(&mem(&two(5)), &mem(&two(10))).as_deref(),
+            Some(varied)
+        );
+        // Stand-ins for the design's recorded windows: zopfli's clusters
+        // near 12.7 and 14.7 MB (an interval one margin wide that holds
+        // 0), and a pair at 12.9–14.2 against 13.9–14.9 MB (about [+4.0,
+        // +8.7] % against a 7.7 % margin).
+        let z = |highs: usize| -> Vec<u64> {
+            (0..15)
+                .map(|i| if i < highs { 14_700_000 } else { 12_700_000 })
+                .collect()
+        };
+        assert_eq!(
+            memory_words(&mem(&z(5)), &mem(&z(9))).as_deref(),
+            Some(varied)
+        );
+        let spread = |from: f64, to: f64| -> Vec<u64> {
+            (0..15)
+                .map(|i| (from + (to - from) * i as f64 / 14.0) as u64)
+                .collect()
+        };
+        assert_eq!(
+            memory_words(&mem(&spread(12.9e6, 14.2e6)), &mem(&spread(13.9e6, 14.9e6))).as_deref(),
+            Some(varied)
+        );
+        // The margin: max(5 %, min(1 MiB, 20 %)) of the C's median.
+        let same = |m: u64, other: u64| memory_words(&mem(&[m; 15]), &mem(&[other; 15]));
+        assert_eq!(
+            same(lo, lo).as_deref(),
+            Some("about the same memory (within 8.5 %)")
+        );
+        assert_eq!(
+            same(1_000_000, 1_150_000).as_deref(),
+            Some("about the same memory (within 20 %)")
+        );
+        assert_eq!(
+            same(100_000_000, 104_000_000).as_deref(),
+            Some("about the same memory (within 5 %)")
+        );
+        assert_eq!(
+            same(100_000_000, 115_000_000).as_deref(),
+            Some("uses about 15 % more memory (15 %)")
+        );
+        assert_eq!(
+            same(100_000_000, 85_000_000).as_deref(),
+            Some("uses about 15 % less memory (15 %)")
+        );
+    }
+
+    #[test]
+    fn a_short_run_is_named_by_both_legs_of_the_floor() {
+        let short = "a short run: under 1e9 instructions and half a second of CPU on one side";
+        // A memory-bound program at 2.6 s of CPU and 0.9e9 instructions is
+        // measured in full: inside the line it reads about as fast, with
+        // its memory line and no short-run words.
+        let bound = |runs: Vec<Run>| -> Vec<Run> {
+            runs.into_iter()
+                .map(|r| Run {
+                    instructions: Some(900_000_000),
+                    p_instructions: Some(900_000_000),
+                    ..r
+                })
+                .collect()
+        };
+        let full = row(
+            bound(side(15, 8.32e9, 0.004)),
+            bound(side(15, 8.32e9, 0.004)),
+            "macos-v6-pnorm",
+            false,
+        );
+        let w = words(&full, &UNIT);
+        assert_eq!(w.answer, "about-as-fast", "{}", w.headline);
+        assert!(w.details.iter().any(|d| d.starts_with("CPU about 2.60 s")));
+        assert!(w
+            .details
+            .iter()
+            .any(|d| d == "about the same memory (within 8.5 %)"));
+        assert!(!w.details.iter().any(|d| d.contains("short run")));
+        // Marked short: the short-run words, and the memory line only
+        // over 4 MiB.
+        let mut s = full.clone();
+        s.short = Some(true);
+        let w = words(&s, &UNIT);
+        assert_eq!(w.answer, "cant-tell-short-run");
+        assert!(w.details.iter().any(|d| d == short), "{:?}", w.details);
+        assert!(w.details.iter().any(|d| d.contains("memory")));
+        let small = |runs: &mut Vec<Run>| {
+            for r in runs.iter_mut() {
+                r.memory = Some(1_000_000);
+            }
+        };
+        small(s.c.as_mut().expect("runs"));
+        small(s.other.as_mut().expect("runs"));
+        let w = words(&s, &UNIT);
+        assert!(!w.details.iter().any(|d| d.contains("memory")));
+        // The C alone's baseline, marked short (an older file's row).
+        let mut b = full.clone();
+        b.outcome = "baseline".into();
+        b.other = None;
+        b.platform_metrics = None;
+        b.short = Some(true);
+        let w = words(
+            &b,
+            &Context {
+                side: Side::C,
+                ..UNIT
+            },
+        );
+        assert_eq!(
+            w.details,
+            [
+                "15 runs",
+                "a short run: under 1e9 instructions and half a second of CPU — use a bigger \
+                 input"
+            ]
+        );
+    }
+
     fn step1(c_cpu: u64, c_ins: u64, o_cpu: u64, o_ins: u64) -> Step1 {
         let r = |cpu: u64, ins: u64| Step1Run {
             instructions: Some(ins),
@@ -1926,6 +2768,34 @@ mod tests {
         let w = words(&r, &cx);
         assert!(w.headline.contains("1.1×"), "{}", w.headline);
         assert_eq!(w.short, "too short to time");
+        // The gap (build note 14) only when the Rust is slower by more
+        // than 2× against both step-1 C runs, both sides at least 20 ms:
+        // (the C's first and second CPU, the Rust's) → its short form.
+        let mut gap = |a: u64, b: u64, o: u64| {
+            let mut s = step1(a, 140_000_000, o, 1_260_000_000);
+            s.c_second.cpu_us = Some(b);
+            r.step1 = Some(s);
+            let w = words(&r, &cx);
+            (w.short, w.rank)
+        };
+        let none = ("too short to time".to_string(), (13, 0.0));
+        // Start-up noise: a 3 ms C and a 9 ms Rust.
+        assert_eq!(gap(3_000, 3_000, 9_000), none);
+        // Either side of 20 ms.
+        assert_eq!(gap(19_999, 19_999, 60_000), none);
+        assert_eq!(
+            gap(20_000, 20_000, 60_000),
+            ("too short · Rust 3× CPU".to_string(), (5, 3.0))
+        );
+        // 20 ms is the faster C run's: 15 and 25 ms, the Rust at 100 ms.
+        assert_eq!(gap(15_000, 25_000, 100_000), none);
+        assert_eq!(gap(25_000, 15_000, 100_000), none);
+        // More than 2× against both: 40 and 200 ms, the Rust at 360 ms is
+        // 9× the faster run but under 2× the slower.
+        assert_eq!(gap(40_000, 200_000, 360_000), none);
+        assert_eq!(gap(200_000, 40_000, 360_000), none);
+        // The Rust the slower side only: a C 9× the Rust is no gap.
+        assert_eq!(gap(360_000, 360_000, 40_000), none);
     }
 
     #[test]
@@ -2124,6 +2994,155 @@ mod tests {
     }
 
     #[test]
+    fn odd_and_forged_numbers_never_panic() {
+        // Every metric over runs a real record can hold (a V4 record with
+        // no P fields, p_instructions = 0, a program that backgrounds
+        // itself part-way) and ones only a forged file can (a stored 0,
+        // every number at its largest): words, never a panic.
+        let base = side(15, 4e9, 0.01);
+        let map = |f: &dyn Fn(usize, &mut Run)| -> Vec<Run> {
+            base.iter()
+                .cloned()
+                .enumerate()
+                .map(|(i, mut r)| {
+                    f(i, &mut r);
+                    r
+                })
+                .collect()
+        };
+        let max = u64::MAX;
+        let sides: Vec<(&str, Vec<Run>)> = vec![
+            (
+                "V4, no P fields",
+                map(&|_, r| {
+                    r.p_cycles = None;
+                    r.p_instructions = None;
+                }),
+            ),
+            ("p_instructions 0", map(&|_, r| r.p_instructions = Some(0))),
+            (
+                "backgrounds itself",
+                map(&|i, r| {
+                    if i >= 5 {
+                        r.p_cycles = r.cycles.map(|v| v / 50);
+                        r.p_instructions = r.instructions.map(|v| v / 50);
+                    }
+                }),
+            ),
+            (
+                "a stored 0",
+                map(&|_, r| {
+                    *r = Run {
+                        instructions: Some(0),
+                        cycles: Some(0),
+                        cpu_us: Some(0),
+                        wall_us: Some(0),
+                        memory: Some(0),
+                        p_instructions: Some(0),
+                        p_cycles: Some(0),
+                        load: Some(0),
+                        ..r.clone()
+                    }
+                }),
+            ),
+            (
+                "the largest",
+                map(&|_, r| {
+                    *r = Run {
+                        instructions: Some(max),
+                        cycles: Some(max),
+                        cpu_us: Some(max),
+                        wall_us: Some(max),
+                        memory: Some(max),
+                        p_instructions: Some(max),
+                        p_cycles: Some(max),
+                        load: Some(u32::MAX),
+                        ..r.clone()
+                    }
+                }),
+            ),
+        ];
+        for (name, odd) in &sides {
+            for platform in [
+                Platform::MacV6,
+                Platform::MacV4,
+                Platform::Linux,
+                Platform::LinuxHybrid,
+            ] {
+                for two_kinds in [true, false] {
+                    let _ = choose_metric(&base, odd, platform, two_kinds);
+                    let _ = choose_metric(odd, odd, platform, two_kinds);
+                }
+            }
+            for metric in super::super::results::PLATFORM_METRICS {
+                for (c, o) in [(&base, odd), (odd, &base), (odd, odd)] {
+                    for short in [false, true] {
+                        let w = words(&row(c.clone(), o.clone(), metric, short), &UNIT);
+                        assert!(ANSWERS.contains(&w.answer), "{name}, {metric}");
+                    }
+                }
+            }
+            let mut b = row(odd.clone(), Vec::new(), "macos-v6-pnorm", false);
+            b.outcome = "baseline".into();
+            b.other = None;
+            let cx = Context {
+                side: Side::C,
+                ..UNIT
+            };
+            assert_eq!(words(&b, &cx).answer, "baseline", "{name}");
+        }
+        // A forged step 1, difference, set-up index and failed run.
+        let mut r = row(Vec::new(), Vec::new(), "macos-v6-pnorm", false);
+        r.c = None;
+        r.other = None;
+        r.short = None;
+        r.runs = None;
+        r.platform_metrics = None;
+        for (c, o) in [(max, max), (max / 2 + 1, max), (0, 0), (20_000, max)] {
+            let mut t = r.clone();
+            t.outcome = "too-short".into();
+            t.step1 = Some(step1(c, c, o, o));
+            assert_eq!(words(&t, &UNIT).answer, "too-short");
+        }
+        let d = Difference {
+            stream: "stdout".into(),
+            c_len: max,
+            other_len: max,
+            offset: max,
+            c_end: "exit 0".into(),
+            other_end: "exit 0".into(),
+            over_cap: false,
+            kept: Vec::new(),
+        };
+        assert_eq!(
+            difference_words(&d),
+            "prints differently (stdout, byte 18 446 744 073 709 551 615)"
+        );
+        let mut t = r.clone();
+        t.outcome = "behaves-differently".into();
+        t.first_difference = Some(d.clone());
+        t.found_before = Some(d);
+        assert_eq!(words(&t, &UNIT).answer, "behaves-differently");
+        let facts = SetupFacts {
+            index: Some(u32::MAX),
+            ..SetupFacts::default()
+        };
+        assert_eq!(
+            set_up_words("replaces-mismatch", Some(&facts), &UNIT),
+            "u001's replaces entry 4294967295 names no top-level C file of the program — \
+             Re-check it"
+        );
+        let mut t = r;
+        t.outcome = "run-failed: exit".into();
+        t.failed_run = Some(super::super::results::FailedRun {
+            side: "other".into(),
+            index: u32::MAX,
+            end: "exit 1".into(),
+        });
+        assert_eq!(words(&t, &UNIT).answer, "run-failed-exit");
+    }
+
+    #[test]
     fn the_worst_order_is_the_designs() {
         let r = |rank: (u8, f64)| RowWords {
             headline: String::new(),
@@ -2174,6 +3193,46 @@ mod tests {
                 pair[1]
             );
         }
+        // Within a kind, the worse row first: the bigger slowdown, and the
+        // smaller gain — never the fastest row first among faster ones.
+        let shift = |p: f64| {
+            let d = (1.0 + p / 100.0).ln();
+            Shift {
+                estimate: d,
+                lo: d,
+                hi: d,
+                m: 15,
+                n: 15,
+            }
+        };
+        let k = |a: Answer, p: f64| r(time_short(a, Some(&shift(p)), false).1);
+        for (a, worse, better) in [
+            (Answer::Slower, 20.0, 5.0),
+            (Answer::Faster, -5.0, -20.0),
+            (Answer::Probably { slower: false }, -2.0, -8.0),
+            (Answer::CloseCall { slower: false }, -0.5, -1.5),
+            (Answer::Probably { slower: true }, 8.0, 2.0),
+            (Answer::CloseCall { slower: true }, 1.5, 0.5),
+        ] {
+            assert_eq!(
+                worst_first(&k(a, worse), &k(a, better)),
+                std::cmp::Ordering::Less,
+                "{a:?}: {worse} % before {better} %"
+            );
+        }
+        // Through the words: a unit 5 % faster before one 20 % faster.
+        let five = words(
+            &row(flat(15), at(1e9, &[-5.0; 15]), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        let twenty = words(
+            &row(flat(15), at(1e9, &[-20.0; 15]), "macos-v6-cycles", false),
+            &UNIT,
+        );
+        assert_eq!((five.answer, twenty.answer), ("faster", "faster"));
+        let mut both = [twenty, five];
+        both.sort_by(worst_first);
+        assert_eq!(both[0].short, "faster 5.0 % (5.0 %)");
     }
 
     #[test]

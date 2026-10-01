@@ -194,7 +194,8 @@ pub struct SpeedModel {
     /// Each workload's id and runs a side, in file order.
     pub workloads: Vec<(String, u32)>,
     /// The C's clock time on each workload, in seconds, from its stored
-    /// C-alone row (for the estimate).
+    /// C-alone row, else from the C's runs on another of its rows (for the
+    /// estimate).
     pub c_clock: BTreeMap<String, f64>,
 }
 
@@ -711,6 +712,17 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
             None => {}
         }
     }
+    // A workload with no C-alone row (only units measured so far) takes the
+    // C's time from the C's runs on its other rows, as the CLI's 31-run
+    // words do (§6: "from its last stored rows").
+    more_c_clocks(
+        &mut model.c_clock,
+        model
+            .program_rows
+            .iter()
+            .chain(model.units.iter().flat_map(|u| &u.rows))
+            .map(|r| &r.row),
+    );
     model
         .units
         .sort_by(|a, b| match (a.rows.first(), b.rows.first()) {
@@ -751,9 +763,58 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
     model
 }
 
+/// Each workload `c_clock` lacks, from the first of `rows` on it whose C
+/// runs give a clock time.
+fn more_c_clocks<'a>(c_clock: &mut BTreeMap<String, f64>, rows: impl Iterator<Item = &'a Row>) {
+    for r in rows {
+        if !c_clock.contains_key(&r.workload) {
+            if let Some(c) = estimate::c_clock(r) {
+                c_clock.insert(r.workload.clone(), c);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_workload_without_a_c_alone_row_takes_the_cs_time_from_its_other_rows() {
+        // A unit's row on big-text, its C runs at 1.3 s of clock time; no
+        // row at all on many-small.
+        let row: Row = serde_json::from_value(serde_json::json!({
+            "workload": "big-text",
+            "outcome": "measured",
+            "inputs": {
+                "workload": "x", "program": "x", "program_name": "tool",
+                "recipe": "r", "launcher": "l",
+                "computer": {"os": "15.6", "build": "b", "arch": "arm64", "cpu": "Apple M3",
+                             "two_kinds": true, "fast_cores": 8},
+                "compilers": {"cc": "cc"}
+            },
+            "c": (0..5).map(|_| serde_json::json!({"wall_us": 1_300_000, "end": "exit 0"}))
+                .collect::<Vec<_>>()
+        }))
+        .expect("a row");
+        let mut c_clock = BTreeMap::new();
+        more_c_clocks(&mut c_clock, [&row].into_iter());
+        assert_eq!(c_clock.get("big-text"), Some(&1.3));
+        assert_eq!(c_clock.get("many-small"), None);
+        // A C-alone row's time is kept.
+        let mut c_clock = BTreeMap::from([("big-text".to_string(), 2.0)]);
+        more_c_clocks(&mut c_clock, [&row].into_iter());
+        assert_eq!(c_clock.get("big-text"), Some(&2.0));
+        // So a unit's dialog, and its 31-run one, give seconds, not runs.
+        let job = Job {
+            workloads: vec![(31, Some(1.3))],
+            c_alone: false,
+            rows: 1,
+            crates: 1,
+            links: 1,
+        };
+        assert_eq!(job.estimate(), estimate::Estimate::Seconds(131));
+    }
 
     #[test]
     fn the_labels_fit_19_columns() {
