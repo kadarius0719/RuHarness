@@ -2571,7 +2571,7 @@ mod tests {
         let mut seen_varied = 0;
         for seed in 0..12u64 {
             for p in [0.3, 0.5, 0.7] {
-                let mut rng = Rng(0xA076_1D64_78BD_642F ^ (seed + 1) * 0x9E37_79B9);
+                let mut rng = Rng(0xA076_1D64_78BD_642F ^ ((seed + 1) * 0x9E37_79B9));
                 let mut draw = || -> Vec<u64> {
                     (0..15)
                         .map(|_| if rng.next() < p { hi } else { lo })
