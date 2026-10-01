@@ -1233,8 +1233,12 @@ fn the_runtime_merges_and_marks_that_it_attached() {
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fnprobe/fnprobe.h"))
         .arg("-o")
         .arg(&bin)
-        .arg(&runtime)
+        // The program's object first: its constructor's note lands in the
+        // early array before setup, so the merge is what keeps it (with the
+        // runtime first, setup ran first and nothing needed merging — the
+        // fix pass's mutation check found the merge untested).
         .arg(&main)
+        .arg(&runtime)
         .status()
         .expect("cc runs");
     assert!(built.success());

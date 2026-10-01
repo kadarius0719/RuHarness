@@ -1323,7 +1323,10 @@ mod tests {
         assert_eq!(mode, 0o700, "{path:?}");
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         let hex = name.strip_prefix("ruharness-map-").expect("named");
-        assert!(hex.len() == 16 && hex.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+        assert!(
+            hex.len() == 16 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{name}"
+        );
         assert!(LIVE_DIRS.lock().unwrap().contains(&path));
         drop(out);
         assert!(!path.exists());
