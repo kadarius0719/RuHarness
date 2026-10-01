@@ -229,7 +229,9 @@ sandboxed process, plus the link; the listing runs now write their preprocessed 
 file's preprocessed source, e.g. 9 MB for sqlite3.c). A rejected note costs one more compile of
 its file, plus one compile of each file that enters a changed header. Measured with the store
 note on sqlite3.c: compile time +3 %, peak memory +15 MiB, object +12.5 %; a probed run +2 %
-over plain. A probed run keeps the same `timeout_secs` as plain: a scenario near the limit can
+over plain. Measured on the build (§10): compile +4 % instructions, peak memory +16.8 MiB, object
++12.5 %; a probed run +1–2 % time on zopfli but **+11 % cycles and instructions** on a call-heavy
+sqlite3.c workload. A probed run keeps the same `timeout_secs` as plain: a scenario near the limit can
 time out only when probed, recorded as `probe_agrees = false`.
 
 ### 3.5 The probe's own build
@@ -350,8 +352,8 @@ test fixtures.
   same shape with `__attribute__((error))` (one placed round); a compile with no located error
   that still fails with every note out (refused after exactly one extra compile); a compile
   that times out (an `always_inline` doubling tree, `timeout_secs = 5`: refused, not read); the
-  per-file round bound (`#pragma clang diagnostic fatal "-Wdeclaration-after-statement"` over 9
-  functions) and the pass bound; two top-level files with a weak function of the same name and
+  per-file round bound (built with a parse error that hides a code-generation error — the
+  `#pragma clang diagnostic fatal` fixture is silenced by the probed compile's `-w`, §10) and the pass bound; two top-level files with a weak function of the same name and
   a constructor each, the first recompiled last (the first file's weak function noted as run);
   the progress lines.
 - §3.5 — the runtime compiled without `-I`; the probe header found only by its path; a
@@ -395,7 +397,7 @@ test fixtures.
 | 15 | a struct in a macro read as a function | the compiler decides (§3.4): its note does not compile |
 | 16 | an absolute include of a function-less header refused | fix: refused only when the file has notes |
 | 17 | `source_dir = "."` accepts no `include_dirs` | fix: both paths normalised before the prefix test |
-| 18 | an unsandboxed scenario's forked child kept or killed by chance | fix: built-program and scenario runs keep the fixed 50 ms poll |
+| 18 | an unsandboxed scenario's forked child kept or killed by chance | fix: built-program and scenario runs keep the fixed 50 ms poll — built so; the code review found the chance narrowed, not removed (§10) |
 | 19 | the process-group timeout test flakes | fix: its timeout (a fresh binary's first exec under load) |
 | 20 | `a_scenario_run_ends_as_data` flakes | fix: its timeout, as #19 |
 | 21 | a huge `timeout_secs` overflows the deadline | fix: refused at load, the message naming the range 1 to 604 800 (built so; the code governs, §10) |
@@ -447,6 +449,15 @@ test fixtures.
   lose a note made during setup's switch to the mapping.
 - **gcc**: `#line` files and a byte-order mark cost search compiles; naked functions are
   unwatched (rule 4); trigraphs (`??=` for `#`) are not read as directives.
+- **A body the parser misreads** (an `#if` whose branches each open a brace) swallows the
+  definitions after it: they are recorded (the scan searches definitions' bodies) and unwatched
+  with the parser reason, and so is the misread function. sqlite3.c: 457 of 4 621 functions
+  (winWrite's and decodeIntArray's bodies). Revisit with a preprocessing frontend (libclang).
+- **A hidden variant** (§10): a function the parser cannot read, compiled in place of a visible
+  `#if` sibling of the same id, is caught when a compiled object defines its name; a static
+  inlined everywhere leaves no symbol and still reads "not run".
+- **A probed run's time**: +11 % on a call-heavy workload (sqlite3.c); a scenario near
+  `timeout_secs` can time out only when probed — recorded as `probe_agrees = false`.
 
 ## 7. What is removed
 

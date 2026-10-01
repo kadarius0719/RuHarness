@@ -291,14 +291,18 @@ fn map_inner(
                     build_failed("the C program does not build", why)
                 }
             })?;
-        programs.push(program);
+        // Its text stays on disk until §3.3 step 4 reads it back: one file's
+        // text in memory at a time (review: every file's, twice, was 1.7 GB
+        // for a 300-file program).
+        programs.push(Reads {
+            text: Vec::new(),
+            ..program
+        });
     }
-    let mut copy_texts: Vec<Vec<u8>> = Vec::new();
     let mut unit_reads: Vec<std::collections::BTreeSet<String>> = Vec::new();
     // Per top-level file: the notes its preprocessed copy holds as code.
     let mut copy_notes: Vec<std::collections::BTreeSet<u32>> = Vec::new();
     for pass in 0.. {
-        copy_texts.clear();
         unit_reads.clear();
         copy_notes.clear();
         let mut changed = false;
@@ -380,7 +384,6 @@ fn map_inner(
             entered.retain(|rel| probe.rels().contains(rel));
             unit_reads.push(entered);
             copy_notes.push(scan.notes.keys().copied().collect());
-            copy_texts.push(copied_reads.text);
         }
         if !changed {
             break;
@@ -397,15 +400,23 @@ fn map_inner(
         }
         keep_times(&times);
     }
-    // §3.3 step 4: apart from its notes, the copy is the program's code.
+    // §3.3 step 4: apart from its notes, the copy is the program's code —
+    // each file's two texts read back from the random folder (the last
+    // pass's listings), compared, then removed.
     for (n, c_file) in c_files.iter().enumerate() {
-        if let Err(line) = probecopy::same_code(&programs[n].text, &copy_texts[n], &header) {
+        let (program_i, _) = listing_out("program", n);
+        let (copy_i, _) = listing_out("copy", n);
+        let program_text = std::fs::read(&program_i).map_err(|e| Error::io(&program_i, e))?;
+        let copy_text = std::fs::read(&copy_i).map_err(|e| Error::io(&copy_i, e))?;
+        if let Err(line) = probecopy::same_code(&program_text, &copy_text, &header) {
             return Err(Error::Invariant(format!(
                 "the scratch copy of {} is not the same program near: {line} — the features \
                  map cannot map this program",
                 shown(c_file, &root).display()
             )));
         }
+        let _ = std::fs::remove_file(&program_i);
+        let _ = std::fs::remove_file(&copy_i);
     }
     // The compile copies: no end tokens.
     for rel in probe.rels() {
@@ -637,7 +648,15 @@ impl MapOut {
                 .strip_prefix(harness_core::hash::HASH_PREFIX)
                 .unwrap_or(&tag);
             let dir = base.join(format!("ruharness-map-{}", &hex[..16]));
-            match std::fs::create_dir(&dir) {
+            // Only the person can read it: it holds the whole preprocessed
+            // program and its binaries (review: a shared /tmp).
+            let made = {
+                let mut builder = std::fs::DirBuilder::new();
+                #[cfg(unix)]
+                std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+                builder.create(&dir)
+            };
+            match made {
                 Ok(()) => {
                     LIVE_DIRS
                         .lock()
@@ -862,18 +881,21 @@ fn reads(
     let headers = match run.end {
         crate::exec::ChildEnd::Exited(status) if status.success() => run.stderr,
         // No re-run after a timeout or an overflow (check 7: an included
-        // FIFO would wait twice).
+        // FIFO would wait twice), and said as what it is — never blamed on
+        // the includes (review).
         crate::exec::ChildEnd::TimedOut => {
-            return Ok(Err(Error::Invariant(format!(
-                "cc timed out after {}s",
+            return Err(Error::Invariant(format!(
+                "the compiler's listing of {} did not finish in {} s — raise [oracle] timeout_secs",
+                input.file_name().unwrap_or_default().to_string_lossy(),
                 runner.timeout.as_secs()
-            ))))
+            )))
         }
         crate::exec::ChildEnd::OutputOverflow => {
-            return Ok(Err(Error::Invariant(format!(
-                "cc produced more than {} bytes of output",
+            return Err(Error::Invariant(format!(
+                "the compiler's listing of {} printed more than {} bytes",
+                input.file_name().unwrap_or_default().to_string_lossy(),
                 runner.max_output
-            ))))
+            )))
         }
         crate::exec::ChildEnd::Exited(_) => {
             // The compiler's own words, from a run without -H, whose header

@@ -111,6 +111,18 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
     ));
 
     let mut read_roots: Vec<&Path> = vec![spec.target_root];
+    // What a child may write it may read back: the harness's own folders
+    // (a features map's random folder holds the probe header every compile
+    // `-include`s) and the temp dir its compiler's own temp files go to —
+    // under the home folder too (review: a TMPDIR there broke every build).
+    // Only one the home denial hides and no read root holds already; never
+    // a TMPDIR that is the home folder or holds it.
+    let tmp = spec.host.tmpdir.as_deref().filter(|t| !home.starts_with(t));
+    for dir in spec.write_dirs.iter().map(PathBuf::as_path).chain(tmp) {
+        if dir.starts_with(home) && !read_roots.iter().any(|r| dir.starts_with(r)) {
+            read_roots.push(dir);
+        }
+    }
     if spec.toolchain {
         read_roots.extend(spec.host.cargo_home.as_deref());
         read_roots.extend(spec.host.rustup_home.as_deref());
@@ -358,6 +370,44 @@ mod tests {
 (allow file-write* (subpath \"/Users/u/t/migration/build/u1\") (subpath \"/Users/u/t/migration/units/u1/c/target\") (literal \"/Users/u/t/migration/units/u1/c/Cargo.lock\") (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (subpath \"/private/var/folders/xy/T\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
 ";
         assert_eq!(text, expected);
+    }
+
+    /// Review: a TMPDIR under the home folder, and a write dir outside the
+    /// target there (the features map's random folder), are readable — the
+    /// compiler reads back its own temp files and the probe header.
+    #[test]
+    fn a_tool_reads_back_what_it_writes_under_home() {
+        let mut host = host();
+        host.tmpdir = Some(PathBuf::from("/Users/u/tmp"));
+        let write_dirs = vec![PathBuf::from("/Users/u/tmp/ruharness-map-0123456789abcdef")];
+        let text = render_profile(&ProfileSpec {
+            host: &host,
+            target_root: Path::new("/Users/u/t"),
+            toolchain: true,
+            write_dirs: &write_dirs,
+            write_files: &[],
+        })
+        .expect("renders");
+        assert!(
+            text.contains(
+                "(allow file-read* (subpath \"/Users/u/t\") (subpath \"/Users/u/tmp/ruharness-map-0123456789abcdef\") (subpath \"/Users/u/tmp\") (subpath \"/Users/u/.cargo\")"
+            ),
+            "{text}"
+        );
+        // A TMPDIR that is the home folder opens nothing.
+        host.tmpdir = Some(PathBuf::from("/Users/u"));
+        let text = render_profile(&ProfileSpec {
+            host: &host,
+            target_root: Path::new("/Users/u/t"),
+            toolchain: false,
+            write_dirs: &[],
+            write_files: &[],
+        })
+        .expect("renders");
+        assert!(
+            text.contains("(allow file-read* (subpath \"/Users/u/t\"))\n"),
+            "{text}"
+        );
     }
 
     #[test]

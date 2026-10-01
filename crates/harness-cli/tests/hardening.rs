@@ -796,6 +796,69 @@ fn a_signal_during_a_map_leaves_no_scratch_folder() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// §4 (§3.4 step 2), review: a probed compile that does not finish is
+/// refused by name — "raise [oracle] timeout_secs" — never read as a
+/// compile error. A `cc` on PATH that hangs only on the probed compiles
+/// (the only ones with `-ferror-limit=0`).
+#[cfg(unix)]
+#[test]
+fn a_probed_compile_that_hangs_is_refused_by_name() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = std::env::temp_dir().join(format!("ruharness-map-hang-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let target = tmp.join("t");
+    std::fs::create_dir_all(target.join("src")).unwrap();
+    std::fs::create_dir_all(target.join("migration/features")).unwrap();
+    std::fs::write(
+        target.join("harness.toml"),
+        "schema_version = 1\n[target]\nname = \"p\"\nsource_dir = \"src\"\n\n\
+         [oracle]\nallowlist = [\"cc\"]\ntimeout_secs = 5\n",
+    )
+    .unwrap();
+    std::fs::write(
+        target.join("src/main.c"),
+        "int f(int x) { return x + 1; }\nint main(void) { return f(-1); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        target.join("migration/features/features.toml"),
+        "schema_version = 1\n[[feature]]\nid = \"run\"\nname = \"Run\"\n\
+         [[scenario]]\nfeature = \"run\"\nid = \"none\"\nargs = []\n",
+    )
+    .unwrap();
+    let fake = tmp.join("bin");
+    std::fs::create_dir_all(&fake).unwrap();
+    let cc = fake.join("cc");
+    std::fs::write(
+        &cc,
+        "#!/bin/sh\ncase \" $* \" in\n  *\" -ferror-limit=0 \"*) sleep 100; exit 0 ;;\nesac\n\
+         exec /usr/bin/cc \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&cc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A fresh script's first exec can take seconds here (the system's
+    // first-run check): run it once before the timed map.
+    let _ = Command::new(&cc).arg("--version").output();
+    let t = target.to_str().unwrap();
+    let r = harness(&["scan", "--target", t]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let path = format!("{}:/usr/bin:/bin", fake.display());
+    let started = std::time::Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["features", "map", "--target", t])
+        .env("PATH", &path)
+        .output()
+        .expect("spawn harness");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("src/main.c did not finish in 5 s — raise [oracle] timeout_secs"),
+        "{stderr}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(60));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The first turn's `request_key` as the ledger journaled it.
 fn evs_turn_key(unit_dir: &Path, id: &str) -> serde_json::Value {
     let text =

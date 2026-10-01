@@ -61,9 +61,13 @@ pub(crate) const DEFAULT_MAX_OUTPUT: usize = 64 * 1024 * 1024;
 /// How much of a failed child's stderr is quoted in errors and check details.
 pub(crate) const STDERR_EXCERPT: usize = 8 * 1024;
 
-/// `try_wait` polling interval of a built program or a scenario run (a
-/// fixed interval: a forked child that outlives its leader by a few ms is
-/// then always kept or always killed, never by chance).
+/// `try_wait` polling interval of a built program or a scenario run. A
+/// fixed interval narrows, but does not remove, the chance in whether a
+/// forked child that outlives its leader by a few ms is kept: the group is
+/// killed at the first poll after the leader exits, and where that exit
+/// falls against the 50 ms grid varies run to run (review). Only an
+/// unsandboxed run can fork (macOS's scenario profile denies it); a
+/// blocking wait on a helper thread would remove the chance.
 const POLL: Duration = Duration::from_millis(50);
 
 /// How a run waits for its child: a tool run (the compiler, whose listings

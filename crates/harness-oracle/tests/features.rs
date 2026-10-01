@@ -440,7 +440,10 @@ fn a_dangling_c_link_in_the_source_dir_is_a_skip_not_an_error() {
 #[test]
 fn a_fifo_named_like_a_c_file_is_a_skip_not_a_wait() {
     let tmp = TempDir::new("feat-fifo");
-    let (target, unit) = program(tmp.path(), GOOD, Some(FEATURES), "timeout_secs = 20");
+    // A wait on the FIFO would last the whole timeout (120 s); an ordinary
+    // verify ends well before 100 s even on a loaded machine (a 20 s bound
+    // measured the machine's load, not the wait).
+    let (target, unit) = program(tmp.path(), GOOD, Some(FEATURES), "timeout_secs = 120");
     mkfifo(&tmp.path().join("src/tool/x.c"));
     let started = std::time::Instant::now();
     let verdict = CAbiDifferential
@@ -454,7 +457,7 @@ fn a_fifo_named_like_a_c_file_is_a_skip_not_a_wait() {
         .features_skipped
         .iter()
         .all(|s| s.ends_with(": c-side-build-failed")));
-    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    assert!(started.elapsed() < std::time::Duration::from_secs(100));
 }
 
 fn mkfifo(path: &Path) {
@@ -2445,4 +2448,74 @@ fn an_odd_quote_in_a_raw_string_maps() {
         ran.contains(&"src/tool/main.c::quote") && ran.contains(&"src/tool/main.c::f"),
         "{ran:?}"
     );
+}
+
+/// §4 (§3.6), review: a constructor that forks before the runtime's setup —
+/// both images run setup, map the one notes file and merge; neither wipes
+/// the other's notes.
+#[test]
+fn a_constructor_that_forks_before_setup_keeps_both_images_notes() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("constructor order by link order: checked on Mach-O");
+        return;
+    }
+    let tmp = TempDir::new("fnprobe-fork-early");
+    let runtime = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fnprobe/fnprobe.c");
+    let main = tmp.path().join("main.c");
+    write(
+        &main,
+        "#include <sys/wait.h>\n#include <unistd.h>\n\
+         extern unsigned char *volatile __ruharness_seen;\n\
+         static pid_t kid = -1;\n\
+         __attribute__((constructor)) static void early(void) { kid = fork(); }\n\
+         int main(void) {\n\
+           if (kid == 0) { __ruharness_seen[1] = 1; return 0; }\n\
+           __ruharness_seen[0] = 1;\n\
+           int st; while (waitpid(kid, &st, 0) < 0) {}\n\
+           return 0;\n\
+         }\n",
+    );
+    let bin = tmp.path().join("probed");
+    // The program's object first: its constructor runs before setup.
+    let built = std::process::Command::new("cc")
+        .args(["-O2", "-DRUHARNESS_FNPROBE_N=4", "-include"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fnprobe/fnprobe.h"))
+        .arg("-o")
+        .arg(&bin)
+        .arg(&main)
+        .arg(&runtime)
+        .status()
+        .expect("cc runs");
+    assert!(built.success());
+    let dir = tmp.path().join("t");
+    std::fs::create_dir_all(&dir).unwrap();
+    let notes = dir.join(".ruharness-notes");
+    std::fs::write(&notes, [0u8; 5]).unwrap();
+    let ran = std::process::Command::new(&bin)
+        .env_clear()
+        .env("TMPDIR", &dir)
+        .status()
+        .expect("runs");
+    assert!(ran.success());
+    assert_eq!(std::fs::read(&notes).unwrap(), [1, 1, 0, 0, 1]);
+}
+
+/// §4 (§3.6), review: setup points the notes at the mapping before it
+/// merges the early array — a note a thread makes during setup lands in
+/// the mapping or in the array the merge then reads. A runtime that merged
+/// first and switched after would drop a note made between the two; a race
+/// test of it is flaky either way, so the order itself is pinned here.
+#[test]
+fn setup_switches_to_the_mapping_before_it_merges() {
+    let source = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fnprobe/fnprobe.c"),
+    )
+    .unwrap();
+    let switch = source
+        .find("__ruharness_seen = m;")
+        .expect("setup points the notes at the mapping");
+    let merge = source
+        .find("if (ruharness_early[i])")
+        .expect("setup merges the early notes");
+    assert!(switch < merge, "the merge runs before the switch");
 }

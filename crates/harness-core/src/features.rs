@@ -2120,20 +2120,16 @@ args = ["-h"]
             ..crate::Facts::default()
         };
         assert!(program_digest_now(&ctx("src"), &facts).starts_with("blake3:"));
-        // Fix check 2 N4: a folder or a FIFO named `x.c` is no sign of
-        // stale facts; an include dir reached through an alias the scan
-        // walked first keeps the scan's path.
+        // Fix check 2 N4: a folder named `x.c` is no sign of stale facts (a
+        // FIFO: tests/core_tests.rs — making one forks, and a fork in this
+        // binary can hold the lock tests' lock); an include dir reached
+        // through an alias the scan walked first keeps the scan's path.
         std::fs::remove_file(&big).unwrap();
         let facts = crate::Facts {
             files: vec![rec("src/main.c")],
             ..crate::Facts::default()
         };
         std::fs::create_dir_all(dir.join("src/gen.c")).unwrap();
-        assert!(std::process::Command::new("mkfifo")
-            .arg(dir.join("src/pipe.c"))
-            .status()
-            .unwrap()
-            .success());
         assert!(program_digest_now(&ctx("src"), &facts).starts_with("blake3:"));
         std::fs::remove_dir_all(&dir).unwrap();
 

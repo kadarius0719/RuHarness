@@ -322,7 +322,12 @@ impl Ctx<'_> {
             let started = std::time::Instant::now();
             match self.confined.run(&o2, &[], &[])? {
                 Ok(out) => {
-                    slowest = slowest.max(started.elapsed());
+                    // The first run of a just-linked binary can carry the
+                    // system's first-exec check (seconds on macOS): the
+                    // bound is the driver's own, so the later runs time it.
+                    if i > 0 {
+                        slowest = slowest.max(started.elapsed());
+                    }
                     outputs.push(out);
                 }
                 Err(e) => {

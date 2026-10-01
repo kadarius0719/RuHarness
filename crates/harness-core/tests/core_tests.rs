@@ -489,3 +489,37 @@ fn read_regular_never_blocks_on_a_fifo() {
     assert!(err.contains("not a regular file"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Fix check 2 N4 (moved here from the lib's tests, review: the fork that
+/// makes a FIFO held the lock tests' lock — `a_reader_never_makes_a_writer_fail`
+/// failed under load for that): a FIFO named `x.c` in source_dir is no sign
+/// of stale facts.
+#[test]
+fn a_fifo_named_like_a_c_file_is_no_sign_of_stale_facts() {
+    let dir = std::env::temp_dir().join(format!("ruharness-stale-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    std::fs::write(
+        dir.join("harness.toml"),
+        "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"src\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/main.c"), "int main;").unwrap();
+    let ctx = harness_core::config::TargetContext::load(&dir).unwrap();
+    let facts = harness_core::Facts {
+        files: vec![harness_core::facts::FileRecord {
+            path: "src/main.c".into(),
+            hash: harness_core::hash::file_hash(&dir.join("src/main.c")).unwrap(),
+            includes: Vec::new(),
+        }],
+        ..harness_core::Facts::default()
+    };
+    let made = std::process::Command::new("mkfifo")
+        .arg(dir.join("src/pipe.c"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    assert!(harness_core::features::program_digest_now(&ctx, &facts).starts_with("blake3:"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
