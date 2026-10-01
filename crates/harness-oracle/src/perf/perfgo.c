@@ -1,5 +1,5 @@
 /* perfgo — RuHarness's perf trampoline (docs/PERF-DESIGN.md §3.3 step 3),
- * launcher version perf-launcher-1.
+ * launcher version perf-launcher-2.
  *
  * perfgo READY GO STATUS PROGRAM NAME ARGS...
  *

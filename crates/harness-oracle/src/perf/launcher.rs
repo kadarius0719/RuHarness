@@ -1090,13 +1090,13 @@ mod tests {
         let h = digest.trim_start_matches(harness_core::hash::HASH_PREFIX);
         assert_eq!(
             (harness_core::perf::PERF_LAUNCHER, &h[..16]),
-            ("perf-launcher-1", PINNED_SOURCES),
+            ("perf-launcher-2", PINNED_SOURCES),
             "perfrun.c or perfgo.c changed: bump PERF_LAUNCHER and PINNED_SOURCES"
         );
     }
 
     /// The sources' hash at [`harness_core::perf::PERF_LAUNCHER`].
-    const PINNED_SOURCES: &str = "ad34c300de52107d";
+    const PINNED_SOURCES: &str = "dafbfe6534c4eb17";
 
     #[test]
     fn a_record_is_read_strictly() {
@@ -1188,34 +1188,75 @@ mod tests {
         bin.canonicalize().expect("canonical")
     }
 
+    /// A test run's shape; [`run`] is the usual one.
+    struct Opts<'a> {
+        deadline: u64,
+        capture: bool,
+        args: Vec<String>,
+        /// The target root the profile denies reads under.
+        target_root: &'a Path,
+        /// The program the profile lets run, when not the one run.
+        allowed: Option<&'a Path>,
+        /// A profile of the test's own instead of the perf profile.
+        profile: Option<&'a str>,
+        max_output: usize,
+    }
+
+    fn opts(deadline: u64, capture: bool) -> Opts<'static> {
+        Opts {
+            deadline,
+            capture,
+            args: vec!["one".to_string()],
+            target_root: Path::new("/nonexistent-target"),
+            allowed: None,
+            profile: None,
+            max_output: 1024 * 1024,
+        }
+    }
+
     fn run(l: &Launcher, bin: &Path, deadline: u64, capture: bool) -> Measured {
+        run_with(l, bin, &opts(deadline, capture))
+    }
+
+    fn run_with(l: &Launcher, bin: &Path, o: &Opts<'_>) -> Measured {
         let host = HostDirs::from_env().expect("host");
         let tmp = crate::testutil::TempDir::new("perf-run");
         let tmpdir = tmp.path().canonicalize().expect("tmp");
         let cwd = tmpdir.join("run");
         std::fs::create_dir(&cwd).expect("cwd");
-        let profile = crate::sandbox::render_perf_profile(&crate::sandbox::PerfSpec {
-            host: &host,
-            target_root: Path::new("/nonexistent-target"),
-            bin,
-            perfgo: &l.perfgo.path,
-            tmpdir: &tmpdir,
-        })
-        .expect("profile");
+        let profile = match o.profile {
+            Some(p) => p.to_string(),
+            None => crate::sandbox::render_perf_profile(&crate::sandbox::PerfSpec {
+                host: &host,
+                target_root: o.target_root,
+                bin: o.allowed.unwrap_or(bin),
+                perfgo: &l.perfgo.path,
+                tmpdir: &tmpdir,
+            })
+            .expect("profile"),
+        };
         run_measured(&RunSpec {
             launcher: l,
             profile: &profile,
-            deadline_secs: deadline,
+            deadline_secs: o.deadline,
             allowance: Duration::from_secs(60),
             program: bin,
             name: "tool",
-            args: &["one".to_string()],
+            args: &o.args,
             cwd: &cwd,
             tmpdir: &tmpdir,
-            capture,
-            max_output: 1024 * 1024,
+            capture: o.capture,
+            max_output: o.max_output,
         })
         .expect("runs")
+    }
+
+    /// The run's record, or a panic naming what was seen instead.
+    fn record(m: &Measured) -> &Record {
+        match &m.seen {
+            Seen::Record(r) => r,
+            other => panic!("{other:?}: {}", String::from_utf8_lossy(&m.stderr)),
+        }
     }
 
     #[test]
@@ -1307,6 +1348,78 @@ mod tests {
         assert!(l.check().is_err());
     }
 
+    /// perfrun only waits while the program runs (§3.3 step 5; §4 "perfrun
+    /// stays idle meanwhile"): its own CPU time stays near zero while the
+    /// program sleeps — a busy perfrun would take a fast core from the
+    /// program and raise the load its record reports.
+    #[test]
+    fn perfrun_stays_idle_while_the_program_runs() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-idle");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let sleeper = program(
+            &dir,
+            "sleeper",
+            "#include <unistd.h>\nint main(void) { sleep(3); return 0; }\n",
+        );
+        let l = Arc::new(l);
+        let worker = {
+            let l = Arc::clone(&l);
+            let sleeper = sleeper.clone();
+            std::thread::spawn(move || run(&l, &sleeper, 60, false))
+        };
+        let perfrun = parent_of(pid_of(&sleeper));
+        std::thread::sleep(Duration::from_millis(1500));
+        let used = cpu_time(perfrun);
+        let m = worker.join().expect("joins");
+        let r = record(&m);
+        assert_eq!(
+            (&r.status, r.end),
+            (&Status::Ok, Some(End::Exit(0))),
+            "{r:?}"
+        );
+        assert!(
+            used < Duration::from_millis(200),
+            "perfrun used {used:?} of CPU while the program slept"
+        );
+    }
+
+    /// perfrun takes the longest deadline the harness can ask for — the
+    /// longest `[oracle] timeout_secs` plus step 1's extra minute — and no
+    /// more.
+    #[test]
+    fn perfrun_takes_the_longest_deadline() {
+        let max: u64 = PERFRUN_C
+            .lines()
+            .find_map(|l| l.strip_prefix("#define DEADLINE_MAX "))
+            .expect("perfrun.c's DEADLINE_MAX")
+            .trim()
+            .parse()
+            .expect("a number");
+        assert_eq!(
+            max,
+            crate::MAX_TIMEOUT_SECS + crate::perf::measure::STEP1_EXTRA_SECS
+        );
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-deadline");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let bin = program(&dir, "quick", "int main(void) { return 0; }\n");
+        let r = record(&run(&l, &bin, max, true)).clone();
+        assert_eq!((r.status, r.end), (Status::Ok, Some(End::Exit(0))));
+        let m = run(&l, &bin, max + 1, true);
+        assert!(
+            matches!(&m.seen, Seen::NoRecord(w) if w.contains("bad deadline")),
+            "{:?}",
+            m.seen
+        );
+    }
+
     /// The pid of the process running `bin`, once it runs.
     fn pid_of(bin: &Path) -> u32 {
         for _ in 0..400 {
@@ -1335,12 +1448,32 @@ mod tests {
     }
 
     fn alive(pid: u32) -> bool {
+        let stat = ps(pid, "stat");
+        !stat.is_empty() && !stat.starts_with('Z')
+    }
+
+    /// `ps -o <field>= -p <pid>`, trimmed: "" once the pid is gone.
+    fn ps(pid: u32, field: &str) -> String {
         let out = Command::new("ps")
-            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .args(["-o", &format!("{field}="), "-p", &pid.to_string()])
             .output()
             .expect("ps");
-        let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        !stat.is_empty() && !stat.starts_with('Z')
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn parent_of(pid: u32) -> u32 {
+        ps(pid, "ppid").parse().expect("ppid")
+    }
+
+    /// The CPU time `pid` has used (`ps`'s `[hh:]mm:ss.hh`).
+    fn cpu_time(pid: u32) -> Duration {
+        let text = ps(pid, "time");
+        let mut secs = 0.0;
+        for part in text.split(':') {
+            let v: f64 = part.parse().unwrap_or_else(|_| panic!("ps time {text:?}"));
+            secs = secs * 60.0 + v;
+        }
+        Duration::from_secs_f64(secs)
     }
 
     #[test]

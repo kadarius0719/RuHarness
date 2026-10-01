@@ -1280,7 +1280,7 @@ replaces-changed | rust-changed | accept-interrupted`, `attempt`, `never_started
 [{id, digest}]` (unit rows), `replaces` (unit rows), `program_name`, `units [{id,
 crate_digest}]` and `left_out [{id, crate_digest, reason}]` (as-it-stands rows; reasons
 `not-fresh | replaces-mismatch | replaces-changed | crate-does-not-build | does-not-link |
-accept-interrupted`), `recipe` (`perf-recipe-1`), `launcher` (`perf-launcher-1`), `computer {os,
+accept-interrupted`), `recipe` (`perf-recipe-1`), `launcher` (`perf-launcher-2`), `computer {os,
 build, arch, cpu, two_kinds, fast_cores}`, `compilers {cc, rustc?}`. **Strict** (unknown fields
 refused; every field checked against its outcome); free text ≤ 160 bytes, no control character.
 
@@ -1353,4 +1353,4 @@ with a compiler found through root-owned paths, and every sandbox profile denies
 | `migration/perf/program.json`, `migration/perf/units/<id>.json` | `perf run` |
 | `migration/build/.perf/**` (fresh each run), `migration/build/.perf-out/**`, `migration/build/perf-logs/` (last 20) (gitignored) | `perf run` |
 | `units/<id>/<crate>/target/**`, `Cargo.lock` | `perf run` (builds, as `verify` does) |
-| `~/Library/Caches/ruharness/perf/perf-launcher-1-<hash>/` (outside the target) | `perf run` (only when stale) |
+| `~/Library/Caches/ruharness/perf/perf-launcher-2-<hash>/` (outside the target) | `perf run` (only when stale) |

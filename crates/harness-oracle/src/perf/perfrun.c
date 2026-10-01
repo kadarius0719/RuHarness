@@ -1,5 +1,5 @@
 /* perfrun — RuHarness's perf launcher (docs/PERF-DESIGN.md §3.3, build notes
- * 1-8), launcher version perf-launcher-1. macOS only (Linux: §6, not built).
+ * 1-8), launcher version perf-launcher-2. macOS only (Linux: §6, not built).
  *
  * perfrun run PROFILE PERFGO DEADLINE PROGRAM NAME ARGS...
  * perfrun facts
@@ -38,6 +38,10 @@
 
 #define CTL 0
 #define RECORD_MAX 4096
+/* The longest DEADLINE, in seconds: the longest `[oracle] timeout_secs` the
+ * harness accepts (a week) plus step 1's extra minute. A test beside the
+ * harness's side keeps the two in step. */
+#define DEADLINE_MAX 604860
 
 static char record[RECORD_MAX];
 static size_t record_len = 0;
@@ -194,6 +198,14 @@ static void close_fds_but(int keep0, int keep1, int keep2) {
     free(fds);
 }
 
+/* A watch the loop does not wait on: removed, so it can never fire again
+ * and keep perfrun busy while it should only wait. */
+static void forget_watch(int kq, const struct kevent *e) {
+    struct kevent del;
+    EV_SET(&del, e->ident, e->filter, EV_DELETE, 0, 0, 0);
+    kevent(kq, &del, 1, NULL, 0, NULL);
+}
+
 static int launcher_failed(const char *what) {
     put("status launcher %s (%s)", what, strerror(errno));
     put("end");
@@ -215,7 +227,7 @@ int main(int argc, char **argv) {
     const char *profile = argv[2], *perfgo = argv[3], *program = argv[5];
     char *end = NULL;
     long deadline = strtol(argv[4], &end, 10);
-    if (end == argv[4] || *end != '\0' || deadline < 1 || deadline > 86400) {
+    if (end == argv[4] || *end != '\0' || deadline < 1 || deadline > DEADLINE_MAX) {
         errno = EINVAL;
         return launcher_failed("bad deadline");
     }
@@ -319,7 +331,7 @@ int main(int argc, char **argv) {
             ssize_t m = e.data > 0 ? read(CTL, &c, 1) : 0;
             if (m == 1 && c == 'G') got_go = 1;
             else if (m == 0 || (e.flags & EV_EOF)) harness_gone = 1;
-        } else if ((int)e.ident == ready[0]) {
+        } else if (ready[0] >= 0 && (int)e.ident == ready[0]) {
             char c;
             ssize_t m = read(ready[0], &c, 1);
             if (m == 1) {
@@ -327,9 +339,17 @@ int main(int argc, char **argv) {
                 base = read_counts(pid);
             } else if (m == 0) {
                 ready_gone = 1;
-                EV_SET(&ev, ready[0], EVFILT_READ, EV_DELETE, 0, 0, 0);
-                kevent(kq, &ev, 1, NULL, 0, NULL);
             }
+            if (m >= 0) {
+                /* ready is read once. Closed now, its watch goes with it:
+                 * perfgo closes its end just before the exec, and a watch
+                 * left on that end-of-file would fire on every wait and keep
+                 * perfrun busy for the whole run (§4: perfrun stays idle). */
+                close(ready[0]);
+                ready[0] = -1;
+            }
+        } else {
+            forget_watch(kq, &e);
         }
         if (got_ready && got_go && !stopped && !harness_gone && !exited) {
             char g = 'g';
@@ -391,6 +411,8 @@ int main(int argc, char **argv) {
                 EV_SET(&ev, CTL, EVFILT_READ, EV_DELETE, 0, 0, 0);
                 kevent(kq, &ev, 1, NULL, 0, NULL);
             }
+        } else {
+            forget_watch(kq, &e);
         }
     }
 
