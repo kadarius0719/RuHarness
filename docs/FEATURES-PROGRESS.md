@@ -72,7 +72,7 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    adapt, keep only what is still missing). Mutation-check each new test (`SP/mutfix.py`, add
    entries; run `python3 -u SP/mutfix.py SP/mut1 <names>` after `git archive HEAD | tar -x -C
    SP/mut1`).
-2. Write design §10 in docs/FEATURES-PROBE-REDESIGN.md (the review record and every place the
+2. DONE (e846261): design §10 and §2's table. Was: write design §10 in docs/FEATURES-PROBE-REDESIGN.md (the review record and every place the
    build differs from the text — see the "Built (§10)" notes already in §3.3–§3.5, §4, §6) and
    replace §2's table with the build's premise numbers: adversarial repros 24/24 and 25/25 map,
    2 567 and 1 999 unwatched (same as the prototype, all kind compile, ≤ 2 compiles); corpus 42/42,
@@ -83,7 +83,8 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    +16.8 MiB, object +12.5 %; a probed run +1–2 % (zopfli) to +11 % (sqlite3.c). Re-run
    `SP/premise-fix1/run.py` with the final binary for the final numbers (it copies the binary
    given in its HARNESS line).
-3. Check the whole fix pass with independent agents (a Workflow: lenses over the diff
+3. RUNNING: the check of the whole fix pass, workflow `wf_35a3625c-b71` at e846261 (base copy
+   `SP/fc1/base`; lenses tokenizer, build-link, scanner-variant, runner-ux; two verifiers each). Was planned as: lenses over the diff
    665495b..HEAD — the tokenizer and same-code check, probebuild bounds/search/link, objsyms and
    the runtime-names check, the scanner's nested/keyword/run-together rules, featuremap memory and
    cleanup, the sandbox read roots; two verifiers per finding), fix what it confirms, check again.
