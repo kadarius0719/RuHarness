@@ -913,6 +913,14 @@ pub(crate) fn run_measured(spec: &RunSpec<'_>) -> Result<Measured, Error> {
                 break;
             }
         }
+        // Output over the cap is judged first (§3.3 "Judging a run", step
+        // 1), whatever else was seen: a stream's last bytes may reach the
+        // cap only after perfrun's record was read in full.
+        let seen = if overflow.load(Ordering::SeqCst) {
+            Seen::Overflow
+        } else {
+            seen
+        };
         Measured {
             seen,
             launcher_exit: status.and_then(|s| s.code()),
@@ -972,6 +980,10 @@ pub(crate) fn run_measured(spec: &RunSpec<'_>) -> Result<Measured, Error> {
         drop(launcher_reg);
         return Ok(m);
     };
+    #[cfg(test)]
+    hooks::at(hooks::Stage::ChildLine, program_pid);
+    #[cfg(test)]
+    let held = hooks::hold_stdout().then(|| out_buf.lock());
     // 3. The go-ahead, under the lock — or a cancel that never starts it.
     if exec::cancelled() {
         drop(ours);
@@ -997,12 +1009,16 @@ pub(crate) fn run_measured(spec: &RunSpec<'_>) -> Result<Measured, Error> {
         |b| b == b"end\n" || b.ends_with(b"\nend\n"),
         &overflowed,
     );
+    #[cfg(test)]
+    drop(held);
     match got {
         ReadEnd::Done => {
             let text = String::from_utf8_lossy(&record).into_owned();
             // Unregister the program's group, then the bye: perfrun reaps it
             // only after that, so no later kill can reach a reused pid.
             drop(program_reg);
+            #[cfg(test)]
+            hooks::at(hooks::Stage::Bye, program_pid);
             let _ = ours.write_all(b"B");
             let seen = match parse_record(&text, false) {
                 Ok(r) => Seen::Record(Box::new(r)),
@@ -1075,6 +1091,55 @@ pub(crate) fn run_measured(spec: &RunSpec<'_>) -> Result<Measured, Error> {
             }
             Ok(m)
         }
+    }
+}
+
+/// Where a test steps into [`run_measured`], at the moments the harness
+/// side's order is about (§3.3 *The harness side*). Tests only; each hook
+/// holds for the runs of the thread that set it.
+#[cfg(test)]
+mod hooks {
+    use std::cell::{Cell, RefCell};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Stage {
+        /// perfrun's child line is read: the cancel check and the go-ahead
+        /// come next.
+        ChildLine,
+        /// The record is read and the program's group unregistered: the bye
+        /// comes next.
+        Bye,
+    }
+
+    type Hook = Box<dyn FnMut(Stage, u32)>;
+
+    thread_local! {
+        static AT: RefCell<Option<Hook>> = const { RefCell::new(None) };
+        static HOLD_STDOUT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Call `hook` at each stage, with the program's pid.
+    pub(super) fn set(hook: impl FnMut(Stage, u32) + 'static) {
+        AT.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Hold the stdout buffer's lock from the go-ahead until the record is
+    /// read: the stream's drain then meets the cap only after the record,
+    /// as a drain thread kept off the CPU while the program exits would.
+    pub(super) fn set_hold_stdout(hold: bool) {
+        HOLD_STDOUT.with(|h| h.set(hold));
+    }
+
+    pub(super) fn at(stage: Stage, program_pid: u32) {
+        AT.with(|h| {
+            if let Some(hook) = h.borrow_mut().as_mut() {
+                hook(stage, program_pid);
+            }
+        });
+    }
+
+    pub(super) fn hold_stdout() -> bool {
+        HOLD_STDOUT.with(Cell::get)
     }
 }
 
@@ -1808,6 +1873,585 @@ mod tests {
             stdout.contains("cancel-ok"),
             "{stdout}\n{}",
             String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// perfrun started by hand as [`run_measured`] starts it, the go-ahead
+    /// held back: the harness's end of the socket, perfrun, and its child
+    /// (the program's pid once it runs).
+    struct ByHand {
+        ours: UnixStream,
+        perfrun: std::process::Child,
+        child: u32,
+    }
+
+    /// A fresh 0700 run folder, its `run/` working folder inside, and the
+    /// perf profile for `bin` there.
+    fn run_dir(l: &Launcher, bin: &Path) -> (crate::testutil::TempDir, PathBuf, String) {
+        let tmp = crate::testutil::TempDir::new("perf-run");
+        let cwd = tmp.path().join("run");
+        std::fs::create_dir(&cwd).expect("cwd");
+        let host = HostDirs::from_env().expect("host");
+        let profile = crate::sandbox::render_perf_profile(&crate::sandbox::PerfSpec {
+            host: &host,
+            target_root: Path::new("/nonexistent-target"),
+            bin,
+            perfgo: &l.perfgo.path,
+            tmpdir: tmp.path(),
+        })
+        .expect("profile");
+        (tmp, cwd, profile)
+    }
+
+    fn by_hand(l: &Launcher, profile: &str, bin: &Path, cwd: &Path) -> ByHand {
+        use std::os::unix::process::CommandExt;
+        let (mut ours, theirs) = UnixStream::pair().expect("a socket pair");
+        let perfrun = Command::new(&l.perfrun.path)
+            .args(["run", profile])
+            .arg(&l.perfgo.path)
+            .arg("60")
+            .arg(bin)
+            .arg("tool")
+            .current_dir(cwd)
+            .env_clear()
+            .env("TMPDIR", cwd.parent().expect("the run folder"))
+            .stdin(Stdio::from(std::os::fd::OwnedFd::from(theirs)))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("perfrun starts");
+        let mut line = Vec::new();
+        let got = read_until(
+            &mut ours,
+            &mut line,
+            CHILD_LINE_MAX,
+            Instant::now() + Duration::from_secs(30),
+            |b| b.ends_with(b"\n"),
+            &|| false,
+        );
+        assert!(matches!(got, ReadEnd::Done), "{line:?}");
+        let child = std::str::from_utf8(&line)
+            .ok()
+            .and_then(|l| l.strip_prefix("child "))
+            .and_then(|l| l.trim_end().parse().ok())
+            .expect("the child line");
+        ByHand {
+            ours,
+            perfrun,
+            child,
+        }
+    }
+
+    impl ByHand {
+        /// Wait until the child runs perfgo, which then waits for the
+        /// go-ahead (a new binary's first exec can be slow on a busy Mac).
+        fn wait_for_perfgo(&self) {
+            for _ in 0..1200 {
+                if ps(self.child, "ucomm") == "perfgo" {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            panic!("the child never ran perfgo");
+        }
+
+        /// The record, read to its end.
+        fn record(&mut self) -> Record {
+            let mut text = Vec::new();
+            let got = read_until(
+                &mut self.ours,
+                &mut text,
+                RECORD_MAX + 1,
+                Instant::now() + Duration::from_secs(30),
+                |b| b == b"end\n" || b.ends_with(b"\nend\n"),
+                &|| false,
+            );
+            assert!(matches!(got, ReadEnd::Done), "{text:?}");
+            parse_record(&String::from_utf8_lossy(&text), false).expect("a record")
+        }
+    }
+
+    /// `child`'s exit code once it exits, within `within`.
+    fn exits_within(child: &mut std::process::Child, within: Duration) -> Option<i32> {
+        let until = Instant::now() + within;
+        while Instant::now() < until {
+            if let Some(status) = child.try_wait().expect("try_wait") {
+                return status.code();
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let _ = child.kill();
+        panic!("perfrun did not exit within {within:?}");
+    }
+
+    /// A program that leaves the file `ran` in its working folder.
+    const MARKER: &str =
+        "#include <fcntl.h>\n#include <unistd.h>\nint main(void) { close(open(\"ran\", O_CREAT | O_WRONLY, 0600)); return 0; }\n";
+
+    /// Run the test `name` alone in a new process of this test binary with
+    /// `var` set to `dir` (a cancellation is for the whole process): its
+    /// stdout, or a panic when it is not done within `within`.
+    fn in_own_process(name: &str, var: &str, dir: &Path, within: Duration) -> String {
+        let out = dir.join("child-out");
+        let mut child = Command::new(std::env::current_exe().expect("exe"))
+            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+            .env(var, dir)
+            .stdout(File::create(&out).expect("out"))
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("re-exec the test binary");
+        let until = Instant::now() + within;
+        while child.try_wait().expect("try_wait").is_none() {
+            if Instant::now() >= until {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "{name} was not done within {within:?}: {}",
+                    std::fs::read_to_string(&out).unwrap_or_default()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::read_to_string(&out).expect("the child's stdout")
+    }
+
+    /// The baseline is exact (§2, §3.3 step 4): an empty program run
+    /// through the launcher counts about what it counts run alone —
+    /// sandbox-exec's set-up and perfgo's start, several times an empty
+    /// program's instructions, are left out — and work done before an exec
+    /// of itself carries on into the count (§3.4).
+    #[test]
+    fn the_baseline_is_exact() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-baseline");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let empty = program(&dir, "empty", "int main(void) { return 0; }\n");
+        let mut through: Vec<u64> = (0..3)
+            .map(|_| {
+                record(&run(&l, &empty, 60, false))
+                    .instructions
+                    .expect("counted")
+            })
+            .collect();
+        through.sort_unstable();
+        // `/usr/bin/time -l` counts the program run alone, where it can.
+        let mut alone: Vec<u64> = (0..3)
+            .filter_map(|_| {
+                let out = Command::new("/usr/bin/time")
+                    .arg("-l")
+                    .arg(&empty)
+                    .output()
+                    .ok()?;
+                String::from_utf8_lossy(&out.stderr).lines().find_map(|l| {
+                    l.trim()
+                        .strip_suffix("instructions retired")?
+                        .trim()
+                        .parse()
+                        .ok()
+                })
+            })
+            .collect();
+        alone.sort_unstable();
+        if let (Some(&through), Some(&alone)) = (through.get(1), alone.get(alone.len() / 2)) {
+            assert!(
+                through < alone * 2 && through * 2 > alone,
+                "an empty program counts {through} through the launcher and {alone} alone"
+            );
+        }
+        // A program that execs itself after its work: the work is counted.
+        let again = program(
+            &dir,
+            "again",
+            "#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nint main(int c, char **v) {\n\
+             if (c > 2 && strcmp(v[1], \"first\") == 0) { volatile unsigned long x = 0;\n\
+             for (unsigned long i = 0; i < 20000000UL; i++) x += i;\n\
+             char *a[] = { v[0], \"second\", 0 }; execv(v[2], a); return 9; }\n\
+             printf(\"%s %s\\n\", v[0], v[1]); return 0; }\n",
+        );
+        let o = Opts {
+            args: vec!["first".into(), again.to_string_lossy().into_owned()],
+            ..opts(60, true)
+        };
+        let m = run_with(&l, &again, &o);
+        let r = record(&m);
+        assert_eq!(
+            (&r.status, r.end),
+            (&Status::Ok, Some(End::Exit(0))),
+            "{r:?}"
+        );
+        assert_eq!(m.stdout, b"tool second\n");
+        assert!(r.instructions.is_some_and(|i| i > 20_000_000), "{r:?}");
+    }
+
+    /// A program the profile does not name never starts: the exec is
+    /// refused, read as "never started" with its errno (§3.3 judging step 4).
+    #[test]
+    fn an_exec_the_profile_denies_never_starts() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-denied");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let named = program(&dir, "named", "int main(void) { return 0; }\n");
+        let unnamed = program(&dir, "unnamed", MARKER);
+        let o = Opts {
+            allowed: Some(&named),
+            ..opts(60, true)
+        };
+        let m = run_with(&l, &unnamed, &o);
+        let r = record(&m);
+        assert_eq!(r.status, Status::NeverStarted(Some(1)), "{r:?}");
+    }
+
+    /// Before the go-ahead (§3.3 step 4): a SIGTERM gives a `stopped`
+    /// record within the harness's grace, the child kept unreaped until the
+    /// bye (build note 7); the socket's end — the harness gone or cancelled
+    /// — ends perfrun within the CLI's 250 ms. Either way the program never
+    /// runs.
+    #[test]
+    fn before_the_go_ahead_the_program_never_runs() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-before-go");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let marker = program(&dir, "marker", MARKER);
+        // A SIGTERM.
+        let (_run, cwd, profile) = run_dir(&l, &marker);
+        let mut h = by_hand(&l, &profile, &marker, &cwd);
+        h.wait_for_perfgo();
+        exec::terminate(h.perfrun.id());
+        let t = Instant::now();
+        let r = h.record();
+        assert!(t.elapsed() < TERM_GRACE, "{:?}", t.elapsed());
+        assert_eq!(
+            (&r.status, r.killed, r.end),
+            (&Status::Stopped, true, Some(End::Signal(9))),
+            "{r:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            ps(h.child, "stat").starts_with('Z'),
+            "unreaped until the bye"
+        );
+        h.ours.write_all(b"B").expect("bye");
+        assert_eq!(
+            exits_within(&mut h.perfrun, Duration::from_secs(5)),
+            Some(0)
+        );
+        assert_eq!(ps(h.child, "stat"), "", "reaped after the bye");
+        assert!(!cwd.join("ran").exists(), "the program never ran");
+        // The socket's end.
+        let (_run, cwd, profile) = run_dir(&l, &marker);
+        let h = by_hand(&l, &profile, &marker, &cwd);
+        h.wait_for_perfgo();
+        let ByHand {
+            ours,
+            mut perfrun,
+            child,
+        } = h;
+        drop(ours);
+        let t = Instant::now();
+        assert_eq!(exits_within(&mut perfrun, Duration::from_secs(5)), Some(0));
+        assert!(
+            t.elapsed() < Duration::from_millis(250),
+            "{:?}",
+            t.elapsed()
+        );
+        assert_eq!(ps(child, "stat"), "", "the child is gone");
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!cwd.join("ran").exists(), "the program never ran");
+    }
+
+    /// After the go-ahead: the child stays unreaped from the record until
+    /// the harness's bye (§3.3 step 7), so its pid can never be reused while
+    /// the harness may still signal its group; and the socket's end — the
+    /// harness killed while the program runs — kills the program (step 5).
+    #[test]
+    fn after_the_go_ahead_perfrun_holds_the_child_until_the_bye() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-after-go");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let marker = program(&dir, "marker", MARKER);
+        let (_run, cwd, profile) = run_dir(&l, &marker);
+        let mut h = by_hand(&l, &profile, &marker, &cwd);
+        h.ours.write_all(b"G").expect("go");
+        let r = h.record();
+        assert_eq!(
+            (&r.status, r.end),
+            (&Status::Ok, Some(End::Exit(0))),
+            "{r:?}"
+        );
+        assert!(cwd.join("ran").exists(), "the program ran");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            ps(h.child, "stat").starts_with('Z'),
+            "unreaped until the bye"
+        );
+        h.ours.write_all(b"B").expect("bye");
+        assert_eq!(
+            exits_within(&mut h.perfrun, Duration::from_secs(5)),
+            Some(0)
+        );
+        assert_eq!(ps(h.child, "stat"), "", "reaped after the bye");
+        // The harness killed while its program runs.
+        let spin = program(
+            &dir,
+            "spinhand",
+            "#include <signal.h>\nint main(void) { signal(SIGTERM, SIG_IGN); for (;;) {} }\n",
+        );
+        let (_run, cwd, profile) = run_dir(&l, &spin);
+        let ByHand {
+            mut ours,
+            mut perfrun,
+            child,
+        } = by_hand(&l, &profile, &spin, &cwd);
+        ours.write_all(b"G").expect("go");
+        assert_eq!(pid_of(&spin), child);
+        drop(ours);
+        assert_eq!(exits_within(&mut perfrun, Duration::from_secs(5)), Some(0));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!alive(child), "the program died with the harness");
+    }
+
+    /// Run by [`a_cancel_before_the_go_ahead_never_starts_the_program`] in
+    /// its own process; a no-op otherwise.
+    #[test]
+    fn cancel_before_go_child_body() {
+        let Some(dir) = std::env::var_os("RUHARNESS_PERF_CANCEL_BEFORE_GO") else {
+            return;
+        };
+        let dir = PathBuf::from(dir);
+        let (tmp, l) = test_launcher("perf-cancel-before-go");
+        let marker = program(&dir, "marker", MARKER);
+        let (run_tmp, cwd, profile) = run_dir(&l, &marker);
+        let cancelled_at = std::rc::Rc::new(std::cell::Cell::new(None));
+        {
+            let cancelled_at = std::rc::Rc::clone(&cancelled_at);
+            hooks::set(move |stage, _| {
+                if stage == hooks::Stage::ChildLine {
+                    cancelled_at.set(Some(Instant::now()));
+                    exec::kill_live_process_groups();
+                }
+            });
+        }
+        let result = run_measured(&RunSpec {
+            launcher: &l,
+            profile: &profile,
+            deadline_secs: 60,
+            allowance: Duration::from_secs(60),
+            program: &marker,
+            name: "tool",
+            args: &[],
+            cwd: &cwd,
+            tmpdir: run_tmp.path(),
+            capture: false,
+            max_output: 1024,
+        });
+        let took = cancelled_at.get().expect("the hook ran").elapsed();
+        assert!(matches!(result, Err(Error::Interrupted)), "{result:?}");
+        assert!(took < Duration::from_millis(250), "answered in {took:?}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!cwd.join("ran").exists(), "the program never ran");
+        drop((run_tmp, l, tmp));
+        println!("cancel-before-go-ok");
+        std::process::exit(0);
+    }
+
+    /// A cancel between perfrun's child line and the go-ahead leaves no
+    /// program run, answered within the CLI's 250 ms (§3.3 *The harness
+    /// side* step 3). A missing check would hang in the registry's lock,
+    /// which a cancel keeps for good.
+    #[test]
+    fn a_cancel_before_the_go_ahead_never_starts_the_program() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("perf-cancel-before-go-parent");
+        let out = in_own_process(
+            "perf::launcher::tests::cancel_before_go_child_body",
+            "RUHARNESS_PERF_CANCEL_BEFORE_GO",
+            tmp.path(),
+            Duration::from_secs(120),
+        );
+        assert!(out.contains("cancel-before-go-ok"), "{out}");
+    }
+
+    /// Run by [`a_cancel_at_the_bye_never_signals_the_program`] in its own
+    /// process; a no-op otherwise.
+    #[test]
+    fn cancel_at_bye_child_body() {
+        let Some(dir) = std::env::var_os("RUHARNESS_PERF_CANCEL_AT_BYE") else {
+            return;
+        };
+        let dir = PathBuf::from(dir);
+        let (tmp, l) = test_launcher("perf-cancel-at-bye");
+        // The program leaves a sleeping child in its own group (this test's
+        // profile allows the fork), says its pid, and exits.
+        let leaver = program(
+            &dir,
+            "leaver",
+            "#include <stdio.h>\n#include <unistd.h>\nint main(void) { pid_t p = fork();\n\
+             if (p == 0) { sleep(30); return 0; }\n\
+             FILE *f = fopen(\"grandchild\", \"w\"); fprintf(f, \"%d\\n\", (int)p); fclose(f); return 0; }\n",
+        );
+        let run_tmp = crate::testutil::TempDir::new("perf-run");
+        let cwd = run_tmp.path().join("run");
+        std::fs::create_dir(&cwd).expect("cwd");
+        hooks::set(|stage, _| {
+            if stage == hooks::Stage::Bye {
+                exec::kill_live_process_groups();
+            }
+        });
+        let result = run_measured(&RunSpec {
+            launcher: &l,
+            profile: "(version 1)(allow default)",
+            deadline_secs: 60,
+            allowance: Duration::from_secs(60),
+            program: &leaver,
+            name: "tool",
+            args: &[],
+            cwd: &cwd,
+            tmpdir: run_tmp.path(),
+            capture: false,
+            max_output: 1024,
+        });
+        assert!(matches!(result, Err(Error::Interrupted)), "{result:?}");
+        let grandchild: u32 = std::fs::read_to_string(cwd.join("grandchild"))
+            .expect("the grandchild's pid")
+            .trim()
+            .parse()
+            .expect("a pid");
+        std::thread::sleep(Duration::from_millis(100));
+        let spared = alive(grandchild);
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", &grandchild.to_string()])
+            .status();
+        assert!(spared, "a cancel at the bye signalled the program's group");
+        drop((run_tmp, l, tmp));
+        println!("cancel-at-bye-ok");
+        std::process::exit(0);
+    }
+
+    /// The program's group is unregistered before the bye (§3.3 *The
+    /// harness side* step 4): a cancel just before it never signals the
+    /// group, whose pid perfrun frees once it has the bye. A child the
+    /// program left in its group (a profile that allows the fork) shows
+    /// whether a signal came.
+    #[test]
+    fn a_cancel_at_the_bye_never_signals_the_program() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("perf-cancel-at-bye-parent");
+        let out = in_own_process(
+            "perf::launcher::tests::cancel_at_bye_child_body",
+            "RUHARNESS_PERF_CANCEL_AT_BYE",
+            tmp.path(),
+            Duration::from_secs(120),
+        );
+        assert!(out.contains("cancel-at-bye-ok"), "{out}");
+    }
+
+    /// Output over the cap ends the run at once (§3.3 *The harness side*
+    /// step 6): the program — which ignores SIGTERM and SIGPIPE — is dead,
+    /// and the answer never waits on the 2-second drain bound.
+    #[test]
+    fn an_overflow_ends_the_run_at_once() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-overflow");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let printer = program(
+            &dir,
+            "printer",
+            "#include <signal.h>\n#include <unistd.h>\nint main(void) { signal(SIGTERM, SIG_IGN);\n\
+             signal(SIGPIPE, SIG_IGN); char b[4096] = {0}; for (;;) { if (write(1, b, sizeof b) < 0) {} } }\n",
+        );
+        let o = Opts {
+            max_output: 64 * 1024,
+            ..opts(60, true)
+        };
+        // Timed the second time: a new binary's first exec can take
+        // seconds on a busy Mac.
+        for timed in [false, true] {
+            let t = Instant::now();
+            let m = run_with(&l, &printer, &o);
+            assert!(matches!(m.seen, Seen::Overflow), "{:?}", m.seen);
+            assert!(
+                !timed || t.elapsed() < Duration::from_secs(2),
+                "{:?}",
+                t.elapsed()
+            );
+            assert!(!still_running("printer"), "the program is dead");
+        }
+    }
+
+    /// A stream that reaches the cap only after perfrun's record was read
+    /// in full is still output over the cap (§3.3 "Judging a run", step 1).
+    #[test]
+    fn an_overflow_seen_after_the_record_is_still_an_overflow() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-late-overflow");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let bin = program(
+            &dir,
+            "overprint",
+            "#include <string.h>\n#include <unistd.h>\nint main(void) { char b[1100];\n\
+             memset(b, 'x', sizeof b); if (write(1, b, sizeof b) < 0) return 1; return 0; }\n",
+        );
+        hooks::set_hold_stdout(true);
+        let m = run_with(
+            &l,
+            &bin,
+            &Opts {
+                max_output: 1000,
+                ..opts(60, true)
+            },
+        );
+        hooks::set_hold_stdout(false);
+        assert!(matches!(m.seen, Seen::Overflow), "{:?}", m.seen);
+    }
+
+    /// A child that ends before it is ready — here sandbox-exec refusing a
+    /// broken profile at once, possibly before its exit watch is even added
+    /// — reads `never-started no-ready` with the child's own end.
+    #[test]
+    fn a_child_that_ends_before_it_is_ready_never_started() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (tmp, l) = test_launcher("perf-early-end");
+        let dir = tmp.path().join("progs");
+        std::fs::create_dir(&dir).expect("dir");
+        let bin = program(&dir, "early", "int main(void) { return 0; }\n");
+        let m = run_with(
+            &l,
+            &bin,
+            &Opts {
+                profile: Some("("),
+                ..opts(60, true)
+            },
+        );
+        let r = record(&m);
+        assert_eq!(
+            (&r.status, r.end, r.killed),
+            (&Status::NeverStarted(None), Some(End::Exit(65)), false),
+            "{r:?}"
         );
     }
 
