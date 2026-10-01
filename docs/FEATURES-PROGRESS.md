@@ -83,7 +83,17 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    +16.8 MiB, object +12.5 %; a probed run +1–2 % (zopfli) to +11 % (sqlite3.c). Re-run
    `SP/premise-fix1/run.py` with the final binary for the final numbers (it copies the binary
    given in its HARNESS line).
-3. RUNNING: the check of the whole fix pass, workflow `wf_35a3625c-b71` at e846261 (base copy
+3. The check of the whole fix pass, workflow `wf_35a3625c-b71`: its four lenses FINISHED with 26
+   findings (`SP/fc1/lenses.json`; verifiers were still running — read the journal for verdicts).
+   FIX PASS 2 in progress, from those findings: tokenizer (raw-string delimiters with `"`, Unicode
+   whitespace, pragma lines in .incbin runs and stringized notes, the unresolvable-.incbin test,
+   has_line_directives spellings), MAP_PROBE → compiler-guided-2, the link search with cut-short
+   referrer lists, nested definitions only inside a misread body (an #if group with two branches
+   that move the brace depth) — never statement-macro misreads or GNU nested functions, the
+   run-together rule only for a second head on a later line, hidden-variant false positives,
+   C23 attributed declarators, killed child compilers, bounds order, GNU/lld parsing, ELF
+   e_shnum = 0, the signal cleanup made final, hardening tests on Linux, the lld main() hint.
+   Then check fix pass 2 likewise. Was: at e846261 (base copy
    `SP/fc1/base`; lenses tokenizer, build-link, scanner-variant, runner-ux; two verifiers each). Was planned as: lenses over the diff
    665495b..HEAD — the tokenizer and same-code check, probebuild bounds/search/link, objsyms and
    the runtime-names check, the scanner's nested/keyword/run-together rules, featuremap memory and
