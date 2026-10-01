@@ -388,8 +388,9 @@ same computer, and perf says which was faster and by how much — or honestly th
 
 - **Write them.** On the Speed row in the tree, press Enter and choose *Write your workloads
   file*. It works like the features file: your editor opens a private copy, the cockpit checks
-  it when you come back, and asks before saving it. A run should take the C half a second or
-  more; shorter ones read "too short to time".
+  it when you come back, and asks before saving it. A run should take the C half a second of CPU
+  or more; one under half a second that also runs fewer than a billion instructions reads "too
+  short to time".
 - **Measure.** Choose *Measure speed* (or, on a verified unit, *Measure this unit's speed*). The
   dialog says how many runs it will make and about how long it takes, and what it writes. Keep
   the computer quiet while it measures: other work makes the numbers noisier. Cancel keeps the

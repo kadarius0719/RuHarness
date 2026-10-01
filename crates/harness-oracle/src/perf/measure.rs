@@ -48,6 +48,17 @@ pub enum RowSide<'a> {
     Unit(&'a str),
 }
 
+impl RowSide<'_> {
+    /// The side in the progress lines' words.
+    fn label(self) -> String {
+        match self {
+            RowSide::C => "the C".into(),
+            RowSide::Program => "the program as it stands".into(),
+            RowSide::Unit(id) => id.to_string(),
+        }
+    }
+}
+
 /// What to measure (§3.10).
 #[derive(Debug, Clone, Default)]
 pub struct PerfRequest {
@@ -62,16 +73,26 @@ pub struct PerfRequest {
     pub as_it_stands_only: bool,
 }
 
+impl PerfRequest {
+    /// Whether this run builds unit `id`'s crate and program (§3.10, §6
+    /// *Cost*): with `--unit` alone, only the units asked for; otherwise
+    /// every measurable unit, as the program as it stands holds them all.
+    fn builds(&self, id: &str) -> bool {
+        self.units.is_empty() || self.as_it_stands_only || self.units.iter().any(|u| u == id)
+    }
+}
+
 /// What a perf run did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PerfSummary {
     /// Rows written.
     pub rows: usize,
-    /// Rows measured (baseline or measured).
+    /// Rows measured in this run (baseline or measured) — an earlier row the
+    /// replace rule kept is not counted.
     pub measured: usize,
-    /// Rows too short to time.
+    /// Rows this run found too short to time.
     pub too_short: usize,
-    /// Rows that behave differently.
+    /// Rows this run found behaving differently.
     pub behaves_differently: usize,
 }
 
@@ -221,7 +242,7 @@ enum UnitSide {
     Built {
         candidate: Candidate,
         bin: Hashed,
-        staticlib: PathBuf,
+        staticlib: Hashed,
         facts: ArchiveFacts,
         crate_digest: String,
         profile: Vec<ProfileSetting>,
@@ -259,6 +280,46 @@ enum Program {
     None,
 }
 
+impl Program {
+    /// The units the program as it stands holds, when perf made one.
+    fn units(&self) -> Option<&[UnitRef]> {
+        match self {
+            Program::Built { units, .. } | Program::SetUp { units, .. } => Some(units),
+            Program::None => None,
+        }
+    }
+}
+
+/// The tool sandbox for each build step (§3.2 *Build* step 3): the version
+/// probes write nowhere, the compiles only `.perf/obj`, each link only its
+/// own slot, each cargo build only its crate's `target/` and `Cargo.lock` —
+/// so no step (a crate's build script among them) can change what another
+/// step built. The hash checks before each link catch what still could.
+struct Steps<'a> {
+    /// The runner every step's is made from (no profile of its own).
+    runner: &'a Runner,
+    host: &'a HostDirs,
+    root: &'a Path,
+}
+
+impl Steps<'_> {
+    /// A runner whose tools may write only `dirs` and `files` (and the
+    /// temp folders every tool profile allows).
+    fn writing(&self, dirs: &[PathBuf], files: &[PathBuf]) -> Result<Runner, Error> {
+        let profile = sandbox::render_profile(&ProfileSpec {
+            host: self.host,
+            target_root: self.root,
+            toolchain: true,
+            write_dirs: dirs,
+            write_files: files,
+        })?;
+        Ok(Runner {
+            tool_profile: Some(profile),
+            ..self.runner.clone()
+        })
+    }
+}
+
 /// A crate manifest's `[profile.release]` settings away from Cargo's
 /// defaults (build note 25).
 fn profile_settings(crate_dir: &Path) -> Vec<ProfileSetting> {
@@ -284,7 +345,10 @@ enum Judged {
         run: Box<Run>,
     },
     TimedOut,
-    Overflow,
+    /// A stream passed the capture cap: `stdout` or `stderr`.
+    Overflow {
+        stream: &'static str,
+    },
     /// The launcher's own words for why.
     Unmeasurable(String),
     NeverStarted(Option<i32>),
@@ -293,15 +357,37 @@ enum Judged {
 }
 
 impl Judged {
+    /// The run's end as the results store it: a run over the output cap
+    /// ends by the SIGKILL that stops it (`signal 9`), never a timeout it
+    /// did not have. An unmeasurable run's end is never stored (its row
+    /// keeps no step-1 facts).
     fn end_token(&self) -> String {
         match self {
             Judged::Ended { end, .. } => end.token(),
-            Judged::TimedOut => "timeout".into(),
-            Judged::SigKilled => "signal 9".into(),
+            Judged::TimedOut | Judged::Unmeasurable(_) => "timeout".into(),
+            Judged::SigKilled | Judged::Overflow { .. } => "signal 9".into(),
             Judged::NeverStarted(_) => "never-started".into(),
-            _ => "timeout".into(),
         }
     }
+}
+
+/// Which stream passed the capture cap. The harness stops reading a stream
+/// at the read that would pass the cap, so that stream holds within one
+/// read of it and the other no more than the cap: the longer one (stdout
+/// when both are as long).
+fn overflowed_stream(stdout_len: usize, stderr_len: usize) -> &'static str {
+    if stderr_len > stdout_len {
+        "stderr"
+    } else {
+        "stdout"
+    }
+}
+
+/// perfrun's deadline for a run (§3.3 *The harness side* step 6): the
+/// target's `timeout_secs` for a timed run, and 60 s more in step 1, where
+/// every new binary's first exec falls.
+fn deadline_secs(timeout_secs: u64, step1: bool) -> u64 {
+    timeout_secs + if step1 { STEP1_EXTRA_SECS } else { 0 }
 }
 
 /// Everything one run needs.
@@ -428,11 +514,10 @@ fn run_once(
         perfgo: &ctx.launcher.perfgo.path,
         tmpdir: tmp,
     })?;
-    let deadline = ctx.timeout_secs + if step1 { STEP1_EXTRA_SECS } else { 0 };
     let m = launcher::run_measured(&launcher::RunSpec {
         launcher: ctx.launcher,
         profile: &profile,
-        deadline_secs: deadline,
+        deadline_secs: deadline_secs(ctx.timeout_secs, step1),
         allowance: ALLOWANCE,
         program: &bin.path,
         name: ctx.name,
@@ -444,7 +529,9 @@ fn run_once(
     })?;
     Ok(match m.seen {
         Seen::TimedOut => Judged::TimedOut,
-        Seen::Overflow => Judged::Overflow,
+        Seen::Overflow => Judged::Overflow {
+            stream: overflowed_stream(m.stdout.len(), m.stderr.len()),
+        },
         Seen::NoRecord(why) => Judged::Unmeasurable(why),
         Seen::Record(_) if m.launcher_exit != Some(0) => {
             Judged::Unmeasurable("perfrun did not exit cleanly".into())
@@ -503,8 +590,6 @@ fn step1_run(j: &Judged) -> Step1Run {
     }
 }
 
-/// The C's own outcome from a step-1 run that did not end as a program
-/// should, or `None` when it ended (§3.5 step 1).
 /// The launcher's words for an unmeasurable run, in the progress line.
 fn say_unmeasurable(j: &Judged, label: &str, w: &Workload, progress: &mut dyn PerfProgress) {
     if let Judged::Unmeasurable(why) = j {
@@ -516,19 +601,45 @@ fn say_unmeasurable(j: &Judged, label: &str, w: &Workload, progress: &mut dyn Pe
     }
 }
 
+/// The outcome of a C step-1 run that did not end as a program should, or
+/// `None` when it ended (§3.3 *Judging a run*, §3.5 step 1): a signal is a
+/// crash; a SIGKILL perfrun did not send is `stopped-by-sigkill`, worded
+/// without asserting its cause (perf's sandbox kills a program that starts
+/// another, but the C may have killed itself); a run the launcher could not
+/// measure is `run-failed: unmeasurable`, for the row being measured only.
 fn c_side(j: &Judged) -> Option<&'static str> {
     match j {
         Judged::Ended {
             end: End::Signal(_),
             ..
-        }
-        | Judged::SigKilled => Some("c-crashed"),
+        } => Some("c-crashed"),
+        Judged::SigKilled => Some("stopped-by-sigkill"),
         Judged::Ended { .. } => None,
         Judged::TimedOut => Some("c-timed-out"),
-        Judged::Overflow => Some("output-too-large"),
+        Judged::Overflow { .. } => Some("output-too-large"),
         Judged::NeverStarted(_) => Some("c-could-not-start"),
         Judged::Unmeasurable(_) => Some("run-failed: unmeasurable"),
     }
+}
+
+/// Whether the linker's words are about `main` itself — none, or more than
+/// one (§3.2 *Build* step 2: "the program needs one main()" only when the
+/// link says so) — never a symbol merely called from `main` or an object
+/// named after a `main.c`.
+fn link_says_main(words: &str) -> bool {
+    [
+        // Apple's ld: no main; two.
+        "\"_main\", referenced from",
+        "duplicate symbol '_main'",
+        // GNU ld.
+        "undefined reference to `main'",
+        "multiple definition of `main'",
+        // lld.
+        "undefined symbol: main",
+        "duplicate symbol: main",
+    ]
+    .iter()
+    .any(|says| words.contains(says))
 }
 
 /// Where two ended runs first differ: their end, then stdout, then stderr.
@@ -578,8 +689,8 @@ fn difference(c: &Judged, other: &Judged) -> Option<Difference> {
 }
 
 /// Whether a step-1 run is under both legs of the floor (§3.5 step 2):
-/// fewer than 1e9 instructions (when counted) and under half a second of
-/// CPU.
+/// fewer than 1e9 instructions (an uncounted run counts as under) and under
+/// half a second of CPU (an unknown time counts as not under).
 fn under_both(r: &Step1Run) -> bool {
     let ins = r
         .instructions
@@ -590,15 +701,27 @@ fn under_both(r: &Step1Run) -> bool {
     ins && cpu
 }
 
-/// Whether a step-1 run is under either leg.
-fn under_either(r: &Step1Run) -> bool {
-    let ins = r
-        .instructions
-        .is_some_and(|i| (i as f64) < perf_words::FLOOR_INSTRUCTIONS);
-    let cpu = r
-        .cpu_us
-        .is_some_and(|c| (c as f64) < perf_words::FLOOR_CPU_US);
-    ins || cpu
+/// What the floor makes of a row (§3.5 step 2, §7, §9: both legs for
+/// too-short and short).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Floor {
+    /// Every side under both legs: not timed.
+    TooShort,
+    /// One side under both legs: measured, marked a short run.
+    Short,
+    /// Measured in full.
+    Full,
+}
+
+/// The floor from the C's step-1 run with fewer instructions and, on a
+/// side's row, the other side's step-1 run. The C alone has one side: under
+/// both legs it is too short, else measured in full — never a short run.
+fn floor(c: &Step1Run, other: Option<&Step1Run>) -> Floor {
+    match (under_both(c), other.map(under_both)) {
+        (true, None | Some(true)) => Floor::TooShort,
+        (false, None | Some(false)) => Floor::Full,
+        _ => Floor::Short,
+    }
 }
 
 /// The C's step-1 run with fewer instructions (§3.5 step 2).
@@ -683,42 +806,24 @@ pub fn perf_run(
     let log_path = logs.join(&log_name);
     let mut log = String::new();
 
-    // The tool profile: the scratch folder, each crate's target/ and lock.
-    let wanted: Vec<&Candidate> = selected
-        .iter()
-        .filter_map(|s| match s {
-            Selected::Ready(c) => Some(c),
-            _ => None,
-        })
-        .collect();
-    let mut target_dirs = Vec::new();
-    for c in &wanted {
-        target_dirs.push(prepare_target_dir(&c.crate_dir)?);
-    }
-    let mut write_dirs = vec![scratch.clone()];
-    write_dirs.extend(target_dirs.iter().cloned());
-    let write_files: Vec<PathBuf> = wanted
-        .iter()
-        .map(|c| c.crate_dir.join("Cargo.lock"))
-        .collect();
-    let tool_profile = sandbox::render_profile(&ProfileSpec {
-        host: &host,
-        target_root: &root,
-        toolchain: true,
-        write_dirs: &write_dirs,
-        write_files: &write_files,
-    })?;
-    let runner = Runner {
+    // Each build step in its own sandbox (§3.2 *Build* step 3).
+    let plain = Runner {
         cwd: root.clone(),
         allowlist: base.allowlist.clone(),
         timeout: base.timeout,
         max_output: exec::DEFAULT_MAX_OUTPUT,
-        tool_profile: Some(tool_profile),
+        tool_profile: None,
         tool_tmpdir: None,
     };
+    let steps = Steps {
+        runner: &plain,
+        host: &host,
+        root: &root,
+    };
+    let probes = steps.writing(&[], &[])?;
     let first_line = |argv: &[&str]| -> String {
         let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-        runner
+        probes
             .tool(&argv)
             .map(|o| {
                 String::from_utf8_lossy(&o)
@@ -744,7 +849,8 @@ pub fn perf_run(
             odd.display()
         )));
     }
-    let objects = match build::compile_objects(&base, &runner, &c_files, &obj_dir)? {
+    let compiler = steps.writing(std::slice::from_ref(&obj_dir), &[])?;
+    let objects = match build::compile_objects(&base, &compiler, &c_files, &obj_dir)? {
         Ok(o) => o,
         Err(words) => {
             return Err(Error::Invariant(format!(
@@ -757,19 +863,19 @@ pub fn perf_run(
         build::sub_folder(&scratch, &format!("bin/{}", s.name()?))
     };
     let name = harness_core::features::program_name(&target.config);
-    let object_paths: Vec<PathBuf> = objects.iter().map(|h| h.path.clone()).collect();
+    let c_slot = slot(Slot::C)?;
     let c_bin = match build::link_side(
         &base,
         &link_args,
-        &runner,
-        &slot(Slot::C)?.join(&name),
-        &object_paths,
+        &steps.writing(std::slice::from_ref(&c_slot), &[])?,
+        &c_slot.join(&name),
+        &objects,
         &[],
         false,
     )? {
         Ok(b) => b,
         Err(words) => {
-            let hint = if words.contains("_main") || words.contains("main") {
+            let hint = if link_says_main(&words) {
                 " — the program needs one main()"
             } else {
                 ""
@@ -780,44 +886,42 @@ pub fn perf_run(
             )));
         }
     };
-    let kept_objects = |kept: &[PathBuf]| -> Vec<PathBuf> {
+    let kept_objects = |kept: &[PathBuf]| -> Vec<Hashed> {
         c_files
             .iter()
             .zip(&objects)
             .filter(|(c, _)| kept.contains(c))
-            .map(|(_, o)| o.path.clone())
+            .map(|(_, o)| o.clone())
             .collect()
     };
 
-    // The units: each crate built, checked against its verdict, linked.
+    // The units: each crate built, checked against its verdict, linked —
+    // with --unit alone, only the units asked for (§3.10).
     let measure_units = !req.as_it_stands_only;
     let mut sides: Vec<UnitSide> = Vec::new();
     for s in &selected {
         let Selected::Ready(c) = s else { continue };
+        if !req.builds(&c.id) {
+            continue;
+        }
         progress.message(&format!("{} — building its Rust…", c.id));
         let target_dir = prepare_target_dir(&c.crate_dir)?;
-        let staticlib = match build_staticlib(
-            &runner,
-            runner.tool_profile.as_deref(),
+        let cargo = steps.writing(
+            std::slice::from_ref(&target_dir),
+            &[c.crate_dir.join("Cargo.lock")],
+        )?;
+        let built = build_staticlib(
+            &cargo,
+            cargo.tool_profile.as_deref(),
             &c.crate_dir,
             &target_dir,
-        ) {
-            Ok(lib) => lib,
-            Err(Error::Interrupted) => return Err(Error::Interrupted),
-            Err(e) => {
-                log.push_str(&format!("{} — the crate does not build:\n{e}\n\n", c.id));
-                sides.push(UnitSide::SetUp {
-                    id: c.id.clone(),
-                    outcome: "crate-does-not-build",
-                    setup: SetupFacts {
-                        log: Some(log_name.clone()),
-                        ..SetupFacts::default()
-                    },
-                    crate_digest: String::new(),
-                });
-                continue;
-            }
-        };
+        );
+        if let Err(Error::Interrupted) = built {
+            return Err(Error::Interrupted);
+        }
+        // The crate's digest after the build, whether it built or not: the
+        // files verify hashed (cargo may write Cargo.lock), so the unit's
+        // rows stay current until the crate itself changes (§3.2, note 24).
         let crate_digest = harness_core::hash::unit_crate_file_set_hash(&root, &c.crate_dir)?;
         if crate_digest != c.verdict_crate {
             sides.push(UnitSide::SetUp {
@@ -831,6 +935,22 @@ pub fn perf_run(
             });
             continue;
         }
+        let staticlib = match built {
+            Ok(lib) => Hashed::new(&lib)?,
+            Err(e) => {
+                log.push_str(&format!("{} — the crate does not build:\n{e}\n\n", c.id));
+                sides.push(UnitSide::SetUp {
+                    id: c.id.clone(),
+                    outcome: "crate-does-not-build",
+                    setup: SetupFacts {
+                        log: Some(log_name.clone()),
+                        ..SetupFacts::default()
+                    },
+                    crate_digest,
+                });
+                continue;
+            }
+        };
         let kept = match build::kept_c_files(&c_files, &c.replaces) {
             Ok(k) => k,
             Err(i) => {
@@ -846,18 +966,18 @@ pub fn perf_run(
                 continue;
             }
         };
-        let bytes = std::fs::read(&staticlib).map_err(|e| Error::io(&staticlib, e))?;
+        let bytes = std::fs::read(&staticlib.path).map_err(|e| Error::io(&staticlib.path, e))?;
         let facts_of = archive_facts(&bytes).unwrap_or(ArchiveFacts {
             runtime: PanicRuntime::None,
             std: true,
             fat_lto: false,
         });
-        let out = slot(Slot::Unit(c.position))?.join(&name);
+        let unit_slot = slot(Slot::Unit(c.position))?;
         match build::link_side(
             &base,
             &link_args,
-            &runner,
-            &out,
+            &steps.writing(std::slice::from_ref(&unit_slot), &[])?,
+            &unit_slot.join(&name),
             &kept_objects(&kept),
             std::slice::from_ref(&staticlib),
             false,
@@ -909,15 +1029,18 @@ pub fn perf_run(
             _ => None,
         })
         .collect();
+    // Each left-out unit with its closed reason for the rows, and in words
+    // for the progress lines ("u-tree left out: its crate does not build").
     let mut left_out: Vec<LeftOut> = Vec::new();
+    let mut left: Vec<String> = Vec::new();
     for s in &selected {
-        match s {
-            Selected::NotVerified { id, reason, .. } => left_out.push(LeftOut {
+        if let Selected::NotVerified { id, reason, .. } = s {
+            left_out.push(LeftOut {
                 id: id.clone(),
                 crate_digest: String::new(),
                 reason: (*reason).into(),
-            }),
-            Selected::Ready(_) => {}
+            });
+            left.push(format!("{id} left out: {}", left_out_words(reason)));
         }
     }
     for s in &sides {
@@ -928,30 +1051,27 @@ pub fn perf_run(
             crate_digest,
         } = s
         {
-            let reason = match *outcome {
-                "not-verified" => setup.reason.as_deref().unwrap_or("not-fresh").to_string(),
-                o => o.to_string(),
+            let why = match *outcome {
+                "not-verified" => setup.reason.as_deref().unwrap_or("not-fresh"),
+                o => o,
             };
-            let reason = if res::LEFT_OUT_REASONS.contains(&reason.as_str()) {
-                reason
+            let reason = if res::LEFT_OUT_REASONS.contains(&why) {
+                why
             } else {
-                "not-fresh".into()
+                "not-fresh"
             };
             left_out.push(LeftOut {
                 id: id.clone(),
                 crate_digest: crate_digest.clone(),
-                reason,
+                reason: reason.into(),
             });
+            left.push(format!("{id} left out: {}", left_out_words(why)));
         }
     }
     let program = if built.len() < 2 || (!req.units.is_empty() && !req.as_it_stands_only) {
         Program::None
     } else {
         let names: Vec<String> = held.iter().map(|u| u.id.clone()).collect();
-        let left: Vec<String> = left_out
-            .iter()
-            .map(|l| format!("{} left out: {}", l.id, l.reason))
-            .collect();
         progress.message(&format!(
             "the program as it stands — {}{}",
             names.join(", "),
@@ -961,24 +1081,21 @@ pub fn perf_run(
                 format!(" ({})", left.join("; "))
             }
         ));
+        let all_slot = slot(Slot::AsItStands)?;
         as_it_stands(
             &built,
             &held,
             &c_files,
             &base,
             &link_args,
-            &runner,
-            &slot(Slot::AsItStands)?.join(&name),
+            &steps.writing(std::slice::from_ref(&all_slot), &[])?,
+            &all_slot.join(&name),
             &kept_objects,
             &log_name,
             &mut log,
         )?
     };
     if matches!(program, Program::None) && req.units.is_empty() && !req.as_it_stands_only {
-        let left: Vec<String> = left_out
-            .iter()
-            .map(|l| format!("{} left out: {}", l.id, l.reason))
-            .collect();
         let tail = if left.is_empty() {
             String::new()
         } else {
@@ -1080,12 +1197,23 @@ pub fn perf_run(
                             store.put(RowSide::Unit(s.id()), row, progress, &mut summary)?;
                         }
                     }
-                    if !matches!(program, Program::None) {
+                    // As every row of it, it records the units the program
+                    // holds and those left out (§3.2, §3.9).
+                    if let Some(units) = program.units() {
                         let row = set_up_row(
                             w,
                             "input-unusable",
                             setup.clone(),
-                            inputs(RowKind::AsItStands, None),
+                            row_inputs(
+                                &shared,
+                                w,
+                                None,
+                                RowKind::AsItStands,
+                                None,
+                                None,
+                                Some(units.to_vec()),
+                                Some(left_out.clone()),
+                            ),
                         );
                         store.put(RowSide::Program, row, progress, &mut summary)?;
                     }
@@ -1097,13 +1225,21 @@ pub fn perf_run(
         let input = input.as_deref();
         let digest = wl::digest(w, input);
         let runs = req.runs.unwrap_or(w.runs);
+        // When the C fails here in step 1 (§3.5 step 1, build note 23), the
+        // workload's other rows are not run and keep their earlier rows;
+        // rows that run nothing (a unit perf cannot build or measure today)
+        // are still written.
+        let mut c_failed = false;
+        let mut said = false;
         // The C alone (§3.6).
         if req.units.is_empty() && !req.as_it_stands_only {
             progress.message(&format!(
                 "the C on {} — checking it ends the same way twice…",
                 w.id
             ));
-            let row = c_alone_row(&ctx, &c_bin, w, input, &digest, runs, &shared, progress)?;
+            let (row, failed) =
+                c_alone_row(&ctx, &c_bin, w, input, &digest, runs, &shared, progress)?;
+            c_failed = failed;
             store.put(RowSide::C, row, progress, &mut summary)?;
         }
         // A verified unit perf cannot measure today: its own row says why.
@@ -1158,17 +1294,17 @@ pub fn perf_run(
                         RowKind::Unit,
                         Some(vec![CrateDigest {
                             id: id.clone(),
-                            digest: if crate_digest.is_empty() {
-                                empty_digest()
-                            } else {
-                                crate_digest.clone()
-                            },
+                            digest: crate_digest.clone(),
                         }]),
                         None,
                         None,
                         None,
                     ),
                 ),
+                UnitSide::Built { .. } if c_failed => {
+                    say_not_run(w, &mut said, progress);
+                    continue;
+                }
                 UnitSide::Built {
                     candidate,
                     bin,
@@ -1221,7 +1357,8 @@ pub fn perf_run(
                             row
                         }
                         SideResult::CSide(c_row) => {
-                            store.put(RowSide::C, c_row, progress, &mut summary)?;
+                            c_failed = true;
+                            store.put_c_failure(c_row, progress, &mut summary)?;
                             continue;
                         }
                     }
@@ -1254,6 +1391,7 @@ pub fn perf_run(
                 );
                 store.put(RowSide::Program, row, progress, &mut summary)?;
             }
+            Program::Built { .. } if c_failed => say_not_run(w, &mut said, progress),
             Program::Built { bin, units } => {
                 progress.message(&format!("the program as it stands on {} — C, it, C…", w.id));
                 let crates: Vec<CrateDigest> = units
@@ -1291,15 +1429,41 @@ pub fn perf_run(
                         store.put(RowSide::Program, row, progress, &mut summary)?;
                     }
                     SideResult::CSide(c_row) => {
-                        store.put(RowSide::C, c_row, progress, &mut summary)?
+                        store.put_c_failure(c_row, progress, &mut summary)?
                     }
                 }
             }
         }
     }
-    // Rows of units now named only as left out stay as they were.
-    let _ = (&held, &left_out);
     Ok(summary)
+}
+
+/// Said once on a workload where the C failed in step 1, when a row there
+/// is not run (§3.5 step 1).
+fn say_not_run(w: &Workload, said: &mut bool, progress: &mut dyn PerfProgress) {
+    if !*said {
+        progress.message(&format!(
+            "the other rows on {} are not run — the C failed there",
+            w.id
+        ));
+        *said = true;
+    }
+}
+
+/// Why a unit is left out of the program as it stands, in words for the
+/// progress lines (§3.2, §3.10) — from the reason it is left out for, which
+/// the results keep as a closed token.
+fn left_out_words(reason: &str) -> &'static str {
+    match reason {
+        "crate-does-not-build" => "its crate does not build",
+        "does-not-link" => "its program does not link",
+        "replaces-mismatch" => "a replaces entry names no top-level C file — Re-check it",
+        "replaces-changed" => "its replaced files changed since verify — Re-check it",
+        "rust-changed" => "its Rust changed since verify — Re-check it",
+        "accept-interrupted" => "its Accept was interrupted — Re-check it to finish or undo it",
+        // not-fresh, and anything else.
+        _ => "verify it first",
+    }
 }
 
 /// The units perf could measure today, in plan order (read-only: no lock,
@@ -1336,10 +1500,6 @@ pub fn perf_computer_if_cached() -> Option<res::Computer> {
     })
 }
 
-fn empty_digest() -> String {
-    harness_core::hash::bytes_hash(b"")
-}
-
 fn first_lines(words: &str, n: usize) -> String {
     words
         .lines()
@@ -1361,14 +1521,14 @@ fn as_it_stands(
     link_args: &[String],
     runner: &Runner,
     out: &Path,
-    kept_objects: &dyn Fn(&[PathBuf]) -> Vec<PathBuf>,
+    kept_objects: &dyn Fn(&[PathBuf]) -> Vec<Hashed>,
     log_name: &str,
     log: &mut String,
 ) -> Result<Program, Error> {
     let mut runtimes = Vec::new();
     let mut found = std::collections::BTreeSet::new();
     let mut replaces: Vec<PathBuf> = Vec::new();
-    let mut libs: Vec<PathBuf> = Vec::new();
+    let mut libs: Vec<Hashed> = Vec::new();
     let mut no_std: Vec<String> = Vec::new();
     let mut lto: Vec<String> = Vec::new();
     let mut std_units = 0;
@@ -1526,7 +1686,10 @@ fn bare_row(w: &Workload, outcome: &str, inputs: RowInputs) -> Row {
     set_up_row(w, outcome, SetupFacts::default(), inputs)
 }
 
-/// The C alone on `w` (§3.5 *The C alone*, §3.6).
+/// The C alone on `w` (§3.5 *The C alone*, §3.6), and whether the C failed
+/// there in step 1 — one of the C's own outcomes, or a SIGKILL perfrun did
+/// not send — so that the workload's other rows are not run. A run the
+/// launcher could not measure is this row's only (§3.3 step 2).
 #[allow(clippy::too_many_arguments)]
 fn c_alone_row(
     ctx: &RunCtx<'_>,
@@ -1537,7 +1700,7 @@ fn c_alone_row(
     runs: u32,
     shared: &Shared,
     progress: &mut dyn PerfProgress,
-) -> Result<Row, Error> {
+) -> Result<(Row, bool), Error> {
     let inputs = row_inputs(
         shared,
         w,
@@ -1562,25 +1725,24 @@ fn c_alone_row(
             if let Judged::NeverStarted(errno) = j {
                 row.setup = Some(never_started(*errno));
             }
-            if o != "run-failed: unmeasurable" && o != "c-could-not-start" {
+            let unmeasurable = o == "run-failed: unmeasurable";
+            if !unmeasurable && o != "c-could-not-start" {
                 row.step1 = Some(step1);
             }
-            return Ok(row);
+            return Ok((row, !unmeasurable));
         }
     }
     if difference(&c1, &c2).is_some() {
         let mut row = bare_row(w, "c-unstable", inputs);
         row.step1 = Some(step1);
-        return Ok(row);
+        return Ok((row, true));
     }
     note_c_exit(&c1, w, progress);
-    let floor = fewer(&step1.c_first, &step1.c_second);
-    if under_both(floor) {
+    if floor(fewer(&step1.c_first, &step1.c_second), None) == Floor::TooShort {
         let mut row = bare_row(w, "too-short", inputs);
         row.step1 = Some(step1);
-        return Ok(row);
+        return Ok((row, false));
     }
-    let short = under_either(floor);
     progress.message("keep the computer quiet while it measures");
     let expected = c1.end_token();
     let mut c_runs = Vec::with_capacity(runs as usize);
@@ -1595,7 +1757,7 @@ fn c_alone_row(
             Judged::Ended { run, .. } if run.end == expected => c_runs.push(*run),
             other => {
                 say_unmeasurable(&other, "the C", w, progress);
-                return Ok(failed(w, inputs, "c", i + 1, &other, step1));
+                return Ok((failed(w, inputs, "c", i + 1, &other, step1), false));
             }
         }
     }
@@ -1605,10 +1767,11 @@ fn c_alone_row(
         platform(&c_runs, shared),
         shared.computer.two_kinds,
     );
-    Ok(Row {
+    let row = Row {
         workload: w.id.clone(),
         outcome: "baseline".into(),
-        short: Some(short),
+        // One side: never a short run (§3.5 step 2).
+        short: Some(false),
         runs: Some(runs),
         platform_metrics: Some(metric.into()),
         inputs,
@@ -1623,7 +1786,8 @@ fn c_alone_row(
         first_difference: None,
         found_before: None,
         last_try: None,
-    })
+    };
+    Ok((row, false))
 }
 
 fn never_started(errno: Option<i32>) -> SetupFacts {
@@ -1700,7 +1864,7 @@ fn failed(
         } => ("run-failed: signal", format!("signal {n}")),
         Judged::SigKilled => ("stopped-by-sigkill", "signal 9".to_string()),
         Judged::NeverStarted(_) => ("run-failed: unmeasurable", "never-started".to_string()),
-        Judged::Unmeasurable(_) | Judged::Overflow => {
+        Judged::Unmeasurable(_) | Judged::Overflow { .. } => {
             ("run-failed: unmeasurable", "timeout".to_string())
         }
     };
@@ -1723,8 +1887,57 @@ type Outputs = [Vec<u8>; 4];
 enum SideResult {
     /// The side's row, with the outputs to keep when it behaves differently.
     Row(Row, Option<Outputs>),
-    /// A C-side outcome found in step 1: written to the C-alone row only.
+    /// The C failed in step 1 — one of the C's own outcomes, or a SIGKILL
+    /// perfrun did not send: for the C alone's row only (§3.6, note 23).
     CSide(Row),
+}
+
+/// The C's two step-1 runs on a side's row (§3.5 step 1), `None` when both
+/// ended alike. A failure of the C is the C's, for the C alone's row
+/// ([`SideResult::CSide`]); a run the launcher could not measure is this
+/// row's own (§3.3 step 2: "that row only"). The runs are read in order, so
+/// a first run's crash is never hidden by a second run the launcher lost.
+fn c_in_step1(
+    c1: &Judged,
+    c2: &Judged,
+    step1: &Step1,
+    w: &Workload,
+    inputs: &RowInputs,
+    progress: &mut dyn PerfProgress,
+) -> Option<SideResult> {
+    let c_inputs = || {
+        let mut i = inputs.clone();
+        i.crates = None;
+        i.replaces = None;
+        i.units = None;
+        i.left_out = None;
+        i.compilers.rustc = None;
+        i
+    };
+    let c_step1 = || Step1 {
+        other: None,
+        ..step1.clone()
+    };
+    for j in [c1, c2] {
+        let Some(outcome) = c_side(j) else { continue };
+        say_unmeasurable(j, "the C", w, progress);
+        if let Judged::Unmeasurable(_) = j {
+            return Some(SideResult::Row(bare_row(w, outcome, inputs.clone()), None));
+        }
+        let mut row = bare_row(w, outcome, c_inputs());
+        if let Judged::NeverStarted(errno) = j {
+            row.setup = Some(never_started(*errno));
+        } else {
+            row.step1 = Some(c_step1());
+        }
+        return Some(SideResult::CSide(row));
+    }
+    if difference(c1, c2).is_some() {
+        let mut row = bare_row(w, "c-unstable", c_inputs());
+        row.step1 = Some(c_step1());
+        return Some(SideResult::CSide(row));
+    }
+    None
 }
 
 /// One side against the C on `w` (§3.5 *Per side against the C*).
@@ -1749,38 +1962,8 @@ fn side_row(
         other: Some(step1_run(&o)),
         c_second: step1_run(&c2),
     };
-    let c_inputs = || {
-        let mut i = inputs.clone();
-        i.crates = None;
-        i.replaces = None;
-        i.units = None;
-        i.left_out = None;
-        i.compilers.rustc = None;
-        i
-    };
-    for j in [&c1, &c2] {
-        if let Some(outcome) = c_side(j) {
-            say_unmeasurable(j, "the C", w, progress);
-            let mut row = bare_row(w, outcome, c_inputs());
-            if let Judged::NeverStarted(errno) = j {
-                row.setup = Some(never_started(*errno));
-            }
-            if outcome != "run-failed: unmeasurable" && outcome != "c-could-not-start" {
-                row.step1 = Some(Step1 {
-                    other: None,
-                    ..step1.clone()
-                });
-            }
-            return Ok(SideResult::CSide(row));
-        }
-    }
-    if difference(&c1, &c2).is_some() {
-        let mut row = bare_row(w, "c-unstable", c_inputs());
-        row.step1 = Some(Step1 {
-            other: None,
-            ..step1
-        });
-        return Ok(SideResult::CSide(row));
+    if let Some(result) = c_in_step1(&c1, &c2, &step1, w, &inputs, progress) {
+        return Ok(result);
     }
     note_c_exit(&c1, w, progress);
     // The other side in step 1.
@@ -1791,19 +1974,33 @@ fn side_row(
             row.step1 = Some(step1);
             return Ok(SideResult::Row(row, None));
         }
-        Judged::Overflow => {
+        Judged::Overflow { stream } => {
+            // Compared on the stream that passed the cap: the C's length
+            // there; the other side ends by the SIGKILL that stopped it.
             let mut row = bare_row(w, "behaves-differently", inputs);
             let (c_end, c_len) = match &c1 {
-                Judged::Ended { end, stdout, .. } => (end.token(), stdout.len() as u64),
+                Judged::Ended {
+                    end,
+                    stdout,
+                    stderr,
+                    ..
+                } => (
+                    end.token(),
+                    if *stream == "stderr" {
+                        stderr.len()
+                    } else {
+                        stdout.len()
+                    } as u64,
+                ),
                 other => (other.end_token(), 0),
             };
             row.first_difference = Some(Difference {
-                stream: "stdout".into(),
+                stream: (*stream).into(),
                 c_len,
                 other_len: OUTPUT_CAP as u64,
                 offset: 0,
                 c_end,
-                other_end: "exit 0".into(),
+                other_end: o.end_token(),
                 over_cap: true,
                 kept: Vec::new(),
             });
@@ -1853,12 +2050,15 @@ fn side_row(
     // The floor (§3.5 step 2).
     let cf = fewer(&step1.c_first, &step1.c_second);
     let of = step1.other.clone().expect("the other side ran");
-    if under_both(cf) && under_both(&of) {
-        let mut row = bare_row(w, "too-short", inputs);
-        row.step1 = Some(step1);
-        return Ok(SideResult::Row(row, None));
-    }
-    let short = under_either(cf) || under_either(&of);
+    let short = match floor(cf, Some(&of)) {
+        Floor::TooShort => {
+            let mut row = bare_row(w, "too-short", inputs);
+            row.step1 = Some(step1);
+            return Ok(SideResult::Row(row, None));
+        }
+        Floor::Short => true,
+        Floor::Full => false,
+    };
     progress.message("keep the computer quiet while it measures");
     let (c_end, o_end) = (c1.end_token(), o.end_token());
     let mut c_runs = Vec::with_capacity(runs as usize);
@@ -1991,6 +2191,10 @@ impl Store {
         })
     }
 
+    /// Write this run's row by the replace rule. The summary counts what
+    /// this run found, and the progress sees this run's row — when the rule
+    /// kept the earlier row (this try beside it as `last_try`), the
+    /// progress line says so; the earlier row is never shown as new.
     fn put(
         &mut self,
         side: RowSide<'_>,
@@ -2001,6 +2205,7 @@ impl Store {
         let keep = |rows: &mut Vec<Row>, workloads: &[String]| {
             rows.retain(|r| workloads.contains(&r.workload))
         };
+        let this_run = row.clone();
         let written = match side {
             RowSide::C | RowSide::Program => {
                 let (list, kind) = match side {
@@ -2029,14 +2234,53 @@ impl Store {
             }
         };
         summary.rows += 1;
-        match written.outcome.as_str() {
+        match this_run.outcome.as_str() {
             "baseline" | "measured" => summary.measured += 1,
             "too-short" => summary.too_short += 1,
             "behaves-differently" => summary.behaves_differently += 1,
             _ => {}
         }
-        progress.row(side, &written);
+        // The replace rule keeps an earlier row only beside a set-up or C
+        // outcome, whose outcome then differs from this run's.
+        if written.outcome == this_run.outcome {
+            progress.row(side, &written);
+        } else {
+            progress.row(side, &this_run);
+            progress.message(&format!(
+                "{} on {} — the earlier result is kept, with this try beside it",
+                side.label(),
+                this_run.workload
+            ));
+        }
         Ok(())
+    }
+
+    /// A failure of the C that a unit's or the program's step 1 found, for
+    /// the C alone's row (§3.6, note 23): the C's own outcomes go by the
+    /// replace rule (beside an earlier baseline as `last_try`). A SIGKILL
+    /// perfrun did not send is not one the results keep as `last_try`, so
+    /// it never replaces the C alone's earlier baseline: that row stays and
+    /// the progress line says so.
+    fn put_c_failure(
+        &mut self,
+        row: Row,
+        progress: &mut dyn PerfProgress,
+        summary: &mut PerfSummary,
+    ) -> Result<(), Error> {
+        let over_a_baseline = self
+            .program
+            .c_alone
+            .iter()
+            .any(|r| r.workload == row.workload && r.outcome == "baseline");
+        if !res::is_c_side(&row.outcome) && over_a_baseline {
+            progress.message(&format!(
+                "the C on {} was stopped by a SIGKILL perf did not send — its earlier \
+                 measurement is kept",
+                row.workload
+            ));
+            return Ok(());
+        }
+        self.put(RowSide::C, row, progress, summary)
     }
 }
 
@@ -2411,12 +2655,12 @@ mod tests {
         let objects = build::compile_objects(&base, bench.runner(), &c_files, &obj)
             .expect("runs")
             .expect("compiles");
-        let kept_objects = |kept: &[PathBuf]| -> Vec<PathBuf> {
+        let kept_objects = |kept: &[PathBuf]| -> Vec<Hashed> {
             c_files
                 .iter()
                 .zip(&objects)
                 .filter(|(c, _)| kept.contains(c))
-                .map(|(_, o)| o.path.clone())
+                .map(|(_, o)| o.clone())
                 .collect()
         };
         let unit = |id: &str, func: &str, value: i32, abort: bool, file: &str| -> UnitSide {
@@ -2426,8 +2670,8 @@ mod tests {
                 abort,
                 &format!("#[no_mangle] pub extern \"C\" fn {func}() -> i32 {{ {value} }}\n"),
             );
-            let lib = bench.build(&crate_dir);
-            let facts = archive_facts(&std::fs::read(&lib).expect("lib")).expect("facts");
+            let lib = Hashed::new(&bench.build(&crate_dir)).expect("hash");
+            let facts = archive_facts(&std::fs::read(&lib.path).expect("lib")).expect("facts");
             UnitSide::Built {
                 candidate: Candidate {
                     id: id.into(),
@@ -2530,6 +2774,10 @@ mod tests {
         );
     }
 
+    /// The floor (§3.5 step 2, §4 *The floor*): a side is under it only
+    /// under both legs — fewer than 1e9 instructions and under half a
+    /// second of CPU; a row is too short with every side under, a short run
+    /// with one, else measured in full.
     #[test]
     fn the_floor_legs() {
         let r = |ins: Option<u64>, cpu: Option<u64>| Step1Run {
@@ -2539,13 +2787,38 @@ mod tests {
             stdout_bytes: 0,
             stderr_bytes: 0,
         };
-        assert!(under_both(&r(Some(1_000), Some(1_000))));
-        assert!(
-            !under_both(&r(Some(2_000_000_000), Some(1_000))),
-            "a memory-bound run past one leg"
+        // Each leg on either side of its line (strictly under).
+        assert!(under_both(&r(Some(999_999_999), Some(499_999))));
+        assert!(!under_both(&r(Some(1_000_000_000), Some(499_999))));
+        assert!(!under_both(&r(Some(999_999_999), Some(500_000))));
+        // An uncounted run is under the instruction leg; an unknown CPU
+        // time is not under the time leg.
+        assert!(under_both(&r(None, Some(499_999))));
+        assert!(!under_both(&r(Some(1), None)));
+        // A memory-bound C at 2.6 s and 0.9e9 instructions is measured in
+        // full, not short — alone and against a side just like it.
+        let memory_bound = r(Some(900_000_000), Some(2_600_000));
+        assert_eq!(floor(&memory_bound, None), Floor::Full);
+        assert_eq!(floor(&memory_bound, Some(&memory_bound)), Floor::Full);
+        // A CPU-bound run past the instruction leg in under half a second
+        // (4.9e9 at 0.34 s, 2e9 at 0.2 s) is measured in full too — and so
+        // is an input made 7× bigger as the too-short words advise.
+        let fast = r(Some(4_900_000_000), Some(340_000));
+        assert_eq!(
+            floor(&fast, Some(&r(Some(2_000_000_000), Some(200_000)))),
+            Floor::Full
         );
-        assert!(under_either(&r(Some(2_000_000_000), Some(1_000))));
-        assert!(!under_either(&r(Some(2_000_000_000), Some(600_000))));
+        assert_eq!(
+            floor(&r(Some(1_050_000_000), Some(70_000)), None),
+            Floor::Full
+        );
+        // One side under both legs: a short run, whichever side it is.
+        let tiny = r(Some(900_000_000), Some(400_000));
+        assert_eq!(floor(&tiny, Some(&memory_bound)), Floor::Short);
+        assert_eq!(floor(&memory_bound, Some(&tiny)), Floor::Short);
+        // Every side under both: too short; the C alone is never short.
+        assert_eq!(floor(&tiny, Some(&tiny)), Floor::TooShort);
+        assert_eq!(floor(&tiny, None), Floor::TooShort);
         // The C's run with fewer instructions decides.
         let a = r(Some(5), Some(9));
         let b = r(Some(3), Some(9));
@@ -2570,5 +2843,1221 @@ mod tests {
         assert_eq!(d.stream, "stderr");
         let d = difference(&c, &ended(End::Exit(0), b"ab", b"")).expect("differs");
         assert_eq!((d.offset, d.c_len, d.other_len), (2, 3, 2));
+    }
+
+    // ---- Helpers for the tests below -----------------------------------
+
+    fn seen() -> Seen {
+        Seen {
+            messages: Vec::new(),
+            rows: Vec::new(),
+        }
+    }
+
+    fn shared() -> Shared {
+        Shared {
+            program_digest: harness_core::hash::bytes_hash(b"p"),
+            program_name: "tool".into(),
+            computer: res::Computer {
+                os: "x".into(),
+                build: "x".into(),
+                arch: "x".into(),
+                cpu: "x".into(),
+                two_kinds: true,
+                fast_cores: 4,
+            },
+            cc: "cc".into(),
+            rustc: "rustc".into(),
+            platform: Platform::MacV6,
+        }
+    }
+
+    fn workload(id: &str) -> Workload {
+        Workload {
+            id: id.into(),
+            args: Vec::new(),
+            input: None,
+            runs: 5,
+        }
+    }
+
+    fn put(root: &Path, rel: &str, text: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().expect("parent")).expect("dir");
+        std::fs::write(&p, text).expect("write");
+    }
+
+    /// A launcher built into a private cache under `root`.
+    fn test_launcher(root: &Path) -> Launcher {
+        let cache = root.join("cache");
+        let owner = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(root).expect("meta"));
+        std::fs::create_dir(&cache).expect("cache");
+        std::fs::set_permissions(&cache, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .expect("mode");
+        launcher::launcher_in(&cache, owner, &mut |_| {}).expect("launcher")
+    }
+
+    /// A C program `name` in `root/bins` from `src`, hashed.
+    fn c_program(root: &Path, name: &str, src: &str) -> Hashed {
+        let bins = root.join("bins");
+        std::fs::create_dir_all(&bins).expect("bins");
+        let file = bins.join(format!("{name}.c"));
+        std::fs::write(&file, src).expect("src");
+        let bin = bins.join(name);
+        assert!(std::process::Command::new("cc")
+            .args(["-O0", "-o"])
+            .arg(&bin)
+            .arg(&file)
+            .status()
+            .expect("cc")
+            .success());
+        Hashed::new(&bin.canonicalize().expect("bin")).expect("hash")
+    }
+
+    fn timed(n: usize) -> Vec<Run> {
+        (0..n)
+            .map(|_| Run {
+                cpu_us: Some(600_000),
+                end: "exit 0".into(),
+                ..Run::default()
+            })
+            .collect()
+    }
+
+    fn step(end: &str) -> Step1Run {
+        Step1Run {
+            instructions: None,
+            cpu_us: None,
+            end: end.into(),
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+        }
+    }
+
+    /// The tokens of why `row` is out of date, against today's tree.
+    #[allow(clippy::too_many_arguments)]
+    fn out_of_date(
+        root: &Path,
+        target: &TargetContext,
+        facts: &Facts,
+        row: &Row,
+        kind: RowKind,
+        workload: Option<&str>,
+        replaces: Option<&[String]>,
+        measurable: &[String],
+    ) -> Vec<&'static str> {
+        let crate_now = |id: &str| -> Option<String> {
+            harness_core::hash::unit_crate_file_set_hash(
+                root,
+                &root.join(format!("migration/units/{id}/{id}_rs")),
+            )
+            .ok()
+        };
+        let program = harness_core::features::program_digest_now(target, facts);
+        let name = harness_core::features::program_name(&target.config);
+        let today = harness_core::perf::currency::Today {
+            workload,
+            program: &program,
+            crate_digest: &crate_now,
+            replaces,
+            program_name: &name,
+            measurable: Some(measurable),
+            computer: None,
+            compilers: None,
+        };
+        harness_core::perf::currency::reasons(row, kind, &today)
+            .into_iter()
+            .map(|r| r.token)
+            .collect()
+    }
+
+    /// A small target for perf: `main.c` adds what `int <id>(void)` in each
+    /// `src/<id>.c` returns (1, 2, …), aborts on "crash" and starts `true`
+    /// on "sys".
+    fn mini_program(root: &Path, ids: &[&str]) {
+        put(
+            root,
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"tool\"\nsource_dir = \"src\"\n\
+             [oracle]\nallowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\ntimeout_secs = 60\n",
+        );
+        let decls: String = ids.iter().map(|id| format!("int {id}(void);\n")).collect();
+        let sum: Vec<String> = ids.iter().map(|id| format!("{id}()")).collect();
+        put(
+            root,
+            "src/main.c",
+            &format!(
+                "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n{decls}\
+                 int main(int argc, char **argv) {{\n\
+                 if (argc > 1 && strcmp(argv[1], \"crash\") == 0) abort();\n\
+                 if (argc > 1 && strcmp(argv[1], \"sys\") == 0) return system(\"true\");\n\
+                 printf(\"%d\\n\", {});\n return 0;\n}}\n",
+                sum.join(" + ")
+            ),
+        );
+        for (i, id) in ids.iter().enumerate() {
+            put(
+                root,
+                &format!("src/{id}.c"),
+                &format!("int {id}(void) {{ return {}; }}\n", i + 1),
+            );
+        }
+    }
+
+    /// The facts a scan records for the top-level C files under `src/`.
+    fn facts_of(root: &Path) -> Facts {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(root.join("src")).expect("src") {
+            let p = entry.expect("entry").path();
+            if p.extension().is_some_and(|x| x == "c") {
+                let name = p.file_name().and_then(|n| n.to_str()).expect("name");
+                files.push(harness_core::facts::FileRecord {
+                    path: format!("src/{name}"),
+                    hash: harness_core::hash::file_hash(&p).expect("hash"),
+                    includes: Vec::new(),
+                });
+            }
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Facts {
+            files,
+            ..Facts::default()
+        }
+    }
+
+    /// A unit's crate as verify leaves it, `migration/units/<id>/<id>_rs`:
+    /// a staticlib exporting `<id>()` (returning `value`), panic = "abort",
+    /// and — with `lock` — its Cargo.lock as cargo writes it.
+    fn unit_crate(root: &Path, id: &str, value: usize, build_rs: Option<&str>, lock: bool) {
+        let dir = root.join(format!("migration/units/{id}/{id}_rs"));
+        put(
+            &dir,
+            "Cargo.toml",
+            &format!(
+                "[package]\nname = \"{id}_rs\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+                 [lib]\ncrate-type = [\"staticlib\"]\n\n[workspace]\n\n\
+                 [profile.release]\npanic = \"abort\"\n"
+            ),
+        );
+        put(
+            &dir,
+            "src/lib.rs",
+            &format!("#[no_mangle]\npub extern \"C\" fn {id}() -> i32 {{\n    {value}\n}}\n"),
+        );
+        if let Some(text) = build_rs {
+            put(&dir, "build.rs", text);
+        }
+        if lock {
+            assert!(std::process::Command::new("cargo")
+                .args(["generate-lockfile", "--offline", "--manifest-path"])
+                .arg(dir.join("Cargo.toml"))
+                .status()
+                .expect("cargo")
+                .success());
+        }
+    }
+
+    /// One unit's plan entry, replacing `src/<id>.c` with its crate; for a
+    /// verified or merged unit with a crate, its verdict too — green or red,
+    /// its inputs hashed from the tree now, as verify writes them.
+    fn plan_unit(
+        root: &Path,
+        facts: &Facts,
+        id: &str,
+        status: &str,
+        green: bool,
+        verdict_replaces: Option<&str>,
+    ) -> String {
+        let file = format!("src/{id}.c");
+        let files = vec![file.clone()];
+        let source =
+            harness_core::hash::file_set_hash_on_disk(root, &facts.include_closure(&files))
+                .expect("hash");
+        let ledger = Ledger::new(root.to_path_buf());
+        let crate_dir = ledger.unit_dir(id).join(format!("{id}_rs"));
+        if crate_dir.is_dir() && matches!(status, "verified" | "merged") {
+            let inputs = harness_core::verdict::VerdictInputs {
+                unit_source: source.clone(),
+                rust_crate: harness_core::hash::unit_crate_file_set_hash(root, &crate_dir)
+                    .expect("crate hash"),
+                replaces: vec![verdict_replaces.unwrap_or(&file).to_string()],
+                ..Default::default()
+            };
+            let checks = vec![harness_core::verdict::Check {
+                name: "differential".into(),
+                passed: green,
+                detail: String::new(),
+            }];
+            harness_core::Verdict::new(id, inputs, checks)
+                .store(&ledger.verdict_latest_path(id))
+                .expect("verdict");
+        }
+        format!(
+            "\n[[unit]]\nid = \"{id}\"\nstatus = \"{status}\"\nfiles = [\"{file}\"]\n\
+             source_hash = \"{source}\"\n\n[unit.oracle]\nkind = \"c-abi-differential\"\n\
+             rust_crate = \"{id}_rs\"\nreplaces = [\"{file}\"]\n"
+        )
+    }
+
+    /// A fresh folder beside the test binary — outside the temp folders
+    /// every tool profile may write, so a build step's own write set is
+    /// what decides — removed when dropped.
+    struct Beside(PathBuf);
+
+    impl Beside {
+        fn new(tag: &str) -> Beside {
+            let exe = std::env::current_exe().expect("test exe");
+            let dir = exe.parent().expect("exe folder").join(format!(
+                "perf-{tag}-{}-{}",
+                std::process::id(),
+                harness_core::hash::random_hex(4)
+            ));
+            std::fs::create_dir_all(&dir).expect("dir");
+            Beside(dir.canonicalize().expect("canonical"))
+        }
+
+        /// Whether the folder lies in a temp folder after all (a target dir
+        /// there): every tool may write it, so no write set is tested.
+        fn in_temp(&self) -> bool {
+            let tmp = std::env::temp_dir().canonicalize().ok();
+            self.0.starts_with("/private/tmp")
+                || self.0.starts_with("/private/var/folders")
+                || tmp.is_some_and(|t| self.0.starts_with(t))
+        }
+    }
+
+    impl Drop for Beside {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // ---- Tests ------------------------------------------------------------
+
+    /// perf's own selection (§3.2, note 24): a verified or merged unit is
+    /// measurable only when its verdict is green and fresh, no Accept of it
+    /// was interrupted and its replaced files are the ones verify saw; any
+    /// other verified unit says why; pending, blocked and in-progress units
+    /// are never named.
+    #[test]
+    fn the_selection_reads_each_rule() {
+        let tmp = crate::testutil::TempDir::new("perf-select");
+        let root = tmp.path().to_path_buf();
+        let ids = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"];
+        mini_program(&root, &ids);
+        for (i, id) in ids.iter().enumerate().take(6) {
+            unit_crate(&root, id, i + 1, None, false);
+        }
+        let facts = facts_of(&root);
+        let mut plan = "schema_version = 1\ntarget = \"tool\"\n".to_string();
+        plan += &plan_unit(&root, &facts, "s1", "verified", true, None);
+        plan += &plan_unit(&root, &facts, "s2", "verified", true, None);
+        plan += &plan_unit(&root, &facts, "s3", "merged", true, None);
+        plan += &plan_unit(&root, &facts, "s4", "verified", false, None);
+        plan += &plan_unit(&root, &facts, "s5", "verified", true, None);
+        plan += &plan_unit(&root, &facts, "s6", "verified", true, Some("src/s1.c"));
+        plan += &plan_unit(&root, &facts, "s7", "pending", false, None);
+        plan += &plan_unit(&root, &facts, "s8", "blocked", false, None);
+        plan += &plan_unit(&root, &facts, "s9", "in-progress", false, None);
+        put(&root, "migration/plan.toml", &plan);
+        // s2: an Accept of a-1234 interrupted; s3: one from before the
+        // markers (a bare `.<crate>.prev`); s5: its C changed since verify.
+        std::fs::create_dir_all(root.join("migration/units/s2/.promote-a-1234")).expect("marker");
+        std::fs::create_dir_all(root.join("migration/units/s3/.s3_rs.prev")).expect("legacy");
+        put(&root, "src/s5.c", "int s5(void) { return 50; }\n");
+        let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+        let target = TargetContext::load(&root).expect("target");
+        let ledger = Ledger::new(root.clone());
+        let got: Vec<(String, String)> = select(&target, &ledger, &facts, &plan)
+            .expect("selects")
+            .into_iter()
+            .map(|s| match s {
+                Selected::Ready(c) => {
+                    assert_eq!(
+                        c.verdict_crate,
+                        harness_core::hash::unit_crate_file_set_hash(&root, &c.crate_dir)
+                            .expect("hash")
+                    );
+                    (c.id, "ready".to_string())
+                }
+                Selected::NotVerified {
+                    id,
+                    reason,
+                    attempt,
+                } => (
+                    id,
+                    format!("{reason} {}", attempt.as_deref().unwrap_or("-")),
+                ),
+            })
+            .collect();
+        let want = [
+            ("s1", "ready"),
+            ("s2", "accept-interrupted a-1234"),
+            ("s3", "accept-interrupted legacy"),
+            ("s4", "not-fresh -"),
+            ("s5", "not-fresh -"),
+            ("s6", "replaces-changed -"),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(a, b)| (a.to_string(), b.to_string())).to_vec()
+        );
+        assert_eq!(
+            perf_measurable(&target, &plan, &facts).expect("reads"),
+            vec!["s1".to_string()]
+        );
+    }
+
+    /// A request builds what it measures (§3.10, §6 *Cost*): `--unit` alone
+    /// builds and links only the units asked for; a full run and the
+    /// program as it stands build every measurable unit.
+    #[test]
+    fn a_request_builds_only_the_units_it_measures() {
+        let full = PerfRequest::default();
+        assert!(full.builds("u001") && full.builds("u002"));
+        let one = PerfRequest {
+            units: vec!["u001".into()],
+            ..PerfRequest::default()
+        };
+        assert!(one.builds("u001"));
+        assert!(!one.builds("u002"));
+        let together = PerfRequest {
+            units: vec!["u001".into()],
+            as_it_stands_only: true,
+            ..PerfRequest::default()
+        };
+        assert!(together.builds("u002"));
+    }
+
+    /// A run's summary and its progress tell what this run found (§3.10):
+    /// a set-up outcome kept beside an earlier measured row is not counted
+    /// as measured, and the progress shows this run's row and says the
+    /// earlier one is kept. On the C alone, a SIGKILL a unit's step 1 met
+    /// never replaces the baseline; the C's own outcomes go beside it.
+    #[test]
+    fn the_summary_and_progress_tell_this_runs_rows() {
+        let tmp = crate::testutil::TempDir::new("perf-store");
+        let dir = tmp.path().join("perf");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let workloads = wl::parse(
+            "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = []\n",
+            Path::new("w.toml"),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let w = workloads.workloads[0].clone();
+        let shared = shared();
+        let unit_inputs = row_inputs(
+            &shared,
+            &w,
+            None,
+            RowKind::Unit,
+            Some(vec![CrateDigest {
+                id: "u001".into(),
+                digest: harness_core::hash::bytes_hash(b"crate"),
+            }]),
+            Some(vec!["src/a.c".into()]),
+            None,
+            None,
+        );
+        let mut store = Store::load(&dir, &workloads).expect("loads");
+        let mut seen = seen();
+        let mut summary = PerfSummary::default();
+        let measured = Row {
+            short: Some(false),
+            runs: Some(5),
+            platform_metrics: Some("cpu-time".into()),
+            c: Some(timed(5)),
+            other: Some(timed(5)),
+            ..bare_row(&w, "measured", unit_inputs.clone())
+        };
+        store
+            .put(RowSide::Unit("u001"), measured, &mut seen, &mut summary)
+            .expect("written");
+        assert_eq!((summary.rows, summary.measured), (1, 1));
+        // The input is gone the next time.
+        let mut summary = PerfSummary::default();
+        let gone = set_up_row(
+            &w,
+            "input-unusable",
+            SetupFacts {
+                input: Some("missing".into()),
+                ..SetupFacts::default()
+            },
+            unit_inputs,
+        );
+        store
+            .put(RowSide::Unit("u001"), gone, &mut seen, &mut summary)
+            .expect("written");
+        assert_eq!((summary.rows, summary.measured), (1, 0), "nothing measured");
+        let (side, shown) = seen.rows.last().expect("a row");
+        assert_eq!(
+            (side.as_str(), shown.outcome.as_str()),
+            ("u001", "input-unusable")
+        );
+        assert_eq!(
+            seen.messages.last().map(String::as_str),
+            Some("u001 on w — the earlier result is kept, with this try beside it")
+        );
+        let file = res::read_unit(&res::unit_path(&dir, "u001"), "u001")
+            .expect("reads")
+            .expect("written");
+        assert_eq!(file.rows[0].outcome, "measured");
+        assert_eq!(
+            file.rows[0].last_try.as_ref().map(|t| t.outcome.as_str()),
+            Some("input-unusable")
+        );
+        // The C alone's baseline.
+        let c_inputs = row_inputs(&shared, &w, None, RowKind::CAlone, None, None, None, None);
+        let baseline = Row {
+            short: Some(false),
+            runs: Some(5),
+            platform_metrics: Some("cpu-time".into()),
+            c: Some(timed(5)),
+            ..bare_row(&w, "baseline", c_inputs.clone())
+        };
+        store
+            .put(RowSide::C, baseline, &mut seen, &mut summary)
+            .expect("written");
+        let c_row = |outcome: &str, first: &str| {
+            let mut row = bare_row(&w, outcome, c_inputs.clone());
+            row.step1 = Some(Step1 {
+                c_first: step(first),
+                other: None,
+                c_second: step("exit 0"),
+            });
+            row
+        };
+        // A SIGKILL a unit's step 1 met: the baseline stays as it was.
+        let rows_before = seen.rows.len();
+        store
+            .put_c_failure(
+                c_row("stopped-by-sigkill", "signal 9"),
+                &mut seen,
+                &mut summary,
+            )
+            .expect("kept");
+        assert_eq!(seen.rows.len(), rows_before, "no row written");
+        assert_eq!(
+            seen.messages.last().map(String::as_str),
+            Some(
+                "the C on w was stopped by a SIGKILL perf did not send — its earlier \
+                 measurement is kept"
+            )
+        );
+        let program = res::read_program(&res::program_path(&dir))
+            .expect("reads")
+            .expect("written");
+        assert_eq!(program.c_alone[0].outcome, "baseline");
+        assert!(program.c_alone[0].last_try.is_none());
+        // A crash: beside the baseline, shown as this run's.
+        store
+            .put_c_failure(c_row("c-crashed", "signal 11"), &mut seen, &mut summary)
+            .expect("kept");
+        let program = res::read_program(&res::program_path(&dir))
+            .expect("reads")
+            .expect("written");
+        assert_eq!(program.c_alone[0].outcome, "baseline");
+        assert_eq!(
+            program.c_alone[0]
+                .last_try
+                .as_ref()
+                .map(|t| t.outcome.as_str()),
+            Some("c-crashed")
+        );
+        assert_eq!(
+            seen.rows
+                .last()
+                .map(|(s, r)| (s.as_str(), r.outcome.as_str())),
+            Some(("c", "c-crashed"))
+        );
+    }
+
+    /// The C's step-1 runs on a side's row (§3.3, §3.5 step 1, note 23): a
+    /// run the launcher lost is the side's own row ("that row only"), with
+    /// the side's inputs; a crash — in either run — or a SIGKILL perfrun did
+    /// not send is the C's, for the C alone's row, the SIGKILL worded
+    /// without "crash"; the first run that failed decides.
+    #[test]
+    fn the_cs_step1_failures_go_to_the_right_row() {
+        let w = workload("w");
+        let shared = shared();
+        let inputs = row_inputs(
+            &shared,
+            &w,
+            None,
+            RowKind::Unit,
+            Some(vec![CrateDigest {
+                id: "u001".into(),
+                digest: harness_core::hash::bytes_hash(b"crate"),
+            }]),
+            Some(vec!["src/a.c".into()]),
+            None,
+            None,
+        );
+        let ended = |end: End| Judged::Ended {
+            end,
+            stdout: b"same\n".to_vec(),
+            stderr: Vec::new(),
+            run: Box::default(),
+        };
+        let ok = ended(End::Exit(0));
+        let crash = ended(End::Signal(11));
+        let lost = Judged::Unmeasurable("perfrun ended before its record was complete".into());
+        let step1 = |c1: &Judged, c2: &Judged| Step1 {
+            c_first: step1_run(c1),
+            other: Some(step1_run(&ok)),
+            c_second: step1_run(c2),
+        };
+        let mut seen = seen();
+        // The launcher lost the C's first run: the unit's own row.
+        let Some(SideResult::Row(row, None)) =
+            c_in_step1(&lost, &ok, &step1(&lost, &ok), &w, &inputs, &mut seen)
+        else {
+            panic!("the unit's own row")
+        };
+        assert_eq!(row.outcome, "run-failed: unmeasurable");
+        assert_eq!(
+            row.inputs.crates.as_ref().map(|c| c[0].id.as_str()),
+            Some("u001")
+        );
+        res::check_row(&row, RowKind::Unit).expect("valid on the unit's row");
+        assert!(
+            seen.messages
+                .iter()
+                .any(|m| m.starts_with("the C on w: the launcher stopped before measuring")),
+            "{:?}",
+            seen.messages
+        );
+        // A crash in the first run outranks a second run the launcher lost.
+        let Some(SideResult::CSide(row)) =
+            c_in_step1(&crash, &lost, &step1(&crash, &lost), &w, &inputs, &mut seen)
+        else {
+            panic!("the C's row")
+        };
+        assert_eq!(row.outcome, "c-crashed");
+        res::check_row(&row, RowKind::CAlone).expect("valid on the C alone");
+        // Only the second run crashed: still the C's.
+        let Some(SideResult::CSide(row)) =
+            c_in_step1(&ok, &crash, &step1(&ok, &crash), &w, &inputs, &mut seen)
+        else {
+            panic!("the C's row")
+        };
+        assert_eq!(row.outcome, "c-crashed");
+        // A SIGKILL perfrun did not send: stopped-by-sigkill on the C alone.
+        let killed = Judged::SigKilled;
+        let Some(SideResult::CSide(row)) =
+            c_in_step1(&killed, &ok, &step1(&killed, &ok), &w, &inputs, &mut seen)
+        else {
+            panic!("the C's row")
+        };
+        assert_eq!(row.outcome, "stopped-by-sigkill");
+        res::check_row(&row, RowKind::CAlone).expect("valid on the C alone");
+        let words = perf_words::words(
+            &row,
+            &perf_words::Context {
+                side: perf_words::Side::C,
+                workload: "w",
+                input: None,
+            },
+        );
+        assert!(
+            words.headline.starts_with("the C was stopped by a SIGKILL"),
+            "{}",
+            words.headline
+        );
+        assert!(!words.headline.contains("crash"), "{}", words.headline);
+        // The C alone's own step 1 says the same.
+        assert_eq!(c_side(&Judged::SigKilled), Some("stopped-by-sigkill"));
+        // Both ended alike: nothing of the C's.
+        assert!(c_in_step1(&ok, &ok, &step1(&ok, &ok), &w, &inputs, &mut seen).is_none());
+    }
+
+    /// "The program needs one main()" only when the link is about main
+    /// (§3.2 *Build* step 2) — the texts are Apple ld's, GNU ld's and lld's.
+    #[test]
+    fn the_main_hint_only_when_the_link_is_about_main() {
+        let no_main = "cc failed (exit status: 1):\nUndefined symbols for architecture arm64:\n  \
+                       \"_main\", referenced from:\n      <initial-undefines>\n\
+                       ld: symbol(s) not found for architecture arm64\n";
+        let two = "cc failed (exit status: 1):\nduplicate symbol '_main' in:\n    \
+                   /t/migration/build/.perf/obj/002-m2.o\n    /t/migration/build/.perf/obj/001-m1.o\n\
+                   ld: 1 duplicate symbols\n";
+        let called_from_main = "cc failed (exit status: 1):\nUndefined symbols for architecture \
+                                arm64:\n  \"_compressBound\", referenced from:\n      _main in \
+                                003-main.o\nld: symbol(s) not found for architecture arm64\n";
+        let main_folder = "cc failed (exit status: 1):\nduplicate symbol '_helper' in:\n    \
+                           /t/domain/main/001-a.o\n    /t/domain/main/002-b.o\n";
+        assert!(link_says_main(no_main));
+        assert!(link_says_main(two));
+        assert!(link_says_main(
+            "/usr/bin/ld: crt1.o: in function `_start':\n(.text+0x1b): undefined reference to `main'\n"
+        ));
+        assert!(link_says_main(
+            "/usr/bin/ld: b.o: in function `main':\nmultiple definition of `main'; a.o: first defined here\n"
+        ));
+        assert!(link_says_main("ld.lld: error: undefined symbol: main\n"));
+        assert!(!link_says_main(called_from_main));
+        assert!(!link_says_main(main_folder));
+        // The line that says so is among the lines shown.
+        assert!(first_lines(no_main, 3).contains("\"_main\", referenced from"));
+        assert!(first_lines(two, 3).contains("duplicate symbol '_main'"));
+    }
+
+    /// Every reason a unit is left out has words for the progress lines
+    /// (§3.2, §3.10) — never a closed token.
+    #[test]
+    fn every_left_out_reason_has_words() {
+        let tokens: Vec<&str> = res::LEFT_OUT_REASONS
+            .iter()
+            .chain(res::NOT_VERIFIED_REASONS)
+            .copied()
+            .collect();
+        for reason in &tokens {
+            let words = left_out_words(reason);
+            assert!(
+                !words.is_empty() && !tokens.iter().any(|t| words.contains(t)),
+                "{reason}: {words}"
+            );
+        }
+        assert_eq!(left_out_words("not-fresh"), "verify it first");
+        assert_eq!(
+            left_out_words("crate-does-not-build"),
+            "its crate does not build"
+        );
+    }
+
+    /// Step 1 has a minute more than the target's timeout (§3.3 step 6):
+    /// every new binary's first exec falls there.
+    #[test]
+    fn step_one_has_a_minute_more() {
+        assert_eq!(deadline_secs(5, true), 65);
+        assert_eq!(deadline_secs(5, false), 5);
+    }
+
+    /// A fresh binary with a short `timeout_secs` is not timed out in step 1
+    /// (§4 [m17, n4]); a timed run gets the target's timeout alone.
+    #[test]
+    fn a_fresh_binary_is_not_timed_out_in_step_one() {
+        if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("perf-deadline");
+        let root = tmp.path().canonicalize().expect("root");
+        let l = test_launcher(&root);
+        let host = HostDirs::from_env().expect("host");
+        let slow = c_program(
+            &root,
+            "slow",
+            "#include <stdio.h>\n#include <unistd.h>\nint main(void) { sleep(2); printf(\"slept\\n\"); return 0; }\n",
+        );
+        let ctx = RunCtx {
+            launcher: &l,
+            host: &host,
+            root: &root,
+            name: "tool",
+            timeout_secs: 1,
+        };
+        let w = workload("w");
+        let first = run_once(&ctx, &slow, &w, None, true).expect("runs");
+        assert!(
+            matches!(&first, Judged::Ended { end: End::Exit(0), stdout, .. } if stdout == b"slept\n"),
+            "{first:?}"
+        );
+        let timed = run_once(&ctx, &slow, &w, None, false).expect("runs");
+        assert!(matches!(timed, Judged::TimedOut), "{timed:?}");
+    }
+
+    /// Output over the cap on the other side only (§3.3 step 1, §3.9): the
+    /// row compares the stream that passed the cap — stderr here, where the
+    /// C prints 3 MiB and its stdout matches — and stores the end perf saw
+    /// (the SIGKILL that stopped the run), never an exit it did not see.
+    #[test]
+    fn output_over_the_cap_is_compared_on_its_own_stream() {
+        assert_eq!(overflowed_stream(OUTPUT_CAP - 100, 5), "stdout");
+        assert_eq!(overflowed_stream(5, OUTPUT_CAP - 100), "stderr");
+        if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("perf-cap");
+        let root = tmp.path().canonicalize().expect("root");
+        let l = test_launcher(&root);
+        let host = HostDirs::from_env().expect("host");
+        let program = |name: &str, blocks: usize| {
+            c_program(
+                &root,
+                name,
+                &format!(
+                    "#include <stdio.h>\n#include <string.h>\nint main(void) {{ static char b[65536]; \
+                     memset(b, 'x', sizeof b); printf(\"same\\n\"); fflush(stdout); \
+                     for (int i = 0; i < {blocks}; i++) fwrite(b, 1, sizeof b, stderr); return 0; }}\n"
+                ),
+            )
+        };
+        let c = program("c", 48);
+        let flood = program("flood", 1200);
+        let ctx = RunCtx {
+            launcher: &l,
+            host: &host,
+            root: &root,
+            name: "tool",
+            timeout_secs: 60,
+        };
+        let w = workload("w");
+        let shared = shared();
+        let inputs = row_inputs(&shared, &w, None, RowKind::Unit, None, None, None, None);
+        let mut seen = seen();
+        let SideResult::Row(row, None) = side_row(
+            &ctx, &c, &flood, &w, None, 5, inputs, "u001", &shared, &mut seen,
+        )
+        .expect("runs") else {
+            panic!("the unit's row")
+        };
+        assert_eq!(row.outcome, "behaves-differently");
+        let d = row.first_difference.as_ref().expect("difference");
+        assert!(d.over_cap);
+        assert_eq!((d.stream.as_str(), d.c_len), ("stderr", 48 * 65536));
+        let other_end = row
+            .step1
+            .as_ref()
+            .and_then(|s| s.other.as_ref())
+            .map(|o| o.end.clone());
+        assert_eq!(other_end.as_deref(), Some("signal 9"));
+        assert_eq!(Some(d.other_end.clone()), other_end, "the row agrees");
+        res::check_row(&row, RowKind::Unit).expect("valid");
+    }
+
+    /// The program as it stands says why it does not link (§3.2, note 15,
+    /// §4): a no-std unit beside a std unit, in both orders — and never a
+    /// mixed-panic finding for a unit with no runtime found; a fat-LTO unit
+    /// beside a std unit, in both orders; otherwise "unknown", naming every
+    /// unit, with the linker's lines in the log.
+    #[test]
+    fn the_program_as_it_stands_says_why_it_does_not_link() {
+        let bench = crate::testutil::ToolBench::new("perf-causes");
+        let root = bench.root().canonicalize().expect("root");
+        put(
+            &root,
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"tool\"\nsource_dir = \"src\"\n\
+             [oracle]\nallowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n",
+        );
+        put(&root, "src/main.c", "#include <stdio.h>\nint a(void); int b(void);\nint main(void) { printf(\"%d\\n\", a() + b()); return 0; }\n");
+        put(&root, "src/a.c", "int a(void) { return 1; }\n");
+        put(&root, "src/b.c", "int b(void) { return 2; }\n");
+        let target = harness_core::TargetContext::load(&root).expect("target");
+        let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
+        let scratch = build::perf_scratch(&root).expect("scratch");
+        let obj = build::sub_folder(&scratch, "obj").expect("obj");
+        let c_files = program_c_files_in(&base, "perf").expect("files");
+        let objects = build::compile_objects(&base, bench.runner(), &c_files, &obj)
+            .expect("runs")
+            .expect("compiles");
+        let kept_objects = |kept: &[PathBuf]| -> Vec<Hashed> {
+            c_files
+                .iter()
+                .zip(&objects)
+                .filter(|(c, _)| kept.contains(c))
+                .map(|(_, o)| o.clone())
+                .collect()
+        };
+        // A unit's crate: its own release profile and lib.rs; it replaces
+        // `file`.
+        let unit = |id: &str, profile: &str, lib_rs: &str, file: &str| -> UnitSide {
+            let dir = root.join("fixtures").join(id);
+            put(
+                &dir,
+                "Cargo.toml",
+                &format!(
+                    "[package]\nname = \"{id}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+                     [lib]\ncrate-type = [\"staticlib\"]\n\n[workspace]\n\n[profile.release]\n{profile}"
+                ),
+            );
+            put(&dir, "src/lib.rs", lib_rs);
+            let lib = Hashed::new(&bench.build(&dir.canonicalize().expect("dir"))).expect("hash");
+            let facts = archive_facts(&std::fs::read(&lib.path).expect("lib")).expect("facts");
+            UnitSide::Built {
+                candidate: Candidate {
+                    id: id.into(),
+                    position: 1,
+                    replaces_rel: vec![format!("src/{file}")],
+                    replaces: vec![root.join("src").join(file).canonicalize().expect("c")],
+                    crate_dir: dir,
+                    verdict_crate: String::new(),
+                },
+                bin: Hashed {
+                    path: root.join("unused"),
+                    digest: String::new(),
+                },
+                staticlib: lib,
+                facts,
+                crate_digest: harness_core::hash::bytes_hash(id.as_bytes()),
+                profile: Vec::new(),
+            }
+        };
+        // A std unit's body pulls std in (a Vec, an index that may panic).
+        let uses_std = |func: &str| {
+            format!(
+                "#[no_mangle]\npub extern \"C\" fn {func}() -> i32 {{\n    \
+                 let v: Vec<i32> = std::hint::black_box(vec![10]);\n    v[0]\n}}\n"
+            )
+        };
+        let std_a = unit("stda", "panic = \"abort\"\n", &uses_std("a"), "a.c");
+        let unwind_a = unit("unwinda", "", &uses_std("a"), "a.c");
+        let lto_b = unit(
+            "ltob",
+            "panic = \"abort\"\nlto = true\n",
+            &uses_std("b"),
+            "b.c",
+        );
+        let nostd_b = unit(
+            "nostdb",
+            "panic = \"abort\"\n",
+            "#![no_std]\n#[panic_handler]\nfn on_panic(_: &core::panic::PanicInfo) -> ! {\n    loop {}\n}\n\
+             #[no_mangle]\npub extern \"C\" fn b() -> i32 {\n    20\n}\n",
+            "b.c",
+        );
+        let not_a = unit(
+            "nota",
+            "panic = \"abort\"\n",
+            "#[no_mangle]\npub extern \"C\" fn not_a() -> i32 {\n    10\n}\n",
+            "a.c",
+        );
+        let out = build::sub_folder(&scratch, "bin/pall")
+            .expect("slot")
+            .join("tool");
+        let link = |sides: &[&UnitSide]| -> (Program, String) {
+            let held: Vec<UnitRef> = sides
+                .iter()
+                .map(|s| UnitRef {
+                    id: s.id().into(),
+                    crate_digest: harness_core::hash::bytes_hash(s.id().as_bytes()),
+                })
+                .collect();
+            let mut log = String::new();
+            let p = as_it_stands(
+                sides,
+                &held,
+                &c_files,
+                &base,
+                &[],
+                bench.runner(),
+                &out,
+                &kept_objects,
+                "x.log",
+                &mut log,
+            )
+            .expect("runs");
+            (p, log)
+        };
+        let cause = |sides: &[&UnitSide]| -> (String, Vec<String>, String) {
+            match link(sides) {
+                (
+                    Program::SetUp {
+                        outcome: "does-not-link",
+                        setup,
+                        ..
+                    },
+                    log,
+                ) => (
+                    setup.cause.unwrap_or_default(),
+                    setup.units.unwrap_or_default(),
+                    log,
+                ),
+                (Program::SetUp { outcome, .. }, log) => panic!("{outcome}: {log}"),
+                (_, log) => panic!("it linked: {log}"),
+            }
+        };
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // A no-std unit beside a std one, in both orders.
+        let (c, u, _) = cause(&[&std_a, &nostd_b]);
+        assert_eq!((c.as_str(), u), ("no-std", ids(&["nostdb"])));
+        let (c, u, _) = cause(&[&nostd_b, &std_a]);
+        assert_eq!((c.as_str(), u), ("no-std", ids(&["nostdb"])));
+        // Beside an unwinding unit too: no runtime found is never part of a
+        // mixed-panic finding.
+        let (c, _, _) = cause(&[&unwind_a, &nostd_b]);
+        assert_eq!(c, "no-std");
+        // A fat-LTO unit beside a std unit, in both orders.
+        let (c, u, _) = cause(&[&std_a, &lto_b]);
+        assert_eq!((c.as_str(), u), ("lto", ids(&["ltob"])));
+        let (c, u, _) = cause(&[&lto_b, &std_a]);
+        assert_eq!((c.as_str(), u), ("lto", ids(&["ltob"])));
+        // Otherwise unknown, naming every unit, the linker's lines kept.
+        let std_b = unit("stdb", "panic = \"abort\"\n", &uses_std("b"), "b.c");
+        let (c, u, log) = cause(&[&not_a, &std_b]);
+        assert_eq!((c.as_str(), u), ("unknown", ids(&["nota", "stdb"])));
+        assert!(log.contains("_a"), "{log}");
+    }
+
+    /// `perf run` end to end on a small target of five verified units and a
+    /// pending one (§3.2, §3.5, §3.10): no build step writes outside its own
+    /// folder; the progress names the left-out units in words; when the C
+    /// fails on a workload in step 1 its other rows are not run; a C that
+    /// starts another program is stopped by a SIGKILL perf did not send,
+    /// never "crashes"; a crate that does not build keeps its real digest,
+    /// so its rows stay current; one changed by its build is caught after
+    /// it; an as-it-stands row on a missing input records its units; and
+    /// `--unit` builds only the units asked for.
+    #[test]
+    fn a_run_over_verified_units_end_to_end() {
+        if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let dir = Beside::new("e2e");
+        let root = dir.0.clone();
+        let ids = ["ua", "ub", "uc", "ud", "ue"];
+        mini_program(&root, &ids);
+        // ud's build script tries to write the C's objects and ua's
+        // staticlib folder, then fails; ue has no Cargo.lock yet, so its
+        // build writes one into the files verify hashed.
+        let obj_probe = root.join("migration/build/.perf/obj/written-by-a-build-script");
+        let lib_probe = root.join("migration/units/ua/ua_rs/target/written-by-a-build-script");
+        let build_rs = format!(
+            "fn main() {{\n    let _ = std::fs::write({obj_probe:?}, b\"x\");\n    \
+             let _ = std::fs::write({lib_probe:?}, b\"x\");\n    \
+             panic!(\"this crate does not build\");\n}}\n"
+        );
+        for (i, id) in ids.iter().enumerate() {
+            let script = (*id == "ud").then_some(build_rs.as_str());
+            unit_crate(&root, id, i + 1, script, *id != "ue");
+        }
+        let facts = facts_of(&root);
+        let mut plan = "schema_version = 1\ntarget = \"tool\"\n".to_string();
+        for id in ids {
+            plan += &plan_unit(&root, &facts, id, "verified", true, None);
+        }
+        plan += "\n[[unit]]\nid = \"up\"\nstatus = \"pending\"\n";
+        put(&root, "migration/plan.toml", &plan);
+        let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+        let target = TargetContext::load(&root).expect("target");
+        let perf_dir = root.join("migration/perf");
+        std::fs::create_dir_all(&perf_dir).expect("perf dir");
+        let workloads = wl::parse(
+            "schema_version = 1\n\
+             [[workload]]\nid = \"tiny\"\nargs = []\nruns = 5\n\
+             [[workload]]\nid = \"crash\"\nargs = [\"crash\"]\nruns = 5\n\
+             [[workload]]\nid = \"sys\"\nargs = [\"sys\"]\nruns = 5\n\
+             [[workload]]\nid = \"gone\"\nargs = [\"{input}\"]\ninput = \"bench/gone.txt\"\nruns = 5\n",
+            Path::new("w.toml"),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let run = |req: PerfRequest, seen: &mut Seen| {
+            perf_run(&target, &plan, &facts, &workloads, &perf_dir, &req, seen)
+        };
+
+        // An unknown id is refused naming the verified units — never the
+        // pending one.
+        let refused = run(
+            PerfRequest {
+                units: vec!["nope".into()],
+                ..PerfRequest::default()
+            },
+            &mut seen(),
+        );
+        let Err(Error::InvalidPlan(words)) = &refused else {
+            panic!("{refused:?}")
+        };
+        assert!(
+            words.ends_with("the verified units are ua, ub, uc, ud, ue"),
+            "{words}"
+        );
+
+        // A full run.
+        let mut first = seen();
+        let summary = run(PerfRequest::default(), &mut first).expect("perf runs");
+        let says = |s: &Seen, text: &str| s.messages.iter().any(|m| m == text);
+        let rows_on = |s: &Seen, w: &str| -> Vec<(String, String)> {
+            s.rows
+                .iter()
+                .filter(|(_, r)| r.workload == w)
+                .map(|(side, r)| (side.clone(), r.outcome.clone()))
+                .collect()
+        };
+        let pairs = |v: &[(&str, &str)]| -> Vec<(String, String)> {
+            v.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
+        // Each build step wrote only its own folder (§3.2 *Build* step 3).
+        if !dir.in_temp() {
+            assert!(!obj_probe.exists(), "a build script wrote the C's objects");
+            assert!(
+                !lib_probe.exists(),
+                "a build script wrote another unit's target"
+            );
+        }
+        // The pending unit is never measured, recorded or named.
+        assert!(!first.rows.iter().any(|(side, _)| side == "up"));
+        assert!(!first.messages.iter().any(|m| m
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|word| word == "up")));
+        assert!(!res::unit_path(&perf_dir, "up").exists());
+        // The left-out units, in words.
+        assert!(
+            says(
+                &first,
+                "the program as it stands — ua, ub, uc (ud left out: its crate does not build; \
+                 ue left out: its Rust changed since verify — Re-check it)"
+            ),
+            "{:#?}",
+            first.messages
+        );
+        // The C crashes on "crash": shown once, under the C; the units and
+        // the program as it stands are not run there, and the units perf
+        // cannot build still say why.
+        assert_eq!(
+            rows_on(&first, "crash"),
+            pairs(&[
+                ("c", "c-crashed"),
+                ("ud", "crate-does-not-build"),
+                ("ue", "not-verified")
+            ])
+        );
+        assert!(says(
+            &first,
+            "the other rows on crash are not run — the C failed there"
+        ));
+        assert!(!first
+            .messages
+            .iter()
+            .any(|m| m.starts_with("ua on crash")
+                || m.starts_with("the program as it stands on crash")));
+        // A C that starts another program is stopped by a SIGKILL perfrun
+        // did not send: worded without asserting why, never as a crash.
+        assert_eq!(
+            rows_on(&first, "sys"),
+            pairs(&[
+                ("c", "stopped-by-sigkill"),
+                ("ud", "crate-does-not-build"),
+                ("ue", "not-verified")
+            ])
+        );
+        let program = res::read_program(&res::program_path(&perf_dir))
+            .expect("reads")
+            .expect("written");
+        let sys = program
+            .c_alone
+            .iter()
+            .find(|r| r.workload == "sys")
+            .expect("row");
+        assert!(sys.step1.is_some());
+        let words = perf_words::words(
+            sys,
+            &perf_words::Context {
+                side: perf_words::Side::C,
+                workload: "sys",
+                input: None,
+            },
+        );
+        assert!(!words.headline.contains("crash"), "{}", words.headline);
+        assert_eq!(summary.measured, 0);
+        // Today: ue's build wrote its Cargo.lock, so it is not fresh now.
+        let measurable = perf_measurable(&target, &plan, &facts).expect("reads");
+        assert_eq!(measurable, ["ua", "ub", "uc", "ud"]);
+        let reasons = |row: &Row, kind: RowKind, w: Option<&str>, replaces: Option<&[String]>| {
+            out_of_date(&root, &target, &facts, row, kind, w, replaces, &measurable)
+        };
+        // A missing input: the program as it stands still records the units
+        // it holds and those left out, so only its input reads out of date.
+        let gone = program
+            .as_it_stands
+            .iter()
+            .find(|r| r.workload == "gone")
+            .expect("row");
+        assert_eq!(gone.outcome, "input-unusable");
+        let held: Vec<&str> = gone
+            .inputs
+            .units
+            .iter()
+            .flatten()
+            .map(|u| u.id.as_str())
+            .collect();
+        assert_eq!(held, ["ua", "ub", "uc"]);
+        assert_eq!(
+            reasons(gone, RowKind::AsItStands, None, None),
+            ["workload-gone"]
+        );
+        // A crate that does not build keeps its real digest: its row and the
+        // program's left-out entry stay current (§3.2, note 24).
+        let tiny = wl::digest(&workloads.workloads[0], None);
+        let unit_row = |id: &str, w: &str| -> Row {
+            res::read_unit(&res::unit_path(&perf_dir, id), id)
+                .expect("reads")
+                .expect("written")
+                .rows
+                .into_iter()
+                .find(|r| r.workload == w)
+                .expect("row")
+        };
+        let ud = unit_row("ud", "tiny");
+        assert_eq!(ud.outcome, "crate-does-not-build");
+        let ud_replaces = vec!["src/ud.c".to_string()];
+        assert!(
+            reasons(&ud, RowKind::Unit, Some(&tiny), Some(&ud_replaces)).is_empty(),
+            "{ud:?}"
+        );
+        let all = program
+            .as_it_stands
+            .iter()
+            .find(|r| r.workload == "tiny")
+            .expect("row");
+        assert!(
+            reasons(all, RowKind::AsItStands, Some(&tiny), None).is_empty(),
+            "{all:?}"
+        );
+        // ue's crate changed in its build: caught after it (§3.2).
+        let ue = unit_row("ue", "tiny");
+        assert_eq!(
+            (
+                ue.outcome.as_str(),
+                ue.setup.as_ref().and_then(|s| s.reason.as_deref())
+            ),
+            ("not-verified", Some("rust-changed"))
+        );
+
+        // --unit ua --unit ub on "crash": only those two are built and
+        // linked; ua's step 1 finds the C crashing — written on the C
+        // alone's row only — and ub is not run there.
+        let ua_before = std::fs::read(res::unit_path(&perf_dir, "ua")).expect("ua");
+        let ub_before = std::fs::read(res::unit_path(&perf_dir, "ub")).expect("ub");
+        let mut second = seen();
+        run(
+            PerfRequest {
+                units: vec!["ua".into(), "ub".into()],
+                workloads: vec!["crash".into()],
+                ..PerfRequest::default()
+            },
+            &mut second,
+        )
+        .expect("perf runs");
+        assert!(
+            says(&second, "ua — building its Rust…") && says(&second, "ub — building its Rust…")
+        );
+        assert!(
+            !second
+                .messages
+                .iter()
+                .any(|m| ["uc —", "ud —", "ue —"].iter().any(|p| m.starts_with(p))),
+            "{:#?}",
+            second.messages
+        );
+        let bins = root.join("migration/build/.perf/bin");
+        assert!(bins.join("p001").is_dir() && bins.join("p002").is_dir());
+        assert!(!bins.join("p003").exists() && !bins.join("pall").exists());
+        assert_eq!(rows_on(&second, "crash"), pairs(&[("c", "c-crashed")]));
+        assert!(says(&second, "ua on crash — C, ua, C…"));
+        assert!(!second.messages.iter().any(|m| m.starts_with("ub on crash")));
+        assert!(says(
+            &second,
+            "the other rows on crash are not run — the C failed there"
+        ));
+        assert_eq!(
+            std::fs::read(res::unit_path(&perf_dir, "ua")).expect("ua"),
+            ua_before
+        );
+        assert_eq!(
+            std::fs::read(res::unit_path(&perf_dir, "ub")).expect("ub"),
+            ub_before
+        );
     }
 }

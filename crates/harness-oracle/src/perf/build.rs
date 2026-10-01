@@ -1,8 +1,9 @@
 //! perf's builds (docs/PERF-DESIGN.md §3.2): as verify builds them — the C
 //! with `-O2 -ffp-contract=off` through the same `cc` invocation, its
 //! objects compiled once into `.perf/obj/`, each side one link into its
-//! slot; every object, staticlib and binary hashed after its build and
-//! checked before the first run; the scratch folders made by helpers that
+//! slot; every object, staticlib and binary hashed after its build, each
+//! object and staticlib checked before every link that uses it and each
+//! binary before every run; the scratch folders made by helpers that
 //! refuse links.
 
 use crate::exec::Runner;
@@ -173,9 +174,12 @@ pub(crate) fn whole_cc_into(
     )
 }
 
-/// Compile each C file once into `obj_dir` (`<stem>.o`), with the flags
-/// [`whole_cc_into`] gives them; `Ok(Err(first lines))` when the compiler
-/// ran and failed — a set-up failure of the C, in its own words.
+/// Compile each C file once into `obj_dir` (`<n>-<stem>.o`, `n` its place
+/// in `c_files` from 001), with the flags [`whole_cc_into`] gives them;
+/// `Ok(Err(first lines))` when the compiler ran and failed — a set-up
+/// failure of the C, in its own words. The place keeps two files with one
+/// base name (a top-level link to a same-named file in a subfolder) apart,
+/// as verify's single compile does.
 pub(crate) fn compile_objects(
     base: &Base,
     runner: &Runner,
@@ -184,12 +188,12 @@ pub(crate) fn compile_objects(
 ) -> Result<Result<Vec<Hashed>, String>, Error> {
     let includes = base.includes();
     let mut out = Vec::with_capacity(c_files.len());
-    for c in c_files {
+    for (i, c) in c_files.iter().enumerate() {
         let stem = c
             .file_stem()
             .and_then(|s| s.to_str())
             .ok_or_else(|| Error::Invariant(format!("{}: not a UTF-8 name", c.display())))?;
-        let obj = obj_dir.join(format!("{stem}.o"));
+        let obj = obj_dir.join(format!("{:03}-{stem}.o", i + 1));
         let cflags = ["-c".to_string()];
         let inv = CcInvocation {
             includes: &includes,
@@ -209,28 +213,34 @@ pub(crate) fn compile_objects(
 
 /// Link one side into `slot_dir/<name>`: `objects` and `libs` (staticlibs,
 /// in order) with the target's `extra_link_args`; `group` wraps the
-/// staticlibs in `--start-group … --end-group` (GNU ld). `Ok(Err(first
+/// staticlibs in `--start-group … --end-group` (GNU ld). Every object and
+/// staticlib is first checked against the hash taken right after its build
+/// (§3.2 *Build* step 2): one that a later build step changed is refused
+/// ("… changed after perf built it — measure again"). `Ok(Err(first
 /// lines))` when the link ran and failed.
 pub(crate) fn link_side(
     base: &Base,
     link_args: &[String],
     runner: &Runner,
     out: &Path,
-    objects: &[PathBuf],
-    libs: &[PathBuf],
+    objects: &[Hashed],
+    libs: &[Hashed],
     group: bool,
 ) -> Result<Result<Hashed, String>, Error> {
+    for built in objects.iter().chain(libs) {
+        built.check()?;
+    }
     let includes = base.includes();
-    let mut inputs: Vec<PathBuf> = objects.to_vec();
+    let mut inputs: Vec<PathBuf> = objects.iter().map(|h| h.path.clone()).collect();
     let mut tail: Vec<String> = Vec::new();
     if group && libs.len() > 1 {
         tail.push("-Wl,--start-group".into());
         for lib in libs {
-            tail.push(crate::path_str(lib)?.to_string());
+            tail.push(crate::path_str(&lib.path)?.to_string());
         }
         tail.push("-Wl,--end-group".into());
     } else {
-        inputs.extend(libs.iter().cloned());
+        inputs.extend(libs.iter().map(|h| h.path.clone()));
     }
     tail.extend(link_args.iter().cloned());
     let inv = CcInvocation {
@@ -302,13 +312,12 @@ mod tests {
         assert_eq!(objects.len(), 2);
         let slot =
             sub_folder(&scratch, &format!("bin/{}", Slot::C.name().expect("slot"))).expect("slot");
-        let paths: Vec<PathBuf> = objects.iter().map(|h| h.path.clone()).collect();
         let c = link_side(
             &base,
             &[],
             bench.runner(),
             &slot.join("tool"),
-            &paths,
+            &objects,
             &[],
             false,
         )
@@ -327,13 +336,15 @@ mod tests {
             true,
             "#[no_mangle] pub extern \"C\" fn unit(x: i32) -> i32 { x + 2 }\n",
         );
-        let lib = bench.build(&crate_dir);
+        let lib = Hashed::new(&bench.build(&crate_dir)).expect("hash");
         let unit_c = root.join("src/unit.c").canonicalize().expect("unit.c");
         let kept = kept_c_files(&c_files, std::slice::from_ref(&unit_c)).expect("kept");
-        let kept_objects: Vec<PathBuf> = objects
+        // Objects pair with their C files by place, as perf's run does.
+        let kept_objects: Vec<Hashed> = c_files
             .iter()
-            .filter(|h| kept.iter().any(|k| k.file_stem() == h.path.file_stem()))
-            .map(|h| h.path.clone())
+            .zip(&objects)
+            .filter(|(c, _)| kept.contains(c))
+            .map(|(_, o)| o.clone())
             .collect();
         let slot = sub_folder(
             &scratch,
@@ -346,7 +357,7 @@ mod tests {
             bench.runner(),
             &slot.join("tool"),
             &kept_objects,
-            &[lib],
+            std::slice::from_ref(&lib),
             false,
         )
         .expect("runs")
@@ -364,6 +375,91 @@ mod tests {
         )
         .expect("runs");
         assert!(broken.is_err(), "unit() is missing");
+        // An object a later build step rewrote (a crate's build script, say)
+        // is refused before the link, by its hash.
+        std::fs::write(&objects[0].path, b"not the C's object").expect("rewrite");
+        let refused = link_side(
+            &base,
+            &[],
+            bench.runner(),
+            &slot.join("again"),
+            &objects,
+            &[],
+            false,
+        )
+        .expect_err("refused");
+        assert!(
+            refused
+                .to_string()
+                .contains("changed after perf built it — measure again"),
+            "{refused}"
+        );
+        assert!(!slot.join("again").exists(), "nothing linked");
+        // A staticlib the same.
+        std::fs::write(&lib.path, b"!<arch>\n").expect("rewrite");
+        let refused = link_side(
+            &base,
+            &[],
+            bench.runner(),
+            &slot.join("again"),
+            &[],
+            std::slice::from_ref(&lib),
+            false,
+        )
+        .expect_err("refused");
+        assert!(refused.to_string().contains("changed after perf built it"));
+    }
+
+    /// Two top-level C files with one base name — `b.c` a link to
+    /// `sub/a.c` beside `a.c` — each get their own object, so perf's C
+    /// links and prints what verify's single compile prints.
+    #[test]
+    fn two_files_with_one_base_name_keep_their_own_objects() {
+        let bench = crate::testutil::ToolBench::new("perf-stems");
+        let root = bench.root().canonicalize().expect("root");
+        let put = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().expect("parent")).expect("dir");
+            std::fs::write(&p, text).expect("write");
+        };
+        put(
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"tool\"\nsource_dir = \"src\"\n\
+             [oracle]\nallowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n",
+        );
+        put(
+            "src/a.c",
+            "#include <stdio.h>\nint sub_fn(void);\nint main(void) { printf(\"%d\\n\", sub_fn()); return 0; }\n",
+        );
+        put("src/sub/a.c", "int sub_fn(void) { return 3; }\n");
+        std::os::unix::fs::symlink("sub/a.c", root.join("src/b.c")).expect("link");
+        let target = harness_core::TargetContext::load(&root).expect("target");
+        let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
+        let scratch = perf_scratch(&root).expect("scratch");
+        let obj = sub_folder(&scratch, "obj").expect("obj");
+        let c_files = crate::program_c_files_in(&base, "perf").expect("c files");
+        assert_eq!(c_files.len(), 2, "{c_files:?}");
+        let objects = compile_objects(&base, bench.runner(), &c_files, &obj)
+            .expect("runs")
+            .expect("compiles");
+        assert_ne!(objects[0].path, objects[1].path, "one object each");
+        let slot = sub_folder(&scratch, "bin/p000").expect("slot");
+        let c = link_side(
+            &base,
+            &[],
+            bench.runner(),
+            &slot.join("tool"),
+            &objects,
+            &[],
+            false,
+        )
+        .expect("runs")
+        .expect("links");
+        let whole = scratch.join("whole");
+        whole_cc_into(&base, &[], bench.runner(), &whole, &c_files).expect("verify's build");
+        let run = |p: &Path| std::process::Command::new(p).output().expect("runs").stdout;
+        assert_eq!(run(&c.path), b"3\n");
+        assert_eq!(run(&c.path), run(&whole));
     }
 
     #[test]

@@ -23,8 +23,9 @@ pub const PERF_LAUNCHER: &str = "perf-launcher-2";
 pub const PERF_RUN_LOCK: &str = "perf run";
 
 /// How a row was measured (§3.9 `inputs.recipe`): a change to the method
-/// makes every earlier row out of date.
-pub const PERF_RECIPE: &str = "perf-recipe-1";
+/// makes every earlier row out of date. Recipe 2: a short run is one side
+/// under both legs of the floor, not either (§3.5 step 2).
+pub const PERF_RECIPE: &str = "perf-recipe-2";
 
 /// Directory of perf's files, inside the ledger dir.
 pub const PERF_DIR: &str = "perf";
