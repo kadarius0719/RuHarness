@@ -11,7 +11,8 @@ use std::ffi::OsString;
 
 impl App {
     /// Why perf cannot measure now, from the workloads file's state (and
-    /// the platform); `None` when it can.
+    /// the platform) in the words `perf run` refuses with (§3.1 *States*:
+    /// "Measure is greyed with the same words"); `None` when it can.
     pub fn speed_gate(&self) -> Option<String> {
         if !cfg!(target_os = "macos") {
             return Some(
@@ -19,14 +20,17 @@ impl App {
             );
         }
         match &self.speed.group {
-            Group::NoFile => Some("write your workloads file first".into()),
-            Group::NoWorkload => Some("add a workload to your workloads file first".into()),
-            Group::FileError(_) => Some("the workloads file has an error — Edit it first".into()),
+            Group::NoFile | Group::NoWorkload | Group::FileError(_) => self
+                .speed
+                .blocker
+                .clone()
+                .or_else(|| Some("the workloads file cannot be used".into())),
             _ => None,
         }
     }
 
-    /// Why `id` is not one perf would measure now, in words.
+    /// Why `id` is not one perf would measure now, in perf's own words for
+    /// the reason it would leave it out (§3.2).
     fn not_measurable(&self, id: &str) -> String {
         let Some(u) = self.snapshot.unit(id) else {
             return format!("unit {id} is gone");
@@ -37,10 +41,22 @@ impl App {
         ) {
             return "perf measures a verified unit's Rust — accept an attempt first".into();
         }
-        if u.report.promotion_interrupted.is_some() {
-            return "an Accept was interrupted — Re-check it first".into();
+        match crate::speed::left_out_today(u) {
+            Some("accept-interrupted") => format!(
+                "{}; Measure does not",
+                harness_core::perf::accept_interrupted_words(
+                    u.report
+                        .promotion_interrupted
+                        .as_deref()
+                        .unwrap_or("legacy"),
+                    id
+                )
+            ),
+            Some("replaces-changed") => {
+                format!("{id}'s replaced files changed since verify — Re-check it")
+            }
+            _ => "its verdict is not green and fresh — Re-check it first".into(),
         }
-        "its verdict is not green and fresh — Re-check it first".into()
     }
 
     /// A Measure act's argv and its label (the one argv builder's part for
@@ -62,6 +78,18 @@ impl App {
                 Err(self.not_measurable(id))
             }
         };
+        // `--as-it-stands-only` with fewer than two measurable units: perf
+        // would build everything, then refuse (§3.10) — said here instead.
+        let two_units = || -> Result<(), String> {
+            if self.speed.measurable.len() < 2 {
+                return Err(
+                    "the program as it stands needs two verified units — with one, that \
+                     unit's own row measures the same program"
+                        .into(),
+                );
+            }
+            Ok(())
+        };
         let mut rest = vec![os("perf"), os("run"), self.target_arg()];
         let label = match act {
             Act::Measure => match unit {
@@ -73,13 +101,7 @@ impl App {
                 None => act.label().to_string(),
             },
             Act::MeasureProgram => {
-                if self.speed.measurable.len() < 2 {
-                    return Err(
-                        "the program as it stands needs two verified units — with one, that \
-                         unit's own row measures the same program"
-                            .into(),
-                    );
-                }
+                two_units()?;
                 rest.push(os("--as-it-stands-only"));
                 act.label().to_string()
             }
@@ -94,7 +116,10 @@ impl App {
                         measurable(id)?;
                         rest.push(os(format!("--unit={id}")));
                     }
-                    None => rest.push(os("--as-it-stands-only")),
+                    None => {
+                        two_units()?;
+                        rest.push(os("--as-it-stands-only"))
+                    }
                 }
                 for w in &workloads {
                     rest.push(os(format!("--workload={w}")));

@@ -198,14 +198,18 @@ pub struct SpeedModel {
     pub header: Vec<String>,
     /// A perf run holds the lock now.
     pub measuring: bool,
-    /// The units perf would measure now (verified or merged, verdict green
-    /// and fresh, no interrupted Accept), in plan order.
+    /// The units perf would measure now (verified or merged, no interrupted
+    /// Accept, verdict green and fresh, the plan's `replaces` still the
+    /// verdict's, a crate folder: [`left_out_today`]), in plan order.
     pub measurable: Vec<String>,
     /// Each workload's id and runs a side, in file order.
     pub workloads: Vec<(String, u32)>,
     /// The C's clock time on each workload, in seconds, from its stored
     /// C-alone row (for the estimate).
     pub c_clock: BTreeMap<String, f64>,
+    /// Why perf cannot measure, in the words `perf run` refuses with (the
+    /// workloads file's state, §3.1): `None` when it can.
+    pub blocker: Option<String>,
 }
 
 impl SpeedModel {
@@ -504,6 +508,32 @@ fn cut(text: &str, width: usize) -> String {
     s
 }
 
+/// Why perf would leave a verified or merged unit out today, as its
+/// `left_out` reason — §3.2's selection, every condition perf's own
+/// checks (build note 24): an interrupted Accept, a verdict not green and
+/// fresh, the plan's `replaces` no longer the verdict's, no crate folder.
+/// `None`: perf would measure it. Built from what the snapshot holds:
+/// nothing more is read.
+pub fn left_out_today(u: &UnitView) -> Option<&'static str> {
+    if u.report.promotion_interrupted.is_some() {
+        return Some("accept-interrupted");
+    }
+    if !u.report.fresh_green() {
+        return Some("not-fresh");
+    }
+    match &u.verdict {
+        Some(v) if v.inputs.replaces != u.unit.oracle_param_list("replaces") => {
+            return Some("replaces-changed")
+        }
+        Some(_) => {}
+        None => return Some("not-fresh"),
+    }
+    if u.crate_dir.is_none() {
+        return Some("not-fresh");
+    }
+    None
+}
+
 /// Build Speed from `snapshot`.
 pub fn build(snapshot: &Snapshot) -> SpeedModel {
     let perf = &snapshot.perf;
@@ -521,22 +551,25 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         measurable: Vec::new(),
         workloads: Vec::new(),
         c_clock: BTreeMap::new(),
+        blocker: None,
     };
     let workloads = match &perf.workloads {
-        Ok(WorkloadsState::NoFile) => return model,
-        Ok(WorkloadsState::NoWorkload) => {
-            model.group = Group::NoWorkload;
+        Ok(WorkloadsState::Ready(w)) => w,
+        Ok(state) => {
+            model.blocker = state.blocker();
+            model.group = match state {
+                WorkloadsState::NoWorkload => Group::NoWorkload,
+                WorkloadsState::Invalid(e) => Group::FileError(e.to_string()),
+                _ => Group::NoFile,
+            };
             return model;
         }
-        Ok(WorkloadsState::Invalid(e)) => {
-            model.group = Group::FileError(e.to_string());
-            return model;
-        }
+        // A file perf cannot load at all: its error, as `perf run` prints it.
         Err(e) => {
+            model.blocker = Some(e.clone());
             model.group = Group::FileError(e.clone());
             return model;
         }
-        Ok(WorkloadsState::Ready(w)) => w,
     };
     let order = |id: &str| {
         workloads
@@ -558,7 +591,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 harness_core::UnitStatus::Verified | harness_core::UnitStatus::Merged
             )
         })
-        .filter(|u| u.report.fresh_green() && u.report.promotion_interrupted.is_none())
+        .filter(|u| left_out_today(u).is_none())
         .map(|u| u.unit.id.clone())
         .collect();
     model.measurable = measurable.clone();
@@ -781,6 +814,7 @@ mod tests {
             measurable: Vec::new(),
             workloads: Vec::new(),
             c_clock: BTreeMap::new(),
+            blocker: None,
         };
         for g in [
             Group::NoFile,

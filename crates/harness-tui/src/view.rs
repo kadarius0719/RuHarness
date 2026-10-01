@@ -6714,6 +6714,180 @@ mod tests {
         );
     }
 
+    /// "Measurable today" is perf's own selection (§3.2, build note 24): a
+    /// unit whose plan `replaces` changed since its verdict — which stays
+    /// green and fresh — is left out, its Measure greyed in perf's words,
+    /// and the program as it stands is judged against that.
+    #[test]
+    fn measurable_today_follows_every_condition_of_perfs_selection() {
+        use harness_core::perf::results::{self as res, LeftOut};
+        let app = app_of("targets/zopfli", "speed-measurable");
+        let app = write_speed_results(&app, false);
+        let id = "u001-katajainen";
+        let root = app.config.target.clone();
+        assert_eq!(app.speed.measurable, [id]);
+        assert!(
+            app.speed.program_rows[0].out_of_date.is_empty(),
+            "{:?}",
+            app.speed.program_rows[0].out_of_date
+        );
+        // The plan's replaces edited after verify.
+        let plan = root.join("migration/plan.toml");
+        let text = std::fs::read_to_string(&plan).unwrap();
+        let edited = text.replace(
+            r#"replaces = ["src/zopfli/katajainen.c"]"#,
+            r#"replaces = ["src/zopfli/katajainen.c", "src/zopfli/util.c"]"#,
+        );
+        assert_ne!(edited, text);
+        std::fs::write(&plan, edited).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert!(app.snapshot.unit(id).unwrap().report.fresh_green());
+        assert!(
+            app.speed.measurable.is_empty(),
+            "{:?}",
+            app.speed.measurable
+        );
+        // Held by the row, left out now.
+        assert_eq!(
+            app.speed.program_rows[0].out_of_date,
+            ["u001-katajainen is left out now"]
+        );
+        app.select(Selection::Unit(id.into()));
+        let this = app
+            .menu_items()
+            .into_iter()
+            .find(|i| i.label == "Measure this unit's speed")
+            .expect("on a verified unit");
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                this.greyed.as_deref(),
+                Some("u001-katajainen's replaced files changed since verify — Re-check it")
+            );
+        }
+        // A row that left it out for that reason is current: nothing was
+        // verified since.
+        let perf = harness_core::perf::perf_dir(&root);
+        let path = res::program_path(&perf);
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        for r in &mut program.as_it_stands {
+            let held = r.inputs.units.take().unwrap();
+            r.inputs.units = Some(Vec::new());
+            r.inputs.left_out.as_mut().unwrap().push(LeftOut {
+                id: id.into(),
+                crate_digest: held[0].crate_digest.clone(),
+                reason: "replaces-changed".into(),
+            });
+        }
+        res::write_program(&path, &program).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        for r in &app.speed.program_rows {
+            assert!(r.out_of_date.is_empty(), "{:?}", r.out_of_date);
+        }
+    }
+
+    /// Measure is greyed in the words `perf run` refuses with: the
+    /// workloads file's state (§3.1), an interrupted Accept (§3.2), and the
+    /// program as it stands's 31 runs with one measurable unit (§3.10).
+    #[test]
+    fn measure_is_greyed_with_perfs_own_words() {
+        use harness_core::perf::results as res;
+        use harness_core::perf::workloads::{self as wl, WorkloadsState};
+        if !cfg!(target_os = "macos") {
+            return; // greyed "macOS only" first.
+        }
+        let greyed = |app: &mut App, sel: Selection, label: &str| -> Option<String> {
+            app.select(sel);
+            app.menu_items()
+                .into_iter()
+                .find(|i| i.label == label)
+                .unwrap_or_else(|| panic!("{label}"))
+                .greyed
+        };
+        let mut app = app_of("targets/zopfli", "speed-greyed");
+        let root = app.config.target.clone();
+        assert_eq!(
+            greyed(&mut app, Selection::Speed, "Measure speed"),
+            WorkloadsState::NoFile.blocker()
+        );
+        let dir = harness_core::perf::perf_dir(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("workloads.toml"), wl::STARTER).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert_eq!(
+            greyed(&mut app, Selection::Speed, "Measure speed"),
+            WorkloadsState::NoWorkload.blocker()
+        );
+        std::fs::write(
+            dir.join("workloads.toml"),
+            "schema_version = 1\n[[workload]]\nid = \"w\"\nruns = 99\n",
+        )
+        .unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        let words = greyed(&mut app, Selection::Speed, "Measure speed").unwrap();
+        assert_eq!(Some(words.clone()), wl::load(&root).unwrap().blocker());
+        assert!(
+            words.contains("workloads.toml line 4, column")
+                && words.ends_with("— fix it, or Edit the workloads file"),
+            "{words}"
+        );
+        // An interrupted Accept: perf's own words for it.
+        write_speed_results(&app, false);
+        let id = "u001-katajainen";
+        let marker = root
+            .join("migration/units")
+            .join(id)
+            .join(".promote-a-1234");
+        std::fs::create_dir_all(&marker).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert_eq!(
+            greyed(
+                &mut app,
+                Selection::Unit(id.into()),
+                "Measure this unit's speed"
+            )
+            .as_deref(),
+            Some(
+                "an Accept of a-1234 was interrupted — Re-check u001-katajainen (or run harness \
+                 verify u001-katajainen) to finish or undo it; Measure does not"
+            )
+        );
+        std::fs::remove_dir(&marker).unwrap();
+        // The program as it stands asks for 31 runs, but only one unit is
+        // measurable: perf would build everything, then refuse.
+        let path = res::program_path(&dir);
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        for (i, r) in program.as_it_stands[0]
+            .other
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            let f = if i % 2 == 0 { 0.88 } else { 1.14 };
+            r.cycles = Some((3.9e9 * f) as u64);
+            r.p_cycles = r.cycles;
+        }
+        res::write_program(&path, &program).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        assert_eq!(app.speed.measurable, [id]);
+        assert_eq!(
+            app.speed.more_runs(&crate::speed::SideKey::AsItStands),
+            ["big-text"]
+        );
+        assert_eq!(
+            greyed(
+                &mut app,
+                Selection::Speed,
+                "Measure the program as it stands again with 31 runs"
+            )
+            .as_deref(),
+            Some(
+                "the program as it stands needs two verified units — with one, that unit's own \
+                 row measures the same program"
+            )
+        );
+    }
+
     /// The committed zopfli (the dogfood): its features, its map, u001
     /// verified on them.
     #[test]
