@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod results;
 pub mod stats;
 pub mod workloads;
 
