@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// perf's scratch folder in `migration/build/`, made fresh each run.
 pub(crate) const PERF_BUILD_DIR: &str = ".perf";
 /// The kept outputs of behaves-differently rows, in `migration/build/`.
-pub(crate) const PERF_OUT_DIR: &str = ".perf-out";
+pub(crate) const PERF_OUT_DIR: &str = harness_core::perf::PERF_OUT_DIR;
 /// The runs' logs, in `migration/build/` (build note 29): never recreated
 /// by the `.perf` helper, the last [`KEPT_LOGS`] kept.
 pub(crate) const PERF_LOGS_DIR: &str = "perf-logs";

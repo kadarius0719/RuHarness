@@ -1214,7 +1214,10 @@ fn too_short(row: &Row, cx: &Context) -> RowWords {
     }
 }
 
-fn difference_words(d: &Difference) -> String {
+/// A difference in words: "prints differently (stdout, byte 40 961)",
+/// "exits differently (…)", "the Rust crashes (signal 11)", "prints more
+/// than 64 MiB …".
+pub fn difference_words(d: &Difference) -> String {
     if d.over_cap {
         return format!(
             "prints more than 64 MiB where the C prints {}",

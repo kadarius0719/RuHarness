@@ -4,7 +4,7 @@
 //! the ledger's lock, that Cancel keeps finished rows, and to keep the
 //! computer quiet.
 
-use super::{os, Act, App, Pending};
+use super::{os, Act, App, Mode, Pending};
 use crate::speed::{Group, SideKey};
 use harness_core::perf::estimate::{self, Estimate, Job};
 use std::ffi::OsString;
@@ -265,5 +265,211 @@ impl App {
                 .into(),
         );
         (title, body)
+    }
+
+    /// Compare the outputs (§3.11): the kept files of `side`'s row on
+    /// `workload`, around their first difference — a unified diff of text,
+    /// hex rows of anything else, control characters escaped — when they
+    /// are regular files whose size and blake3 match what the row recorded;
+    /// else "the two outputs are not on this computer — measure again".
+    pub fn compare_outputs(&self, side: &SideKey, workload: &str) -> Result<Mode, String> {
+        let row = self
+            .speed
+            .row(side, workload)
+            .ok_or_else(|| format!("no row on {workload}"))?;
+        let d = row
+            .difference
+            .as_ref()
+            .ok_or("this row found no difference")?;
+        let stream = if d.stream == "stderr" {
+            "stderr"
+        } else {
+            "stdout"
+        };
+        let unit = match side {
+            SideKey::Unit(id) => Some(id.as_str()),
+            _ => None,
+        };
+        let dir = harness_core::perf::kept_outputs_dir(&self.config.target, unit);
+        let gone = || "the two outputs are not on this computer — measure again".to_string();
+        let read = |which: &str| -> Result<Vec<u8>, String> {
+            let name = format!("{workload}.{which}.{stream}");
+            let kept = d.kept.iter().find(|k| k.name == name).ok_or_else(gone)?;
+            let path = dir.join(&name);
+            let meta = std::fs::symlink_metadata(&path).map_err(|_| gone())?;
+            if !meta.is_file() || meta.len() != kept.size {
+                return Err(gone());
+            }
+            let bytes = std::fs::read(&path).map_err(|_| gone())?;
+            if harness_core::hash::bytes_hash(&bytes) != kept.blake3 {
+                return Err(gone());
+            }
+            Ok(bytes)
+        };
+        let c = read("c")?;
+        let other = read("other")?;
+        let who = match side {
+            SideKey::Unit(id) => format!("{id}'s Rust"),
+            _ => "the program as it stands".into(),
+        };
+        let offset = if d.stream == stream {
+            d.offset as usize
+        } else {
+            first_difference(&c, &other)
+        };
+        let mut lines = vec![
+            format!(
+                "--- the C's {stream} ({} bytes, ended {})",
+                c.len(),
+                d.c_end
+            ),
+            format!(
+                "+++ {who}: {stream} ({} bytes, ended {})",
+                other.len(),
+                d.other_end
+            ),
+            format!(
+                "@@ first difference at byte {} · kept in {} @@",
+                offset + 1,
+                dir.strip_prefix(&self.config.target)
+                    .unwrap_or(&dir)
+                    .display()
+            ),
+        ];
+        lines.extend(outputs_around(&c, &other, offset));
+        Ok(Mode::Diff {
+            scroll: 0,
+            lines,
+            title: format!("the C and {who} on {workload}"),
+        })
+    }
+}
+
+/// Where two byte strings first differ (the shorter's length when one is
+/// the other's start).
+fn first_difference(a: &[u8], b: &[u8]) -> usize {
+    a.iter()
+        .zip(b)
+        .position(|(x, y)| x != y)
+        .unwrap_or(a.len().min(b.len()))
+}
+
+/// How far around the first difference the comparison shows.
+const COMPARE_BEFORE: usize = 2048;
+const COMPARE_AFTER: usize = 8192;
+
+/// `text` with every control character but a tab escaped (`\x1b`, `\r`).
+fn escaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\t' => out.push(ch),
+            '\r' => out.push_str("\\r"),
+            c if c.is_control() => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The two outputs around `offset`: a unified diff of the lines there when
+/// both read as text, else hex rows of 16 bytes (`-` the C, `+` the other).
+fn outputs_around(c: &[u8], other: &[u8], offset: usize) -> Vec<String> {
+    let start = offset.saturating_sub(COMPARE_BEFORE);
+    let window = |b: &[u8]| -> Vec<u8> {
+        let from = start.min(b.len());
+        b[from..(offset + COMPARE_AFTER).min(b.len())].to_vec()
+    };
+    let (cw, ow) = (window(c), window(other));
+    let as_text = |w: &[u8]| -> Option<String> {
+        // From the first line start, to the last whole line.
+        let from = if start == 0 {
+            0
+        } else {
+            w.iter().position(|&b| b == b'\n').map_or(0, |i| i + 1)
+        };
+        let to = match w.iter().rposition(|&b| b == b'\n') {
+            Some(i) if i >= from => i + 1,
+            _ => w.len(),
+        };
+        let text = std::str::from_utf8(&w[from..to]).ok()?;
+        text.chars()
+            .all(|ch| !ch.is_control() || matches!(ch, '\n' | '\t' | '\r'))
+            .then(|| text.to_string())
+    };
+    if let (Some(ct), Some(ot)) = (as_text(&cw), as_text(&ow)) {
+        let diff = similar::TextDiff::configure()
+            .timeout(std::time::Duration::from_millis(200))
+            .diff_lines(&ct, &ot);
+        return diff
+            .unified_diff()
+            .context_radius(3)
+            .to_string()
+            .lines()
+            .filter(|l| !l.starts_with("---") && !l.starts_with("+++"))
+            .map(escaped)
+            .collect();
+    }
+    let hex = |at: usize, b: &[u8]| -> String {
+        let row = &b[at.min(b.len())..(at + 16).min(b.len())];
+        let bytes: Vec<String> = row.iter().map(|x| format!("{x:02x}")).collect();
+        let ascii: String = row
+            .iter()
+            .map(|&x| {
+                if (0x20..0x7f).contains(&x) {
+                    x as char
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+        format!("{at:08x}  {:<47}  |{ascii}|", bytes.join(" "))
+    };
+    let first = (offset / 16).saturating_sub(2) * 16;
+    let mut lines = Vec::new();
+    let mut at = first;
+    while at < first + 16 * 12 && (at < c.len() || at < other.len()) {
+        let (a, b) = (hex(at, c), hex(at, other));
+        if a == b {
+            lines.push(format!(" {a}"));
+        } else {
+            lines.push(format!("-{a}"));
+            lines.push(format!("+{b}"));
+        }
+        at += 16;
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_outputs_compare_by_lines_and_bytes_by_hex_rows() {
+        let c = b"one\ntwo\nthree\n";
+        let o = b"one\nTWO\x1b\nthree\n";
+        let lines = outputs_around(c, o, first_difference(c, o));
+        assert!(
+            lines.iter().any(|l| l.starts_with("-00000000")),
+            "a control character makes it bytes: {lines:?}"
+        );
+        let o = b"one\nTWO\nthree\n";
+        let lines = outputs_around(c, o, first_difference(c, o));
+        assert!(
+            lines.iter().any(|l| l == "-two") && lines.iter().any(|l| l == "+TWO"),
+            "{lines:?}"
+        );
+        let c = [0u8, 1, 2, 3];
+        let o = [0u8, 1, 9, 3];
+        let lines = outputs_around(&c, &o, 2);
+        assert_eq!(
+            lines,
+            [
+                format!("-00000000  {:<47}  |....|", "00 01 02 03"),
+                format!("+00000000  {:<47}  |....|", "00 01 09 03"),
+            ]
+        );
+        assert_eq!(escaped("a\x1bb\r"), "a\\x1bb\\r");
     }
 }

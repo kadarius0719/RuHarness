@@ -29,6 +29,16 @@ pub struct FactsState {
     pub stale_paths: Vec<String>,
 }
 
+/// `a-13c941dfff95` → `a-13c9`; samples keep their `.rN`.
+pub fn short_id(id: &str) -> String {
+    let (base, sample) = match id.split_once(".r") {
+        Some((b, n)) => (b, format!(".r{n}")),
+        None => (id, String::new()),
+    };
+    let cut: String = base.chars().take(6).collect();
+    format!("{cut}{sample}")
+}
+
 /// Which recorded attempt produced the unit crate (R-5), by id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProvenanceView {

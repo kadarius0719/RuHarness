@@ -863,6 +863,16 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             width,
         )));
     }
+    let advice = app.speed.advice(unit, !app.config.providers.is_empty());
+    for d in &advice.differences {
+        lines.extend(wrapped(d, width, Style::default().fg(Color::Red)));
+    }
+    if let Some(next) = &advice.next {
+        lines.extend(wrapped(&format!("Next: {next}"), width, bold()));
+    }
+    if let Some(change) = &advice.change {
+        lines.extend(wrapped(change, width, Style::default()));
+    }
     lines
 }
 
@@ -1409,7 +1419,16 @@ fn summary_speed(
         return Vec::new();
     };
     links.push((start, Selection::Speed));
-    wrapped(&text, width, Style::default())
+    let mut lines = wrapped(&text, width, Style::default());
+    for (fact, _) in app.speed.program_differences() {
+        links.push((start + lines.len(), Selection::Speed));
+        lines.extend(wrapped(
+            &format!("Speed: {fact} — see Speed"),
+            width,
+            Style::default().fg(Color::Red),
+        ));
+    }
+    lines
 }
 
 /// How a row's sentence names its side.
@@ -1617,6 +1636,12 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             speed::SideKey::AsItStands,
             &model.program_rows,
         );
+        for (fact, which) in model.program_differences() {
+            section
+                .lines
+                .extend(wrapped(&fact, width, Style::default().fg(Color::Red)));
+            section.lines.extend(wrapped(&which, width, dim()));
+        }
     }
     for u in &model.units {
         section.push(
@@ -2936,6 +2961,64 @@ const HELP_FEATURE_LEGEND: &[(&str, &str)] = &[
     ("·", "see its units: they differ"),
 ];
 
+const HELP_SPEED: &[&str] = &[
+    "Speed compares the C against the Rust in use. A workload is one run of the whole program \
+     with arguments you choose and, at most, one input file of yours (inside the project). perf \
+     runs it as the C alone, then each verified unit's Rust swapped in alone, then the program \
+     as it stands (every verified unit together), the C and the Rust taking turns, many times \
+     each, and says which is faster and by how much — or that it cannot tell. It never changes \
+     a verdict.",
+    "perf compares what the program prints and how it ends: when the Rust prints or ends \
+     differently on a workload, that row says \"behaves differently\" and keeps both outputs; \
+     Compare the outputs shows them around their first difference. Verify does not run your \
+     workloads, so only perf finds this. perf stops even a fork; verify allows a fork but not \
+     starting another program.",
+    "The file, migration/perf/workloads.toml: schema_version = 1, then a [[workload]] table per \
+     run (id = \"big-text\", args = [\"-c\", \"{input}\"], input = \"bench/big.txt\", \
+     runs = 15). Enter on Speed: Write / Edit the workloads file, Measure speed; on a verified \
+     unit, Measure this unit's speed. Keep the computer quiet while it measures. Commit \
+     migration/perf/ to keep a history: measuring again replaces a row.",
+    "When a unit's Rust is slower and speed matters, change the Rust the way it was made: \
+     made by a model — Modify its attempt with a note about speed, Replace the verified crate \
+     with the new attempt, measure again, and Replace it back if it is not faster; a hand \
+     edit — Hand edit it, then measure again; written outside the cockpit — commit the crate \
+     first (git), edit it in your editor, run harness verify <unit> in a terminal, then \
+     measure again.",
+];
+
+const HELP_SPEED_WORDS: &[(&str, &str)] = &[
+    ("about as fast", "within 2 % of the C, either way"),
+    (
+        "slower 6.2 % (4.1–8.3 %)",
+        "the best guess, and the range it surely lies in",
+    ),
+    (
+        "probably slower",
+        "slower, but not clearly past the 2 % line",
+    ),
+    ("close call", "too close to the 2 % line to call"),
+    (
+        "can't tell",
+        "the runs vary too much — measure again with 31 runs, on a quiet computer",
+    ),
+    (
+        "too short to time",
+        "the run is too quick to time — use a bigger input",
+    ),
+    (
+        "behaves differently",
+        "the Rust prints or ends differently from the C on this workload",
+    ),
+    (
+        "out of date",
+        "the C, the Rust or the workload changed since — measure again",
+    ),
+    (
+        "parallel",
+        "it uses several cores: the words compare total CPU work",
+    ),
+];
+
 const HELP_CHAT: &[&str] = &[
     "The chat (Tab, or click Chat): ask for model work in plain words — \"migrate this\". It \
      reads the project and ASKS: a request waits on a line above the input, still for a \
@@ -3022,6 +3105,14 @@ fn help_rows(
             width,
             dim(),
         ));
+    }
+    rows.push(Line::from(""));
+    rows.push(Line::from(Span::styled("Speed", bold())));
+    for l in HELP_SPEED {
+        rows.extend(wrapped(l, width, Style::default()));
+    }
+    for (w, v) in HELP_SPEED_WORDS {
+        rows.extend(wrapped(&format!("  {w} — {v}"), width, dim()));
     }
     rows.push(Line::from(""));
     if let Some(why) = chat {
@@ -6317,6 +6408,222 @@ mod tests {
         let (title, body) = app.dialog_words(&p);
         assert_eq!(title, "Measure u001-katajainen again with 31 runs?");
         assert!(body[0].contains("on 1 workload (big-text)"), "{body:?}");
+    }
+
+    /// A unit row that behaves differently: its fact, its next step, the
+    /// change by provenance; the outputs compared from the kept files —
+    /// never from files that do not match what the row recorded.
+    #[test]
+    fn a_difference_is_a_fact_with_its_outputs_to_compare() {
+        use harness_core::perf::results::{self as res, Difference, KeptFile};
+        let app = app_of("targets/zopfli", "speed-differs");
+        let mut app = write_speed_results(&app, false);
+        // The slower row first: its next step, by provenance (zopfli's u001
+        // records no attempt: commit, edit, verify).
+        app.select(Selection::Unit("u001-katajainen".into()));
+        let screen = text(&render(&mut app, 200, 50));
+        assert!(
+            screen.contains("Next: perf times the Rust in use."),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("Commit the unit's crate first (git) — replacing it deletes it"),
+            "{screen}"
+        );
+        // Now its row prints differently, both outputs kept.
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        let id = "u001-katajainen";
+        let path = res::unit_path(&perf, id);
+        let mut file = res::read_unit(&path, id).unwrap().unwrap();
+        let kept_dir = harness_core::perf::kept_outputs_dir(&root, Some(id));
+        std::fs::create_dir_all(&kept_dir).unwrap();
+        let outputs = [
+            ("big-text.c.stdout", &b"line one\nline two\n"[..]),
+            ("big-text.c.stderr", &b""[..]),
+            ("big-text.other.stdout", &b"line one\nline 2\n"[..]),
+            ("big-text.other.stderr", &b""[..]),
+        ];
+        let mut kept = Vec::new();
+        for (name, bytes) in outputs {
+            std::fs::write(kept_dir.join(name), bytes).unwrap();
+            kept.push(KeptFile {
+                name: name.into(),
+                size: bytes.len() as u64,
+                blake3: harness_core::hash::bytes_hash(bytes),
+            });
+        }
+        let r = &mut file.rows[0];
+        r.outcome = "behaves-differently".into();
+        r.c = None;
+        r.other = None;
+        r.runs = None;
+        r.short = None;
+        r.platform_metrics = None;
+        r.std = None;
+        r.first_difference = Some(Difference {
+            stream: "stdout".into(),
+            c_len: 18,
+            other_len: 16,
+            offset: 14,
+            c_end: "exit 0".into(),
+            other_end: "exit 0".into(),
+            over_cap: false,
+            kept,
+        });
+        res::write_unit(&path, &file).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        app.select(Selection::Unit(id.into()));
+        let screen = text(&render(&mut app, 200, 50));
+        assert!(
+            screen.contains(
+                "With u001-katajainen's Rust the program prints differently (stdout, byte 15) on \
+                 big-text — verify does not run this workload"
+            ),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("Next: Compare the outputs; then change the unit's Rust (below)"),
+            "{screen}"
+        );
+        assert!(!screen.contains("perf times the Rust in use"), "{screen}");
+        let items = app.menu_items();
+        let compare = items
+            .iter()
+            .find(|i| i.label == "Compare the outputs (big-text)")
+            .expect("offered")
+            .clone();
+        let crate::menu::Action::CompareOutputs(side, workload) = compare.action else {
+            panic!()
+        };
+        let Ok(Mode::Diff { lines, title, .. }) = app.compare_outputs(&side, &workload) else {
+            panic!("the comparison")
+        };
+        assert_eq!(title, "the C and u001-katajainen's Rust on big-text");
+        assert!(lines.iter().any(|l| l == "-line two"), "{lines:?}");
+        assert!(lines.iter().any(|l| l == "+line 2"), "{lines:?}");
+        assert!(
+            lines[2].contains("first difference at byte 15"),
+            "{lines:?}"
+        );
+        // A kept file that changed since: not compared.
+        std::fs::write(
+            kept_dir.join("big-text.other.stdout"),
+            b"line one\nline 3\n",
+        )
+        .unwrap();
+        assert_eq!(
+            app.compare_outputs(&side, &workload).err().as_deref(),
+            Some("the two outputs are not on this computer — measure again")
+        );
+    }
+
+    /// The program as it stands printing differently: on its heading and
+    /// in the summary, with which unit to measure alone.
+    #[test]
+    fn a_difference_as_it_stands_names_its_units() {
+        use harness_core::perf::results::{self as res, Difference};
+        let app = app_of("targets/zopfli", "speed-differs-ais");
+        let mut app = write_speed_results(&app, false);
+        let perf = harness_core::perf::perf_dir(&app.config.target);
+        let path = res::program_path(&perf);
+        let mut program = res::read_program(&path).unwrap().unwrap();
+        let r = &mut program.as_it_stands[0];
+        r.outcome = "behaves-differently".into();
+        r.c = None;
+        r.other = None;
+        r.runs = None;
+        r.short = None;
+        r.platform_metrics = None;
+        r.std = None;
+        r.first_difference = Some(Difference {
+            stream: "exit".into(),
+            c_len: 0,
+            other_len: 0,
+            offset: 0,
+            c_end: "exit 0".into(),
+            other_end: "exit 1".into(),
+            over_cap: false,
+            kept: Vec::new(),
+        });
+        res::write_program(&path, &program).unwrap();
+        app = crate::app::tests::app_of_path(&app.config.target);
+        let diffs = app.speed.program_differences();
+        assert_eq!(
+            diffs,
+            [(
+                "With the program as it stands (u001-katajainen) the program exits differently \
+                 (exit 1 where the C has exit 0) on big-text"
+                    .to_string(),
+                "no unit's Rust differs alone — it is how they work together".to_string()
+            )]
+        );
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 200, 50));
+        assert!(
+            screen.contains(
+                "Speed: With the program as it stands (u001-katajainen) the program exits"
+            ),
+            "{screen}"
+        );
+        // The help says what perf compares.
+        let (rows, _) = help_rows(1000, true, None);
+        let help: String = rows
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        assert!(
+            help.contains("perf stops even a fork; verify allows a fork but not"),
+            "{help}"
+        );
+    }
+
+    /// How to change a unit's Rust follows where it came from (§3.11).
+    #[test]
+    fn the_change_follows_the_provenance() {
+        use crate::model::ProvenanceView as P;
+        use crate::speed::change_words;
+        let app = crate::app::tests::app("speed-change");
+        let mut unit = app.snapshot.unit("u-lib").unwrap().clone();
+        unit.provenance = P::Pipeline("a-13c941dfff95".into());
+        assert_eq!(
+            change_words(&unit, true),
+            "Modify a-13c9 with a note about speed (give these numbers), then Replace u-lib's \
+             verified crate with the new attempt, measure this unit again — and if it is not \
+             faster, Replace it back with a-13c9"
+        );
+        assert!(change_words(&unit, false).starts_with(
+            "Connect a model to Modify (start the cockpit with --provider), then modify a-13c9"
+        ));
+        unit.provenance = P::Ambiguous(vec!["a-28d8aaaa".into(), "a-13c9bbbb".into()]);
+        assert!(
+            change_words(&unit, true).starts_with("Modify a-13c9 "),
+            "the lowest id"
+        );
+        let dir = std::env::temp_dir().join(format!("speed-change-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/logic.rs"), "").unwrap();
+        std::fs::write(dir.join("src/ffi.rs"), "").unwrap();
+        unit.crate_dir = Some(dir.clone());
+        unit.provenance = P::Human {
+            attempt: "a-77".into(),
+            origin: "a-77".into(),
+        };
+        assert_eq!(
+            change_words(&unit, true),
+            "Hand edit u-lib, then measure again"
+        );
+        std::fs::remove_file(dir.join("src/ffi.rs")).unwrap();
+        assert!(change_words(&unit, true).starts_with("Commit the unit's crate first (git)"));
+        unit.provenance = P::None;
+        assert!(change_words(&unit, true).contains("run harness verify u-lib in a terminal"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -54,6 +54,8 @@ pub enum Action {
     EditWorkloads,
     /// Discard the kept workloads draft.
     DiscardWorkloadsDraft,
+    /// Compare the kept outputs of a row that behaves differently.
+    CompareOutputs(crate::speed::SideKey, String),
 }
 
 /// One menu item.
@@ -229,12 +231,27 @@ impl App {
                 None,
             )));
         }
+        for w in self.speed.comparable(&SideKey::AsItStands) {
+            items.push(item(
+                format!("Compare the outputs of the program as it stands ({w})"),
+                Action::CompareOutputs(SideKey::AsItStands, w),
+                None,
+            ));
+        }
     }
 
     /// A verified unit's speed items: Measure this unit's speed, and
     /// Measure again with 31 runs when its rows ask for it.
     fn unit_speed_items(&self, u: usize, items: &mut Vec<Item>) {
         let unit = &self.snapshot.units[u];
+        let side = crate::speed::SideKey::Unit(unit.unit.id.clone());
+        for w in self.speed.comparable(&side) {
+            items.push(item(
+                format!("Compare the outputs ({w})"),
+                Action::CompareOutputs(side.clone(), w),
+                None,
+            ));
+        }
         if !matches!(
             unit.unit.status,
             harness_core::UnitStatus::Verified | harness_core::UnitStatus::Merged

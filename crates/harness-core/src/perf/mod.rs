@@ -34,6 +34,27 @@ pub fn perf_dir(root: &Path) -> PathBuf {
     root.join(crate::ledger::MIGRATION_DIR).join(PERF_DIR)
 }
 
+/// The kept outputs of behaves-differently rows, in `migration/build/`.
+pub const PERF_OUT_DIR: &str = ".perf-out";
+/// A unit's kept outputs, under [`PERF_OUT_DIR`]: `units/<id>/`.
+pub const KEPT_UNITS: &str = "units";
+/// The program as it stands's (and the C alone's), under
+/// [`PERF_OUT_DIR`].
+pub const KEPT_PROGRAM: &str = "program";
+
+/// Where a side's kept outputs are under `root`:
+/// `migration/build/.perf-out/units/<id>/`, or `…/program/` without a
+/// unit. Each is `<workload>.{c,other}.{stdout,stderr}`.
+pub fn kept_outputs_dir(root: &Path, unit: Option<&str>) -> PathBuf {
+    let out = crate::ledger::Ledger::new(root)
+        .build_dir()
+        .join(PERF_OUT_DIR);
+    match unit {
+        Some(id) => out.join(KEPT_UNITS).join(id),
+        None => out.join(KEPT_PROGRAM),
+    }
+}
+
 /// What perf and the cockpit say about a unit whose Accept was interrupted
 /// (§3.2; the cockpit's `Cause::PromotionInterrupted` says the same):
 /// `attempt` is the `.promote-<id>/` marker's attempt id, or `legacy` for

@@ -3049,6 +3049,16 @@ impl App {
             }
             Action::EditFeatures => self.start_features_edit(),
             Action::DiscardFeaturesDraft => self.ask_discard_features_draft(),
+            Action::CompareOutputs(side, workload) => {
+                match self.compare_outputs(side, workload) {
+                    Ok(mode) => {
+                        self.diff_rows = None;
+                        self.mode = mode;
+                    }
+                    Err(why) => self.notice = notice(why),
+                }
+                Command::None
+            }
             Action::EditWorkloads => self.start_edit(features_edit::DraftKind::Workloads),
             Action::DiscardWorkloadsDraft => {
                 self.ask_discard_draft(features_edit::DraftKind::Workloads)
@@ -4812,15 +4822,7 @@ pub fn attempt_tags(unit: &UnitView, a: &AttemptView) -> Vec<String> {
     tags
 }
 
-/// `a-13c941dfff95` → `a-13c9`; samples keep their `.rN`.
-pub fn short_id(id: &str) -> String {
-    let (base, sample) = match id.split_once(".r") {
-        Some((b, n)) => (b, format!(".r{n}")),
-        None => (id, String::new()),
-    };
-    let cut: String = base.chars().take(6).collect();
-    format!("{cut}{sample}")
-}
+pub use crate::model::short_id;
 
 #[cfg(test)]
 pub(crate) mod tests {

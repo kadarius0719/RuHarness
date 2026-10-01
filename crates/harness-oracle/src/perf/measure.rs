@@ -1932,8 +1932,13 @@ fn keep_outputs(
     outputs: Option<Outputs>,
 ) -> Result<(), Error> {
     let folder = match side {
-        RowSide::Unit(id) => build::sub_folder(&build::sub_folder(out_root, "units")?, id)?,
-        RowSide::Program | RowSide::C => build::sub_folder(out_root, "program")?,
+        RowSide::Unit(id) => build::sub_folder(
+            &build::sub_folder(out_root, harness_core::perf::KEPT_UNITS)?,
+            id,
+        )?,
+        RowSide::Program | RowSide::C => {
+            build::sub_folder(out_root, harness_core::perf::KEPT_PROGRAM)?
+        }
     };
     let names = ["c.stdout", "c.stderr", "other.stdout", "other.stderr"]
         .map(|s| format!("{}.{s}", row.workload));

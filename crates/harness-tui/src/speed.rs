@@ -4,11 +4,11 @@
 //! a unit's header line and the project summary's line. Built from the
 //! snapshot alone: nothing here starts a process.
 
-use crate::model::Snapshot;
+use crate::model::{short_id, ProvenanceView, Snapshot, UnitView};
 use crate::perfread::InputNow;
 use harness_core::perf::currency::{self, Today};
 use harness_core::perf::estimate::{self, Job};
-use harness_core::perf::results::{Row, RowKind};
+use harness_core::perf::results::{Difference, Row, RowKind};
 use harness_core::perf::words::{self as words, RowWords, Side};
 use harness_core::perf::workloads::WorkloadsState;
 use std::collections::BTreeMap;
@@ -58,6 +58,98 @@ pub struct SpeedRow {
     /// Why it is out of date; empty when current as far as the cockpit can
     /// tell (the computer and the compilers are not checked here).
     pub out_of_date: Vec<String>,
+    /// Where the outputs differed: the row's own (behaves-differently), or
+    /// the one found before that a later measure did not clear.
+    pub difference: Option<Difference>,
+    /// `difference` is the one found before.
+    pub found_before: bool,
+}
+
+impl SpeedRow {
+    /// The unit's (or any held unit's) Rust changed since the row.
+    fn rust_changed(&self) -> bool {
+        self.out_of_date
+            .iter()
+            .any(|w| w.ends_with("'s Rust changed since"))
+    }
+
+    /// Measured with the same output as the C, and current.
+    fn same_output_now(&self) -> bool {
+        self.out_of_date.is_empty() && matches!(self.outcome.as_str(), "measured" | "too-short")
+    }
+
+    /// Why a difference may be old, in words (empty when it is the row's
+    /// own and current).
+    fn difference_age(&self) -> String {
+        if self.rust_changed() {
+            " — found before the unit's Rust changed — measure this unit again to check".into()
+        } else if self.found_before {
+            " — found before; the last measure ended another way — measure again to check".into()
+        } else if !self.out_of_date.is_empty() {
+            format!(
+                " — found before ({}) — measure again to check",
+                self.out_of_date.join(", ")
+            )
+        } else {
+            String::new()
+        }
+    }
+}
+
+/// What a unit's Speed rows ask of the person (§3.11).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Advice {
+    /// Each difference, a fact in words.
+    pub differences: Vec<String>,
+    /// The next step: after a difference, "Compare the outputs; then …";
+    /// on a slower row, "perf times the Rust in use. …".
+    pub next: Option<String>,
+    /// How to change the unit's Rust, from where it came from.
+    pub change: Option<String>,
+}
+
+/// How to change a unit's Rust, from its provenance (§3.11 *A slower row's
+/// next step*): Modify the model's attempt and Replace (and back), a hand
+/// edit, or — for code the cockpit did not record — commit, edit, verify.
+pub fn change_words(unit: &UnitView, has_provider: bool) -> String {
+    let id = &unit.unit.id;
+    let model_made = match &unit.provenance {
+        ProvenanceView::Pipeline(a) | ProvenanceView::Steered(a) | ProvenanceView::Chat(a) => {
+            Some(a.clone())
+        }
+        // Several attempts share the crate: the lowest id is named.
+        ProvenanceView::Ambiguous(ids) => ids.iter().min().cloned(),
+        _ => None,
+    };
+    if let Some(a) = model_made {
+        let a = short_id(&a);
+        let modify = format!(
+            "{a} with a note about speed (give these numbers), then Replace {id}'s verified crate \
+             with the new attempt, measure this unit again — and if it is not faster, Replace it \
+             back with {a}"
+        );
+        return if has_provider {
+            format!("Modify {modify}")
+        } else {
+            format!(
+                "Connect a model to Modify (start the cockpit with --provider), then modify \
+                 {modify}"
+            )
+        };
+    }
+    let hand_editable = matches!(unit.provenance, ProvenanceView::Human { .. })
+        && unit
+            .crate_dir
+            .as_ref()
+            .is_some_and(|d| d.join("src/logic.rs").is_file() && d.join("src/ffi.rs").is_file());
+    if hand_editable {
+        return format!("Hand edit {id}, then measure again");
+    }
+    format!(
+        "Commit the unit's crate first (git) — replacing it deletes it; edit it in your editor, \
+         then run harness verify {id} in a terminal (the cockpit cannot Re-check code it did not \
+         record), then measure again"
+    )
 }
 
 /// A unit's rows.
@@ -157,6 +249,115 @@ impl SpeedModel {
             crates,
             links,
         }
+    }
+
+    /// What `unit`'s rows ask of the person: each difference as a fact
+    /// and its next step, or a slower row's next step; and how to change
+    /// the unit's Rust. `has_provider`: a model can Modify.
+    pub fn advice(&self, unit: &UnitView, has_provider: bool) -> Advice {
+        let id = &unit.unit.id;
+        let mut advice = Advice::default();
+        let Some(u) = self.unit(id) else {
+            return advice;
+        };
+        for r in &u.rows {
+            let Some(d) = &r.difference else {
+                continue;
+            };
+            advice.differences.push(format!(
+                "With {id}'s Rust the program {} on {} — verify does not run this workload{}",
+                words::difference_words(d),
+                r.workload,
+                r.difference_age()
+            ));
+        }
+        if !advice.differences.is_empty() {
+            advice.next = Some(
+                "Compare the outputs; then change the unit's Rust (below) and measure this unit \
+                 again"
+                    .into(),
+            );
+        } else if u.rows.iter().any(|r| {
+            r.out_of_date.is_empty() && matches!(r.words.answer, "slower" | "probably-slower")
+        }) {
+            advice.next = Some(
+                "perf times the Rust in use. If speed matters here — note these numbers first (or \
+                 commit migration/perf/): measuring again replaces them —"
+                    .into(),
+            );
+        }
+        if advice.next.is_some() {
+            advice.change = Some(change_words(unit, has_provider));
+        }
+        advice
+    }
+
+    /// The workloads on which `side`'s rows hold a difference whose outputs
+    /// were kept, in the rows' order.
+    pub fn comparable(&self, side: &SideKey) -> Vec<String> {
+        let rows: &[SpeedRow] = match side {
+            SideKey::C => &[],
+            SideKey::AsItStands => &self.program_rows,
+            SideKey::Unit(id) => self.unit(id).map_or(&[][..], |u| &u.rows),
+        };
+        rows.iter()
+            .filter(|r| r.difference.as_ref().is_some_and(|d| !d.kept.is_empty()))
+            .map(|r| r.workload.clone())
+            .collect()
+    }
+
+    /// The row of `side` on `workload`.
+    pub fn row(&self, side: &SideKey, workload: &str) -> Option<&SpeedRow> {
+        let rows: &[SpeedRow] = match side {
+            SideKey::C => &self.c_rows,
+            SideKey::AsItStands => &self.program_rows,
+            SideKey::Unit(id) => self.unit(id).map_or(&[][..], |u| &u.rows),
+        };
+        rows.iter().find(|r| r.workload == workload)
+    }
+
+    /// The program as it stands's differences, each a fact for its heading
+    /// and the summary, with what tells which unit it is: "no unit's Rust
+    /// differs alone" only when every held unit's own row on that workload
+    /// is current and measured the same; else the commands that would
+    /// measure the missing ones.
+    pub fn program_differences(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for r in &self.program_rows {
+            let Some(d) = &r.difference else {
+                continue;
+            };
+            let fact = format!(
+                "With the program as it stands ({}) the program {} on {}{}",
+                self.held.join(", "),
+                words::difference_words(d),
+                r.workload,
+                r.difference_age()
+            );
+            let missing: Vec<&String> = self
+                .held
+                .iter()
+                .filter(|id| {
+                    !self
+                        .row(&SideKey::Unit((*id).clone()), &r.workload)
+                        .is_some_and(SpeedRow::same_output_now)
+                })
+                .collect();
+            let which = if missing.is_empty() {
+                "no unit's Rust differs alone — it is how they work together".to_string()
+            } else {
+                format!(
+                    "to find which unit, measure each alone: {}",
+                    missing
+                        .iter()
+                        .map(|id| format!("harness perf run --unit {id} --workload {}", r.workload))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            };
+            out.push((fact, which));
+        }
+        out
     }
 
     /// A unit's rows.
@@ -405,6 +606,11 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 outcome: row.outcome.clone(),
                 words,
                 out_of_date,
+                difference: row
+                    .first_difference
+                    .clone()
+                    .or_else(|| row.found_before.clone()),
+                found_before: row.first_difference.is_none() && row.found_before.is_some(),
             }
         };
     let mut computers: Vec<String> = Vec::new();

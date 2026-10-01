@@ -81,8 +81,16 @@ below are history.
   MeasureMore `--workload=… --runs=31`; measure_words); menu items on Speed and on a verified
   unit; events `PerfRow` (activity line; narrator ends "Measured N rows — see Speed"; MCP
   ignores it).
-  NEXT: (f3) behaves-differently fact + Compare outputs, slower row's next step by
-  provenance, Help's Speed section; (f4) the MCP Speed fact. Then (g) SCHEMAS, tutorial, the
+- Step (f3) DONE: speed.rs `Advice` (difference facts with their age, "Next: Compare the outputs
+  …", the slower row's "perf times the Rust in use…"), `change_words` by provenance (Modify +
+  Replace and back / Hand edit / commit-edit-verify; "Connect a model to Modify" without a
+  provider), `program_differences` (heading + summary; "no unit's Rust differs alone" or the
+  per-unit commands); `compare_outputs` (kept files checked by size and blake3, unified diff of
+  text or hex rows, controls escaped) behind "Compare the outputs (w)"; Help's Speed section
+  and word list; `harness_core::perf::{PERF_OUT_DIR, KEPT_UNITS, KEPT_PROGRAM,
+  kept_outputs_dir}` shared with the oracle; `words::difference_words` public;
+  `model::short_id` (app re-exports it).
+  NEXT: (f4) the MCP Speed fact. Then (g) SCHEMAS, tutorial, the
   testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
 
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
