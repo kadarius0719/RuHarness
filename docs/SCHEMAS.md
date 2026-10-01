@@ -1282,7 +1282,10 @@ crate_digest}]` and `left_out [{id, crate_digest, reason}]` (as-it-stands rows; 
 `not-fresh | replaces-mismatch | replaces-changed | crate-does-not-build | does-not-link |
 accept-interrupted`), `recipe` (`perf-recipe-1`), `launcher` (`perf-launcher-1`), `computer {os,
 build, arch, cpu, two_kinds, fast_cores}`, `compilers {cc, rustc?}`. **Strict** (unknown fields
-refused; every field checked against its outcome); free text ≤ 160 bytes, no control character.
+refused; every field checked against its outcome); free text ≤ 160 bytes, no control character;
+a difference's lengths and kept files ≤ 64 MiB (the output cap), its `offset` no further than
+the shorter length, and 0, 0, 0 on `exit`; a replaces-mismatch's `index` below 65 536 (and
+within the row's `replaces` when it holds them).
 
 **The replace rule** (one, in `harness-core`): a set-up outcome never replaces an earlier row that
 is not itself a set-up row — it is kept beside it as `last_try`; on the C-alone rows the C's own
