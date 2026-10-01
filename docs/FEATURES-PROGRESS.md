@@ -124,7 +124,11 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    a namesake renamed by a macro explains; a K&R gnu_inline namesake escapes the inline check) and
    one regression (added units = every unit skips the every-unit search → refusal). RULE (set
    before it): the last probe review round unless it finds a silent wrong map or a high finding;
-   lower findings are fixed directly or named in §6. So FIX PASS 5 (in progress): fix those four,
+   lower findings are fixed directly or named in §6. FIX PASS 5 COMMITTED (8ccd4ad, test 793bdc4;
+   design §10.4, §6): all 13 answered (fixed, or named in §6); 101 bench facts identical,
+   sqlite3.c same; oracle 145 + features 80, scanner 57 pass. Its MUTATION CHECK running
+   (`SP/mutfix5.py` in `SP/mut1`, log `SP/mutfix5.log`). Then a short check of the fix-pass-5
+   diff (script `SP/fix-pass-5-check.js`): findings closed? new silent wrong maps only. Was: fix those four,
    the lows (misread walk over all branch combinations, capped; K&R function-typed parameter
    `int cb(int)` outranking `after(cb)`; folded second head's static; non-nested signature ends at
    the call; `static Count (after)(void)` named `Count`), the missing tests (by-shape ranking,
