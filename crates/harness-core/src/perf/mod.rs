@@ -16,7 +16,7 @@ pub mod workloads;
 /// The launcher's version (§3.3): `perfrun` and `perfgo`'s sources are
 /// pinned to it by a test beside them; a new version builds a new cache
 /// folder.
-pub const PERF_LAUNCHER: &str = "perf-launcher-1";
+pub const PERF_LAUNCHER: &str = "perf-launcher-2";
 
 /// The command perf's writer lock records — a lock holder whose command
 /// starts with it is a perf run (§3.11: the cockpit hashes no input then).

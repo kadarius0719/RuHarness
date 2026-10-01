@@ -1281,7 +1281,7 @@ replaces-changed | rust-changed | accept-interrupted`, `attempt`, `never_started
 [{id, digest}]` (unit rows), `replaces` (unit rows), `program_name`, `units [{id,
 crate_digest}]` and `left_out [{id, crate_digest, reason}]` (as-it-stands rows; reasons
 `not-fresh | replaces-mismatch | replaces-changed | crate-does-not-build | does-not-link |
-accept-interrupted`), `recipe` (`perf-recipe-1`), `launcher` (`perf-launcher-1`), `computer {os,
+accept-interrupted`), `recipe` (`perf-recipe-1`), `launcher` (`perf-launcher-2`), `computer {os,
 build, arch, cpu, two_kinds, fast_cores}`, `compilers {cc, rustc?}`. **Strict** (unknown fields
 refused; every field checked against its outcome); free text ≤ 160 bytes, no control character;
 a difference's lengths and kept files ≤ 64 MiB (the output cap), its `offset` no further than
@@ -1344,7 +1344,10 @@ differently). They gate nothing — no verdict, no promotion, no plan state — 
 (hostile, committed). The program runs only under perf's profile through the harness-owned
 launcher (`perfrun`, outside the sandbox) and trampoline (`perfgo`, inside it): no fork (killed on
 trying), no signal out, no network, no reads under the home folder or the target beyond its
-binary, writes only its temp dir; nothing it starts outlives its run. Kept outputs are the
+binary, writes only its temp dir, and nothing started for it by the system — opening an app, a
+document or a web address (LaunchServices), Apple events and launchd jobs are denied, and so is
+reaching the services that do them; nothing it starts outlives its run. Other services of the
+same user stay reachable (the profile starts from "allow by default"). Kept outputs are the
 program's own bytes: shown only after their size and blake3 match the row, control characters
 escaped. The launcher cache is per user, outside the target, built only from harness sources
 with a compiler found through root-owned paths, and every sandbox profile denies writes to it.
@@ -1357,4 +1360,4 @@ with a compiler found through root-owned paths, and every sandbox profile denies
 | `migration/perf/program.json`, `migration/perf/units/<id>.json` | `perf run` |
 | `migration/build/.perf/**` (fresh each run), `migration/build/.perf-out/**`, `migration/build/perf-logs/` (last 20) (gitignored) | `perf run` |
 | `units/<id>/<crate>/target/**`, `Cargo.lock` | `perf run` (builds, as `verify` does) |
-| `~/Library/Caches/ruharness/perf/perf-launcher-1-<hash>/` (outside the target) | `perf run` (only when stale) |
+| `~/Library/Caches/ruharness/perf/perf-launcher-2-<hash>/` (outside the target) | `perf run` (only when stale) |

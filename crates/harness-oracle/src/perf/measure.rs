@@ -27,7 +27,7 @@ pub(crate) const OUTPUT_CAP: usize = 64 * 1024 * 1024;
 /// The bound before a run's go-ahead.
 const ALLOWANCE: Duration = Duration::from_secs(60);
 /// Extra deadline for step-1 runs (a new binary's first exec falls there).
-const STEP1_EXTRA_SECS: u64 = 60;
+pub(crate) const STEP1_EXTRA_SECS: u64 = 60;
 
 /// What a perf run tells its caller as it goes (§3.10).
 pub trait PerfProgress {
