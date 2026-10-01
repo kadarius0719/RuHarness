@@ -1310,6 +1310,26 @@ mod tests {
         );
     }
 
+    /// Review: the random folder is the person's alone, named with 16 hex
+    /// digits, registered for the signal handler while it lives, and gone
+    /// after.
+    #[cfg(unix)]
+    #[test]
+    fn the_random_folder_is_private_and_goes() {
+        use std::os::unix::fs::PermissionsExt;
+        let out = MapOut::create().expect("made");
+        let path = out.path().to_path_buf();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{path:?}");
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let hex = name.strip_prefix("ruharness-map-").expect("named");
+        assert!(hex.len() == 16 && hex.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+        assert!(LIVE_DIRS.lock().unwrap().contains(&path));
+        drop(out);
+        assert!(!path.exists());
+        assert!(!LIVE_DIRS.lock().unwrap().contains(&path));
+    }
+
     #[test]
     fn ends_read_as_the_map_writes_them() {
         assert_eq!(end_words(&ScenarioEnd::Exited(0)), "exit 0");
