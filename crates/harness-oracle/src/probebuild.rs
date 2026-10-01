@@ -744,10 +744,7 @@ impl Build<'_> {
         let mut changed = BTreeSet::new();
         let mut unresolved: Option<(String, BTreeSet<usize>)> = None;
         for u in &undefined {
-            let why = format!(
-                "the program does not link with its note: {} is undefined",
-                u.symbol
-            );
+            let why = format!("{} is undefined", u.symbol);
             let units = self.units_named(&u.refs);
             // (a) a function of the program: an external one, whose id is
             // its name (a static is never an undefined symbol).
@@ -801,7 +798,7 @@ impl Build<'_> {
         let Some((symbol, units)) = unresolved else {
             return Err(refuse(&stderr));
         };
-        let why = format!("the program does not link with its note: {symbol} is undefined");
+        let why = format!("{symbol} is undefined");
         let rels: BTreeSet<String> = units
             .iter()
             .flat_map(|n| self.reads[*n].iter().cloned())

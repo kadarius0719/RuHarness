@@ -77,6 +77,10 @@ struct FnDef {
     /// The head names `naked` (its parameters and K&R declarations aside):
     /// on gcc such a function is not watched (§3.1 rule 4).
     naked_head: bool,
+    /// The parser put it inside another definition's body — C has no
+    /// nested functions, so the outer one was misread (an `#if` whose
+    /// branches each open a brace): recorded, never watched (rule 1).
+    nested: bool,
 }
 
 /// Why the features probe cannot put a note in a definition
@@ -345,15 +349,20 @@ fn collect_includes(node: tree_sitter::Node, src: &[u8], out: &mut BTreeSet<Stri
 /// Recursively collect function definitions with their storage class,
 /// signature, span, and direct-call names.
 fn collect_functions(node: tree_sitter::Node, src: &[u8], file: &str, defs: &mut Vec<FnDef>) {
-    collect_functions_in(node, src, file, false, defs);
+    collect_functions_in(node, src, file, false, false, defs);
 }
 
-/// [`collect_functions`], knowing whether an ERROR node encloses `node`.
+/// [`collect_functions`], knowing whether an ERROR node encloses `node` and
+/// whether a definition does. A definition's own body is searched too: a
+/// misread `#if` can make the parser run one body on over every later
+/// definition (sqlite3.c's winWrite holds 19 700 lines of them), which
+/// would otherwise vanish from the facts.
 fn collect_functions_in(
     node: tree_sitter::Node,
     src: &[u8],
     file: &str,
     under_error: bool,
+    nested: bool,
     defs: &mut Vec<FnDef>,
 ) {
     let mut cursor = node.walk();
@@ -377,13 +386,15 @@ fn collect_functions_in(
                         (child.end_position().row + 1) as u32,
                     ),
                     calls,
-                    note_at: note_point(child, src, under_error),
+                    note_at: note_point(child, src, under_error || nested),
                     naked_head: naked_head(child, src),
+                    nested,
                 });
             }
+            collect_functions_in(child, src, file, under_error, true, defs);
         } else {
             let error = under_error || child.is_error();
-            collect_functions_in(child, src, file, error, defs);
+            collect_functions_in(child, src, file, error, nested, defs);
         }
     }
 }

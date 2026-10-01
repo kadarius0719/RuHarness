@@ -487,7 +487,7 @@ fn map_inner(
                         id,
                         Reason::new(
                             Kind::Parser,
-                            "a definition the parser cannot read is compiled in its place",
+                            "the one compiled is another definition, in another #if branch",
                         ),
                     );
                 }
@@ -599,8 +599,24 @@ fn compare_reads(c_file: &Path, program: &Reads, copied: &Reads, root: &Path) ->
 
 /// The folder a map makes everything in after the mirror
 /// (`$TMPDIR/ruharness-map-<random>`), removed when dropped — on success,
-/// refusal, error and interrupt alike.
+/// refusal and error — and by [`remove_live_scratch_dirs`] when a signal
+/// ends the harness (the process dies by it, so no drop runs).
 struct MapOut(PathBuf);
+
+/// The random folders of maps in progress.
+static LIVE_DIRS: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Remove the random folder of every map in progress — the signal handler's
+/// part, after it has killed the children that write there. Returns how
+/// many it removed.
+pub fn remove_live_scratch_dirs() -> usize {
+    let live = LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner());
+    for dir in live.iter() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    live.len()
+}
 
 impl MapOut {
     fn create() -> Result<MapOut, Error> {
@@ -617,9 +633,18 @@ impl MapOut {
             let tag = harness_core::hash::bytes_hash(
                 format!("{}-{nanos}-{n}", std::process::id()).as_bytes(),
             );
-            let dir = base.join(format!("ruharness-map-{}", &tag[..16]));
+            let hex = tag
+                .strip_prefix(harness_core::hash::HASH_PREFIX)
+                .unwrap_or(&tag);
+            let dir = base.join(format!("ruharness-map-{}", &hex[..16]));
             match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(MapOut(dir)),
+                Ok(()) => {
+                    LIVE_DIRS
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(dir.clone());
+                    return Ok(MapOut(dir));
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(Error::io(&dir, e)),
             }
@@ -638,6 +663,10 @@ impl MapOut {
 impl Drop for MapOut {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        LIVE_DIRS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
     }
 }
 

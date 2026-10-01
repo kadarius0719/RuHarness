@@ -80,6 +80,12 @@ pub fn probe_source(
         if options.skip.contains(&id) {
             continue;
         }
+        // A misread twin inside another body never takes the note of a
+        // definition of the same id the parser read whole (the map's check
+        // for a compiled definition with no note covers the other way).
+        if def.nested && defs.iter().any(|d| !d.nested && d.canonical_id() == id) {
+            continue;
+        }
         let placed = match def.note_at {
             Ok(_) if options.gcc && def.naked_head => Err(NoNote::Naked),
             other => other,
@@ -225,6 +231,33 @@ mod tests {
             },
         );
         assert!(p.unwatched.is_empty(), "{p:?}");
+    }
+
+    /// Premise re-run (sqlite3.c's winWrite): an `#if` whose branches each
+    /// open a brace makes the parser run one body on over the definitions
+    /// after it. They are recorded and unwatched (rule 1) — not lost — and
+    /// a misread twin never takes the note of a definition read whole.
+    #[test]
+    fn definitions_a_misread_body_swallows_are_recorded_unwatched() {
+        let src = "static int w(int rc) {\n#if defined(NEVER)\n  if (rc == 0) {\n#else\n  {\n#endif\n\
+                   rc += 1;\n  }\n  return rc;\n}\n\
+                   static int b(int x) { return x + 1; }\n\
+                   #ifdef _WIN32\nint os_init(void) { return 1; }\n#endif\n\
+                   static int d(int x) {\n  if (x) {\n    x++;\n#if defined(NEVER)\n  }\n#else\n  }\n#endif\n  return x;\n}\n\
+                   int os_init(void) { return 0; }\n";
+        let known = ["src/a.c::w", "src/a.c::b", "os_init", "src/a.c::d"];
+        let p = probe(src, &known);
+        let unwatched: Vec<&str> = p.unwatched.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(unwatched.contains(&"src/a.c::b"), "{p:?}");
+        assert!(
+            p.unwatched.iter().all(|(_, why)| *why == NoNote::Parser),
+            "{p:?}"
+        );
+        assert!(
+            !unwatched.contains(&"os_init"),
+            "a misread twin demoted it: {p:?}"
+        );
+        assert!(p.notes.iter().any(|n| n.id == "os_init"), "{p:?}");
     }
 
     /// Rule 3 in each directive spelling, with the depth form: only a `{`

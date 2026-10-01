@@ -331,6 +331,9 @@ fn install_signal_handler() {
                 _ => "SIGHUP",
             };
             let killed = harness_oracle::kill_live_process_groups();
+            // A features map's random folder: its drop never runs when the
+            // process dies by the signal.
+            harness_oracle::remove_live_scratch_dirs();
             // Courtesy output only (docs/CLI-HARDENING.md §3 "best-effort"):
             // the main thread may be parked in a write on a full stdout pipe
             // holding the stdout mutex, and a closed stderr would make

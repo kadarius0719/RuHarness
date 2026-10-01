@@ -728,7 +728,7 @@ pub fn unwatched_words(kind: &str, detail: &str) -> String {
         }
     };
     match kind {
-        "parser" => "the parser could not read its definition".to_string(),
+        "parser" => with("the parser could not read its definition"),
         "not-a-block" => "its body is not a { } block".to_string(),
         "conditional-brace" => "a # line between its head and its body".to_string(),
         "skipped-branch" => "its body's brace is inside #if".to_string(),
@@ -859,7 +859,12 @@ impl FeatureMap {
             why.push("made on another platform");
         }
         if self.inputs.probe != now.probe {
-            why.push("made by an older harness");
+            // An older harness wrote no probe; a newer one, another name.
+            why.push(if self.inputs.probe.is_empty() {
+                "made by an older harness"
+            } else {
+                "made by another version of the harness"
+            });
         }
         why
     }
@@ -2374,6 +2379,39 @@ args = ["-h"]
         assert!(!text.contains("\"probe\""), "an empty probe is not written");
         let read: FeatureMap = serde_json::from_str(&text).expect("reads");
         assert_eq!(read.out_of_date(&m.inputs), ["made by an older harness"]);
+        // Review: a newer probe is not an older harness.
+        let mut newer = a_map();
+        newer.inputs.probe = "compiler-guided-9".into();
+        assert_eq!(
+            newer.out_of_date(&m.inputs),
+            ["made by another version of the harness"]
+        );
+    }
+
+    /// Review: each kind's words with the detail the writer gives it — the
+    /// link's name said once, the parser's detail shown.
+    #[test]
+    fn each_kind_reads_in_words_once() {
+        assert_eq!(
+            unwatched_words("link", "w is undefined"),
+            "the program does not link with its note: w is undefined"
+        );
+        assert_eq!(
+            unwatched_words("parser", ""),
+            "the parser could not read its definition"
+        );
+        assert_eq!(
+            unwatched_words(
+                "parser",
+                "the one compiled is another definition, in another #if branch"
+            ),
+            "the parser could not read its definition: the one compiled is another definition, in \
+             another #if branch"
+        );
+        for kind in UNWATCHED_KINDS {
+            let words = unwatched_words(kind, "x");
+            assert!(!words.contains("probe could not"), "{kind}: {words}");
+        }
     }
 
     #[test]

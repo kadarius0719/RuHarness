@@ -1,6 +1,7 @@
 # Features map — the compiler-guided probe (design)
 
-Status: **revision 3 — to be built** (2026-09-30). Decided by the person: DECISIONS.md,
+Status: **revision 3 — built** (2026-09-30); its code review and fix passes: §10 (where the
+built behaviour differs from the text below, §10 says so and the code governs). Decided by the person: DECISIONS.md,
 "Features map: PROPOSAL … let the compiler decide". Replaces the "Unwatched" rules and the
 probe runtime of FEATURES-DESIGN.md §5.3–§5.4; the rest of §5 stays. History: the draft
 (777cd27) had an adversarial review from four angles (37 findings, each reproduced by two
@@ -124,7 +125,8 @@ text. Then, in order:
    are compared as code: in the copy, the probe header's region (from the line marker that
    enters it — its exact path, flag 1 — through the marker that leaves it, both included) and
    every note and end token are removed; then on both sides every line marker and blank line is
-   dropped. The rest must be equal, line by line. A difference refuses the map by name before any
+   dropped. The rest must be equal, line by line, each line compared as its tokens (a tokenizer that
+   knows raw strings, C23 digit separators, encoding prefixes and the longest punctuator — §10). A difference refuses the map by name before any
    build — "the copy of <file> is not the same program near: <the first differing line, cut>"
    — the net for anything the steps above do not name. This is also where a file both included
    and `#embed`-ed, or a file embedding itself, is caught: the embedded bytes differ, and the
@@ -186,7 +188,7 @@ The copy's build becomes one real compile per top-level file, then one link:
    the program on Mach-O and, at default priority, on ELF), then the program's objects in the
    plain build's input order, whatever order the rounds compiled them in, then the plain
    build's libraries. Undefined symbols:
-   (a) a symbol that is a watched function of the program still carrying a note (less
+   (a) a symbol that is a watched **external** function of the program still carrying a note (less
    Mach-O's leading `_`) — a C99 `inline` function its note stopped from being inlined —
    loses that function's note, kind "link": "the program does not link with its note: <name>
    is undefined";
@@ -197,8 +199,9 @@ The copy's build becomes one real compile per top-level file, then one link:
    search runs over the notes of the objects the linker names, with the relink as the test;
    (c) a link that fails with no undefined-symbol line, or that timed out, overflowed or was
    killed, refuses the map with the linker's words.
-   The link also writes its map (`-Wl,-map,<file>` on ld64, `-Wl,-Map=<file> -Wl,--cref` on GNU
-   ld) for §3.5.
+   Built (§10): (a) also when the function carries no note any more (a callee's note, inlined into
+   it, tips it), and (b) in the files the named object reads only — then the search runs; no link
+   map is written (§3.5 reads the objects' own symbol tables).
 6. **Bounds and progress.** Per top-level file: at most 8 placed rounds and 64 compiles; for the
    whole pass: at most 400 compiles beyond each file's first compile and step 7's re-compiles.
    Past a per-file bound, that file and every probed file it reads go back unprobed (kind
@@ -241,7 +244,8 @@ time out only when probed, recorded as `probe_agrees = false`.
   runtime's setup runs before `main` and would call the program's own: the probed link's map
   (§3.4 step 5) says which object defines each import, and one defined by a program object
   refuses the map by name — "the program defines open(), which the probe's runtime also uses;
-  the features map cannot map it".
+  the features map cannot map it". Built (§10): the objects' own symbol tables say it, and only an
+  **external** definition counts (a program's static `close` is never what the import binds to).
 
 ### 3.6 The note and the runtime
 

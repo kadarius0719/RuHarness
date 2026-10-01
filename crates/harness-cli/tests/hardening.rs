@@ -730,6 +730,72 @@ fn an_ignored_sighup_stays_ignored_when_detached() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Review: a signal during `features map` leaves no random folder behind —
+/// the process dies by the signal, so the folder's drop never runs; the
+/// signal thread removes it.
+#[cfg(unix)]
+#[test]
+fn a_signal_during_a_map_leaves_no_scratch_folder() {
+    use std::os::unix::process::ExitStatusExt;
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let tmp = std::env::temp_dir().join(format!("ruharness-map-sig-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let target_dir = tmp.join("t");
+    copy_dir(&repo_root.join("targets/zopfli"), &target_dir);
+    let own_tmp = tmp.join("tmp");
+    std::fs::create_dir_all(&own_tmp).unwrap();
+    let own_tmp = own_tmp.canonicalize().unwrap();
+    let target = target_dir.to_str().unwrap();
+    let r = harness(&["scan", "--target", target]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let scratch = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.file_name()
+                            .is_some_and(|n| n.to_string_lossy().starts_with("ruharness-map-"))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["features", "map", "--target", target])
+        .env("TMPDIR", &own_tmp)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn harness");
+    let pid = child.id();
+    let mut seen = false;
+    for _ in 0..6000 {
+        if !scratch(&own_tmp).is_empty() {
+            seen = true;
+            break;
+        }
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(seen, "the map made no scratch folder under its TMPDIR");
+    assert!(Command::new("/bin/kill")
+        .args(["-INT", &pid.to_string()])
+        .status()
+        .unwrap()
+        .success());
+    let status = child.wait().unwrap();
+    assert_eq!(status.signal(), Some(2), "{status:?}");
+    assert!(
+        scratch(&own_tmp).is_empty(),
+        "left behind: {:?}",
+        scratch(&own_tmp)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The first turn's `request_key` as the ledger journaled it.
 fn evs_turn_key(unit_dir: &Path, id: &str) -> serde_json::Value {
     let text =

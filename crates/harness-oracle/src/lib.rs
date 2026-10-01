@@ -88,7 +88,7 @@ mod validate;
 
 pub use boundary::{BoundaryReport, ParamFigures};
 pub use exec::{cancelled, kill_live_process_groups};
-pub use featuremap::{map_features, MapProgress, FEATURES_BUILD_DIR};
+pub use featuremap::{map_features, remove_live_scratch_dirs, MapProgress, FEATURES_BUILD_DIR};
 #[doc(hidden)]
 pub use probebuild::{with_map_bounds, MapBounds};
 pub use sandbox::sandbox_mode;

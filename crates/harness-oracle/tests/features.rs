@@ -1724,7 +1724,7 @@ fn a_compiled_definition_the_parser_cannot_read_is_unwatched() {
         let map = map.expect("maps");
         let reason = map.unwatched_reasons.iter().find(|r| r.id == id);
         assert!(
-            reason.is_some_and(|r| r.kind == "parser" && r.detail.contains("cannot read")),
+            reason.is_some_and(|r| r.kind == "parser" && r.detail.contains("another #if branch")),
             "{name}: {:?}",
             map.unwatched_reasons
         );
