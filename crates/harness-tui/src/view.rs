@@ -6658,6 +6658,112 @@ mod tests {
         );
     }
 
+    /// A behaves-differently fact is kept through an Accept (§3.11 [m25]):
+    /// it clears only when a re-measure ends measured or too-short; after
+    /// the unit's crate changed it stays, "found before the unit's Rust
+    /// changed", with its next step and the outputs still to compare — and
+    /// a later measure that ended another way keeps it as found before.
+    #[test]
+    fn a_difference_is_kept_through_an_accept() {
+        use harness_core::perf::results::{self as res, Difference, KeptFile};
+        let app = app_of("targets/zopfli", "speed-differs-accept");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        let perf = harness_core::perf::perf_dir(&root);
+        let id = "u001-katajainen";
+        let path = res::unit_path(&perf, id);
+        let mut file = res::read_unit(&path, id).unwrap().unwrap();
+        let kept_dir = harness_core::perf::kept_outputs_dir(&root, Some(id));
+        std::fs::create_dir_all(&kept_dir).unwrap();
+        let mut kept = Vec::new();
+        for (name, bytes) in [
+            ("big-text.c.stdout", &b"line one\nline two\n"[..]),
+            ("big-text.other.stdout", &b"line one\nline 2\n"[..]),
+        ] {
+            std::fs::write(kept_dir.join(name), bytes).unwrap();
+            kept.push(KeptFile {
+                name: name.into(),
+                size: bytes.len() as u64,
+                blake3: harness_core::hash::bytes_hash(bytes),
+            });
+        }
+        let difference = Difference {
+            stream: "stdout".into(),
+            c_len: 18,
+            other_len: 16,
+            offset: 14,
+            c_end: "exit 0".into(),
+            other_end: "exit 0".into(),
+            over_cap: false,
+            kept,
+        };
+        let r = &mut file.rows[0];
+        r.outcome = "behaves-differently".into();
+        r.c = None;
+        r.other = None;
+        r.runs = None;
+        r.short = None;
+        r.platform_metrics = None;
+        r.std = None;
+        r.first_difference = Some(difference.clone());
+        // The state an Accept leaves: today's crate is not the one the row
+        // measured (the verdict stays green and fresh).
+        for c in r.inputs.crates.iter_mut().flatten() {
+            c.digest = format!("blake3:{}", "e".repeat(64));
+        }
+        res::write_unit(&path, &file).unwrap();
+        let mut app = crate::app::tests::app_of_path(&root);
+        let unit = app.snapshot.unit(id).unwrap().clone();
+        let fact =
+            "With u001-katajainen's Rust the program prints differently (stdout, byte 15) on \
+                    big-text — verify does not run this workload";
+        let next = "Compare the outputs; then change the unit's Rust (below) and measure this \
+                    unit again";
+        let advice = app.speed.advice(&unit, true);
+        assert_eq!(
+            advice.differences,
+            [format!(
+                "{fact} — found before the unit's Rust changed — measure this unit again to \
+                 check"
+            )]
+        );
+        assert_eq!(advice.next.as_deref(), Some(next));
+        app.select(Selection::Unit(id.into()));
+        let screen = text(&render(&mut app, 300, 50));
+        assert!(
+            screen.contains("found before the unit's Rust changed"),
+            "{screen}"
+        );
+        assert!(
+            app.menu_items()
+                .iter()
+                .any(|i| i.label == "Compare the outputs (big-text)"),
+            "the outputs are still there to compare"
+        );
+        // A later measure that ended another way (a set-up row): kept as
+        // found before.
+        let mut file = res::read_unit(&path, id).unwrap().unwrap();
+        let today = file.rows[1].inputs.crates.clone();
+        let r = &mut file.rows[0];
+        r.outcome = "not-verified".into();
+        r.first_difference = None;
+        r.found_before = Some(difference);
+        r.setup = Some(res::SetupFacts {
+            reason: Some("not-fresh".into()),
+            ..res::SetupFacts::default()
+        });
+        r.inputs.crates = today;
+        res::write_unit(&path, &file).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(
+            app.speed.advice(&unit, true).differences,
+            [format!(
+                "{fact} — found before; the last measure ended another way — measure again to \
+                 check"
+            )]
+        );
+    }
+
     /// The program as it stands printing differently: on its heading and
     /// in the summary, with which unit to measure alone.
     #[test]
