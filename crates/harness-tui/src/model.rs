@@ -246,9 +246,19 @@ impl Snapshot {
             stale: stale_paths.len(),
             stale_paths,
         });
+        let has_workloads = !matches!(
+            snapshot.perf.workloads,
+            Ok(harness_core::perf::workloads::WorkloadsState::NoFile)
+        );
         let plan = match Plan::load(&ledger.plan_path()) {
             Ok(p) => p,
             Err(e) if e.is_not_found() => {
+                // The C alone is measured from day one, before a plan
+                // (docs/PERF-DESIGN.md §3.6): its rows are judged too.
+                if has_workloads {
+                    snapshot.perf.program_now =
+                        Some(harness_core::features::program_digest_now(&ctx, &facts));
+                }
                 snapshot.note = Some(NO_PLAN.into());
                 snapshot.facts = Some(facts);
                 return Ok(snapshot);
@@ -263,10 +273,7 @@ impl Snapshot {
         }
         // The program's digest for perf's currency: the features' when
         // computed, else hashed here — only with a workloads file.
-        if !matches!(
-            snapshot.perf.workloads,
-            Ok(harness_core::perf::workloads::WorkloadsState::NoFile)
-        ) {
+        if has_workloads {
             snapshot.perf.program_now = Some(match &now {
                 Some(n) => n.program.clone(),
                 None => harness_core::features::program_digest_now(&ctx, &facts),

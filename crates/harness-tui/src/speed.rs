@@ -579,7 +579,6 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
             .unwrap_or(usize::MAX)
     };
     let input_of = |id: &str| workloads.get(id).and_then(|w| w.input.clone());
-    let program_now = perf.program_now.clone().unwrap_or_default();
     let program_name = snapshot.program_name.clone();
     let crate_digest = |id: &str| perf.crates.get(id).cloned();
     let measurable: Vec<String> = snapshot
@@ -618,9 +617,13 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 }
                 _ => None,
             };
+            // Without facts the C cannot be hashed here: only that one
+            // comparison is skipped (the header says so) — the workload, the
+            // recipe, the launcher and the Rust are still judged.
+            let program_today = perf.program_now.as_deref().unwrap_or(&row.inputs.program);
             let today = Today {
                 workload: today_workload.as_deref(),
-                program: &program_now,
+                program: program_today,
                 crate_digest: &crate_digest,
                 replaces: replaces.as_deref(),
                 program_name: &program_name,
@@ -628,11 +631,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 computer: None,
                 compilers: None,
             };
-            let mut why: Vec<currency::Reason> = if program_now.is_empty() {
-                Vec::new()
-            } else {
-                currency::reasons(row, kind, &today)
-            };
+            let mut why: Vec<currency::Reason> = currency::reasons(row, kind, &today);
             let reason = |token: &'static str, words: String| currency::Reason { token, words };
             match perf.inputs.get(&row.workload) {
                 Some(InputNow::WhileMeasuring) => {
@@ -790,6 +789,11 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         model.header.push(format!(
             "{on}{with} · as verify builds them{each} · compares what the program prints and how it ends"
         ));
+        if perf.program_now.is_none() {
+            model
+                .header
+                .push("the C is not checked here: no facts — run harness scan".into());
+        }
     }
     model
 }

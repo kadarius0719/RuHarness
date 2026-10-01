@@ -6785,6 +6785,41 @@ mod tests {
         }
     }
 
+    /// Day one (§3.6): the C alone measured before a plan is judged as any
+    /// row is; without facts only the C goes unchecked, and the header says
+    /// so.
+    #[test]
+    fn the_c_alone_is_judged_before_a_plan() {
+        use crate::speed::SideKey;
+        let app = app_of("targets/zopfli", "speed-day-one");
+        let app = write_speed_results(&app, false);
+        let root = app.config.target.clone();
+        std::fs::remove_file(root.join("migration/plan.toml")).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(app.snapshot.note.as_deref(), Some(crate::model::NO_PLAN));
+        let big = |app: &App| app.speed.row(&SideKey::C, "big-text").unwrap().clone();
+        assert!(
+            big(&app).out_of_date.is_empty(),
+            "{:?}",
+            big(&app).out_of_date
+        );
+        std::fs::write(root.join("bench/big.txt"), "another input").unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(big(&app).out_of_date, ["your workload changed"]);
+        // Without facts: the C cannot be hashed here; the rest is judged.
+        std::fs::remove_file(root.join("migration/facts.jsonl")).unwrap();
+        let app = crate::app::tests::app_of_path(&root);
+        assert_eq!(big(&app).out_of_date_tokens, ["workload"]);
+        assert!(
+            app.speed
+                .header
+                .iter()
+                .any(|h| h == "the C is not checked here: no facts — run harness scan"),
+            "{:?}",
+            app.speed.header
+        );
+    }
+
     /// Measure is greyed in the words `perf run` refuses with: the
     /// workloads file's state (§3.1), an interrupted Accept (§3.2), and the
     /// program as it stands's 31 runs with one measurable unit (§3.10).
