@@ -2512,11 +2512,18 @@ impl App {
                 if self.chat.has_conversation() {
                     vec!["Quit? The chat's conversation is not kept.".into()]
                 } else {
-                    vec![
-                        "Nothing is running. Hand edits not recorded and features drafts not saved are \
-                         named on the way out."
-                            .into(),
+                    // Every kind of draft the way out names (main's
+                    // `announce_kept_edits`).
+                    let kinds = [
+                        features_edit::DraftKind::Features,
+                        features_edit::DraftKind::Workloads,
                     ]
+                    .map(features_edit::DraftKind::noun)
+                    .join(" and ");
+                    vec![format!(
+                        "Nothing is running. Hand edits not recorded and {kinds} drafts not saved \
+                         are named on the way out."
+                    )]
                 },
             ),
             Purpose::Quit => (Kind::Quit, "Quit while a command runs?".into(), {
@@ -5368,6 +5375,22 @@ pub(crate) mod tests {
         std::fs::write(&logic, text).unwrap();
         assert!(app.reload(true));
         assert_eq!(recheck(&app).greyed, None);
+    }
+
+    /// The idle quit dialog names every kind of draft the way out names —
+    /// the workloads draft too (PERF-DESIGN §3.1: the features Edit flow,
+    /// generalised).
+    #[test]
+    fn the_idle_quit_dialog_names_every_kind_of_draft() {
+        let mut app = app("quit-drafts");
+        app.open_dialog(Purpose::Quit);
+        let Mode::Dialog(c) = &app.mode else { panic!() };
+        assert_eq!(c.dialog.kind, crate::dialog::Kind::QuitIdle);
+        assert_eq!(
+            c.body,
+            ["Nothing is running. Hand edits not recorded and features and workloads drafts not \
+              saved are named on the way out."]
+        );
     }
 
     /// CHK-7: a live holder of the writer lock greys every spawning item,
