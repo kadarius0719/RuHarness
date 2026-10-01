@@ -329,15 +329,46 @@ impl harness_oracle::PerfProgress for Progress<'_> {
     }
 }
 
+/// A folder `perf show` reads, every part checked with lstat: `None` when
+/// it is not there, refused when a part is a link or not a folder (§3.9:
+/// links are refused on read too). It creates nothing.
+fn stored_dir(root: &Path, parts: &[&str]) -> Result<Option<PathBuf>> {
+    let mut cur = root.to_path_buf();
+    for part in parts {
+        cur = cur.join(part);
+        match std::fs::symlink_metadata(&cur) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Ok(m) if m.file_type().is_dir() => {}
+            Ok(_) => bail!(
+                "{}: must be a directory (a link is refused)",
+                shown(root, &cur)
+            ),
+            Err(e) => return Err(e).with_context(|| format!("inspecting {}", cur.display())),
+        }
+    }
+    Ok(Some(cur))
+}
+
 /// `harness perf show` (§3.9): every stored row's words, rebuilt, with why
 /// it is out of date; the computer checked only when the launcher cache is
-/// current, the compilers only as allowlisted tool runs; `--no-check`
-/// skips both.
-pub(crate) fn cmd_show(target: PathBuf, no_check: bool) -> Result<u8> {
+/// current, the compilers only as tool runs (sandboxed; without a sandbox
+/// only with `--allow-unsandboxed`); `--no-check` skips both. It writes
+/// nothing.
+pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool) -> Result<u8> {
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
-    let dir = perf_dir(&ctx)?;
-    let program = res::read_program(&res::program_path(&dir))?;
+    let perf_parts = [
+        harness_core::ledger::MIGRATION_DIR,
+        harness_core::perf::PERF_DIR,
+    ];
+    let dir = stored_dir(&ctx.root, &perf_parts)?;
+    // The units' folder is checked the same way: a linked one would show
+    // another folder's files as this target's rows.
+    let units_dir = stored_dir(&ctx.root, &[perf_parts[0], perf_parts[1], res::UNITS_DIR])?;
+    let program = match &dir {
+        Some(dir) => res::read_program(&res::program_path(dir))?,
+        None => None,
+    };
     let workloads = match wl::load(&ctx.root)? {
         WorkloadsState::Ready(w) => Some(w),
         state => {
@@ -360,7 +391,11 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool) -> Result<u8> {
     } else {
         harness_oracle::perf_computer_if_cached()
     };
-    let compilers = if no_check { None } else { compilers(&ctx) };
+    let compilers = if no_check {
+        None
+    } else {
+        harness_oracle::perf_compilers(&ctx, allow_unsandboxed)
+    };
     if !no_check && computer.is_none() {
         out("perf: computer not checked — run harness perf run once".into());
     }
@@ -424,8 +459,9 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool) -> Result<u8> {
             None,
         );
     }
-    let units_dir = dir.join(res::UNITS_DIR);
-    if let Ok(entries) = std::fs::read_dir(&units_dir) {
+    if let Some(units_dir) = &units_dir {
+        let entries = std::fs::read_dir(units_dir)
+            .with_context(|| format!("reading {}", shown(&ctx.root, units_dir)))?;
         let mut ids: Vec<String> = entries
             .filter_map(|e| e.ok())
             .filter_map(|e| {
@@ -438,7 +474,7 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool) -> Result<u8> {
             .collect();
         ids.sort();
         for id in ids {
-            let Some(file) = res::read_unit(&res::unit_path(&dir, &id), &id)? else {
+            let Some(file) = res::read_unit(&units_dir.join(format!("{id}.json")), &id)? else {
                 continue;
             };
             let replaces = plan
@@ -457,37 +493,4 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool) -> Result<u8> {
         out("perf: nothing measured yet — run harness perf run".into());
     }
     Ok(0)
-}
-
-/// `cc --version` and `rustc -V`'s first lines, as tool runs, when the
-/// target's allowlist has them.
-fn compilers(ctx: &TargetContext) -> Option<(String, String)> {
-    let allow: Vec<&str> = ctx
-        .config
-        .oracle
-        .get("allowlist")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|t| t.as_str()).collect())
-        .unwrap_or_default();
-    if !allow.contains(&"cc") || !allow.contains(&"rustc") {
-        return None;
-    }
-    let first = |cmd: &str, arg: &str| -> Option<String> {
-        let out = std::process::Command::new(cmd)
-            .arg(arg)
-            .current_dir(&ctx.root)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .ok()?;
-        Some(
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .next()?
-                .trim()
-                .chars()
-                .take(160)
-                .collect(),
-        )
-    };
-    Some((first("cc", "--version")?, first("rustc", "-V")?))
 }
