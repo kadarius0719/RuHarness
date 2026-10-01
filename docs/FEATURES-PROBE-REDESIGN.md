@@ -708,6 +708,10 @@ verifiers: 26 findings. Fix pass 2 answers them (the code governs):
   skipped static beside its namesake, a hidden variant with an unused parameter — gcc names it
   `.isra`, clang keeps the name, and only clang is on this machine; CLI: a killed `cc1`).
 
+**§8's premise re-run with fix pass 2's build** (98c2173's harness, `SP/premise-fix1/`): all 79
+programs map or refuse exactly as with fix pass 1's build — corpus 42 of 42 mapped, 928 unwatched;
+extensions 35 of 37, 786 unwatched (136 in their own files) — §2's table stands.
+
 **Mutation check of fix pass 2**: 37 mutants of its rules, 34 killed. Three live, none hiding a
 wrong map: the bound check before the search's `-fsyntax-only` compile and the restore pass's
 room for two compiles change only how many compiles a file spends at its bound (the next check

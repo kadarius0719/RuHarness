@@ -95,7 +95,8 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    (--allow-unsandboxed, -fmax-errors=0), the lld main hint, the incbin-macro test, zopfli's
    map.json regenerated; committed 617f75f, 4fd10a1). Recorded in design §10.1. Mutation check
    DONE: 37 mutants, 34 killed, 3 live and explained in §10.1 (`SP/mutfix2.py`, `SP/mutfix2b.py`,
-   logs in SP). The CHECK of fix pass 2 RUNNING: workflow `wf_b40998a8-a02` (script
+   logs in SP). §8 premise re-run with this build: identical to fix pass 1's (79 of 79 the same;
+   design §10.1). The CHECK of fix pass 2 RUNNING: workflow `wf_b40998a8-a02` (script
    `SP/fix-pass-2-check.js`, base copy `SP/fc2/base` at 4fd10a1's code, work `SP/fc2/work`;
    lenses tokenizer-scanner, build-link, variant-runner; two verifiers each). The fix-pass-1
    check FINISHED (`SP/fc1/result.json`): 25 confirmed by both verifiers, 1 refuted by both (gcc
