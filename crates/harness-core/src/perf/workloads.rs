@@ -656,7 +656,9 @@ pub fn read_input(root: &Path, rel: &str) -> Result<Vec<u8>, InputUnusable> {
 
 /// The workload's digest (§3.1): blake3 over its id, its arguments, its
 /// input's name and bytes — not `runs` (a row records the n it used).
-/// `input` is the bytes [`read_input`] gave, when the workload has one.
+/// `input` is the bytes [`read_input`] gave, when the workload has one;
+/// `None` for an input perf could not use, which is hashed as absent, never
+/// as empty bytes: an input that comes back as an empty file is a change.
 pub fn digest(workload: &Workload, input: Option<&[u8]>) -> String {
     let mut h = blake3::Hasher::new();
     let mut field = |tag: &[u8], bytes: &[u8]| {
@@ -670,7 +672,10 @@ pub fn digest(workload: &Workload, input: Option<&[u8]>) -> String {
     }
     if let Some(name) = &workload.input {
         field(b"input-name", name.as_bytes());
-        field(b"input-bytes", input.unwrap_or_default());
+        match input {
+            Some(bytes) => field(b"input-bytes", bytes),
+            None => field(b"input-absent", b""),
+        }
     }
     format!("{HASH_PREFIX}{}", h.finalize().to_hex())
 }
@@ -941,6 +946,10 @@ mod tests {
             runs: 15,
         };
         let d = digest(&w, Some(b"one"));
+        // An input perf could not read is not an empty one: when it comes
+        // back empty, the workload changed.
+        assert_ne!(digest(&w, None), digest(&w, Some(b"")));
+        assert_eq!(digest(&w, None), digest(&w, None));
         assert_eq!(
             digest(
                 &Workload {
