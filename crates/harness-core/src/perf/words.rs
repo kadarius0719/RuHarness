@@ -859,18 +859,24 @@ fn share_rule(c: &[Run], o: &[Run], row: &Row) -> (Answer, Option<Shift>, Option
     let all: Vec<&Run> = c.iter().chain(o.iter()).collect();
     let slow = all.iter().filter(|r| !mostly_fast(r)).count();
     let of = all.len();
-    let (Some(raw), Some(norm)) = (raw, norm) else {
+    // Too few only when the runs gave too few cycles. A program kept off
+    // the performance cores (a low priority, say) has no normalised value
+    // at all: the two metrics cannot agree, so it reads as slow cores with
+    // its cause — measuring again would find the same.
+    let Some(raw) = raw else {
         return (Answer::TooFew, None, None);
     };
     let (rl, rh) = raw.percent_interval();
-    let (nl, nh) = norm.percent_interval();
     let m = TIME_MARGIN;
     let note = format!("{slow} of the {of} runs ran mostly on the slower cores");
-    if rl > m && nl > m {
-        return (Answer::Slower, Some(raw), Some(format!("cycles; {note}")));
-    }
-    if rh < -m && nh < -m {
-        return (Answer::Faster, Some(raw), Some(format!("cycles; {note}")));
+    if let Some(norm) = norm {
+        let (nl, nh) = norm.percent_interval();
+        if rl > m && nl > m {
+            return (Answer::Slower, Some(raw), Some(format!("cycles; {note}")));
+        }
+        if rh < -m && nh < -m {
+            return (Answer::Faster, Some(raw), Some(format!("cycles; {note}")));
+        }
     }
     let load = stats::median(
         &all.iter()
@@ -1938,6 +1944,144 @@ mod tests {
                 w.headline
             );
         }
+    }
+
+    /// `runs` with `fast` (a fraction) of their cycles and instructions on
+    /// the performance cores, every run at `load` (hundredths), and
+    /// `threads` the CPU time over the clock time.
+    fn on_slow_cores(runs: Vec<Run>, fast: f64, load: Option<u32>, threads: u64) -> Vec<Run> {
+        runs.into_iter()
+            .map(|mut r| {
+                r.p_cycles = r.cycles.map(|v| (v as f64 * fast) as u64);
+                r.p_instructions = r.instructions.map(|v| (v as f64 * fast) as u64);
+                r.load = load;
+                if threads > 1 {
+                    r.wall_us = r.cpu_us.map(|v| v.div_ceil(threads));
+                }
+                r
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_share_rules_cause_puts_busy_first_only_past_the_programs_own_threads() {
+        let w = |fast: f64, load: Option<u32>, threads: u64| {
+            let side = || on_slow_cores(side(15, 4e9, 0.01), fast, load, threads);
+            words(&row(side(), side(), "macos-v6-share", false), &UNIT)
+        };
+        let design = "the program may run there by design (several threads, a low priority)";
+        let busy =
+            |l: u32| format!("the computer may have been busy (load about {l} on 8 fast cores)");
+        let cases = [
+            // One thread at load 14 on 8 fast cores: 14 − 1 ≥ 8, busy first.
+            (Some(1400), 1, format!("{}, or {design}", busy(14))),
+            // Eight threads at load 14: 14 − 8 < 8, by design first.
+            (Some(1400), 8, format!("{design}, or {}", busy(14))),
+            // One thread at load 3 (a background-priority harness).
+            (Some(300), 1, format!("{design}, or {}", busy(3))),
+            // Two threads at load 10: 10 − 2 is exactly 8, busy first;
+            // at load 9 it is 7, by design first.
+            (Some(1000), 2, format!("{}, or {design}", busy(10))),
+            (Some(900), 2, format!("{design}, or {}", busy(9))),
+            // No load recorded: the design's cause alone.
+            (None, 1, design.to_string()),
+        ];
+        for (load, threads, cause) in cases {
+            let got = w(0.25, load, threads);
+            assert_eq!(got.answer, "cant-tell-slow-cores", "{}", got.headline);
+            assert_eq!(
+                got.headline,
+                format!("can't tell — 30 of the 30 runs ran mostly on the slower cores — {cause}"),
+                "load {load:?}, {threads} threads"
+            );
+            assert_eq!(got.short, "can't tell: slow cores");
+            assert!(!got.offers_more_runs, "never on a slow-cores row");
+        }
+    }
+
+    #[test]
+    fn a_program_kept_off_the_fast_cores_reads_slow_cores_never_too_few() {
+        // A background-priority harness: every run on the slower cores, no
+        // performance-core cycles at all — so no normalised value.
+        let zero = |runs: Vec<Run>, load: u32| on_slow_cores(runs, 0.0, Some(load), 1);
+        let w = words(
+            &row(
+                zero(side(15, 4e9, 0.01), 150),
+                zero(side(15, 4e9, 0.01), 150),
+                "macos-v6-share",
+                false,
+            ),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "cant-tell-slow-cores", "{}", w.headline);
+        assert_eq!(
+            w.headline,
+            "can't tell — 30 of the 30 runs ran mostly on the slower cores — the program may run \
+             there by design (several threads, a low priority), or the computer may have been \
+             busy (load about 2 on 8 fast cores)"
+        );
+        assert_eq!(w.short, "can't tell: slow cores");
+        assert!(!w.offers_more_runs);
+        // Busy: the busy clause first.
+        let w = words(
+            &row(
+                zero(side(15, 4e9, 0.01), 1400),
+                zero(side(15, 4e9, 0.01), 1400),
+                "macos-v6-share",
+                false,
+            ),
+            &UNIT,
+        );
+        assert!(
+            w.headline.contains(
+                "slower cores — the computer may have been busy (load about 14 on 8 fast cores), \
+                 or the program may run there by design"
+            ),
+            "{}",
+            w.headline
+        );
+        // A Rust 3.7× the cycles: the metrics cannot agree — never "slower",
+        // never "too few".
+        let w = words(
+            &row(
+                zero(side(15, 4e9, 0.01), 150),
+                zero(side(15, 1.48e10, 0.01), 150),
+                "macos-v6-share",
+                false,
+            ),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "cant-tell-slow-cores", "{}", w.headline);
+        // A few runs on the fast cores, fewer than five a side: the same.
+        let some = |runs: Vec<Run>| -> Vec<Run> {
+            let mut runs = zero(runs, 150);
+            for r in runs.iter_mut().take(3) {
+                r.p_cycles = r.cycles.map(|v| v / 4);
+                r.p_instructions = r.instructions.map(|v| v / 4);
+            }
+            runs
+        };
+        let w = words(
+            &row(
+                some(side(15, 4e9, 0.01)),
+                some(side(15, 4e9, 0.01)),
+                "macos-v6-share",
+                false,
+            ),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "cant-tell-slow-cores", "{}", w.headline);
+        // Too few still means too few cycles: under five runs with cycles.
+        let mut c = zero(side(15, 4e9, 0.01), 150);
+        for r in c.iter_mut().take(11) {
+            r.cycles = None;
+        }
+        let w = words(
+            &row(c, zero(side(15, 4e9, 0.01), 150), "macos-v6-share", false),
+            &UNIT,
+        );
+        assert_eq!(w.answer, "cant-tell-too-few", "{}", w.headline);
+        assert!(!w.offers_more_runs);
     }
 
     #[test]
