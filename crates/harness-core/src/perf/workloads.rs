@@ -925,16 +925,100 @@ mod tests {
             Err(InputUnusable::UnderMigration)
         );
         assert_eq!(read_input(&root, "bench"), Err(InputUnusable::NotAFile));
-        // Each reason has its own words and token.
-        for r in InputUnusable::ALL {
-            assert_eq!(InputUnusable::from_token(r.token()), Some(r));
-            assert!(r.words("bench/big.txt").starts_with("bench/big.txt "));
-        }
+        // A pipe and a socket are not files either.
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("bench/pipe"))
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "mkfifo");
         assert_eq!(
-            InputUnusable::Missing.words("bench/big.txt"),
-            "bench/big.txt is not here — put the file back or remove the workload"
+            read_input(&root, "bench/pipe"),
+            Err(InputUnusable::NotAFile)
         );
+        let _socket =
+            std::os::unix::net::UnixListener::bind(root.join("bench/sock")).expect("bind");
+        assert_eq!(
+            read_input(&root, "bench/sock"),
+            Err(InputUnusable::NotAFile)
+        );
+        // Over 64 MiB by its size (a sparse file, nothing written); exactly
+        // 64 MiB reads. The capped read's own check is reached only when the
+        // file grows between the look and the read, which no test can time.
+        let huge = std::fs::File::create(root.join("bench/huge.bin")).expect("create");
+        huge.set_len(MAX_INPUT_BYTES + 1).expect("grow");
+        assert_eq!(
+            read_input(&root, "bench/huge.bin"),
+            Err(InputUnusable::TooLarge)
+        );
+        huge.set_len(MAX_INPUT_BYTES).expect("shrink");
+        assert_eq!(
+            read_input(&root, "bench/huge.bin").map(|b| b.len() as u64),
+            Ok(MAX_INPUT_BYTES)
+        );
+        // Its permissions refuse the read — unless the tests run as root,
+        // who reads it anyway.
+        use std::os::unix::fs::PermissionsExt;
+        let locked = root.join("bench/locked.txt");
+        std::fs::write(&locked, b"x").expect("write");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        if std::fs::File::open(&locked).is_err() {
+            assert_eq!(
+                read_input(&root, "bench/locked.txt"),
+                Err(InputUnusable::PermissionDenied)
+            );
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).expect("chmod");
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn every_input_unusable_reason_has_its_own_words() {
+        // §3.1's eight sentences, word for word, the same in the CLI and
+        // the cockpit; the ninth (another read failure) has none there, so
+        // its own is pinned.
+        let want = [
+            (
+                InputUnusable::Missing,
+                "bench/big.txt is not here — put the file back or remove the workload",
+            ),
+            (
+                InputUnusable::Link,
+                "bench/big.txt is a link — copy the file in instead",
+            ),
+            (
+                InputUnusable::Outside,
+                "bench/big.txt leads outside the project through a linked folder — copy the file in",
+            ),
+            (
+                InputUnusable::IntoGit,
+                "bench/big.txt leads into .git through a linked folder — copy the file in",
+            ),
+            (
+                InputUnusable::NotAFile,
+                "bench/big.txt is a folder (or a pipe, or a device) — name a file",
+            ),
+            (
+                InputUnusable::TooLarge,
+                "bench/big.txt is over 64 MiB — use a smaller input",
+            ),
+            (
+                InputUnusable::UnderMigration,
+                "bench/big.txt is under migration/ — move it",
+            ),
+            (
+                InputUnusable::PermissionDenied,
+                "bench/big.txt cannot be read (permission denied) — fix its permissions",
+            ),
+            (
+                InputUnusable::Unreadable,
+                "bench/big.txt cannot be read — check the file and measure again",
+            ),
+        ];
+        assert_eq!(want.map(|(r, _)| r), InputUnusable::ALL);
+        for (r, words) in want {
+            assert_eq!(r.words("bench/big.txt"), words);
+            assert_eq!(InputUnusable::from_token(r.token()), Some(r));
+        }
     }
 
     #[test]
