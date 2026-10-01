@@ -968,3 +968,7 @@ the last two rounds found only rarer spellings of one class — two heads run to
 body-supplying macro, read without a preprocessor — with no instance in real code. That class is
 named in §6 with its revisit condition. Fix pass 7 gets a mutation check and a check that its four
 fixes hold and regress nothing (tests, real code), not another open-ended search.
+
+**Mutation check of fix pass 7**: 7 mutants, all killed — two after shapes were added (an
+annotation starting its own line after a named head, and after an empty head that started its
+line).

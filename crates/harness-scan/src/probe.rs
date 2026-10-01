@@ -680,6 +680,10 @@ mod tests {
             "int g(void) NI\nCount\nafter(void)\n  A B NAME()\n{ return 1; }\n",
             "int g(void) NI\nCount\nafter(int x)\n  A B NAME()\n{ return 1; }\n",
             "int g(void)\n  A B STUB_BODY()\nCount\nafter()\n{ return 1; }\n",
+            // An annotation that starts its own line, after a named head or
+            // after an empty head that started its line, never takes it.
+            "int g(void) NI\nCount\nafter(void) A B\nNAME()\n{ return 1; }\n",
+            "int g(void) NI\nCount\nafter() A\nNAME()\n{ return 1; }\n",
         ] {
             let defs = defs_of(src);
             let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
