@@ -520,6 +520,19 @@ mod tests {
         }
     }
 
+    /// Fix pass 4's mutation check: a stray parse error between a head and
+    /// its body, with no call to name, still makes the definition rule 1.
+    #[test]
+    fn a_stray_parse_error_before_the_body_is_rule_1() {
+        let src = "int g(void) NI\nCount\nafter(x)\n\tOther y;\n{ return 0; }\n";
+        let defs = defs_of(src);
+        assert!(!defs.is_empty(), "{defs:?}");
+        assert!(
+            defs.iter().all(|d| d.note_at == Err(NoNote::Parser)),
+            "{defs:?}"
+        );
+    }
+
     /// Fix pass 3's check: an annotation naming the function's own parameters
     /// (`__sized_by(n * size)`) is no second head; a macro before the real
     /// name with attributes between (macOS's malloc headers) gives one static

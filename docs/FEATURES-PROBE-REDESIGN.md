@@ -841,3 +841,11 @@ all confirmed by both verifiers, none refuted, none high — 6 medium, 10 low, 5
   inline-only namesake; a namesake taken out in a later pass; the ruled namesake's conservative
   answer; the scanner's shapes; the reserved ELF indexes; the link-round bound; the scorer's
   folders; newer maps. The 101 bench targets' facts byte-identical; sqlite3.c unchanged.
+
+**Mutation check of fix pass 4**: 23 mutants, 21 killed (two tests added on the way: the spread case
+under a pass bound the every-unit retry cannot fit, and a search the named files cannot explain —
+eight files each with its own tipped static among forty more — at three bounds, never unprobing
+the forty; plus a stray parse error with no call to name). Two live, both without effect on the
+map: the nested-declarator gate in `heads()` (the definition is never recorded — `function_name`
+gates it first), and widening the units when the pass bound is spent (it changes what is
+recompiled, not what goes back unprobed).

@@ -3757,7 +3757,14 @@ fn the_spread_case_is_found_at_the_designs_bounds() {
         .map(|(a, b)| (a.as_str(), b.as_str()))
         .collect();
     let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
-    let (_tmp, map) = map_program("spread-at-design-bounds", &main, &extra, &ids);
+    // A pass bound the every-unit retry cannot fit (each of its trials
+    // compiles all 49 units), while the narrowed search can.
+    let bounds = harness_oracle::MapBounds {
+        pass_compiles: 150,
+        ..DESIGN_BOUNDS
+    };
+    let (_tmp, map, _) =
+        map_program_bounded("spread-at-design-bounds", &main, &extra, &ids, bounds);
     let map = map.expect("maps");
     assert_eq!(
         reason_for(&map, "src/tool/tip.h::g").map(|r| r.kind.as_str()),
@@ -3771,5 +3778,67 @@ fn the_spread_case_is_found_at_the_designs_bounds() {
             "{id}: {:?}",
             map.unwatched_reasons
         );
+    }
+}
+
+/// Fix pass 4's mutation check: eight files, each with its own tipped
+/// static (ld64 lists seven): the named files cannot explain the eighth
+/// object's reference, so the search widens; whatever the pass bound, only
+/// files that referenced the symbol go back unprobed — never the forty that
+/// did not.
+#[test]
+fn a_cut_search_unprobes_only_the_files_that_reference_the_symbol() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let (_, files, _) = shared_tip(0);
+    let tip = &files[0].1;
+    let mut extra: Vec<(String, String)> = Vec::new();
+    let mut ids: Vec<(String, String)> = Vec::new();
+    for i in 0..8 {
+        let mut u = tip.clone();
+        u.push_str(&format!(
+            "int fa{i}(void) {{ return w(5); }}\nint fb{i}(void) {{ return w(6); }}\n"
+        ));
+        extra.push((format!("src/tool/u{i}.c"), u));
+        ids.push((format!("src/tool/u{i}.c"), format!("src/tool/u{i}.c::g")));
+        ids.push((format!("src/tool/u{i}.c"), format!("fa{i}")));
+        ids.push((format!("src/tool/u{i}.c"), format!("fb{i}")));
+    }
+    for k in 0..40 {
+        extra.push((
+            format!("src/tool/t{k}.c"),
+            format!("int xf{k}(int x) {{ return x + {k}; }}\n"),
+        ));
+        ids.push((format!("src/tool/t{k}.c"), format!("xf{k}")));
+    }
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nvolatile int sink; volatile int sink2;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1); }\n";
+    let extra: Vec<(&str, &str)> = extra
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    for bound in [30, 60, 120] {
+        let bounds = harness_oracle::MapBounds {
+            pass_compiles: bound,
+            ..DESIGN_BOUNDS
+        };
+        let (_tmp, map, _) = map_program_bounded(
+            &format!("cut-unprobes-referrers-{bound}"),
+            main,
+            &extra,
+            &ids,
+            bounds,
+        );
+        let map = map.expect("maps");
+        for id in ["xf0", "xf39", "unit_add", "main"] {
+            assert!(
+                reason_for(&map, id).is_none(),
+                "bound {bound}, {id}: {:?}",
+                map.unwatched_reasons
+            );
+        }
     }
 }
