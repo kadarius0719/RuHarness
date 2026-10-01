@@ -1,6 +1,6 @@
 # C-vs-Rust performance baselines (design)
 
-Status: **revision 5 — after the check of revision 4 (f7a4905)**, to be checked (2026-10-01).
+Status: **revision 5 — after the check of revision 4 (f7a4905); its check (no high finding) answered by §10's build notes — to be built** (2026-10-01).
 History: the draft (0b64bba) had an adversarial review (4 lenses, 49 findings, 46 confirmed by two
 verifiers); revision 1 (00f2e23) answered them; its check gave 118 changes (scratchpad
 `perf/rev2-changes.md`, cited [c12]); revision 2 (cd1f79b) took them; its check gave 35 new
@@ -986,3 +986,113 @@ None.
   Linux hybrid case summed and marked unchecked; the draft's integration caps kept. Not taken: a fresh
   TMPDIR for every crate build and `RLIMIT_NPROC`; a scheduling-band field in the record (the busy
   cause uses the load and the fast-core count instead) [c25, c118].
+
+## 10. Build notes — the check of revision 5
+
+The check of revision 5 (`wf_2b416222-f83`; `perf/revision5-check.json`, digest `perf/rev5-digest.md`)
+found 39 open items done, 25 in part, 6 done wrongly, and 19 new findings confirmed by two verifiers
+(none high: 4 medium, 10 low, 5 nits; cited [q1]), 3 by one, none refuted. As decided before the
+round (FEATURES-PROGRESS, DECISIONS), revision 5 is built without a further design round; each note
+below is a decision the build makes, each with a test, and **the notes govern where they differ from
+§1–§9**.
+
+**Launcher**
+1. [q1, P7] The go-ahead usually arrives before *ready*: perfrun reads it whenever the socket is
+   readable, remembers it, and sends *go* once both have arrived. The harness's timer counts from
+   the go-ahead plus the step-1 allowance; both timers read as a timeout, and "perfrun's fires
+   first" is not claimed.
+2. [q2] The child keeps exactly *ready*'s write end, *go*'s read end, *status*'s write end, stdout
+   and stderr; perfrun keeps the other ends and closes its copies of the child's.
+3. [q3] The record's status gains `never-started no-ready` (with the child's end); the go-ahead is
+   the byte `G`, the bye `B`; on an early end perfrun discards a pending `G` before it waits for `B`.
+4. [q4, c24, n4] Locks: the shared version lock is taken while the exclusive `perf/.lock` is held,
+   then `perf/.lock` is released; stale folders are removed only under `perf/.lock`, keeping the two
+   newest versions (two worktrees in turn do not rebuild each other); after every `flock` the locked
+   file's (device, inode) is compared with a fresh stat of the path, and the lock retried if they
+   differ; `perf show` holds the shared lock while it runs `perfrun facts`. The cache refusal also
+   covers `CARGO_HOME`.
+5. [q5] Every rendered profile (tool, run, scenario) ends with `(deny file-write* (subpath <the
+   canonical launcher cache root>))`; the refusal of §3.2 stays as a second line.
+6. [q6] CPU times from `proc_pid_rusage` are mach ticks, converted with `mach_timebase_info`; the V4
+   fallback stays (no P fields).
+7. [q7] The program's group is killed before perfrun's (the registry kills in that order); on the
+   pre-go SIGTERM path the child too stays unreaped until the bye.
+8. [q8, c37] The child resets every catchable signal (1 to NSIG−1) to `SIG_DFL` and empties its mask;
+   perfrun adds its SIGTERM watch before it ignores SIGTERM, before the fork; perfrun's kills go to
+   both `-pid` and `pid` (the child may not have called `setsid()` yet). Linux's
+   `PR_SET_CHILD_SUBREAPER` is not taken (Linux unchecked; §6 names the grandchild).
+9. [disputed: the compiler, P8] Both layouts are named — Command Line Tools: `<dev>/usr/bin/clang`
+   and `<dev>/SDKs/MacOSX.sdk`; Xcode: `<dev>/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang`,
+   the `ld` and `lib/libLTO.dylib` beside it, `<dev>/Platforms/MacOSX.platform/Developer/SDKs/
+   MacOSX.sdk`. `clang -###` confirms the `ld` and `libLTO` used are the checked ones (else
+   `-fuse-ld=<checked ld>`); an `xcrun` shim is refused; compile and link run with a cleared
+   environment. With no `xcode_select_link`: `/Applications/Xcode.app/Contents/Developer`, then the
+   Command Line Tools; when the selected folder fails the ownership check and the Command Line Tools
+   pass, they are used (said in the progress line).
+
+**Words**
+10. [q9, P11] The steadiness test is per side: the mean of the two sides' own spreads of
+    ln(p_cycles / p_instructions) against the mean of their raw-cycle spreads; skipped when ≥ 97 %
+    of the row's cycles were on the performance cores; "the program's phases differ in speed" only
+    when it failed. A real cost-per-instruction slowdown (×1.1) keeps normalisation and reads slower.
+11. [q10, P10] The share rule's can't-tell never asserts one cause: "K of the 30 runs ran mostly on
+    the slower cores — the computer may have been busy (load about 14 on 8 fast cores), or the
+    program runs there by design (several threads, a low priority)", the busy clause first only when
+    the load less the program's own parallelism (its median CPU/clock, rounded up) is at least the
+    fast-core count; short form `can't tell: slow cores`.
+12. [q13, P12] The 31-run act's set is exactly the words' set (n < 31; probably, close call, or "can't
+    tell: the estimate"); a short row whose interval lies inside ±M gives the short-run words, never
+    the offer.
+13. [q14, m15, P16] Rounding: each end to the nearest step; when that would put it on or past a
+    boundary its branch relies on — 0 or ±M, and for a close call both — it shows two decimals,
+    rounded away from that boundary; Y in "within ±Y %" rounds up.
+14. [q16, p18] The too-short gap is shown only when the Rust is the slower side by more than 2×
+    against both step-1 C runs, and both sides ran at least 20 ms of CPU; ranked with slower. The
+    half-second factor is taken over the smaller side's CPU time.
+15. [q15, p23] Archive members are matched as name segments: the runtime's members are
+    `panic_abort-<hash>.panic_abort…` / `panic_unwind-<hash>.panic_unwind…`, std's `std-<hash>.std…`,
+    each possibly after a thin-LTO `<crate>-<hash>.` prefix — never a crate whose own name merely
+    contains them. Fat LTO is a defined `rust_eh_personality` with no std member. Causes gain "two
+    units use no std" and "two units are built with lto"; the thin-LTO order sentence is dropped
+    (it did not reproduce); perf always tries the link, and the archive facts only word a failure.
+16. [m9] "· parallel" goes on a short form only where it fits 26 columns (about as fast, slower or
+    faster without the interval, ≥ 2×); otherwise it is in the detail; the unit header's second line
+    carries it.
+17. [n14, m13] The seeded statement is a rate: over 12 seeds × 2 000 rows of +3 % at σ 4–5 %, n = 31,
+    "probably slower" is the most common answer and "faster" or "about as fast" under 0.5 % of rows.
+18. [p17, disputed: the start-up note] The note's interval (of the absolute median differences) must
+    hold 1.04e7 with its upper end ≤ 2.6e7 (no lower bound); its §4 case is a rate over the recorded
+    rows.
+19. [q17] The MCP answer for a short row is `cant-tell-short-run`, with no shift exported.
+20. [m11] §2's answer rates name their source (`design-check4/…/m11.py`); §6 says "at 15 runs under
+    load fewer than half the windows answer; at 31 most do".
+21. [m8] A Rust that crashes part-way with stdout already different reads "Rust crashed" (a §4
+    case); the cockpit's fact sentence follows the same order.
+
+**Integration**
+22. [q11, c91, p24, m18] The recorded hand edit's step: "Hand edit u001's crate, then Replace u001's
+    verified crate with the new attempt and measure this unit again — and if it is not faster,
+    Replace it back with <the attempt in use now>"; the §4 test checks that each named act changes
+    the crate perf will measure. §1 reads "written by hand and verified".
+23. [q12, p26] One C-side rule: `c-unstable`, `c-crashed`, `c-timed-out`, `output-too-large` and
+    `c-could-not-start` (moved out of the set-up list) are written only to the workload's `c_alone`
+    row — replacing a C-side or too-short row there, otherwise beside its baseline as `last_try`;
+    unit and as-it-stands rows are left exactly as they were (no `last_try`); the reader refuses a
+    `c-` outcome outside `c_alone`.
+24. [c21, m22, p25, q19] `left_out` reasons gain `replaces-changed` and `accept-interrupted`;
+    currency compares with **measurable today** (every condition of §3.2's selection), not
+    `fresh_green` alone; a held unit whose crate changed reads "u-x's Rust changed since"; that
+    words for a left-out unit only for the build, link and replaces reasons.
+25. [c33] A crate whose manifest's `[profile.release]` sets `opt-level`, `lto`, `codegen-units` or
+    `panic` away from the defaults is named on its row ("the crate's manifest sets lto = thin"),
+    read with the workspace's toml reader; `.cargo/config.toml` stays a §6 residual.
+26. [c51] When the C exits non-zero, the progress line quotes the first line of its step-1 stderr
+    (control characters shown escaped, at most 80 columns); nothing is stored.
+27. [c113] The C compile's figure (about 1–5 s) joins the estimate; the example's sum includes the
+    builds; a crate's build is "cold" when `target/release` is missing or its newest file is older
+    than the newest source file (files compared, not folders).
+28. [n30, q18] The View's header for rows that differ only in compilers: "with 2 compilers — see each
+    row". Tree labels: `Speed (no workload)` for the starter, and `Speed (not yet run)`.
+29. [p28] Run logs live in `migration/build/perf-logs/` (never recreated by the `.perf` helper), one
+    per run, the last 20 kept.
+30. [disputed: the Modify words] The greyed Modify reason is the cockpit's own, word for word.
