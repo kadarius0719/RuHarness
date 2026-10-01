@@ -131,11 +131,16 @@ core_tests; driver validation times runs 2–3 only; many §4 tests.
    CHECK OF FIX PASS 5 FINISHED (`wf_37778f58-b30`, `SP/fc5/result.json`): all 13 closed; 4 new,
    narrower (comments in heads; an empty-call macro taking the real head's place; folded first
    heads returning pointers; a namesake holding the name as a parameter or tag) — FIX PASS 6
-   COMMITTED (bf6dfec; mutation 13/13 after two listing tests, 1dee223; design §10.5). RUNNING:
-   the short CHECK OF FIX PASS 6, workflow `wf_d449beca-415` (script `SP/fix-pass-6-check.js`,
-   base `SP/fc6/base` at 1dee223; two lenses; result → save to `SP/fc6/result.json`). If it finds
-   no silent wrong map, false refusal, crash or real-code regression, the probe review is
-   CLOSED: go to items 4–7. Findings per round so far: 26, 26, 21, 13, 4 (all narrower). Was: fix those four,
+   COMMITTED (bf6dfec; mutation 13/13 after two listing tests, 1dee223; design §10.5). The CHECK
+   OF FIX PASS 6 FINISHED (`wf_d449beca-415`, `SP/fc6/result.json`): all 4 closed; 4 rarer
+   spellings new, none in real code. FIX PASS 7 COMMITTED (03927a4; mutation 7/7, 264164b; design
+   §10.6). DECIDED (process, §10.6): the review STOPS here — findings fell 26, 26, 21, 13, 4, 4,
+   the last two rounds only rarer spellings of one class (two heads run together after a
+   body-supplying macro, read without a preprocessor), none in real code; the class is named in
+   §6 with "revisit with a preprocessing frontend". RUNNING: the BOUNDED CHECK of fix pass 7,
+   workflow `wf_3d782237-429` (script `SP/fix-pass-7-check.js`, base `SP/fc7/base` at 264164b;
+   one closure verifier per fix + a regression sweep; save to `SP/fc7/result.json`). If the fixes
+   hold and nothing regressed: items 4–7. Was: fix those four,
    the lows (misread walk over all branch combinations, capped; K&R function-typed parameter
    `int cb(int)` outranking `after(cb)`; folded second head's static; non-nested signature ends at
    the call; `static Count (after)(void)` named `Count`), the missing tests (by-shape ranking,
