@@ -156,8 +156,6 @@ pub(crate) enum ScenarioEnd {
     ExecFailed,
 }
 
-/// A scenario run: how it ended, and both streams (rewritten, §4.1 step 3)
-/// for a run that exited or was signalled. Compare runs with
 /// The features map's notes file in a scenario run's temp dir
 /// (docs/FEATURES-PROBE-REDESIGN.md §3.6).
 pub(crate) const NOTES_FILE: &str = ".ruharness-notes";
@@ -172,6 +170,8 @@ pub(crate) struct NotesFile {
     pub read: bool,
 }
 
+/// A scenario run: how it ended, and both streams (rewritten, §4.1 step 3)
+/// for a run that exited or was signalled. Compare runs with
 /// [`ScenarioRun::same_result`].
 #[derive(Debug, Clone)]
 pub(crate) struct ScenarioRun {

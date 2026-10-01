@@ -295,9 +295,12 @@ fn map_inner(
     }
     let mut copy_texts: Vec<Vec<u8>> = Vec::new();
     let mut unit_reads: Vec<std::collections::BTreeSet<String>> = Vec::new();
+    // Per top-level file: the notes its preprocessed copy holds as code.
+    let mut copy_notes: Vec<std::collections::BTreeSet<u32>> = Vec::new();
     for pass in 0.. {
         copy_texts.clear();
         unit_reads.clear();
+        copy_notes.clear();
         let mut changed = false;
         for (n, (c_file, copied)) in c_files.iter().zip(&probed_inputs).enumerate() {
             let program = &programs[n];
@@ -376,6 +379,7 @@ fn map_inner(
                 .collect();
             entered.retain(|rel| probe.rels().contains(rel));
             unit_reads.push(entered);
+            copy_notes.push(scan.notes.keys().copied().collect());
             copy_texts.push(copied_reads.text);
         }
         if !changed {
@@ -449,9 +453,47 @@ fn map_inner(
         link_args: &link_args,
         out: out.path(),
         index_of: &index_pair,
+        functions: &index.pairs,
         times: &times,
+        bounds: crate::probebuild::bounds(),
     };
-    let probed = build_copy.run(&mut probe, progress)?;
+    let built = build_copy.run(&mut probe, progress)?;
+    let probed = built.program;
+    // A watched function whose note no compile holds, in a file the
+    // compiles enter, while a compiled object defines its name: its visible
+    // definition sits in a branch the build skips, and one the parser cannot
+    // read (made by a macro, a parenthesized name) is compiled in its place —
+    // unwatched, never "not run" (review: an #if sibling shares its id).
+    for (n, entered) in unit_reads.iter().enumerate() {
+        for rel in entered {
+            for (file, id) in index.pairs.iter().filter(|(file, _)| file == rel) {
+                let Some(number) = index.of(file, id) else {
+                    continue;
+                };
+                if probe.reasons.contains_key(&(file.clone(), id.clone())) || !probe.is_probed(file)
+                {
+                    continue;
+                }
+                let compiled = (0..unit_reads.len())
+                    .any(|m| unit_reads[m].contains(rel) && copy_notes[m].contains(&number));
+                let name = id.rsplit("::").next().unwrap_or(id);
+                let external = !id.contains("::");
+                let defined = built.defined[n]
+                    .iter()
+                    .any(|d| d.name == name && (d.external || !external));
+                if !compiled && defined {
+                    probe.take_out(
+                        file,
+                        id,
+                        Reason::new(
+                            Kind::Parser,
+                            "a definition the parser cannot read is compiled in its place",
+                        ),
+                    );
+                }
+            }
+        }
+    }
 
     // The runs: plain, probed, plain — all at the one path of §4.1.
     let run_path = build.join("f").join(features::program_name(&target.config));

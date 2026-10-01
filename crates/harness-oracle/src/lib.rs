@@ -75,6 +75,7 @@ mod confine;
 mod exec;
 mod featuremap;
 mod features;
+mod objsyms;
 mod probebuild;
 mod probecopy;
 mod sandbox;
@@ -88,6 +89,8 @@ mod validate;
 pub use boundary::{BoundaryReport, ParamFigures};
 pub use exec::{cancelled, kill_live_process_groups};
 pub use featuremap::{map_features, MapProgress, FEATURES_BUILD_DIR};
+#[doc(hidden)]
+pub use probebuild::{with_map_bounds, MapBounds};
 pub use sandbox::sandbox_mode;
 pub use validate::validate_driver;
 

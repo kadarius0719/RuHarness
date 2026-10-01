@@ -1603,3 +1603,737 @@ fn the_runtimes_names_and_function_less_headers() {
     harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
         .expect("an absolute include of a header without notes maps");
 }
+
+// ---- The compiler-guided probe's code review, its first fix pass ----
+
+/// A progress that keeps its messages.
+struct Loud(Vec<String>);
+
+impl harness_oracle::MapProgress for Loud {
+    fn message(&mut self, m: &str) {
+        self.0.push(m.to_string());
+    }
+    fn scenario(&mut self, _: &harness_core::features::ScenarioRecord, _: usize, _: usize) {}
+}
+
+/// [`map_program`] under `bounds`, keeping the progress messages.
+fn map_program_bounded(
+    name: &str,
+    main: &str,
+    extra: &[(&str, &str)],
+    functions: &[(&str, &str)],
+    bounds: harness_oracle::MapBounds,
+) -> (
+    TempDir,
+    Result<harness_core::features::FeatureMap, harness_core::error::Error>,
+    Vec<String>,
+) {
+    let tmp = TempDir::new(name);
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+    let (target, _) = program(tmp.path(), GOOD, Some(features), "");
+    write(&tmp.path().join("src/tool/main.c"), main);
+    for (path, text) in extra {
+        write(&tmp.path().join(path), text);
+    }
+    let mut facts = with_symbols(tmp.path());
+    for (file, id) in functions {
+        facts.symbols.push(harness_core::facts::SymbolRecord {
+            name: (*id).into(),
+            kind: "function".into(),
+            file: (*file).into(),
+            visibility: "public".into(),
+            signature: String::new(),
+            span: (1, 1),
+        });
+    }
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    let mut loud = Loud(Vec::new());
+    let map = harness_oracle::with_map_bounds(bounds, || {
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut loud)
+    });
+    (tmp, map, loud.0)
+}
+
+const DESIGN_BOUNDS: harness_oracle::MapBounds = harness_oracle::MapBounds {
+    placed_rounds: 8,
+    file_compiles: 64,
+    pass_compiles: 400,
+};
+
+fn kind_of<'a>(map: &'a harness_core::features::FeatureMap, id: &str) -> Option<&'a str> {
+    map.unwatched_reasons
+        .iter()
+        .find(|r| r.id == id)
+        .map(|r| r.kind.as_str())
+}
+
+fn ran(map: &harness_core::features::FeatureMap) -> Vec<&str> {
+    map.scenarios[0]
+        .functions
+        .iter()
+        .map(|(_, n)| n.as_str())
+        .collect()
+}
+
+/// Review: an `#if` sibling the parser cannot see shares its id — the
+/// visible definition sits in the branch the build skips, so the compiled
+/// one carries no note. It is unwatched with its reason, never "not run".
+#[test]
+fn a_compiled_definition_the_parser_cannot_read_is_unwatched() {
+    let shapes = [
+        (
+            "macro",
+            "#define DEFINE_ADD(T) T add(T a, T b) { return a + b; }\n\
+             #ifndef PORTABLE\nDEFINE_ADD(int)\n#else\nint add(int a, int b) { return a + b; }\n#endif\n",
+            "add",
+            "add(1, 2)",
+        ),
+        (
+            "paren",
+            "#if 0\nint add(int x, int y) { return x - y; }\n#else\nint (add)(int x, int y) { return x + y; }\n#endif\n",
+            "add",
+            "add(1, 2)",
+        ),
+        (
+            "static",
+            "#if 0\nstatic int sadd(int x, int y) { return x - y; }\n#else\n__attribute__((noinline)) static int (sadd)(int x, int y) { return x + y; }\n#endif\n\
+             __attribute__((noinline)) int add2(int x, int y) { return sadd(x, y); }\n",
+            "src/tool/main.c::sadd",
+            "add2(1, 2)",
+        ),
+    ];
+    for (name, defs, id, call) in shapes {
+        let main = format!(
+            "#include \"unit.h\"\n#include \"mul.h\"\n{defs}\
+             __attribute__((noinline)) int use(void) {{ return {call}; }}\n\
+             int main(void) {{ return unit_add(1, 2) == 3 ? use() - 3 : (int)mul_step(0, 1); }}\n"
+        );
+        let mut functions = vec![("src/tool/main.c", id), ("src/tool/main.c", "use")];
+        if name == "static" {
+            functions.push(("src/tool/main.c", "add2"));
+        }
+        let (_tmp, map) = map_program(
+            &format!("feat-review-hidden-{name}"),
+            &main,
+            &[],
+            &functions,
+        );
+        let map = map.expect("maps");
+        let reason = map.unwatched_reasons.iter().find(|r| r.id == id);
+        assert!(
+            reason.is_some_and(|r| r.kind == "parser" && r.detail.contains("cannot read")),
+            "{name}: {:?}",
+            map.unwatched_reasons
+        );
+        assert!(ran(&map).contains(&"use"), "{name}: {:?}", ran(&map));
+    }
+    // Both readable: the compiled one carries the note, and it ran.
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n\
+                #if 0\nint add(int x, int y) { return x - y; }\n#else\nint add(int x, int y) { return x + y; }\n#endif\n\
+                int main(void) { return unit_add(1, 2) == 3 ? add(1, 2) - 3 : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "feat-review-hidden-control",
+        main,
+        &[],
+        &[("src/tool/main.c", "add")],
+    );
+    let map = map.expect("maps");
+    assert!(map.unwatched.is_empty(), "{:?}", map.unwatched_reasons);
+    assert!(ran(&map).contains(&"add"));
+}
+
+/// Review: a GNU raw string with a lone `"` on the line before a stringized
+/// body put the old scanner out of step — the note in the string read as
+/// code, the probed program was another program. The tokenizer keeps the
+/// literal whole: the function is unwatched, the map records what ran.
+#[test]
+fn a_raw_string_never_hides_a_stringized_note() {
+    let main = "#include <stdio.h>\n#include <string.h>\n#include \"unit.h\"\n#include \"mul.h\"\n\
+                #define STR(...) #__VA_ARGS__\n\
+                #define SHADER(...) static const char *pre = R\"(\")\"; static const char frag[] = STR(__VA_ARGS__)\n\
+                SHADER(\nvoid shade(void) { color = vec4(1.0); }\n);\n\
+                void longer(void) { puts(\"x\"); } void shorter(void) { puts(\"x\"); }\n\
+                int main(void) { (void)pre; if (unit_add(1, 2) != 3) return (int)mul_step(0, 1);\n\
+                if (strlen(frag) > 45) longer(); else shorter(); return 0; }\n";
+    let (_tmp, map) = map_program(
+        "feat-review-raw-string",
+        main,
+        &[],
+        &[
+            ("src/tool/main.c", "shade"),
+            ("src/tool/main.c", "longer"),
+            ("src/tool/main.c", "shorter"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        kind_of(&map, "shade"),
+        Some("stringized"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    let ran = ran(&map);
+    assert!(
+        ran.contains(&"shorter") && !ran.contains(&"longer"),
+        "{ran:?}"
+    );
+}
+
+/// Review: a Latin-1 byte on a function's line made the same-code check
+/// refuse an ordinary program (its end token's spaces were kept).
+#[test]
+fn a_latin1_line_maps() {
+    let main = b"#include <stdio.h>\n#include \"unit.h\"\n#include \"mul.h\"\n\
+                 int greet(void) { return puts(\"caf\xE9\"); }\n\
+                 int main(void) { return unit_add(1, 2) == 3 ? greet() < 0 : (int)mul_step(0, 1); }\n";
+    let tmp = TempDir::new("feat-review-latin1");
+    let features = "schema_version = 1\n[[feature]]\nid = \"use\"\nname = \"Usage\"\n\
+                    [[scenario]]\nfeature = \"use\"\nid = \"none\"\nargs = []\n";
+    let (target, _) = program(tmp.path(), GOOD, Some(features), "");
+    std::fs::write(tmp.path().join("src/tool/main.c"), main).unwrap();
+    let mut facts = with_symbols(tmp.path());
+    facts.symbols.push(harness_core::facts::SymbolRecord {
+        name: "greet".into(),
+        kind: "function".into(),
+        file: "src/tool/main.c".into(),
+        visibility: "public".into(),
+        signature: String::new(),
+        span: (1, 1),
+    });
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    let map =
+        harness_oracle::map_features(&target, &facts, &features, &digest, &mut Quiet(Vec::new()))
+            .expect("maps");
+    assert!(map.unwatched.is_empty(), "{:?}", map.unwatched_reasons);
+    assert!(ran(&map).contains(&"greet"));
+}
+
+/// Review: an `.incbin` whose directive is split over two string literals
+/// on two lines read the probed copy's bytes.
+#[test]
+fn an_incbin_split_across_lines_unprobes_the_file_it_reads() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("Mach-O symbol names: skipped here");
+        return;
+    }
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n\
+                __asm__(\".data\\n.globl _blob\\n_blob:\\n.inc\"\n\
+                \"bin \\\"unit.c\\\"\\n.globl _blob_end\\n_blob_end:\\n.text\\n\");\n\
+                extern const char blob[], blob_end[];\n\
+                int main(void) { return unit_add(1, 2) == 3 ? (blob_end - blob > 100000) : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program("feat-review-incbin-split", main, &[], &[]);
+    let map = map.expect("maps");
+    let reason = map.unwatched_reasons.iter().find(|r| r.id == "unit_add");
+    assert!(
+        reason.is_some_and(|r| r.kind == "data" && r.detail.contains(".incbin")),
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Review: §3.4 step 6's pass bound counts the compiles beyond each file's
+/// first — files whose notes all compile never reach it.
+#[test]
+fn the_pass_bound_counts_only_compiles_beyond_the_first() {
+    let files: Vec<(String, String)> = (0..3)
+        .map(|i| {
+            (
+                format!("src/tool/z{i}.c"),
+                format!("int zf{i}(int x) {{ return x + {i}; }}\n"),
+            )
+        })
+        .collect();
+    let extra: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let ids: Vec<(String, String)> = (0..3)
+        .map(|i| (format!("src/tool/z{i}.c"), format!("zf{i}")))
+        .collect();
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let bounds = harness_oracle::MapBounds {
+        pass_compiles: 1,
+        ..DESIGN_BOUNDS
+    };
+    let (_tmp, map, _) = map_program_bounded(
+        "feat-review-pass-first",
+        "#include \"unit.h\"\n#include \"mul.h\"\nint main(void) { return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1); }\n",
+        &extra,
+        &ids,
+        bounds,
+    );
+    let map = map.expect("maps");
+    assert!(map.unwatched.is_empty(), "{:?}", map.unwatched_reasons);
+}
+
+/// Review: past the pass bound, only the probed files no settled compile
+/// has checked go back unprobed — a header an earlier file compiled with
+/// its notes keeps them.
+#[test]
+fn past_the_pass_bound_checked_headers_keep_their_notes() {
+    let shared = "static inline int sh(int x) { return x * 2; }\n";
+    let a = "#include \"shared.h\"\n\
+             int bad(int x) { __label__ out; if (x) goto out; return 0; out: return 1; }\n\
+             int a_use(int x) { return sh(x) + bad(x); }\n";
+    let b = "#include \"shared.h\"\nint b_use(int x) { return sh(x) + 1; }\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nint a_use(int); int b_use(int);\n\
+                int main(void) { return unit_add(1, 2) == 3 ? a_use(0) + b_use(0) - 1 : (int)mul_step(0, 1); }\n";
+    let bounds = harness_oracle::MapBounds {
+        pass_compiles: 1,
+        ..DESIGN_BOUNDS
+    };
+    let (_tmp, map, _) = map_program_bounded(
+        "feat-review-pass-checked",
+        main,
+        &[
+            ("src/tool/shared.h", shared),
+            ("src/tool/a.c", a),
+            ("src/tool/b.c", b),
+        ],
+        &[
+            ("src/tool/shared.h", "src/tool/shared.h::sh"),
+            ("src/tool/a.c", "bad"),
+            ("src/tool/a.c", "a_use"),
+            ("src/tool/b.c", "b_use"),
+        ],
+        bounds,
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        kind_of(&map, "bad"),
+        Some("compile"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert_eq!(kind_of(&map, "b_use"), Some("not-checked"));
+    assert_eq!(
+        kind_of(&map, "src/tool/shared.h::sh"),
+        None,
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert!(
+        ran(&map).contains(&"src/tool/shared.h::sh"),
+        "{:?}",
+        ran(&map)
+    );
+}
+
+/// `m` pairs: g{i}'s note tips w{i} (which carries no note: its brace sits
+/// under `#if`) out of being inlined, and w{i}'s `__builtin_constant_p`
+/// guard then calls an `error`-attributed function — an error in a body
+/// with no note, which only a search finds (the review's exp/gen6.sh; the
+/// sizes are clang 21's inlining threshold).
+fn tipping_pairs(m: usize) -> (String, Vec<(String, String)>) {
+    let mut s = String::from(
+        "__attribute__((error(\"not constant\"))) extern void bad_size(void);\n\
+         volatile int sink; volatile int sink2;\n",
+    );
+    let mut ids = Vec::new();
+    for p in 0..m {
+        s.push_str(&format!("static void g{p}(int n) {{ sink = n; }}\n"));
+        s.push_str(&format!(
+            "static int w{p}(int n)\n#if 1\n{{\n#endif\n  g{p}(n);\n"
+        ));
+        for i in 0..23 {
+            s.push_str(&format!("  sink = n * {i} + sink;\n"));
+        }
+        for _ in 0..4 {
+            s.push_str("  sink2 = 1;\n");
+        }
+        s.push_str("  if (!__builtin_constant_p(n)) bad_size();\n  return n; }\n");
+        s.push_str(&format!(
+            "int f{p}(void)\n#if 1\n{{\n#endif\n  return w{p}(5); }}\n"
+        ));
+        s.push_str(&format!(
+            "int h{p}(void)\n#if 1\n{{\n#endif\n  return w{p}(6); }}\n"
+        ));
+        ids.push((
+            "src/tool/main.c".to_string(),
+            format!("src/tool/main.c::g{p}"),
+        ));
+    }
+    (s, ids)
+}
+
+/// Review: a search is not a placed round — two notes each found by a
+/// search stay within one placed round, and main keeps its note.
+#[test]
+fn searches_are_not_placed_rounds() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let (body, ids) = tipping_pairs(2);
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{body}\
+         int main(void) {{ return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1) + f0() + h1(); }}\n"
+    );
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let bounds = harness_oracle::MapBounds {
+        placed_rounds: 1,
+        ..DESIGN_BOUNDS
+    };
+    let (_tmp, map, _) = map_program_bounded("feat-review-search-rounds", &main, &[], &ids, bounds);
+    let map = map.expect("maps");
+    assert_eq!(kind_of(&map, "src/tool/main.c::g0"), Some("elimination"));
+    assert_eq!(kind_of(&map, "src/tool/main.c::g1"), Some("elimination"));
+    assert_eq!(kind_of(&map, "main"), None, "{:?}", map.unwatched_reasons);
+}
+
+/// Review: a search a bound stops has found nothing — the file goes back
+/// unprobed ("file-limit"), no note blamed as "elimination".
+#[test]
+fn a_search_cut_by_the_bound_blames_no_note() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let (body, mut ids) = tipping_pairs(1);
+    let mut trivial = String::new();
+    for i in 0..20 {
+        trivial.push_str(&format!("int t{i}(int x) {{ return x + {i}; }}\n"));
+        ids.push(("src/tool/main.c".to_string(), format!("t{i}")));
+    }
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{trivial}{body}\
+         int main(void) {{ return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1) + f0() + h0(); }}\n"
+    );
+    let ids: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let bounds = harness_oracle::MapBounds {
+        file_compiles: 4,
+        ..DESIGN_BOUNDS
+    };
+    let (_tmp, map, _) = map_program_bounded("feat-review-search-cut", &main, &[], &ids, bounds);
+    let map = map.expect("maps");
+    assert!(
+        !map.unwatched_reasons
+            .iter()
+            .any(|r| r.kind == "elimination"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert_eq!(kind_of(&map, "src/tool/main.c::g0"), Some("file-limit"));
+    assert_eq!(kind_of(&map, "t0"), Some("file-limit"));
+}
+
+/// Review: the restore pass's compiles count — a.c's one search costs
+/// five compiles beyond its first (the syntax check, every note out, the
+/// compile after, the note put back, and out again), so a pass bound of
+/// five leaves b.c unchecked and six does not.
+#[test]
+fn the_restore_pass_compiles_are_counted() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let (body, _) = tipping_pairs(1);
+    let a = format!("{body}int a_use(void) {{ return f0() + h0(); }}\n");
+    let b = "int b_use(int x) { return x + 1; }\n";
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nint a_use(void); int b_use(int);\n\
+                int main(void) { return unit_add(1, 2) == 3 ? a_use() + b_use(0) - 12 : (int)mul_step(0, 1); }\n";
+    for (bound, b_kind) in [(5, Some("not-checked")), (6, None)] {
+        let bounds = harness_oracle::MapBounds {
+            pass_compiles: bound,
+            ..DESIGN_BOUNDS
+        };
+        let (_tmp, map, _) = map_program_bounded(
+            &format!("feat-review-restore-{bound}"),
+            main,
+            &[("src/tool/a.c", &a), ("src/tool/b.c", b)],
+            &[
+                ("src/tool/a.c", "src/tool/a.c::g0"),
+                ("src/tool/a.c", "a_use"),
+                ("src/tool/b.c", "b_use"),
+            ],
+            bounds,
+        );
+        let map = map.expect("maps");
+        assert_eq!(kind_of(&map, "src/tool/a.c::g0"), Some("elimination"));
+        assert_eq!(
+            kind_of(&map, "b_use"),
+            b_kind,
+            "bound {bound}: {:?}",
+            map.unwatched_reasons
+        );
+    }
+}
+
+/// §4's per-file round bound. The design's fixture (`#pragma clang
+/// diagnostic fatal`) is silenced by the probed compile's `-w`; here a
+/// parse error in `d` hides a code-generation error in `w` (its note tips
+/// it out of being inlined, so an `error`-attributed call stays), so the
+/// file needs two placed rounds: one round allowed sends it back unprobed,
+/// two map it.
+#[test]
+fn the_per_file_round_bound_unprobes_the_file() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let w = tipping_w(25, 0, false).replace(
+        "extern void bad_size(void);",
+        "__attribute__((error(\"not constant\"))) extern void bad_size(void);",
+    );
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{w}\
+         int d(int x) {{ __label__ out; if (x) goto out; return 0; out: return 1; }}\n\
+         int main(void) {{ return unit_add(1, 2) == 3 ? d(0) : (int)mul_step(0, 1) + f() + f2(); }}\n"
+    );
+    let ids = [
+        ("src/tool/main.c", "src/tool/main.c::w"),
+        ("src/tool/main.c", "f"),
+        ("src/tool/main.c", "f2"),
+        ("src/tool/main.c", "d"),
+    ];
+    for (rounds, w_kind) in [(1, "file-limit"), (2, "compile")] {
+        let bounds = harness_oracle::MapBounds {
+            placed_rounds: rounds,
+            ..DESIGN_BOUNDS
+        };
+        let (_tmp, map, _) = map_program_bounded(
+            &format!("feat-review-round-bound-{rounds}"),
+            &main,
+            &[],
+            &ids,
+            bounds,
+        );
+        let map = map.expect("maps");
+        assert_eq!(
+            kind_of(&map, "d"),
+            Some("compile"),
+            "{:?}",
+            map.unwatched_reasons
+        );
+        assert_eq!(
+            kind_of(&map, "src/tool/main.c::w"),
+            Some(w_kind),
+            "{rounds} round(s): {:?}",
+            map.unwatched_reasons
+        );
+        let main_kind = if rounds == 1 {
+            Some("file-limit")
+        } else {
+            None
+        };
+        assert_eq!(kind_of(&map, "main"), main_kind);
+    }
+}
+
+/// A static `w` whose inlining into two constant callers is tipped by a
+/// note: `k` big statements and `j` small ones (the review's exp/gen3.sh);
+/// with `g`, `g`'s note (inlined into `w`) tips it and `w` carries none.
+fn tipping_w(k: usize, j: usize, with_g: bool) -> String {
+    let mut s =
+        String::from("extern void bad_size(void);\nvolatile int sink; volatile int sink2;\n");
+    if with_g {
+        s.push_str(
+            "static void g(int n) { sink = n; }\nstatic int w(int n)\n#if 1\n{\n#endif\n  g(n);\n",
+        );
+    } else {
+        s.push_str("static int w(int n) {\n");
+    }
+    for i in 0..k {
+        s.push_str(&format!("  sink = n * {i} + sink;\n"));
+    }
+    for _ in 0..j {
+        s.push_str("  sink2 = 1;\n");
+    }
+    s.push_str("  if (!__builtin_constant_p(n)) bad_size();\n  return n; }\n");
+    s.push_str("int f(void) { return w(5); }\nint f2(void) { return w(6); }\n");
+    s
+}
+
+/// Review: link rule (b) when the function the linker names carries no
+/// note — the search over the named object's notes, the relink its test,
+/// finds `g`'s; the callers keep theirs.
+#[test]
+fn link_rule_b_falls_back_to_a_search() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{}\
+         int main(void) {{ return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1) + f() + f2(); }}\n",
+        tipping_w(23, 4, true)
+    );
+    let (_tmp, map) = map_program(
+        "feat-review-link-search",
+        &main,
+        &[],
+        &[
+            ("src/tool/main.c", "src/tool/main.c::g"),
+            ("src/tool/main.c", "f"),
+            ("src/tool/main.c", "f2"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        kind_of(&map, "src/tool/main.c::g"),
+        Some("link"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert_eq!(kind_of(&map, "f"), None);
+    assert_eq!(kind_of(&map, "f2"), None);
+}
+
+/// Review: link rule (b) takes the note of the function the linker names
+/// in the object it names — a static of the same name in another file
+/// keeps its own.
+#[test]
+fn link_rule_b_names_one_function() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{}int other(int);\n\
+         int main(void) {{ return unit_add(1, 2) == 3 ? other(0) : (int)mul_step(0, 1) + f() + f2(); }}\n",
+        tipping_w(25, 0, false)
+    );
+    let other = "static int w(int x) { return x + 1; }\nint other(int x) { return w(x) - 1; }\n";
+    let (_tmp, map) = map_program(
+        "feat-review-link-b-one",
+        &main,
+        &[("src/tool/other.c", other)],
+        &[
+            ("src/tool/main.c", "src/tool/main.c::w"),
+            ("src/tool/main.c", "f"),
+            ("src/tool/main.c", "f2"),
+            ("src/tool/other.c", "src/tool/other.c::w"),
+            ("src/tool/other.c", "other"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        kind_of(&map, "src/tool/main.c::w"),
+        Some("link"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert_eq!(
+        kind_of(&map, "src/tool/other.c::w"),
+        None,
+        "{:?}",
+        map.unwatched_reasons
+    );
+}
+
+/// Review and §4: the C99 `inline` link case — rule (a) takes the inline
+/// function's own note; a static of the same name elsewhere keeps its; and
+/// when a callee's note (inlined into it) still tips it, the search finds
+/// that note, the callers keeping theirs.
+#[test]
+fn the_c99_inline_link_case() {
+    if cfg!(not(target_os = "macos")) {
+        eprintln!("clang's inlining threshold: skipped here");
+        return;
+    }
+    let mut w = String::from("volatile int sink; volatile int sink2;\ninline int w(int n) {\n");
+    for i in 0..35 {
+        w.push_str(&format!("  sink = n * {i} + sink;\n"));
+    }
+    w.push_str("  return n; }\nint f(void) { return w(5); }\nint f2(void) { return w(6); }\n");
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{w}int other(int);\n\
+         int main(void) {{ return unit_add(1, 2) == 3 ? other(0) : (int)mul_step(0, 1) + f() + f2(); }}\n"
+    );
+    let other = "static int w(int x) { return x + 1; }\nint other(int x) { return w(x) - 1; }\n";
+    let (_tmp, map) = map_program(
+        "feat-review-c99-inline",
+        &main,
+        &[("src/tool/other.c", other)],
+        &[
+            ("src/tool/main.c", "w"),
+            ("src/tool/main.c", "f"),
+            ("src/tool/main.c", "f2"),
+            ("src/tool/other.c", "src/tool/other.c::w"),
+            ("src/tool/other.c", "other"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        kind_of(&map, "w"),
+        Some("link"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert_eq!(
+        kind_of(&map, "src/tool/other.c::w"),
+        None,
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert_eq!(kind_of(&map, "f"), None);
+
+    let mut w = String::from(
+        "volatile int sink; volatile int sink2;\nstatic void g(int n) { sink = n; }\ninline int w(int n) {\n  g(n);\n",
+    );
+    for i in 0..33 {
+        w.push_str(&format!("  sink = n * {i} + sink;\n"));
+    }
+    for _ in 0..4 {
+        w.push_str("  sink2 = 1;\n");
+    }
+    w.push_str("  return n; }\nint f(void) { return w(5); }\nint f2(void) { return w(6); }\n");
+    let main = format!(
+        "#include \"unit.h\"\n#include \"mul.h\"\n{w}\
+         int main(void) {{ return unit_add(1, 2) == 3 ? 0 : (int)mul_step(0, 1) + f() + f2(); }}\n"
+    );
+    let (_tmp, map) = map_program(
+        "feat-review-c99-callee",
+        &main,
+        &[],
+        &[
+            ("src/tool/main.c", "src/tool/main.c::g"),
+            ("src/tool/main.c", "w"),
+            ("src/tool/main.c", "f"),
+            ("src/tool/main.c", "f2"),
+        ],
+    );
+    let map = map.expect("maps");
+    assert_eq!(
+        kind_of(&map, "w"),
+        Some("link"),
+        "{:?}",
+        map.unwatched_reasons
+    );
+    assert_eq!(kind_of(&map, "src/tool/main.c::g"), Some("link"));
+    assert_eq!(kind_of(&map, "f"), None);
+    assert_eq!(kind_of(&map, "f2"), None);
+}
+
+/// Review: a program's own static `close` is never what the runtime's
+/// import binds to; a program's `environ` is refused in words for a
+/// variable.
+#[test]
+fn the_runtimes_names_are_external_definitions() {
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\n\
+                __attribute__((noinline)) static int close(int fd) { return fd + 1; }\n\
+                int main(int argc, char **argv) { (void)argv; return unit_add(1, 2) == 3 ? close(-argc) : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program(
+        "feat-review-static-close",
+        main,
+        &[],
+        &[("src/tool/main.c", "src/tool/main.c::close")],
+    );
+    let map = map.expect("a static close maps");
+    assert!(
+        ran(&map).contains(&"src/tool/main.c::close"),
+        "{:?}",
+        ran(&map)
+    );
+
+    let main = "#include \"unit.h\"\n#include \"mul.h\"\nchar **environ = 0;\n\
+                int main(void) { return unit_add(1, 2) == 3 ? (environ != 0) : (int)mul_step(0, 1); }\n";
+    let (_tmp, map) = map_program("feat-review-environ", main, &[], &[]);
+    let err = map.expect_err("refused").to_string();
+    assert!(err.contains("the program defines environ,"), "{err}");
+}

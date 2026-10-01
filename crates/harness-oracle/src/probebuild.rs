@@ -7,6 +7,7 @@
 
 use crate::exec::{ChildEnd, Runner};
 use crate::featuremap::MapProgress;
+use crate::objsyms;
 use crate::probecopy::{Kind, Probe, Reason};
 use crate::CcInvocation;
 use harness_core::error::Error;
@@ -108,9 +109,11 @@ pub(crate) fn diagnostics(stderr: &[u8], cc: Cc) -> Vec<Diagnostic> {
                 continue;
             }
         }
+        // The earlier of the two: a message may itself hold the other.
         let kind = [": fatal error: ", ": error: "]
             .iter()
-            .find_map(|k| line.find(k).map(|at| (at, k.len())));
+            .filter_map(|k| line.find(k).map(|at| (at, k.len())))
+            .min();
         if let Some((at, len)) = kind {
             let located = located(&line[..at]);
             let message = line[at + len..].to_string();
@@ -212,14 +215,63 @@ pub(crate) struct Build<'a> {
     pub link_args: &'a [String],
     pub out: &'a Path,
     pub index_of: &'a dyn Fn(&str, &str) -> Option<u32>,
+    /// Every function the facts record: `(file, canonical id)`.
+    pub functions: &'a [(String, String)],
     pub times: &'a [(PathBuf, std::time::SystemTime)],
+    pub bounds: MapBounds,
 }
 
-/// Per-file and whole-pass bounds (§3.4 step 6).
-const PLACED_ROUNDS: usize = 8;
-const FILE_COMPILES: usize = 64;
-const PASS_COMPILES: usize = 400;
+/// The per-file and whole-pass bounds of the notes check (§3.4 step 6).
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MapBounds {
+    /// Rounds that placed a note, per top-level file.
+    pub placed_rounds: usize,
+    /// Compiles per top-level file (a step 7 re-compile starts afresh).
+    pub file_compiles: usize,
+    /// Compiles for the whole pass beyond each file's first compile and
+    /// step 7's re-compiles.
+    pub pass_compiles: usize,
+}
+
+/// The bounds the design names.
+const BOUNDS: MapBounds = MapBounds {
+    placed_rounds: 8,
+    file_compiles: 64,
+    pass_compiles: 400,
+};
 const LINK_ROUNDS: usize = 32;
+
+thread_local! {
+    static BOUNDS_HERE: std::cell::Cell<MapBounds> = const { std::cell::Cell::new(BOUNDS) };
+}
+
+/// The bounds a map on this thread uses.
+pub(crate) fn bounds() -> MapBounds {
+    BOUNDS_HERE.with(std::cell::Cell::get)
+}
+
+/// Run `f` with other bounds on this thread — for tests that reach a bound
+/// in a few compiles rather than hundreds.
+#[doc(hidden)]
+pub fn with_map_bounds<R>(bounds: MapBounds, f: impl FnOnce() -> R) -> R {
+    struct Restore(MapBounds);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BOUNDS_HERE.with(|b| b.set(self.0));
+        }
+    }
+    let _restore = Restore(BOUNDS_HERE.with(|b| b.replace(bounds)));
+    f()
+}
+
+/// How a search over the notes ended (§3.4 step 4).
+enum Search {
+    /// Note k: with it out (and the ones before it), the file compiles.
+    Found((String, String)),
+    /// A bound stopped it before it narrowed to one note.
+    Cut,
+}
 
 /// How a compile or link ended, for the pass.
 enum Outcome {
@@ -327,6 +379,11 @@ impl Build<'_> {
             return None;
         }
         let text = std::fs::read(self.mirror.join(&rel)).ok()?;
+        // gcc counts a byte-order mark's bytes in line 1's columns its own
+        // way: such an error goes to the search (§3.4 step 3).
+        if matches!(self.cc, Cc::Gcc(_)) && line == 1 && text.starts_with(b"\xef\xbb\xbf") {
+            return None;
+        }
         let at = offset(&text, line, col)?;
         probe
             .notes(&rel)
@@ -337,7 +394,8 @@ impl Build<'_> {
     }
 
     /// Compile top-level file `n` until it compiles, taking notes out as
-    /// §3.4 steps 3–6 say.
+    /// §3.4 steps 3–6 say. `pass` counts every compile beyond the call's
+    /// first (a file's first compile, or a step 7 re-compile).
     fn settle(
         &self,
         n: usize,
@@ -345,33 +403,45 @@ impl Build<'_> {
         pass: &mut usize,
         progress: &mut dyn MapProgress,
     ) -> Result<(), Error> {
-        let mut rounds = 0;
+        let bounds = self.bounds;
+        // Rounds that placed a note (the per-file bound), and every round
+        // (what the person sees).
+        let mut placed_rounds = 0;
+        let mut round = 0;
         let mut compiles = 0;
         let rels = &self.reads[n];
         let gcc = matches!(self.cc, Cc::Gcc(_));
         let mut eliminated: Vec<(String, String)> = Vec::new();
         loop {
+            round += 1;
             progress.message(&format!(
-                "Checking where the notes compile… {} (round {})",
+                "Checking where the notes compile… {} (round {round})",
                 self.shown(&self.units[n]),
-                rounds + 1
             ));
+            if compiles > 0 {
+                *pass += 1;
+            }
             compiles += 1;
-            *pass += 1;
             let stderr = match self.compile(n, false)? {
                 Outcome::Ok => {
                     // The restore pass: each note the search took out is put
-                    // back alone once and kept if the file still compiles.
+                    // back alone once and kept if the file still compiles —
+                    // within the bounds; past them the rest stay out.
                     for (rel, id) in std::mem::take(&mut eliminated) {
+                        if compiles >= bounds.file_compiles || *pass >= bounds.pass_compiles {
+                            break;
+                        }
                         let reason = probe.reasons.get(&(rel.clone(), id.clone())).cloned();
                         probe.put_back(&rel, &id);
                         self.rewrite(probe, rels, &[])?;
+                        compiles += 1;
                         *pass += 1;
                         if !matches!(self.compile(n, false)?, Outcome::Ok) {
                             if let Some(reason) = reason {
                                 probe.take_out(&rel, &id, reason);
                             }
                             self.rewrite(probe, rels, &[])?;
+                            compiles += 1;
                             *pass += 1;
                             if !matches!(self.compile(n, false)?, Outcome::Ok) {
                                 return Err(Error::Invariant(format!(
@@ -387,7 +457,10 @@ impl Build<'_> {
                 }
                 Outcome::Failed(stderr) => stderr,
             };
-            if rounds >= PLACED_ROUNDS || compiles >= FILE_COMPILES || *pass >= PASS_COMPILES {
+            if placed_rounds >= bounds.placed_rounds
+                || compiles >= bounds.file_compiles
+                || *pass >= bounds.pass_compiles
+            {
                 return self.give_up(n, probe, &stderr);
             }
             let found = diagnostics(&stderr, self.cc);
@@ -408,22 +481,25 @@ impl Build<'_> {
                 unplaced = Some(crate::exec::stderr_excerpt(&stderr));
             }
             if placed {
-                rounds += 1;
+                placed_rounds += 1;
                 self.rewrite(probe, rels, &[])?;
                 continue;
             }
             let why = unplaced.unwrap_or_else(|| crate::exec::stderr_excerpt(&stderr));
-            if let Some(found) = self.search(n, probe, &why, &mut compiles, pass)? {
-                eliminated.push(found);
+            match self.search(n, probe, &why, &mut compiles, pass)? {
+                Search::Found(pair) => eliminated.push(pair),
+                // A search a bound stopped has found nothing: the file goes
+                // back unprobed, no note blamed.
+                Search::Cut => return self.give_up(n, probe, &stderr),
             }
-            rounds += 1;
         }
     }
 
     /// §3.4 step 4: compile with every note of the file and the probed
     /// files it reads taken out — still failing, the copy differs (a
     /// harness fault); compiling, a binary search finds one note to take
-    /// out.
+    /// out. The trials compile `-fsyntax-only` when the chased error also
+    /// shows there.
     fn search(
         &self,
         n: usize,
@@ -431,7 +507,8 @@ impl Build<'_> {
         why: &str,
         compiles: &mut usize,
         pass: &mut usize,
-    ) -> Result<Option<(String, String)>, Error> {
+    ) -> Result<Search, Error> {
+        let bounds = self.bounds;
         let rels = &self.reads[n];
         let notes: Vec<(String, String)> = rels
             .iter()
@@ -446,6 +523,14 @@ impl Build<'_> {
             .into_iter()
             .filter(|p| seen.insert(p.clone()))
             .collect();
+        *compiles += 1;
+        *pass += 1;
+        let syntax_only = match self.compile(n, true)? {
+            Outcome::Failed(stderr) => diagnostics(&stderr, self.cc)
+                .iter()
+                .any(|d| d.message == why),
+            Outcome::Ok => false,
+        };
         let trial = |k: usize,
                      probe: &mut Probe,
                      compiles: &mut usize,
@@ -454,7 +539,7 @@ impl Build<'_> {
             self.rewrite(probe, rels, &notes[..k])?;
             *compiles += 1;
             *pass += 1;
-            Ok(matches!(self.compile(n, false)?, Outcome::Ok))
+            Ok(matches!(self.compile(n, syntax_only)?, Outcome::Ok))
         };
         if !trial(notes.len(), probe, compiles, pass)? {
             self.rewrite(probe, rels, &[])?;
@@ -467,8 +552,9 @@ impl Build<'_> {
         }
         let (mut lo, mut hi) = (0usize, notes.len());
         while hi - lo > 1 {
-            if *compiles >= FILE_COMPILES || *pass >= PASS_COMPILES {
-                break;
+            if *compiles >= bounds.file_compiles || *pass >= bounds.pass_compiles {
+                self.rewrite(probe, rels, &[])?;
+                return Ok(Search::Cut);
             }
             let mid = lo + (hi - lo) / 2;
             if trial(mid, probe, compiles, pass)? {
@@ -478,11 +564,15 @@ impl Build<'_> {
             }
         }
         let found = notes.get(hi.saturating_sub(1)).cloned();
-        if let Some((rel, id)) = &found {
-            probe.take_out(rel, id, Reason::new(Kind::Elimination, why));
-        }
         self.rewrite(probe, rels, &[])?;
-        Ok(found)
+        match found {
+            Some((rel, id)) => {
+                probe.take_out(&rel, &id, Reason::new(Kind::Elimination, why));
+                self.rewrite(probe, rels, &[])?;
+                Ok(Search::Found((rel, id)))
+            }
+            None => Ok(Search::Cut),
+        }
     }
 
     /// Past a bound: the file and every probed file it reads go back
@@ -508,12 +598,13 @@ impl Build<'_> {
     }
 
     /// Compile every top-level file, re-compile those whose probed files
-    /// changed, then link; returns the probed program.
+    /// changed, then link — again after a link that took notes out; returns
+    /// the probed program and what each object defines.
     pub(crate) fn run(
         &self,
         probe: &mut Probe,
         progress: &mut dyn MapProgress,
-    ) -> Result<PathBuf, Error> {
+    ) -> Result<Probed, Error> {
         let mut pass = 0usize;
         let notes_of = |probe: &Probe| -> BTreeMap<String, usize> {
             probe
@@ -526,145 +617,48 @@ impl Build<'_> {
                 .collect()
         };
         let mut compiled_with: Vec<BTreeMap<String, usize>> = Vec::with_capacity(self.units.len());
+        // The probed files a settled compile has checked: past the pass
+        // bound, only the others go back unprobed.
+        let mut checked: BTreeSet<String> = BTreeSet::new();
         for n in 0..self.units.len() {
-            if pass >= PASS_COMPILES {
-                for rel in &self.reads[n] {
+            if pass >= self.bounds.pass_compiles {
+                let unchecked: BTreeSet<String> =
+                    self.reads[n].difference(&checked).cloned().collect();
+                for rel in &unchecked {
                     probe.unprobe(rel, Reason::new(Kind::NotChecked, ""));
                 }
-                self.rewrite(probe, &self.reads[n], &[])?;
+                self.rewrite(probe, &unchecked, &[])?;
             }
             self.settle(n, probe, &mut pass, progress)?;
+            checked.extend(self.reads[n].iter().cloned());
             compiled_with.push(notes_of(probe));
         }
-        // Re-compiles: a file whose probed files lost notes after it compiled.
-        loop {
-            let now = notes_of(probe);
-            let stale: Vec<usize> = (0..self.units.len())
-                .filter(|n| {
-                    self.reads[*n]
-                        .iter()
-                        .any(|rel| compiled_with[*n].get(rel) != now.get(rel))
-                })
-                .collect();
-            if stale.is_empty() {
-                break;
-            }
-            for n in stale {
-                self.settle(n, probe, &mut pass, progress)?;
-                compiled_with[n] = notes_of(probe);
-            }
-        }
-        self.link(probe, progress, &mut pass)
-    }
-
-    /// §3.4 step 5: the runtime's object first, the program's objects in the
-    /// plain build's order, its libraries; undefined symbols attributed.
-    fn link(
-        &self,
-        probe: &mut Probe,
-        progress: &mut dyn MapProgress,
-        pass: &mut usize,
-    ) -> Result<PathBuf, Error> {
-        let program = self.out.join("probed");
-        let link_map = self.out.join("probed.map");
         for _ in 0..LINK_ROUNDS {
-            let mut argv = vec![
-                "cc".to_string(),
-                "-o".to_string(),
-                crate::featuremap::path_text(&program)?,
-            ];
-            // The link's map says which object defines each name (§3.5).
-            let map_text = crate::featuremap::path_text(&link_map)?;
-            argv.push(match self.cc {
-                Cc::Clang => format!("-Wl,-map,{map_text}"),
-                Cc::Gcc(_) => format!("-Wl,-Map={map_text},--cref"),
-            });
-            argv.push(crate::featuremap::path_text(self.runtime)?);
-            for n in 0..self.units.len() {
-                argv.push(crate::featuremap::path_text(&self.object(n))?);
-            }
-            argv.extend(self.link_args.iter().cloned());
-            let run = self.runner.tool_run(&argv)?;
-            let stderr = match run.end {
-                ChildEnd::Exited(status) if status.success() => {
-                    let text = std::fs::read(&link_map).unwrap_or_default();
-                    let objects: Vec<PathBuf> =
-                        (0..self.units.len()).map(|n| self.object(n)).collect();
-                    if let Some(name) = defined_by_program(&text, &objects) {
-                        return Err(Error::Invariant(format!(
-                            "the program defines {name}(), which the probe's runtime also uses \
-                             before main — the features map cannot map it"
-                        )));
-                    }
-                    return Ok(program);
-                }
-                ChildEnd::Exited(_) => run.stderr,
-                _ => {
-                    return Err(Error::Invariant(format!(
-                        "the scratch copy's link did not finish: {}",
-                        crate::exec::stderr_excerpt(&run.stderr)
-                    )))
-                }
-            };
-            let undefined = undefined_symbols(&stderr);
-            if undefined.is_empty() {
-                return Err(Error::Invariant(format!(
-                    "the scratch copy does not link: {}",
-                    crate::exec::stderr_excerpt(&stderr)
-                )));
-            }
-            let mut changed = BTreeSet::new();
-            for (symbol, referrers) in &undefined {
-                let why = format!("the program does not link with its note: {symbol} is undefined");
-                // (a) the symbol is a watched function still carrying a note.
-                let mut done = false;
-                for rel in probe.rels() {
-                    if probe
-                        .notes(&rel)
-                        .iter()
-                        .any(|note| id_name(&note.id) == symbol)
-                    {
-                        let id = probe
-                            .notes(&rel)
+            // Re-compiles: a file whose probed files lost notes after it
+            // compiled, or whose object a link search left in a trial state.
+            loop {
+                let now = notes_of(probe);
+                let stale: Vec<usize> = (0..self.units.len())
+                    .filter(|n| {
+                        self.reads[*n]
                             .iter()
-                            .find(|note| id_name(&note.id) == symbol)
-                            .map(|note| note.id.clone())
-                            .unwrap_or_default();
-                        if probe.take_out(&rel, &id, Reason::new(Kind::Link, &why)) {
-                            changed.insert(rel.clone());
-                            done = true;
-                        }
-                    }
+                            .any(|rel| compiled_with[*n].get(rel) != now.get(rel))
+                    })
+                    .collect();
+                if stale.is_empty() {
+                    break;
                 }
-                if done {
-                    continue;
-                }
-                // (b) the referencing function the linker names.
-                for referrer in referrers {
-                    for rel in probe.rels() {
-                        let hit = probe
-                            .notes(&rel)
-                            .iter()
-                            .find(|note| id_name(&note.id) == referrer)
-                            .map(|note| note.id.clone());
-                        if let Some(id) = hit {
-                            if probe.take_out(&rel, &id, Reason::new(Kind::Link, &why)) {
-                                changed.insert(rel.clone());
-                            }
-                        }
-                    }
+                for n in stale {
+                    self.settle(n, probe, &mut pass, progress)?;
+                    compiled_with[n] = notes_of(probe);
                 }
             }
-            if changed.is_empty() {
-                return Err(Error::Invariant(format!(
-                    "the scratch copy does not link: {}",
-                    crate::exec::stderr_excerpt(&stderr)
-                )));
-            }
-            self.rewrite(probe, &changed, &[])?;
-            for n in 0..self.units.len() {
-                if self.reads[n].iter().any(|rel| changed.contains(rel)) {
-                    self.settle(n, probe, pass, progress)?;
+            match self.link(probe, &mut pass)? {
+                Linked::Program(probed) => return Ok(probed),
+                Linked::Changed(dirty) => {
+                    for n in dirty {
+                        compiled_with[n].clear();
+                    }
                 }
             }
         }
@@ -674,89 +668,338 @@ impl Build<'_> {
                 .to_string(),
         ))
     }
+
+    /// One link of the probed program: the runtime's object first, the
+    /// program's objects in the plain build's order, its libraries.
+    /// `Ok(None)` when it linked, else the linker's stderr.
+    fn link_once(&self, program: &Path) -> Result<Option<Vec<u8>>, Error> {
+        let mut argv = vec![
+            "cc".to_string(),
+            "-o".to_string(),
+            crate::featuremap::path_text(program)?,
+            crate::featuremap::path_text(self.runtime)?,
+        ];
+        for n in 0..self.units.len() {
+            argv.push(crate::featuremap::path_text(&self.object(n))?);
+        }
+        argv.extend(self.link_args.iter().cloned());
+        let run = self.runner.tool_run(&argv)?;
+        match run.end {
+            ChildEnd::Exited(status) if status.success() => Ok(None),
+            ChildEnd::Exited(_) => Ok(Some(run.stderr)),
+            _ => Err(Error::Invariant(format!(
+                "the scratch copy's link did not finish: {}",
+                crate::exec::stderr_excerpt(&run.stderr)
+            ))),
+        }
+    }
+
+    /// The top-level files whose objects the linker names (every one when
+    /// it names none it made).
+    fn units_named(&self, refs: &[Referrer]) -> BTreeSet<usize> {
+        let named: BTreeSet<usize> = refs
+            .iter()
+            .filter_map(|r| r.object.as_deref().and_then(unit_of_object))
+            .filter(|n| *n < self.units.len())
+            .collect();
+        if named.is_empty() {
+            (0..self.units.len()).collect()
+        } else {
+            named
+        }
+    }
+
+    /// §3.4 step 5: link; undefined symbols take notes out — (a) a function
+    /// of the program still carrying a note, (b) the referencing function
+    /// the linker names, in the objects it names; when neither has a note
+    /// left, a search over the notes those objects read, with the relink as
+    /// the test.
+    fn link(&self, probe: &mut Probe, pass: &mut usize) -> Result<Linked, Error> {
+        let program = self.out.join("probed");
+        let Some(stderr) = self.link_once(&program)? else {
+            let defined = self.defined()?;
+            if let Some(name) = runtime_name_defined(&defined) {
+                let shown = if name == "environ" {
+                    name
+                } else {
+                    format!("{name}()")
+                };
+                return Err(Error::Invariant(format!(
+                    "the program defines {shown}, which the probe's runtime also uses before \
+                     main — the features map cannot map it"
+                )));
+            }
+            return Ok(Linked::Program(Probed { program, defined }));
+        };
+        let refuse = |stderr: &[u8]| {
+            Error::Invariant(format!(
+                "the scratch copy does not link: {}",
+                crate::exec::stderr_excerpt(stderr)
+            ))
+        };
+        let undefined = undefined_symbols(&stderr);
+        if undefined.is_empty() {
+            return Err(refuse(&stderr));
+        }
+        let mut changed = BTreeSet::new();
+        let mut unresolved: Option<(String, BTreeSet<usize>)> = None;
+        for u in &undefined {
+            let why = format!(
+                "the program does not link with its note: {} is undefined",
+                u.symbol
+            );
+            let units = self.units_named(&u.refs);
+            // (a) a function of the program: an external one, whose id is
+            // its name (a static is never an undefined symbol).
+            if self.functions.iter().any(|(_, id)| *id == u.symbol) {
+                let mut done = false;
+                for rel in probe.rels() {
+                    let noted = probe.notes(&rel).iter().any(|note| note.id == u.symbol);
+                    if noted && probe.take_out(&rel, &u.symbol, Reason::new(Kind::Link, &why)) {
+                        changed.insert(rel);
+                        done = true;
+                    }
+                }
+                if !done {
+                    unresolved.get_or_insert((u.symbol.clone(), units));
+                }
+                continue;
+            }
+            // (b) the referencing function, in the files its object reads.
+            let mut done = false;
+            for r in &u.refs {
+                let Some(function) = &r.function else {
+                    continue;
+                };
+                let rels: Vec<String> = match r.object.as_deref().and_then(unit_of_object) {
+                    Some(n) if n < self.units.len() => self.reads[n].iter().cloned().collect(),
+                    _ => probe.rels(),
+                };
+                for rel in rels {
+                    let as_static = format!("{rel}::{function}");
+                    let hit = probe
+                        .notes(&rel)
+                        .iter()
+                        .find(|note| note.id == *function || note.id == as_static)
+                        .map(|note| note.id.clone());
+                    if let Some(id) = hit {
+                        if probe.take_out(&rel, &id, Reason::new(Kind::Link, &why)) {
+                            changed.insert(rel);
+                            done = true;
+                        }
+                    }
+                }
+            }
+            if !done {
+                unresolved.get_or_insert((u.symbol.clone(), units));
+            }
+        }
+        if !changed.is_empty() {
+            self.rewrite(probe, &changed, &[])?;
+            return Ok(Linked::Changed(BTreeSet::new()));
+        }
+        let Some((symbol, units)) = unresolved else {
+            return Err(refuse(&stderr));
+        };
+        let why = format!("the program does not link with its note: {symbol} is undefined");
+        let rels: BTreeSet<String> = units
+            .iter()
+            .flat_map(|n| self.reads[*n].iter().cloned())
+            .collect();
+        match self.link_search(probe, &symbol, &units, &rels, &program, pass)? {
+            Some(LinkSearch::Found(rel, id)) => {
+                probe.take_out(&rel, &id, Reason::new(Kind::Link, &why));
+            }
+            Some(LinkSearch::Cut) => {
+                for rel in &rels {
+                    probe.unprobe(rel, Reason::new(Kind::FileLimit, &why));
+                }
+            }
+            None => return Err(refuse(&stderr)),
+        }
+        self.rewrite(probe, &rels, &[])?;
+        Ok(Linked::Changed(units))
+    }
+
+    /// The search of §3.4 step 4 over the notes the named objects' files
+    /// carry, the test a relink that no longer leaves `symbol` undefined.
+    /// `None` when even every note out does not.
+    fn link_search(
+        &self,
+        probe: &mut Probe,
+        symbol: &str,
+        units: &BTreeSet<usize>,
+        rels: &BTreeSet<String>,
+        program: &Path,
+        pass: &mut usize,
+    ) -> Result<Option<LinkSearch>, Error> {
+        let notes: Vec<(String, String)> = rels
+            .iter()
+            .flat_map(|rel| {
+                let mut ns: Vec<_> = probe.notes(rel).to_vec();
+                ns.sort_by_key(|note| note.body.0);
+                ns.into_iter().map(move |note| (rel.clone(), note.id))
+            })
+            .collect();
+        let trial = |k: usize, probe: &mut Probe, pass: &mut usize| -> Result<bool, Error> {
+            self.rewrite(probe, rels, &notes[..k])?;
+            for n in units {
+                *pass += 1;
+                if !matches!(self.compile(*n, false)?, Outcome::Ok) {
+                    return Ok(false);
+                }
+            }
+            Ok(match self.link_once(program)? {
+                None => true,
+                Some(stderr) => !undefined_symbols(&stderr)
+                    .iter()
+                    .any(|u| u.symbol == symbol),
+            })
+        };
+        if !trial(notes.len(), probe, pass)? {
+            return Ok(None);
+        }
+        let (mut lo, mut hi) = (0usize, notes.len());
+        while hi - lo > 1 {
+            if *pass >= self.bounds.pass_compiles {
+                return Ok(Some(LinkSearch::Cut));
+            }
+            let mid = lo + (hi - lo) / 2;
+            if trial(mid, probe, pass)? {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        Ok(Some(match notes.get(hi.saturating_sub(1)) {
+            Some((rel, id)) => LinkSearch::Found(rel.clone(), id.clone()),
+            None => LinkSearch::Cut,
+        }))
+    }
+
+    /// What each top-level file's object defines.
+    fn defined(&self) -> Result<Vec<Vec<objsyms::Defined>>, Error> {
+        (0..self.units.len())
+            .map(|n| {
+                let object = self.object(n);
+                let bytes = std::fs::read(&object).map_err(|e| Error::io(&object, e))?;
+                objsyms::defined(&bytes).map_err(|why| {
+                    Error::Invariant(format!(
+                        "the scratch copy's object for {} cannot be read: {why} — the features \
+                         map reads 64-bit little-endian Mach-O and ELF objects",
+                        self.shown(&self.units[n])
+                    ))
+                })
+            })
+            .collect()
+    }
+}
+
+/// The probed program and what each top-level file's object defines.
+pub(crate) struct Probed {
+    pub program: PathBuf,
+    pub defined: Vec<Vec<objsyms::Defined>>,
+}
+
+/// How one link ended for the pass.
+enum Linked {
+    /// It linked.
+    Program(Probed),
+    /// Notes were taken out; these files' objects are in a trial state and
+    /// compile again.
+    Changed(BTreeSet<usize>),
+}
+
+/// How a link search ended.
+enum LinkSearch {
+    Found(String, String),
+    Cut,
 }
 
 /// The names the probe's runtime uses (docs/FEATURES-PROBE-REDESIGN.md
 /// §3.5); a unit test pins them against the runtime object's imports.
 pub(crate) const RUNTIME_IMPORTS: &[&str] = &["open", "fstat", "mmap", "close", "environ"];
 
-/// The first of [`RUNTIME_IMPORTS`] the link's map says one of the
-/// program's `objects` defines — ld64's map (`[ n] path` object lines, then
-/// `0x… 0x… [ n] _name` symbol lines) or GNU ld's cross-reference table
-/// (`name  definer` then referrers). `None` when none is, or the map cannot
-/// be read.
-pub(crate) fn defined_by_program(map: &[u8], objects: &[PathBuf]) -> Option<String> {
-    let text = String::from_utf8_lossy(map);
-    let is_program = |path: &str| {
-        let path = Path::new(path.trim());
-        objects.iter().any(|o| o == path)
-    };
-    // ld64
-    let mut files: BTreeMap<usize, bool> = BTreeMap::new();
-    let mut section = "";
-    let bracket = |l: &str| -> Option<(usize, String)> {
-        let open = l.find('[')?;
-        let close = l[open..].find(']')? + open;
-        let n = l[open + 1..close].trim().parse().ok()?;
-        Some((n, l[close + 1..].trim().to_string()))
-    };
-    for line in text.lines() {
-        if line.starts_with("# Object files:") {
-            section = "objects";
-        } else if line.starts_with("# Symbols:") {
-            section = "symbols";
-        } else if line.starts_with("# Sections:") || line.starts_with("# Dead Stripped Symbols:") {
-            section = "";
-        } else if line.starts_with('#') {
-        } else if section == "objects" {
-            if let Some((n, path)) = bracket(line) {
-                files.insert(n, is_program(&path));
-            }
-        } else if section == "symbols" {
-            if let Some((n, name)) = bracket(line) {
-                let name = name.strip_prefix('_').unwrap_or(&name);
-                if RUNTIME_IMPORTS.contains(&name) && files.get(&n) == Some(&true) {
-                    return Some(name.to_string());
-                }
-            }
-        }
-    }
-    // GNU ld: after "Cross Reference Table", a symbol at column 0 is
-    // followed by its definer.
-    if let Some(at) = text.find("Cross Reference Table") {
-        for line in text[at..].lines().skip(1) {
-            if line.is_empty() || line.starts_with(char::is_whitespace) {
-                continue;
-            }
-            let mut words = line.split_whitespace();
-            if let (Some(name), Some(definer)) = (words.next(), words.next()) {
-                if RUNTIME_IMPORTS.contains(&name) && is_program(definer) {
-                    return Some(name.to_string());
-                }
-            }
-        }
-    }
-    None
+/// The first of [`RUNTIME_IMPORTS`] one of the program's objects defines as
+/// an external symbol — the only kind the runtime's import can bind to (a
+/// static `close` cannot). A Mach-O variant suffix (`fstat$INODE64` on
+/// Intel Macs) is the same name.
+pub(crate) fn runtime_name_defined(objects: &[Vec<objsyms::Defined>]) -> Option<String> {
+    objects.iter().flatten().find_map(|d| {
+        let name = d.name.split('$').next().unwrap_or(&d.name);
+        (d.external && RUNTIME_IMPORTS.contains(&name)).then(|| name.to_string())
+    })
 }
 
-/// A canonical id's function name (a static's `file::name` read as `name`).
-fn id_name(id: &str) -> &str {
-    id.rsplit("::").next().unwrap_or(id)
+/// A function the linker names, without a compiler's clone suffix (gcc's
+/// `.constprop.0`, `.isra.0`, `.part.0`, `.cold`: a C name has no `.`).
+fn function_name(name: &str) -> String {
+    name.split('.').next().unwrap_or(name).to_string()
 }
 
-/// The undefined symbols of a failed link, each with the functions the
-/// linker says refer to it — ld64 (`"_name", referenced from:` then
-/// indented `_fn in f.o` lines), GNU ld (``in function `fn':`` … ``undefined
-/// reference to `name'``) and lld (`undefined symbol: name` then `>>>
-/// referenced by … (fn)`). Mach-O's leading `_` dropped.
-pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<(String, Vec<String>)> {
+/// The top-level file a probed object is: `probed-<n>.o`.
+fn unit_of_object(object: &str) -> Option<usize> {
+    let name = object.rsplit(['/', '\\']).next().unwrap_or(object);
+    name.strip_prefix("probed-")?
+        .strip_suffix(".o")?
+        .parse()
+        .ok()
+}
+
+/// One reference the linker names to an undefined symbol: the function it
+/// is in (when the linker says) and the object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Referrer {
+    pub function: Option<String>,
+    pub object: Option<String>,
+}
+
+/// An undefined symbol of a failed link and its referrers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Undefined {
+    pub symbol: String,
+    pub refs: Vec<Referrer>,
+}
+
+/// The name quoted at the start of `text` — `` `name' ``, `'name'` or
+/// `‘name’`.
+fn quoted_name(text: &str) -> Option<String> {
+    let rest = text
+        .strip_prefix('`')
+        .or_else(|| text.strip_prefix('\''))
+        .or_else(|| text.strip_prefix('‘'))?;
+    let end = rest.find(['\'', '’'])?;
+    Some(rest[..end].to_string())
+}
+
+/// The object a GNU ld message names: the words after the linker's own
+/// `ld: ` prefix, up to `:(` or `: in function`.
+fn gnu_object(line: &str) -> Option<String> {
+    let at = line.find("ld: ").map_or(0, |at| at + "ld: ".len());
+    let rest = &line[at..];
+    let lower = rest.to_ascii_lowercase();
+    let end = [rest.find(":("), lower.find(": in function")]
+        .into_iter()
+        .flatten()
+        .min()?;
+    Some(rest[..end].trim().to_string())
+}
+
+/// The undefined symbols of a failed link, each with its referrers — ld64
+/// (`"_name", referenced from:` then indented `_fn in f.o` lines), GNU ld
+/// (`` f.o: in function `fn': `` then `` undefined reference to `name' ``
+/// lines — any case, any quotes; a reference of its own, from data, names
+/// no function) and lld (`undefined symbol: name` then `>>> referenced by …
+/// f.o:(fn)`). Mach-O's leading `_` dropped.
+pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<Undefined> {
     let text = String::from_utf8_lossy(stderr);
     let strip = |s: &str| s.strip_prefix('_').unwrap_or(s).to_string();
-    let mut out: Vec<(String, Vec<String>)> = Vec::new();
-    let mut gnu_function: Option<String> = None;
+    let mut out: Vec<Undefined> = Vec::new();
+    let mut gnu_context: Option<Referrer> = None;
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
         let t = line.trim();
+        let lower = t.to_ascii_lowercase();
         // ld64
         if let Some(rest) = t.strip_prefix('"') {
             if let Some(end) = rest.find("\", referenced from:") {
@@ -764,28 +1007,53 @@ pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<(String, Vec<String>)> {
                 let mut refs = Vec::new();
                 while let Some(next) = lines.peek() {
                     let n = next.trim();
-                    if let Some((f, _)) = n.split_once(" in ") {
-                        refs.push(strip(f));
+                    if let Some((f, object)) = n.split_once(" in ") {
+                        refs.push(Referrer {
+                            function: Some(function_name(&strip(f))),
+                            object: Some(object.trim().to_string()),
+                        });
                         lines.next();
                     } else {
                         break;
                     }
                 }
-                out.push((symbol, refs));
+                out.push(Undefined { symbol, refs });
                 continue;
             }
         }
         // GNU ld
-        if let Some(at) = t.find("in function `") {
-            let rest = &t[at + "in function `".len()..];
-            gnu_function = rest.split('\'').next().map(str::to_string);
-            continue;
-        }
-        if let Some(at) = t.find("undefined reference to `") {
-            let rest = &t[at + "undefined reference to `".len()..];
-            if let Some(symbol) = rest.split('\'').next() {
-                out.push((symbol.to_string(), gnu_function.iter().cloned().collect()));
+        if let Some(at) = lower.find("in function ") {
+            if !lower.contains("undefined reference to ") {
+                gnu_context = Some(Referrer {
+                    function: quoted_name(&t[at + "in function ".len()..])
+                        .map(|f| function_name(&f)),
+                    object: gnu_object(t),
+                });
+                continue;
             }
+        }
+        if let Some(at) = lower.find("undefined reference to ") {
+            let Some(symbol) = quoted_name(&t[at + "undefined reference to ".len()..]) else {
+                continue;
+            };
+            // A message of its own (the linker's prefix before it) is not
+            // under the last "in function" line: a reference from data.
+            let own = t[..at].contains("ld: ");
+            let referrer = if own {
+                Referrer {
+                    function: None,
+                    object: gnu_object(t),
+                }
+            } else {
+                gnu_context.clone().unwrap_or(Referrer {
+                    function: None,
+                    object: None,
+                })
+            };
+            out.push(Undefined {
+                symbol,
+                refs: vec![referrer],
+            });
             continue;
         }
         // lld
@@ -794,18 +1062,26 @@ pub(crate) fn undefined_symbols(stderr: &[u8]) -> Vec<(String, Vec<String>)> {
             let mut refs = Vec::new();
             while let Some(next) = lines.peek() {
                 let n = next.trim();
-                if let Some(r) = n.strip_prefix(">>>") {
-                    if let (Some(open), Some(close)) = (r.rfind('('), r.rfind(')')) {
-                        if open < close {
-                            refs.push(r[open + 1..close].to_string());
-                        }
-                    }
-                    lines.next();
-                } else {
+                let Some(r) = n.strip_prefix(">>>") else {
                     break;
+                };
+                if let (Some(open), Some(close)) = (r.rfind(":("), r.rfind(')')) {
+                    if open < close {
+                        let inside = &r[open + 2..close];
+                        let function = inside
+                            .chars()
+                            .next()
+                            .filter(|c| c.is_alphabetic() || *c == '_')
+                            .map(|_| function_name(inside));
+                        refs.push(Referrer {
+                            function,
+                            object: Some(r[..open].trim().to_string()),
+                        });
+                    }
                 }
+                lines.next();
             }
-            out.push((symbol, refs));
+            out.push(Undefined { symbol, refs });
         }
     }
     out
@@ -864,28 +1140,31 @@ mod tests {
     }
 
     #[test]
-    fn the_link_map_says_who_defines_the_runtimes_names() {
+    fn only_an_external_definition_takes_a_runtime_name() {
+        let d = |name: &str, external: bool| objsyms::Defined {
+            name: name.to_string(),
+            external,
+        };
         let objects = vec![
-            PathBuf::from("/o/probed-0.o"),
-            PathBuf::from("/o/probed-1.o"),
+            vec![d("main", true), d("close", false)],
+            vec![d("helper", true)],
         ];
-        let ld64 = b"# Path: /o/probed\n# Object files:\n[  0] linker synthesized\n\
-                     [  1] /o/fnprobe.o\n[  2] /o/probed-0.o\n[  3] /usr/lib/libSystem.tbd\n\
-                     # Sections:\n# Address Size Segment Section\n\
-                     # Symbols:\n# Address\tSize    \tFile  Name\n\
-                     0x100003E6C\t0x00000070\t[  2] _main\n\
-                     0x100003F00\t0x00000010\t[  2] _close\n";
-        assert_eq!(
-            defined_by_program(ld64, &objects),
-            Some("close".to_string())
-        );
-        let fine = String::from_utf8_lossy(ld64).replace("[  2] _close", "[  3] _close");
-        assert_eq!(defined_by_program(fine.as_bytes(), &objects), None);
-        let gnu = b"Cross Reference Table\n\nSymbol                File\n\
-                    close                 /o/probed-1.o\n                      /o/fnprobe.o\n\
-                    open                  /lib/libc.so.6\n";
-        assert_eq!(defined_by_program(gnu, &objects), Some("close".to_string()));
-        assert_eq!(defined_by_program(b"", &objects), None);
+        assert_eq!(runtime_name_defined(&objects), None, "a static close");
+        let objects = vec![vec![d("main", true)], vec![d("close", true)]];
+        assert_eq!(runtime_name_defined(&objects), Some("close".to_string()));
+        // Intel Macs: `fstat$INODE64` is fstat.
+        let objects = vec![vec![d("fstat$INODE64", true)]];
+        assert_eq!(runtime_name_defined(&objects), Some("fstat".to_string()));
+        let objects = vec![vec![d("environ", true)]];
+        assert_eq!(runtime_name_defined(&objects), Some("environ".to_string()));
+    }
+
+    #[test]
+    fn a_message_holding_fatal_error_keeps_its_place() {
+        let stderr = b"/m/src/a.c:12:7: error: call to 'chk' declared with 'error' attribute: size: fatal error: too big\n";
+        let d = diagnostics(stderr, Cc::Clang);
+        assert_eq!(d[0].at, Some((PathBuf::from("/m/src/a.c"), 12, 7)));
+        assert!(d[0].message.starts_with("call to 'chk'"));
     }
 
     /// The names [`RUNTIME_IMPORTS`] lists are the runtime object's own
@@ -921,6 +1200,8 @@ mod tests {
                     w.to_string()
                 }
             })
+            // `fstat$INODE64` on Intel Macs is fstat.
+            .map(|w| w.split('$').next().unwrap_or(&w).to_string())
             .filter(|w| !w.is_empty())
             .collect();
         let _ = std::fs::remove_dir_all(&dir);
@@ -935,23 +1216,56 @@ mod tests {
 
     #[test]
     fn undefined_symbols_name_their_referrers() {
+        let r = |function: Option<&str>, object: Option<&str>| Referrer {
+            function: function.map(str::to_string),
+            object: object.map(str::to_string),
+        };
+        let u = |symbol: &str, refs: Vec<Referrer>| Undefined {
+            symbol: symbol.to_string(),
+            refs,
+        };
         let ld64 = b"Undefined symbols for architecture arm64:\n  \"_step\", referenced from:\n      _main in probed-0.o\n      _helper in probed-1.o\nld: symbol(s) not found\n";
         assert_eq!(
             undefined_symbols(ld64),
-            vec![(
-                "step".to_string(),
-                vec!["main".to_string(), "helper".to_string()]
+            vec![u(
+                "step",
+                vec![
+                    r(Some("main"), Some("probed-0.o")),
+                    r(Some("helper"), Some("probed-1.o"))
+                ]
             )]
         );
-        let gnu = b"/usr/bin/ld: probed-0.o: in function `main':\nmain.c:(.text+0x9): undefined reference to `step'\n";
+        let gnu = b"/usr/bin/ld: /o/probed-0.o: in function `main':\nmain.c:(.text+0x9): undefined reference to `step'\n";
         assert_eq!(
             undefined_symbols(gnu),
-            vec![("step".to_string(), vec!["main".to_string()])]
+            vec![u("step", vec![r(Some("main"), Some("/o/probed-0.o"))])]
         );
-        let lld = b"ld.lld: error: undefined symbol: step\n>>> referenced by main.c\n>>>               probed-0.o:(main)\n";
+        // Review: a reference from data names no function — never the last
+        // one named for another object.
+        let gnu = b"/usr/bin/ld: /o/probed-0.o: in function `main':\nmain.c:(.text+0x9): undefined reference to `step'\n\
+                    /usr/bin/ld: /o/probed-1.o:(.data.rel.local+0x0): undefined reference to `other'\n";
+        assert_eq!(
+            undefined_symbols(gnu)[1],
+            u("other", vec![r(None, Some("/o/probed-1.o"))])
+        );
+        // Review: gcc's clones, and older binutils' "In function".
+        let gnu = b"probed-0.o: In function `w.constprop.0':\nmain.c:(.text+0x9): undefined reference to `bad_size'\n";
+        assert_eq!(
+            undefined_symbols(gnu),
+            vec![u("bad_size", vec![r(Some("w"), Some("probed-0.o"))])]
+        );
+        let lld = b"ld.lld: error: undefined symbol: step\n>>> referenced by main.c\n>>>               probed-0.o:(main)\n>>> referenced by d.c\n>>>               probed-1.o:(.data+0x0)\n";
         assert_eq!(
             undefined_symbols(lld),
-            vec![("step".to_string(), vec!["main".to_string()])]
+            vec![u(
+                "step",
+                vec![
+                    r(Some("main"), Some("probed-0.o")),
+                    r(None, Some("probed-1.o"))
+                ]
+            )]
         );
+        assert_eq!(unit_of_object("/t/ruharness-map-x/probed-12.o"), Some(12));
+        assert_eq!(unit_of_object("main.o"), None);
     }
 }

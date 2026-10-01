@@ -314,63 +314,60 @@ pub(crate) struct TextScan {
 }
 
 /// Read a preprocessed text: line markers and `#pragma` lines skipped,
-/// string and character literals told apart from code.
+/// string and character literals — raw strings and C23 digit separators
+/// too — told apart from code by [`lex`].
 pub(crate) fn scan_text(text: &[u8]) -> TextScan {
     let mut scan = TextScan::default();
-    for line in text.split(|b| *b == b'\n') {
-        let trimmed = trim_start(line);
-        if trimmed.starts_with(b"#") {
+    // Adjacent string literals, joined and decoded: across lines and line
+    // markers, as the compiler joins them (§3.3 step 1).
+    let mut run: Option<Vec<u8>> = None;
+    let flush = |run: &mut Option<Vec<u8>>, scan: &mut TextScan| {
+        if let Some(joined) = run.take() {
+            note_incbin(&joined, scan);
+        }
+    };
+    for line in lex(text) {
+        if line.directive {
+            if line_marker(line.row(text)).is_none() {
+                flush(&mut run, &mut scan);
+            }
             continue;
         }
-        let mut code: Vec<u8> = Vec::new();
-        let mut literals: Vec<Vec<u8>> = Vec::new();
-        let mut run: Option<Vec<u8>> = None;
-        let mut i = 0;
-        while i < line.len() {
-            let b = line[i];
-            if b == b'"' || b == b'\'' {
-                let quote = b;
-                let start = i + 1;
-                i += 1;
-                while i < line.len() && line[i] != quote {
-                    i += if line[i] == b'\\' { 2 } else { 1 };
-                }
-                let body = &line[start..i.min(line.len())];
-                if quote == b'"' {
-                    let decoded = decode_c_string(body);
-                    run.get_or_insert_with(Vec::new).extend_from_slice(&decoded);
-                }
-                literals.push(body.to_vec());
-                i += 1;
-                code.push(b' ');
+        let toks = &line.toks;
+        let mut k = 0;
+        while k < toks.len() {
+            let tok = &toks[k];
+            if let TokKind::Literal { string: true, raw } = tok.kind {
+                let body = tok.body(text);
+                let decoded = if raw {
+                    body.to_vec()
+                } else {
+                    decode_c_string(body)
+                };
+                run.get_or_insert_with(Vec::new).extend_from_slice(&decoded);
+            } else {
+                flush(&mut run, &mut scan);
+            }
+            if let Some((n, len)) = note_at(text, toks, k) {
+                *scan.notes.entry(n).or_insert(0) += 1;
+                k += len;
                 continue;
             }
-            if !b.is_ascii_whitespace() {
-                if let Some(joined) = run.take() {
-                    note_incbin(&joined, &mut scan);
+            if let Some(n) = end_token(text, tok) {
+                *scan.ends.entry(n).or_insert(0) += 1;
+            }
+            if let TokKind::Literal { raw, .. } = tok.kind {
+                let body = tok.body(text);
+                let mut found = note_numbers(body);
+                if !raw {
+                    found.extend(note_numbers(&decode_c_string(body)));
                 }
+                scan.in_literals.extend(found);
             }
-            code.push(b);
-            i += 1;
-        }
-        if let Some(joined) = run.take() {
-            note_incbin(&joined, &mut scan);
-        }
-        for n in note_numbers(&code) {
-            *scan.notes.entry(n).or_insert(0) += 1;
-        }
-        for n in end_numbers(&code) {
-            *scan.ends.entry(n).or_insert(0) += 1;
-        }
-        for literal in &literals {
-            for n in note_numbers(&decode_c_string(literal)) {
-                scan.in_literals.insert(n);
-            }
-            for n in note_numbers(literal) {
-                scan.in_literals.insert(n);
-            }
+            k += 1;
         }
     }
+    flush(&mut run, &mut scan);
     scan
 }
 
@@ -404,7 +401,8 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// The note numbers in `text`: `__ruharness_seen[N] = 1;`, spaces allowed.
+/// The note numbers in a literal's text: `__ruharness_seen[N] = 1;`, spaces
+/// allowed.
 fn note_numbers(text: &[u8]) -> Vec<u32> {
     let mut out = Vec::new();
     let key = b"__ruharness_seen";
@@ -452,37 +450,6 @@ fn note_numbers(text: &[u8]) -> Vec<u32> {
         }
     }
     out
-}
-
-/// The end-token numbers in `text`: `__ruharness_end_N` as a whole word.
-fn end_numbers(text: &[u8]) -> Vec<u32> {
-    let mut out = Vec::new();
-    let key = b"__ruharness_end_";
-    let mut from = 0;
-    while let Some(at) = find(&text[from..], key) {
-        let start = from + at;
-        let mut i = start + key.len();
-        from = i;
-        let before_ok = start == 0 || !is_word(text[start - 1]);
-        let digits_from = i;
-        while i < text.len() && text[i].is_ascii_digit() {
-            i += 1;
-        }
-        let after_ok = i >= text.len() || !is_word(text[i]);
-        if before_ok && after_ok && i > digits_from {
-            if let Ok(n) = std::str::from_utf8(&text[digits_from..i])
-                .unwrap_or("")
-                .parse()
-            {
-                out.push(n);
-            }
-        }
-    }
-    out
-}
-
-fn is_word(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// A C string literal's body decoded to bytes: the simple escapes and octal
@@ -551,8 +518,9 @@ fn line_marker(line: &[u8]) -> Option<(Vec<u8>, Vec<u32>)> {
 
 /// §3.3 step 4: the copy's preprocessed text, with the probe header's region
 /// and every note and end token taken out, must be the program's code — line
-/// markers and blank lines dropped on both sides, whitespace runs read as one
-/// space. `Err` carries the first line that differs, as the copy has it.
+/// markers and blank lines dropped on both sides, each line compared as its
+/// tokens (so spacing never counts, and `- -` is not `--`). `Err` carries the
+/// first line that differs, as the copy has it.
 pub(crate) fn same_code(program: &[u8], copy: &[u8], header: &Path) -> Result<(), String> {
     let header_name = header.as_os_str().as_encoded_bytes().to_vec();
     let program_lines = code_lines(program, None);
@@ -562,8 +530,11 @@ pub(crate) fn same_code(program: &[u8], copy: &[u8], header: &Path) -> Result<()
         let (a, b) = (program_lines.get(i), copy_lines.get(i));
         if a != b {
             let shown = match (b, a) {
-                (Some(line), _) => line.clone(),
-                (None, Some(line)) => format!("(the copy ends; the program has: {line})"),
+                (Some(line), _) => String::from_utf8_lossy(line).into_owned(),
+                (None, Some(line)) => format!(
+                    "(the copy ends; the program has: {})",
+                    String::from_utf8_lossy(line)
+                ),
                 (None, None) => String::new(),
             };
             return Err(detail_text(&shown));
@@ -572,148 +543,314 @@ pub(crate) fn same_code(program: &[u8], copy: &[u8], header: &Path) -> Result<()
     Ok(())
 }
 
-/// The code lines of a preprocessed text: markers and blank lines dropped,
-/// the probe header's region (for the copy) skipped, notes and end tokens
-/// taken out, whitespace runs as one space.
-fn code_lines(text: &[u8], header: Option<&[u8]>) -> Vec<String> {
+/// The code lines of a preprocessed text, each as its tokens joined by one
+/// space: markers and blank lines dropped, the probe header's region (for
+/// the copy) skipped, notes and end tokens taken out.
+fn code_lines(text: &[u8], header: Option<&[u8]>) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let mut depth: usize = 0;
     let mut in_header: Option<usize> = None;
-    for line in text.split(|b| *b == b'\n') {
-        if let Some((name, flags)) = line_marker(line) {
-            if flags.contains(&1) {
-                depth += 1;
-                if in_header.is_none() && header.is_some_and(|h| name == h) {
-                    in_header = Some(depth - 1);
+    for line in lex(text) {
+        if line.directive {
+            if let Some((name, flags)) = line_marker(line.row(text)) {
+                if flags.contains(&1) {
+                    depth += 1;
+                    if in_header.is_none() && header.is_some_and(|h| name == h) {
+                        in_header = Some(depth - 1);
+                    }
+                } else if flags.contains(&2) {
+                    depth = depth.saturating_sub(1);
+                    if in_header == Some(depth) {
+                        in_header = None;
+                    }
                 }
-            } else if flags.contains(&2) {
-                depth = depth.saturating_sub(1);
-                if in_header == Some(depth) {
-                    in_header = None;
-                }
+                continue;
             }
-            continue;
         }
         if in_header.is_some() {
             continue;
         }
-        let mut code = line.to_vec();
-        if header.is_some() {
-            code = strip_notes(&code);
+        let mut joined: Vec<u8> = Vec::new();
+        let mut k = 0;
+        while k < line.toks.len() {
+            if header.is_some() {
+                if let Some((_, len)) = note_at(text, &line.toks, k) {
+                    k += len;
+                    continue;
+                }
+                if end_token(text, &line.toks[k]).is_some() {
+                    k += 1;
+                    continue;
+                }
+            }
+            if !joined.is_empty() {
+                joined.push(b' ');
+            }
+            joined.extend_from_slice(line.toks[k].text(text));
+            k += 1;
         }
-        let tokens = token_text(&code);
-        if tokens.is_empty() {
-            continue;
+        if !joined.is_empty() {
+            out.push(joined);
         }
-        out.push(tokens);
     }
     out
 }
 
-/// `line` as its tokens: whitespace kept (as one space) only where it
-/// separates two word characters, and inside literals as it is — so taking
-/// a note or end token out of `{}` compares equal, and `int x` never reads as
-/// `intx`.
-fn token_text(line: &[u8]) -> String {
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
-    let mut out: Vec<u8> = Vec::with_capacity(line.len());
-    let mut pending_space = false;
-    let mut i = 0;
-    while i < line.len() {
-        let b = line[i];
-        if b.is_ascii_whitespace() {
-            pending_space = true;
-            i += 1;
-            continue;
-        }
-        if pending_space && out.last().is_some_and(|l| word(*l)) && word(b) {
-            out.push(b' ');
-        }
-        pending_space = false;
-        if b == b'"' || b == b'\'' {
-            let start = i;
-            i += 1;
-            while i < line.len() && line[i] != b {
-                i += if line[i] == b'\\' { 2 } else { 1 };
-            }
-            i = (i + 1).min(line.len());
-            out.extend_from_slice(&line[start..i]);
-            continue;
-        }
-        out.push(b);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+/// A token of preprocessed C.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokKind {
+    /// An identifier or keyword.
+    Word,
+    /// A preprocessing number (C23 digit separators included).
+    Number,
+    /// A string (`string`) or character literal, with any encoding prefix;
+    /// `raw`: `R"delim(…)delim"`, which may span lines.
+    Literal { string: bool, raw: bool },
+    /// A punctuator, the longest that fits (`--` is one, `- -` two).
+    Punct,
 }
 
-/// `line` with every note (`__ruharness_seen[N] = 1;`) and end token
-/// (`__ruharness_end_N`) taken out, outside literals.
-fn strip_notes(line: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(line.len());
+/// A token: its kind and its bytes in the text (`start..end`); a literal's
+/// body is `body.0..body.1` (between the quotes, or a raw string's
+/// parentheses).
+#[derive(Debug, Clone, Copy)]
+struct Tok {
+    kind: TokKind,
+    start: usize,
+    end: usize,
+    body: (usize, usize),
+}
+
+impl Tok {
+    fn text<'t>(&self, text: &'t [u8]) -> &'t [u8] {
+        &text[self.start..self.end]
+    }
+
+    fn body<'t>(&self, text: &'t [u8]) -> &'t [u8] {
+        &text[self.body.0..self.body.1]
+    }
+}
+
+/// A line of preprocessed text: where it starts, whether it is a directive
+/// (its first token `#`: a line marker or a `#pragma`), and its tokens — a
+/// raw string that spans lines stays in the line it starts on.
+struct Line {
+    start: usize,
+    directive: bool,
+    toks: Vec<Tok>,
+}
+
+impl Line {
+    /// The line's first physical row, for reading a line marker.
+    fn row<'t>(&self, text: &'t [u8]) -> &'t [u8] {
+        let rest = &text[self.start..];
+        &rest[..rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len())]
+    }
+}
+
+fn ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
+}
+
+/// Split preprocessed C into lines of tokens, as the compiler reads them:
+/// encoding prefixes (`L`, `u`, `U`, `u8`), raw strings, C23 digit
+/// separators (`1'000`) and the longest punctuator.
+fn lex(text: &[u8]) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut line = Line {
+        start: 0,
+        directive: false,
+        toks: Vec::new(),
+    };
     let mut i = 0;
-    while i < line.len() {
-        let b = line[i];
-        if b == b'"' || b == b'\'' {
-            let start = i;
+    while i < text.len() {
+        let b = text[i];
+        if b == b'\n' {
+            let next = Line {
+                start: i + 1,
+                directive: false,
+                toks: Vec::new(),
+            };
+            lines.push(std::mem::replace(&mut line, next));
             i += 1;
-            while i < line.len() && line[i] != b {
-                i += if line[i] == b'\\' { 2 } else { 1 };
-            }
-            i = (i + 1).min(line.len());
-            out.extend_from_slice(&line[start..i]);
             continue;
         }
-        if line[i..].starts_with(b"__ruharness_seen") {
-            if let Some(end) = note_end(&line[i..]) {
-                i += end;
-                continue;
-            }
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
         }
-        if line[i..].starts_with(b"__ruharness_end_") && (i == 0 || !is_word(line[i - 1])) {
-            let mut j = i + b"__ruharness_end_".len();
-            while j < line.len() && line[j].is_ascii_digit() {
+        if line.toks.is_empty() && b == b'#' {
+            line.directive = true;
+        }
+        let tok = if ident_byte(b) && !b.is_ascii_digit() {
+            let mut j = i + 1;
+            while j < text.len() && ident_byte(text[j]) {
                 j += 1;
             }
-            if j < line.len() && is_word(line[j]) {
-                out.push(b);
-                i += 1;
-                continue;
+            let word = &text[i..j];
+            let raw = matches!(word, b"R" | b"LR" | b"uR" | b"UR" | b"u8R");
+            let prefix = matches!(word, b"L" | b"u" | b"U" | b"u8");
+            match text.get(j) {
+                Some(b'"') if raw => raw_string(text, i, j).unwrap_or(Tok {
+                    kind: TokKind::Word,
+                    start: i,
+                    end: j,
+                    body: (j, j),
+                }),
+                Some(q @ (b'"' | b'\'')) if prefix => quoted(text, i, j, *q == b'"'),
+                _ => Tok {
+                    kind: TokKind::Word,
+                    start: i,
+                    end: j,
+                    body: (j, j),
+                },
             }
-            i = j;
-            continue;
-        }
-        out.push(b);
-        i += 1;
+        } else if b.is_ascii_digit()
+            || (b == b'.' && text.get(i + 1).is_some_and(u8::is_ascii_digit))
+        {
+            let mut j = i + 1;
+            loop {
+                match text.get(j) {
+                    Some(b'e' | b'E' | b'p' | b'P')
+                        if matches!(text.get(j + 1), Some(b'+' | b'-')) =>
+                    {
+                        j += 2
+                    }
+                    Some(c) if ident_byte(*c) || *c == b'.' => j += 1,
+                    // A C23 digit separator: `'` then a digit or a letter.
+                    Some(b'\'')
+                        if text
+                            .get(j + 1)
+                            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_') =>
+                    {
+                        j += 2
+                    }
+                    _ => break,
+                }
+            }
+            Tok {
+                kind: TokKind::Number,
+                start: i,
+                end: j,
+                body: (j, j),
+            }
+        } else if b == b'"' || b == b'\'' {
+            quoted(text, i, i, b == b'"')
+        } else {
+            let len = PUNCTUATORS
+                .iter()
+                .find(|p| text[i..].starts_with(p))
+                .map_or(1, |p| p.len());
+            Tok {
+                kind: TokKind::Punct,
+                start: i,
+                end: i + len,
+                body: (i, i),
+            }
+        };
+        line.toks.push(tok);
+        i = tok.end;
     }
-    out
+    lines.push(line);
+    lines
 }
 
-/// The length of the note at the start of `text`, if one is there.
-fn note_end(text: &[u8]) -> Option<usize> {
-    let mut i = b"__ruharness_seen".len();
-    let ws = |i: &mut usize| {
-        while *i < text.len() && text[*i].is_ascii_whitespace() {
-            *i += 1;
-        }
-    };
-    for part in [&b"["[..], b"", b"]", b"=", b"1", b";"] {
-        ws(&mut i);
-        if part.is_empty() {
-            let from = i;
-            while i < text.len() && text[i].is_ascii_digit() {
-                i += 1;
-            }
-            if i == from {
-                return None;
-            }
-            continue;
-        }
-        if !text[i..].starts_with(part) {
-            return None;
-        }
-        i += part.len();
+/// Punctuators longer than one byte, longest first.
+const PUNCTUATORS: &[&[u8]] = &[
+    b"%:%:", b"...", b"<<=", b">>=", b"->", b"++", b"--", b"<<", b">>", b"<=", b">=", b"==", b"!=",
+    b"&&", b"||", b"*=", b"/=", b"%=", b"+=", b"-=", b"&=", b"^=", b"|=", b"##", b"<:", b":>",
+    b"<%", b"%>", b"%:", b"::",
+];
+
+/// A string or character literal from `start` (its prefix), its quote at
+/// `quote`; an unterminated one ends at the line's end.
+fn quoted(text: &[u8], start: usize, quote: usize, string: bool) -> Tok {
+    let q = text[quote];
+    let mut j = quote + 1;
+    while j < text.len() && text[j] != q && text[j] != b'\n' {
+        j += if text[j] == b'\\' && text.get(j + 1).is_some_and(|c| *c != b'\n') {
+            2
+        } else {
+            1
+        };
     }
-    Some(i)
+    let body_end = j.min(text.len());
+    let end = if text.get(j) == Some(&q) {
+        j + 1
+    } else {
+        body_end
+    };
+    Tok {
+        kind: TokKind::Literal { string, raw: false },
+        start,
+        end,
+        body: (quote + 1, body_end),
+    }
+}
+
+/// A raw string from `start` (its prefix), its quote at `quote`:
+/// `"delim(` … `)delim"`, the delimiter at most 16 bytes. `None` when it is
+/// not one.
+fn raw_string(text: &[u8], start: usize, quote: usize) -> Option<Tok> {
+    let from = quote + 1;
+    let open = text[from..]
+        .iter()
+        .take(17)
+        .position(|b| *b == b'(')
+        .map(|at| from + at)?;
+    let delim = &text[from..open];
+    if delim
+        .iter()
+        .any(|b| b.is_ascii_whitespace() || matches!(b, b')' | b'\\' | b'"'))
+    {
+        return None;
+    }
+    let mut close: Vec<u8> = vec![b')'];
+    close.extend_from_slice(delim);
+    close.push(b'"');
+    let at = find(&text[open + 1..], &close)? + open + 1;
+    Some(Tok {
+        kind: TokKind::Literal {
+            string: true,
+            raw: true,
+        },
+        start,
+        end: at + close.len(),
+        body: (open + 1, at),
+    })
+}
+
+/// The note that starts at token `k` (`__ruharness_seen [ N ] = 1 ;`): its
+/// number and how many tokens it takes.
+fn note_at(text: &[u8], toks: &[Tok], k: usize) -> Option<(u32, usize)> {
+    let t = |d: usize| toks.get(k + d).map(|tok| tok.text(text));
+    if t(0)? != b"__ruharness_seen"
+        || t(1)? != b"["
+        || t(3)? != b"]"
+        || t(4)? != b"="
+        || t(5)? != b"1"
+        || t(6)? != b";"
+    {
+        return None;
+    }
+    let digits = t(2)?;
+    if !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let n = std::str::from_utf8(digits).ok()?.parse().ok()?;
+    Some((n, 7))
+}
+
+/// The number of an end token (`__ruharness_end_N`, a whole word).
+fn end_token(text: &[u8], tok: &Tok) -> Option<u32> {
+    if tok.kind != TokKind::Word {
+        return None;
+    }
+    let digits = tok.text(text).strip_prefix(b"__ruharness_end_")?;
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    std::str::from_utf8(digits).ok()?.parse().ok()
 }
 
 #[cfg(test)]
@@ -749,7 +886,7 @@ mod tests {
             b"# 1 \"/m/src/a.c\"\nint f(void) {__ruharness_seen[0] = 1; return 2; }\nint x = 3;\n";
         assert_eq!(
             same_code(program, different, Path::new("/o/fnprobe.h")),
-            Err("int f(void){return 2;}".to_string())
+            Err("int f ( void ) { return 2 ; }".to_string())
         );
         // An empty body: the note and end token out, `{ }` is `{}`.
         let program = b"void f(void) {}\nint x;\n";
@@ -767,6 +904,62 @@ mod tests {
         let program = b"const char *s = \"{ }\";\n";
         let copy = b"const char *s = \"{__ruharness_seen[0] = 1; }\";\n";
         assert!(same_code(program, copy, Path::new("/o/fnprobe.h")).is_err());
+        // Tokens, not spacing: `- -` is two tokens, `--` one.
+        assert!(same_code(b"x = a - -b;\n", b"x = a--b;\n", Path::new("/o/h")).is_err());
+        assert_eq!(
+            same_code(b"x = a - -b;\n", b"x = a- - b;\n", Path::new("/o/h")),
+            Ok(())
+        );
+        // Review (non-UTF-8 lines): a Latin-1 byte in a literal compares as
+        // the byte it is, and the end token's spaces do not count.
+        let program = b"int greet(void) { return puts(\"caf\xe9\"); }\n";
+        let copy = b"int greet(void) {__ruharness_seen[0] = 1; return puts(\"caf\xe9\");  __ruharness_end_0 }\n";
+        assert_eq!(same_code(program, copy, Path::new("/o/h")), Ok(()));
+        let other = b"int greet(void) {__ruharness_seen[0] = 1; return puts(\"caf\xe8\");  __ruharness_end_0 }\n";
+        assert!(same_code(program, other, Path::new("/o/h")).is_err());
+    }
+
+    /// Review (a raw string or a C23 digit separator on the same line): a
+    /// stringized note after one is still inside its literal — never code
+    /// the check takes out.
+    #[test]
+    fn raw_strings_and_digit_separators_keep_literals_in_step() {
+        let copy = b"static const char *pre = R\"(\")\"; static const char frag[] = \
+                     \"void shade(void) {__ruharness_seen[3] = 1; go(); __ruharness_end_3}\";\n";
+        let scan = scan_text(copy);
+        assert_eq!(scan.in_literals, BTreeSet::from([3]));
+        assert!(scan.notes.is_empty() && scan.ends.is_empty(), "{scan:?}");
+        let program = b"static const char *pre = R\"(\")\"; static const char frag[] = \
+                        \"void shade(void) { go(); }\";\n";
+        assert!(same_code(program, copy, Path::new("/o/h")).is_err());
+        // A raw string over two lines, with a delimiter and a quote inside.
+        let copy =
+            b"const char *r = R\"x(a \" )\"\nb)x\"; int f(void) {__ruharness_seen[1] = 1; }\n";
+        let scan = scan_text(copy);
+        assert_eq!(scan.notes, BTreeMap::from([(1, 1)]));
+        assert!(scan.in_literals.is_empty());
+        // C23 digit separators: `1'000` is one number, not a character literal.
+        let copy = b"int k = 1'000; const char *s = \"[1'0] {__ruharness_seen[2] = 1; }\";\n";
+        assert_eq!(scan_text(copy).in_literals, BTreeSet::from([2]));
+        let copy = b"int k = 1'000'000; int f(void) {__ruharness_seen[4] = 1; }\n";
+        assert_eq!(scan_text(copy).notes, BTreeMap::from([(4, 1)]));
+        // Encoding prefixes, and a quote in a character literal.
+        let copy = b"char c = '\"'; const char *u = u8\"{__ruharness_seen[5] = 1;\"; wchar_t w = L'\\'';\n";
+        let scan = scan_text(copy);
+        assert_eq!(scan.in_literals, BTreeSet::from([5]));
+        assert!(scan.notes.is_empty());
+    }
+
+    /// Review (`.incbin` split across lines): string literals on several
+    /// lines, with a line marker between them, are one run.
+    #[test]
+    fn an_incbin_split_across_lines_is_read() {
+        let text = b"__asm__(\".data\\n.inc\"\n\"bin \\\"unit.c\\\"\\n\");\n\
+                     __asm__(\".incbin \"\n# 7 \"a.c\"\n\"\\\"b.c\\\"\");\n";
+        assert_eq!(
+            scan_text(text).incbins,
+            vec![Some("unit.c".to_string()), Some("b.c".to_string())]
+        );
     }
 
     #[test]
