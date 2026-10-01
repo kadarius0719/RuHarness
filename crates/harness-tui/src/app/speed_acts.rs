@@ -399,44 +399,63 @@ fn escaped(text: &str) -> String {
 
 /// The two outputs around `offset`: a unified diff of the lines there when
 /// both read as text, else hex rows of 16 bytes (`-` the C, `+` the other).
+/// The window never drops the difference: its head is cut to a line start
+/// only before `offset` (else a partial first line is kept — the bytes
+/// before `offset` are the same on both sides, so both cut alike), its
+/// tail to a whole line only when the window ends before that stream does
+/// (a last line with no newline is kept, so a dropped final newline shows);
+/// a cut that would still hide it falls back to the hex rows.
 fn outputs_around(c: &[u8], other: &[u8], offset: usize) -> Vec<String> {
     let start = offset.saturating_sub(COMPARE_BEFORE);
-    let window = |b: &[u8]| -> Vec<u8> {
-        let from = start.min(b.len());
-        b[from..(offset + COMPARE_AFTER).min(b.len())].to_vec()
-    };
-    let (cw, ow) = (window(c), window(other));
-    let as_text = |w: &[u8]| -> Option<String> {
-        // From the first line start, to the last whole line.
+    let end = offset.saturating_add(COMPARE_AFTER);
+    let as_text = |b: &[u8]| -> Option<String> {
+        let (from_w, to_w) = (start.min(b.len()), end.min(b.len()));
+        let w = &b[from_w..to_w];
+        // Where the difference lies within the window.
+        let at = offset.saturating_sub(from_w).min(w.len());
         let from = if start == 0 {
             0
         } else {
-            w.iter().position(|&b| b == b'\n').map_or(0, |i| i + 1)
+            w[..at]
+                .iter()
+                .position(|&x| x == b'\n')
+                .map_or(0, |i| i + 1)
         };
-        let to = match w.iter().rposition(|&b| b == b'\n') {
-            Some(i) if i >= from => i + 1,
-            _ => w.len(),
+        let to = if to_w == b.len() {
+            w.len()
+        } else {
+            match w.iter().rposition(|&x| x == b'\n') {
+                Some(i) if i >= at && i >= from => i + 1,
+                _ => w.len(),
+            }
         };
         let text = std::str::from_utf8(&w[from..to]).ok()?;
         text.chars()
             .all(|ch| !ch.is_control() || matches!(ch, '\n' | '\t' | '\r'))
             .then(|| text.to_string())
     };
-    if let (Some(ct), Some(ot)) = (as_text(&cw), as_text(&ow)) {
+    if let (Some(ct), Some(ot)) = (as_text(c), as_text(other)) {
         let diff = similar::TextDiff::configure()
             .timeout(std::time::Duration::from_millis(200))
             .diff_lines(&ct, &ot);
-        return diff
+        // No file header is asked for, so every line is the diff's own (a
+        // removed line "--x" reads "---x").
+        let lines: Vec<String> = diff
             .unified_diff()
             .context_radius(3)
             .to_string()
             .lines()
-            .filter(|l| !l.starts_with("---") && !l.starts_with("+++"))
             .map(escaped)
             .collect();
+        let shows = lines
+            .iter()
+            .any(|l| l.starts_with('-') || l.starts_with('+'));
+        if ct != ot && shows {
+            return lines;
+        }
     }
     let hex = |at: usize, b: &[u8]| -> String {
-        let row = &b[at.min(b.len())..(at + 16).min(b.len())];
+        let row = &b[at.min(b.len())..at.saturating_add(16).min(b.len())];
         let bytes: Vec<String> = row.iter().map(|x| format!("{x:02x}")).collect();
         let ascii: String = row
             .iter()
@@ -453,7 +472,7 @@ fn outputs_around(c: &[u8], other: &[u8], offset: usize) -> Vec<String> {
     let first = (offset / 16).saturating_sub(2) * 16;
     let mut lines = Vec::new();
     let mut at = first;
-    while at < first + 16 * 12 && (at < c.len() || at < other.len()) {
+    while at < first.saturating_add(16 * 12) && (at < c.len() || at < other.len()) {
         let (a, b) = (hex(at, c), hex(at, other));
         if a == b {
             lines.push(format!(" {a}"));
@@ -496,5 +515,47 @@ mod tests {
             ]
         );
         assert_eq!(escaped("a\x1bb\r"), "a\\x1bb\\r");
+    }
+
+    /// The comparison never hides the difference: on a last line with no
+    /// newline, when only the final newline differs (each way round), on a
+    /// line over 2 KiB that crosses the window's start, and on a line that
+    /// itself starts with "--".
+    #[test]
+    fn the_comparison_always_shows_the_difference() {
+        let cmp = |c: &[u8], o: &[u8]| outputs_around(c, o, first_difference(c, o));
+        let has = |lines: &[String], l: &str| lines.iter().any(|x| x == l);
+        let lines = cmp(b"line1\nabc", b"line1\nabd");
+        assert!(has(&lines, "-abc") && has(&lines, "+abd"), "{lines:?}");
+        // The Rust drops only the final newline: it did print "result".
+        let lines = cmp(b"x\nresult\n", b"x\nresult");
+        assert!(
+            has(&lines, "-result") && has(&lines, "+result"),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("No newline at end of file")),
+            "{lines:?}"
+        );
+        let lines = cmp(b"x\nresult", b"x\nresult\n");
+        assert!(
+            has(&lines, "-result") && has(&lines, "+result"),
+            "{lines:?}"
+        );
+        // One long line, the difference past its 2048th byte.
+        let long = "a".repeat(3000);
+        let c = format!("{long}X\nok\n");
+        let o = format!("{long}Y\nok\n");
+        let lines = cmp(c.as_bytes(), o.as_bytes());
+        assert!(
+            lines.iter().any(|l| l.starts_with('-') && l.ends_with('X'))
+                && lines.iter().any(|l| l.starts_with('+') && l.ends_with('Y')),
+            "{lines:?}"
+        );
+        // A line starting with "--" is the diff's own, never dropped.
+        let lines = cmp(b"a\n--x\n", b"a\n--y\n");
+        assert!(has(&lines, "---x") && has(&lines, "+--y"), "{lines:?}");
     }
 }
