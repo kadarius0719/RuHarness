@@ -171,6 +171,44 @@ harness-mcp. `compile_commands.json` is read, never executed; a command in it th
 compile is ignored and counted. The model's reply changes nothing until the deterministic check
 passes, and even then only writes a `harness.toml` the person accepted.
 
+### 3.9 An interactive picture of the map (the person's wish, 2026-10-02; to investigate)
+
+The person wants to **see** the map, not read it: an interactive architecture diagram of the
+project — files as nodes, calls and includes as paths, clustered around the tools the closures
+found, with shared libraries sitting between the tools they serve. The cockpit (a TUI) is the
+right place for walking a migration step by step, but probably the wrong medium for a graph of
+hundreds of files; this is a different kind of view and may be a **throwaway export** rather than
+a cockpit screen.
+
+Direction to investigate, not decided:
+
+- **Source of truth: the map file.** The picture is rendered *from* `project-map.json` (and,
+  once a tool is a target, from the facts and plan), never from a separate analysis — so it shows
+  exactly what the harness believes, and a stale picture is visibly stale (the map's `root_hash`).
+- **Form:** most likely `harness map export --html` writing a single self-contained HTML file
+  (one page, no network, the graph data embedded) that opens in a browser: zoom, pan, click a
+  node for its facts, collapse a tool into one node, colour by state (C / Rust in use / set aside
+  / could not compile / duplicate). Candidates for the drawing: a force-directed or clustered
+  layout; the libraries used must pass the dependency due-diligence rule (vendored or embedded,
+  pinned, no downloads at run time). A plain-text fallback (Graphviz `.dot`) is cheap and worth
+  having regardless.
+- **What it shows, in layers:** (1) the tools and what they share — the "which programs are in
+  here?" picture; (2) inside a tool, the units of the plan and their order (leaf first) — the
+  migration picture, where each unit's state is today's cockpit state (planned, tried,
+  migrated, failing); (3) inside a unit, the functions and their calls. Features' map (which
+  functions each feature runs) and perf's rows (which units got slower) are natural overlays
+  later.
+- **Interaction limits:** read-only. The picture never changes a bin, a target or the plan; an
+  action chosen in it (accept this tool, migrate this unit) would hand off to the cockpit or the
+  CLI, if ever. Untrusted names (paths, symbols, the model's tool names) are escaped for HTML as
+  the cockpit display-filters them for the terminal.
+- **Size:** a project of thousands of files needs collapsing by folder and by tool at first
+  view, with expansion on click; the map's caps bound it.
+
+Open: whether this is a `harness map export` (throwaway file), a cockpit act that opens the
+browser on that file, a page in the cockpit's own MCP-served help, or all three. Decide after the
+map exists and a first export has been tried on zopfli and on one real download.
+
 ## 4. Tests and checks (to be completed in review)
 
 - The walk on the 100 benchmark cases: each gives exactly one library bin, zero tools (99) or one
@@ -223,3 +261,5 @@ DECISIONS.
    a `migration/` folder inside the downloaded project?
 4. Is a library with no tool in the project (the benchmark's shape) a target by itself — as today
    — or does the map need a `main()` to call something a tool?
+5. The picture (§3.9): a throwaway HTML export first, or straight to something the cockpit can
+   open? And which of the three layers (tools / units / functions) matters most to see first?
