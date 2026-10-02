@@ -132,7 +132,8 @@ below are history.
      units are measurable;
   7. add `assert_eq!(crash.len(), 1)` (and for "time") to harness-cli tests/perf.rs
      two_units_end_to_end now that the C-fails-in-step-1 rule is merged.
-  AFTER THE WEEKLY RESET (2026-10-07; the person chose to stop here at 75 % weekly usage): the
+  THE PLAN FOR NEXT WEEK IS docs/NEXT-WEEK-PLAN.md (fix check, fix pass 2, mutation checks, the
+  DECISIONS draft, merge, then the project map). In short — AFTER THE WEEKLY RESET (2026-10-07): the
   fix check (re-verify all 82 against the merged code + regressions — or, cheaper, the 9 high
   ones), fix pass 2 (the list above), mutation checks, DECISIONS (incl. the Linux refusal), merge
   to main, push.
