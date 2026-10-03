@@ -1374,7 +1374,9 @@ trying), no signal out, no network, no reads under the home folder or the target
 binary, writes only its temp dir, and nothing started for it by the system — opening an app, a
 document or a web address (LaunchServices), Apple events and launchd jobs are denied, and so is
 reaching the services that do them; nothing it starts outlives its run. Other services of the
-same user stay reachable (the profile starts from "allow by default"). Kept outputs are the
+same user stay reachable (the profile starts from "allow by default"). **The same rule ends
+every profile** — the tool profile (compilers, cargo), verify's run and scenario profiles — since
+2026-10-03: the perf review found those shared the gap. Kept outputs are the
 program's own bytes: shown only after their size and blake3 match the row, control characters
 escaped. The launcher cache is per user, outside the target, built only from harness sources
 with a compiler found through root-owned paths, and every sandbox profile denies writes to it.

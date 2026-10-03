@@ -399,6 +399,12 @@ with exec allowed for exactly two literals — perfgo and the side's program —
 `(deny process-fork (with send-signal SIGKILL))` [c42, c94]. A run cannot read the other side's
 binary. A program may exec **itself**: counts carry on across the exec, the memory reads only the
 last image (§6) [c34].
+Build-time addition (fix pass 1, finding 24): the profile also denies having the system start a
+program for it — `lsopen`, `appleevent-send`, `job-creation`, and the mach lookups of
+LaunchServices, Core Services, the Apple event server, `smd` and login-item registration
+(`NO_STARTS_THROUGH_THE_SYSTEM` in sandbox.rs) — because a program started that way runs outside
+the sandbox and the program's group and would outlive the run. Fix pass 2 (2026-10-03) put the same
+rule at the end of verify's tool, run and scenario profiles, which shared the gap.
 
 ### 3.5 Running a row
 

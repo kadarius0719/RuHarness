@@ -236,6 +236,7 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
         " (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n",
     );
     out.push_str(&perf_cache_tail(spec.host)?);
+    out.push_str(NO_STARTS_THROUGH_THE_SYSTEM);
     Ok(out)
 }
 
@@ -285,6 +286,7 @@ pub(crate) fn render_run_profile(spec: &RunSpec<'_>) -> Result<String, Error> {
          (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
     ));
     out.push_str(&perf_cache_tail(spec.host)?);
+    out.push_str(NO_STARTS_THROUGH_THE_SYSTEM);
     Ok(out)
 }
 
@@ -499,6 +501,8 @@ mod tests {
 (deny file-write* (subpath \"/\"))
 (allow file-write* (subpath \"/Users/u/t/migration/build/u1\") (subpath \"/Users/u/t/migration/units/u1/c/target\") (literal \"/Users/u/t/migration/units/u1/c/Cargo.lock\") (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (subpath \"/private/var/folders/xy/T\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
 (deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
+(deny lsopen appleevent-send job-creation)
+(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") (global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") (global-name \"com.apple.xpc.loginitemregisterd\"))
 ";
         assert_eq!(text, expected);
     }
@@ -664,6 +668,8 @@ mod tests {
 (deny file-write* (subpath \"/\"))
 (allow file-write* (subpath \"/private/var/folders/xy/T/ruharness-run-1-0\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
 (deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
+(deny lsopen appleevent-send job-creation)
+(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") (global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") (global-name \"com.apple.xpc.loginitemregisterd\"))
 ";
         assert_eq!(text, expected);
 
@@ -692,6 +698,61 @@ mod tests {
             tmpdir: Path::new("/tmp/r"),
         })
         .is_err());
+    }
+
+    /// Live (macOS, sandbox-exec): a program under verify's run profile can
+    /// have nothing started for it by the system either — the gap the perf
+    /// review found in these profiles, closed by the same rule.
+    #[test]
+    fn a_run_cannot_open_or_start_anything_through_the_system() {
+        if !cfg!(target_os = "macos") || !Path::new(SANDBOX_EXEC).exists() {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("run-no-open");
+        let dir = tmp.path().canonicalize().expect("tmp");
+        let src = dir.join("opener.c");
+        std::fs::write(
+            &src,
+            "#include <servers/bootstrap.h>\n#include <stdio.h>\n#include <unistd.h>\n\
+             int sandbox_check(pid_t pid, const char *operation, int type, ...);\n\
+             int main(void) {\n\
+             const char *ops[] = { \"lsopen\", \"appleevent-send\", \"job-creation\" };\n\
+             for (int i = 0; i < 3; i++) printf(\"%s %d\\n\", ops[i], sandbox_check(getpid(), ops[i], 0));\n\
+             mach_port_t p = MACH_PORT_NULL;\n\
+             printf(\"lsd %d\\n\", bootstrap_look_up(bootstrap_port, \"com.apple.lsd.open\", &p) == BOOTSTRAP_NOT_PRIVILEGED);\n\
+             return 0; }\n",
+        )
+        .expect("source");
+        let bin = dir.join("opener");
+        let cc = std::process::Command::new("/usr/bin/cc")
+            .args(["-w", "-o"])
+            .arg(&bin)
+            .arg(&src)
+            .status()
+            .expect("cc");
+        assert!(cc.success());
+        let host = HostDirs::from_env().expect("host");
+        let run_tmp = dir.join("run");
+        std::fs::create_dir(&run_tmp).expect("run dir");
+        let profile = render_run_profile(&RunSpec {
+            host: &host,
+            target_root: &dir,
+            bin: &bin,
+            read_files: &[],
+            tmpdir: &run_tmp,
+        })
+        .expect("renders");
+        let argv = wrap(&profile, &[bin.to_string_lossy().into_owned()]);
+        let out = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .output()
+            .expect("sandbox-exec");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "lsopen 1\nappleevent-send 1\njob-creation 1\nlsd 1\n",
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[test]

@@ -119,9 +119,9 @@ below are history.
   programs through the system (LaunchServices). New: `harness_oracle::perf_compilers` (perf
   show's compilers as sandboxed tool runs), `harness-tui/tests/speed_change.rs` (build note 22).
   Left open, small (do them in fix pass 2, after the reset):
-  1. verify's own run / scenario / tool sandbox profiles share the LaunchServices gap the perf
-     profile closed (`sandbox.rs` NO_STARTS_THROUGH_THE_SYSTEM is ready to append) — a
-     pre-existing verify issue, security: do first;
+  1. DONE 2026-10-03: verify's tool, run and scenario profiles now end with
+     NO_STARTS_THROUGH_THE_SYSTEM (goldens updated; live test
+     a_run_cannot_open_or_start_anything_through_the_system; SCHEMAS + PERF-DESIGN §3.4 say so);
   2. `perf show` with no facts says "the C changed" on every row (the cockpit side is fixed);
   3. the results reader should cap the lengths of `replaces`, `units`, `left_out` lists;
   4. `perf show` and the writer's Store::put still follow a linked migration/perf/units folder
