@@ -23,6 +23,7 @@ Written for RuHarness at commit `a154870` (the program itself reports `harness 0
 | 8 | Add features: runs of the whole program that the harness re-checks every time | 20 min | no |
 | 9 | Tour the cockpit on the finished project | 15 min | no |
 | 10 | Check the status, and pick up again another day | 5 min | no |
+| 11 | Measure the speed of the Rust against the C (macOS) | 15–20 min (mostly waiting) | no |
 
 Altogether this takes about 3–4 hours, and you do not have to finish in one sitting. Part 10 shows how to pick up where you left off.
 
@@ -3580,6 +3581,262 @@ targets/lzg/
     units/u-version/                     the same for u-version
     build/                               scratch builds (ignored by git)
 ```
+
+---
+
+## Part 11 — Speed: is the Rust as fast as the C?
+
+**Run.** Make sure you are in the RuHarness folder on your practice branch.
+
+```bash
+cd ~/code/RuHarness
+```
+
+**Run.**
+
+```bash
+git switch practice-lzg
+```
+
+**You should see** `Already on 'practice-lzg'` (or `Switched to branch 'practice-lzg'` if you were on another branch).
+
+**Before you start.** Part 11 needs a RuHarness with `harness perf` (run `harness perf --help`; if it says `unrecognized subcommand`, update RuHarness and reinstall it as Part 10's *After updating RuHarness* shows).
+
+**The idea.** The oracle checks that the Rust does the same thing as the C. **perf** checks whether it does it as fast. It never changes a verdict: a slower unit is still a correct one, and you decide whether the difference matters.
+
+- A **workload** is one run of the whole program the way it is really used: your own options and, if you like, one input file of yours inside the target.
+- perf runs each workload as the original C ("the C alone"), then with each verified unit's Rust swapped in on its own, then with every verified unit together ("the program as it stands"). The C and the Rust take turns, 15 times each by default.
+- It says which was faster and by how much, or plainly that it cannot tell. It also compares what the program prints and how it ends on your workloads — something the oracle's checks never run.
+- perf runs on macOS only, for now. On Linux every `harness perf run` stops with `perf runs on macOS only for now — the Linux launcher is not built yet`.
+
+Your numbers will not match anyone else's: they belong to your computer, on this day. In the outputs below, `<n.nn>` stands for a number of your own.
+
+### Step 11.1 — Make a big input file
+
+**Why.** A run has to be long enough to time: half a second or more of the C's CPU time, or at least a billion instructions (a run under both reads `too short to time`). The harness's sample files are far too small for that, so you make a bigger one by repeating liblzg's own sources. The command gives the same bytes every time you run it, so you do not need to commit the file.
+
+**Run.**
+
+```bash
+mkdir -p targets/lzg/bench
+```
+
+**Run.** This is one command.
+
+```bash
+for i in $(seq 1 300); do cat targets/lzg/src/lzg/*.c; done > targets/lzg/bench/big.txt
+```
+
+**Run.**
+
+```bash
+ls -lh targets/lzg/bench/big.txt
+```
+
+**You should see** a file of about 10 to 20 MB.
+
+**What just happened.** `bench/big.txt` is 300 copies of the target's own C files, one after another. It sits in the target's root folder, outside `src/lzg`, so the scan and the plan never see it.
+
+### Step 11.2 — Write the workloads file
+
+**Run.** With no workloads file, measuring is refused by name.
+
+```bash
+harness perf run --target targets/lzg; echo "exit=$?"
+```
+
+**You should see.**
+
+```text
+error: write your workloads file first — harness perf init gives a starter
+exit=1
+```
+
+**Run.** Write your two workloads into a draft. This is one command down to `EOF`.
+
+```bash
+cat > ~/lzg-practice/workloads.toml <<'EOF'
+schema_version = 1
+
+[[workload]]
+id = "best"
+args = ["-9", "{input}"]
+input = "bench/big.txt"
+
+[[workload]]
+id = "fast"
+args = ["-1", "{input}"]
+input = "bench/big.txt"
+EOF
+```
+
+**You should see** `heredoc>` lines while it pastes, and then the prompt again.
+
+**Run.** Save it through the harness, which checks it first. `--expect none` says there is no workloads file yet.
+
+```bash
+harness perf save --expect none --bytes "$(wc -c < ~/lzg-practice/workloads.toml | tr -d ' ')" --target targets/lzg < ~/lzg-practice/workloads.toml; echo "exit=$?"
+```
+
+**You should see.**
+
+```text
+perf: saved migration/perf/workloads.toml
+exit=0
+```
+
+**What just happened.** The rules of this file:
+
+| Part | Rule |
+|---|---|
+| `id` | Lowercase letters, digits and `-`, at most 24, starting with a letter or digit; unique. |
+| `args` | Up to 8 of the program's own options. `{input}` stands for the input file, once, as an argument of its own. |
+| `input` | A file inside the target, written relative to `targets/lzg`: a real file (not a link), at most 64 MiB, not under `migration/` or `.git`, and no part of its path starting with `.` or `-`. |
+| `runs` | How many times each side runs, 5 to 31. Left out, it is 15. |
+
+A mistake is refused with its line and column, for example `error: migration/perf/workloads.toml line 4, column 6: workload[0]: id "Best" is not allowed — 1 to 24 of a-z, 0-9 and -, starting with a letter or digit`. `harness perf init --target targets/lzg` writes a starter file with these rules as comments, if you would rather start from that.
+
+**If it looks different.** If it says `changed since the edit started`, a workloads file is already there (from an earlier try). Edit it in the cockpit instead: select the **Speed** row, press `Enter`, choose **Edit the workloads file**, and the cockpit saves it for you.
+
+### Step 11.3 — Measure
+
+**Why.** Both your verified units are measured, alone and together. It takes several minutes: per workload about 17 runs of the C alone, then 33 for each unit and 33 for the program as it stands. Keep the computer quiet while it runs: other work makes the numbers noisier.
+
+**Run.**
+
+```bash
+harness perf run --target targets/lzg; echo "exit=$?"
+```
+
+**You should see**, as it goes (shortened here):
+
+```text
+perf: building the C program…
+perf: u-checksum — building its Rust…
+perf: u-version — building its Rust…
+perf: the program as it stands — u-checksum, u-version
+perf: the C on best — checking it ends the same way twice…
+perf: keep the computer quiet while it measures
+perf: the C on best — timed run 1 of 15…
+…
+perf: the C on best — CPU about <n.nn> s here today (varies with load) · <n.n> MB
+      · <n.nn>e<nn> instructions
+      15 runs
+perf: u-checksum on best — C, u-checksum, C…
+…
+perf: u-checksum on best — about as fast as the C (within 2 %)
+…
+perf: measured 8 rows, 0 too short, 0 behave differently — wrote migration/perf (commit it to keep a history; perf compares what the program prints and how it ends)
+exit=0
+```
+
+The first time, it also says `building the launcher…`: perf builds its own small timing program into `~/Library/Caches/ruharness/perf`, once (about 5 seconds).
+
+**What just happened.** For each workload perf wrote a row for the C alone, one for each unit and one for the program as it stands: 8 rows. What the answers mean:
+
+| Answer | Meaning |
+|---|---|
+| `about as fast as the C (within 2 %)` | The difference, whichever way, is under 2 %. |
+| `slower by about 6.2 % (4.1–8.3 %)` | The best guess, and the range it lies in (perf is at least 95 % sure of it). `faster` is the mirror. |
+| `probably slower …` / `close call …` | Slower, but not clearly past the 2 % line — or too close to it to call. |
+| `can't tell: the estimate is ±Y %` | The runs varied too much. It ends with the command to measure again with 31 runs. |
+| `too short to time` | The C ran too briefly. It says how many times bigger the input should be. |
+| `behaves differently` | The Rust printed or ended differently from the C on this workload. The oracle never ran this workload, so only perf can find this. Both outputs are kept in `migration/build/.perf-out/`. |
+
+**If it looks different.**
+
+- `too short to time` on a workload: your computer is faster than expected. Run Step 11.1 again with `seq 1 900`, and measure again.
+- `perf: the other rows on best are not run — the C failed there`: the original C crashed, timed out, printed too much or was stopped on that workload (the line above it says which), so perf has nothing to compare the Rust against there. Check the workload's options and input.
+- `perf: one unit measured (u-checksum) — u-version left out: verify it first — the program as it stands needs two`: that unit's verdict is no longer fresh. Re-check it in the cockpit (or run `harness verify u-version --target targets/lzg`), then measure again.
+- `error: the program's C changed since the scan: scan the project first, then measure`: run `harness scan --target targets/lzg`, and try again.
+- `error:` naming a command that holds the writer lock: another harness command is running on this target. Wait for it, and try again.
+
+### Step 11.4 — Read them again, and watch one go out of date
+
+**Run.** `perf show` rebuilds every row's words from the stored numbers. It builds nothing and writes nothing in the target. Besides asking perf's launcher which computer this is, the only things it runs are `cc --version` and `rustc -V`, inside the sandbox, to see whether your compilers changed since the rows were measured (`--no-check` skips both checks).
+
+```bash
+harness perf show --target targets/lzg
+```
+
+**You should see** the same rows as at the end of Step 11.3.
+
+**Run.** Change the input.
+
+```bash
+echo "one more line" >> targets/lzg/bench/big.txt
+```
+
+**Run.**
+
+```bash
+harness perf show --target targets/lzg --no-check | head -4
+```
+
+**You should see** the C's first row ending `· out of date: your workload changed`.
+
+**Run.** Make the input again, exactly as Step 11.1 made it.
+
+```bash
+for i in $(seq 1 300); do cat targets/lzg/src/lzg/*.c; done > targets/lzg/bench/big.txt
+```
+
+**Run.**
+
+```bash
+harness perf show --target targets/lzg | grep -c 'out of date'
+```
+
+**You should see** `0`: the same bytes, so every row is current again.
+
+**What just happened.** Every row records what it measured: the workload (its options and its input's bytes), the C, each unit's Rust, the way it measured, and the computer. When one of them changes, the row says which, and it stays on record until you measure again. Measuring again replaces a row.
+
+### Step 11.5 — Speed in the cockpit
+
+**Run.**
+
+```bash
+harness-tui --target targets/lzg
+```
+
+1. **The Speed row** is below Features in the tree, labelled `Speed (2 of 2)`: both verified units are measured.
+2. **The Speed view.** Select it. It starts with the computer and compilers the rows were measured with, then `The original C`, `As it stands (2 units)` and each unit, worst first, each workload with its short answer. Press `Tab` to move into the view, then `↓` onto a row: its full sentence shows below the list, with the computer and compilers that row was measured with.
+3. **A unit.** Select `u-checksum`. Below its verdict lines it shows `Speed: <answer> on <workload>`, and on the next line its range (when the answer has one), `parallel` when the program uses several cores, and how many of the workloads say the same. If a row is slower, a `Next:` line says what you could do about it.
+4. **The actions.** Back on the Speed row, press `Enter`: **Edit the workloads file**, **Measure speed** and **Measure the program as it stands**. Each dialog says how many runs it makes, about how long it takes, and what it writes. Press `Esc` to close it without running anything.
+5. **Help.** Press `?` and scroll to **Speed** for the words and what they mean.
+6. **Quit** with `q`.
+
+### Step 11.6 — Commit the results
+
+**Why.** The rows are plain JSON in `migration/perf/`. Committing them keeps a history, so you can see how a change to a unit's Rust moved its speed. The big input is not committed: Step 11.1's command makes the same bytes again.
+
+**Run.**
+
+```bash
+git add targets/lzg/migration/perf
+```
+
+**Run.**
+
+```bash
+git commit -m "lzg: workloads and the first speed measurement"
+```
+
+**You should see** a line like `[practice-lzg <7hex>] lzg: workloads and the first speed measurement`, then `4 files changed`.
+
+**Run.**
+
+```bash
+git status --short
+```
+
+**You should see** `?? targets/lzg/bench/`: the input you chose not to commit.
+
+### Checkpoint — Speed is working if…
+
+- [ ] `harness perf run` ended `exit=0` and wrote rows for the C alone, both units and the program as it stands.
+- [ ] `perf show` printed the same rows, and said `out of date: your workload changed` after you changed the input.
+- [ ] The cockpit's Speed row says `Speed (2 of 2)`, and `u-checksum` shows a `Speed:` line.
 
 ---
 

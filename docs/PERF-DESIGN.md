@@ -399,6 +399,12 @@ with exec allowed for exactly two literals — perfgo and the side's program —
 `(deny process-fork (with send-signal SIGKILL))` [c42, c94]. A run cannot read the other side's
 binary. A program may exec **itself**: counts carry on across the exec, the memory reads only the
 last image (§6) [c34].
+Build-time addition (fix pass 1, finding 24): the profile also denies having the system start a
+program for it — `lsopen`, `appleevent-send`, `job-creation`, and the mach lookups of
+LaunchServices, Core Services, the Apple event server, `smd` and login-item registration
+(`NO_STARTS_THROUGH_THE_SYSTEM` in sandbox.rs) — because a program started that way runs outside
+the sandbox and the program's group and would outlive the run. Fix pass 2 (2026-10-03) put the same
+rule at the end of verify's tool, run and scenario profiles, which shared the gap.
 
 ### 3.5 Running a row
 
@@ -582,7 +588,7 @@ file one list of rows. A measurement replaces only the rows it measured, by §3.
   `platform_metrics` (`macos-v6-pnorm`, `macos-v6-cycles`, `macos-v6-cycles-phases`,
   `macos-v6-share`, `macos-v4-cycles`, `linux-cycles`, `linux-hybrid-summed`, `cpu-time`);
 - `inputs`: the workload digest, the program digest, the crate digest(s), the unit's `replaces` and
-  `program_name`, `units` and `left_out` (as-it-stands rows), `recipe` (`perf-recipe-1`), `launcher`
+  `program_name`, `units` and `left_out` (as-it-stands rows), `recipe` (`perf-recipe-2`, note 31), `launcher`
   (`PERF_LAUNCHER`), `computer` (OS product version and build, arch, CPU, two kinds of cores and
   how many fast), `compilers` (the first line of `cc --version`, and of `rustc -V` except on
   `c_alone` rows);
@@ -734,7 +740,8 @@ not ledger truth; committing it keeps a history in git; it gates nothing [c78, c
     again — and if it is not faster, Replace it back with a-1234"; several attempts share the crate:
     the lowest id is named; with no provider, Modify is greyed and the words say "connect a model to
     Modify";
-  - **a recorded hand edit**: "Hand edit u001, then measure again" (or, when the crate has no
+  - **a recorded hand edit** (superseded by note 22, which has the words in use): "Hand edit
+    u001, then measure again" (or, when the crate has no
     src/logic.rs and src/ffi.rs: the next branch);
   - **no recorded attempt** (written by hand outside the cockpit): "commit the unit's crate first
     (git) — replacing it deletes it; edit it in your editor, then run harness verify u001 in a
@@ -1096,3 +1103,8 @@ below is a decision the build makes, each with a test, and **the notes govern wh
 29. [p28] Run logs live in `migration/build/perf-logs/` (never recreated by the `.perf` helper), one
     per run, the last 20 kept.
 30. [disputed: the Modify words] The greyed Modify reason is the cockpit's own, word for word.
+31. [fix pass 1, 2026-10-01] `PERF_RECIPE` is `perf-recipe-2` and `PERF_LAUNCHER`
+    `perf-launcher-2`: a run is short only under BOTH legs of the floor (§3.5 as written; the
+    build had used either leg), and perfrun no longer keeps a core busy while the program runs.
+    Rows of the earlier recipe or launcher read out of date until measured again. Fix pass 2
+    (2026-10-03) added the §3.4 system-start rule to verify's own profiles too.

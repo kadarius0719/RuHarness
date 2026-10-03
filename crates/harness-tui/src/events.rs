@@ -122,6 +122,19 @@ pub enum Event {
         /// `verified` / `rolled-back`.
         result: String,
     },
+    /// A perf row was written (docs/PERF-DESIGN.md §3.10).
+    PerfRow {
+        /// `c`, `program` or `unit`.
+        side: String,
+        /// The unit (unit rows).
+        unit: Option<String>,
+        /// The workload.
+        workload: String,
+        /// The row's outcome.
+        outcome: String,
+        /// Its words (a display-only courtesy).
+        words: String,
+    },
     /// The `external` hand-off is waiting for a response file.
     Awaiting {
         /// The attempt (none for triage).
@@ -250,6 +263,13 @@ fn known(k: &str, v: &Value) -> Option<Event> {
             unit: text(v, "unit")?,
             attempt: text(v, "attempt")?,
             result: text(v, "result")?,
+        },
+        "perf-row" => Event::PerfRow {
+            side: text(v, "side")?,
+            unit: text(v, "unit"),
+            workload: text(v, "workload")?,
+            outcome: text(v, "outcome")?,
+            words: text(v, "words").unwrap_or_default(),
         },
         "awaiting" => {
             let path = text(v, "path")?;

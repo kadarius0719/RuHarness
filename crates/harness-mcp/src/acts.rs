@@ -414,6 +414,8 @@ impl Collected {
             }
             Event::Message { text } => self.message(text),
             Event::Header { .. } | Event::TurnStart { .. } | Event::Result { .. } => {}
+            // No MCP act runs perf: its Speed fact reads the results files.
+            Event::PerfRow { .. } => {}
             Event::Other { line, .. } | Event::NotJson { line } => self.message(line),
         }
     }

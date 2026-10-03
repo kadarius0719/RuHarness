@@ -15,6 +15,7 @@
 
 pub mod asks;
 pub mod features_edit;
+pub mod speed_acts;
 
 use crate::chat::{self, Chat};
 use crate::dialog::{Choice, Dialog, Kind, Outcome};
@@ -179,6 +180,17 @@ pub enum Act {
     /// `features save`: the person's edited features file, its text on the
     /// command's stdin (§7.2).
     SaveFeatures,
+    /// `perf save`: the person's edited workloads file, likewise
+    /// (docs/PERF-DESIGN.md §3.11).
+    SaveWorkloads,
+    /// `perf run`: the C alone, each measurable unit and the program as it
+    /// stands — or, with a unit, only that unit (§3.11).
+    Measure,
+    /// `perf run --as-it-stands-only`.
+    MeasureProgram,
+    /// `perf run --runs 31` on the workloads whose rows ask for it — a
+    /// unit's, or (without one) the program as it stands's.
+    MeasureMore,
 }
 
 impl Act {
@@ -198,6 +210,10 @@ impl Act {
             Act::Continue => "Continue",
             Act::MapFeatures => "Map the features",
             Act::SaveFeatures => "Save the features file",
+            Act::SaveWorkloads => "Save the workloads file",
+            Act::Measure => "Measure speed",
+            Act::MeasureProgram => "Measure the program as it stands",
+            Act::MeasureMore => "Measure again with 31 runs",
         }
     }
 
@@ -216,7 +232,11 @@ impl Act {
             | Act::Migrate
             | Act::Continue
             | Act::MapFeatures
-            | Act::SaveFeatures => None,
+            | Act::SaveFeatures
+            | Act::SaveWorkloads
+            | Act::Measure
+            | Act::MeasureProgram
+            | Act::MeasureMore => None,
         }
     }
 
@@ -677,6 +697,9 @@ pub struct App {
     /// The person's features as the cockpit shows them
     /// (docs/FEATURES-DESIGN.md §8.1).
     pub features: featmap::FeatureModel,
+    /// The C-vs-Rust speed as the cockpit shows it
+    /// (docs/PERF-DESIGN.md §3.11).
+    pub speed: crate::speed::SpeedModel,
     /// What is selected.
     pub selection: Selection,
     /// Which nodes are folded or opened.
@@ -752,7 +775,12 @@ pub struct App {
     /// unless the override recorded it or the user discarded it.
     pub kept_edits: Vec<KeptEdit>,
     /// The person's features draft, kept until saved or discarded.
-    pub features_draft: Option<features_edit::FeaturesDraft>,
+    pub features_draft: Option<features_edit::Draft>,
+    /// The workloads draft, likewise (docs/PERF-DESIGN.md §3.11).
+    pub workloads_draft: Option<features_edit::Draft>,
+    /// Which draft the open editor dialog, the editor and its return are
+    /// about.
+    pub editing: features_edit::DraftKind,
     /// Earlier features drafts (their private dirs) kept when the person
     /// chose to edit the file as it is now (§7.2 step 5): named on quit,
     /// never removed here.
@@ -904,6 +932,7 @@ impl App {
     pub fn new(config: Config, read: Read) -> App {
         let files = files::build(&read.snapshot, &read.walk);
         let features = featmap::build(&read.snapshot, &files, &read.map, read.map_now.as_ref());
+        let speed = crate::speed::build(&read.snapshot);
         let target = config.target.clone();
         let holder = read.holder;
         let migrate_model = read.migrate_model;
@@ -914,6 +943,7 @@ impl App {
             walk: read.walk,
             files,
             features,
+            speed,
             selection: Selection::Project,
             expansion: Expansion::default(),
             rows: Vec::new(),
@@ -946,6 +976,8 @@ impl App {
             view_follow: true,
             kept_edits: Vec::new(),
             features_draft: None,
+            workloads_draft: None,
+            editing: features_edit::DraftKind::Features,
             kept_drafts: Vec::new(),
             leftovers: Vec::new(),
             notes: BTreeMap::new(),
@@ -1177,6 +1209,7 @@ impl App {
             &read.map,
             read.map_now.as_ref(),
         );
+        self.speed = crate::speed::build(&self.snapshot);
         self.selection =
             tree::surviving(&self.snapshot, &self.files, &self.features, &self.selection);
         // A finished (or vanished) attempt no longer awaits anything.
@@ -1486,6 +1519,25 @@ impl App {
                 };
                 push(run, tone, format!("turn {index} {kind} → {result}"));
             }
+            Event::PerfRow {
+                side,
+                unit,
+                workload,
+                outcome,
+                words,
+            } => {
+                let who = match (side.as_str(), unit) {
+                    ("unit", Some(u)) => u,
+                    ("program", _) => "the program as it stands".into(),
+                    _ => "the C".into(),
+                };
+                let tone = if outcome == "behaves-differently" {
+                    Tone::Bad
+                } else {
+                    Tone::Plain
+                };
+                push(run, tone, format!("{who} on {workload} — {words}"));
+            }
             Event::Check {
                 name,
                 passed,
@@ -1643,10 +1695,11 @@ impl App {
         }
         // A features save is not offered again with its text as it was: the
         // draft may move on; Continue saves what it holds (fix check N6).
-        if pending.act == Act::SaveFeatures {
+        if let Some(kind) = features_edit::DraftKind::of_act(pending.act) {
             self.notice = notice(format!(
-                "could not start the save: {why}; your features draft is kept — the menu offers \
-                 Continue my features draft"
+                "could not start the save: {why}; your {} draft is kept — the menu offers {}",
+                kind.noun(),
+                kind.continue_words()
             ));
             return;
         }
@@ -1668,6 +1721,7 @@ impl App {
             // A features draft is its private dir: an editor's recovery
             // file (nano's .save, vim's swap) lands beside the draft (N3).
             .chain(self.features_draft.iter().map(|d| d.tmp.clone()))
+            .chain(self.workloads_draft.iter().map(|d| d.tmp.clone()))
             .chain(self.kept_drafts.iter().cloned())
             .collect()
     }
@@ -1728,7 +1782,7 @@ impl App {
             // from what it holds (fix check P1).
             if ending == Ending::Locked
                 && run.pending.chat.is_none()
-                && run.act != Act::SaveFeatures
+                && features_edit::DraftKind::of_act(run.act).is_none()
             {
                 // The same command, whole: its unit, attempt, note and hand
                 // edit (review USE-2/ENG-1/SAFE-4). Its dialog re-checks
@@ -1749,13 +1803,11 @@ impl App {
         self.chat_reaped(status);
         let mut remove = None;
         // The features Edit's save: saved → its draft goes; refused → kept.
-        if let Some(saved) = self
-            .run
-            .as_ref()
-            .filter(|r| r.act == Act::SaveFeatures)
-            .map(|r| r.pending.stdin.clone().unwrap_or_default())
-        {
-            remove = self.features_save_ended(status.success(), &saved);
+        if let Some((kind, saved)) = self.run.as_ref().and_then(|r| {
+            features_edit::DraftKind::of_act(r.act)
+                .map(|k| (k, r.pending.stdin.clone().unwrap_or_default()))
+        }) {
+            remove = self.features_save_ended(kind, status.success(), &saved);
         }
         if let Some(run) = self.run.as_mut() {
             if let (Act::HandEdit, Some(tmp)) = (run.act, run.cleanup.take()) {
@@ -1897,6 +1949,11 @@ impl App {
                 Ok(pending(argv, act.label().to_string(), None, None))
             }
             Act::SaveFeatures => Err("saved from the features Edit only".into()),
+            Act::SaveWorkloads => Err("saved from the workloads Edit only".into()),
+            Act::Measure | Act::MeasureProgram | Act::MeasureMore => {
+                let (argv, label) = self.measure_argv(act, unit)?;
+                Ok(pending(argv, label, unit, None))
+            }
             Act::MapFeatures => {
                 let argv = self.with_sandbox_flag(self.harness_argv(&[
                     os("features"),
@@ -1970,7 +2027,7 @@ impl App {
                     .config
                     .providers
                     .first()
-                    .ok_or("no provider is allowed (start with --provider <name>)")?;
+                    .ok_or(crate::model::NO_PROVIDER)?;
                 let mut from = os("--from=");
                 from.push(&r.id);
                 let mut steer = os("--steer=");
@@ -2211,6 +2268,8 @@ impl App {
         let routing = || self.migrate_model.clone();
         let (title, mut body) = match p.act {
             Act::SaveFeatures => self.save_features_words(p),
+            Act::SaveWorkloads => self.save_workloads_words(p),
+            Act::Measure | Act::MeasureProgram | Act::MeasureMore => self.measure_words(p),
             Act::Scan => {
                 (
                     "Scan the project?".to_string(),
@@ -2453,11 +2512,18 @@ impl App {
                 if self.chat.has_conversation() {
                     vec!["Quit? The chat's conversation is not kept.".into()]
                 } else {
-                    vec![
-                        "Nothing is running. Hand edits not recorded and features drafts not saved are \
-                         named on the way out."
-                            .into(),
+                    // Every kind of draft the way out names (main's
+                    // `announce_kept_edits`).
+                    let kinds = [
+                        features_edit::DraftKind::Features,
+                        features_edit::DraftKind::Workloads,
                     ]
+                    .map(features_edit::DraftKind::noun)
+                    .join(" and ");
+                    vec![format!(
+                        "Nothing is running. Hand edits not recorded and {kinds} drafts not saved \
+                         are named on the way out."
+                    )]
                 },
             ),
             Purpose::Quit => (Kind::Quit, "Quit while a command runs?".into(), {
@@ -2478,7 +2544,7 @@ impl App {
             ),
             Purpose::OpenEditor | Purpose::EditAgain | Purpose::FeaturesChanged => (
                 Kind::OpenEditor,
-                "Open the features file?".into(),
+                format!("Open the {} file?", self.editing.noun()),
                 Vec::new(),
             ),
             Purpose::Cancel => (
@@ -2740,12 +2806,15 @@ impl App {
                 }
                 Err(why) => {
                     self.notice = notice(format!("{}: {why}", p.label));
-                    if let (Act::SaveFeatures, Some(d)) = (p.act, &self.features_draft) {
+                    if let Some((kind, d)) = features_edit::DraftKind::of_act(p.act)
+                        .and_then(|k| self.draft(k).map(|d| (k, d)))
+                    {
                         self.notice = notice(format!(
-                            "{}: {why}; your features draft is kept in {} — the menu offers \
-                             Continue my features draft",
+                            "{}: {why}; your {} draft is kept in {} — the menu offers {}",
                             p.label,
-                            d.file.display()
+                            kind.noun(),
+                            d.file.display(),
+                            kind.continue_words()
                         ));
                     } else if let Some(tmp) = &p.cleanup {
                         self.notice = notice(format!(
@@ -2763,13 +2832,15 @@ impl App {
                 self.notice = notice("hand edit discarded");
                 Command::Cleanup(tmp)
             }
-            (Purpose::Act(p), _) if p.act == Act::SaveFeatures => {
-                self.notice = notice(match &self.features_draft {
+            (Purpose::Act(p), _) if features_edit::DraftKind::of_act(p.act).is_some() => {
+                let kind = features_edit::DraftKind::of_act(p.act).unwrap_or_default();
+                self.notice = notice(match self.draft(kind) {
                     Some(d) => format!(
-                        "{}: not run; your features draft is kept in {} — the menu offers \
-                         Continue my features draft",
+                        "{}: not run; your {} draft is kept in {} — the menu offers {}",
                         p.label,
-                        d.file.display()
+                        kind.noun(),
+                        d.file.display(),
+                        kind.continue_words()
                     ),
                     None => format!("{}: not run", p.label),
                 });
@@ -2816,6 +2887,13 @@ impl App {
                     Some(menu::Action::EditFeatures)
                 }
                 featmap::Group::Valid => None,
+            },
+            Selection::Speed => match self.speed.group {
+                crate::speed::Group::NoFile
+                | crate::speed::Group::NoWorkload
+                | crate::speed::Group::FileError(_) => Some(menu::Action::EditWorkloads),
+                crate::speed::Group::NotYetRun => Some(menu::Action::Act(Act::Measure)),
+                _ => None,
             },
             Selection::Feature(id) => self.features.feature(id).and_then(|f| match f.state {
                 featmap::FeatureState::NotMapped | featmap::FeatureState::MapOutOfDate => {
@@ -2978,6 +3056,20 @@ impl App {
             }
             Action::EditFeatures => self.start_features_edit(),
             Action::DiscardFeaturesDraft => self.ask_discard_features_draft(),
+            Action::CompareOutputs(side, workload) => {
+                match self.compare_outputs(side, workload) {
+                    Ok(mode) => {
+                        self.diff_rows = None;
+                        self.mode = mode;
+                    }
+                    Err(why) => self.notice = notice(why),
+                }
+                Command::None
+            }
+            Action::EditWorkloads => self.start_edit(features_edit::DraftKind::Workloads),
+            Action::DiscardWorkloadsDraft => {
+                self.ask_discard_draft(features_edit::DraftKind::Workloads)
+            }
         }
     }
 
@@ -4372,6 +4464,11 @@ impl App {
                 featmap::Group::Invalid(_) => ("⚠", "error".into()),
                 _ => ("", String::new()),
             },
+            Selection::Speed => match &self.speed.group {
+                crate::speed::Group::FileError(_) => ("⚠", "error".into()),
+                _ if self.speed.measuring => ("", "measuring".into()),
+                _ => ("", String::new()),
+            },
             Selection::Feature(id) => match self.features.feature(id) {
                 Some(f) => (
                     f.state.glyph(),
@@ -4732,15 +4829,7 @@ pub fn attempt_tags(unit: &UnitView, a: &AttemptView) -> Vec<String> {
     tags
 }
 
-/// `a-13c941dfff95` → `a-13c9`; samples keep their `.rN`.
-pub fn short_id(id: &str) -> String {
-    let (base, sample) = match id.split_once(".r") {
-        Some((b, n)) => (b, format!(".r{n}")),
-        None => (id, String::new()),
-    };
-    let cut: String = base.chars().take(6).collect();
-    format!("{cut}{sample}")
-}
+pub use crate::model::short_id;
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -5286,6 +5375,22 @@ pub(crate) mod tests {
         std::fs::write(&logic, text).unwrap();
         assert!(app.reload(true));
         assert_eq!(recheck(&app).greyed, None);
+    }
+
+    /// The idle quit dialog names every kind of draft the way out names —
+    /// the workloads draft too (PERF-DESIGN §3.1: the features Edit flow,
+    /// generalised).
+    #[test]
+    fn the_idle_quit_dialog_names_every_kind_of_draft() {
+        let mut app = app("quit-drafts");
+        app.open_dialog(Purpose::Quit);
+        let Mode::Dialog(c) = &app.mode else { panic!() };
+        assert_eq!(c.dialog.kind, crate::dialog::Kind::QuitIdle);
+        assert_eq!(
+            c.body,
+            ["Nothing is running. Hand edits not recorded and features and workloads drafts not \
+              saved are named on the way out."]
+        );
     }
 
     /// CHK-7: a live holder of the writer lock greys every spawning item,

@@ -96,8 +96,15 @@ pub fn walk_tree(root: &Path, source_dir: &str, facts: Option<&Facts>) -> TreeWa
 pub enum Cause {
     /// Status and verdict evidence disagree.
     Contradiction,
-    /// A promotion was interrupted ("the next command recovers it").
-    PromotionInterrupted(String),
+    /// An Accept (a promotion) was interrupted: the attempt of its marker
+    /// (or `legacy`) and the unit — Re-check finishes or undoes it. Worded
+    /// as perf words it (`harness_core::perf::accept_interrupted_words`).
+    PromotionInterrupted {
+        /// The marker's attempt id, or `legacy`.
+        attempt: String,
+        /// The unit.
+        unit: String,
+    },
     /// The unit's C changed since it was planned (or since the verdict).
     SourceChanged,
     /// The verdict no longer matches the crate or driver ("Re-check").
@@ -120,8 +127,8 @@ impl Cause {
                  explains)"
                     .into()
             }
-            Cause::PromotionInterrupted(id) => {
-                format!("the promotion of {id} was interrupted — the next command recovers it")
+            Cause::PromotionInterrupted { attempt, unit } => {
+                harness_core::perf::accept_interrupted_words(attempt, unit)
             }
             Cause::SourceChanged => {
                 "its C changed since it was planned — scan, refresh the plan, then review its \
@@ -389,7 +396,10 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
         return UnitState::Blocked;
     }
     if let Some(id) = &r.promotion_interrupted {
-        return UnitState::Attention(Cause::PromotionInterrupted(id.clone()));
+        return UnitState::Attention(Cause::PromotionInterrupted {
+            attempt: id.clone(),
+            unit: unit.unit.id.clone(),
+        });
     }
     // The specific causes first: harness-core also calls a verified unit
     // whose verdict went stale a contradiction. The C changed since planning
@@ -552,6 +562,25 @@ mod tests {
     use harness_core::facts::{FileRecord, SymbolRecord};
     use harness_core::ledger::Ledger;
     use std::path::PathBuf;
+
+    /// The interrupted-Accept words are perf's, word for word
+    /// (docs/PERF-DESIGN.md §3.2).
+    #[test]
+    fn an_interrupted_accept_reads_as_perf_reads_it() {
+        let cause = Cause::PromotionInterrupted {
+            attempt: "a-1234".into(),
+            unit: "u001".into(),
+        };
+        assert_eq!(
+            cause.words(),
+            "an Accept of a-1234 was interrupted — Re-check u001 (or run harness verify u001) \
+             to finish or undo it"
+        );
+        assert_eq!(
+            cause.words(),
+            harness_core::perf::accept_interrupted_words("a-1234", "u001")
+        );
+    }
 
     const CASE: &str = "targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib";
     const LIB_C: &str = "test_case/src/lib.c";

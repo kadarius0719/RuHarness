@@ -1228,3 +1228,165 @@ terminal); `--json` escapes them.
 | `migration/features/features.toml` | a person; `features init`; `features save` |
 | `migration/features/map.json` | `features map` |
 | `migration/build/.features/**`, `migration/build/<unit>/f/**` (gitignored) | `features map`; `verify` |
+
+---
+
+# C-vs-Rust speed (docs/PERF-DESIGN.md governs; additive)
+
+perf only measures: it never changes a verdict, an attempt, the plan or a unit's crate sources.
+A target without `migration/perf/workloads.toml` is unchanged by it in every byte; the cockpit
+shows `Speed (no file)` and harness-mcp's `speed` is `null`. macOS only for now: elsewhere every
+`perf run` is refused by name ("perf runs on macOS only for now — the Linux launcher is not built
+yet").
+
+## `migration/perf/workloads.toml` (`ruharness-perf-workloads` v1, hand-written)
+
+`schema_version = 1`, then `[[workload]]` tables of `id`, `args`, `input`, `runs`. Ids
+`^[a-z0-9][a-z0-9-]{0,23}$`, unique; `args` 0–8 strings, each ≤ 256 bytes, no NUL, `{input}`
+only as a whole argument and exactly where an `input` is named; `input` (optional) a path relative
+to the project — no control character, no empty part, no part starting with `.` or `-`, not under
+`migration/`; `runs` 5–31 (default 15) runs a side. ≤ 16 workloads; ≤ 64 KiB. **Strict**: an
+unknown key, a wrong type or a broken rule is refused with its line, column and workload — every
+new key bumps `schema_version`. A file that cannot be used is a value on every read path (the
+cockpit's `Speed (file error)`), never an error; a newer `schema_version` is refused.
+
+The input is read once per measure through one confined, bounded read shared with the cockpit:
+a regular file (not a link; a linked folder must stay inside the project and out of `.git` and
+`migration/`), ≤ 64 MiB; otherwise the row is `input-unusable` with a closed reason `missing |
+link | outside | into-git | not-a-file | too-large | under-migration | permission-denied |
+unreadable`. The workload's digest = blake3 over its id, its args and, with an input, its name
+and bytes (not `runs`: a row records the n it used); an input perf could not read is hashed as
+absent, not as empty, so one that comes back as an empty file reads "your workload changed".
+
+## `migration/perf/program.json` and `migration/perf/units/<id>.json` (`ruharness-perf` v1)
+
+`{schema: "ruharness-perf", schema_version: 1, c_alone: [Row], as_it_stands: [Row]}` and
+`{schema, schema_version, unit, rows: [Row]}`, one row per workload, each file ≤ 4 MiB, written
+atomically after every row. A Row: `workload`, `outcome` (closed: `baseline | measured |
+behaves-differently | stopped-by-sigkill | too-short | run-failed: timeout | run-failed: exit |
+run-failed: signal | c-unstable | c-crashed | c-timed-out | output-too-large | c-could-not-start |
+not-verified | replaces-mismatch | crate-does-not-build | does-not-link | mixed-panic |
+input-unusable | could-not-start | run-failed: unmeasurable`), and as the outcome needs: `short`,
+`runs` (5–31), `platform_metrics` (`macos-v6-pnorm | macos-v6-cycles | macos-v6-cycles-phases |
+macos-v6-share | macos-v4-cycles | linux-cycles | linux-hybrid-summed | cpu-time`), `c` and
+`other` (the timed runs: `instructions`, `cycles`, `cpu_us`, `wall_us`, `memory`,
+`p_instructions`, `p_cycles`, `switches_voluntary`, `switches_involuntary`, `load`, `end`),
+`std`, `fat_lto`, `profile` (`opt-level | lto | codegen-units | panic` set away from the
+defaults), `step1`, `failed_run`, `setup` (closed facts: `runtimes`, `cause` ∈ `no-std |
+two-no-std | lto | two-lto | unknown`, `units`, `index`, `log`, `input`, `reason` ∈ `not-fresh |
+replaces-changed | rust-changed | accept-interrupted`, `attempt`, `never_started`),
+`first_difference` / `found_before` (`stream` ∈ `stdout | stderr | exit`, `c_len`, `other_len`,
+`offset`, `c_end`, `other_end`, `over_cap`, `kept [{name, size, blake3}]`; with `over_cap`,
+`stream` is the stream that passed the 64 MiB cap, `c_len` the C's length on it, `offset` 0 and
+`other_end` `signal 9`, the kill that stopped the run, as in its `step1`), `last_try`
+(`{outcome, setup}`). `short` is true when one side's step-1 run was under both legs of the
+floor (fewer than 1e9 instructions and under half a second of CPU); never on the C alone.
+`inputs`: `workload`, `program` (the features' program digest), `crates [{id, digest}]` (unit
+rows; a crate that does not build records its real digest), `replaces` (unit rows),
+`program_name`, `units [{id, crate_digest}]` and `left_out [{id, crate_digest, reason}]`
+(every as-it-stands row, set-up ones included; reasons `not-fresh | replaces-mismatch |
+replaces-changed | crate-does-not-build | does-not-link | accept-interrupted`), `recipe`
+(`perf-recipe-2`: rows of `perf-recipe-1`, whose short runs were judged by either leg of the
+floor, read out of date), `launcher` (`perf-launcher-2`), `computer {os, build, arch, cpu,
+two_kinds, fast_cores}`, `compilers {cc, rustc?}`. **Strict** (unknown fields refused; every
+field checked against its outcome); free text ≤ 160 bytes, no control character; a
+difference's lengths and kept files ≤ 64 MiB (the output cap), its `offset` no further than the
+shorter length, and 0, 0, 0 on `exit`; a replaces-mismatch's `index` below 65 536 (and within
+the row's `replaces` when it holds them).
+
+**The replace rule** (one, in `harness-core`): a set-up outcome never replaces an earlier row that
+is not itself a set-up row — it is kept beside it as `last_try`; on the C-alone rows the C's own
+outcomes replace a C-side or too-short row and are otherwise kept as `last_try`; a
+behaves-differently finding survives every re-measure that does not end `measured` or
+`too-short`, kept as `found_before`. A SIGKILL perf did not send that a unit's or the program's
+step 1 meets on the C is written to the C alone's row only when no baseline is there (perf
+says when it keeps the baseline). Rows of workloads no longer in the file are dropped on the
+next write.
+
+**Current** iff every input equals today's: the workload's digest, the program digest, the
+program's name, the recipe, the launcher, each unit's crate digest and its `replaces` (unit
+rows), the held units, those left out and the plan's order (as-it-stands rows); the computer
+and the compilers are checked only by `perf show` (when the launcher cache is current), never by
+the cockpit or harness-mcp. Each reason has a closed token: `workload | workload-gone | program |
+program-name | recipe | launcher | rust | replaces | left-out | accepted | verified | plan-order |
+computer | compilers`, and the cockpit's own `measuring | too-large | input-unusable`.
+
+## CLI
+
+- `harness perf init [--target]` — the starter (no workload); never overwrites, never through a
+  symlink. Exit 0/1.
+- `harness perf save --expect <blake3|none> --bytes N [--target]` — the text on stdin (exactly N
+  bytes, ≤ 64 KiB), saved only when it validates and the file is still the one `--expect` names.
+  Exit 0/1.
+- `harness perf run [--target] [--unit ID]… [--workload ID]… [--runs 5–31]
+  [--as-it-stands-only] [--allow-unsandboxed]` — the writer lock (`perf run …` is the holder's
+  command); refuses without workloads, with stale facts ("scan the project first"), unknown ids
+  (naming the known ones). Without `--unit` / `--as-it-stands-only`: the C alone, each measurable
+  unit (verified or merged, verdict green and fresh, no interrupted Accept), and the program as it
+  stands; `--unit` alone builds and links only the units named. Each build step may write only
+  its own folder (the compiles `.perf/obj`, each link its slot, each crate build its `target/`
+  and `Cargo.lock`), and every object and staticlib is checked against its hash before each link.
+  When the C fails on a workload in step 1 (one of its own outcomes, or a SIGKILL perf did not
+  send), that workload's other rows are not run and keep their earlier rows. The progress names
+  each left-out unit in words ("u-tree left out: its crate does not build"); the summary counts
+  only what this run measured, and a row the replace rule kept is said to be kept. Exit 0 when
+  it ran (a difference is a row, not a failure), 1 refused, 2 usage.
+- `harness perf show [--target] [--no-check] [--allow-unsandboxed]` — every stored row's words,
+  rebuilt, with why it is out of date. Creates and writes nothing in the target; never builds the
+  launcher; refuses a link (or a non-folder) at `migration/`, `migration/perf` or
+  `migration/perf/units` instead of reading through it. Besides the launcher's own `perfrun facts`
+  (only when its cache is current), it starts only `cc --version` and `rustc -V`, as tool runs
+  (the tool sandbox, the tool environment, the allowlist, `[oracle] timeout_secs`); "compilers not
+  checked" when either is not allowlisted, either run fails, or no sandbox is available and
+  `--allow-unsandboxed` was not given. `--no-check` checks neither the computer nor the compilers.
+  Exit 0/1.
+- Events (`--json`): `perf-row {side: c | program | unit, unit (unit rows), workload, outcome,
+  words}` — `words` is a display-only courtesy (the CLI's line), never parsed.
+
+## harness-mcp
+
+`harness_status.speed`: `null` without a workloads file, else `{state: no-workload | file-error |
+not-yet-run | c-only | units, units_measured, units_measurable, measuring, c_alone [row],
+as_it_stands {units, units_omitted?, left_out [{id, reason}], left_out_omitted?, rows [row]}}` —
+`units_measured` the units with a row perf timed or ran (not only set-up rows), `units_measurable`
+those it would measure now; the held and left-out units listed up to 20 each, with how many more;
+rows only of workloads still in the workloads file (one each, so at most 16 a side) — bounded
+whatever the plan holds. Each unit's `speed` is its worst row; `harness_unit.speed` all of the
+unit's rows, worst first. A row: `workload`, `answer` (closed:
+`about-as-fast | slower | faster | probably-slower | probably-faster | close-call-slower |
+close-call-faster | no-clear-difference | cant-tell-estimate | cant-tell-short-run |
+cant-tell-too-few | cant-tell-slow-cores | baseline | too-short | behaves-differently |
+stopped-by-sigkill | run-failed-timeout | run-failed-exit | run-failed-signal` and the C's and the
+set-up's outcomes), `outcome`, `platform_metrics`, `short`, `runs`, `shift_percent {estimate,
+low, high}` (only when the answer tells), `current`, `out_of_date` (the closed tokens above, each
+once), `environment_checked: false`; the C alone's adds `cpu_seconds` and `memory_bytes`
+(medians).
+Ids and the workload are fenced as untrusted text; everything else is closed or a number.
+
+## Trust boundaries
+
+The results are **forgeable and non-canonical**: committed files any writer of the repository can
+edit, and numbers of one computer at one time (another computer, or the same one busy, measures
+differently). They gate nothing — no verdict, no promotion, no plan state — and are read strictly
+(hostile, committed). The program runs only under perf's profile through the harness-owned
+launcher (`perfrun`, outside the sandbox) and trampoline (`perfgo`, inside it): no fork (killed on
+trying), no signal out, no network, no reads under the home folder or the target beyond its
+binary, writes only its temp dir, and nothing started for it by the system — opening an app, a
+document or a web address (LaunchServices), Apple events and launchd jobs are denied, and so is
+reaching the services that do them; nothing it starts outlives its run. Other services of the
+same user stay reachable (the profile starts from "allow by default"). **The same rule ends
+every profile** — the tool profile (compilers, cargo), verify's run and scenario profiles — since
+2026-10-03: the perf review found those shared the gap. Kept outputs are the
+program's own bytes: shown only after their size and blake3 match the row, control characters
+escaped. The launcher cache is per user, outside the target, built only from harness sources
+with a compiler found through root-owned paths, and every sandbox profile denies writes to it.
+
+## Writer table additions
+
+| File | Writer |
+|---|---|
+| `migration/perf/workloads.toml` | a person; `perf init`; `perf save` |
+| `migration/perf/program.json`, `migration/perf/units/<id>.json` | `perf run` |
+| `migration/build/.perf/**` (fresh each run), `migration/build/.perf-out/**`, `migration/build/perf-logs/` (last 20) (gitignored) | `perf run` |
+| `units/<id>/<crate>/target/**`, `Cargo.lock` | `perf run` (builds, as `verify` does) |
+| `~/Library/Caches/ruharness/perf/perf-launcher-2-<hash>/` (outside the target) | `perf run` (only when stale) |

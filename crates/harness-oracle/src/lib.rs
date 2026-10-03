@@ -76,6 +76,7 @@ mod exec;
 mod featuremap;
 mod features;
 mod objsyms;
+mod perf;
 mod probebuild;
 mod probecopy;
 mod sandbox;
@@ -89,6 +90,11 @@ mod validate;
 pub use boundary::{BoundaryReport, ParamFigures};
 pub use exec::{cancelled, kill_live_process_groups};
 pub use featuremap::{map_features, remove_live_scratch_dirs, MapProgress, FEATURES_BUILD_DIR};
+pub use perf::measure::{
+    perf_computer_if_cached, perf_measurable, perf_run, PerfProgress, PerfRequest, PerfSummary,
+    RowSide,
+};
+pub use perf::tools::perf_compilers;
 #[doc(hidden)]
 pub use probebuild::{
     last_map_most_file_compiles, last_map_pass_compiles, with_map_bounds, MapBounds,
@@ -886,14 +892,13 @@ impl CAbiDifferential {
         // Every `replaces` entry must actually match a collected C file —
         // otherwise the mixed link silently degenerates to C-vs-C and the
         // check proves nothing.
-        for (rel, canon) in &prep.replaces {
-            if !c_files.contains(canon) {
-                return Err(Error::InvalidPlan(format!(
-                    "unit `{}`: replaces entry `{rel}` does not match any .c file in {}",
-                    unit.id,
-                    source_dir.display()
-                )));
-            }
+        if let Err(i) = perf::build::kept_c_files(&c_files, &replace_paths(prep)) {
+            return Err(Error::InvalidPlan(format!(
+                "unit `{}`: replaces entry `{}` does not match any .c file in {}",
+                unit.id,
+                prep.replaces[i].0,
+                source_dir.display()
+            )));
         }
         let c = build_whole_c(prep, confined.runner, &c_files)?;
         // Its bytes right after the build: without the sandbox a candidate
@@ -986,18 +991,7 @@ pub(crate) fn irregular_c_file(c_files: &[PathBuf]) -> Option<&PathBuf> {
 }
 
 fn whole_cc(prep: &Prepared, runner: &Runner, out: &Path, inputs: &[PathBuf]) -> Result<(), Error> {
-    let includes = prep.base.includes();
-    cc_compile(
-        runner,
-        &CcInvocation {
-            includes: &includes,
-            cflags: &[],
-            quiet: true,
-            out,
-            inputs,
-            libs: &prep.link_args,
-        },
-    )
+    perf::build::whole_cc_into(&prep.base, &prep.link_args, runner, out, inputs)
 }
 
 impl WholePrograms {
@@ -1023,6 +1017,11 @@ pub(crate) fn build_whole_c(
     Ok(out)
 }
 
+/// The unit's `replaces` entries' canonical paths, in plan order.
+pub(crate) fn replace_paths(prep: &Prepared) -> Vec<PathBuf> {
+    prep.replaces.iter().map(|(_, p)| p.clone()).collect()
+}
+
 /// Build `whole_mixed`: `c_files` minus the unit's `replaces`, plus
 /// `rust_lib`.
 pub(crate) fn build_whole_mixed(
@@ -1031,11 +1030,14 @@ pub(crate) fn build_whole_mixed(
     c_files: &[PathBuf],
     rust_lib: &Path,
 ) -> Result<PathBuf, Error> {
-    let replace_paths: Vec<&PathBuf> = prep.replaces.iter().map(|(_, p)| p).collect();
-    let mixed: Vec<PathBuf> = c_files
-        .iter()
-        .filter(|p| !replace_paths.contains(p))
-        .cloned()
+    let mixed: Vec<PathBuf> = perf::build::kept_c_files(c_files, &replace_paths(prep))
+        .map_err(|i| {
+            Error::InvalidPlan(format!(
+                "replaces entry `{}` does not match any .c file",
+                prep.replaces[i].0
+            ))
+        })?
+        .into_iter()
         .chain(std::iter::once(rust_lib.to_path_buf()))
         .collect();
     let out = prep.build.join("whole_mixed");
@@ -1589,7 +1591,7 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     std::fs::write(path, bytes).map_err(|e| Error::io(path, e))
 }
 
-fn path_str(p: &Path) -> Result<&str, Error> {
+pub(crate) fn path_str(p: &Path) -> Result<&str, Error> {
     p.to_str()
         .ok_or_else(|| Error::Invariant(format!("non-UTF-8 path: {}", p.display())))
 }

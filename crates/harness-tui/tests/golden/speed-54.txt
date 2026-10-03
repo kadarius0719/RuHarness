@@ -1,0 +1,40 @@
+┌ Files ───────────────┐┌ Speed (1 of 1) ──────────────────────────────────────┐
+│      ▸ ◇ lz77.c      ││Speed — your workloads, the C against the Rust in use │
+│        · lz77.h      ││measured on Apple M3 with 2 compilers — see each row ·│
+│      ▸ ◇ squeeze.c   ││as verify builds them · 15 runs each · compares what  │
+│        · squeeze.h   ││the program prints and how it ends                    │
+│      ▸ · symbols.h   ││                                                      │
+│      ▸ ◇ tree.c      ││The original C                                        │
+│        · tree.h      ││  big-text                  CPU 1.22 s · 12.4 MB      │
+│      ▸ ◇ util.c      ││  many-small                too short to time         │
+│        · util.h      ││  compress-a-big-text-file  CPU 12.4 s · 124 MB       │
+│      ▸ ◇ zlib_contai…││    last try: the C ends or prints differently from   │
+│        · zlib_contai…││    one run to the next                               │
+│        · zopfli.h    ││As it stands (1 of 2 units — 1 left out)              │
+│      ▸ ◇ zopfli_bin.c││  big-text                  slower 6.2 % (5.6–6.8 %)  │
+│      ▸ ◇ zopfli_lib.c││  many-small                too short to time         │
+│  ▾ Units (11)        ││u001-katajainen                                       │
+│    ▸ ✓? u001-katajai…││  big-text                  slower 6.2 % (5.6–6.8 %)  │
+│    ▸ ◇ u-cache       ││  compress-a-big-text-file  slower 6.2 % · parallel   │
+│    ▸ ◇ u-hash        ││  many-small                too short to time         │
+│    ▸ ◇ u-lz77        ││                                                      │
+│    ▸ ◇ u-tree        ││Move to a row (Tab, then ↓) to read its full words.   │
+│    ▸ ◇ u-blocksplitt…││                                                      │
+│    ▸ ◇ u-gzip_contai…││                                                      │
+│    ▸ ◇ u-util        ││                                                      │
+│    ▸ ◇ u-zlib_contai…││                                                      │
+│    ▸ ◇ u-zopfli_lib  ││                                                      │
+│    ▸ ◇ u-zopfli_bin  ││                                                      │
+│  ▾ Features (7)      ││                                                      │
+│      ◉ Compress to g…││                                                      │
+│      ◉ Compress to z…││                                                      │
+│      ◉ Compress to r…││                                                      │
+│      ◉ Say what it d…││                                                      │
+│      ◉ Compress quic…││                                                      │
+│      ◌ Show the help ││                                                      │
+│      ◌ Report a miss…││                                                      │
+│    Speed (1 of 1)    ││                                                      │
+└──────────────────────┘└──────────────────────────────────────────────────────┘
+ Ready.
+
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit

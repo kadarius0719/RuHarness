@@ -86,6 +86,8 @@ pub struct Narrator {
     error: Option<(String, String)>,
     last_message: Option<String>,
     locked_by: Option<String>,
+    /// The perf rows this run wrote.
+    perf_rows: usize,
 }
 
 fn arg_value(argv: &[OsString], flag: &str) -> Option<String> {
@@ -128,6 +130,7 @@ impl Narrator {
             error: None,
             last_message: None,
             locked_by: None,
+            perf_rows: 0,
         }
     }
 
@@ -203,6 +206,21 @@ impl Narrator {
             }
             Event::Attempt { id, outcome, .. } => {
                 self.step = format!("Recorded attempt {id}: {outcome}");
+            }
+            Event::PerfRow {
+                side,
+                unit,
+                workload,
+                words,
+                ..
+            } => {
+                self.perf_rows += 1;
+                let who = match (side.as_str(), unit) {
+                    ("unit", Some(u)) => u.clone(),
+                    ("program", _) => "the program as it stands".into(),
+                    _ => "the C".into(),
+                };
+                self.step = format!("{who} on {workload} — {words}");
             }
             Event::Promote {
                 unit,
@@ -288,6 +306,12 @@ impl Narrator {
         let outcome = match self.ending(code, signal) {
             Ending::Done => match (&self.verdict, self.subcommand.as_str()) {
                 (Some(v), _) => v.clone(),
+                // docs/PERF-DESIGN.md §3.11: "Measured 4 rows — see Speed".
+                (None, "perf") if self.perf_rows > 0 => format!(
+                    "Measured {} row{} — see Speed",
+                    self.perf_rows,
+                    if self.perf_rows == 1 { "" } else { "s" }
+                ),
                 _ => "Done".into(),
             },
             Ending::Red => match &self.verdict {
@@ -536,5 +560,32 @@ mod tests {
         assert_eq!(check_words("mystery"), "mystery");
         assert_eq!(result_words("crash-timeout"), "it crashed or timed out");
         assert_eq!(result_words("odd"), "odd");
+    }
+
+    #[test]
+    fn a_perf_run_counts_its_rows() {
+        let mut n = Narrator::new(
+            "Measure speed",
+            &argv(&["harness", "--json", "perf", "run", "--target=/t"]),
+        );
+        for line in [
+            r#"{"k":"perf-row","side":"c","workload":"big","outcome":"baseline","words":"CPU about 1.2 s"}"#,
+            r#"{"k":"perf-row","side":"unit","unit":"u001","workload":"big","outcome":"measured","words":"about as fast"}"#,
+        ] {
+            n.on_event(&parse_line(line));
+        }
+        assert_eq!(n.step(), "u001 on big — about as fast");
+        assert!(
+            n.last(Some(0), None, Duration::from_secs(3))
+                .starts_with("Measure speed — Measured 2 rows — see Speed"),
+            "{}",
+            n.last(Some(0), None, Duration::from_secs(3))
+        );
+        let mut none = Narrator::new(
+            "Measure speed",
+            &argv(&["harness", "--json", "perf", "run"]),
+        );
+        none.on_event(&parse_line(r#"{"k":"perf-row","side":"program"}"#));
+        assert!(none.last(Some(0), None, Duration::ZERO).contains("— Done"));
     }
 }

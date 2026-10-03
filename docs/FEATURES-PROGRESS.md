@@ -32,6 +32,122 @@ fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
 ## Open (in order) — resume here (session 17c366c0…, 2026-09-30 → 10-01; continues after context compactions)
 
+**NOW (2026-10-01, after 56cd090 on main):** the probe review is closed and pushed. Next: BUILD the
+C-vs-Rust performance baselines from docs/PERF-DESIGN.md (revision 5 + §10's 30 build notes) in
+§5's order (b, c, a, d, e, f, g), with the full process; then the briefing's M5. The probe items
+below are history.
+- Step (b) DONE (0540415, 8e67a30, and the words commit after): `crates/harness-core/src/perf/`
+  — `stats.rs` (exact Mann–Whitney null, Hodges–Lehmann), `workloads.rs` (strict reader with
+  line/column, starter, digest, the confined input read and its words), `results.rs` (rows,
+  strict reader, atomic writer, the replace rule), `words.rs` (all of §3.8 and notes 10–21),
+  `mod.rs` (PERF_LAUNCHER, PERF_RUN_LOCK, PERF_RECIPE, interrupted-Accept words);
+  `status::promotion_marker` public; the cockpit's `Cause::PromotionInterrupted {attempt,
+  unit}` words = perf's.
+- Step (c) DONE: `crates/harness-oracle/src/perf/{build,archive}.rs` (whole_cc_into shared with
+  verify, compile_objects, link_side, Slot, Hashed, kept_c_files (verify uses it), perf_scratch /
+  perf_out / perf_logs, the ar reader + ArchiveFacts). `#![allow(dead_code)]` in perf/mod.rs
+  until step (d) wires it — REMOVE then (also the two `#[allow(dead_code)]` on sandbox.rs's
+  PerfSpec / render_perf_profile).
+- Step (a) DONE (c418809): `perf/{perfrun.c,perfgo.c,launcher.rs}` — find_compiler (root-owned
+  paths), launcher()/launcher_in() (cache in ~/Library/Caches/ruharness/perf, 0700, flock with
+  identity re-check, hashes, stale removal), parse_record (strict), computer_facts,
+  run_measured (control socket, G/B, SIGTERM→SIGKILL, program group killed first via exec's
+  ordered LIVE registry); sandbox: HostDirs.perf_cache, every profile ends with a deny-write on
+  it, render_perf_profile. DECIDED here (to record in DECISIONS at the perf close): Linux is
+  refused by name ("perf runs on macOS only for now — the Linux launcher is not built yet"):
+  no Linux machine to compile or test on, CI's Linux job red since 2026-09-17.
+- Step (d) DONE: `perf/measure.rs` — `harness_oracle::perf_run(target, plan, facts, workloads,
+  perf_dir, &PerfRequest, &mut dyn PerfProgress) -> PerfSummary` (the CLI holds the writer lock,
+  loads plan/facts/workloads, resolves perf_dir). Not yet exercised with real verified units —
+  that is step (e)'s end-to-end test (a mini target with two accepted units, zopfli's u001).
+  `harness_core::perf::manifest_profile` added (note 25).
+- Step (e) DONE: `crates/harness-cli/src/perf.rs` + `tests/perf.rs`; `harness_core::perf::
+  currency::out_of_date`; oracle `perf_measurable`, `perf_computer_if_cached`. Real result on
+  zopfli (800 KB text, 5 runs): the C 2.20 s / 35.1 MB / 3.30e10 instructions; u001-katajainen
+  "about as fast as the C (within 2 %)", 1.9 % more instructions. A two-verified-unit end-to-end
+  target does not exist yet (zopfli has one): the as-it-stands path is tested at the oracle level.
+- Step (f1) DONE: `harness-tui/src/perfread.rs` (Snapshot.perf: workloads state, results files,
+  orphans, inputs hashed off a process-wide cache keyed by (dev, ino, size, mtime, identity),
+  never while a `perf run` holds the lock, 256 MiB budget; crates' digests; program_now) and
+  `speed.rs` (SpeedModel: group label ≤ 19 cols, rows worded by harness-core with currency,
+  units worst first, header, unit_header, summary_line); tree `Selection::Speed` (a leaf after
+  Features); the Speed View (golden `tests/golden/speed-54.txt`; each row a link, the focused
+  row's full sentence below); the unit header's two Speed lines; the summary's Speed line.
+- Step (f2) DONE: `harness_core::perf::estimate` (Job/Estimate per §6, c_clock, crate_cold per
+  note 27; the CLI's 31-run figure uses it); `app/features_edit.rs` generalised (DraftKind
+  Features | Workloads, Draft, App.workloads_draft + App.editing, start_edit / ask_discard_draft /
+  discard_draft, Act::SaveWorkloads → `perf save`), quit names kept workloads drafts;
+  `app/speed_acts.rs` (speed_gate, measure_argv: Act::Measure [unit], MeasureProgram,
+  MeasureMore `--workload=… --runs=31`; measure_words); menu items on Speed and on a verified
+  unit; events `PerfRow` (activity line; narrator ends "Measured N rows — see Speed"; MCP
+  ignores it).
+- Step (f3) DONE: speed.rs `Advice` (difference facts with their age, "Next: Compare the outputs
+  …", the slower row's "perf times the Rust in use…"), `change_words` by provenance (Modify +
+  Replace and back / Hand edit / commit-edit-verify; "Connect a model to Modify" without a
+  provider), `program_differences` (heading + summary; "no unit's Rust differs alone" or the
+  per-unit commands); `compare_outputs` (kept files checked by size and blake3, unified diff of
+  text or hex rows, controls escaped) behind "Compare the outputs (w)"; Help's Speed section
+  and word list; `harness_core::perf::{PERF_OUT_DIR, KEPT_UNITS, KEPT_PROGRAM,
+  kept_outputs_dir}` shared with the oracle; `words::difference_words` public;
+  `model::short_id` (app re-exports it).
+- Step (f4) DONE: harness-mcp `reads::speed_row` / `speed_head` / `unit_speed` — `harness_status`
+  gains `speed` (state, units measured/measurable, measuring, the C alone's rows with
+  cpu_seconds and memory_bytes, the program as it stands's units, left-out, rows; null without a
+  workloads file) and each unit's worst row; `harness_unit` gains `speed` (all rows). Closed
+  sets: `words::ANSWERS` (tested over every outcome), `currency::REASONS` (`currency::reasons`
+  gives each reason's token; `out_of_date` its words), results' OUTCOMES / PLATFORM_METRICS /
+  LEFT_OUT_REASONS; `environment_checked: false`. (The design's `cant-tell-busy` is not an
+  answer the words give: busy is a detail.)
+- Step (g) DONE: SCHEMAS "C-vs-Rust speed" (workloads.toml, results files and the replace rule,
+  currency tokens, CLI, perf-row, harness-mcp fields, trust boundaries — forgeable and
+  non-canonical — and writer rows); TUTORIAL "Speed" part + two words; TESTING-GUIDE Part 11
+  (liblzg: big input from the sources, two workloads, save with --expect none, measure, show and
+  out of date, the cockpit, commit). Part 11 was NOT run on liblzg here (liblzg is not on this
+  machine; downloading it needs the person's OK): its fixed lines come from the code and a real
+  run on a zopfli copy (scratchpad zperf/: refusals, init, measure, show, out of date all as
+  written); numbers are `<n.nn>` placeholders.
+- Perf code review DONE: `wf_f4b82b8e-a61` — 84 findings, 82 confirmed by both verifiers (9 high,
+  42 medium, 31 low), 2 split (build note 30's Modify words; unreachable today), 0 refuted. Saved:
+  `SP/perfrv/result.json`; every finding in full, numbered by severity: `SP/perfrv/findings.md`
+  ("## N [severity] lens — title").
+- Fix pass 1 DONE: workflow `wf_4260dd05-3f0` (six agents, own worktrees from d8d6d11), merged
+  here as six merge commits (core-files, core-words, launcher, measure, cli, cockpit-mcp; one
+  SCHEMAS conflict merged by hand). Every one of the 82 confirmed findings was handled (per-agent
+  results: `SP/fix1/result.json`). PERF_LAUNCHER is now perf-launcher-2 (perfrun no longer spins
+  a core), PERF_RECIPE perf-recipe-2 (a run is short only under BOTH legs of the floor): every
+  stored row reads out of date until measured again. The perf sandbox also refuses starting
+  programs through the system (LaunchServices). New: `harness_oracle::perf_compilers` (perf
+  show's compilers as sandboxed tool runs), `harness-tui/tests/speed_change.rs` (build note 22).
+  Left open, small (do them in fix pass 2, after the reset):
+  1. DONE 2026-10-03: verify's tool, run and scenario profiles now end with
+     NO_STARTS_THROUGH_THE_SYSTEM (goldens updated; live test
+     a_run_cannot_open_or_start_anything_through_the_system; SCHEMAS + PERF-DESIGN §3.4 say so);
+  2. `perf show` with no facts says "the C changed" on every row (the cockpit side is fixed);
+  3. the results reader should cap the lengths of `replaces`, `units`, `left_out` lists;
+  4. `perf show` and the writer's Store::put still follow a linked migration/perf/units folder
+     (the cockpit refuses it);
+  5. the dialogs' estimate cannot add the launcher build: the cockpit needs a cheap public
+     "is the launcher cache current" check in harness-oracle;
+  6. optional: `perf run --as-it-stands-only` could refuse before building when fewer than two
+     units are measurable;
+  7. add `assert_eq!(crash.len(), 1)` (and for "time") to harness-cli tests/perf.rs
+     two_units_end_to_end now that the C-fails-in-step-1 rule is merged.
+  2026-10-03 (Fable): fix pass 2 item 1 (verify's sandbox profiles) DONE; the scoped fix check
+  of the 9 high findings DONE — all clear (`SP/perfrv/check1.json`); `bench check --replay` run;
+  `bench check --replay`: 198 reproduce, 2 expected divergences, 0 problems, no regression;
+  DECISIONS entry 2026-10-03 written; merged to main.
+  THE PLAN FOR NEXT WEEK IS docs/NEXT-WEEK-PLAN.md (fix check, fix pass 2, mutation checks, the
+  DECISIONS draft, merge, then the project map). In short — AFTER THE WEEKLY RESET (2026-10-07): the
+  fix check (re-verify all 82 against the merged code + regressions — or, cheaper, the 9 high
+  ones), fix pass 2 (the list above), mutation checks, DECISIONS (incl. the Linux refusal), merge
+  to main, push.
+- ROADMAP (recorded 2026-10-01, not designed): real project layouts (several folders, several
+  programs, the project's own build files; a deterministic project map + link closures, a model
+  bins the ambiguous part, the harness checks, the person accepts) and a fuller C–Rust boundary
+  (non-leaf units, shared code across tools, one Rust library per program). See
+  docs/PROJECT-MAP-ROADMAP.md. Design it after the speed work is merged; weigh against M5. Then (g) SCHEMAS, tutorial, the
+  testing guide's Part 11; then the code review, fix passes, mutation checks, DECISIONS, push.
+
 **Where things are.** Branch `claude/rust-migration-harness-f7665f` (worktree
 `.claude/worktrees/rust-migration-harness-7d1c42`), NOT yet merged to main or pushed. This
 session's commits on top of 665495b: 3ed89be 1a0efb0 31610cf 6a03a6d 9bc83d3 7615200 667654b

@@ -37,6 +37,8 @@ pub enum Selection {
     Features,
     /// A feature, by id.
     Feature(String),
+    /// The C-vs-Rust speed (docs/PERF-DESIGN.md §3.11).
+    Speed,
 }
 
 impl Selection {
@@ -57,6 +59,7 @@ impl Selection {
             Selection::Crate(u) | Selection::Attempt(u, _) => Some(Selection::Unit(u.clone())),
             Selection::Features => Some(Selection::Project),
             Selection::Feature(_) => Some(Selection::Features),
+            Selection::Speed => Some(Selection::Project),
         }
     }
 
@@ -266,6 +269,8 @@ pub fn rows(
             push_node(&mut rows, 2, Selection::Feature(f.id.clone()), false, false);
         }
     }
+    // Speed, always beside Features: the label says its state.
+    push_node(&mut rows, 1, Selection::Speed, false, false);
     rows
 }
 
@@ -297,6 +302,7 @@ pub fn exists(
         Selection::Attempt(u, a) => snapshot.unit(u).and_then(|u| u.attempt(a)).is_some(),
         Selection::Features => true,
         Selection::Feature(id) => features.feature(id).is_some(),
+        Selection::Speed => true,
     }
 }
 

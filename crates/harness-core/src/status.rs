@@ -223,8 +223,10 @@ pub fn live_holder(ledger: &Ledger) -> Result<Option<Holder>, Error> {
 }
 
 /// The attempt id of the first `.promote-<id>/` marker in the unit dir, or
-/// `legacy` for a bare `.<crate>.prev` (the pre-marker protocol).
-fn promotion_marker(ledger: &Ledger, unit: &Unit) -> Result<Option<String>, Error> {
+/// `legacy` for a bare `.<crate>.prev` (the pre-marker protocol). Public for
+/// perf, which refuses to measure a unit whose Accept was interrupted
+/// (docs/PERF-DESIGN.md §3.2).
+pub fn promotion_marker(ledger: &Ledger, unit: &Unit) -> Result<Option<String>, Error> {
     let dir = ledger.unit_dir(&unit.id);
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,

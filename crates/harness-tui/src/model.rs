@@ -29,6 +29,21 @@ pub struct FactsState {
     pub stale_paths: Vec<String>,
 }
 
+/// `a-13c941dfff95` → `a-13c9`; samples keep their `.rN`.
+pub fn short_id(id: &str) -> String {
+    let (base, sample) = match id.split_once(".r") {
+        Some((b, n)) => (b, format!(".r{n}")),
+        None => (id, String::new()),
+    };
+    let cut: String = base.chars().take(6).collect();
+    format!("{cut}{sample}")
+}
+
+/// Why Migrate and Modify are greyed when no provider is allowed — the
+/// cockpit's own words, which the Speed advice repeats word for word
+/// (docs/PERF-DESIGN.md §10 build note 30).
+pub const NO_PROVIDER: &str = "no provider is allowed (start with --provider <name>)";
+
 /// Which recorded attempt produced the unit crate (R-5), by id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProvenanceView {
@@ -169,6 +184,8 @@ pub struct Snapshot {
     pub source_dir: String,
     /// The file name the program runs under in a scenario.
     pub program_name: String,
+    /// perf's files and today's inputs (docs/PERF-DESIGN.md §3.11).
+    pub perf: crate::perfread::PerfRead,
 }
 
 impl Snapshot {
@@ -186,7 +203,26 @@ impl Snapshot {
             features_now: None,
             source_dir: ctx.config.target.source_dir.clone(),
             program_name: harness_core::features::program_name(&ctx.config),
+            perf: crate::perfread::PerfRead::default(),
         };
+        // perf's files: the live lock holder read here (as `unit_report`
+        // does) — while a perf run holds it no input is hashed.
+        let holder = status::live_holder(&ledger).ok().flatten();
+        let holder_command = holder.as_ref().map(|h| h.command.clone());
+        let perf_units: Vec<(String, Option<String>)> = Plan::load(&ledger.plan_path())
+            .map(|p| {
+                p.units
+                    .iter()
+                    .map(|u| {
+                        (
+                            u.id.clone(),
+                            u.oracle_param_str("rust_crate").map(str::to_string),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        snapshot.perf = crate::perfread::read(&ctx.root, &perf_units, holder_command.as_deref());
         let facts = match Facts::load(&ledger.facts_path()) {
             Ok(f) => f,
             Err(e) if e.is_not_found() => {
@@ -210,9 +246,19 @@ impl Snapshot {
             stale: stale_paths.len(),
             stale_paths,
         });
+        let has_workloads = !matches!(
+            snapshot.perf.workloads,
+            Ok(harness_core::perf::workloads::WorkloadsState::NoFile)
+        );
         let plan = match Plan::load(&ledger.plan_path()) {
             Ok(p) => p,
             Err(e) if e.is_not_found() => {
+                // The C alone is measured from day one, before a plan
+                // (docs/PERF-DESIGN.md §3.6): its rows are judged too.
+                if has_workloads {
+                    snapshot.perf.program_now =
+                        Some(harness_core::features::program_digest_now(&ctx, &facts));
+                }
                 snapshot.note = Some(NO_PLAN.into());
                 snapshot.facts = Some(facts);
                 return Ok(snapshot);
@@ -224,6 +270,14 @@ impl Snapshot {
             snapshot
                 .units
                 .push(unit_view(&ctx, &ledger, &facts, unit, now.as_ref())?);
+        }
+        // The program's digest for perf's currency: the features' when
+        // computed, else hashed here — only with a workloads file.
+        if has_workloads {
+            snapshot.perf.program_now = Some(match &now {
+                Some(n) => n.program.clone(),
+                None => harness_core::features::program_digest_now(&ctx, &facts),
+            });
         }
         snapshot.features_now = now;
         snapshot.facts = Some(facts);

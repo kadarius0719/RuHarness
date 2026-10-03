@@ -48,6 +48,29 @@ pub(crate) struct HostDirs {
     pub rustup_home: Option<PathBuf>,
     /// `TMPDIR`, when set and existing.
     pub tmpdir: Option<PathBuf>,
+    /// perf's launcher cache (docs/PERF-DESIGN.md §3.2): no profile may
+    /// write under it (build note 5).
+    pub perf_cache: PathBuf,
+}
+
+/// perf's launcher cache root under `home`: `~/Library/Caches/ruharness/
+/// perf`, with `Library/Caches` canonical when it exists.
+pub(crate) fn perf_cache_root(home: &Path) -> PathBuf {
+    let caches = home.join("Library").join("Caches");
+    caches
+        .canonicalize()
+        .unwrap_or(caches)
+        .join("ruharness")
+        .join("perf")
+}
+
+/// The line every rendered profile ends its write rules with: nothing a
+/// sandboxed child runs may write perf's launcher cache (build note 5).
+fn perf_cache_tail(host: &HostDirs) -> Result<String, Error> {
+    Ok(format!(
+        "(deny file-write* (subpath {}))\n",
+        sbpl_string(&host.perf_cache)?
+    ))
 }
 
 impl HostDirs {
@@ -72,6 +95,7 @@ impl HostDirs {
             p.canonicalize().ok()
         };
         Ok(HostDirs {
+            perf_cache: perf_cache_root(&home),
             cargo_home: or_default("CARGO_HOME", ".cargo"),
             rustup_home: or_default("RUSTUP_HOME", ".rustup"),
             tmpdir: std::env::var_os("TMPDIR")
@@ -211,6 +235,8 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
     out.push_str(
         " (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n",
     );
+    out.push_str(&perf_cache_tail(spec.host)?);
+    out.push_str(NO_STARTS_THROUGH_THE_SYSTEM);
     Ok(out)
 }
 
@@ -259,8 +285,77 @@ pub(crate) fn render_run_profile(spec: &RunSpec<'_>) -> Result<String, Error> {
         "(deny file-write* (subpath \"/\"))\n(allow file-write* (subpath {tmp}) \
          (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
     ));
+    out.push_str(&perf_cache_tail(spec.host)?);
+    out.push_str(NO_STARTS_THROUGH_THE_SYSTEM);
     Ok(out)
 }
+
+/// What one perf run may touch (docs/PERF-DESIGN.md §3.4).
+#[derive(Debug, Clone)]
+pub(crate) struct PerfSpec<'a> {
+    /// Host directories (the home directory is denied).
+    pub host: &'a HostDirs,
+    /// Canonical target root (denied, wherever it lives).
+    pub target_root: &'a Path,
+    /// Canonical path of the side's program.
+    pub bin: &'a Path,
+    /// Canonical path of perfgo, in the launcher cache.
+    pub perfgo: &'a Path,
+    /// The run's fresh, canonical temp dir: the only writable location.
+    pub tmpdir: &'a Path,
+}
+
+/// The perf profile (§3.4): the scenario profile with `exec` allowed for
+/// exactly perfgo and the side's program, reads of exactly those two and
+/// the run's temp dir under the home folder and the target, no signal but
+/// to itself, a fork killed on trying, and no program started for it by the
+/// system ([`NO_STARTS_THROUGH_THE_SYSTEM`]).
+pub(crate) fn render_perf_profile(spec: &PerfSpec<'_>) -> Result<String, Error> {
+    let bin = sbpl_string(spec.bin)?;
+    let perfgo = sbpl_string(spec.perfgo)?;
+    let tmp = sbpl_string(spec.tmpdir)?;
+    let mut out = String::new();
+    out.push_str("(version 1)\n(allow default)\n(deny network*)\n");
+    out.push_str("(deny process-exec*)\n");
+    out.push_str(&format!(
+        "(allow process-exec (literal {perfgo}) (literal {bin}))\n"
+    ));
+    out.push_str(&format!(
+        "(deny file-read* (subpath {}) (subpath {}))\n",
+        sbpl_string(&spec.host.home)?,
+        sbpl_string(spec.target_root)?
+    ));
+    out.push_str(&format!(
+        "(allow file-read* (literal {bin}) (literal {perfgo}) (subpath {tmp}))\n"
+    ));
+    out.push_str(&format!(
+        "(deny file-write* (subpath \"/\"))\n(allow file-write* (subpath {tmp}) \
+         (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
+    ));
+    out.push_str(&perf_cache_tail(spec.host)?);
+    out.push_str(
+        "(deny signal)\n(allow signal (target self))\n(deny process-fork (with send-signal SIGKILL))\n",
+    );
+    out.push_str(NO_STARTS_THROUGH_THE_SYSTEM);
+    Ok(out)
+}
+
+/// What stops a sandboxed program from having the system start a program
+/// for it — started by launchd, outside the sandbox and the program's group,
+/// so it would outlive the run with the person's own rights: opening an app,
+/// a document or a web address (LaunchServices), sending Apple events, and
+/// submitting a launchd job are denied, and so is reaching the services
+/// that do them (LaunchServices and Core Services, the Apple event server,
+/// login items and helper registration). A plain C or Rust program uses
+/// none of them; other same-user services stay reachable (named in
+/// SCHEMAS' perf trust boundaries). The perf profile ends with it.
+pub(crate) const NO_STARTS_THROUGH_THE_SYSTEM: &str = "\
+(deny lsopen appleevent-send job-creation)
+(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") \
+(global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") \
+(global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") \
+(global-name \"com.apple.xpc.loginitemregisterd\"))
+";
 
 /// The scenario run's profile (docs/FEATURES-DESIGN.md §4.1 step 4): the run
 /// profile, plus no signal to any process but itself (`(target others)`
@@ -328,7 +423,44 @@ mod tests {
             cargo_home: Some(PathBuf::from("/Users/u/.cargo")),
             rustup_home: Some(PathBuf::from("/Users/u/.rustup")),
             tmpdir: Some(PathBuf::from("/private/var/folders/xy/T")),
+            perf_cache: PathBuf::from("/Users/u/Library/Caches/ruharness/perf"),
         }
+    }
+
+    /// The perf profile (docs/PERF-DESIGN.md §3.4): exec of exactly perfgo
+    /// and the side's program, reads of exactly those and the temp dir,
+    /// writes only the temp dir and never the launcher cache, no signal out,
+    /// a fork killed, nothing opened or started through the system (what
+    /// macOS does with these rules is tested live in `perf::launcher`).
+    #[test]
+    fn the_perf_profile() {
+        let host = host();
+        let text = render_perf_profile(&PerfSpec {
+            host: &host,
+            target_root: Path::new("/Users/u/t"),
+            bin: Path::new("/Users/u/t/migration/build/.perf/bin/p001/tool"),
+            perfgo: Path::new("/Users/u/Library/Caches/ruharness/perf/perf-launcher-1-ab/perfgo"),
+            tmpdir: Path::new("/private/var/folders/xy/T/ruharness-perf-1"),
+        })
+        .expect("renders");
+        let expected = "\
+(version 1)
+(allow default)
+(deny network*)
+(deny process-exec*)
+(allow process-exec (literal \"/Users/u/Library/Caches/ruharness/perf/perf-launcher-1-ab/perfgo\") (literal \"/Users/u/t/migration/build/.perf/bin/p001/tool\"))
+(deny file-read* (subpath \"/Users/u\") (subpath \"/Users/u/t\"))
+(allow file-read* (literal \"/Users/u/t/migration/build/.perf/bin/p001/tool\") (literal \"/Users/u/Library/Caches/ruharness/perf/perf-launcher-1-ab/perfgo\") (subpath \"/private/var/folders/xy/T/ruharness-perf-1\"))
+(deny file-write* (subpath \"/\"))
+(allow file-write* (subpath \"/private/var/folders/xy/T/ruharness-perf-1\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
+(deny signal)
+(allow signal (target self))
+(deny process-fork (with send-signal SIGKILL))
+(deny lsopen appleevent-send job-creation)
+(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") (global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") (global-name \"com.apple.xpc.loginitemregisterd\"))
+";
+        assert_eq!(text, expected);
     }
 
     #[test]
@@ -368,6 +500,9 @@ mod tests {
 (deny file-read* (literal \"/Users/u/.cargo/credentials.toml\") (literal \"/Users/u/.cargo/credentials\"))
 (deny file-write* (subpath \"/\"))
 (allow file-write* (subpath \"/Users/u/t/migration/build/u1\") (subpath \"/Users/u/t/migration/units/u1/c/target\") (literal \"/Users/u/t/migration/units/u1/c/Cargo.lock\") (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (subpath \"/private/var/folders/xy/T\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
+(deny lsopen appleevent-send job-creation)
+(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") (global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") (global-name \"com.apple.xpc.loginitemregisterd\"))
 ";
         assert_eq!(text, expected);
     }
@@ -532,6 +667,9 @@ mod tests {
 (allow file-read* (literal \"/Users/u/t/migration/build/u1/drv_rs\") (literal \"/Users/u/t/migration/build/u1/sample_text.txt\") (subpath \"/private/var/folders/xy/T/ruharness-run-1-0\"))
 (deny file-write* (subpath \"/\"))
 (allow file-write* (subpath \"/private/var/folders/xy/T/ruharness-run-1-0\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
+(deny lsopen appleevent-send job-creation)
+(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") (global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") (global-name \"com.apple.xpc.loginitemregisterd\"))
 ";
         assert_eq!(text, expected);
 
@@ -560,6 +698,61 @@ mod tests {
             tmpdir: Path::new("/tmp/r"),
         })
         .is_err());
+    }
+
+    /// Live (macOS, sandbox-exec): a program under verify's run profile can
+    /// have nothing started for it by the system either — the gap the perf
+    /// review found in these profiles, closed by the same rule.
+    #[test]
+    fn a_run_cannot_open_or_start_anything_through_the_system() {
+        if !cfg!(target_os = "macos") || !Path::new(SANDBOX_EXEC).exists() {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("run-no-open");
+        let dir = tmp.path().canonicalize().expect("tmp");
+        let src = dir.join("opener.c");
+        std::fs::write(
+            &src,
+            "#include <servers/bootstrap.h>\n#include <stdio.h>\n#include <unistd.h>\n\
+             int sandbox_check(pid_t pid, const char *operation, int type, ...);\n\
+             int main(void) {\n\
+             const char *ops[] = { \"lsopen\", \"appleevent-send\", \"job-creation\" };\n\
+             for (int i = 0; i < 3; i++) printf(\"%s %d\\n\", ops[i], sandbox_check(getpid(), ops[i], 0));\n\
+             mach_port_t p = MACH_PORT_NULL;\n\
+             printf(\"lsd %d\\n\", bootstrap_look_up(bootstrap_port, \"com.apple.lsd.open\", &p) == BOOTSTRAP_NOT_PRIVILEGED);\n\
+             return 0; }\n",
+        )
+        .expect("source");
+        let bin = dir.join("opener");
+        let cc = std::process::Command::new("/usr/bin/cc")
+            .args(["-w", "-o"])
+            .arg(&bin)
+            .arg(&src)
+            .status()
+            .expect("cc");
+        assert!(cc.success());
+        let host = HostDirs::from_env().expect("host");
+        let run_tmp = dir.join("run");
+        std::fs::create_dir(&run_tmp).expect("run dir");
+        let profile = render_run_profile(&RunSpec {
+            host: &host,
+            target_root: &dir,
+            bin: &bin,
+            read_files: &[],
+            tmpdir: &run_tmp,
+        })
+        .expect("renders");
+        let argv = wrap(&profile, &[bin.to_string_lossy().into_owned()]);
+        let out = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .output()
+            .expect("sandbox-exec");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "lsopen 1\nappleevent-send 1\njob-creation 1\nlsd 1\n",
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[test]

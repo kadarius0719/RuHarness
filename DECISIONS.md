@@ -2672,3 +2672,59 @@ rest and become the build's tests. It is built next in §5's order with the full
 
 **Revisit when:** a real program shows the two-heads class (then: a preprocessing frontend), or
 the premise re-run disagrees with §2's table.
+
+## 2026-10-03 — C-vs-Rust performance baselines: built, reviewed, fixed; merged to main
+
+**Built** from docs/PERF-DESIGN.md revision 5 in seven steps, each committed green (b, c, a, d,
+e, f1–f4, g): the statistics and words (harness-core `perf`), the launcher and trampoline
+(perfrun, perfgo; a private per-user cache; the perf sandbox profile), the measurement
+(harness-oracle `perf`), `harness perf init|save|run|show`, the cockpit's Speed group, View and
+acts, the behaves-differently fact and Compare the outputs, harness-mcp's Speed fact, and the docs
+(SCHEMAS, the tutorial's Speed part, the testing guide's Part 11). Real result on zopfli:
+u001-katajainen about as fast as the C (within 2 %).
+
+**Reviewed** at d8d6d11 by six reviewers (statistics and words; files and currency; launcher
+and sandbox; the measurement; CLI, cockpit and MCP; tests against the design): 84 findings, 82
+confirmed by two verifiers each, 2 split (one wording no person can reach), 0 refuted. **Fix
+pass 1** handled all 82, in six worktrees, one area each, every fix with a test; merged with one
+docs conflict. **The scoped fix check** re-verified the 9 high findings on the merged code, two
+skeptical verifiers each: all hold, each guarded by a test that fails when the fix is undone, no
+regression. **Fix pass 2** so far: verify's own sandbox profiles closed (below). Then: every test
+of the five perf crates green (about 950), clippy clean, `bench check --replay` 198 reproduce, 2
+expected divergences, 0 problems, no regression.
+
+**What was wrong, in plain words, and is fixed:** the launcher kept a core busy while the
+program ran (it skewed the load it then reported as "busy"); a run under only one leg of the
+floor was called short, so common workloads could never read "about as fast"; a missing input
+after a too-short row stopped the whole run with an error; `perf show` ran the project's
+compilers outside the sandbox; the hand-edit advice told the person to measure again when perf
+would have measured the unchanged crate; the perf sandbox let a program have macOS start another
+program for it (LaunchServices, Apple events, launchd jobs), which would outlive the run;
+several rounding and wording edge cases (an interval printed backwards, a close call inside
+±2 %, a program kept off the fast cores told "too few runs"); and many tests the design lists did
+not exist.
+
+**Decided: the same system-start rule now ends verify's own profiles** (tool, run, scenario) —
+the perf review found they shared the gap; a pre-existing hole in the part of the harness
+already in use, closed first in fix pass 2 (goldens updated, a live test under the run profile).
+
+**Decided: perf runs on macOS only for now.** `perf run` refuses by name elsewhere ("perf runs
+on macOS only for now — the Linux launcher is not built yet"). Reason: no Linux machine to build
+or test the launcher's Linux half on (perf_event_open, epoll, PR_SET_PDEATHSIG), and CI's Linux
+job has been red since 2026-09-17. The design's Linux mechanisms (§3.3) are written and marked
+unchecked; building them is its own item when a Linux machine is available.
+
+**Decided: stored rows read out of date after this close** — `PERF_RECIPE` is `perf-recipe-2`
+and `PERF_LAUNCHER` `perf-launcher-2` (design note 31) — because rows measured by the spinning
+launcher, or judged short by either leg, must not read current. Measuring again brings a row
+back.
+
+**Deferred to the week of 2026-10-07** (docs/NEXT-WEEK-PLAN.md): the full re-check of the other
+73 findings, fix pass 2's remaining small items, the mutation checks, and the liblzg run of the
+testing guide's Part 11 (not run here: liblzg is not on this machine). The person chose to stop
+at 75 % of the weekly limit and merge once the security fix and the high findings were checked.
+
+**Recorded, not decided:** the project map — real project layouts, several programs, a
+deterministic walk with link closures, a model binning only the ambiguous part, the harness
+checking its answer, and an interactive picture of the map (docs/PROJECT-MAP-ROADMAP.md,
+-INVESTIGATION.md, -DESIGN.md draft 0). To design next, weighed against M5.

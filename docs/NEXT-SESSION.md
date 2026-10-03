@@ -1,3 +1,19 @@
+# Next session — kickoff (for the week of 2026-10-07)
+
+Paste the Agent Briefing first, then:
+
+Resume RuHarness on branch `claude/rust-migration-harness-f7665f` (worktree
+`.claude/worktrees/rust-migration-harness-7d1c42`; also on GitHub). Main is at 56cd090. The
+C-vs-Rust speed work is built, reviewed (82 findings) and fixed (fix pass 1 merged, all tests
+green) but not yet re-checked, mutation-checked or merged. Follow docs/NEXT-WEEK-PLAN.md in order:
+the fix check (scoped to the 9 high findings first), fix pass 2 (verify's sandbox gap first),
+mutation checks, the DECISIONS entry (its draft is in the plan), merge to main, push. Then the
+project map (docs/PROJECT-MAP-DESIGN.md draft 0 — ask the person its §7 questions first).
+Check `get_usage` before each large workflow and say what it will cost. Plain words, no review
+codes.
+
+---
+
 # Next session — kickoff (2026-09-30)
 
 Paste the Agent Briefing first, then:
