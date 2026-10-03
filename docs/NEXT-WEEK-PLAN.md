@@ -7,7 +7,13 @@ Rule for the week: the person stopped at 75 % of the weekly limit; the costly st
 check, mutation checks) were deferred to the reset. Check `get_usage` before each large workflow
 and say roughly what it will cost. Report in plain words, no finding codes.
 
-## 1. The fix check — re-verify fix pass 1 (first thing)
+## 1. The fix check — re-verify fix pass 1
+
+**Scoped check DONE 2026-10-03** (`wf_04985eae-c28`, `SP/perfrv/check1.json`): all 9 high
+findings clear — both verifiers each: the fix holds, a test guards it (undone in a copy, the
+test fails), no regression. Optional tidy-ups they noted, added to fix pass 2 below (items 8–13).
+The **full** check of the remaining 73 stays optional (about 150 agents).
+
 
 What: 82 findings were fixed by six agents and merged (fix pass 1, `SP/fix1/result.json`;
 findings in full: `SP/perfrv/findings.md`, numbered 0–81 by severity). None has been checked by a
@@ -50,6 +56,19 @@ hand (they are small):
    are measurable.
 7. `harness-cli/tests/perf.rs` two_units_end_to_end: add `assert_eq!(crash.len(), 1)` (and for
    "time") now that the C-fails-in-step-1 rule is merged.
+8. measure.rs keeps its own copy of the compilers' first-line code: call `tools::first_line`.
+9. Tests: assert the stored `short` on the C alone (`Some(false)`) and on a full measured row
+   in the measure end-to-end test (swapping the Short/Full arms must fail a test); the
+   second-run case (a too-short workload whose input is then removed: exit 0, `last_try`
+   input-unusable, the next workload still measured) in measure.rs or tests/perf.rs.
+10. Launcher tests: `pid_of` must pick only a process descended from the test (two worktrees
+    running the tests at once can read each other's perfrun); `cpu_time` must tolerate an empty
+    `ps` read; `every_way_to_start_a_process_is_killed` flaked once under a full parallel run.
+11. perf show: skip the two compiler checks when no row is stored (harmless, saves two runs).
+12. SCHEMAS: "the computer and the compilers are checked only by perf show (when the launcher
+    cache is current)" — the parenthesis is the computer's only.
+13. PERF-DESIGN §3.3 step 3: the cancel check comes before the lock is retaken (as the code
+    does); note 22 quotes §1 as "verified" where §1 says "Re-checked".
 
 Then `cargo fmt`, clippy clean, full tests of the five perf crates, commit per group.
 

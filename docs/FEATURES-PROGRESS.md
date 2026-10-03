@@ -132,6 +132,9 @@ below are history.
      units are measurable;
   7. add `assert_eq!(crash.len(), 1)` (and for "time") to harness-cli tests/perf.rs
      two_units_end_to_end now that the C-fails-in-step-1 rule is merged.
+  2026-10-03 (Fable): fix pass 2 item 1 (verify's sandbox profiles) DONE; the scoped fix check
+  of the 9 high findings DONE — all clear (`SP/perfrv/check1.json`); `bench check --replay` run;
+  the branch then merges to main (see the DECISIONS entry).
   THE PLAN FOR NEXT WEEK IS docs/NEXT-WEEK-PLAN.md (fix check, fix pass 2, mutation checks, the
   DECISIONS draft, merge, then the project map). In short — AFTER THE WEEKLY RESET (2026-10-07): the
   fix check (re-verify all 82 against the merged code + regressions — or, cheaper, the 9 high
