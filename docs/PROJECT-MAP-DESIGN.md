@@ -250,13 +250,20 @@ person accepts.
 Where a model stays out: deciding what is *correct* (the oracle, the link check, the differential
 runs — deterministic, always), and anything that writes state unchecked.
 
-**The principle under all of it (the person's, 2026-10-03): know what right looks like before
-anything changes.** The harness already records expected behaviour at two levels — the driver
+**The principle under all of it (the person's, 2026-10-03): know what the project does before
+anything changes, and judge every change as a match or a mismatch against that.** The word is
+**match**, not "right": the baseline is the untouched project's behaviour as it is, bugs and
+all. The project may hold known or unknown vulnerabilities and room for improvement; the harness
+does not know and must not pretend to. Matching is the first step — it is what makes moving
+code over safe, one bug-for-bug-compatible piece at a time. Improving is a separate, later step:
+any change a model proposes as an improvement is, by definition, a deliberate *mismatch*, and
+must be labelled as one, judged against a new expected behaviour the person wrote down, and
+accepted knowingly — never slipped in with a translation that is supposed to match. The harness already records expected behaviour at two levels — the driver
 (every function's outputs on fixed inputs) and the features (what a person-visible feature
 materialises as: exit status, stdout, stderr on fixed runs). Make that the organising rule as
 the model's role grows: every proposal — a bin, an order, a seam, a translation — is judged
 against behaviour recorded *before* the change, so a wrong change is known wrong with high
-probability, and a right one known right, rather than trusted. The picture (§3.9) shows the
+probability, and a matching one known to match, rather than trusted. The picture (§3.9) shows the
 proposal and its reasons; the recorded behaviour judges the result; **a subject-matter expert
 signs off**, and nothing is accepted without that. The gap to close for the map: once bins
 exist, record each tool's expected behaviour (features for a tool, not only for one program)
@@ -318,3 +325,8 @@ DECISIONS.
    open? And which of the three layers (tools / units / functions) matters most to see first?
 6. §3.10: should the first model-backed advice be the migration order (cheaper, builds on the
    plan) or the seam (more valuable, needs Part 2 of the roadmap note)?
+7. §3.10, later: an improvements mode — the model proposes a change that does *not* match
+   (a fixed bug, a hardened bound), the person writes the new expected behaviour, the harness
+   records the mismatch as intended and judges against the new baseline. Out of scope until
+   matching works across a whole project; recorded so the vocabulary (match / intended
+   mismatch) is settled now.
