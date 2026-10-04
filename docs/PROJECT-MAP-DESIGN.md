@@ -9,7 +9,9 @@ design only gets a real project to the point where today's harness can take over
 
 ## 1. What it is, in plain words
 
-`harness map` looks at a whole C project — every folder — and works out, without a model, which
+Today the harness migrates one folder of one program, and the person gathers that folder by
+hand. The goal here is the whole project: **`harness map` looks at a whole C project — every
+folder — and works out, without a model, which
 files make up each program (**tool**) it builds, which files several tools share (a **library**),
 which files are tests, examples or for another platform, and which files it could not make sense
 of. It writes that as the **project map**. Where the facts leave a choice open — two files that
@@ -205,9 +207,24 @@ Direction to investigate, not decided:
 - **Size:** a project of thousands of files needs collapsing by folder and by tool at first
   view, with expansion on click; the map's caps bound it.
 
+**Decided direction (2026-10-03, with the person):** the picture is **read-only, and the data
+flows one way** — the scan and the map feed the picture; the picture never writes a bin, a plan,
+a target or a test. Two places that can change state would have to agree and would each need
+the cockpit's confirm-and-show-the-command safety; not worth it before anyone has used the
+picture. The first and only interaction beyond looking is **handing off**: click a tool or a unit
+and get the exact `harness` command (or the cockpit opened on it); the write still happens in
+the cockpit or the CLI. Reference for the *concept*, not the implementation:
+[emerge](https://github.com/glato/emerge) — scan a codebase, build a dependency graph, render
+an interactive HTML page with force-directed layout, clustering and metrics. Not adopted: it is
+Python with its own parsers, which would be a second opinion on the code beside the harness's
+scanner; the rule here is one source of truth (the map). Order unchanged: the map first (its
+link closures are what make clusters mean anything — on a raw download every file is one blob),
+then a throwaway HTML export of the map on zopfli (about a day) to see whether the picture earns
+its place, then a design of its own if it does. A picture is also the quickest way to *check* a
+map: a wrong closure is obvious drawn and invisible in JSON.
+
 Open: whether this is a `harness map export` (throwaway file), a cockpit act that opens the
-browser on that file, a page in the cockpit's own MCP-served help, or all three. Decide after the
-map exists and a first export has been tried on zopfli and on one real download.
+browser on that file, a page in the cockpit's own MCP-served help, or all three.
 
 ## 4. Tests and checks (to be completed in review)
 
