@@ -3,6 +3,17 @@
 Written 2026-10-02 on branch `claude/rust-migration-harness-f7665f` (pushed to GitHub). Main is at
 56cd090 (the probe milestone). Everything below runs on this branch until step 6 merges it.
 
+**Order, revised 2026-10-03 (agreed with the person): prove before planning.** Finish what is
+started (fix pass 2's leftovers, the mutation checks), then **run the testing guide on liblzg end
+to end** — nobody has taken the harness through a real migration outside zopfli, and the rough
+edges that run finds in the core loop matter more than any new design — then **one real-project
+spike for the map** (the closure script from the investigation on a real multi-tool C download:
+see what breaks), and only then the design review of docs/PROJECT-MAP-DESIGN.md. No new design
+sections until the spike has run. The picture (§3.9) stays a one-day throwaway on zopfli, and may
+turn out to add nothing over `harness map`'s text. The model-advice features (§3.10) are last and
+not to be built before matching works across a whole project. Steps below renumbered to this
+order: 1, 2, 3, 6 (merge: DONE 2026-10-03), then 4 (liblzg), then 7 (the spike, then review).
+
 Rule for the week: the person stopped at 75 % of the weekly limit; the costly steps (the fix
 check, mutation checks) were deferred to the reset. Check `get_usage` before each large workflow
 and say roughly what it will cost. Report in plain words, no finding codes.
@@ -88,7 +99,7 @@ tree; a test must fail). Rules to mutate — one list to write first, then run:
   units folder refusal.
 Record killed / survived / equivalent in docs/FEATURES-PROGRESS.md.
 
-## 4. Real run on liblzg (optional, needs the person's OK to download)
+## 4. Real run on liblzg (needs the person's OK to download) — BEFORE the project map
 
 `git clone https://gitlab.com/mbitsnbites/liblzg.git ~/code/liblzg-upstream`, then Parts 1–6 of
 docs/TESTING-GUIDE.md (two translations through the chat), then Part 11 as written. Fix the guide
@@ -136,16 +147,17 @@ by either leg, must not read current. Measuring again brings a row back.
 against M5.
 ```
 
-## 6. Merge to main and push
+## 6. Merge to main and push — DONE 2026-10-03 (9af3fcf); repeat at the next milestone
 
 Checklist: full `cargo test --workspace` green; clippy clean; `bench check --replay` (expect 198
 reproduce, 2 expected divergences, 0 problems); docs/FEATURES-PROGRESS.md "NOW" updated; the
 DECISIONS entry in; then on `main`: `git merge --no-ff claude/rust-migration-harness-f7665f`,
 `git push`. Then update memory `ruharness-project-state`.
 
-## 7. Then: the project map
+## 7. Then: the project map — spike first, review second
 
-Start with the design process the speed work had: a §15-style spike on two or three real
+A §15-style spike BEFORE any design review: run the investigation's closure script
+(`SP/pmap/closure.py`, 40 lines; rewrite it if the scratchpad is gone) on one or two real
 downloads (the person must OK downloads — candidates: liblzg if already here, and one
 multi-tool C project such as zlib (one library, `example.c`, `minigzip.c`) or lz4 (library +
 `programs/`)), then review rounds of docs/PROJECT-MAP-DESIGN.md draft 0 (its §7 has five
