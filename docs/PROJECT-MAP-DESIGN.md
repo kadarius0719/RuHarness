@@ -226,6 +226,42 @@ map: a wrong closure is obvious drawn and invisible in JSON.
 Open: whether this is a `harness map export` (throwaway file), a cockpit act that opens the
 browser on that file, a page in the cockpit's own MCP-served help, or all three.
 
+### 3.10 What the map makes possible: where a model earns its place (direction, 2026-10-03)
+
+The founding rule (briefing §1): models for judgment, deterministic tooling for measurement. The
+map produces facts no model should guess — the call graph across folders, the closures, shared
+code, hazards (the detectors), feature coverage (the features map). Two judgments sit naturally
+on top of those facts, and both are **advice**, offered the same way as the map's bins: the
+harness gives the facts, the model proposes with reasons, the harness checks what it can, the
+person accepts.
+
+1. **What to migrate first.** Today the plan's order is structural only: leaf units in
+   dependency order. With the map's facts a model can weigh value as well — "start with the
+   checksum: small, no hazards, every feature runs it; leave the signal handler for last." The
+   harness checks the proposed order still respects dependencies; the person sees it, with the
+   reasons, before the plan changes.
+2. **Where to put the C–Rust seam.** Today the boundary is fixed — one C file is one unit, only
+   leaf units cross. Reading the call graph a model can propose better cuts: "these three files
+   are one subsystem; migrate them together so the seam has four calls instead of forty", or
+   "this struct crosses the seam; move the seam one level out." The harness checks a proposed
+   unit still links as one; the person accepts. This is Part 2 of the roadmap note made
+   concrete, and it is where migration pain concentrates.
+
+Where a model stays out: deciding what is *correct* (the oracle, the link check, the differential
+runs — deterministic, always), and anything that writes state unchecked.
+
+**The principle under all of it (the person's, 2026-10-03): know what right looks like before
+anything changes.** The harness already records expected behaviour at two levels — the driver
+(every function's outputs on fixed inputs) and the features (what a person-visible feature
+materialises as: exit status, stdout, stderr on fixed runs). Make that the organising rule as
+the model's role grows: every proposal — a bin, an order, a seam, a translation — is judged
+against behaviour recorded *before* the change, so a wrong change is known wrong with high
+probability, and a right one known right, rather than trusted. The picture (§3.9) shows the
+proposal and its reasons; the recorded behaviour judges the result; **a subject-matter expert
+signs off**, and nothing is accepted without that. The gap to close for the map: once bins
+exist, record each tool's expected behaviour (features for a tool, not only for one program)
+*before* its first unit moves, so the whole project has a baseline to iterate against.
+
 ## 4. Tests and checks (to be completed in review)
 
 - The walk on the 100 benchmark cases: each gives exactly one library bin, zero tools (99) or one
@@ -280,3 +316,5 @@ DECISIONS.
    — or does the map need a `main()` to call something a tool?
 5. The picture (§3.9): a throwaway HTML export first, or straight to something the cockpit can
    open? And which of the three layers (tools / units / functions) matters most to see first?
+6. §3.10: should the first model-backed advice be the migration order (cheaper, builds on the
+   plan) or the seam (more valuable, needs Part 2 of the roadmap note)?
