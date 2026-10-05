@@ -475,6 +475,30 @@ fn an_unknown_chat_model_is_said_in_words() {
     l.wait("the words", "unknown model no-such-model-xyz", 90);
 }
 
+/// A greeting is answered in a line and reads nothing: the context block's
+/// "About:" is where the person is looking, not a request (the brief says
+/// so). The pane would show "· read the project's status" for a call.
+#[test]
+#[ignore = "live: RUHARNESS_LIVE_CHAT=1"]
+fn a_greeting_calls_no_tool() {
+    if !live() {
+        return;
+    }
+    let mut l = Live::start("greet", "--chat-model haiku");
+    l.wait("the cockpit", "Files", 30);
+    l.press(b"\t");
+    l.press(b"\t");
+    l.type_text("hi");
+    l.press(b"\r");
+    l.wait("the model's init", "haiku", 60);
+    l.wait("the turn's end", "of plan usage", 120);
+    let screen = l.screen();
+    assert!(
+        !screen.contains("read the project") && !screen.contains("harness_status"),
+        "a greeting read the project:\n{screen}"
+    );
+}
+
 /// A harness server that fails to start ends the chat, in words (§1.2).
 #[test]
 #[ignore = "live: RUHARNESS_LIVE_CHAT=1"]
