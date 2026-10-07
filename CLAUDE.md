@@ -15,3 +15,7 @@ Rules that are never skipped, whatever the task:
 - Solo developer: commit to `main` and push at each milestone, no pull requests, never force-push.
 - Before a large multi-agent workflow late in a session, check the plan's usage and say what it
   will roughly cost.
+- Models (the person, 2026-10-07): the main session may run on Fable; everything it hands off runs
+  on Opus — Agent subagents with `model: "opus"`, every Workflow `agent()` call with
+  `{model: 'opus'}` (the default inherits the main session's model), hand-off answers with
+  `--model claude-opus-5-5`. Ask the person before giving any handed-off work Fable.

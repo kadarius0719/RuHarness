@@ -1279,11 +1279,12 @@ replaces-changed | rust-changed | accept-interrupted`, `attempt`, `never_started
 `offset`, `c_end`, `other_end`, `over_cap`, `kept [{name, size, blake3}]`; with `over_cap`,
 `stream` is the stream that passed the 64 MiB cap, `c_len` the C's length on it, `offset` 0 and
 `other_end` `signal 9`, the kill that stopped the run, as in its `step1`), `last_try`
-(`{outcome, setup}`). `short` is true when one side's step-1 run was under both legs of the
-floor (fewer than 1e9 instructions and under half a second of CPU); never on the C alone.
+(`{outcome, setup, units}`, `units` on as-it-stands rows). `short` is true when one side's
+step-1 run was under both legs of the floor (fewer than 1e9 instructions and under half a second
+of CPU); never on the C alone.
 `inputs`: `workload`, `program` (the features' program digest), `crates [{id, digest}]` (unit
 rows; a crate that does not build records its real digest), `replaces` (unit rows),
-`program_name`, `units [{id, crate_digest}]` and `left_out [{id, crate_digest, reason}]`
+`program_name`, `units [{id, crate}]` and `left_out [{id, crate, reason}]`
 (every as-it-stands row, set-up ones included; reasons `not-fresh | replaces-mismatch |
 replaces-changed | crate-does-not-build | does-not-link | accept-interrupted`), `recipe`
 (`perf-recipe-2`: rows of `perf-recipe-1`, whose short runs were judged by either leg of the
@@ -1292,7 +1293,12 @@ two_kinds, fast_cores}`, `compilers {cc, rustc?}`. **Strict** (unknown fields re
 field checked against its outcome); free text ≤ 160 bytes, no control character; a
 difference's lengths and kept files ≤ 64 MiB (the output cap), its `offset` no further than the
 shorter length, and 0, 0, 0 on `exit`; a replaces-mismatch's `index` below 65 536 (and within
-the row's `replaces` when it holds them).
+the row's `replaces` when it holds them). Every list a row holds is capped, its length checked
+before its entries, and a row over a cap is refused by name ("left_out holds 1000 entries, at
+most 999"): `replaces` ≤ 65 536 paths; `crates`, `units`, `left_out`, a set-up's `runtimes` and
+`units` and a last try's `units` ≤ 999 entries each (perf measures a plan of at most 999 units,
+one slot each); `profile` ≤ 4 settings; `kept` ≤ 4 files. The caps bound what the reader accepts
+and hands on; the parse itself is bounded only by the file's 4 MiB.
 
 **The replace rule** (one, in `harness-core`): a set-up outcome never replaces an earlier row that
 is not itself a set-up row — it is kept beside it as `last_try`; on the C-alone rows the C's own
@@ -1306,10 +1312,13 @@ next write.
 **Current** iff every input equals today's: the workload's digest, the program digest, the
 program's name, the recipe, the launcher, each unit's crate digest and its `replaces` (unit
 rows), the held units, those left out and the plan's order (as-it-stands rows); the computer
-and the compilers are checked only by `perf show` (when the launcher cache is current), never by
-the cockpit or harness-mcp. Each reason has a closed token: `workload | workload-gone | program |
-program-name | recipe | launcher | rust | replaces | left-out | accepted | verified | plan-order |
-computer | compilers`, and the cockpit's own `measuring | too-large | input-unusable`.
+and the compilers are checked only by `perf show` (never with `--no-check`), never by the
+cockpit or harness-mcp — the computer through the launcher's `perfrun facts`, only when the
+launcher cache is current; the compilers as tool runs (`cc --version`, `rustc -V`; the CLI
+below), whatever the launcher cache. Each reason has a closed token: `workload | workload-gone |
+program | program-name | recipe | launcher | rust | replaces | left-out | accepted | verified |
+plan-order | computer | compilers`, and the cockpit's own `measuring | too-large |
+input-unusable`.
 
 ## CLI
 

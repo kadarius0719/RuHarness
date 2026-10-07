@@ -1436,21 +1436,35 @@ mod tests {
             "#include <unistd.h>\nint main(void) { sleep(3); return 0; }\n",
         );
         let l = Arc::new(l);
-        let worker = {
-            let l = Arc::clone(&l);
-            let sleeper = sleeper.clone();
-            std::thread::spawn(move || run(&l, &sleeper, 60, false))
-        };
-        let perfrun = parent_of(pid_of(&sleeper));
-        std::thread::sleep(Duration::from_millis(1500));
-        let used = cpu_time(perfrun);
-        let m = worker.join().expect("joins");
-        let r = record(&m);
-        assert_eq!(
-            (&r.status, r.end),
-            (&Status::Ok, Some(End::Exit(0))),
-            "{r:?}"
-        );
+        // A reading counts only when taken while the program still sleeps:
+        // perfrun gone, or the program already ended, means the reading came
+        // too late on a busy Mac, and the run is tried again — three runs at
+        // most. Every run's record is checked all the same.
+        let mut used = None;
+        for _ in 0..3 {
+            let worker = {
+                let l = Arc::clone(&l);
+                let sleeper = sleeper.clone();
+                std::thread::spawn(move || run(&l, &sleeper, 60, false))
+            };
+            let program = pid_of(&sleeper);
+            let perfrun = parent_of(program);
+            std::thread::sleep(Duration::from_millis(1500));
+            let reading = cpu_time(perfrun).filter(|_| alive(program));
+            let m = worker.join().expect("joins");
+            let r = record(&m);
+            assert_eq!(
+                (&r.status, r.end),
+                (&Status::Ok, Some(End::Exit(0))),
+                "{r:?}"
+            );
+            if reading.is_some() {
+                used = reading;
+                break;
+            }
+        }
+        let used =
+            used.expect("perfrun's CPU time was never read while its program slept, in 3 runs");
         assert!(
             used < Duration::from_millis(200),
             "perfrun used {used:?} of CPU while the program slept"
@@ -1490,31 +1504,78 @@ mod tests {
         );
     }
 
-    /// The pid of the process running `bin`, once it runs.
+    /// Every process in one `ps -axww -o <fields>` snapshot: each line's
+    /// first `words` columns (none of them holds a space) and the rest of
+    /// the line, the last column, which may.
+    fn ps_rows(fields: &str, words: usize) -> Vec<(Vec<String>, String)> {
+        let out = Command::new("ps")
+            .args(["-axww", "-o", fields])
+            .output()
+            .expect("ps");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| {
+                let mut rest = l.trim();
+                let mut lead = Vec::with_capacity(words);
+                for _ in 0..words {
+                    let (word, after) = rest.split_once(char::is_whitespace)?;
+                    lead.push(word.to_string());
+                    rest = after.trim_start();
+                }
+                Some((lead, rest.to_string()))
+            })
+            .collect()
+    }
+
+    /// The pid of the process running `bin` once it runs, waiting up to 30
+    /// seconds (a new binary's first exec can be slow on a busy Mac). Only
+    /// a process this test process started counts — perfrun's child, or its
+    /// own: another copy of these tests running at once on the machine (a
+    /// second worktree) runs programs of the very same names.
     fn pid_of(bin: &Path) -> u32 {
-        for _ in 0..400 {
-            // The executable's own name (`ucomm`): perfrun's command line
-            // holds the program's path too, and argv[0] is "tool".
-            let name = bin
-                .file_name()
-                .expect("name")
-                .to_string_lossy()
-                .into_owned();
-            let out = Command::new("ps")
-                .args(["-axo", "pid=,ucomm="])
-                .output()
-                .expect("ps");
-            if let Some(pid) = String::from_utf8_lossy(&out.stdout).lines().find_map(|l| {
-                let (pid, comm) = l.trim().split_once(' ')?;
-                (comm.trim() == name)
-                    .then(|| pid.parse::<u32>().ok())
-                    .flatten()
-            }) {
+        // The executable's own name (`ucomm`): perfrun's command line holds
+        // the program's path too, and argv[0] is "tool".
+        let name = bin
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .into_owned();
+        let until = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < until {
+            let rows = ps_rows("pid=,ppid=,ucomm=", 2);
+            let parents: std::collections::HashMap<u32, u32> = rows
+                .iter()
+                .filter_map(|(w, _)| Some((w[0].parse().ok()?, w[1].parse().ok()?)))
+                .collect();
+            if let Some(pid) = rows
+                .iter()
+                .filter(|(_, comm)| *comm == name)
+                .filter_map(|(w, _)| w[0].parse::<u32>().ok())
+                .find(|&pid| descends_from_this_process(pid, &parents))
+            {
                 return pid;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
         panic!("{} never ran", bin.display());
+    }
+
+    /// Whether `pid` descends from this test process, by the parents of one
+    /// `ps` snapshot. launchd (pid 1) ends the walk: an orphan it adopted is
+    /// nobody's here.
+    fn descends_from_this_process(pid: u32, parents: &std::collections::HashMap<u32, u32>) -> bool {
+        let me = std::process::id();
+        let mut at = pid;
+        // A chain is never longer than the snapshot; the bound keeps a
+        // malformed one from looping.
+        for _ in 0..parents.len() {
+            match parents.get(&at) {
+                Some(&parent) if parent == me => return true,
+                Some(&parent) if parent > 1 => at = parent,
+                _ => return false,
+            }
+        }
+        false
     }
 
     fn alive(pid: u32) -> bool {
@@ -1535,15 +1596,94 @@ mod tests {
         ps(pid, "ppid").parse().expect("ppid")
     }
 
-    /// The CPU time `pid` has used (`ps`'s `[hh:]mm:ss.hh`).
-    fn cpu_time(pid: u32) -> Duration {
+    /// The CPU time `pid` has used (`ps`'s `[hh:]mm:ss.hh`), or `None` once
+    /// it is gone (`ps` prints nothing): the caller says what a gone
+    /// process means. Anything else `ps` prints that is not a time panics.
+    fn cpu_time(pid: u32) -> Option<Duration> {
         let text = ps(pid, "time");
+        if text.is_empty() {
+            return None;
+        }
         let mut secs = 0.0;
         for part in text.split(':') {
             let v: f64 = part.parse().unwrap_or_else(|_| panic!("ps time {text:?}"));
             secs = secs * 60.0 + v;
         }
-        Duration::from_secs_f64(secs)
+        Some(Duration::from_secs_f64(secs))
+    }
+
+    /// [`cpu_time`] of a process that is gone is `None`, not a panic: on a
+    /// busy Mac the reading can come just after the process ended.
+    #[test]
+    fn cpu_time_of_a_gone_process_is_none() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let mut gone = Command::new("/usr/bin/true").spawn().expect("true");
+        let pid = gone.id();
+        gone.wait().expect("reaped");
+        assert_eq!(cpu_time(pid), None);
+        assert!(cpu_time(std::process::id()).is_some(), "this process runs");
+    }
+
+    /// [`pid_of`] takes only a process this test process started: a copy of
+    /// the same executable that another run of these tests runs elsewhere
+    /// on the machine — here a decoy launchd adopted — is never taken for
+    /// it, even while the decoy is the only one running.
+    #[test]
+    fn pid_of_never_takes_another_run_s_program() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("perf-pid-of");
+        let (ours, theirs) = (tmp.path().join("ours"), tmp.path().join("theirs"));
+        std::fs::create_dir(&ours).expect("ours");
+        std::fs::create_dir(&theirs).expect("theirs");
+        let bin = program(
+            &ours,
+            "lookalike",
+            "#include <unistd.h>\nint main(void) { sleep(30); return 0; }\n",
+        );
+        let decoy = theirs.join("lookalike");
+        std::fs::copy(&bin, &decoy).expect("the decoy");
+        // A shell that exits at once starts the decoy: launchd adopts it.
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("\"$0\" </dev/null >/dev/null 2>&1 & echo $!")
+            .arg(&decoy)
+            .output()
+            .expect("sh");
+        let decoy_pid: u32 = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .expect("the decoy's pid");
+        let until = Instant::now() + Duration::from_secs(30);
+        while ps(decoy_pid, "ucomm") != "lookalike" {
+            assert!(Instant::now() < until, "the decoy never ran");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let adopted = parent_of(decoy_pid);
+        // Ours starts a moment later, while pid_of already looks.
+        let starter = {
+            let bin = bin.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                Command::new(&bin).spawn()
+            })
+        };
+        let found = pid_of(&bin);
+        let mut started = starter.join().expect("joins").expect("ours starts");
+        let _ = started.kill();
+        let _ = started.wait();
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", &decoy_pid.to_string()])
+            .status();
+        assert_eq!(adopted, 1, "launchd adopted the decoy");
+        assert_eq!(
+            found,
+            started.id(),
+            "pid_of took the decoy ({decoy_pid}) for this process's own"
+        );
     }
 
     #[test]
@@ -1610,25 +1750,121 @@ mod tests {
         assert_eq!(m.stdout, b"dfl 1 empty 1\n", "{:?}", m.seen);
     }
 
-    /// Whether a process (not a zombie) runs the executable named `name`,
-    /// polled for up to a second until none does.
-    fn still_running(name: &str) -> bool {
-        for _ in 0..40 {
-            let out = Command::new("ps")
-                .args(["-axo", "stat=,ucomm="])
-                .output()
-                .expect("ps");
-            let any = String::from_utf8_lossy(&out.stdout).lines().any(|l| {
-                let mut words = l.split_whitespace();
-                let stat = words.next().unwrap_or("");
-                words.collect::<Vec<_>>().join(" ") == name && !stat.starts_with('Z')
+    /// [`run_with`], and the program's pid — the id of its group, which
+    /// perfrun's child leads (§3.3 step 2) — from the harness's child line;
+    /// `None` when there was none.
+    fn run_with_group(l: &Launcher, bin: &Path, o: &Opts<'_>) -> (Measured, Option<u32>) {
+        let group = std::rc::Rc::new(std::cell::Cell::new(None));
+        {
+            let group = std::rc::Rc::clone(&group);
+            hooks::set(move |stage, pid| {
+                if stage == hooks::Stage::ChildLine {
+                    group.set(Some(pid));
+                }
             });
-            if !any {
-                return false;
+        }
+        let m = run_with(l, bin, o);
+        (m, group.get())
+    }
+
+    /// What a run left running (not a zombie), as `pid command-line` lines:
+    /// a process in the program's group `group` — the program cannot leave
+    /// it, and whatever it starts joins it (§3.3 step 2) — or one whose
+    /// argv[0] is `bin`'s exact path, a copy of itself the program started.
+    /// Both are this run's own, never another run's of the same tests at
+    /// once on the machine (a second worktree, programs of the very same
+    /// names). Looked for again while anything is left, for up to `within`:
+    /// a program killed at its run's end can take a moment to go on a busy
+    /// Mac.
+    fn left_running(group: u32, bin: &Path, within: Duration) -> Vec<String> {
+        let path = bin.to_string_lossy();
+        let until = Instant::now() + within;
+        loop {
+            let left: Vec<String> = ps_rows("pid=,pgid=,stat=,args=", 3)
+                .into_iter()
+                .filter(|(w, args)| {
+                    let in_group = w[1].parse::<u32>().ok() == Some(group);
+                    let started_as_bin = args
+                        .strip_prefix(path.as_ref())
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '));
+                    !w[2].starts_with('Z') && (in_group || started_as_bin)
+                })
+                .map(|(w, args)| format!("{} {args}", w[0]))
+                .collect();
+            if left.is_empty() || Instant::now() >= until {
+                return left;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        true
+    }
+
+    /// [`left_running`] finds what a run left — anything in its group, a
+    /// copy started by the program's exact path — and never a process of the
+    /// same name that another run of these tests left elsewhere on the
+    /// machine.
+    #[test]
+    fn only_a_run_s_own_leftovers_count() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        use std::os::unix::process::CommandExt;
+        let tmp = crate::testutil::TempDir::new("perf-left");
+        let (ours, theirs) = (tmp.path().join("ours"), tmp.path().join("theirs"));
+        std::fs::create_dir(&ours).expect("ours");
+        std::fs::create_dir(&theirs).expect("theirs");
+        let bin = program(
+            &ours,
+            "leftover",
+            "#include <unistd.h>\nint main(void) { sleep(30); return 0; }\n",
+        );
+        let decoy = theirs.join("leftover");
+        std::fs::copy(&bin, &decoy).expect("the decoy");
+        // Another run's leftover: the same name, its own folder and group.
+        let mut other = Command::new(&decoy)
+            .process_group(0)
+            .spawn()
+            .expect("the decoy");
+        // The program as perfrun runs it — argv[0] "tool", leading its group
+        // — and something else it started, in that group.
+        let mut program_run = Command::new(&bin)
+            .arg0("tool")
+            .process_group(0)
+            .spawn()
+            .expect("the program");
+        let group = program_run.id();
+        let mut started = Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(i32::try_from(group).expect("a pid"))
+            .spawn()
+            .expect("sleep");
+        let in_group = left_running(group, &bin, Duration::ZERO);
+        for child in [&mut program_run, &mut started] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        // A copy started by the program's exact path, in a group of its own.
+        let mut copy = Command::new(&bin)
+            .process_group(0)
+            .spawn()
+            .expect("the copy");
+        let by_path = left_running(group, &bin, Duration::ZERO);
+        let _ = copy.kill();
+        let _ = copy.wait();
+        // Only the decoy is left now.
+        let none = left_running(group, &bin, Duration::from_secs(5));
+        let _ = other.kill();
+        let _ = other.wait();
+        let has =
+            |left: &[String], pid: u32| left.iter().any(|l| l.starts_with(&format!("{pid} ")));
+        assert!(
+            has(&in_group, group) && has(&in_group, started.id()),
+            "{in_group:?}"
+        );
+        assert!(has(&by_path, copy.id()), "{by_path:?}");
+        assert!(
+            none.is_empty(),
+            "another run's process was taken for this run's: {none:?}"
+        );
     }
 
     /// Every way to start a process is killed on trying — a SIGKILL perfrun
@@ -1667,7 +1903,7 @@ mod tests {
                 args: vec![bin.to_string_lossy().into_owned()],
                 ..opts(60, true)
             };
-            let m = run_with(&l, &bin, &o);
+            let (m, group) = run_with_group(&l, &bin, &o);
             let r = record(&m);
             assert_eq!(
                 (&r.status, r.end, r.killed),
@@ -1675,7 +1911,17 @@ mod tests {
                 "{name}: {r:?}"
             );
             assert_eq!(m.launcher_exit, Some(0), "{name}");
-            assert!(!still_running(name), "{name}: a started copy outlived the run");
+            // This run's own leftovers only: another worktree may be running
+            // these very programs at this moment.
+            let left = left_running(
+                group.expect("the child line"),
+                &bin,
+                Duration::from_secs(5),
+            );
+            assert!(
+                left.is_empty(),
+                "{name}: a started copy outlived the run: {left:?}"
+            );
         }
     }
 
@@ -2392,14 +2638,19 @@ mod tests {
         // seconds on a busy Mac.
         for timed in [false, true] {
             let t = Instant::now();
-            let m = run_with(&l, &printer, &o);
+            let (m, group) = run_with_group(&l, &printer, &o);
             assert!(matches!(m.seen, Seen::Overflow), "{:?}", m.seen);
             assert!(
                 !timed || t.elapsed() < Duration::from_secs(2),
                 "{:?}",
                 t.elapsed()
             );
-            assert!(!still_running("printer"), "the program is dead");
+            let left = left_running(
+                group.expect("the child line"),
+                &printer,
+                Duration::from_secs(5),
+            );
+            assert!(left.is_empty(), "the program is dead: {left:?}");
         }
     }
 
