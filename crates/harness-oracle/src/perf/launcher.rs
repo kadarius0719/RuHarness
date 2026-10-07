@@ -1750,25 +1750,121 @@ mod tests {
         assert_eq!(m.stdout, b"dfl 1 empty 1\n", "{:?}", m.seen);
     }
 
-    /// Whether a process (not a zombie) runs the executable named `name`,
-    /// polled for up to a second until none does.
-    fn still_running(name: &str) -> bool {
-        for _ in 0..40 {
-            let out = Command::new("ps")
-                .args(["-axo", "stat=,ucomm="])
-                .output()
-                .expect("ps");
-            let any = String::from_utf8_lossy(&out.stdout).lines().any(|l| {
-                let mut words = l.split_whitespace();
-                let stat = words.next().unwrap_or("");
-                words.collect::<Vec<_>>().join(" ") == name && !stat.starts_with('Z')
+    /// [`run_with`], and the program's pid — the id of its group, which
+    /// perfrun's child leads (§3.3 step 2) — from the harness's child line;
+    /// `None` when there was none.
+    fn run_with_group(l: &Launcher, bin: &Path, o: &Opts<'_>) -> (Measured, Option<u32>) {
+        let group = std::rc::Rc::new(std::cell::Cell::new(None));
+        {
+            let group = std::rc::Rc::clone(&group);
+            hooks::set(move |stage, pid| {
+                if stage == hooks::Stage::ChildLine {
+                    group.set(Some(pid));
+                }
             });
-            if !any {
-                return false;
+        }
+        let m = run_with(l, bin, o);
+        (m, group.get())
+    }
+
+    /// What a run left running (not a zombie), as `pid command-line` lines:
+    /// a process in the program's group `group` — the program cannot leave
+    /// it, and whatever it starts joins it (§3.3 step 2) — or one whose
+    /// argv[0] is `bin`'s exact path, a copy of itself the program started.
+    /// Both are this run's own, never another run's of the same tests at
+    /// once on the machine (a second worktree, programs of the very same
+    /// names). Looked for again while anything is left, for up to `within`:
+    /// a program killed at its run's end can take a moment to go on a busy
+    /// Mac.
+    fn left_running(group: u32, bin: &Path, within: Duration) -> Vec<String> {
+        let path = bin.to_string_lossy();
+        let until = Instant::now() + within;
+        loop {
+            let left: Vec<String> = ps_rows("pid=,pgid=,stat=,args=", 3)
+                .into_iter()
+                .filter(|(w, args)| {
+                    let in_group = w[1].parse::<u32>().ok() == Some(group);
+                    let started_as_bin = args
+                        .strip_prefix(path.as_ref())
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '));
+                    !w[2].starts_with('Z') && (in_group || started_as_bin)
+                })
+                .map(|(w, args)| format!("{} {args}", w[0]))
+                .collect();
+            if left.is_empty() || Instant::now() >= until {
+                return left;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        true
+    }
+
+    /// [`left_running`] finds what a run left — anything in its group, a
+    /// copy started by the program's exact path — and never a process of the
+    /// same name that another run of these tests left elsewhere on the
+    /// machine.
+    #[test]
+    fn only_a_run_s_own_leftovers_count() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        use std::os::unix::process::CommandExt;
+        let tmp = crate::testutil::TempDir::new("perf-left");
+        let (ours, theirs) = (tmp.path().join("ours"), tmp.path().join("theirs"));
+        std::fs::create_dir(&ours).expect("ours");
+        std::fs::create_dir(&theirs).expect("theirs");
+        let bin = program(
+            &ours,
+            "leftover",
+            "#include <unistd.h>\nint main(void) { sleep(30); return 0; }\n",
+        );
+        let decoy = theirs.join("leftover");
+        std::fs::copy(&bin, &decoy).expect("the decoy");
+        // Another run's leftover: the same name, its own folder and group.
+        let mut other = Command::new(&decoy)
+            .process_group(0)
+            .spawn()
+            .expect("the decoy");
+        // The program as perfrun runs it — argv[0] "tool", leading its group
+        // — and something else it started, in that group.
+        let mut program_run = Command::new(&bin)
+            .arg0("tool")
+            .process_group(0)
+            .spawn()
+            .expect("the program");
+        let group = program_run.id();
+        let mut started = Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(i32::try_from(group).expect("a pid"))
+            .spawn()
+            .expect("sleep");
+        let in_group = left_running(group, &bin, Duration::ZERO);
+        for child in [&mut program_run, &mut started] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        // A copy started by the program's exact path, in a group of its own.
+        let mut copy = Command::new(&bin)
+            .process_group(0)
+            .spawn()
+            .expect("the copy");
+        let by_path = left_running(group, &bin, Duration::ZERO);
+        let _ = copy.kill();
+        let _ = copy.wait();
+        // Only the decoy is left now.
+        let none = left_running(group, &bin, Duration::from_secs(5));
+        let _ = other.kill();
+        let _ = other.wait();
+        let has =
+            |left: &[String], pid: u32| left.iter().any(|l| l.starts_with(&format!("{pid} ")));
+        assert!(
+            has(&in_group, group) && has(&in_group, started.id()),
+            "{in_group:?}"
+        );
+        assert!(has(&by_path, copy.id()), "{by_path:?}");
+        assert!(
+            none.is_empty(),
+            "another run's process was taken for this run's: {none:?}"
+        );
     }
 
     /// Every way to start a process is killed on trying — a SIGKILL perfrun
@@ -1807,7 +1903,7 @@ mod tests {
                 args: vec![bin.to_string_lossy().into_owned()],
                 ..opts(60, true)
             };
-            let m = run_with(&l, &bin, &o);
+            let (m, group) = run_with_group(&l, &bin, &o);
             let r = record(&m);
             assert_eq!(
                 (&r.status, r.end, r.killed),
@@ -1815,7 +1911,17 @@ mod tests {
                 "{name}: {r:?}"
             );
             assert_eq!(m.launcher_exit, Some(0), "{name}");
-            assert!(!still_running(name), "{name}: a started copy outlived the run");
+            // This run's own leftovers only: another worktree may be running
+            // these very programs at this moment.
+            let left = left_running(
+                group.expect("the child line"),
+                &bin,
+                Duration::from_secs(5),
+            );
+            assert!(
+                left.is_empty(),
+                "{name}: a started copy outlived the run: {left:?}"
+            );
         }
     }
 
@@ -2532,14 +2638,19 @@ mod tests {
         // seconds on a busy Mac.
         for timed in [false, true] {
             let t = Instant::now();
-            let m = run_with(&l, &printer, &o);
+            let (m, group) = run_with_group(&l, &printer, &o);
             assert!(matches!(m.seen, Seen::Overflow), "{:?}", m.seen);
             assert!(
                 !timed || t.elapsed() < Duration::from_secs(2),
                 "{:?}",
                 t.elapsed()
             );
-            assert!(!still_running("printer"), "the program is dead");
+            let left = left_running(
+                group.expect("the child line"),
+                &printer,
+                Duration::from_secs(5),
+            );
+            assert!(left.is_empty(), "the program is dead: {left:?}");
         }
     }
 
