@@ -1801,7 +1801,8 @@ mod tests {
     /// [`left_running`] finds what a run left — anything in its group, a
     /// copy started by the program's exact path — and never a process of the
     /// same name that another run of these tests left elsewhere on the
-    /// machine.
+    /// machine, nor one whose path only begins with the program's (a longer
+    /// name beside it).
     #[test]
     fn only_a_run_s_own_leftovers_count() {
         if !cfg!(target_os = "macos") {
@@ -1824,6 +1825,14 @@ mod tests {
             .process_group(0)
             .spawn()
             .expect("the decoy");
+        // Not a copy either: a program beside it whose path only begins with
+        // the program's — the path must be the program's exact one.
+        let longer = ours.join("leftover-old");
+        std::fs::copy(&bin, &longer).expect("the longer name");
+        let mut other_longer = Command::new(&longer)
+            .process_group(0)
+            .spawn()
+            .expect("the longer name");
         // The program as perfrun runs it — argv[0] "tool", leading its group
         // — and something else it started, in that group.
         let mut program_run = Command::new(&bin)
@@ -1850,10 +1859,12 @@ mod tests {
         let by_path = left_running(group, &bin, Duration::ZERO);
         let _ = copy.kill();
         let _ = copy.wait();
-        // Only the decoy is left now.
+        // Only the decoy and the longer name are left now.
         let none = left_running(group, &bin, Duration::from_secs(5));
-        let _ = other.kill();
-        let _ = other.wait();
+        for child in [&mut other, &mut other_longer] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         let has =
             |left: &[String], pid: u32| left.iter().any(|l| l.starts_with(&format!("{pid} ")));
         assert!(
@@ -1863,7 +1874,7 @@ mod tests {
         assert!(has(&by_path, copy.id()), "{by_path:?}");
         assert!(
             none.is_empty(),
-            "another run's process was taken for this run's: {none:?}"
+            "a process not this run's was taken for this run's: {none:?}"
         );
     }
 
