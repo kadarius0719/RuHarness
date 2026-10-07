@@ -1436,21 +1436,35 @@ mod tests {
             "#include <unistd.h>\nint main(void) { sleep(3); return 0; }\n",
         );
         let l = Arc::new(l);
-        let worker = {
-            let l = Arc::clone(&l);
-            let sleeper = sleeper.clone();
-            std::thread::spawn(move || run(&l, &sleeper, 60, false))
-        };
-        let perfrun = parent_of(pid_of(&sleeper));
-        std::thread::sleep(Duration::from_millis(1500));
-        let used = cpu_time(perfrun);
-        let m = worker.join().expect("joins");
-        let r = record(&m);
-        assert_eq!(
-            (&r.status, r.end),
-            (&Status::Ok, Some(End::Exit(0))),
-            "{r:?}"
-        );
+        // A reading counts only when taken while the program still sleeps:
+        // perfrun gone, or the program already ended, means the reading came
+        // too late on a busy Mac, and the run is tried again — three runs at
+        // most. Every run's record is checked all the same.
+        let mut used = None;
+        for _ in 0..3 {
+            let worker = {
+                let l = Arc::clone(&l);
+                let sleeper = sleeper.clone();
+                std::thread::spawn(move || run(&l, &sleeper, 60, false))
+            };
+            let program = pid_of(&sleeper);
+            let perfrun = parent_of(program);
+            std::thread::sleep(Duration::from_millis(1500));
+            let reading = cpu_time(perfrun).filter(|_| alive(program));
+            let m = worker.join().expect("joins");
+            let r = record(&m);
+            assert_eq!(
+                (&r.status, r.end),
+                (&Status::Ok, Some(End::Exit(0))),
+                "{r:?}"
+            );
+            if reading.is_some() {
+                used = reading;
+                break;
+            }
+        }
+        let used =
+            used.expect("perfrun's CPU time was never read while its program slept, in 3 runs");
         assert!(
             used < Duration::from_millis(200),
             "perfrun used {used:?} of CPU while the program slept"
@@ -1582,15 +1596,34 @@ mod tests {
         ps(pid, "ppid").parse().expect("ppid")
     }
 
-    /// The CPU time `pid` has used (`ps`'s `[hh:]mm:ss.hh`).
-    fn cpu_time(pid: u32) -> Duration {
+    /// The CPU time `pid` has used (`ps`'s `[hh:]mm:ss.hh`), or `None` once
+    /// it is gone (`ps` prints nothing): the caller says what a gone
+    /// process means. Anything else `ps` prints that is not a time panics.
+    fn cpu_time(pid: u32) -> Option<Duration> {
         let text = ps(pid, "time");
+        if text.is_empty() {
+            return None;
+        }
         let mut secs = 0.0;
         for part in text.split(':') {
             let v: f64 = part.parse().unwrap_or_else(|_| panic!("ps time {text:?}"));
             secs = secs * 60.0 + v;
         }
-        Duration::from_secs_f64(secs)
+        Some(Duration::from_secs_f64(secs))
+    }
+
+    /// [`cpu_time`] of a process that is gone is `None`, not a panic: on a
+    /// busy Mac the reading can come just after the process ended.
+    #[test]
+    fn cpu_time_of_a_gone_process_is_none() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let mut gone = Command::new("/usr/bin/true").spawn().expect("true");
+        let pid = gone.id();
+        gone.wait().expect("reaped");
+        assert_eq!(cpu_time(pid), None);
+        assert!(cpu_time(std::process::id()).is_some(), "this process runs");
     }
 
     /// [`pid_of`] takes only a process this test process started: a copy of
