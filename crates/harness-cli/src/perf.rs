@@ -149,6 +149,17 @@ fn fresh_facts(ctx: &TargetContext, ledger: &Ledger) -> Result<Facts> {
     Ok(facts)
 }
 
+/// `--as-it-stands-only` with fewer than two measurable units, refused
+/// before the launcher, the C or any crate is built (§3.10: "says why"),
+/// in the words the run itself uses when fewer than two units build.
+fn as_it_stands_needs_two(measurable: &[String]) -> Result<()> {
+    match measurable {
+        [] => bail!("no accepted unit to compare yet"),
+        [one] => bail!("one unit measured ({one}) — the program as it stands needs two"),
+        _ => Ok(()),
+    }
+}
+
 /// `harness perf run` (§3.10).
 pub(crate) fn cmd_run(
     target: PathBuf,
@@ -166,6 +177,9 @@ pub(crate) fn cmd_run(
     let workloads = workloads(&ctx)?;
     let facts = fresh_facts(&ctx, &ledger)?;
     let plan = plan(&ledger)?;
+    if as_it_stands_only {
+        as_it_stands_needs_two(&harness_oracle::perf_measurable(&ctx, &plan, &facts)?)?;
+    }
     let dir = perf_dir(&ctx)?;
     let request = harness_oracle::PerfRequest {
         units,

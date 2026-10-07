@@ -274,6 +274,43 @@ fn run_refuses_by_name() {
     }
 }
 
+/// `perf run --as-it-stands-only` with one measurable unit (zopfli's u001)
+/// is refused before anything is built (§3.10), in the words the run uses
+/// when fewer than two units build: no build step said, no build folder,
+/// no results.
+#[test]
+fn as_it_stands_only_refuses_before_building() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("stands-only");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(
+        t.join("migration/perf/workloads.toml"),
+        "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = [\"-h\"]\n",
+    )
+    .unwrap();
+    let r = harness(
+        &["perf", "run", "--target", target, "--as-it-stands-only"],
+        None,
+    );
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stderr
+            .contains("one unit measured (u001-katajainen) — the program as it stands needs two"),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stdout.contains("building"), "{}", r.stdout);
+    assert!(
+        !t.join("migration/build/.perf").exists(),
+        "perf built before refusing"
+    );
+    assert!(!t.join("migration/perf/program.json").exists());
+}
+
 #[test]
 fn zopfli_measured_end_to_end() {
     if !cfg!(target_os = "macos") {
