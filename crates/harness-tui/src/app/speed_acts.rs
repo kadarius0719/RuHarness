@@ -748,7 +748,8 @@ mod tests {
     }
 
     /// The launcher check never holds a dialog: a slow answer is waited
-    /// for at most the given time, then the dialog goes on without it.
+    /// for at most the dialog's own wait, then the dialog goes on without
+    /// it.
     #[test]
     fn a_slow_launcher_check_never_holds_the_dialog() {
         fn slow() -> bool {
@@ -756,7 +757,7 @@ mod tests {
             true
         }
         let started = std::time::Instant::now();
-        assert_eq!(ask_within(slow, Duration::from_millis(50)), None);
+        assert_eq!(ask_within(slow, LAUNCHER_WAIT), None);
         assert!(
             started.elapsed() < Duration::from_secs(3),
             "{:?}",
@@ -764,6 +765,35 @@ mod tests {
         );
         assert_eq!(ask_within(|| false, Duration::from_secs(30)), Some(false));
         assert_eq!(ask_within(|| true, Duration::from_secs(30)), Some(true));
+    }
+
+    /// The Measure dialog asks the machine's own launcher cache and reads
+    /// its answer the right way round: its words are those for the answer
+    /// `perf_launcher_cached` gives (or, not known in time, the hedge) —
+    /// never those for the other answer.
+    #[test]
+    fn the_measure_dialog_reads_the_machines_launcher_cache() {
+        if !cfg!(target_os = "macos") {
+            // Measure is greyed off macOS: no dialog opens.
+            return;
+        }
+        let app = measurable_app("speed-launcher-own");
+        let p = app
+            .act_argv(Act::Measure, None, None, None)
+            .expect("offered");
+        // Asked first, so the dialog's own ask finds the compiler warm.
+        let cached = harness_oracle::perf_launcher_cached();
+        let (_, right) = app.measure_words_with(&p, Some(cached));
+        let (_, wrong) = app.measure_words_with(&p, Some(!cached));
+        let (_, late) = app.measure_words_with(&p, None);
+        assert_ne!(right, wrong);
+        // A loaded machine may answer late: the dialog is asked again.
+        let words = (0..5)
+            .map(|_| app.measure_words(&p).1)
+            .find(|w| *w != late)
+            .unwrap_or(late.clone());
+        assert_ne!(words, wrong, "the answer read the wrong way round");
+        assert!(words == right || words == late, "{words:?}");
     }
 
     /// The cockpit and `perf show` read perf's launcher cache alike: when

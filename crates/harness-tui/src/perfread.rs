@@ -346,9 +346,10 @@ mod tests {
     }
 
     /// The cache never answers for perf's checks: a file moved out and
-    /// linked back, a folder moved out and linked back, a chmod, or bytes
-    /// rewritten in place with the old modification time put back — each
-    /// reads as perf would read it now, never the cached digest.
+    /// linked back, a folder moved out and linked back, a chmod, another
+    /// file of the same size renamed over it, or bytes rewritten in place —
+    /// the old modification time put back each time — each reads as perf
+    /// would read it now, never the cached digest.
     #[test]
     fn the_digest_cache_never_trusts_a_link_or_an_old_change_time() {
         use std::os::unix::fs::{symlink, PermissionsExt};
@@ -400,6 +401,27 @@ mod tests {
             w(&read(&root, &[], None)),
             Some(InputNow::Digest(d.clone()))
         );
+        // Another file of the same size renamed over it, the old
+        // modification time put back: another inode, hashed again.
+        let mtime = std::fs::metadata(&input).unwrap().modified().unwrap();
+        let other = root.join("bench/other.txt");
+        std::fs::write(&other, b"HELLO").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&other)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        std::fs::rename(&other, &input).unwrap();
+        let Some(InputNow::Digest(swapped)) = w(&read(&root, &[], None)) else {
+            panic!("a digest")
+        };
+        assert_ne!(swapped, d, "another file: hashed again");
+        std::fs::write(&input, b"hello").unwrap();
+        assert_eq!(
+            w(&read(&root, &[], None)),
+            Some(InputNow::Digest(d.clone()))
+        );
         // Other bytes of the same size, the old modification time put back.
         let mtime = std::fs::metadata(&input).unwrap().modified().unwrap();
         std::fs::write(&input, b"HELLO").unwrap();
@@ -416,8 +438,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// The cache keys the workload as well as the file: two workloads on
+    /// one input, and a workload whose options or input name changed (the
+    /// same file under another name, a hard link), each read perf's own
+    /// digest today — never one cached for another workload.
+    #[test]
+    fn the_digest_cache_keys_the_workload_too() {
+        let (tmp, root) = scratch("workload", &[]);
+        std::fs::write(root.join("in.txt"), b"hello").unwrap();
+        std::fs::hard_link(root.join("in.txt"), root.join("n.txt")).unwrap();
+        for workloads in [
+            // Two workloads on one input.
+            "id = \"w\"\nargs = [\"{input}\"]\ninput = \"in.txt\"\n\
+             [[workload]]\nid = \"v\"\nargs = [\"{input}\"]\ninput = \"in.txt\"\n",
+            // The same file under another name.
+            "id = \"w\"\nargs = [\"{input}\"]\ninput = \"n.txt\"\n",
+            // Its options changed: added, then split another way.
+            "id = \"w\"\nargs = [\"-a\", \"-b\", \"{input}\"]\ninput = \"in.txt\"\n",
+            "id = \"w\"\nargs = [\"-a-b\", \"{input}\"]\ninput = \"in.txt\"\n",
+            // Its last option and its input's name changed together, run
+            // into one another the same as before.
+            "id = \"w\"\nargs = [\"{input}\", \"-\"]\ninput = \"in.txt\"\n",
+            "id = \"w\"\nargs = [\"{input}\", \"-i\"]\ninput = \"n.txt\"\n",
+        ] {
+            std::fs::write(
+                root.join("migration/perf/workloads.toml"),
+                format!("schema_version = 1\n[[workload]]\n{workloads}"),
+            )
+            .unwrap();
+            let r = read(&root, &[], None);
+            let Ok(WorkloadsState::Ready(file)) = &r.workloads else {
+                panic!("{:?}", r.workloads)
+            };
+            let perf: BTreeMap<String, InputNow> = file
+                .workloads
+                .iter()
+                .map(|w| {
+                    let d = wl::digest(w, Some(b"hello"));
+                    (w.id.clone(), InputNow::Digest(d))
+                })
+                .collect();
+            assert_eq!(r.inputs, perf, "{workloads}");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// Inputs past the load's budget read "can't check" (the load goes on);
-    /// one over perf's own 64 MiB cap reads perf's words, unread.
+    /// one over perf's own 64 MiB cap reads perf's words, unread, and so
+    /// does a folder named as an input — never "can't check".
     #[test]
     fn an_input_over_the_budget_reads_cant_check() {
         let (tmp, root) = scratch(
@@ -427,11 +495,14 @@ mod tests {
                 ("b", "b.txt"),
                 ("c", "c.txt"),
                 ("huge", "huge.bin"),
+                ("folder", "folder"),
             ],
         );
         for name in ["a.txt", "b.txt", "c.txt"] {
             std::fs::write(root.join(name), b"12345").unwrap();
         }
+        std::fs::create_dir_all(root.join("folder")).unwrap();
+        std::fs::write(root.join("folder/in.txt"), b"12345").unwrap();
         // Sparse: nothing is written, and nothing must be read.
         std::fs::File::create(root.join("huge.bin"))
             .unwrap()
@@ -444,6 +515,10 @@ mod tests {
         assert_eq!(
             r.inputs["huge"],
             InputNow::Unusable(InputUnusable::TooLarge)
+        );
+        assert_eq!(
+            r.inputs["folder"],
+            InputNow::Unusable(InputUnusable::NotAFile)
         );
         // Cached inputs cost the next load nothing: c is hashed then.
         let r = read_with_budget(&root, &[], None, 10);
@@ -482,6 +557,30 @@ mod tests {
         assert_eq!(r.orphans[0], "u000");
         assert_eq!(r.orphans_more, 5);
         assert!(r.errors.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A linked `migration/perf` is never read through either: the results
+    /// files behind it are outside the project.
+    #[test]
+    fn a_linked_perf_folder_is_never_read_through() {
+        let (tmp, root) = scratch("perf-link", &[]);
+        let outside = tmp.join("outside");
+        std::fs::create_dir_all(outside.join("units")).unwrap();
+        std::fs::write(outside.join("units/u001.json"), "{\"secret\": 1}").unwrap();
+        std::fs::write(outside.join("program.json"), "{\"secret\": 1}").unwrap();
+        std::fs::remove_dir_all(root.join("migration/perf")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("migration/perf")).unwrap();
+        let r = read(&root, &[("u001".into(), None)], None);
+        assert!(r.units.is_empty(), "{:?}", r.units);
+        assert!(matches!(r.program, Ok(None)), "{:?}", r.program);
+        assert!(
+            r.workloads.as_ref().is_err_and(
+                |e| e.ends_with("migration/perf: must be a directory (a link is refused)")
+            ),
+            "{:?}",
+            r.workloads
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
