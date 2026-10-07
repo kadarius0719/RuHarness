@@ -30,6 +30,13 @@ fails under load and passes alone — listed in DECISIONS "still separate").
 Review reports and verdicts (scratchpad, not in the repo): code-review/<lens>/{findings,verdicts}.md,
 fixcheck-*.md. Their substance is in FEATURES-DESIGN §R5.
 
+## NOW (2026-10-07) — read docs/NEXT-SESSION.md's top section
+
+Fix pass 2 of the speed work merged and green; its check round and the mutation checks ran
+(docs/reviews/2026-10-07-perf-fix2-check.md); the liblzg walkthrough Parts 0–10 done; the
+project-map spike done and the person's answers recorded. Next: fix pass 3, Part 11 on a quiet
+machine, the map design review. Everything below is history.
+
 ## Open (in order) — resume here (session 17c366c0…, 2026-09-30 → 10-01; continues after context compactions)
 
 **NOW (2026-10-01, after 56cd090 on main):** the probe review is closed and pushed. Next: BUILD the

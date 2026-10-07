@@ -81,8 +81,8 @@ likewise a judgement (its folder name and its reaching almost nothing both say s
 
 ## The spike on real downloads (2026-10-07)
 
-Step 7 of docs/NEXT-WEEK-PLAN.md: the closure script, rewritten (about 90 lines, the session's
-scratchpad `pmap/closure.py`: every `.c` compiled alone with `cc -c -w -O0`, include folders = every
+Step 7 of docs/NEXT-WEEK-PLAN.md: the closure script, rewritten (about 90 lines,
+`devtools/project-map/closure.py`: every `.c` compiled alone with `cc -c -w -O0`, include folders = every
 folder holding a `.h`, `-D` flags only when given; `nm -g` for defined and needed; closures from every
 `main` and every `LLVMFuzzerTestOneInput`; a file that defines `main` is never pulled into another
 closure). Run on two downloads kept outside the repository (`~/code/ruharness-test-downloads/`, the

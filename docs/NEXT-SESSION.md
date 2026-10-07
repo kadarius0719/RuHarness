@@ -1,3 +1,65 @@
+# Next session — kickoff (Fable, from 2026-10-07)
+
+Resume RuHarness on `main` (everything below is merged and pushed). The main session runs on
+**Fable**; **everything it hands off runs on Opus** (the person's rule, also in CLAUDE.md): Agent
+subagents with `model: "opus"`; every Workflow `agent()` call with `{model: 'opus'}` — the default
+inherits the main session's model, so set it on each call; hand-off answers by plain Agent
+subagents with `model: "opus"` and `--model claude-opus-5-5`. Ask the person before giving any
+handed-off work Fable. Fable's own job: triage, design judgement, the shape of each workflow.
+
+Read first: DECISIONS.md's last three entries (2026-10-07), then docs/NEXT-WEEK-PLAN.md "Status
+2026-10-07". Check `get_usage` before each large workflow and say roughly what it costs. Plain words,
+no review codes.
+
+**Where things stand (2026-10-07, session 03b25fd0):**
+- Speed work fix pass 2: all twelve leftovers fixed, merged, 1 251 tests green (DECISIONS).
+- Its check round (workflow `wf_6812de33-51b`: two skeptical checkers per fix area, a regression
+  hunter, six mutation testers over the plan's §3 rule list) — its findings and mutant table are in
+  **docs/reviews/2026-10-07-perf-fix2-check.md** when that file exists; if it does not, the round
+  did not finish in that session: run it again (its shape: §3 of the plan for the mutation list,
+  two lenses per area — "does it hold" and "what did it break" — plus one regression hunter over
+  `git diff c5f979a..c92f6ec`; all agents on Opus).
+- The liblzg walkthrough: Parts 0–10 done and the guide corrected; Part 11 (speed) half done.
+- The project-map spike: done (docs/PROJECT-MAP-INVESTIGATION.md "The spike on real downloads"); the
+  person answered the design's open questions 1–4 and the new flags question (design §7, DECISIONS).
+
+**The work, in order:**
+1. **Fix pass 3** from the check round: triage its findings (keep what both checkers or the
+   evidence confirm; say plainly what is dropped and why), merge the mutation testers' new tests if
+   green, fix the confirmed findings in worktrees (Opus fixers, a test each that fails without the
+   fix), then a scoped check of that pass (Opus checkers). Candidates the fixers themselves noted:
+   docs/reviews/2026-10-07-perf-fix2-check.md "Seen by the fixers, not in scope".
+2. **Part 11 of the testing guide on liblzg**, on a quiet machine: the practice worktree
+   `.claude/worktrees/practice-lzg` (branch `practice-lzg`, local only, never pushed; it holds
+   `targets/lzg` with both units verified, features, `migration/perf/workloads.toml` saved and
+   `bench/big.txt` made — Steps 11.1–11.2 done). Merge main into it first (Part 10's "After
+   updating RuHarness"), `cargo build -p harness-cli -p harness-tui -p harness-mcp`, then
+   `PATH="$PWD/target/debug:$PATH"` and Steps 11.3–11.6 (11.5 drives the cockpit: use
+   devtools/cockpit-drive). Fix the guide where reality differs.
+3. **The project-map design review** (docs/PROJECT-MAP-DESIGN.md draft 0 + §7's answers + the
+   spike): 3–4 lenses, Opus reviewers, every finding verified against the spike's evidence and the
+   code by Opus verifiers; Fable triages and revises; then CHECK THE REVISION. The spike's "What
+   the spike changes" list is the first input. No building before the revision is checked.
+4. Then: weigh the briefing's M5 against building the map.
+5. At the next merge to main: `bench check --replay` (not run for fix pass 2; it needs the
+   gitignored `targets/tractor/.scorer-vendor/` and `.bench/` copied with `cp -cR` from
+   `.claude/worktrees/rust-migration-harness-7d1c42`, and a quiet machine; expect 198 reproduce,
+   2 expected divergences, 0 problems).
+
+**Environment (re-check; don't assume):**
+- Test downloads live only in `~/code/ruharness-test-downloads/` (liblzg, lz4, lzg-practice): never
+  installed, never on PATH, compiled only inside that folder or the harness's sandboxed builds; ask
+  before any new download. An `lz4` in /opt/homebrew/bin predates this and is not ours.
+- The harness binaries are not installed (`~/.cargo/bin` has none): put a worktree's
+  `target/debug` first on PATH instead of the guide's `cargo install`.
+- The cockpit's chat uses the person's default Claude Code model (seen: claude-opus-4-8, then
+  claude-opus-5-5); the guide never passes `--chat-model`.
+- devtools/README.md: the headless cockpit driver (dialogs ignore keys for a moment — wait for their
+  own `ready:` line) and the project-map closure script.
+- Live chat tests were not re-run (no change to the chat's protocol, environment or end routine).
+
+---
+
 # Next session — kickoff (for the week of 2026-10-07)
 
 Paste the Agent Briefing first, then:

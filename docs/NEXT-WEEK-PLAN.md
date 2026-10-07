@@ -14,6 +14,14 @@ turn out to add nothing over `harness map`'s text. The model-advice features (§
 not to be built before matching works across a whole project. Steps below renumbered to this
 order: 1, 2, 3, 6 (merge: DONE 2026-10-03), then 4 (liblzg), then 7 (the spike, then review).
 
+**Status 2026-10-07 (session 03b25fd0, Opus 5.5):** step 2 (fix pass 2) DONE — all twelve items,
+merged (c92f6ec), 1 251 tests green; its check round and step 3's mutation checks RAN together as
+workflow `wf_6812de33-51b` (results: docs/reviews/2026-10-07-perf-fix2-check.md when saved). Step 4
+(liblzg) — Parts 0–10 DONE, the guide corrected (e29ec56); Part 11 Steps 11.1–11.2 done, 11.3–11.6
+wait for a quiet machine. Step 7 — the spike DONE (lz4 and liblzg; the investigation note), the
+person's answers to the design's §7 recorded; the design review is next after fix pass 3 and
+Part 11. The next session runs on Fable with every handed-off agent on Opus (docs/NEXT-SESSION.md).
+
 Rule for the week: the person stopped at 75 % of the weekly limit; the costly steps (the fix
 check, mutation checks) were deferred to the reset. Check `get_usage` before each large workflow
 and say roughly what it will cost. Report in plain words, no finding codes.

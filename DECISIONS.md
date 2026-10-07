@@ -2752,3 +2752,35 @@ Still open (§7 5–7): the picture, model advice, an improvements mode — last
 
 **Revisit when:** a project's flags differ per file in a way one stated configuration cannot
 express (then: several configurations from `compile_commands.json`).
+
+## 2026-10-07 — Speed work, fix pass 2: the twelve leftovers fixed; the liblzg walkthrough run
+
+**Fix pass 2** (docs/NEXT-WEEK-PLAN.md §2, items 2–13; item 1 was done 2026-10-03): five agents, one
+area each, in their own worktrees (workflow `wf_c913c6d1-af7`), every fix with a test each agent
+showed fails when the fix is undone; merged as five merge commits (7abd11d … c92f6ec), full
+workspace 1 251 tests green, fmt and clippy clean. In plain words: `perf show` without facts no
+longer says "the C changed" on every row (it says once that the C is not checked); with nothing
+stored it runs no compiler or computer check; `--as-it-stands-only` refuses before building
+anything when fewer than two units are measurable; the results reader caps every list a row holds
+(a forged file's long list is refused by name); `perf run` never reads through or deletes a linked
+`migration/perf/units` folder (refused by name, before anything is built); perf run and perf show
+read the compilers with one function; tests now pin the stored short flag, the second-run case and
+the two-unit run's row counts; the launcher tests can no longer pick another worktree's processes
+when two test runs share the machine; SCHEMAS and PERF-DESIGN wording fixed.
+
+**Decided: harness-tui may depend on harness-oracle**, optionally and only for the `tui` feature
+(the terminal front end), to ask `perf_launcher_cached()` — whether perf's launcher is built — so
+the Measure dialogs' estimate counts the 25 s launcher build when it is not. No outside crate is
+added (the cockpit's tree gains harness-oracle and harness-scan, both workspace crates); the read
+model harness-mcp reuses stays harness-core only. The question is asked on its own thread, waited
+for at most 0.25 s. Rejected: a new `harness` subcommand for it (CLI surface is a stable contract).
+
+**The liblzg walkthrough** (plan step 4): Parts 0–10 of docs/TESTING-GUIDE.md run end to end on a
+real download, both translations through the cockpit's chat on the person's subscription (Opus,
+GREEN on the first turn each, $0.38 and $0.22), the cockpit driven headless with
+devtools/cockpit-drive. Every step behaved as written; the guide now prints the real values
+(808 bytes, the header and checksum bytes, the 13 findings, the mutation line) and five small
+corrections. Part 11 (speed) is half done: it needs a quiet machine.
+
+**Not done here:** `bench check --replay` was not run for this merge (fix pass 2 touched perf, the
+cockpit's estimate and tests only — nothing verify, migrate or bench read); run it at the next merge.
