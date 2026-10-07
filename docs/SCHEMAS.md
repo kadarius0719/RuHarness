@@ -1312,10 +1312,13 @@ next write.
 **Current** iff every input equals today's: the workload's digest, the program digest, the
 program's name, the recipe, the launcher, each unit's crate digest and its `replaces` (unit
 rows), the held units, those left out and the plan's order (as-it-stands rows); the computer
-and the compilers are checked only by `perf show` (when the launcher cache is current), never by
-the cockpit or harness-mcp. Each reason has a closed token: `workload | workload-gone | program |
-program-name | recipe | launcher | rust | replaces | left-out | accepted | verified | plan-order |
-computer | compilers`, and the cockpit's own `measuring | too-large | input-unusable`.
+and the compilers are checked only by `perf show` (never with `--no-check`), never by the
+cockpit or harness-mcp — the computer through the launcher's `perfrun facts`, only when the
+launcher cache is current; the compilers as tool runs (`cc --version`, `rustc -V`; the CLI
+below), whatever the launcher cache. Each reason has a closed token: `workload | workload-gone |
+program | program-name | recipe | launcher | rust | replaces | left-out | accepted | verified |
+plan-order | computer | compilers`, and the cockpit's own `measuring | too-large |
+input-unusable`.
 
 ## CLI
 
