@@ -24,6 +24,7 @@ tui = [
     "dep:tree-sitter-highlight",
     "dep:tree-sitter-c",
     "dep:signal-hook",
+    "dep:harness-oracle",
 ]
 
 [dependencies]
@@ -37,3 +38,9 @@ tree-sitter-highlight = { workspace = true, optional = true }
 tree-sitter-c = { workspace = true, optional = true }
 signal-hook = { workspace = true, optional = true }
 serde_json.workspace = true
+# Workspace path dependency (no crates.io addition; its harness-scan and
+# tree-sitter-c are already here), for the front end only: the Measure
+# dialogs ask whether perf's launcher cache is current
+# (`perf_launcher_cached`, docs/PERF-DESIGN.md §3.11). The read model that
+# harness-mcp reuses stays harness-core only.
+harness-oracle = { workspace = true, optional = true }
