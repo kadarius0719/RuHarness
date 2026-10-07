@@ -947,9 +947,10 @@ fn two_units_end_to_end() {
         assert!(row.inputs.left_out.iter().flatten().next().is_none());
     }
 
-    // A crashing C: its row says so, and only ever under the C.
+    // A crashing C: its row says so, and only ever under the C — once: the
+    // C failed in step 1, so the workload's other rows are not run (§3.5).
     let crash = on("crash");
-    assert!(!crash.is_empty(), "{events:?}");
+    assert_eq!(crash.len(), 1, "{crash:?}");
     for e in &crash {
         assert_eq!(e["side"], "c", "{e}");
         assert_eq!(e["outcome"], "c-crashed", "{e}");
@@ -970,12 +971,15 @@ fn two_units_end_to_end() {
     }
 
     // A C that prints the time cannot be compared against, and no side
-    // reads "behaves differently" for it.
+    // reads "behaves differently" for it: its one row is the C's.
     assert_eq!(
         stored(&program.c_alone, "time").unwrap().outcome,
         "c-unstable"
     );
-    for e in on("time") {
+    let time = on("time");
+    assert_eq!(time.len(), 1, "{time:?}");
+    assert_eq!(time[0]["side"], "c", "{time:?}");
+    for e in time {
         assert_ne!(e["outcome"], "behaves-differently", "{e}");
     }
     for rows in [&u001, &util, &program.as_it_stands] {
