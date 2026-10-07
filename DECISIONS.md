@@ -2782,5 +2782,13 @@ devtools/cockpit-drive. Every step behaved as written; the guide now prints the 
 (808 bytes, the header and checksum bytes, the 13 findings, the mutation line) and five small
 corrections. Part 11 (speed) is half done: it needs a quiet machine.
 
+**Checked** (workflow `wf_6812de33-51b`, 17 Opus agents, report docs/reviews/2026-10-07-perf-fix2-check.md):
+every area's fixes hold; the checkers found 0 high, 6 medium and 22 low problems, left for the next
+session to triage (the main one: without facts, `perf show` and the cockpit judge a program-as-it-
+stands row in opposite wrong ways). **Mutation checks** of the plan's rule list and fix pass 2's own
+rules: 253 mutants — 185 killed, 52 survived and each got the test that kills it (merged), 14
+equivalent (reasons recorded), 2 open (recorded). The weakest guards were currency's reasons and the
+cockpit's change advice: several reasons had no test at all.
+
 **Not done here:** `bench check --replay` was not run for this merge (fix pass 2 touched perf, the
 cockpit's estimate and tests only — nothing verify, migrate or bench read); run it at the next merge.

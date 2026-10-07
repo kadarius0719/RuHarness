@@ -6872,6 +6872,15 @@ mod tests {
                 crate::model::NO_PROVIDER
             )
         );
+        // A steer's attempt and a chat's are a model's too: the same words.
+        let modify = change_words(&unit, true);
+        for made in [
+            P::Steered("a-13c941dfff95".into()),
+            P::Chat("a-13c941dfff95".into()),
+        ] {
+            unit.provenance = made.clone();
+            assert_eq!(change_words(&unit, true), modify, "{made:?}");
+        }
         unit.provenance = P::Ambiguous(vec!["a-28d8aaaa".into(), "a-13c9bbbb".into()]);
         assert!(
             change_words(&unit, true).starts_with("Modify a-13c9 "),
@@ -6894,9 +6903,19 @@ mod tests {
             "Hand edit u-lib's crate, then Replace u-lib's verified crate with the new attempt \
              and measure this unit again — and if it is not faster, Replace it back with a-77b2"
         );
-        std::fs::remove_file(dir.join("src/ffi.rs")).unwrap();
-        assert!(change_words(&unit, true).starts_with("Commit the unit's crate first (git)"));
+        // A crate without either file Hand edit opens: commit, edit, verify.
+        for missing in ["src/ffi.rs", "src/logic.rs"] {
+            std::fs::remove_file(dir.join(missing)).unwrap();
+            assert!(
+                change_words(&unit, true).starts_with("Commit the unit's crate first (git)"),
+                "without {missing}"
+            );
+            std::fs::write(dir.join(missing), "").unwrap();
+        }
+        // Code the cockpit did not record, even with both files: there is
+        // no attempt to Replace it back with.
         unit.provenance = P::None;
+        assert!(change_words(&unit, true).starts_with("Commit the unit's crate first (git)"));
         assert!(change_words(&unit, true).contains("run harness verify u-lib in a terminal"));
         let _ = std::fs::remove_dir_all(dir);
     }

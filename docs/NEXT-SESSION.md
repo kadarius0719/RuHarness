@@ -12,23 +12,31 @@ Read first: DECISIONS.md's last three entries (2026-10-07), then docs/NEXT-WEEK-
 no review codes.
 
 **Where things stand (2026-10-07, session 03b25fd0):**
-- Speed work fix pass 2: all twelve leftovers fixed, merged, 1 251 tests green (DECISIONS).
-- Its check round (workflow `wf_6812de33-51b`: two skeptical checkers per fix area, a regression
-  hunter, six mutation testers over the plan's §3 rule list) — its findings and mutant table are in
-  **docs/reviews/2026-10-07-perf-fix2-check.md** when that file exists; if it does not, the round
-  did not finish in that session: run it again (its shape: §3 of the plan for the mutation list,
-  two lenses per area — "does it hold" and "what did it break" — plus one regression hunter over
-  `git diff c5f979a..c92f6ec`; all agents on Opus).
+- Speed work fix pass 2: all twelve leftovers fixed, merged, 1 251 tests green (DECISIONS); with the
+  mutation checks' new tests merged, 1 264 tests green, fmt and clippy clean.
+- Its check round FINISHED (workflow `wf_6812de33-51b`, 17 Opus agents, ~3.1M tokens): the
+  report is **docs/reviews/2026-10-07-perf-fix2-check.md**. Checkers: 0 high, 6 medium, 22 low, not
+  yet triaged — the mediums: without facts `perf show` lets a program-as-it-stands row read current
+  (its units unchecked; both CLI checkers), while the cockpit and harness-mcp say every held unit is
+  "left out now" (the two disagree); the new 999 cap on `left_out` can stop a real run on a plan
+  over 999 units; the caps do not bound the parse itself (the fixer said so too); the Measure
+  dialog can drop the launcher-cache line when the cockpit and the `harness` it runs are different
+  builds. Mutation checks: 253 mutants — 185 killed, 52 survived and got a test (merged: the six
+  "Merge the mutation checks' new tests" commits), 14 equivalent with reasons, 2 open (a ratio-end
+  rounding the current code gets wrong on the same inputs; the dialog's 0.25 s wait, untestable as
+  the probe is wired).
 - The liblzg walkthrough: Parts 0–10 done and the guide corrected; Part 11 (speed) half done.
 - The project-map spike: done (docs/PROJECT-MAP-INVESTIGATION.md "The spike on real downloads"); the
   person answered the design's open questions 1–4 and the new flags question (design §7, DECISIONS).
 
 **The work, in order:**
 1. **Fix pass 3** from the check round: triage its findings (keep what both checkers or the
-   evidence confirm; say plainly what is dropped and why), merge the mutation testers' new tests if
-   green, fix the confirmed findings in worktrees (Opus fixers, a test each that fails without the
+   evidence confirm; say plainly what is dropped and why; the mutation tests are already merged),
+   decide the two open survivors, fix the confirmed findings in worktrees (Opus fixers, a test each that fails without the
    fix), then a scoped check of that pass (Opus checkers). Candidates the fixers themselves noted:
-   docs/reviews/2026-10-07-perf-fix2-check.md "Seen by the fixers, not in scope".
+   docs/reviews/2026-10-07-perf-fix2-check.md "Seen by the fixers, not in scope" and "Seen by the main
+   session" (a cockpit test that leaves a looping child behind when it fails — eight were found
+   running for a week and stopped).
 2. **Part 11 of the testing guide on liblzg**, on a quiet machine: the practice worktree
    `.claude/worktrees/practice-lzg` (branch `practice-lzg`, local only, never pushed; it holds
    `targets/lzg` with both units verified, features, `migration/perf/workloads.toml` saved and

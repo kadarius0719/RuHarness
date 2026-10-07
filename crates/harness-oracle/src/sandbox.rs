@@ -700,9 +700,12 @@ mod tests {
         .is_err());
     }
 
-    /// Live (macOS, sandbox-exec): a program under verify's run profile can
-    /// have nothing started for it by the system either — the gap the perf
-    /// review found in these profiles, closed by the same rule.
+    /// Live (macOS, sandbox-exec): a program under any of verify's profiles
+    /// — the run profile, the scenario profile built on it, and the tool
+    /// profile — can have nothing started for it by the system either: the
+    /// gap the perf review found in these profiles, closed by the same rule.
+    /// Each profile is asked on its own: the scenario profile's text has no
+    /// golden of its own, so only this run shows it keeps the rule.
     #[test]
     fn a_run_cannot_open_or_start_anything_through_the_system() {
         if !cfg!(target_os = "macos") || !Path::new(SANDBOX_EXEC).exists() {
@@ -734,25 +737,38 @@ mod tests {
         let host = HostDirs::from_env().expect("host");
         let run_tmp = dir.join("run");
         std::fs::create_dir(&run_tmp).expect("run dir");
-        let profile = render_run_profile(&RunSpec {
+        let run = RunSpec {
             host: &host,
             target_root: &dir,
             bin: &bin,
             read_files: &[],
             tmpdir: &run_tmp,
-        })
-        .expect("renders");
-        let argv = wrap(&profile, &[bin.to_string_lossy().into_owned()]);
-        let out = std::process::Command::new(&argv[0])
-            .args(&argv[1..])
-            .output()
-            .expect("sandbox-exec");
-        assert_eq!(
-            String::from_utf8_lossy(&out.stdout),
-            "lsopen 1\nappleevent-send 1\njob-creation 1\nlsd 1\n",
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        };
+        let tool = ProfileSpec {
+            host: &host,
+            target_root: &dir,
+            toolchain: false,
+            write_dirs: std::slice::from_ref(&run_tmp),
+            write_files: &[],
+        };
+        for (name, profile) in [
+            ("run", render_run_profile(&run)),
+            ("scenario", render_scenario_profile(&run)),
+            ("tool", render_profile(&tool)),
+        ] {
+            let profile = profile.expect("renders");
+            let argv = wrap(&profile, &[bin.to_string_lossy().into_owned()]);
+            let out = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .output()
+                .expect("sandbox-exec");
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                "lsopen 1\nappleevent-send 1\njob-creation 1\nlsd 1\n",
+                "the {name} profile: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
     }
 
     #[test]

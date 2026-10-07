@@ -409,4 +409,141 @@ mod tests {
             assert!(why.iter().any(|w| w == want), "{want}: {why:?}");
         }
     }
+
+    fn tokens(why: Vec<Reason>) -> Vec<&'static str> {
+        why.into_iter().map(|r| r.token).collect()
+    }
+
+    #[test]
+    fn the_recipe_the_launcher_and_each_compiler_are_their_own_reason() {
+        let unit = row(RowKind::Unit);
+        let crates = |id: &str| (id == "u001").then(|| d('c'));
+        let replaces = vec!["src/a.c".to_string()];
+        let measurable = vec!["u001".to_string()];
+        let (a, b) = (d('a'), d('b'));
+        let today = |compilers| Today {
+            workload: Some(&a),
+            program: &b,
+            crate_digest: &crates,
+            replaces: Some(&replaces),
+            program_name: "tool",
+            // A unit's row is judged the same with the plan's measurable
+            // units given (the cockpit gives them for every row).
+            measurable: Some(&measurable),
+            computer: Some(&unit.inputs.computer),
+            compilers: Some(compilers),
+        };
+        let same = today(("cc 1", "rustc 1"));
+        assert!(reasons(&unit, RowKind::Unit, &same).is_empty());
+        let mut older = unit.clone();
+        older.inputs.recipe = "perf-recipe-1".into();
+        assert_eq!(tokens(reasons(&older, RowKind::Unit, &same)), ["recipe"]);
+        let mut launched = unit.clone();
+        launched.inputs.launcher = "perf-launcher-1".into();
+        assert_eq!(
+            tokens(reasons(&launched, RowKind::Unit, &same)),
+            ["launcher"]
+        );
+        // Only rustc changed, or only cc: either is other compilers.
+        for (cc, rustc) in [("cc 1", "rustc 2"), ("cc 2", "rustc 1")] {
+            assert_eq!(
+                tokens(reasons(&unit, RowKind::Unit, &today((cc, rustc)))),
+                ["compilers"],
+                "{cc}, {rustc}"
+            );
+        }
+        // The C alone names no rustc: today's is not its concern.
+        let mut c_alone = row(RowKind::CAlone);
+        c_alone.inputs.compilers.rustc = None;
+        let rustc_2 = today(("cc 1", "rustc 2"));
+        assert!(reasons(&c_alone, RowKind::CAlone, &rustc_2).is_empty());
+    }
+
+    #[test]
+    fn the_program_as_it_stands_says_exactly_what_changed() {
+        // As perf run stores it: the held units' crates beside its units,
+        // and the verified units it left out, each with its reason.
+        let mut p = row(RowKind::AsItStands);
+        p.inputs.crates = Some(vec![
+            CrateDigest {
+                id: "u001".into(),
+                digest: d('c'),
+            },
+            CrateDigest {
+                id: "u002".into(),
+                digest: d('e'),
+            },
+        ]);
+        let left = |id: &str, digest: String, reason: &str| LeftOut {
+            id: id.into(),
+            crate_digest: digest,
+            reason: reason.into(),
+        };
+        p.inputs.left_out = Some(vec![
+            left("u003", String::new(), "not-fresh"),
+            left("u004", d('f'), "crate-does-not-build"),
+            left("u005", d('g'), "replaces-changed"),
+            left("u006", d('h'), "accept-interrupted"),
+        ]);
+        let unchanged = |id: &str| match id {
+            "u001" => Some(d('c')),
+            "u002" => Some(d('e')),
+            "u004" => Some(d('f')),
+            _ => None,
+        };
+        let u002_changed = |id: &str| match id {
+            "u002" => Some(d('y')),
+            id => unchanged(id),
+        };
+        let u004_changed = |id: &str| match id {
+            "u004" => Some(d('z')),
+            id => unchanged(id),
+        };
+        let (a, b) = (d('a'), d('b'));
+        let judge = |crates: &dyn Fn(&str) -> Option<String>, now: &[&str]| {
+            let now: Vec<String> = now.iter().map(|s| s.to_string()).collect();
+            let today = Today {
+                workload: Some(&a),
+                program: &b,
+                crate_digest: crates,
+                replaces: None,
+                program_name: "tool",
+                measurable: Some(&now),
+                computer: None,
+                compilers: None,
+            };
+            reasons(&p, RowKind::AsItStands, &today)
+        };
+        // Nothing changed: current. A unit that does not build is still left
+        // out today; its crate is the same.
+        assert!(judge(&unchanged, &["u001", "u002"]).is_empty());
+        assert!(judge(&unchanged, &["u001", "u002", "u004"]).is_empty());
+        // One held crate changed: said once.
+        assert_eq!(tokens(judge(&u002_changed, &["u001", "u002"])), ["rust"]);
+        // The plan's order changed, nothing else.
+        assert_eq!(tokens(judge(&unchanged, &["u002", "u001"])), ["plan-order"]);
+        // A held unit left out now: that alone (the order of the rest is
+        // not a change).
+        assert_eq!(tokens(judge(&unchanged, &["u002"])), ["left-out"]);
+        // The crate of a unit left out because it did not build changed.
+        let why = judge(&u004_changed, &["u001", "u002", "u004"]);
+        assert_eq!(
+            why,
+            [Reason {
+                token: "rust",
+                words: "u004's Rust changed since".into(),
+            }]
+        );
+        // Units left out as not fresh, replaces changed or Accept
+        // interrupted are measurable now: each was verified since.
+        let why = judge(&unchanged, &["u001", "u002", "u003", "u005", "u006"]);
+        assert_eq!(
+            why.iter().map(|r| r.words.as_str()).collect::<Vec<_>>(),
+            [
+                "u003 was verified since",
+                "u005 was verified since",
+                "u006 was verified since"
+            ]
+        );
+    }
 }

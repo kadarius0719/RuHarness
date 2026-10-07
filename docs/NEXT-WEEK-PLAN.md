@@ -16,7 +16,7 @@ order: 1, 2, 3, 6 (merge: DONE 2026-10-03), then 4 (liblzg), then 7 (the spike, 
 
 **Status 2026-10-07 (session 03b25fd0, Opus 5.5):** step 2 (fix pass 2) DONE — all twelve items,
 merged (c92f6ec), 1 251 tests green; its check round and step 3's mutation checks RAN together as
-workflow `wf_6812de33-51b` (results: docs/reviews/2026-10-07-perf-fix2-check.md when saved). Step 4
+workflow `wf_6812de33-51b`, FINISHED: 0 high, 6 medium, 22 low findings to triage; 253 mutants — 185 killed, 52 got a test (merged), 14 equivalent, 2 open (docs/reviews/2026-10-07-perf-fix2-check.md). Step 4
 (liblzg) — Parts 0–10 DONE, the guide corrected (e29ec56); Part 11 Steps 11.1–11.2 done, 11.3–11.6
 wait for a quiet machine. Step 7 — the spike DONE (lz4 and liblzg; the investigation note), the
 person's answers to the design's §7 recorded; the design review is next after fix pass 3 and

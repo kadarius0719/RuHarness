@@ -168,6 +168,16 @@ const ONE_WORKLOAD: &str = "schema_version = 1\n[[workload]]\nid = \"w\"\nargs =
 /// added to the target's digests today — so it reads current until
 /// something changes.
 fn stored_row(t: &Path, outcome: &str, inputs: serde_json::Value) -> serde_json::Value {
+    stored_row_on(t, "w", outcome, inputs)
+}
+
+/// [`stored_row`] on `workload` (one without an input file).
+fn stored_row_on(
+    t: &Path,
+    workload: &str,
+    outcome: &str,
+    inputs: serde_json::Value,
+) -> serde_json::Value {
     use harness_core::perf::workloads::{self as wl, WorkloadsState};
     let ctx = harness_core::TargetContext::load(t).unwrap();
     let facts = harness_core::Facts::load(&t.join("migration/facts.jsonl")).unwrap();
@@ -176,13 +186,13 @@ fn stored_row(t: &Path, outcome: &str, inputs: serde_json::Value) -> serde_json:
     };
     let run = serde_json::json!({"cpu_us": 1_300_000, "wall_us": 1_300_000, "end": "exit 0"});
     let mut row = serde_json::json!({
-        "workload": "w",
+        "workload": workload,
         "outcome": outcome,
         "short": false,
         "runs": 5,
         "platform_metrics": "cpu-time",
         "inputs": {
-            "workload": wl::digest(workloads.get("w").unwrap(), None),
+            "workload": wl::digest(workloads.get(workload).unwrap(), None),
             "program": harness_core::features::program_digest_now(&ctx, &facts),
             "program_name": harness_core::features::program_name(&ctx.config),
             "recipe": harness_core::perf::PERF_RECIPE,
@@ -328,10 +338,78 @@ fn run_refuses_by_name() {
     }
 }
 
-/// `perf run --as-it-stands-only` with one measurable unit (zopfli's u001)
-/// is refused before anything is built (§3.10), in the words the run uses
-/// when fewer than two units build: no build step said, no build folder,
-/// no results.
+/// `perf run` refuses stale facts before anything is built ("scan first",
+/// §3.10), whichever way they went stale: a file the scan recorded changed
+/// though the program does not build it (a C file in a subfolder that
+/// nothing includes), or a C file the whole-program build compiles that the
+/// scan never saw. Each case is checked to be one the other cannot see.
+#[test]
+fn run_refuses_stale_facts_before_building() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    use harness_core::features::{program_digest_now, program_paths, STALE_PROGRAM};
+    let t = zopfli("stale-facts");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    let scan = || {
+        let r = harness(&["scan", "--target", target], None);
+        assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+        (
+            harness_core::TargetContext::load(&t).unwrap(),
+            harness_core::Facts::load(&t.join("migration/facts.jsonl")).unwrap(),
+        )
+    };
+    let refused = |case: &str| {
+        let r = harness(&["perf", "run", "--target", target], None);
+        assert_eq!(r.code, 1, "{case}: {}\n{}", r.stdout, r.stderr);
+        assert!(
+            r.stderr.contains(
+                "the program's C changed since the scan: scan the project first, then measure"
+            ),
+            "{case}: {}",
+            r.stderr
+        );
+        assert!(!r.stdout.contains("building"), "{case}: {}", r.stdout);
+        assert!(
+            !t.join("migration/build/.perf").exists(),
+            "{case}: perf built before refusing"
+        );
+    };
+
+    // A recorded C file outside the program changes: the program's digest
+    // does not see it.
+    let unused = "src/zopfli/extra/unused.c";
+    std::fs::create_dir_all(t.join("src/zopfli/extra")).unwrap();
+    std::fs::write(t.join(unused), "int unused(void) { return 0; }\n").unwrap();
+    let (ctx, facts) = scan();
+    assert!(facts.files.iter().any(|f| f.path == unused));
+    assert!(!program_paths(&ctx, &facts).iter().any(|p| p == unused));
+    std::fs::write(t.join(unused), "int unused(void) { return 1; }\n").unwrap();
+    assert_ne!(program_digest_now(&ctx, &facts), STALE_PROGRAM);
+    refused("a recorded file outside the program changed");
+
+    // A top-level C file the scan never saw: every recorded file is
+    // unchanged, only the program's digest sees it.
+    let (ctx, facts) = scan();
+    std::fs::write(
+        t.join("src/zopfli/added.c"),
+        "int added(void) { return 0; }\n",
+    )
+    .unwrap();
+    for f in &facts.files {
+        assert_eq!(blake3_of(&t.join(&f.path)), f.hash, "{}", f.path);
+    }
+    assert_eq!(program_digest_now(&ctx, &facts), STALE_PROGRAM);
+    refused("a C file the scan never saw");
+}
+
+/// `perf run --as-it-stands-only` with one measurable unit (zopfli's u001),
+/// or none, is refused before anything is built (§3.10), in the words the
+/// run uses when fewer than two units build: no build step said, no build
+/// folder, no results.
 #[test]
 fn as_it_stands_only_refuses_before_building() {
     if !cfg!(target_os = "macos") {
@@ -346,23 +424,28 @@ fn as_it_stands_only_refuses_before_building() {
         "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = [\"-h\"]\n",
     )
     .unwrap();
-    let r = harness(
-        &["perf", "run", "--target", target, "--as-it-stands-only"],
-        None,
+    let refused = |words: &str| {
+        let r = harness(
+            &["perf", "run", "--target", target, "--as-it-stands-only"],
+            None,
+        );
+        assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+        assert!(r.stderr.contains(words), "{words}: {}", r.stderr);
+        assert!(!r.stdout.contains("building"), "{words}: {}", r.stdout);
+        assert!(
+            !t.join("migration/build/.perf").exists(),
+            "{words}: perf built before refusing"
+        );
+        assert!(!t.join("migration/perf/program.json").exists(), "{words}");
+    };
+    refused("one unit measured (u001-katajainen) — the program as it stands needs two");
+    // No measurable unit at all: u001 is no longer verified.
+    edit(
+        &t.join("migration/plan.toml"),
+        "status = \"verified\"",
+        "status = \"pending\"",
     );
-    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
-    assert!(
-        r.stderr
-            .contains("one unit measured (u001-katajainen) — the program as it stands needs two"),
-        "{}",
-        r.stderr
-    );
-    assert!(!r.stdout.contains("building"), "{}", r.stdout);
-    assert!(
-        !t.join("migration/build/.perf").exists(),
-        "perf built before refusing"
-    );
-    assert!(!t.join("migration/perf/program.json").exists());
+    refused("no accepted unit to compare yet");
 }
 
 #[test]
@@ -592,9 +675,12 @@ fn show_checks_the_compilers_in_the_sandbox() {
 }
 
 /// With no row stored there is nothing to judge (§3.9): `perf show` runs no
-/// compiler and checks no computer, and says only that nothing is measured
-/// yet — on a target whose allowlist lacks `cc`, a compiler check would
-/// read "compilers not checked". With a row stored, it checks again.
+/// compiler, checks no computer and does not say the C is not checked, and
+/// says only that nothing is measured yet — on a target whose allowlist
+/// lacks `cc`, a compiler check would read "compilers not checked"; in a
+/// home folder without a launcher cache, a computer check would read
+/// "computer not checked"; without facts, judging would read "the C not
+/// checked". With a row stored, it checks again.
 #[test]
 fn show_checks_nothing_when_nothing_is_stored() {
     let t = zopfli("nothing-stored");
@@ -606,35 +692,71 @@ fn show_checks_nothing_when_nothing_is_stored() {
     );
     std::fs::create_dir_all(t.join("migration/perf")).unwrap();
     std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
-    let r = harness(&["perf", "show", "--target", target], None);
+    // A home folder without perf's launcher cache.
+    let home = t.with_extension("home");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let show = || {
+        harness_env(
+            &["perf", "show", "--target", target],
+            None,
+            &[("HOME", home.as_os_str())],
+        )
+    };
+    let nothing = "perf: nothing measured yet — run harness perf run\n";
+    let r = show();
     assert_eq!(r.code, 0, "{}", r.stderr);
-    assert_eq!(
-        r.stdout, "perf: nothing measured yet — run harness perf run\n",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.stdout, nothing, "{}", r.stdout);
+    // And without facts.
+    let facts = t.join("migration/facts.jsonl");
+    let kept = std::fs::read(&facts).unwrap();
+    std::fs::remove_file(&facts).unwrap();
+    let r = show();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(r.stdout, nothing, "no facts: {}", r.stdout);
+    std::fs::write(&facts, kept).unwrap();
 
-    // A row stored: judged, and the compilers it could not run are said.
+    // A row stored: judged, and the compilers it could not run and the
+    // computer it could not check are said.
     store_a_baseline(&t);
-    let r = harness(&["perf", "show", "--target", target], None);
+    let r = show();
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(
         r.stdout.contains("perf: compilers not checked"),
         "{}",
         r.stdout
     );
+    assert!(
+        r.stdout
+            .contains("perf: computer not checked — run harness perf run once"),
+        "{}",
+        r.stdout
+    );
     assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
 }
 
-/// Without facts `perf show` cannot hash the C (§3.9): it says so once and
-/// judges the rest — no row reads "the C changed", as in the cockpit —
-/// whether the facts file is gone or cannot be read. With the facts the
-/// same row is current, and an edit to the C is said again.
+/// Without facts `perf show` cannot hash the C (§3.9): it says so once —
+/// once for the show, not once a row: two rows are stored — and judges the
+/// rest — no row reads "the C changed", as in the cockpit — whether the
+/// facts file is gone or cannot be read. With the facts the same rows are
+/// current, and an edit to the C is said again.
 #[test]
 fn show_without_facts_does_not_judge_the_c() {
+    use harness_core::perf::results as res;
     let t = zopfli("no-facts");
     let target = t.to_str().unwrap();
     store_a_baseline(&t);
+    // A second row: the C alone on a second workload, `w2`.
+    std::fs::write(
+        t.join("migration/perf/workloads.toml"),
+        format!("{ONE_WORKLOAD}[[workload]]\nid = \"w2\"\nargs = [\"-c\"]\n"),
+    )
+    .unwrap();
+    let program = t.join("migration/perf/program.json");
+    let mut file = res::read_program(&program).unwrap().unwrap();
+    let w2 = stored_row_on(&t, "w2", "baseline", serde_json::json!({}));
+    file.c_alone.push(serde_json::from_value(w2).unwrap());
+    res::write_program(&program, &file).unwrap();
     let show = || harness(&["perf", "show", "--target", target, "--no-check"], None);
     let r = show();
     assert_eq!(r.code, 0, "{}", r.stderr);
@@ -651,12 +773,17 @@ fn show_without_facts_does_not_judge_the_c() {
         }
         let r = show();
         assert_eq!(r.code, 0, "{case}: {}", r.stderr);
+        let shown = rows_of(&r.stdout)
+            .iter()
+            .filter(|r| r.starts_with("perf: the C on w"))
+            .count();
+        assert_eq!(shown, 2, "{case}: both rows shown: {}", r.stdout);
         assert_eq!(
             r.stdout
                 .matches("perf: the C not checked: no facts — run harness scan")
                 .count(),
             1,
-            "{case}: {}",
+            "{case}: said once, not once a row: {}",
             r.stdout
         );
         assert!(!r.stdout.contains("the C changed"), "{case}: {}", r.stdout);
@@ -1045,6 +1172,73 @@ fn two_units_end_to_end() {
     );
     assert!(
         !show.stdout.contains("the plan's order changed"),
+        "{}",
+        show.stdout
+    );
+}
+
+/// `perf run` reads the compilers with `perf show`'s own code (§3.9): the
+/// same runs, output cap and first line, so what it stores is what a check
+/// reads. Here the target's `rustc` is a stand-in that answers `rustc -V`
+/// alone: first with two lines (the first is stored), then with its line
+/// and more than the cap — a version `perf show` cannot read, so `perf
+/// run` cannot either: stored as the bare name, never a line a check would
+/// not see. A unit row names its rustc; u001 is not measured (its Rust
+/// changed since verify), so no build needs that rustc.
+#[test]
+fn run_reads_the_compilers_as_show_does() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("run-compilers");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    let lib = t.join("migration/units/u001-katajainen/katajainen_rs/src/lib.rs");
+    let mut text = std::fs::read_to_string(&lib).unwrap();
+    text.push_str("\n// an edit since verify\n");
+    std::fs::write(&lib, text).unwrap();
+    let bin = t.join("stand-in/bin");
+    let path = path_with(&bin);
+    let stored_rustc = || {
+        let r = harness_env(
+            &["perf", "run", "--target", target],
+            None,
+            &[("PATH", &path)],
+        );
+        assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+        let unit = harness_core::perf::results::read_unit(
+            &t.join("migration/perf/units/u001-katajainen.json"),
+            "u001-katajainen",
+        )
+        .unwrap()
+        .unwrap();
+        let w = unit.rows.iter().find(|r| r.workload == "w").unwrap();
+        assert_eq!(w.outcome, "not-verified");
+        w.inputs.compilers.rustc.clone()
+    };
+    let only_v = "[ \"$*\" = \"-V\" ] || exit 1\necho 'rustc 1.0.0 (stand-in)'\n";
+    script(
+        &bin.join("rustc"),
+        &format!("{only_v}echo 'a second line'\n"),
+    );
+    assert_eq!(stored_rustc().as_deref(), Some("rustc 1.0.0 (stand-in)"));
+    let long = "x".repeat(80);
+    script(
+        &bin.join("rustc"),
+        &format!("{only_v}i=0\nwhile [ $i -lt 1000 ]; do echo {long}; i=$((i+1)); done\n"),
+    );
+    assert_eq!(stored_rustc().as_deref(), Some("rustc"));
+    // perf show cannot read it either.
+    let show = harness_env(
+        &["perf", "show", "--target", target],
+        None,
+        &[("PATH", &path)],
+    );
+    assert_eq!(show.code, 0, "{}", show.stderr);
+    assert!(
+        show.stdout.contains("perf: compilers not checked"),
         "{}",
         show.stdout
     );
