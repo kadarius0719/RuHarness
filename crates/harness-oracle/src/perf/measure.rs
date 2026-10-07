@@ -769,6 +769,9 @@ pub fn perf_run(
             "the facts are out of date — run harness scan first, then measure".into(),
         ));
     }
+    // The results first: a units folder that is a link or not a folder is
+    // refused before anything is built, read or written (§3.9).
+    let mut store = Store::load(perf_dir, workloads)?;
     let ledger = Ledger::new(target.root.clone());
     let host = HostDirs::from_env()?;
     let launcher = launcher::launcher(&host, &mut |w: &str| progress.message(w))?;
@@ -1154,7 +1157,6 @@ pub fn perf_run(
         timeout_secs: base.timeout.as_secs().max(1),
     };
     let out_root = build::perf_out(&root)?;
-    let mut store = Store::load(perf_dir, workloads)?;
     let mut summary = PerfSummary::default();
 
     let chosen: Vec<&Workload> = workloads
@@ -2180,8 +2182,29 @@ struct Store {
     workloads: Vec<String>,
 }
 
+/// `migration/perf/units/` as it stands (§3.9): the results are ledger
+/// state, not scratch, so a units folder that is a link or not a folder is
+/// refused by name — never read through, never removed (perf's scratch
+/// folders, [`build::sub_folder`], are replaced instead). `None` when it is
+/// not there yet.
+fn units_folder(perf_dir: &Path) -> Result<Option<PathBuf>, Error> {
+    let dir = perf_dir.join(res::UNITS_DIR);
+    match std::fs::symlink_metadata(&dir) {
+        Ok(m) if m.file_type().is_dir() => Ok(Some(dir)),
+        Ok(_) => Err(Error::Invariant(format!(
+            "{}: must be a directory (a link is refused)",
+            dir.display()
+        ))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::io(&dir, e)),
+    }
+}
+
 impl Store {
+    /// The results as they stand; a units folder that is a link or not a
+    /// folder is refused before anything is read.
     fn load(dir: &Path, workloads: &Workloads) -> Result<Store, Error> {
+        units_folder(dir)?;
         let program = res::read_program(&res::program_path(dir))?.unwrap_or_default();
         Ok(Store {
             dir: dir.to_path_buf(),
@@ -2219,8 +2242,14 @@ impl Store {
                 merged
             }
             RowSide::Unit(id) => {
+                // Checked again before this row's read and write: a link
+                // made since the load is refused too, never followed.
+                if units_folder(&self.dir)?.is_none() {
+                    let dir = self.dir.join(res::UNITS_DIR);
+                    std::fs::create_dir(&dir).map_err(|e| Error::io(&dir, e))?;
+                }
+                let path = res::unit_path(&self.dir, id);
                 if !self.units.contains_key(id) {
-                    let path = res::unit_path(&self.dir, id);
                     let loaded =
                         res::read_unit(&path, id)?.unwrap_or_else(|| res::UnitResults::new(id));
                     self.units.insert(id.to_string(), loaded);
@@ -2228,8 +2257,7 @@ impl Store {
                 let file = self.units.get_mut(id).expect("loaded");
                 let merged = place(&mut file.rows, row, RowKind::Unit);
                 keep(&mut file.rows, &self.workloads);
-                let units_dir = build::sub_folder(&self.dir, res::UNITS_DIR)?;
-                res::write_unit(&units_dir.join(format!("{id}.json")), file)?;
+                res::write_unit(&path, file)?;
                 merged
             }
         };
@@ -3370,6 +3398,128 @@ mod tests {
                 .map(|(s, r)| (s.as_str(), r.outcome.as_str())),
             Some(("c", "c-crashed"))
         );
+    }
+
+    /// The results are ledger state (§3.9): a units folder that is a link or
+    /// not a folder is refused by name — when the run starts, before
+    /// anything is built, and again before each unit row's read and write —
+    /// never read through (another folder's file would be this target's
+    /// earlier rows) and never removed; the link's target is left as it
+    /// was.
+    #[test]
+    fn a_linked_units_folder_is_refused_never_read_or_removed() {
+        use std::os::unix::fs::symlink;
+        let refused = |r: &Result<(), Error>| match r {
+            Err(Error::Invariant(w)) => {
+                w.ends_with("migration/perf/units: must be a directory (a link is refused)")
+            }
+            _ => false,
+        };
+        let tmp = crate::testutil::TempDir::new("perf-units-link");
+        let root = tmp.path().to_path_buf();
+        let perf_dir = root.join("migration/perf");
+        std::fs::create_dir_all(&perf_dir).expect("perf dir");
+        let workloads = wl::parse(
+            "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = []\n",
+            Path::new("w.toml"),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let w = workloads.workloads[0].clone();
+        let unit_inputs = row_inputs(
+            &shared(),
+            &w,
+            None,
+            RowKind::Unit,
+            Some(vec![CrateDigest {
+                id: "u001".into(),
+                digest: harness_core::hash::bytes_hash(b"crate"),
+            }]),
+            Some(vec!["src/a.c".into()]),
+            None,
+            None,
+        );
+        let measured = Row {
+            short: Some(false),
+            runs: Some(5),
+            platform_metrics: Some("cpu-time".into()),
+            c: Some(timed(5)),
+            other: Some(timed(5)),
+            ..bare_row(&w, "measured", unit_inputs.clone())
+        };
+        // Another folder holding a unit file with a row of its own.
+        let outside = root.join("outside");
+        std::fs::create_dir(&outside).expect("outside");
+        let mut theirs = res::UnitResults::new("u001");
+        theirs.rows.push(measured.clone());
+        res::write_unit(&outside.join("u001.json"), &theirs).expect("their file");
+        let their_bytes = std::fs::read(outside.join("u001.json")).expect("bytes");
+        let untouched = |link: &Path| {
+            let m = std::fs::symlink_metadata(link).expect("still there");
+            assert!(m.file_type().is_symlink(), "the link was removed");
+            assert_eq!(std::fs::read_link(link).expect("link"), outside);
+            let names: Vec<_> = std::fs::read_dir(&outside)
+                .expect("outside")
+                .map(|e| e.expect("entry").file_name())
+                .collect();
+            assert_eq!(names, ["u001.json"]);
+            assert_eq!(
+                std::fs::read(outside.join("u001.json")).expect("bytes"),
+                their_bytes
+            );
+        };
+        let units = perf_dir.join(res::UNITS_DIR);
+
+        // Linked when the run starts: refused before anything is read.
+        symlink(&outside, &units).expect("link");
+        let loaded = Store::load(&perf_dir, &workloads).map(|_| ());
+        assert!(refused(&loaded), "{loaded:?}");
+        untouched(&units);
+        assert!(!res::program_path(&perf_dir).exists());
+
+        // Linked after the load: the unit row's write refuses it before
+        // reading; no row is shown or counted.
+        std::fs::remove_file(&units).expect("unlink");
+        let mut store = Store::load(&perf_dir, &workloads).expect("loads");
+        symlink(&outside, &units).expect("link");
+        let mut seen = seen();
+        let mut summary = PerfSummary::default();
+        let put = store.put(RowSide::Unit("u001"), measured, &mut seen, &mut summary);
+        assert!(refused(&put), "{put:?}");
+        untouched(&units);
+        assert!(seen.rows.is_empty() && summary.rows == 0);
+
+        // A file in its place: refused the same way, the file left as it was.
+        std::fs::remove_file(&units).expect("unlink");
+        std::fs::write(&units, b"not a folder").expect("file");
+        let loaded = Store::load(&perf_dir, &workloads).map(|_| ());
+        assert!(refused(&loaded), "{loaded:?}");
+        assert_eq!(std::fs::read(&units).expect("file"), b"not a folder");
+
+        // The run refuses it before building anything.
+        if cfg!(target_os = "macos") && sandbox::sandbox_mode() == "sandbox-exec" {
+            std::fs::remove_file(&units).expect("rm");
+            symlink(&outside, &units).expect("link");
+            mini_program(&root, &["ua"]);
+            let target = TargetContext::load(&root).expect("target");
+            let plan = Plan {
+                schema_version: 1,
+                target: "tool".into(),
+                units: Vec::new(),
+            };
+            let run = perf_run(
+                &target,
+                &plan,
+                &facts_of(&root),
+                &workloads,
+                &perf_dir,
+                &PerfRequest::default(),
+                &mut seen,
+            )
+            .map(|_| ());
+            assert!(refused(&run), "{run:?}");
+            untouched(&units);
+            assert!(!root.join("migration/build").exists(), "nothing built");
+        }
     }
 
     /// The C's step-1 runs on a side's row (§3.3, §3.5 step 1, note 23): a
