@@ -1500,6 +1500,25 @@ pub fn perf_computer_if_cached() -> Option<res::Computer> {
     })
 }
 
+/// Whether perf's launcher cache is current — the next run would not build
+/// the launcher first — for the cockpit's Measure estimate (§3.11, §6).
+/// Cheap, and it never builds: it finds the compiler (one `clang
+/// --version`), holds the version folder's lock SHARED for a moment and
+/// hashes the two built binaries. A running perf run holds that lock shared
+/// too, so this never waits on one: only a rebuild's check that no run
+/// holds it, and the removal of a folder that is no longer current, take it
+/// exclusive, each for an instant (§3.2 step 1); the long exclusive lock of
+/// a build is the cache root's, which this never takes. The launcher and
+/// its lock are let go before it returns. `false` also when perf could not
+/// use the cache at all (no system compiler, a refused folder): the run
+/// then says why.
+pub fn perf_launcher_cached() -> bool {
+    HostDirs::from_env()
+        .ok()
+        .and_then(|host| launcher::existing_launcher(&host))
+        .is_some()
+}
+
 fn first_lines(words: &str, n: usize) -> String {
     words
         .lines()

@@ -1,13 +1,56 @@
 //! Measuring speed from the cockpit (docs/PERF-DESIGN.md §3.11): the
 //! Measure acts' argv and gates, and their confirm dialogs' words — what
-//! runs, how many times, about how long (§6), what it writes, no verdict,
-//! the ledger's lock, that Cancel keeps finished rows, and to keep the
-//! computer quiet.
+//! runs, how many times, about how long (§6, perf's launcher's build
+//! counted when its cache is not current), what it writes, no verdict, the
+//! ledger's lock, that Cancel keeps finished rows, and to keep the computer
+//! quiet.
 
 use super::{os, Act, App, Mode, Pending};
 use crate::speed::{Group, SideKey};
 use harness_core::perf::estimate::{self, Estimate, Job};
 use std::ffi::OsString;
+use std::time::Duration;
+
+/// How long a Measure dialog waits, at most, to learn whether perf's
+/// launcher cache is current (§3.11). The check runs on its own thread:
+/// finding the compiler runs `clang --version`, which a loaded Mac can make
+/// slow on a new compiler's first exec (§6: 0.25–14 s). Past this wait the
+/// dialog opens without the answer.
+const LAUNCHER_WAIT: Duration = Duration::from_millis(250);
+
+/// `probe`'s answer, asked on a thread of its own and waited for at most
+/// `wait`: `None` when it did not come in time (the thread runs on and its
+/// answer is dropped) or the thread could not start.
+fn ask_within(probe: fn() -> bool, wait: Duration) -> Option<bool> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("harness-tui-launcher".into())
+        .spawn(move || {
+            // The dialog may have stopped waiting: a send nobody takes is
+            // fine.
+            let _ = tx.send(probe());
+        })
+        .ok()?;
+    rx.recv_timeout(wait).ok()
+}
+
+/// What building perf's launcher adds to §6's estimate, in seconds: the
+/// difference it makes to a job that measures nothing (the build and the
+/// first execs of perfrun and perfgo).
+fn launcher_seconds() -> u64 {
+    let nothing = Job {
+        workloads: Vec::new(),
+        c_alone: false,
+        rows: 0,
+        crates: 0,
+        links: 0,
+    };
+    match (nothing.estimate_building_launcher(), nothing.estimate()) {
+        (Estimate::Seconds(with), Estimate::Seconds(without)) => with.saturating_sub(without),
+        // A job with no workload is always a figure in seconds.
+        _ => 0,
+    }
+}
 
 impl App {
     /// Why perf cannot measure now, from the workloads file's state (and
@@ -135,8 +178,20 @@ impl App {
         Ok((self.with_sandbox_flag(self.harness_argv(&rest)?), label))
     }
 
-    /// The Measure dialogs' words (§3.11).
+    /// The Measure dialogs' words (§3.11), with whether perf's launcher
+    /// cache is current asked off the UI thread (at most [`LAUNCHER_WAIT`]).
     pub(super) fn measure_words(&self, p: &Pending) -> (String, Vec<String>) {
+        let launcher = ask_within(harness_oracle::perf_launcher_cached, LAUNCHER_WAIT);
+        self.measure_words_with(p, launcher)
+    }
+
+    /// [`Self::measure_words`] given whether perf's launcher cache is
+    /// current (`None`: not known in time). Not current: the estimate counts
+    /// the launcher's build and says so, and the dialog names the cache it
+    /// builds; current: neither (§3.11 "and — when stale — the launcher
+    /// cache"); not known: today's estimate and the hedge "the first time,
+    /// or after an update".
+    fn measure_words_with(&self, p: &Pending, launcher: Option<bool>) -> (String, Vec<String>) {
         let m = &self.speed;
         let units = &m.measurable;
         let program = units.len() >= 2;
@@ -262,24 +317,50 @@ impl App {
                 cold.join("'s and ")
             )
         };
-        body.push(match job.estimate() {
+        let (estimate, building) = match launcher {
+            Some(false) => (job.estimate_building_launcher(), Some(launcher_seconds())),
+            _ => (job.estimate(), None),
+        };
+        body.push(match estimate {
             e @ Estimate::Seconds(_) => {
-                format!("Takes {}, builds included{cold_words}.", e.words())
+                let launcher_words = building.map_or(String::new(), |s| {
+                    format!(" — about {s} s of it builds perf's launcher first")
+                });
+                format!(
+                    "Takes {}, builds included{launcher_words}{cold_words}.",
+                    e.words()
+                )
             }
             e => {
+                let launcher_words = building.map_or(String::new(), |s| {
+                    format!(", plus about {s} s building perf's launcher first")
+                });
                 let w = e.words();
                 let mut c = w.chars();
                 let first = c.next().map(|f| f.to_uppercase().collect::<String>());
-                format!("{}{}{cold_words}.", first.unwrap_or_default(), c.as_str())
+                format!(
+                    "{}{}{launcher_words}{cold_words}.",
+                    first.unwrap_or_default(),
+                    c.as_str()
+                )
             }
         });
-        body.push(
+        let cache_words = match launcher {
+            Some(true) => "",
+            Some(false) => {
+                "; first it builds perf's launcher into ~/Library/Caches/ruharness/perf (its \
+                 cache is missing or out of date)"
+            }
+            None => {
+                "; the first time, or after an update, it builds perf's launcher into \
+                 ~/Library/Caches/ruharness/perf"
+            }
+        };
+        body.push(format!(
             "Writes migration/perf/ (its rows replace the ones they measure again) and scratch \
-             folders under migration/build/ (.perf, .perf-out with the kept outputs, perf-logs); \
-             the first time, or after an update, it builds perf's launcher into \
-             ~/Library/Caches/ruharness/perf."
-                .into(),
-        );
+             folders under migration/build/ (.perf, .perf-out with the kept outputs, \
+             perf-logs){cache_words}."
+        ));
         body.push(
             "No verdict changes: perf only measures. It holds the ledger's lock while it runs; \
              Cancel keeps the rows already finished."
@@ -557,5 +638,149 @@ mod tests {
         // A line starting with "--" is the diff's own, never dropped.
         let lines = cmp(b"a\n--x\n", b"a\n--y\n");
         assert!(has(&lines, "---x") && has(&lines, "+--y"), "{lines:?}");
+    }
+
+    /// zopfli with a workloads file and nothing measured yet: the Measure
+    /// acts are offered (on macOS), u001 the one verified unit.
+    fn measurable_app(tag: &str) -> App {
+        let target = crate::testutil::scratch_target("targets/zopfli", tag);
+        let perf = harness_core::perf::perf_dir(&target);
+        std::fs::create_dir_all(target.join("bench")).unwrap();
+        std::fs::write(target.join("bench/big.txt"), "big ".repeat(1000)).unwrap();
+        std::fs::write(target.join("bench/small.txt"), "small\n").unwrap();
+        std::fs::create_dir_all(&perf).unwrap();
+        std::fs::write(
+            perf.join("workloads.toml"),
+            "schema_version = 1\n\
+             [[workload]]\nid = \"big-text\"\nargs = [\"-c\", \"{input}\"]\ninput = \"bench/big.txt\"\n\
+             [[workload]]\nid = \"many-small\"\nargs = [\"-c\", \"{input}\"]\ninput = \"bench/small.txt\"\n",
+        )
+        .unwrap();
+        crate::app::tests::app_of_path(&target)
+    }
+
+    /// The seconds of a "Takes about N s, …" line.
+    fn seconds(takes: &str) -> u64 {
+        takes
+            .strip_prefix("Takes about ")
+            .and_then(|r| r.split_once(" s,"))
+            .and_then(|(n, _)| n.parse().ok())
+            .unwrap_or_else(|| panic!("not a figure in seconds: {takes}"))
+    }
+
+    /// §3.11, §6: perf's launcher's build is in the Measure dialogs' figure,
+    /// and its cache named, only when the cache is not current — the
+    /// answer injected, never the machine's own cache; not known in time,
+    /// the figure leaves it out and the words keep the hedge.
+    #[test]
+    fn the_measure_dialog_counts_the_launcher_build_only_when_it_is_not_built() {
+        if !cfg!(target_os = "macos") {
+            // Measure is greyed off macOS: no dialog opens.
+            return;
+        }
+        let mut app = measurable_app("speed-launcher");
+        assert_eq!(app.speed.measurable, ["u001-katajainen"]);
+        let launcher = launcher_seconds();
+        assert_eq!(
+            launcher as f64,
+            estimate::LAUNCHER_BUILD_SECONDS + 2.0 * estimate::FIRST_EXEC_SECONDS
+        );
+        let says_launcher = |body: &[String]| body.iter().any(|l| l.contains("launcher"));
+        // u001's crate may be cold in the copy: its build is said apart.
+        let cold = ", plus building u001-katajainen's Rust, which may take minutes";
+        for (act, unit) in [
+            (Act::Measure, None),
+            (Act::Measure, Some("u001-katajainen")),
+        ] {
+            // The C's time known on both workloads: a figure in seconds.
+            app.speed.c_clock = [("big-text".to_string(), 0.01), ("many-small".into(), 0.01)]
+                .into_iter()
+                .collect();
+            let p = app.act_argv(act, unit, None, None).expect("offered");
+            let (_, built) = app.measure_words_with(&p, Some(true));
+            let (_, not_built) = app.measure_words_with(&p, Some(false));
+            let (_, unknown) = app.measure_words_with(&p, None);
+            assert!(!says_launcher(&built), "built: {built:?}");
+            assert_eq!(
+                not_built[1].replace(cold, ""),
+                format!(
+                    "Takes about {} s, builds included — about {launcher} s of it builds perf's \
+                     launcher first.",
+                    seconds(&built[1]) + launcher
+                ),
+                "{not_built:?}"
+            );
+            assert_eq!(not_built[1].contains(cold), built[1].contains(cold));
+            assert!(
+                not_built[2].ends_with(
+                    "; first it builds perf's launcher into ~/Library/Caches/ruharness/perf (its \
+                     cache is missing or out of date)."
+                ),
+                "{not_built:?}"
+            );
+            assert_eq!(unknown[1], built[1], "not known: the figure leaves it out");
+            assert!(
+                unknown[2].ends_with(
+                    "; the first time, or after an update, it builds perf's launcher into \
+                     ~/Library/Caches/ruharness/perf."
+                ),
+                "{unknown:?}"
+            );
+            // The C's time not known: no figure, the launcher's build still
+            // said with its seconds.
+            app.speed.c_clock.clear();
+            let (_, built) = app.measure_words_with(&p, Some(true));
+            let (_, not_built) = app.measure_words_with(&p, Some(false));
+            assert!(
+                built[1].starts_with("The C's time is not known yet"),
+                "{built:?}"
+            );
+            assert!(!says_launcher(&built), "built: {built:?}");
+            assert_eq!(
+                not_built[1].replace(cold, ""),
+                format!(
+                    "{}, plus about {launcher} s building perf's launcher first.",
+                    built[1].replace(cold, "").trim_end_matches('.')
+                ),
+                "{not_built:?}"
+            );
+        }
+    }
+
+    /// The launcher check never holds a dialog: a slow answer is waited
+    /// for at most the given time, then the dialog goes on without it.
+    #[test]
+    fn a_slow_launcher_check_never_holds_the_dialog() {
+        fn slow() -> bool {
+            std::thread::sleep(Duration::from_secs(5));
+            true
+        }
+        let started = std::time::Instant::now();
+        assert_eq!(ask_within(slow, Duration::from_millis(50)), None);
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(ask_within(|| false, Duration::from_secs(30)), Some(false));
+        assert_eq!(ask_within(|| true, Duration::from_secs(30)), Some(true));
+    }
+
+    /// The cockpit and `perf show` read perf's launcher cache alike: when
+    /// `perf show` checks the computer through it, the cockpit calls it
+    /// current (both are built on the one read of the cache, which never
+    /// builds it).
+    #[test]
+    fn the_cockpit_reads_the_launcher_cache_as_perf_show_does() {
+        let computer = harness_oracle::perf_computer_if_cached();
+        let cached = ask_within(
+            harness_oracle::perf_launcher_cached,
+            Duration::from_secs(60),
+        );
+        if computer.is_some() {
+            assert_eq!(cached, Some(true), "{computer:?}");
+        } else {
+            assert!(cached.is_some(), "the check answers");
+        }
     }
 }

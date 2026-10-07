@@ -477,6 +477,7 @@ name = "harness-tui"
 version = "0.1.0"
 dependencies = [
  "harness-core",
+ "harness-oracle",
  "ratatui",
  "serde_json",
  "signal-hook 0.4.4",
