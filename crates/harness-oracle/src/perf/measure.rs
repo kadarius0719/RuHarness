@@ -7,6 +7,7 @@
 use super::archive::{archive_facts, ArchiveFacts, PanicRuntime};
 use super::build::{self, Hashed, Slot};
 use super::launcher::{self, End, Launcher, Seen, Status};
+use super::tools;
 use crate::exec::{self, Runner};
 use crate::sandbox::{self, HostDirs, PerfSpec, ProfileSpec};
 use crate::{build_staticlib, extra_link_args, prepare_target_dir, program_c_files_in, Base};
@@ -823,25 +824,15 @@ pub fn perf_run(
         host: &host,
         root: &root,
     };
-    let probes = steps.writing(&[], &[])?;
-    let first_line = |argv: &[&str]| -> String {
-        let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-        probes
-            .tool(&argv)
-            .map(|o| {
-                String::from_utf8_lossy(&o)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .chars()
-                    .take(160)
-                    .collect()
-            })
-            .unwrap_or_default()
+    // The compilers read as perf show reads them (tools.rs): the same runs,
+    // output cap and first line. One that cannot be read is stored as its
+    // bare name, as ever (row_inputs).
+    let probes = Runner {
+        max_output: tools::VERSION_OUTPUT_CAP,
+        ..steps.writing(&[], &[])?
     };
-    let cc = first_line(&["cc", "--version"]);
-    let rustc = first_line(&["rustc", "-V"]);
+    let (cc, rustc) = tools::compiler_lines(&probes);
+    let (cc, rustc) = (cc.unwrap_or_default(), rustc.unwrap_or_default());
 
     // The C: objects once, one link.
     progress.message("building the C program…");
@@ -4139,6 +4130,13 @@ mod tests {
                 .find(|r| r.workload == w)
                 .expect("row")
         };
+        // The compilers this run stored are the lines perf show reads on the
+        // same target (tools.rs), so unchanged compilers compare equal.
+        let ua = unit_row("ua", "tiny").inputs.compilers;
+        assert_eq!(
+            tools::perf_compilers(&target, false),
+            Some((ua.cc, ua.rustc.expect("a unit row names its rustc")))
+        );
         let ud = unit_row("ud", "tiny");
         assert_eq!(ud.outcome, "crate-does-not-build");
         let ud_replaces = vec!["src/ud.c".to_string()];
