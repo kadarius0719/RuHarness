@@ -687,7 +687,8 @@ fn show_without_facts_does_not_judge_the_c() {
 
 /// `perf show` only reads: it creates no folder, and it refuses a linked
 /// `migration/perf` or `migration/perf/units` instead of reading another
-/// folder's files as this target's rows (§3.9: links are refused on read).
+/// folder's files as this target's rows (§3.9: links are refused on read) —
+/// even a valid results file there, which a real units folder would show.
 #[test]
 fn show_reads_only_and_refuses_linked_folders() {
     let t = zopfli("show-links");
@@ -704,21 +705,29 @@ fn show_reads_only_and_refuses_linked_folders() {
         "perf show made migration/perf"
     );
 
-    // A units folder linked to one outside the project.
+    // A units folder linked to one outside the project, which holds a
+    // valid results file for u001.
+    use harness_core::perf::results as res;
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
     let outside = t.with_extension("outside");
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).unwrap();
-    std::fs::write(
-        outside.join("u001-katajainen.json"),
-        "{\"schema\": \"SECRET-OUTSIDE\"}",
-    )
-    .unwrap();
+    let mut u001 = res::UnitResults::new("u001-katajainen");
+    let digest = format!("blake3:{}", "a".repeat(64));
+    let crates = serde_json::json!({"crates": [{"id": "u001-katajainen", "digest": digest}]});
+    u001.rows
+        .push(serde_json::from_value(stored_row(&t, "measured", crates)).unwrap());
+    let u001_file = outside.join("u001-katajainen.json");
+    res::write_unit(&u001_file, &u001).unwrap();
+    assert!(res::read_unit(&u001_file, "u001-katajainen")
+        .unwrap()
+        .is_some());
     std::fs::write(
         outside.join("private-notes.json"),
         "{\"api_key\": \"SECRET-OUTSIDE\"}",
     )
     .unwrap();
-    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
     std::os::unix::fs::symlink(&outside, t.join("migration/perf/units")).unwrap();
     let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
     assert_eq!(r.code, 1, "{}", r.stdout);
@@ -729,13 +738,30 @@ fn show_reads_only_and_refuses_linked_folders() {
         r.stderr
     );
     for text in [&r.stdout, &r.stderr] {
+        assert!(!text.contains("u001-katajainen on w"), "{text}");
         assert!(!text.contains("SECRET-OUTSIDE"), "{text}");
         assert!(!text.contains("private-notes"), "{text}");
     }
 
-    // And a linked migration/perf.
+    // The same file in a real units folder is shown: the link alone was
+    // refused.
     std::fs::remove_file(t.join("migration/perf/units")).unwrap();
-    std::fs::remove_dir(t.join("migration/perf")).unwrap();
+    std::fs::create_dir(t.join("migration/perf/units")).unwrap();
+    std::fs::copy(
+        &u001_file,
+        t.join("migration/perf/units/u001-katajainen.json"),
+    )
+    .unwrap();
+    let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains("perf: u001-katajainen on w — "),
+        "{}",
+        r.stdout
+    );
+
+    // And a linked migration/perf.
+    std::fs::remove_dir_all(t.join("migration/perf")).unwrap();
     std::os::unix::fs::symlink(&outside, t.join("migration/perf")).unwrap();
     let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
     assert_eq!(r.code, 1, "{}", r.stdout);
