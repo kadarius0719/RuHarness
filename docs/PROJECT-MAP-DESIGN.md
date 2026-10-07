@@ -313,6 +313,21 @@ DECISIONS.
 
 ## 7. Open questions for the person
 
+**Answered 2026-10-07** (after the spike on lz4 and liblzg, docs/PROJECT-MAP-INVESTIGATION.md
+"The spike on real downloads"):
+- 1 — the per-file compiles run **by default**: the spike compiled all 48 of lz4's files in 2.2 s
+  (decided on that evidence, not asked).
+- 2 — `map` **always stops and shows** the map; the person accepts which tools become targets, the
+  same review gate as the plan.
+- 3 — a mapped tool's target and ledger live **inside the project** (`<project>/migration/…`), as
+  the briefing's ledger design says; RuHarness's `targets/` stays for its own test fixtures.
+- 4 — a **library with no tool stays a target** on its own, as today (the benchmark's shape).
+- New, from the spike — **the build's flags are the person's to state** when the project has no
+  `compile_commands.json`: the map asks which build counts (`make`, `meson`, `cmake`, …) and its
+  flags; a model may read the build files and suggest them, but the person confirms, because the
+  link check cannot tell two configurations apart (lz4 links with and without its threads).
+- 5–7 stay open: they concern the picture, model advice and an improvements mode, which come last.
+
 1. Should `harness map` run the per-file compiles by default (slower, exact) or symbols-off by
    default (fast, parser facts only) with `--symbols` to add them?
 2. When a project has one tool and no open questions, should `map` write the target itself, or

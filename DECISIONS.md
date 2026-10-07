@@ -2728,3 +2728,27 @@ at 75 % of the weekly limit and merge once the security fix and the high finding
 deterministic walk with link closures, a model binning only the ambiguous part, the harness
 checking its answer, and an interactive picture of the map (docs/PROJECT-MAP-ROADMAP.md,
 -INVESTIGATION.md, -DESIGN.md draft 0). To design next, weighed against M5.
+
+## 2026-10-07 — Project map: the spike on real downloads, and the person's answers to its open questions
+
+**Spike** (docs/PROJECT-MAP-INVESTIGATION.md "The spike on real downloads"): the link-closure script
+rewritten and run on lz4 (48 files, 33 entry points) and liblzg (8 files, 3 tools), both downloaded
+with the person's OK into `~/code/ruharness-test-downloads/` (test data only, nothing installed).
+The closures were exact and cheap (lz4 in 2.2 s; liblzg's `lzg` closure is the testing guide's
+hand-picked file list). What the design underrated: **the build's flags decide the program** (lz4's
+tool gains a file and pthreads with `-DLZ4IO_MULTITHREAD`), the project's own build systems
+disagree (Makefile and Meson thread, CMake does not), and **a flag cannot be checked by linking**
+(both configurations link). Also: a `main` that is a driver for many fuzzers, and duplicates
+between programs that never meet in one closure (harmless).
+
+**Decided (the person, 2026-10-07)** — recorded in docs/PROJECT-MAP-DESIGN.md §7:
+- without a `compile_commands.json`, **the person states the build and its flags**; a model may
+  suggest them from the build files, the person confirms — the baseline is one named configuration;
+- `harness map` **always stops and shows**; the person accepts which tools become targets;
+- a mapped tool's target and ledger live **inside the project** (`<project>/migration/…`);
+- a **library with no tool stays a target** on its own (the benchmark's shape);
+- the per-file compiles run by default (2.2 s for lz4: decided on the evidence).
+Still open (§7 5–7): the picture, model advice, an improvements mode — last, as agreed 2026-10-03.
+
+**Revisit when:** a project's flags differ per file in a way one stated configuration cannot
+express (then: several configurations from `compile_commands.json`).
