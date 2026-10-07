@@ -4,7 +4,7 @@ This guide is both a tutorial and a test plan. You take **liblzg**, a small real
 
 You run every step yourself, and none of them needs a cloud API key. The two translation steps use your Claude subscription through Claude Code. Every other step runs on your Mac with no AI.
 
-Written for RuHarness at commit `a154870` (the program itself reports `harness 0.1.0`), on macOS with Apple Silicon, September 2026. Step 0.7 makes sure your copy is at that commit or a newer one.
+Written for RuHarness at commit `a154870` (the program itself reports `harness 0.1.0`), on macOS with Apple Silicon, September 2026. Step 0.7 makes sure your copy is at that commit or a newer one. Parts 0–10 were walked through end to end on liblzg on 2026-10-07, with both translations done through the cockpit's chat: every output shown in them is what that run printed (or names what varies).
 
 ---
 
@@ -49,7 +49,6 @@ When you finish, the folder `targets/lzg` inside RuHarness holds a C program in 
   | `<4hex>` | 4 such characters |
   | `<hash>` | the 7-character code git gives each commit |
   | `<number>` | a number that varies; the text says whether the exact value matters |
-  | `<text number>` | the byte count you write down in Step 1.8 |
   | `<model>` | the name of the model Claude Code uses, as the chat shows it when it starts |
   | `<time>` | how long something took, such as `41 s` |
   | `<line>` | a line number in a file |
@@ -360,7 +359,7 @@ claude --version
 
 **If it looks different.** If you get `command not found: claude`, install Claude Code by following Anthropic's setup instructions (the native installer is `curl -fsSL https://claude.ai/install.sh | bash`). Then open a new Terminal window.
 
-**Run.** Check that the chat will use your subscription and not an API key or another paid route. This command prints only the names of such settings, never their values.
+**Run.** Check that the chat will use your subscription and not an API key or another paid route. This command prints only the names of such settings, never their values. Run it in a plain Terminal window: inside another app's terminal (for example Claude Code's desktop app), that app's own settings show here.
 
 ```bash
 env | grep -E '^(ANTHROPIC_|CLAUDE_CODE_USE_)' | cut -d= -f1
@@ -1123,9 +1122,15 @@ wc -c < ~/lzg-practice/sample_text.txt
 wc -c < ~/lzg-practice/text.lzg
 ```
 
-**You should see** a number a little over 800, far below 30014, because the text repeats. This guide was written without running liblzg, so it cannot print your exact number. The estimate comes from how the format stores repeats: a 16-byte header, the first line stored nearly as it is, and about 236 short instructions that each say "copy 128 bytes from 86 bytes back". Anything between 780 and 1,000 is plausible. If yours is outside that range, the copy or the edit in Steps 1.4–1.5 went wrong.
+**You should see** this. `wc` pads the number with spaces on the left.
 
-**Write this number down.** It is your `<text number>`. Whatever it is, it is the same on every Mac for this version of liblzg, and in Parts 5 and 8 the harness has to report exactly this number.
+```text
+     808
+```
+
+808 bytes is far below 30014, because the text repeats: a 16-byte header, the first line stored nearly as it is, and about 236 short instructions that each say "copy 128 bytes from 86 bytes back". If you see another number, the copy or the edit in Steps 1.4–1.5 went wrong.
+
+**Remember 808.** It is the same on every Mac for this version of liblzg, and in Parts 5 and 8 the harness has to report exactly this number for the text sample.
 
 **Run.** Look at the 16-byte header of the compressed file.
 
@@ -1133,13 +1138,13 @@ wc -c < ~/lzg-practice/text.lzg
 xxd -l 16 ~/lzg-practice/text.lzg
 ```
 
-**You should see** one line shaped like the one below. The `??` bytes depend on the compressed data.
+**You should see.**
 
 ```text
-00000000: 4c5a 4700 0075 3e00 00?? ???? ???? ??01  LZG..u>.........
+00000000: 4c5a 4700 0075 3e00 0003 180c 7280 5201  LZG..u>.....r.R.
 ```
 
-On the right, the characters after `LZG..u>..` vary too: they are the same size and checksum bytes, shown as text.
+On the right, `xxd` shows the same bytes as text, with a dot for each byte that is not a printable letter.
 
 Here is the header byte by byte, counting from 0:
 
@@ -1147,8 +1152,8 @@ Here is the header byte by byte, counting from 0:
 |---|---|---|
 | 0–2 | `4c 5a 47` | the letters `LZG` |
 | 3–6 | `00 00 75 3e` | the original size: hex 753e is 30014 |
-| 7–10 | `00 00 ?? ??` | the compressed size without the header: your text number minus 16 |
-| 11–14 | `?? ?? ?? ??` | **the checksum**, computed by `checksum.c` over the compressed data. This is the output of the unit you will translate first. |
+| 7–10 | `00 00 03 18` | the compressed size without the header: hex 318 is 792, which is 808 minus 16 |
+| 11–14 | `0c 72 80 52` | **the checksum**, computed by `checksum.c` over the compressed data. This is the output of the unit you will translate first. |
 | 15 | `01` | method 1, meaning compressed (0 would mean stored as it is) |
 
 **Run.** Show only the checksum bytes.
@@ -1157,7 +1162,13 @@ Here is the header byte by byte, counting from 0:
 xxd -s 11 -l 4 ~/lzg-practice/text.lzg
 ```
 
-**You should see** one line that starts with `0000000b:` followed by the four checksum bytes. If the Rust translation of the checksum were wrong, these four bytes would change. That is what makes this a real end-to-end test.
+**You should see** the four checksum bytes, starting at byte 11 (hex `b`):
+
+```text
+0000000b: 0c72 8052                                .r.R
+```
+
+If the Rust translation of the checksum were wrong, these four bytes would change. That is what makes this a real end-to-end test.
 
 **Run.** Compress the same file a second time.
 
@@ -1357,7 +1368,7 @@ The 11 files are the seven sources, the license, `VENDORED.md`, `harness.toml` a
 - [ ] The hand build printed `exit=0`.
 - [ ] `lzg -V` printed `LZG library version 1.0.10`.
 - [ ] Two runs on the text sample printed `same`.
-- [ ] You wrote down your text number.
+- [ ] The compressed text was 808 bytes.
 - [ ] `git status` says `nothing to commit, working tree clean`.
 
 ---
@@ -1473,17 +1484,20 @@ Words in this step:
 harness detect --target targets/lzg
 ```
 
-**You should see** a summary line, then one line per kind of finding. The exact counts are not given here:
+**You should see** a summary line, then one line per kind of finding:
 
 ```text
-detect: <number> finding(s) -> /Users/<you>/code/RuHarness/targets/lzg/migration/observer/findings.jsonl
-detect:   <category>: <count>
-detect:   <category>: <count>
+detect: 13 finding(s) -> /Users/<you>/code/RuHarness/targets/lzg/migration/observer/findings.jsonl
+detect:   alloc-ownership: 2
+detect:   function-pointer-arg: 1
+detect:   function-pointer-decl: 2
+detect:   macro-function-like: 7
+detect:   macro-statement-body: 1
 ```
 
 These are the kinds you are likely to see:
 
-- `function-pointer-arg` or `function-pointer-decl`, for the progress callback and the sort comparator used by `encode.c`, `lzg.c` and `lzg.h`;
+- `function-pointer-arg` and `function-pointer-decl`, for the progress callback and the sort comparator in `encode.c` and `lzg.h`;
 - `macro-statement-body` or `macro-function-like`, for macros such as `CHECKSUM_OP` in `checksum.c`;
 - `alloc-ownership`, for memory allocated with `malloc` and released with `free`.
 
@@ -1999,7 +2013,7 @@ jq -r '.checks[] | "\(.name): \(if .passed then "PASS" else "FAIL" end) - \(.det
 mutation: PASS - killed <number>/<number> compiled (<number> sampled of <number> sites, <number> TCE-equivalent discarded; needs ≥ 0.600)
 ```
 
-The guide's estimate is about `killed 12/13 compiled (16 sampled of 16 sites, 3 TCE-equivalent discarded; needs ≥ 0.600)`. Your counts may differ; what matters is PASS. If fewer than 10 mutants compile, the end of the line reads `needs ≥ <number> (small-n rule)` instead. The small-n rule: when fewer than 10 counted mutants compile, a percentage means little, so the driver may miss at most one of them.
+On the guide's run it read exactly `killed 12/13 compiled (16 sampled of 16 sites, 3 TCE-equivalent discarded; needs ≥ 0.600)`. Your counts may differ with another compiler version; what matters is PASS. If fewer than 10 mutants compile, the end of the line reads `needs ≥ <number> (small-n rule)` instead. The small-n rule: when fewer than 10 counted mutants compile, a percentage means little, so the driver may miss at most one of them.
 
 How to read the mutation line:
 
@@ -2045,7 +2059,7 @@ git add targets/lzg
 git commit -m "lzg: validated driver for u-checksum"
 ```
 
-**You should see** `[practice-lzg <hash>] lzg: validated driver for u-checksum` and a line like `<number> files changed, <number> insertions(+), <number> deletion(-)`.
+**You should see** `[practice-lzg <hash>] lzg: validated driver for u-checksum` and a line like `8 files changed, <number> insertions(+)`.
 
 **What just happened.** The driver, its validation record, the attempt, the hand-off files and the updated plan are saved.
 
@@ -2088,7 +2102,7 @@ The cockpit is the easiest way to do model work without an API key. If the chat 
 tput cols
 ```
 
-**You should see** a number. At 156 or more, the chat gets a column of its own. If the number is smaller, make the window larger or the font smaller (Cmd and -) and run `tput cols` again. The guide still works at a smaller width. At 80–155 columns the chat shows only while it has the focus: press Tab until the ` Chat ` tab is highlighted, or click that tab. Below 80 columns only one pane shows at a time, so widen the window.
+**You should see** a number. At 156 or more, the chat gets a column of its own once you open it in Step 4.3; until then it is a tab beside View (` View ─ Chat `). If the number is smaller, make the window larger or the font smaller (Cmd and -) and run `tput cols` again. The guide still works at a smaller width. At 80–155 columns the chat shows only while it has the focus: press Tab until the ` Chat ` tab is highlighted, or click that tab. Below 80 columns only one pane shows at a time, so widen the window.
 
 **Run.**
 
@@ -2116,7 +2130,7 @@ harness-tui --target targets/lzg
 
 **Why.** The cockpit acts on whatever you select, so you select the unit first.
 
-**Run.** Press `↓` until you reach the `Units (5)` row, then press `→` to open it. Press `↓` to move to `u-checksum`.
+**Run.** Press `↓` until you reach the `Units (5)` row. It is usually open already (`▾`); if it shows `▸`, press `→` to open it. Press `↓` to move to `u-checksum`.
 
 **You should see** in the View:
 
@@ -2268,7 +2282,7 @@ The chat's question and answer files are under `migration/units/u-checksum/trace
 2. A dialog titled `Accept a-<12hex> into u-checksum?` opens. It explains that the unit's crate will be replaced with the attempt's candidate and verified in place, and that the old crate is put back if it does not verify.
 3. Wait for `ready`, then press `→` and `Enter`.
 
-**You should see** the activity line say `Running the oracle…`, pass briefly through `Promoted a-<12hex> into u-checksum: verified`, and end as `Ready. Last: Accept a-<4hex> into u-checksum — GREEN — all 8 checks passed (<time>)`. In Files, `u-checksum` and `checksum.c` now show `✓ migrated (asked in chat)`.
+**You should see** the activity line say `Running the oracle…`, pass briefly through `Promoted a-<12hex> into u-checksum: verified`, and end as `Ready. Last: Accept a-<4hex> into u-checksum — GREEN — all 8 checks passed (<time>)`. In Files, `u-checksum` and `checksum.c` now show `✓`, and the View's first line reads `✓ u-checksum migrated (asked in chat) · status verified`. The attempt row reads `✓ a-<4hex> green *c asked in chat`: `*c` marks the attempt the unit's crate came from, asked in chat.
 
 **What just happened.** The cockpit ran `harness --json promote u-checksum a-<12hex> --target=…`. That:
 
@@ -2487,7 +2501,7 @@ verify: [PASS] symbol-set — 1 exported symbol(s) match the unit's symbols exac
 verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm
 verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean
 verify: [PASS] differential-driver — 2936 bytes identical
-verify: [PASS] whole-program:sample_text.txt — <text number> bytes identical
+verify: [PASS] whole-program:sample_text.txt — 808 bytes identical
 verify: [PASS] whole-program:sample_rand.bin — 16400 bytes identical
 verify: [PASS] whole-program:sample_empty — 0 bytes identical (stderr: 21 bytes identical)
 verify: [PASS] sanitizers — asan+ubsan clean
@@ -2508,7 +2522,7 @@ exit=0
 
 **What just happened.** Compare two numbers with Part 1:
 
-- `whole-program:sample_text.txt` shows **your text number** from Step 1.8, because the harness ran `lzg -9` on the very same text you made by hand.
+- `whole-program:sample_text.txt` shows **808**, the size you saw in Step 1.8, because the harness ran `lzg -9` on the very same text you made by hand.
 - `whole-program:sample_rand.bin` shows **16400**: the harness's random sample, stored as it is behind the 16-byte header, just like in your hand run.
 
 The harness also rewrote the verdict files with the same content as before.
@@ -2647,14 +2661,14 @@ verify: [PASS] symbol-set — 1 exported symbol(s) match the unit's symbols exac
 verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm
 verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean
 verify: [FAIL] differential-driver — outputs differ (lens 2936 vs 2936, first diff at byte 23)
-verify: [FAIL] whole-program:sample_text.txt — outputs differ (lens <text number> vs <text number>, first diff at byte <number>)
+verify: [FAIL] whole-program:sample_text.txt — outputs differ (lens 808 vs 808, first diff at byte 11)
 verify: [FAIL] whole-program:sample_rand.bin — outputs differ (lens 16400 vs 16400, first diff at byte 11)
 verify: [PASS] whole-program:sample_empty — 0 bytes identical (stderr: 21 bytes identical)
 verify: [PASS] sanitizers — asan+ubsan clean
 verify: u-checksum RED — status demoted verified -> in-progress
 ```
 
-The byte number for `sample_text.txt` is 11 or 12. With the `<< 15` change, the byte numbers are different, but the same checks fail.
+With the `<< 15` change, the byte numbers are different, but the same checks fail.
 
 **Run.**
 
@@ -2671,7 +2685,7 @@ exit=10
 **What just happened.** Read the result like a detective. Byte positions count from 0.
 
 - **`differential-driver` failed**, at byte 23, which is the last digit of the very first checksum line.
-- **Both whole-program checks that have data failed**, at byte 11 or 12. That is inside bytes 11–14, exactly where the checksum sits in the compressed file (Step 1.8). The bug reached the program's real output.
+- **Both whole-program checks that have data failed**, at byte 11. That is the first of bytes 11–14, exactly where the checksum sits in the compressed file (Step 1.8). The bug reached the program's real output.
 - **`sample_empty` still passed.** For an empty file, lzg never calls the checksum. A check that never runs your code proves nothing about it; Part 8 comes back to this.
 - **`sanitizers` passed**, because that check tests the C side and the driver, not the Rust.
 - The harness recorded a RED verdict, demoted `u-checksum` from `verified` to `in-progress`, and exited with 10.
@@ -2753,7 +2767,7 @@ git status --short
 ### Checkpoint — the app is working if…
 
 - [ ] `verify` printed 8 `[PASS]` lines, GREEN and `exit=0`.
-- [ ] `whole-program:sample_text.txt` showed your text number from Part 1.
+- [ ] `whole-program:sample_text.txt` showed 808, the size from Part 1.
 - [ ] The planted bug gave RED and `exit=10`, and exactly the checks that run the checksum failed.
 - [ ] After `git checkout`, `verify` was GREEN again and `git status --short` printed nothing.
 
@@ -2869,7 +2883,7 @@ gen-driver: promoted migration/units/u-version/driver.c and recorded /Users/<you
 jq -r '.checks[] | "\(.name): \(if .passed then "PASS" else "FAIL" end) - \(.detail)"' targets/lzg/migration/units/u-version/driver-validation.json
 ```
 
-**You should see** seven PASS lines. The mutation line probably reads like one of these:
+**You should see** seven PASS lines. On the guide's run the mutation line was the first of these two:
 
 ```text
 mutation: PASS - n/a (all 1 compiled mutant(s) are TCE-equivalent; 1 sites)
@@ -2950,7 +2964,7 @@ verify: [PASS] symbol-set — 2 exported symbol(s) match the unit's symbols exac
 verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm
 verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean
 verify: [PASS] differential-driver — 284 bytes identical
-verify: [PASS] whole-program:sample_text.txt — <text number> bytes identical
+verify: [PASS] whole-program:sample_text.txt — 808 bytes identical
 verify: [PASS] whole-program:sample_rand.bin — 16400 bytes identical
 verify: [PASS] whole-program:sample_empty — 0 bytes identical (stderr: 21 bytes identical)
 verify: [PASS] sanitizers — asan+ubsan clean
@@ -3188,7 +3202,7 @@ jq -r '.scenarios[] | "\(.feature)/\(.scenario): \(.end), stdout \(.stdout_bytes
 **You should see.**
 
 ```text
-compress/text: exit 0, stdout <text number> bytes, stderr 0 bytes
+compress/text: exit 0, stdout 808 bytes, stderr 0 bytes
 version/flag: exit 0, stdout 27 bytes, stderr 0 bytes
 no-file/missing: exit 0, stdout 0 bytes, stderr 34 bytes
 ```
@@ -3255,11 +3269,11 @@ verify: [PASS] symbol-set — 1 exported symbol(s) match the unit's symbols exac
 verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm
 verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean
 verify: [PASS] differential-driver — 2936 bytes identical
-verify: [PASS] whole-program:sample_text.txt — <text number> bytes identical
+verify: [PASS] whole-program:sample_text.txt — 808 bytes identical
 verify: [PASS] whole-program:sample_rand.bin — 16400 bytes identical
 verify: [PASS] whole-program:sample_empty — 0 bytes identical (stderr: 21 bytes identical)
 verify: [PASS] sanitizers — asan+ubsan clean
-verify: [PASS] feature:compress/text — exit 0; stdout <text number> bytes identical; stderr empty
+verify: [PASS] feature:compress/text — exit 0; stdout 808 bytes identical; stderr empty
 verify: [PASS] feature:version/flag — exit 0; stdout 27 bytes identical; stderr empty
 verify: [PASS] feature:no-file/missing — exit 0; stdout empty; stderr 34 bytes identical
 verify: u-checksum GREEN — status set to verified
@@ -3289,11 +3303,11 @@ verify: [PASS] symbol-set — 2 exported symbol(s) match the unit's symbols exac
 verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm
 verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean
 verify: [PASS] differential-driver — 284 bytes identical
-verify: [PASS] whole-program:sample_text.txt — <text number> bytes identical
+verify: [PASS] whole-program:sample_text.txt — 808 bytes identical
 verify: [PASS] whole-program:sample_rand.bin — 16400 bytes identical
 verify: [PASS] whole-program:sample_empty — 0 bytes identical (stderr: 21 bytes identical)
 verify: [PASS] sanitizers — asan+ubsan clean
-verify: [PASS] feature:compress/text — exit 0; stdout <text number> bytes identical; stderr empty
+verify: [PASS] feature:compress/text — exit 0; stdout 808 bytes identical; stderr empty
 verify: [PASS] feature:version/flag — exit 0; stdout 27 bytes identical; stderr empty
 verify: [PASS] feature:no-file/missing — exit 0; stdout empty; stderr 34 bytes identical
 verify: u-version GREEN — status set to verified
@@ -3368,7 +3382,7 @@ Walk through the items below. Symbols and words are given the way the cockpit sh
 4. **A unit screen.** Open `Units (5)` and select `u-checksum`.
    - The View shows `✓ u-checksum migrated (asked in chat) · status verified`, and a line about the crate that ends `verdict green, fresh`.
    - A cyan line says how many of your features run this unit.
-   - At the bottom there is a row of checks, similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3`.
+   - At the bottom there is a row of checks, similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3 (1 run this unit)`.
 5. **Show the checks.** Press `v`. Move through the checks with `↑↓` and read each one's detail. Press `Esc` to close.
 6. **Re-check from the cockpit.** With `u-checksum` selected, press `Enter` and choose **Re-check with the oracle**. The dialog says what it will write and shows the command, `… verify u-checksum --target=…`. Wait for `ready`, then press `→` and `Enter`. The activity line says `Running the oracle…` and then `Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)`.
 7. **Details.** Press `c` to see the exact command and every event it reported. Press `c` or `Esc` to close.
