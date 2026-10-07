@@ -1487,6 +1487,107 @@ mod tests {
     }
 
     #[test]
+    fn a_last_try_sits_only_where_the_replace_rule_puts_it() {
+        // The rows the replace rule writes (§3.7, note 23), and none other:
+        // a reader takes a last try only where merge could have put it.
+        let try_of = |outcome: &str| {
+            Some(LastTry {
+                outcome: outcome.into(),
+                setup: None,
+                units: None,
+            })
+        };
+        let unmeasurable = "run-failed: unmeasurable";
+        for kind in [RowKind::CAlone, RowKind::Unit, RowKind::AsItStands] {
+            // A set-up outcome sits beside a measured row ...
+            let mut m = measured(kind);
+            m.last_try = try_of(unmeasurable);
+            check_row(&m, kind).unwrap_or_else(|e| panic!("{kind:?}: {e}"));
+            // ... never beside a set-up row: a newer set-up row replaces it.
+            let mut s = other(kind, unmeasurable, None);
+            s.last_try = try_of(unmeasurable);
+            assert!(
+                check_row(&s, kind).is_err(),
+                "{kind:?}: beside a set-up row"
+            );
+            // A last try is a set-up or C outcome, never one a run measures.
+            for outcome in ["measured", "too-short", "run-failed: timeout"] {
+                let mut m = measured(kind);
+                m.last_try = try_of(outcome);
+                assert!(check_row(&m, kind).is_err(), "{kind:?}: {outcome}");
+            }
+        }
+        // The C's own outcome replaces a C-side row: never kept beside one.
+        let c = RowKind::CAlone;
+        for earlier in C_SIDE {
+            let mut r = other(c, earlier, None);
+            r.last_try = try_of("c-unstable");
+            assert!(check_row(&r, c).is_err(), "c-unstable beside {earlier}");
+        }
+        // The units' and the program's rows are left as they were: no C
+        // outcome is ever kept beside them.
+        for kind in [RowKind::Unit, RowKind::AsItStands] {
+            let mut m = measured(kind);
+            m.last_try = try_of("c-crashed");
+            assert!(check_row(&m, kind).is_err(), "{kind:?}: the C's own");
+        }
+    }
+
+    #[test]
+    fn a_last_try_keeps_the_set_up_facts_and_units_it_was_measured_with() {
+        // The program as it stands, measured with u001; a later try with
+        // u001 and u002 does not link: the row stays, and its last try says
+        // why and which units it held.
+        let s = RowKind::AsItStands;
+        let unit = |id: &str| UnitRef {
+            id: id.into(),
+            crate_digest: digest('c'),
+        };
+        let mut earlier = measured(s);
+        earlier.inputs.units = Some(vec![unit("u001")]);
+        let link = SetupFacts {
+            cause: Some("lto".into()),
+            units: Some(vec!["u002".into()]),
+            ..SetupFacts::default()
+        };
+        let mut new = other(s, "does-not-link", Some(link.clone()));
+        new.inputs.units = Some(vec![unit("u001"), unit("u002")]);
+        let m = merge(Some(&earlier), new, s);
+        assert_eq!(m.outcome, "measured");
+        assert_eq!(
+            m.last_try,
+            Some(LastTry {
+                outcome: "does-not-link".into(),
+                setup: Some(link),
+                units: Some(vec![unit("u001"), unit("u002")]),
+            })
+        );
+        check_row(&m, s).expect("valid");
+    }
+
+    #[test]
+    fn the_cs_own_outcome_replaces_an_earlier_set_up_c_alone_row() {
+        // A missing input on the C alone, then (the input back) the C
+        // crashes: the crash is the row, not a try beside the set-up row.
+        let c = RowKind::CAlone;
+        let missing = other(
+            c,
+            "input-unusable",
+            Some(SetupFacts {
+                input: Some("missing".into()),
+                ..SetupFacts::default()
+            }),
+        );
+        let unmeasurable = other(c, "run-failed: unmeasurable", None);
+        for earlier in [&missing, &unmeasurable] {
+            for o in C_SIDE {
+                let new = other(c, o, None);
+                assert_eq!(merge(Some(earlier), new.clone(), c), new, "{o}");
+            }
+        }
+    }
+
+    #[test]
     fn a_differences_numbers_and_a_replaces_index_are_bounded() {
         let k = RowKind::Unit;
         let with = |d: Difference| {
