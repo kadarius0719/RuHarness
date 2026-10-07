@@ -4318,4 +4318,149 @@ mod tests {
             ub_before
         );
     }
+
+    /// Which of the C alone's ends stop the workload's other rows (§3.5
+    /// step 1, §3.3 step 2, note 23): the C failing in step 1 — a crash, or
+    /// two runs that differ — does; a run the launcher could not measure is
+    /// this row's only, and a timed run that fails is past step 1: neither
+    /// does.
+    #[test]
+    fn only_the_cs_own_step1_failures_stop_the_other_rows() {
+        if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("perf-c-stops");
+        let root = tmp.path().canonicalize().expect("root");
+        let l = test_launcher(&root);
+        let host = HostDirs::from_env().expect("host");
+        let ctx = |timeout_secs: u64| RunCtx {
+            launcher: &l,
+            host: &host,
+            root: &root,
+            name: "tool",
+            timeout_secs,
+        };
+        let w = workload("w");
+        let shared = shared();
+        let digest = wl::digest(&w, None);
+        let mut seen = seen();
+        let mut c_alone = |ctx: &RunCtx<'_>, c: &Hashed| {
+            let (row, stops) =
+                c_alone_row(ctx, c, &w, None, &digest, 5, &shared, &mut seen).expect("runs");
+            (row.outcome.clone(), stops, row)
+        };
+        // A crash in step 1: the C failed there.
+        let crash = c_program(
+            &root,
+            "crash",
+            "#include <stdlib.h>\nint main(void) { abort(); }\n",
+        );
+        let (outcome, stops, _) = c_alone(&ctx(60), &crash);
+        assert_eq!((outcome.as_str(), stops), ("c-crashed", true));
+        // Two runs that differ: the C failed there too.
+        let unstable = c_program(
+            &root,
+            "unstable",
+            "#include <stdio.h>\n#include <time.h>\nint main(void) { int x = 0; \
+             printf(\"%ld\\n\", (long)clock() ^ (long)time(0) ^ (long)&x); return 0; }\n",
+        );
+        let (outcome, stops, _) = c_alone(&ctx(60), &unstable);
+        assert_eq!((outcome.as_str(), stops), ("c-unstable", true));
+        // perfrun refuses a deadline past its most, so the launcher measures
+        // no run: unmeasurable, for this row only.
+        let quick = c_program(&root, "quick", "int main(void) { return 0; }\n");
+        let (outcome, stops, _) = c_alone(&ctx(crate::MAX_TIMEOUT_SECS + 1), &quick);
+        assert_eq!(
+            (outcome.as_str(), stops),
+            ("run-failed: unmeasurable", false)
+        );
+        // Over the floor, then past the timeout in its first timed run
+        // (step 1 has a minute more): a failed run, not the C failing in
+        // step 1.
+        let slow = c_program(
+            &root,
+            "slow",
+            "#include <time.h>\nint main(void) { while (clock() < 3 * CLOCKS_PER_SEC / 2) {} \
+             return 0; }\n",
+        );
+        let (outcome, stops, row) = c_alone(&ctx(1), &slow);
+        assert_eq!((outcome.as_str(), stops), ("run-failed: timeout", false));
+        let failed = row.failed_run.as_ref().expect("the failed run");
+        assert_eq!((failed.side.as_str(), failed.index), ("c", 1));
+        res::check_row(&row, RowKind::CAlone).expect("valid on the C alone");
+    }
+
+    /// Where the C fails on a workload in step 1, the rows there that run
+    /// nothing are still written (§3.5 step 1, note 23): a verified unit
+    /// perf cannot measure today says why, and so does a program as it
+    /// stands that cannot be put together; only the rows that would run a
+    /// side are not run.
+    #[test]
+    fn rows_that_run_nothing_are_written_where_the_c_fails() {
+        if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("perf-c-fails");
+        let root = tmp.path().canonicalize().expect("root");
+        mini_program(&root, &["ua", "ub", "uc"]);
+        // ua aborts on a panic and ub unwinds: the program as it stands is
+        // mixed-panic, refused before its link. uc has no crate: not fresh.
+        unit_crate(&root, "ua", 1, None, true);
+        unit_crate(&root, "ub", 2, None, true);
+        let manifest = root.join("migration/units/ub/ub_rs/Cargo.toml");
+        let text = std::fs::read_to_string(&manifest).expect("manifest");
+        std::fs::write(
+            &manifest,
+            text.replace("panic = \"abort\"", "panic = \"unwind\""),
+        )
+        .expect("unwind");
+        let facts = facts_of(&root);
+        let mut plan = "schema_version = 1\ntarget = \"tool\"\n".to_string();
+        for id in ["ua", "ub", "uc"] {
+            plan += &plan_unit(&root, &facts, id, "verified", true, None);
+        }
+        put(&root, "migration/plan.toml", &plan);
+        let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+        let target = TargetContext::load(&root).expect("target");
+        let perf_dir = root.join("migration/perf");
+        std::fs::create_dir_all(&perf_dir).expect("perf dir");
+        let workloads = wl::parse(
+            "schema_version = 1\n[[workload]]\nid = \"crash\"\nargs = [\"crash\"]\nruns = 5\n",
+            Path::new("w.toml"),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let mut seen = seen();
+        perf_run(
+            &target,
+            &plan,
+            &facts,
+            &workloads,
+            &perf_dir,
+            &PerfRequest::default(),
+            &mut seen,
+        )
+        .expect("perf runs");
+        let rows: Vec<(&str, &str)> = seen
+            .rows
+            .iter()
+            .map(|(side, r)| (side.as_str(), r.outcome.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("c", "c-crashed"),
+                ("uc", "not-verified"),
+                ("program", "mixed-panic")
+            ],
+            "{:#?}",
+            seen.messages
+        );
+        assert!(
+            seen.messages
+                .iter()
+                .any(|m| m == "the other rows on crash are not run — the C failed there"),
+            "{:#?}",
+            seen.messages
+        );
+    }
 }

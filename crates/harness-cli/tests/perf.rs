@@ -1049,3 +1049,70 @@ fn two_units_end_to_end() {
         show.stdout
     );
 }
+
+/// `perf run` reads the compilers with `perf show`'s own code (§3.9): the
+/// same runs, output cap and first line, so what it stores is what a check
+/// reads. Here the target's `rustc` is a stand-in that answers `rustc -V`
+/// alone: first with two lines (the first is stored), then with its line
+/// and more than the cap — a version `perf show` cannot read, so `perf
+/// run` cannot either: stored as the bare name, never a line a check would
+/// not see. A unit row names its rustc; u001 is not measured (its Rust
+/// changed since verify), so no build needs that rustc.
+#[test]
+fn run_reads_the_compilers_as_show_does() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("run-compilers");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    let lib = t.join("migration/units/u001-katajainen/katajainen_rs/src/lib.rs");
+    let mut text = std::fs::read_to_string(&lib).unwrap();
+    text.push_str("\n// an edit since verify\n");
+    std::fs::write(&lib, text).unwrap();
+    let bin = t.join("stand-in/bin");
+    let path = path_with(&bin);
+    let stored_rustc = || {
+        let r = harness_env(
+            &["perf", "run", "--target", target],
+            None,
+            &[("PATH", &path)],
+        );
+        assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+        let unit = harness_core::perf::results::read_unit(
+            &t.join("migration/perf/units/u001-katajainen.json"),
+            "u001-katajainen",
+        )
+        .unwrap()
+        .unwrap();
+        let w = unit.rows.iter().find(|r| r.workload == "w").unwrap();
+        assert_eq!(w.outcome, "not-verified");
+        w.inputs.compilers.rustc.clone()
+    };
+    let only_v = "[ \"$*\" = \"-V\" ] || exit 1\necho 'rustc 1.0.0 (stand-in)'\n";
+    script(
+        &bin.join("rustc"),
+        &format!("{only_v}echo 'a second line'\n"),
+    );
+    assert_eq!(stored_rustc().as_deref(), Some("rustc 1.0.0 (stand-in)"));
+    let long = "x".repeat(80);
+    script(
+        &bin.join("rustc"),
+        &format!("{only_v}i=0\nwhile [ $i -lt 1000 ]; do echo {long}; i=$((i+1)); done\n"),
+    );
+    assert_eq!(stored_rustc().as_deref(), Some("rustc"));
+    // perf show cannot read it either.
+    let show = harness_env(
+        &["perf", "show", "--target", target],
+        None,
+        &[("PATH", &path)],
+    );
+    assert_eq!(show.code, 0, "{}", show.stderr);
+    assert!(
+        show.stdout.contains("perf: compilers not checked"),
+        "{}",
+        show.stdout
+    );
+}
