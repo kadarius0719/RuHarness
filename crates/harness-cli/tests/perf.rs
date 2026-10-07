@@ -626,6 +626,65 @@ fn show_checks_nothing_when_nothing_is_stored() {
     assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
 }
 
+/// Without facts `perf show` cannot hash the C (§3.9): it says so once and
+/// judges the rest — no row reads "the C changed", as in the cockpit —
+/// whether the facts file is gone or cannot be read. With the facts the
+/// same row is current, and an edit to the C is said again.
+#[test]
+fn show_without_facts_does_not_judge_the_c() {
+    let t = zopfli("no-facts");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let show = || harness(&["perf", "show", "--target", target, "--no-check"], None);
+    let r = show();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
+    assert!(!r.stdout.contains("out of date"), "{}", r.stdout);
+    assert!(!r.stdout.contains("not checked"), "{}", r.stdout);
+
+    let facts = t.join("migration/facts.jsonl");
+    let kept = std::fs::read(&facts).unwrap();
+    for (case, bytes) in [("gone", None), ("unreadable", Some("not facts\n"))] {
+        match bytes {
+            None => std::fs::remove_file(&facts).unwrap(),
+            Some(b) => std::fs::write(&facts, b).unwrap(),
+        }
+        let r = show();
+        assert_eq!(r.code, 0, "{case}: {}", r.stderr);
+        assert_eq!(
+            r.stdout
+                .matches("perf: the C not checked: no facts — run harness scan")
+                .count(),
+            1,
+            "{case}: {}",
+            r.stdout
+        );
+        assert!(!r.stdout.contains("the C changed"), "{case}: {}", r.stdout);
+        assert!(!r.stdout.contains("out of date"), "{case}: {}", r.stdout);
+    }
+    // The rest is still judged.
+    edit(
+        &t.join("migration/perf/workloads.toml"),
+        "args = [\"-h\"]",
+        "args = [\"-c\"]",
+    );
+    let r = show();
+    let rows = rows_of(&r.stdout);
+    let w = row(&rows, "perf: the C on w — ");
+    assert!(w.contains("out of date: your workload changed"), "{w}");
+    assert!(!w.contains("the C changed"), "{w}");
+
+    // The facts back: an edit to the C is said again.
+    std::fs::write(&facts, kept).unwrap();
+    let main = t.join("src/zopfli/zopfli_bin.c");
+    let mut text = std::fs::read_to_string(&main).unwrap();
+    text.push_str("\n/* an edit */\n");
+    std::fs::write(&main, text).unwrap();
+    let r = show();
+    assert!(r.stdout.contains("the C changed"), "{}", r.stdout);
+    assert!(!r.stdout.contains("not checked"), "{}", r.stdout);
+}
+
 /// `perf show` only reads: it creates no folder, and it refuses a linked
 /// `migration/perf` or `migration/perf/units` instead of reading another
 /// folder's files as this target's rows (§3.9: links are refused on read).

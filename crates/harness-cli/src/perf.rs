@@ -413,7 +413,9 @@ fn stored_units(root: &Path, units_dir: &Path, plan: &Plan) -> Result<Vec<Stored
 /// current, the compilers only as tool runs (sandboxed; without a sandbox
 /// only with `--allow-unsandboxed`); `--no-check` skips both, and with no
 /// row stored there is nothing to judge, so neither is checked or said —
-/// "nothing measured yet" is the line. It writes nothing.
+/// "nothing measured yet" is the line. Without facts the C cannot be
+/// hashed: it is not judged (said once), never "the C changed" on every
+/// row. It writes nothing.
 pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool) -> Result<u8> {
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
@@ -453,10 +455,10 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
             .map(|u| u.rows.len())
             .sum::<usize>();
     let check = !no_check && to_judge > 0;
+    // `None`: no facts (none, or unreadable), so the C cannot be hashed.
     let program_digest = facts
         .as_ref()
-        .map(|f| harness_core::features::program_digest_now(&ctx, f))
-        .unwrap_or_default();
+        .map(|f| harness_core::features::program_digest_now(&ctx, f));
     let name = harness_core::features::program_name(&ctx.config);
     let measurable = facts
         .as_ref()
@@ -476,6 +478,9 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
     }
     if check && compilers.is_none() {
         out("perf: compilers not checked".into());
+    }
+    if to_judge > 0 && program_digest.is_none() {
+        out("perf: the C not checked: no facts — run harness scan".into());
     }
     let crate_digest = |id: &str| -> Option<String> {
         let unit = plan.units.iter().find(|u| u.id == id)?;
@@ -504,9 +509,13 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
                 .and_then(|w| w.input.as_deref());
             let mut w = row_words(row, side, input);
             let today_workload = workload_digest(&row.workload);
+            // Without facts only the C's comparison is skipped (said once
+            // above), as the cockpit does: the row is held to its own
+            // program digest, and the rest is still judged.
+            let program_today = program_digest.as_deref().unwrap_or(&row.inputs.program);
             let today = harness_core::perf::currency::Today {
                 workload: today_workload.as_deref(),
-                program: &program_digest,
+                program: program_today,
                 crate_digest: &crate_digest,
                 replaces: replaces.as_deref(),
                 program_name: &name,
