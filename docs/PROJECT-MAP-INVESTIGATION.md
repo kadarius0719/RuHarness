@@ -78,3 +78,78 @@ likewise a judgement (its folder name and its reaching almost nothing both say s
   "what is in this file".
 - Header-only dependencies (a `.h` with inline code) do not appear in the closure at all; the
   scanner's include graph covers them. The map needs both views side by side.
+
+## The spike on real downloads (2026-10-07)
+
+Step 7 of docs/NEXT-WEEK-PLAN.md: the closure script, rewritten (about 90 lines, the session's
+scratchpad `pmap/closure.py`: every `.c` compiled alone with `cc -c -w -O0`, include folders = every
+folder holding a `.h`, `-D` flags only when given; `nm -g` for defined and needed; closures from every
+`main` and every `LLVMFuzzerTestOneInput`; a file that defines `main` is never pulled into another
+closure). Run on two downloads kept outside the repository (`~/code/ruharness-test-downloads/`, the
+person's rule: test data only, nothing installed): **lz4** at 0774d05 (a library, a command-line
+tool, tests, examples, fuzzers; three build systems) and **liblzg** at 182b56c (the testing guide's
+library, its three tools and an `extra/` folder).
+
+### Result 3 — lz4: the closures separate 33 programs in two seconds
+
+48 `.c` files, all compiling alone with no flags (2.2 s). 33 entry points: 23 `main`s (1 tool in
+`programs/`, 10 in `examples/`, 12 in `tests/`) and 10 fuzz targets in `ossfuzz/`. The folder names
+alone would classify every one of them. `lib/lz4.c` is in 32 of the 33 closures — the library they
+all share; `tests/datagencli.c` reaches into `programs/lorem.c` — sharing across folders. The tool:
+
+| entry | closure (besides itself) | outside |
+|---|---|---|
+| `programs/lz4cli.c` (no flags) | `lib/{lz4,lz4frame,lz4hc,xxhash}.c`, `programs/{bench,lorem,lz4io,threadpool,timefn}.c` | 60 (libc) |
+| `programs/lz4cli.c` with `-DLZ4IO_MULTITHREAD -DNDEBUG` | the same **plus `programs/util.c`** | the same **plus 11 `pthread_*` and `sysctlbyname`** |
+
+What it found that the design underrates:
+
+1. **The build's flags decide the program, not only a residual.** lz4's Makefile builds `lz4` with
+   `-DLZ4IO_MULTITHREAD` (and `-pthread`) whenever pthreads exist. Without that define the closure
+   misses a file and — more important for a migration — misses that the tool is multithreaded. Both
+   configurations compile and link, so **a proposed flag cannot be checked by linking**: the link
+   check of design §3.4 does not catch a wrong configuration. lz4 ships no `compile_commands.json`.
+2. **The project's own build systems disagree.** The Makefile and the Meson file
+   (`build/meson/meson/programs/meson.build`: `multithread_args = ['-DLZ4IO_MULTITHREAD']`) build the
+   tool with threads; `build/cmake/CMakeLists.txt` builds it without. "The untouched project's
+   behaviour" (design §3.10's principle: match, not right) therefore needs **one named build
+   configuration** as its baseline, chosen by the person — the map cannot pick it.
+3. **The project links more than the program needs.** The Makefile links `$(wildcard lib/*.c)` and
+   `$(wildcard *.c)`: `lib/lz4file.c` (and, without threads, `programs/util.c`) are linked but never
+   reached. The closure is the smaller set; matching behaviour is unaffected, but the map's file list
+   and the project's build will differ by design — say so where the map shows a tool.
+4. **One `main` for many programs.** `ossfuzz/standaloneengine.c` defines `main` and needs
+   `LLVMFuzzerTestOneInput`, which 10 fuzzers define: it is a driver linked once with each fuzzer, not
+   a program. The closure reports it as a 10-way ambiguity, correctly; the question for the model is
+   "what is this?", not "which one?".
+5. **Duplicates between programs are harmless.** 14 helper names (`write_bin`, `read_bin`,
+   `compare`, …) are defined in several `examples/` and `tests/` files, each its own program and
+   never in one closure. Only a duplicate met **inside** a closure matters — the investigation's
+   open question ("platform choice or conflict") applies to those alone.
+6. Tools are not on this machine: no `cmake`, `meson` or `bear` (the usual ways to get a
+   `compile_commands.json`). Running a project's build to learn its flags would execute its build
+   logic (Makefile `$(shell …)` probes, CMake scripts) — outside the sandbox today.
+
+### Result 4 — liblzg: the closure is the guide's hand-picked file list
+
+8 `.c` files, all compiling. `src/tools/lzg.c`'s closure is `src/lib/{checksum,encode,version}.c` —
+exactly what Part 1 of the testing guide has the person copy (the guide also copies `decode.c`, which
+`lzg` never reaches; harmless). A **real duplicate**, the case the model step exists for:
+`src/extra/lzgmini.c` (a stand-alone mini decoder) defines `LZG_Decode` and `LZG_DecodedSize` like
+`src/lib/decode.c`, so `unlzg` and `benchmark` are each ambiguous between the two — and either choice
+links. `ShowProgress`/`ShowUsage` are defined in two tools: harmless (never in one closure).
+
+### What the spike changes, for the design review
+
+- **Flags are evidence the map must be given, not guessed.** Order of trust: a
+  `compile_commands.json`; else flags the person states for a named build (`make`, `meson`, `cmake`)
+  — a model may read the build files and propose them, but a proposal is advice the person
+  confirms, because the link check cannot tell configurations apart; else the walk's guess, marked
+  as a guess on every closure it shaped. Design §3.1 step 4 and §6's `#ifdef` residual need this.
+- **The baseline is one named configuration** (design §3.10's "match" principle): record which
+  build and which flags the baseline program was made with, and refuse to compare against another.
+- **Entry kinds:** `main`, fuzz target (`LLVMFuzzerTestOneInput`), and "driver of many" (a `main`
+  whose need is met by many files) — the third is not a program.
+- **Only in-closure duplicates are questions;** between-program duplicates are listed, not asked.
+- Nothing here argues for a bigger mechanism: the closures themselves were exact and cheap on both
+  downloads. The open part is the configuration, and that is a question for the person.
