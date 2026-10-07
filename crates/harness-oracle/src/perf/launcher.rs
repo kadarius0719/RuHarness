@@ -1490,31 +1490,78 @@ mod tests {
         );
     }
 
-    /// The pid of the process running `bin`, once it runs.
+    /// Every process in one `ps -axww -o <fields>` snapshot: each line's
+    /// first `words` columns (none of them holds a space) and the rest of
+    /// the line, the last column, which may.
+    fn ps_rows(fields: &str, words: usize) -> Vec<(Vec<String>, String)> {
+        let out = Command::new("ps")
+            .args(["-axww", "-o", fields])
+            .output()
+            .expect("ps");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| {
+                let mut rest = l.trim();
+                let mut lead = Vec::with_capacity(words);
+                for _ in 0..words {
+                    let (word, after) = rest.split_once(char::is_whitespace)?;
+                    lead.push(word.to_string());
+                    rest = after.trim_start();
+                }
+                Some((lead, rest.to_string()))
+            })
+            .collect()
+    }
+
+    /// The pid of the process running `bin` once it runs, waiting up to 30
+    /// seconds (a new binary's first exec can be slow on a busy Mac). Only
+    /// a process this test process started counts — perfrun's child, or its
+    /// own: another copy of these tests running at once on the machine (a
+    /// second worktree) runs programs of the very same names.
     fn pid_of(bin: &Path) -> u32 {
-        for _ in 0..400 {
-            // The executable's own name (`ucomm`): perfrun's command line
-            // holds the program's path too, and argv[0] is "tool".
-            let name = bin
-                .file_name()
-                .expect("name")
-                .to_string_lossy()
-                .into_owned();
-            let out = Command::new("ps")
-                .args(["-axo", "pid=,ucomm="])
-                .output()
-                .expect("ps");
-            if let Some(pid) = String::from_utf8_lossy(&out.stdout).lines().find_map(|l| {
-                let (pid, comm) = l.trim().split_once(' ')?;
-                (comm.trim() == name)
-                    .then(|| pid.parse::<u32>().ok())
-                    .flatten()
-            }) {
+        // The executable's own name (`ucomm`): perfrun's command line holds
+        // the program's path too, and argv[0] is "tool".
+        let name = bin
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .into_owned();
+        let until = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < until {
+            let rows = ps_rows("pid=,ppid=,ucomm=", 2);
+            let parents: std::collections::HashMap<u32, u32> = rows
+                .iter()
+                .filter_map(|(w, _)| Some((w[0].parse().ok()?, w[1].parse().ok()?)))
+                .collect();
+            if let Some(pid) = rows
+                .iter()
+                .filter(|(_, comm)| *comm == name)
+                .filter_map(|(w, _)| w[0].parse::<u32>().ok())
+                .find(|&pid| descends_from_this_process(pid, &parents))
+            {
                 return pid;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
         panic!("{} never ran", bin.display());
+    }
+
+    /// Whether `pid` descends from this test process, by the parents of one
+    /// `ps` snapshot. launchd (pid 1) ends the walk: an orphan it adopted is
+    /// nobody's here.
+    fn descends_from_this_process(pid: u32, parents: &std::collections::HashMap<u32, u32>) -> bool {
+        let me = std::process::id();
+        let mut at = pid;
+        // A chain is never longer than the snapshot; the bound keeps a
+        // malformed one from looping.
+        for _ in 0..parents.len() {
+            match parents.get(&at) {
+                Some(&parent) if parent == me => return true,
+                Some(&parent) if parent > 1 => at = parent,
+                _ => return false,
+            }
+        }
+        false
     }
 
     fn alive(pid: u32) -> bool {
@@ -1544,6 +1591,66 @@ mod tests {
             secs = secs * 60.0 + v;
         }
         Duration::from_secs_f64(secs)
+    }
+
+    /// [`pid_of`] takes only a process this test process started: a copy of
+    /// the same executable that another run of these tests runs elsewhere
+    /// on the machine — here a decoy launchd adopted — is never taken for
+    /// it, even while the decoy is the only one running.
+    #[test]
+    fn pid_of_never_takes_another_run_s_program() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let tmp = crate::testutil::TempDir::new("perf-pid-of");
+        let (ours, theirs) = (tmp.path().join("ours"), tmp.path().join("theirs"));
+        std::fs::create_dir(&ours).expect("ours");
+        std::fs::create_dir(&theirs).expect("theirs");
+        let bin = program(
+            &ours,
+            "lookalike",
+            "#include <unistd.h>\nint main(void) { sleep(30); return 0; }\n",
+        );
+        let decoy = theirs.join("lookalike");
+        std::fs::copy(&bin, &decoy).expect("the decoy");
+        // A shell that exits at once starts the decoy: launchd adopts it.
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("\"$0\" </dev/null >/dev/null 2>&1 & echo $!")
+            .arg(&decoy)
+            .output()
+            .expect("sh");
+        let decoy_pid: u32 = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .expect("the decoy's pid");
+        let until = Instant::now() + Duration::from_secs(30);
+        while ps(decoy_pid, "ucomm") != "lookalike" {
+            assert!(Instant::now() < until, "the decoy never ran");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let adopted = parent_of(decoy_pid);
+        // Ours starts a moment later, while pid_of already looks.
+        let starter = {
+            let bin = bin.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                Command::new(&bin).spawn()
+            })
+        };
+        let found = pid_of(&bin);
+        let mut started = starter.join().expect("joins").expect("ours starts");
+        let _ = started.kill();
+        let _ = started.wait();
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", &decoy_pid.to_string()])
+            .status();
+        assert_eq!(adopted, 1, "launchd adopted the decoy");
+        assert_eq!(
+            found,
+            started.id(),
+            "pid_of took the decoy ({decoy_pid}) for this process's own"
+        );
     }
 
     #[test]
