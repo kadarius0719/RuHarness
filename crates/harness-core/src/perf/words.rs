@@ -1753,6 +1753,8 @@ mod tests {
         assert_eq!(end(2.010_000_000_000_000_2, &[TIME_MARGIN]), "2.01");
         assert_eq!(end(2.04, &[TIME_MARGIN]), "2.04");
         assert_eq!(end(2.03, &[TIME_MARGIN]), "2.03");
+        // From under the line too: 1.97 a hair under its step stays 1.97.
+        assert_eq!(end(1.969_999_999_999_997, &[0.0, TIME_MARGIN]), "1.97");
         // A hair past a line still shows a step past it, never on it.
         assert_eq!(end(1e-12, &[0.0]), "0.01");
         assert_eq!(end(2.0 + 1e-12, &[TIME_MARGIN]), "2.01");
@@ -1857,6 +1859,13 @@ mod tests {
         let b = w(&bimodal);
         assert_eq!(b.answer, "slower");
         assert_eq!(b.headline, "3.0× as slow (1.03–3.5×)");
+        // A low end of +2.2 % is 1.022×: two decimals at the nearest would
+        // show 1.02×, the line itself, so it rounds up past it — 1.03×.
+        let mut near = bimodal;
+        near[4] = 2.2;
+        let n = w(&near);
+        assert_eq!(n.answer, "slower");
+        assert_eq!(n.headline, "3.0× as slow (1.03–3.5×)");
     }
 
     #[test]
@@ -1884,6 +1893,62 @@ mod tests {
         assert_eq!(
             w.headline,
             "about 1.2 % faster (0.5–2.03 %) — too close to the 2 % line to call"
+        );
+    }
+
+    #[test]
+    fn a_near_end_keeps_off_zero_and_the_line_and_stays_on_its_step() {
+        let (cc, pr) = (
+            "too close to the 2 % line to call",
+            "not clearly past the 2 % line",
+        );
+        let w = |percents: Vec<f64>| {
+            words(
+                &row(flat(15), at(1e9, &percents), "macos-v6-cycles", false),
+                &UNIT,
+            )
+        };
+        // A close call whose near end is 1.97 %: at one decimal it would
+        // show 2.0, on the line, so it shows two decimals rounded away from
+        // the line. Measured, that end is a hair under its 0.01 step
+        // (1.969 999 …), and it stays 1.97 — never 1.96.
+        let s = w(known(15, 1.97, 2.5, 3.6));
+        assert_eq!(s.answer, "close-call-slower");
+        assert_eq!(
+            s.headline,
+            format!("about 2.5 % slower (1.97–3.6 %) — {cc}")
+        );
+        let f = w(known(15, -3.6, -2.5, -1.97));
+        assert_eq!(f.answer, "close-call-faster");
+        assert_eq!(
+            f.headline,
+            format!("about 2.5 % faster (1.97–3.6 %) — {cc}")
+        );
+        // A near end just past 0 % shows a step past it, never "0.0", which
+        // reads as no difference: on a close call and on probably.
+        let s = w(known(15, 0.004, 1.2, 2.5));
+        assert_eq!(s.answer, "close-call-slower");
+        assert_eq!(
+            s.headline,
+            format!("about 1.2 % slower (0.01–2.5 %) — {cc}")
+        );
+        let f = w(known(15, -2.5, -1.2, -0.004));
+        assert_eq!(f.answer, "close-call-faster");
+        assert_eq!(
+            f.headline,
+            format!("about 1.2 % faster (0.01–2.5 %) — {cc}")
+        );
+        let s = w(known(15, 0.004, 3.1, 6.0));
+        assert_eq!(s.answer, "probably-slower");
+        assert_eq!(
+            s.headline,
+            format!("probably slower, by about 3.1 % (0.01–6.0 %) — {pr}")
+        );
+        let f = w(known(15, -6.0, -3.1, -0.004));
+        assert_eq!(f.answer, "probably-faster");
+        assert_eq!(
+            f.headline,
+            format!("probably faster, by about 3.1 % (0.01–6.0 %) — {pr}")
         );
     }
 
