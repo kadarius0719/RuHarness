@@ -7,6 +7,7 @@
 use super::archive::{archive_facts, ArchiveFacts, PanicRuntime};
 use super::build::{self, Hashed, Slot};
 use super::launcher::{self, End, Launcher, Seen, Status};
+use super::tools;
 use crate::exec::{self, Runner};
 use crate::sandbox::{self, HostDirs, PerfSpec, ProfileSpec};
 use crate::{build_staticlib, extra_link_args, prepare_target_dir, program_c_files_in, Base};
@@ -769,6 +770,9 @@ pub fn perf_run(
             "the facts are out of date — run harness scan first, then measure".into(),
         ));
     }
+    // The results first: a units folder that is a link or not a folder is
+    // refused before anything is built, read or written (§3.9).
+    let mut store = Store::load(perf_dir, workloads)?;
     let ledger = Ledger::new(target.root.clone());
     let host = HostDirs::from_env()?;
     let launcher = launcher::launcher(&host, &mut |w: &str| progress.message(w))?;
@@ -820,25 +824,15 @@ pub fn perf_run(
         host: &host,
         root: &root,
     };
-    let probes = steps.writing(&[], &[])?;
-    let first_line = |argv: &[&str]| -> String {
-        let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-        probes
-            .tool(&argv)
-            .map(|o| {
-                String::from_utf8_lossy(&o)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .chars()
-                    .take(160)
-                    .collect()
-            })
-            .unwrap_or_default()
+    // The compilers read as perf show reads them (tools.rs): the same runs,
+    // output cap and first line. One that cannot be read is stored as its
+    // bare name, as ever (row_inputs).
+    let probes = Runner {
+        max_output: tools::VERSION_OUTPUT_CAP,
+        ..steps.writing(&[], &[])?
     };
-    let cc = first_line(&["cc", "--version"]);
-    let rustc = first_line(&["rustc", "-V"]);
+    let (cc, rustc) = tools::compiler_lines(&probes);
+    let (cc, rustc) = (cc.unwrap_or_default(), rustc.unwrap_or_default());
 
     // The C: objects once, one link.
     progress.message("building the C program…");
@@ -1154,7 +1148,6 @@ pub fn perf_run(
         timeout_secs: base.timeout.as_secs().max(1),
     };
     let out_root = build::perf_out(&root)?;
-    let mut store = Store::load(perf_dir, workloads)?;
     let mut summary = PerfSummary::default();
 
     let chosen: Vec<&Workload> = workloads
@@ -2180,8 +2173,29 @@ struct Store {
     workloads: Vec<String>,
 }
 
+/// `migration/perf/units/` as it stands (§3.9): the results are ledger
+/// state, not scratch, so a units folder that is a link or not a folder is
+/// refused by name — never read through, never removed (perf's scratch
+/// folders, [`build::sub_folder`], are replaced instead). `None` when it is
+/// not there yet.
+fn units_folder(perf_dir: &Path) -> Result<Option<PathBuf>, Error> {
+    let dir = perf_dir.join(res::UNITS_DIR);
+    match std::fs::symlink_metadata(&dir) {
+        Ok(m) if m.file_type().is_dir() => Ok(Some(dir)),
+        Ok(_) => Err(Error::Invariant(format!(
+            "{}: must be a directory (a link is refused)",
+            dir.display()
+        ))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::io(&dir, e)),
+    }
+}
+
 impl Store {
+    /// The results as they stand; a units folder that is a link or not a
+    /// folder is refused before anything is read.
     fn load(dir: &Path, workloads: &Workloads) -> Result<Store, Error> {
+        units_folder(dir)?;
         let program = res::read_program(&res::program_path(dir))?.unwrap_or_default();
         Ok(Store {
             dir: dir.to_path_buf(),
@@ -2219,8 +2233,14 @@ impl Store {
                 merged
             }
             RowSide::Unit(id) => {
+                // Checked again before this row's read and write: a link
+                // made since the load is refused too, never followed.
+                if units_folder(&self.dir)?.is_none() {
+                    let dir = self.dir.join(res::UNITS_DIR);
+                    std::fs::create_dir(&dir).map_err(|e| Error::io(&dir, e))?;
+                }
+                let path = res::unit_path(&self.dir, id);
                 if !self.units.contains_key(id) {
-                    let path = res::unit_path(&self.dir, id);
                     let loaded =
                         res::read_unit(&path, id)?.unwrap_or_else(|| res::UnitResults::new(id));
                     self.units.insert(id.to_string(), loaded);
@@ -2228,8 +2248,7 @@ impl Store {
                 let file = self.units.get_mut(id).expect("loaded");
                 let merged = place(&mut file.rows, row, RowKind::Unit);
                 keep(&mut file.rows, &self.workloads);
-                let units_dir = build::sub_folder(&self.dir, res::UNITS_DIR)?;
-                res::write_unit(&units_dir.join(format!("{id}.json")), file)?;
+                res::write_unit(&path, file)?;
                 merged
             }
         };
@@ -2321,6 +2340,9 @@ mod tests {
     /// The C alone on day one (§3.6), end to end through the launcher: a
     /// baseline row on a long enough workload, too-short on a tiny one, an
     /// unusable input in its own words, the results file written strictly.
+    /// The next day the tiny workload's input is gone: the run goes on — the
+    /// too-short row stays with this try beside it, the next workload is
+    /// measured (§3.7, note 23).
     #[test]
     fn the_c_alone_end_to_end() {
         if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
@@ -2348,12 +2370,13 @@ mod tests {
              printf(\"%ld %s\\n\", n, argv[0]); return 0; }\n",
         );
         put("bench/in.txt", "hello\n");
+        put("bench/tiny.txt", "hi\n");
         std::fs::create_dir_all(root.join("migration/perf")).expect("perf dir");
         let target = TargetContext::load(&root).expect("target");
         let workloads = wl::parse(
             "schema_version = 1\n\
+             [[workload]]\nid = \"tiny\"\nargs = [\"{input}\", \"10\"]\ninput = \"bench/tiny.txt\"\nruns = 5\n\
              [[workload]]\nid = \"long\"\nargs = [\"{input}\", \"400000000\"]\ninput = \"bench/in.txt\"\nruns = 5\n\
-             [[workload]]\nid = \"tiny\"\nargs = [\"{input}\", \"10\"]\ninput = \"bench/in.txt\"\nruns = 5\n\
              [[workload]]\nid = \"gone\"\nargs = [\"{input}\"]\ninput = \"bench/gone.txt\"\n",
             Path::new("w.toml"),
         )
@@ -2434,6 +2457,7 @@ mod tests {
             .find(|r| r.workload == "long")
             .expect("row");
         assert_eq!(long.c.as_ref().map(Vec::len), Some(5));
+        assert_eq!(long.short, Some(false), "the C alone is never a short run");
         let words = perf_words::words(
             long,
             &perf_words::Context {
@@ -2457,13 +2481,70 @@ mod tests {
             &perf_words::Context {
                 side: perf_words::Side::C,
                 workload: "tiny",
-                input: Some("bench/in.txt"),
+                input: Some("bench/tiny.txt"),
             },
         );
         assert!(
             words.headline.starts_with("too short to time: the C ran"),
             "{}",
             words.headline
+        );
+
+        // The tiny workload's input is removed: the run still ends well.
+        std::fs::remove_file(root.join("bench/tiny.txt")).expect("rm");
+        let mut second = Seen {
+            messages: Vec::new(),
+            rows: Vec::new(),
+        };
+        let summary = perf_run(
+            &target,
+            &plan,
+            &facts,
+            &workloads,
+            &perf_dir,
+            &PerfRequest::default(),
+            &mut second,
+        )
+        .expect("the run goes on past the missing input");
+        let shown: Vec<(&str, &str)> = second
+            .rows
+            .iter()
+            .map(|(s, r)| (s.as_str(), r.workload.as_str()))
+            .collect();
+        assert_eq!(shown, [("c", "tiny"), ("c", "long"), ("c", "gone")]);
+        let outcome = |id: &str| {
+            second
+                .rows
+                .iter()
+                .find(|(_, r)| r.workload == id)
+                .map(|(_, r)| r.outcome.as_str())
+        };
+        assert_eq!(outcome("tiny"), Some("input-unusable"));
+        assert!(
+            second.messages.iter().any(|m| m
+                == "the C on tiny — the earlier result is kept, with this try beside it"),
+            "{:?}",
+            second.messages
+        );
+        // The next workload is still measured.
+        assert_eq!(outcome("long"), Some("baseline"), "{:?}", second.messages);
+        assert_eq!(summary.measured, 1);
+        let program = res::read_program(&res::program_path(&perf_dir))
+            .expect("reads")
+            .expect("written");
+        let tiny = program
+            .c_alone
+            .iter()
+            .find(|r| r.workload == "tiny")
+            .expect("row");
+        assert_eq!(tiny.outcome, "too-short");
+        let last = tiny.last_try.as_ref().expect("this try beside it");
+        assert_eq!(
+            (
+                last.outcome.as_str(),
+                last.setup.as_ref().and_then(|s| s.input.as_deref())
+            ),
+            ("input-unusable", Some("missing"))
         );
     }
 
@@ -2613,7 +2694,36 @@ mod tests {
             panic!("a row")
         };
         assert_eq!(row.outcome, "measured", "{row:?}");
+        assert_eq!(row.short, Some(false), "both sides over the floor: in full");
         assert_eq!(row.other.as_ref().map(Vec::len), Some(5));
+        res::check_row(&row, RowKind::Unit).expect("valid");
+        // A side under both legs of the floor against a C over them:
+        // measured, marked a short run (§3.5 step 2).
+        let quick = c_program(
+            &root,
+            "quick",
+            "#include <stdio.h>\nint main(void) { printf(\"same\\n\"); return 0; }\n",
+        );
+        let SideResult::Row(row, _) = side_row(
+            &ctx,
+            &c,
+            &quick,
+            &w,
+            None,
+            5,
+            inputs.clone(),
+            "u001",
+            &shared,
+            &mut seen,
+        )
+        .expect("runs") else {
+            panic!("a row")
+        };
+        assert_eq!(
+            (row.outcome.as_str(), row.short),
+            ("measured", Some(true)),
+            "{row:?}"
+        );
         res::check_row(&row, RowKind::Unit).expect("valid");
         // A C that differs from itself: the C alone's row.
         let SideResult::CSide(row) = side_row(
@@ -3372,6 +3482,128 @@ mod tests {
         );
     }
 
+    /// The results are ledger state (§3.9): a units folder that is a link or
+    /// not a folder is refused by name — when the run starts, before
+    /// anything is built, and again before each unit row's read and write —
+    /// never read through (another folder's file would be this target's
+    /// earlier rows) and never removed; the link's target is left as it
+    /// was.
+    #[test]
+    fn a_linked_units_folder_is_refused_never_read_or_removed() {
+        use std::os::unix::fs::symlink;
+        let refused = |r: &Result<(), Error>| match r {
+            Err(Error::Invariant(w)) => {
+                w.ends_with("migration/perf/units: must be a directory (a link is refused)")
+            }
+            _ => false,
+        };
+        let tmp = crate::testutil::TempDir::new("perf-units-link");
+        let root = tmp.path().to_path_buf();
+        let perf_dir = root.join("migration/perf");
+        std::fs::create_dir_all(&perf_dir).expect("perf dir");
+        let workloads = wl::parse(
+            "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = []\n",
+            Path::new("w.toml"),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let w = workloads.workloads[0].clone();
+        let unit_inputs = row_inputs(
+            &shared(),
+            &w,
+            None,
+            RowKind::Unit,
+            Some(vec![CrateDigest {
+                id: "u001".into(),
+                digest: harness_core::hash::bytes_hash(b"crate"),
+            }]),
+            Some(vec!["src/a.c".into()]),
+            None,
+            None,
+        );
+        let measured = Row {
+            short: Some(false),
+            runs: Some(5),
+            platform_metrics: Some("cpu-time".into()),
+            c: Some(timed(5)),
+            other: Some(timed(5)),
+            ..bare_row(&w, "measured", unit_inputs.clone())
+        };
+        // Another folder holding a unit file with a row of its own.
+        let outside = root.join("outside");
+        std::fs::create_dir(&outside).expect("outside");
+        let mut theirs = res::UnitResults::new("u001");
+        theirs.rows.push(measured.clone());
+        res::write_unit(&outside.join("u001.json"), &theirs).expect("their file");
+        let their_bytes = std::fs::read(outside.join("u001.json")).expect("bytes");
+        let untouched = |link: &Path| {
+            let m = std::fs::symlink_metadata(link).expect("still there");
+            assert!(m.file_type().is_symlink(), "the link was removed");
+            assert_eq!(std::fs::read_link(link).expect("link"), outside);
+            let names: Vec<_> = std::fs::read_dir(&outside)
+                .expect("outside")
+                .map(|e| e.expect("entry").file_name())
+                .collect();
+            assert_eq!(names, ["u001.json"]);
+            assert_eq!(
+                std::fs::read(outside.join("u001.json")).expect("bytes"),
+                their_bytes
+            );
+        };
+        let units = perf_dir.join(res::UNITS_DIR);
+
+        // Linked when the run starts: refused before anything is read.
+        symlink(&outside, &units).expect("link");
+        let loaded = Store::load(&perf_dir, &workloads).map(|_| ());
+        assert!(refused(&loaded), "{loaded:?}");
+        untouched(&units);
+        assert!(!res::program_path(&perf_dir).exists());
+
+        // Linked after the load: the unit row's write refuses it before
+        // reading; no row is shown or counted.
+        std::fs::remove_file(&units).expect("unlink");
+        let mut store = Store::load(&perf_dir, &workloads).expect("loads");
+        symlink(&outside, &units).expect("link");
+        let mut seen = seen();
+        let mut summary = PerfSummary::default();
+        let put = store.put(RowSide::Unit("u001"), measured, &mut seen, &mut summary);
+        assert!(refused(&put), "{put:?}");
+        untouched(&units);
+        assert!(seen.rows.is_empty() && summary.rows == 0);
+
+        // A file in its place: refused the same way, the file left as it was.
+        std::fs::remove_file(&units).expect("unlink");
+        std::fs::write(&units, b"not a folder").expect("file");
+        let loaded = Store::load(&perf_dir, &workloads).map(|_| ());
+        assert!(refused(&loaded), "{loaded:?}");
+        assert_eq!(std::fs::read(&units).expect("file"), b"not a folder");
+
+        // The run refuses it before building anything.
+        if cfg!(target_os = "macos") && sandbox::sandbox_mode() == "sandbox-exec" {
+            std::fs::remove_file(&units).expect("rm");
+            symlink(&outside, &units).expect("link");
+            mini_program(&root, &["ua"]);
+            let target = TargetContext::load(&root).expect("target");
+            let plan = Plan {
+                schema_version: 1,
+                target: "tool".into(),
+                units: Vec::new(),
+            };
+            let run = perf_run(
+                &target,
+                &plan,
+                &facts_of(&root),
+                &workloads,
+                &perf_dir,
+                &PerfRequest::default(),
+                &mut seen,
+            )
+            .map(|_| ());
+            assert!(refused(&run), "{run:?}");
+            untouched(&units);
+            assert!(!root.join("migration/build").exists(), "nothing built");
+        }
+    }
+
     /// The C's step-1 runs on a side's row (§3.3, §3.5 step 1, note 23): a
     /// run the launcher lost is the side's own row ("that row only"), with
     /// the side's inputs; a crash — in either run — or a SIGKILL perfrun did
@@ -3989,6 +4221,13 @@ mod tests {
                 .find(|r| r.workload == w)
                 .expect("row")
         };
+        // The compilers this run stored are the lines perf show reads on the
+        // same target (tools.rs), so unchanged compilers compare equal.
+        let ua = unit_row("ua", "tiny").inputs.compilers;
+        assert_eq!(
+            tools::perf_compilers(&target, false),
+            Some((ua.cc, ua.rustc.expect("a unit row names its rustc")))
+        );
         let ud = unit_row("ud", "tiny");
         assert_eq!(ud.outcome, "crate-does-not-build");
         let ud_replaces = vec!["src/ud.c".to_string()];

@@ -13,7 +13,7 @@ use harness_core::TargetContext;
 
 /// Most bytes a version check may print before it is stopped: a version is
 /// a few short lines.
-const VERSION_OUTPUT_CAP: usize = 64 * 1024;
+pub(crate) const VERSION_OUTPUT_CAP: usize = 64 * 1024;
 
 /// The first line a tool run printed, trimmed, at most 160 characters;
 /// `None` when the tool failed, ran past its time, printed too much or
@@ -29,6 +29,16 @@ pub(crate) fn first_line(runner: &Runner, argv: &[&str]) -> Option<String> {
         .take(160)
         .collect();
     (!line.is_empty()).then_some(line)
+}
+
+/// `cc --version` and `rustc -V`'s first lines on `runner` — the one read
+/// `perf run` stores and `perf show` checks (§3.9), so unchanged compilers
+/// compare equal by construction. Each `None` as [`first_line`] says.
+pub(crate) fn compiler_lines(runner: &Runner) -> (Option<String>, Option<String>) {
+    (
+        first_line(runner, &["cc", "--version"]),
+        first_line(runner, &["rustc", "-V"]),
+    )
 }
 
 /// `cc --version` and `rustc -V`'s first lines for `harness perf show`, each
@@ -67,9 +77,8 @@ pub fn perf_compilers(target: &TargetContext, allow_unsandboxed: bool) -> Option
         tool_profile,
         tool_tmpdir: None,
     };
-    let cc = first_line(&runner, &["cc", "--version"])?;
-    let rustc = first_line(&runner, &["rustc", "-V"])?;
-    Some((cc, rustc))
+    let (cc, rustc) = compiler_lines(&runner);
+    Some((cc?, rustc?))
 }
 
 #[cfg(test)]
