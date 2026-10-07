@@ -2340,6 +2340,9 @@ mod tests {
     /// The C alone on day one (§3.6), end to end through the launcher: a
     /// baseline row on a long enough workload, too-short on a tiny one, an
     /// unusable input in its own words, the results file written strictly.
+    /// The next day the tiny workload's input is gone: the run goes on — the
+    /// too-short row stays with this try beside it, the next workload is
+    /// measured (§3.7, note 23).
     #[test]
     fn the_c_alone_end_to_end() {
         if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
@@ -2367,12 +2370,13 @@ mod tests {
              printf(\"%ld %s\\n\", n, argv[0]); return 0; }\n",
         );
         put("bench/in.txt", "hello\n");
+        put("bench/tiny.txt", "hi\n");
         std::fs::create_dir_all(root.join("migration/perf")).expect("perf dir");
         let target = TargetContext::load(&root).expect("target");
         let workloads = wl::parse(
             "schema_version = 1\n\
+             [[workload]]\nid = \"tiny\"\nargs = [\"{input}\", \"10\"]\ninput = \"bench/tiny.txt\"\nruns = 5\n\
              [[workload]]\nid = \"long\"\nargs = [\"{input}\", \"400000000\"]\ninput = \"bench/in.txt\"\nruns = 5\n\
-             [[workload]]\nid = \"tiny\"\nargs = [\"{input}\", \"10\"]\ninput = \"bench/in.txt\"\nruns = 5\n\
              [[workload]]\nid = \"gone\"\nargs = [\"{input}\"]\ninput = \"bench/gone.txt\"\n",
             Path::new("w.toml"),
         )
@@ -2453,6 +2457,7 @@ mod tests {
             .find(|r| r.workload == "long")
             .expect("row");
         assert_eq!(long.c.as_ref().map(Vec::len), Some(5));
+        assert_eq!(long.short, Some(false), "the C alone is never a short run");
         let words = perf_words::words(
             long,
             &perf_words::Context {
@@ -2476,13 +2481,70 @@ mod tests {
             &perf_words::Context {
                 side: perf_words::Side::C,
                 workload: "tiny",
-                input: Some("bench/in.txt"),
+                input: Some("bench/tiny.txt"),
             },
         );
         assert!(
             words.headline.starts_with("too short to time: the C ran"),
             "{}",
             words.headline
+        );
+
+        // The tiny workload's input is removed: the run still ends well.
+        std::fs::remove_file(root.join("bench/tiny.txt")).expect("rm");
+        let mut second = Seen {
+            messages: Vec::new(),
+            rows: Vec::new(),
+        };
+        let summary = perf_run(
+            &target,
+            &plan,
+            &facts,
+            &workloads,
+            &perf_dir,
+            &PerfRequest::default(),
+            &mut second,
+        )
+        .expect("the run goes on past the missing input");
+        let shown: Vec<(&str, &str)> = second
+            .rows
+            .iter()
+            .map(|(s, r)| (s.as_str(), r.workload.as_str()))
+            .collect();
+        assert_eq!(shown, [("c", "tiny"), ("c", "long"), ("c", "gone")]);
+        let outcome = |id: &str| {
+            second
+                .rows
+                .iter()
+                .find(|(_, r)| r.workload == id)
+                .map(|(_, r)| r.outcome.as_str())
+        };
+        assert_eq!(outcome("tiny"), Some("input-unusable"));
+        assert!(
+            second.messages.iter().any(|m| m
+                == "the C on tiny — the earlier result is kept, with this try beside it"),
+            "{:?}",
+            second.messages
+        );
+        // The next workload is still measured.
+        assert_eq!(outcome("long"), Some("baseline"), "{:?}", second.messages);
+        assert_eq!(summary.measured, 1);
+        let program = res::read_program(&res::program_path(&perf_dir))
+            .expect("reads")
+            .expect("written");
+        let tiny = program
+            .c_alone
+            .iter()
+            .find(|r| r.workload == "tiny")
+            .expect("row");
+        assert_eq!(tiny.outcome, "too-short");
+        let last = tiny.last_try.as_ref().expect("this try beside it");
+        assert_eq!(
+            (
+                last.outcome.as_str(),
+                last.setup.as_ref().and_then(|s| s.input.as_deref())
+            ),
+            ("input-unusable", Some("missing"))
         );
     }
 
@@ -2632,7 +2694,36 @@ mod tests {
             panic!("a row")
         };
         assert_eq!(row.outcome, "measured", "{row:?}");
+        assert_eq!(row.short, Some(false), "both sides over the floor: in full");
         assert_eq!(row.other.as_ref().map(Vec::len), Some(5));
+        res::check_row(&row, RowKind::Unit).expect("valid");
+        // A side under both legs of the floor against a C over them:
+        // measured, marked a short run (§3.5 step 2).
+        let quick = c_program(
+            &root,
+            "quick",
+            "#include <stdio.h>\nint main(void) { printf(\"same\\n\"); return 0; }\n",
+        );
+        let SideResult::Row(row, _) = side_row(
+            &ctx,
+            &c,
+            &quick,
+            &w,
+            None,
+            5,
+            inputs.clone(),
+            "u001",
+            &shared,
+            &mut seen,
+        )
+        .expect("runs") else {
+            panic!("a row")
+        };
+        assert_eq!(
+            (row.outcome.as_str(), row.short),
+            ("measured", Some(true)),
+            "{row:?}"
+        );
         res::check_row(&row, RowKind::Unit).expect("valid");
         // A C that differs from itself: the C alone's row.
         let SideResult::CSide(row) = side_row(
