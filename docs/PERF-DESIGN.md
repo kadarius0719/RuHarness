@@ -372,9 +372,11 @@ run_dir, input, collect)`:
    lock and the `Command`.
 2. **Outside the lock**, read the `child <pid>` line (bounded: 64 bytes, within the step-1
    allowance). Ctrl-C is never held up by this read [p2].
-3. Retake the lock, check `cancelled()`: cancelled → close the socket without the go-ahead (perfrun
-   kills the child and exits; a dead perfrun ends perfgo; the program never runs); otherwise register
-   the child's group and write the **go-ahead**; drop the lock.
+3. Check `cancelled()` first: cancelled → close the socket without the go-ahead (perfrun kills the
+   child and exits; a dead perfrun ends perfgo; the program never runs). Otherwise retake the lock
+   — which refuses the same way once cancelled, so a cancel between the check and the lock never
+   starts the program either — register the child's group (killed first) and write the
+   **go-ahead**; drop the lock. A cancel after that finds the child's group registered.
 4. Read the record (to `end`), then **unregister the child's group, then write *bye*** — the child is
    reaped only after that, so a cancel never signals a free pid [m2]. Then reap perfrun.
 5. **perfrun ends without a complete record** (a signal it could not handle, a crash, a cut record)
@@ -1080,7 +1082,8 @@ below is a decision the build makes, each with a test, and **the notes govern wh
 22. [q11, c91, p24, m18] The recorded hand edit's step: "Hand edit u001's crate, then Replace u001's
     verified crate with the new attempt and measure this unit again — and if it is not faster,
     Replace it back with <the attempt in use now>"; the §4 test checks that each named act changes
-    the crate perf will measure. §1 reads "written by hand and verified".
+    the crate perf will measure. §1 reads "written by hand and Re-checked" (the cockpit's
+    Re-check; `harness verify` in a terminal).
 23. [q12, p26] One C-side rule: `c-unstable`, `c-crashed`, `c-timed-out`, `output-too-large` and
     `c-could-not-start` (moved out of the set-up list) are written only to the workload's `c_alone`
     row — replacing a C-side or too-short row there, otherwise beside its baseline as `last_try`;

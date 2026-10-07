@@ -29,6 +29,16 @@ pub const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 /// A replaces-mismatch's index is below this: far past any unit's
 /// `replaces`, and small enough that the words can count from it.
 pub const MAX_REPLACES_INDEX: u32 = 65_536;
+/// Most paths a unit row's `replaces` holds: as many as an index below
+/// [`MAX_REPLACES_INDEX`] can name, and no more.
+pub const MAX_REPLACES: usize = MAX_REPLACES_INDEX as usize;
+/// Most entries one list of units in a row holds (`crates`, `units`,
+/// `left_out`, a set-up's `runtimes` and `units`, a last try's `units`):
+/// perf measures a plan of at most 999 units, one slot each (`p001`…`p999`,
+/// §3.2).
+pub const MAX_UNITS: usize = 999;
+/// Most files a difference keeps: each side's stdout and stderr.
+pub const MAX_KEPT: usize = 4;
 
 /// `program.json` in the resolved `migration/perf/` folder.
 pub fn program_path(perf_dir: &Path) -> PathBuf {
@@ -777,9 +787,13 @@ pub fn check_row(row: &Row, kind: RowKind) -> Result<(), String> {
                 "last_try is a later set-up (or the C's) outcome beside an earlier row".into(),
             );
         }
+        if let Some(u) = &t.units {
+            at_most(u, MAX_UNITS, "last_try's units")?;
+        }
         check_setup(&t.outcome, t.setup.as_ref())?;
     }
     if let Some(p) = &row.profile {
+        at_most(p, PROFILE_KEYS.len(), "profile")?;
         for s in p {
             if !PROFILE_KEYS.contains(&s.key.as_str()) || !text_ok(&s.value, 32) {
                 return Err("profile settings are opt-level, lto, codegen-units and panic".into());
@@ -791,6 +805,19 @@ pub fn check_row(row: &Row, kind: RowKind) -> Result<(), String> {
 
 fn text_ok(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.chars().any(crate::text::unsafe_to_show)
+}
+
+/// A list a row holds is no longer than any run writes: checked before its
+/// entries are walked, so a forged file's long list is refused at once and
+/// never handed on (its words, the once-each checks).
+fn at_most<T>(list: &[T], max: usize, what: &str) -> Result<(), String> {
+    if list.len() > max {
+        return Err(format!(
+            "{what} holds {} entries, at most {max}",
+            list.len()
+        ));
+    }
+    Ok(())
 }
 
 fn is_digest(s: &str) -> bool {
@@ -826,6 +853,7 @@ fn check_inputs(i: &RowInputs, kind: RowKind) -> Result<(), String> {
         if kind == RowKind::CAlone {
             return Err("the C alone has no crate".into());
         }
+        at_most(crates, MAX_UNITS, "crates")?;
         for c in crates {
             if !unit_ok(&c.id) || !is_digest(&c.digest) {
                 return Err("a crate is a unit id and a digest".into());
@@ -833,6 +861,7 @@ fn check_inputs(i: &RowInputs, kind: RowKind) -> Result<(), String> {
         }
     }
     if let Some(r) = &i.replaces {
+        at_most(r, MAX_REPLACES, "replaces")?;
         if kind != RowKind::Unit || r.iter().any(|p| !crate::plan::is_clean_relative_path(p)) {
             return Err("replaces are a unit's clean paths".into());
         }
@@ -842,6 +871,7 @@ fn check_inputs(i: &RowInputs, kind: RowKind) -> Result<(), String> {
         if kind != RowKind::AsItStands {
             return Err("only the program as it stands holds units".into());
         }
+        at_most(units, MAX_UNITS, "units")?;
         for u in units {
             if !unit_ok(&u.id) || !is_digest(&u.crate_digest) || ids.contains(&u.id.as_str()) {
                 return Err("units are unit ids, once each, with crate digests".into());
@@ -853,6 +883,7 @@ fn check_inputs(i: &RowInputs, kind: RowKind) -> Result<(), String> {
         if kind != RowKind::AsItStands {
             return Err("only the program as it stands leaves units out".into());
         }
+        at_most(left, MAX_UNITS, "left_out")?;
         for u in left {
             let digest_ok = u.crate_digest.is_empty() || is_digest(&u.crate_digest);
             if !unit_ok(&u.id)
@@ -962,6 +993,12 @@ fn check_setup(outcome: &str, setup: Option<&SetupFacts>) -> Result<(), String> 
     if !only(&allowed) {
         return Err(format!("{outcome} holds set-up facts that are not its own"));
     }
+    if let Some(r) = &s.runtimes {
+        at_most(r, MAX_UNITS, "runtimes")?;
+    }
+    if let Some(u) = &s.units {
+        at_most(u, MAX_UNITS, "the set-up's units")?;
+    }
     if let Some(log) = &s.log {
         if !crate::plan::is_clean_segment(log) || log.len() > 64 {
             return Err("a log is a plain file name".into());
@@ -1054,6 +1091,7 @@ fn check_difference(d: &Difference) -> Result<(), String> {
     if d.stream == "exit" && (d.c_len, d.other_len, d.offset) != (0, 0, 0) {
         return Err("an exit difference has no lengths and no byte".into());
     }
+    at_most(&d.kept, MAX_KEPT, "kept")?;
     for k in &d.kept {
         let name_ok = crate::plan::is_clean_segment(&k.name)
             && [".c.stdout", ".c.stderr", ".other.stdout", ".other.stderr"]
@@ -1553,6 +1591,143 @@ mod tests {
         )
         .expect("write");
         assert!(read_unit(&u, "u001").is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A valid row whose list `what` holds `n` entries, and which list of
+    /// rows it lives in.
+    fn with_list(what: &str, n: usize) -> (Row, RowKind) {
+        let (u, s) = (RowKind::Unit, RowKind::AsItStands);
+        let unit = |i: usize| UnitRef {
+            id: format!("u{i:04}"),
+            crate_digest: digest('c'),
+        };
+        match what {
+            "replaces" => {
+                let mut r = measured(u);
+                r.inputs.replaces = Some(vec!["src/a.c".into(); n]);
+                (r, u)
+            }
+            "crates" => {
+                let mut r = measured(s);
+                let c = CrateDigest {
+                    id: "u001".into(),
+                    digest: digest('c'),
+                };
+                r.inputs.crates = Some(vec![c; n]);
+                (r, s)
+            }
+            "units" => {
+                let mut r = measured(s);
+                r.inputs.units = Some((0..n).map(unit).collect());
+                (r, s)
+            }
+            "left_out" => {
+                let mut r = measured(s);
+                let left = (0..n).map(|i| LeftOut {
+                    id: format!("u{i:04}"),
+                    crate_digest: String::new(),
+                    reason: "not-fresh".into(),
+                });
+                r.inputs.left_out = Some(left.collect());
+                (r, s)
+            }
+            "runtimes" => {
+                let rt = UnitRuntime {
+                    id: "u001".into(),
+                    runtime: "abort".into(),
+                };
+                let setup = SetupFacts {
+                    runtimes: Some(vec![rt; n]),
+                    ..SetupFacts::default()
+                };
+                (other(s, "mixed-panic", Some(setup)), s)
+            }
+            "the set-up's units" => {
+                let setup = SetupFacts {
+                    cause: Some("unknown".into()),
+                    units: Some(vec!["u001".into(); n]),
+                    ..SetupFacts::default()
+                };
+                (other(u, "does-not-link", Some(setup)), u)
+            }
+            "last_try's units" => {
+                let mut r = measured(s);
+                r.last_try = Some(LastTry {
+                    outcome: "crate-does-not-build".into(),
+                    setup: None,
+                    units: Some((0..n).map(unit).collect()),
+                });
+                (r, s)
+            }
+            "profile" => {
+                let mut r = measured(u);
+                let p = PROFILE_KEYS.iter().cycle().take(n).map(|k| ProfileSetting {
+                    key: (*k).into(),
+                    value: "1".into(),
+                });
+                r.profile = Some(p.collect());
+                (r, u)
+            }
+            "kept" => {
+                let mut r = other(u, "behaves-differently", None);
+                let mut d = difference();
+                d.kept = vec![d.kept[0].clone(); n];
+                r.first_difference = Some(d);
+                (r, u)
+            }
+            _ => panic!("no list {what}"),
+        }
+    }
+
+    /// A forged file holding `row`, written as is (no check on the way),
+    /// then read back by the reader.
+    fn forged(dir: &Path, row: &Row, kind: RowKind) -> Result<(), Error> {
+        let (path, text) = if kind == RowKind::Unit {
+            let mut f = UnitResults::new("u001");
+            f.rows.push(row.clone());
+            (unit_path(dir, "u001"), serde_json::to_string(&f))
+        } else {
+            let mut f = ProgramResults::default();
+            if kind == RowKind::CAlone {
+                f.c_alone.push(row.clone());
+            } else {
+                f.as_it_stands.push(row.clone());
+            }
+            (program_path(dir), serde_json::to_string(&f))
+        };
+        std::fs::write(&path, text.expect("json")).expect("write");
+        if kind == RowKind::Unit {
+            read_unit(&path, "u001").map(|_| ())
+        } else {
+            read_program(&path).map(|_| ())
+        }
+    }
+
+    #[test]
+    fn every_list_a_row_holds_is_capped() {
+        // A forged file one entry over a list's cap is refused by name,
+        // before its entries are walked; one at the cap is read.
+        let dir = std::env::temp_dir().join(format!("perf-l-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(dir.join(UNITS_DIR)).expect("dir");
+        for (what, cap) in [
+            ("replaces", MAX_REPLACES),
+            ("crates", MAX_UNITS),
+            ("units", MAX_UNITS),
+            ("left_out", MAX_UNITS),
+            ("runtimes", MAX_UNITS),
+            ("the set-up's units", MAX_UNITS),
+            ("last_try's units", MAX_UNITS),
+            ("profile", PROFILE_KEYS.len()),
+            ("kept", MAX_KEPT),
+        ] {
+            let (row, kind) = with_list(what, cap);
+            forged(&dir, &row, kind).unwrap_or_else(|e| panic!("{what} at its cap: {e}"));
+            let (row, kind) = with_list(what, cap + 1);
+            let err = forged(&dir, &row, kind).expect_err(what).to_string();
+            let words = format!("{what} holds {} entries, at most {cap}", cap + 1);
+            assert!(err.contains(&words), "{what}: {err}");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 
