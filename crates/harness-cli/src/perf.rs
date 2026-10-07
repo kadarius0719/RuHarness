@@ -149,6 +149,17 @@ fn fresh_facts(ctx: &TargetContext, ledger: &Ledger) -> Result<Facts> {
     Ok(facts)
 }
 
+/// `--as-it-stands-only` with fewer than two measurable units, refused
+/// before the launcher, the C or any crate is built (§3.10: "says why"),
+/// in the words the run itself uses when fewer than two units build.
+fn as_it_stands_needs_two(measurable: &[String]) -> Result<()> {
+    match measurable {
+        [] => bail!("no accepted unit to compare yet"),
+        [one] => bail!("one unit measured ({one}) — the program as it stands needs two"),
+        _ => Ok(()),
+    }
+}
+
 /// `harness perf run` (§3.10).
 pub(crate) fn cmd_run(
     target: PathBuf,
@@ -166,6 +177,9 @@ pub(crate) fn cmd_run(
     let workloads = workloads(&ctx)?;
     let facts = fresh_facts(&ctx, &ledger)?;
     let plan = plan(&ledger)?;
+    if as_it_stands_only {
+        as_it_stands_needs_two(&harness_oracle::perf_measurable(&ctx, &plan, &facts)?)?;
+    }
     let dir = perf_dir(&ctx)?;
     let request = harness_oracle::PerfRequest {
         units,
@@ -349,11 +363,59 @@ fn stored_dir(root: &Path, parts: &[&str]) -> Result<Option<PathBuf>> {
     Ok(Some(cur))
 }
 
+/// One unit's stored rows as `perf show` reads them.
+struct StoredUnit {
+    id: String,
+    rows: Vec<Row>,
+    /// The unit's `replaces` today; `None` when it is no longer in the plan
+    /// (its rows are then not shown).
+    replaces: Option<Vec<String>>,
+}
+
+/// Every unit's results file in `units_dir` (checked by [`stored_dir`]), in
+/// id order, each read strictly; a name that is not a clean unit id is not
+/// read.
+fn stored_units(root: &Path, units_dir: &Path, plan: &Plan) -> Result<Vec<StoredUnit>> {
+    let entries = std::fs::read_dir(units_dir)
+        .with_context(|| format!("reading {}", shown(root, units_dir)))?;
+    let mut ids: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|n| n.strip_suffix(".json"))
+                .map(str::to_string)
+        })
+        .filter(|id| harness_core::plan::is_clean_segment(id))
+        .collect();
+    ids.sort();
+    let mut units = Vec::new();
+    for id in ids {
+        let Some(file) = res::read_unit(&units_dir.join(format!("{id}.json")), &id)? else {
+            continue;
+        };
+        let replaces = plan
+            .units
+            .iter()
+            .find(|u| u.id == id)
+            .map(|u| u.oracle_param_list("replaces"));
+        units.push(StoredUnit {
+            id,
+            rows: file.rows,
+            replaces,
+        });
+    }
+    Ok(units)
+}
+
 /// `harness perf show` (§3.9): every stored row's words, rebuilt, with why
 /// it is out of date; the computer checked only when the launcher cache is
 /// current, the compilers only as tool runs (sandboxed; without a sandbox
-/// only with `--allow-unsandboxed`); `--no-check` skips both. It writes
-/// nothing.
+/// only with `--allow-unsandboxed`); `--no-check` skips both, and with no
+/// row stored there is nothing to judge, so neither is checked or said —
+/// "nothing measured yet" is the line. Without facts the C cannot be
+/// hashed: it is not judged (said once), never "the C changed" on every
+/// row. It writes nothing.
 pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool) -> Result<u8> {
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
@@ -378,29 +440,47 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
     };
     let facts = Facts::load(&ledger.facts_path()).ok();
     let plan = plan(&ledger)?;
+    let units = match &units_dir {
+        Some(units_dir) => stored_units(&ctx.root, units_dir, &plan)?,
+        None => Vec::new(),
+    };
+    // The rows to judge (a unit no longer in the plan shows none): with
+    // none, no check is worth its runs (§3.9).
+    let to_judge = program
+        .as_ref()
+        .map_or(0, |p| p.c_alone.len() + p.as_it_stands.len())
+        + units
+            .iter()
+            .filter(|u| u.replaces.is_some())
+            .map(|u| u.rows.len())
+            .sum::<usize>();
+    let check = !no_check && to_judge > 0;
+    // `None`: no facts (none, or unreadable), so the C cannot be hashed.
     let program_digest = facts
         .as_ref()
-        .map(|f| harness_core::features::program_digest_now(&ctx, f))
-        .unwrap_or_default();
+        .map(|f| harness_core::features::program_digest_now(&ctx, f));
     let name = harness_core::features::program_name(&ctx.config);
     let measurable = facts
         .as_ref()
         .and_then(|f| harness_oracle::perf_measurable(&ctx, &plan, f).ok());
-    let computer = if no_check {
-        None
-    } else {
+    let computer = if check {
         harness_oracle::perf_computer_if_cached()
-    };
-    let compilers = if no_check {
-        None
     } else {
-        harness_oracle::perf_compilers(&ctx, allow_unsandboxed)
+        None
     };
-    if !no_check && computer.is_none() {
+    let compilers = if check {
+        harness_oracle::perf_compilers(&ctx, allow_unsandboxed)
+    } else {
+        None
+    };
+    if check && computer.is_none() {
         out("perf: computer not checked — run harness perf run once".into());
     }
-    if !no_check && compilers.is_none() {
+    if check && compilers.is_none() {
         out("perf: compilers not checked".into());
+    }
+    if to_judge > 0 && program_digest.is_none() {
+        out("perf: the C not checked: no facts — run harness scan".into());
     }
     let crate_digest = |id: &str| -> Option<String> {
         let unit = plan.units.iter().find(|u| u.id == id)?;
@@ -429,9 +509,13 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
                 .and_then(|w| w.input.as_deref());
             let mut w = row_words(row, side, input);
             let today_workload = workload_digest(&row.workload);
+            // Without facts only the C's comparison is skipped (said once
+            // above), as the cockpit does: the row is held to its own
+            // program digest, and the rest is still judged.
+            let program_today = program_digest.as_deref().unwrap_or(&row.inputs.program);
             let today = harness_core::perf::currency::Today {
                 workload: today_workload.as_deref(),
-                program: &program_digest,
+                program: program_today,
                 crate_digest: &crate_digest,
                 replaces: replaces.as_deref(),
                 program_name: &name,
@@ -459,34 +543,16 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
             None,
         );
     }
-    if let Some(units_dir) = &units_dir {
-        let entries = std::fs::read_dir(units_dir)
-            .with_context(|| format!("reading {}", shown(&ctx.root, units_dir)))?;
-        let mut ids: Vec<String> = entries
-            .filter_map(|e| e.ok())
-            .filter_map(|e| {
-                e.file_name()
-                    .to_str()
-                    .and_then(|n| n.strip_suffix(".json"))
-                    .map(str::to_string)
-            })
-            .filter(|id| harness_core::plan::is_clean_segment(id))
-            .collect();
-        ids.sort();
-        for id in ids {
-            let Some(file) = res::read_unit(&units_dir.join(format!("{id}.json")), &id)? else {
-                continue;
-            };
-            let replaces = plan
-                .units
-                .iter()
-                .find(|u| u.id == id)
-                .map(|u| u.oracle_param_list("replaces"));
-            if replaces.is_none() {
-                out(format!("perf: {id} — no longer in the plan"));
-                continue;
-            }
-            show(&file.rows, Side::Unit(&id), RowKind::Unit, &id, replaces);
+    for unit in &units {
+        match &unit.replaces {
+            Some(replaces) => show(
+                &unit.rows,
+                Side::Unit(&unit.id),
+                RowKind::Unit,
+                &unit.id,
+                Some(replaces.clone()),
+            ),
+            None => out(format!("perf: {} — no longer in the plan", unit.id)),
         }
     }
     if printed == 0 {

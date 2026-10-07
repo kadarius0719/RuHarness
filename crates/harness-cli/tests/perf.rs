@@ -160,6 +160,60 @@ fn perf_rows(stdout: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// A workloads file with one workload, `w` (`zopfli -h`).
+const ONE_WORKLOAD: &str = "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = [\"-h\"]\n";
+
+/// A row as `perf run` stores it, without a run: `outcome` on workload `w`
+/// over five runs (`other` runs too unless it is a baseline), with `inputs`
+/// added to the target's digests today — so it reads current until
+/// something changes.
+fn stored_row(t: &Path, outcome: &str, inputs: serde_json::Value) -> serde_json::Value {
+    use harness_core::perf::workloads::{self as wl, WorkloadsState};
+    let ctx = harness_core::TargetContext::load(t).unwrap();
+    let facts = harness_core::Facts::load(&t.join("migration/facts.jsonl")).unwrap();
+    let WorkloadsState::Ready(workloads) = wl::load(t).unwrap() else {
+        panic!("{}: no workloads file", t.display());
+    };
+    let run = serde_json::json!({"cpu_us": 1_300_000, "wall_us": 1_300_000, "end": "exit 0"});
+    let mut row = serde_json::json!({
+        "workload": "w",
+        "outcome": outcome,
+        "short": false,
+        "runs": 5,
+        "platform_metrics": "cpu-time",
+        "inputs": {
+            "workload": wl::digest(workloads.get("w").unwrap(), None),
+            "program": harness_core::features::program_digest_now(&ctx, &facts),
+            "program_name": harness_core::features::program_name(&ctx.config),
+            "recipe": harness_core::perf::PERF_RECIPE,
+            "launcher": harness_core::perf::PERF_LAUNCHER,
+            "computer": {"os": "15.6", "build": "24G84", "arch": "arm64", "cpu": "Apple M3",
+                         "two_kinds": true, "fast_cores": 4},
+            "compilers": {"cc": "cc 1.0 (stand-in)"},
+        },
+        "c": vec![run.clone(); 5],
+    });
+    if outcome != "baseline" {
+        row["other"] = serde_json::json!(vec![run; 5]);
+    }
+    for (k, v) in inputs.as_object().unwrap() {
+        row["inputs"][k] = v.clone();
+    }
+    row
+}
+
+/// The workloads file [`ONE_WORKLOAD`] and the C alone's baseline on `w`,
+/// stored as `perf run` would store it (see [`stored_row`]).
+fn store_a_baseline(t: &Path) {
+    use harness_core::perf::results as res;
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    let mut file = res::ProgramResults::default();
+    let row = stored_row(t, "baseline", serde_json::json!({}));
+    file.c_alone.push(serde_json::from_value(row).unwrap());
+    res::write_program(&t.join("migration/perf/program.json"), &file).unwrap();
+}
+
 #[test]
 fn init_writes_a_starter_once_and_save_guards_the_file() {
     let t = zopfli("init");
@@ -272,6 +326,43 @@ fn run_refuses_by_name() {
         assert_eq!(r.code, 1, "{}", r.stderr);
         assert!(r.stderr.contains("u001-katajainen"), "{}", r.stderr);
     }
+}
+
+/// `perf run --as-it-stands-only` with one measurable unit (zopfli's u001)
+/// is refused before anything is built (§3.10), in the words the run uses
+/// when fewer than two units build: no build step said, no build folder,
+/// no results.
+#[test]
+fn as_it_stands_only_refuses_before_building() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("stands-only");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(
+        t.join("migration/perf/workloads.toml"),
+        "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = [\"-h\"]\n",
+    )
+    .unwrap();
+    let r = harness(
+        &["perf", "run", "--target", target, "--as-it-stands-only"],
+        None,
+    );
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stderr
+            .contains("one unit measured (u001-katajainen) — the program as it stands needs two"),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stdout.contains("building"), "{}", r.stdout);
+    assert!(
+        !t.join("migration/build/.perf").exists(),
+        "perf built before refusing"
+    );
+    assert!(!t.join("migration/perf/program.json").exists());
 }
 
 #[test]
@@ -409,7 +500,8 @@ fn in_a_temp_folder(path: &Path) -> bool {
 /// sandbox, with the tool environment, stopped at `[oracle] timeout_secs`.
 /// The target picks which compilers run (its `rust-toolchain.toml`, or the
 /// PATH as here), so they are target code. Without a launcher cache the
-/// computer is not checked, in those words; `--no-check` runs neither.
+/// computer is not checked, in those words; `--no-check` runs neither. A
+/// stored row gives them something to judge.
 #[test]
 fn show_checks_the_compilers_in_the_sandbox() {
     if !cfg!(target_os = "macos") {
@@ -418,6 +510,7 @@ fn show_checks_the_compilers_in_the_sandbox() {
     }
     let t = zopfli("compilers");
     let target = t.to_str().unwrap();
+    store_a_baseline(&t);
     let bin = t.join("stand-in/bin");
     let marker = t.join("written-by-rustc");
     script(&bin.join("cc"), "echo 'cc 1.0 (stand-in)'\n");
@@ -498,9 +591,104 @@ fn show_checks_the_compilers_in_the_sandbox() {
     );
 }
 
+/// With no row stored there is nothing to judge (§3.9): `perf show` runs no
+/// compiler and checks no computer, and says only that nothing is measured
+/// yet — on a target whose allowlist lacks `cc`, a compiler check would
+/// read "compilers not checked". With a row stored, it checks again.
+#[test]
+fn show_checks_nothing_when_nothing_is_stored() {
+    let t = zopfli("nothing-stored");
+    let target = t.to_str().unwrap();
+    edit(
+        &t.join("harness.toml"),
+        "allowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n",
+        "allowlist = [\"cargo\", \"rustc\", \"nm\"]\n",
+    );
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    let r = harness(&["perf", "show", "--target", target], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        r.stdout, "perf: nothing measured yet — run harness perf run\n",
+        "{}",
+        r.stdout
+    );
+
+    // A row stored: judged, and the compilers it could not run are said.
+    store_a_baseline(&t);
+    let r = harness(&["perf", "show", "--target", target], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains("perf: compilers not checked"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
+}
+
+/// Without facts `perf show` cannot hash the C (§3.9): it says so once and
+/// judges the rest — no row reads "the C changed", as in the cockpit —
+/// whether the facts file is gone or cannot be read. With the facts the
+/// same row is current, and an edit to the C is said again.
+#[test]
+fn show_without_facts_does_not_judge_the_c() {
+    let t = zopfli("no-facts");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let show = || harness(&["perf", "show", "--target", target, "--no-check"], None);
+    let r = show();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
+    assert!(!r.stdout.contains("out of date"), "{}", r.stdout);
+    assert!(!r.stdout.contains("not checked"), "{}", r.stdout);
+
+    let facts = t.join("migration/facts.jsonl");
+    let kept = std::fs::read(&facts).unwrap();
+    for (case, bytes) in [("gone", None), ("unreadable", Some("not facts\n"))] {
+        match bytes {
+            None => std::fs::remove_file(&facts).unwrap(),
+            Some(b) => std::fs::write(&facts, b).unwrap(),
+        }
+        let r = show();
+        assert_eq!(r.code, 0, "{case}: {}", r.stderr);
+        assert_eq!(
+            r.stdout
+                .matches("perf: the C not checked: no facts — run harness scan")
+                .count(),
+            1,
+            "{case}: {}",
+            r.stdout
+        );
+        assert!(!r.stdout.contains("the C changed"), "{case}: {}", r.stdout);
+        assert!(!r.stdout.contains("out of date"), "{case}: {}", r.stdout);
+    }
+    // The rest is still judged.
+    edit(
+        &t.join("migration/perf/workloads.toml"),
+        "args = [\"-h\"]",
+        "args = [\"-c\"]",
+    );
+    let r = show();
+    let rows = rows_of(&r.stdout);
+    let w = row(&rows, "perf: the C on w — ");
+    assert!(w.contains("out of date: your workload changed"), "{w}");
+    assert!(!w.contains("the C changed"), "{w}");
+
+    // The facts back: an edit to the C is said again.
+    std::fs::write(&facts, kept).unwrap();
+    let main = t.join("src/zopfli/zopfli_bin.c");
+    let mut text = std::fs::read_to_string(&main).unwrap();
+    text.push_str("\n/* an edit */\n");
+    std::fs::write(&main, text).unwrap();
+    let r = show();
+    assert!(r.stdout.contains("the C changed"), "{}", r.stdout);
+    assert!(!r.stdout.contains("not checked"), "{}", r.stdout);
+}
+
 /// `perf show` only reads: it creates no folder, and it refuses a linked
 /// `migration/perf` or `migration/perf/units` instead of reading another
-/// folder's files as this target's rows (§3.9: links are refused on read).
+/// folder's files as this target's rows (§3.9: links are refused on read) —
+/// even a valid results file there, which a real units folder would show.
 #[test]
 fn show_reads_only_and_refuses_linked_folders() {
     let t = zopfli("show-links");
@@ -517,21 +705,29 @@ fn show_reads_only_and_refuses_linked_folders() {
         "perf show made migration/perf"
     );
 
-    // A units folder linked to one outside the project.
+    // A units folder linked to one outside the project, which holds a
+    // valid results file for u001.
+    use harness_core::perf::results as res;
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
     let outside = t.with_extension("outside");
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).unwrap();
-    std::fs::write(
-        outside.join("u001-katajainen.json"),
-        "{\"schema\": \"SECRET-OUTSIDE\"}",
-    )
-    .unwrap();
+    let mut u001 = res::UnitResults::new("u001-katajainen");
+    let digest = format!("blake3:{}", "a".repeat(64));
+    let crates = serde_json::json!({"crates": [{"id": "u001-katajainen", "digest": digest}]});
+    u001.rows
+        .push(serde_json::from_value(stored_row(&t, "measured", crates)).unwrap());
+    let u001_file = outside.join("u001-katajainen.json");
+    res::write_unit(&u001_file, &u001).unwrap();
+    assert!(res::read_unit(&u001_file, "u001-katajainen")
+        .unwrap()
+        .is_some());
     std::fs::write(
         outside.join("private-notes.json"),
         "{\"api_key\": \"SECRET-OUTSIDE\"}",
     )
     .unwrap();
-    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
     std::os::unix::fs::symlink(&outside, t.join("migration/perf/units")).unwrap();
     let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
     assert_eq!(r.code, 1, "{}", r.stdout);
@@ -542,13 +738,30 @@ fn show_reads_only_and_refuses_linked_folders() {
         r.stderr
     );
     for text in [&r.stdout, &r.stderr] {
+        assert!(!text.contains("u001-katajainen on w"), "{text}");
         assert!(!text.contains("SECRET-OUTSIDE"), "{text}");
         assert!(!text.contains("private-notes"), "{text}");
     }
 
-    // And a linked migration/perf.
+    // The same file in a real units folder is shown: the link alone was
+    // refused.
     std::fs::remove_file(t.join("migration/perf/units")).unwrap();
-    std::fs::remove_dir(t.join("migration/perf")).unwrap();
+    std::fs::create_dir(t.join("migration/perf/units")).unwrap();
+    std::fs::copy(
+        &u001_file,
+        t.join("migration/perf/units/u001-katajainen.json"),
+    )
+    .unwrap();
+    let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains("perf: u001-katajainen on w — "),
+        "{}",
+        r.stdout
+    );
+
+    // And a linked migration/perf.
+    std::fs::remove_dir_all(t.join("migration/perf")).unwrap();
     std::os::unix::fs::symlink(&outside, t.join("migration/perf")).unwrap();
     let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
     assert_eq!(r.code, 1, "{}", r.stdout);
@@ -734,9 +947,10 @@ fn two_units_end_to_end() {
         assert!(row.inputs.left_out.iter().flatten().next().is_none());
     }
 
-    // A crashing C: its row says so, and only ever under the C.
+    // A crashing C: its row says so, and only ever under the C — once: the
+    // C failed in step 1, so the workload's other rows are not run (§3.5).
     let crash = on("crash");
-    assert!(!crash.is_empty(), "{events:?}");
+    assert_eq!(crash.len(), 1, "{crash:?}");
     for e in &crash {
         assert_eq!(e["side"], "c", "{e}");
         assert_eq!(e["outcome"], "c-crashed", "{e}");
@@ -757,12 +971,15 @@ fn two_units_end_to_end() {
     }
 
     // A C that prints the time cannot be compared against, and no side
-    // reads "behaves differently" for it.
+    // reads "behaves differently" for it: its one row is the C's.
     assert_eq!(
         stored(&program.c_alone, "time").unwrap().outcome,
         "c-unstable"
     );
-    for e in on("time") {
+    let time = on("time");
+    assert_eq!(time.len(), 1, "{time:?}");
+    assert_eq!(time[0]["side"], "c", "{time:?}");
+    for e in time {
         assert_ne!(e["outcome"], "behaves-differently", "{e}");
     }
     for rows in [&u001, &util, &program.as_it_stands] {
