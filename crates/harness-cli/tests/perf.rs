@@ -160,6 +160,60 @@ fn perf_rows(stdout: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// A workloads file with one workload, `w` (`zopfli -h`).
+const ONE_WORKLOAD: &str = "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = [\"-h\"]\n";
+
+/// A row as `perf run` stores it, without a run: `outcome` on workload `w`
+/// over five runs (`other` runs too unless it is a baseline), with `inputs`
+/// added to the target's digests today — so it reads current until
+/// something changes.
+fn stored_row(t: &Path, outcome: &str, inputs: serde_json::Value) -> serde_json::Value {
+    use harness_core::perf::workloads::{self as wl, WorkloadsState};
+    let ctx = harness_core::TargetContext::load(t).unwrap();
+    let facts = harness_core::Facts::load(&t.join("migration/facts.jsonl")).unwrap();
+    let WorkloadsState::Ready(workloads) = wl::load(t).unwrap() else {
+        panic!("{}: no workloads file", t.display());
+    };
+    let run = serde_json::json!({"cpu_us": 1_300_000, "wall_us": 1_300_000, "end": "exit 0"});
+    let mut row = serde_json::json!({
+        "workload": "w",
+        "outcome": outcome,
+        "short": false,
+        "runs": 5,
+        "platform_metrics": "cpu-time",
+        "inputs": {
+            "workload": wl::digest(workloads.get("w").unwrap(), None),
+            "program": harness_core::features::program_digest_now(&ctx, &facts),
+            "program_name": harness_core::features::program_name(&ctx.config),
+            "recipe": harness_core::perf::PERF_RECIPE,
+            "launcher": harness_core::perf::PERF_LAUNCHER,
+            "computer": {"os": "15.6", "build": "24G84", "arch": "arm64", "cpu": "Apple M3",
+                         "two_kinds": true, "fast_cores": 4},
+            "compilers": {"cc": "cc 1.0 (stand-in)"},
+        },
+        "c": vec![run.clone(); 5],
+    });
+    if outcome != "baseline" {
+        row["other"] = serde_json::json!(vec![run; 5]);
+    }
+    for (k, v) in inputs.as_object().unwrap() {
+        row["inputs"][k] = v.clone();
+    }
+    row
+}
+
+/// The workloads file [`ONE_WORKLOAD`] and the C alone's baseline on `w`,
+/// stored as `perf run` would store it (see [`stored_row`]).
+fn store_a_baseline(t: &Path) {
+    use harness_core::perf::results as res;
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    let mut file = res::ProgramResults::default();
+    let row = stored_row(t, "baseline", serde_json::json!({}));
+    file.c_alone.push(serde_json::from_value(row).unwrap());
+    res::write_program(&t.join("migration/perf/program.json"), &file).unwrap();
+}
+
 #[test]
 fn init_writes_a_starter_once_and_save_guards_the_file() {
     let t = zopfli("init");
@@ -446,7 +500,8 @@ fn in_a_temp_folder(path: &Path) -> bool {
 /// sandbox, with the tool environment, stopped at `[oracle] timeout_secs`.
 /// The target picks which compilers run (its `rust-toolchain.toml`, or the
 /// PATH as here), so they are target code. Without a launcher cache the
-/// computer is not checked, in those words; `--no-check` runs neither.
+/// computer is not checked, in those words; `--no-check` runs neither. A
+/// stored row gives them something to judge.
 #[test]
 fn show_checks_the_compilers_in_the_sandbox() {
     if !cfg!(target_os = "macos") {
@@ -455,6 +510,7 @@ fn show_checks_the_compilers_in_the_sandbox() {
     }
     let t = zopfli("compilers");
     let target = t.to_str().unwrap();
+    store_a_baseline(&t);
     let bin = t.join("stand-in/bin");
     let marker = t.join("written-by-rustc");
     script(&bin.join("cc"), "echo 'cc 1.0 (stand-in)'\n");
@@ -533,6 +589,41 @@ fn show_checks_the_compilers_in_the_sandbox() {
         "--no-check checks neither: {}",
         r.stdout
     );
+}
+
+/// With no row stored there is nothing to judge (§3.9): `perf show` runs no
+/// compiler and checks no computer, and says only that nothing is measured
+/// yet — on a target whose allowlist lacks `cc`, a compiler check would
+/// read "compilers not checked". With a row stored, it checks again.
+#[test]
+fn show_checks_nothing_when_nothing_is_stored() {
+    let t = zopfli("nothing-stored");
+    let target = t.to_str().unwrap();
+    edit(
+        &t.join("harness.toml"),
+        "allowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n",
+        "allowlist = [\"cargo\", \"rustc\", \"nm\"]\n",
+    );
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    let r = harness(&["perf", "show", "--target", target], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        r.stdout, "perf: nothing measured yet — run harness perf run\n",
+        "{}",
+        r.stdout
+    );
+
+    // A row stored: judged, and the compilers it could not run are said.
+    store_a_baseline(&t);
+    let r = harness(&["perf", "show", "--target", target], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains("perf: compilers not checked"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
 }
 
 /// `perf show` only reads: it creates no folder, and it refuses a linked
