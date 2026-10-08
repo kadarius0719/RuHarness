@@ -3026,7 +3026,7 @@ digest with it, so new verdicts' `boundary` toolchain entry differs from older o
 not compare that entry, so nothing reads stale. The facts an ambiguous include lands on are in the
 program digest but in no unit's include closure (recorded, not fixed: the configuration settles
 such includes, and `accept` refuses while one is unsettled). The tokens are no longer committed:
-once per computer the person runs `harness state status --target targets/zopfli --adopt` and
+once per checkout (adoption is by canonical path) the person runs `harness state status --target targets/zopfli --adopt` and
 `harness bench status --suite targets/tractor --adopt`. Dot-folders are no longer scanned in the
 folder form (none of the 101 committed roots has one).
 
