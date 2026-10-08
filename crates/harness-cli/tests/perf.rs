@@ -1635,7 +1635,7 @@ fn as_it_stands_only_names_ten_left_out_units_then_counts_the_rest() {
         .map(|i| format!("u-extra-{i:04} left out: verify it first"))
         .collect();
     let want = format!(
-        "one measurable unit (u001-katajainen) — {} and 2 more — the program as it stands \
+        "one measurable unit (u001-katajainen) — {}; and 2 more left out — the program as it stands \
          needs two",
         named.join("; ")
     );
@@ -1743,5 +1743,53 @@ fn show_names_a_unit_no_longer_in_the_plan_without_reading_it() {
         r.stdout.contains("perf: u-gone — no longer in the plan"),
         "{}",
         r.stdout
+    );
+}
+
+/// A plan over 999 units: `perf show` still judges a stored as-it-stands
+/// row as the cockpit and harness-mcp do — the cap is about what perf can
+/// run, not about whether a stored row is current — so no "not checked"
+/// line, and a held unit left out now is named.
+#[test]
+fn show_judges_the_program_as_it_stands_on_a_plan_over_999_units() {
+    use harness_core::perf::results as res;
+    let t = zopfli("show-plan-cap");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let crate_dir = t.join("migration/units/u001-katajainen/katajainen_rs");
+    let digest = harness_core::hash::unit_crate_file_set_hash(&t, &crate_dir).unwrap();
+    let held = serde_json::json!({"units": [{"id": "u001-katajainen", "crate": digest}]});
+    let program = t.join("migration/perf/program.json");
+    let mut file = res::read_program(&program).unwrap().unwrap();
+    file.as_it_stands
+        .push(serde_json::from_value(stored_row(&t, "measured", held)).unwrap());
+    res::write_program(&program, &file).unwrap();
+    let have = std::fs::read_to_string(t.join("migration/plan.toml"))
+        .unwrap()
+        .matches("[[unit]]")
+        .count();
+    add_verified_units(&t, 1000 - have);
+    let show = || harness(&["perf", "show", "--target", target, "--no-check"], None);
+    let r = show();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains("not checked"), "{}", r.stdout);
+    assert!(!r.stdout.contains("999 units"), "{}", r.stdout);
+    let rows = rows_of(&r.stdout);
+    let stands = row(&rows, "perf: the program as it stands on w — ");
+    assert!(!stands.contains("out of date"), "current: {stands}");
+
+    edit(
+        &t.join("migration/plan.toml"),
+        "id = \"u001-katajainen\"\nstatus = \"verified\"",
+        "id = \"u001-katajainen\"\nstatus = \"pending\"",
+    );
+    let r = show();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains("not checked"), "{}", r.stdout);
+    let rows = rows_of(&r.stdout);
+    let stands = row(&rows, "perf: the program as it stands on w — ");
+    assert!(
+        stands.contains("out of date: u001-katajainen is left out now"),
+        "{stands}"
     );
 }
