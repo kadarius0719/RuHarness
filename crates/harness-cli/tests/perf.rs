@@ -996,8 +996,8 @@ fn show_prints_the_rows_that_read_before_a_bad_unit_file() {
     assert!(!r.stdout.contains("nothing measured yet"), "{}", r.stdout);
 
     // A bad file beside a good one: the good unit's row is shown too, and
-    // only the bad file is named.
-    std::fs::write(units.join("u000-junk.json"), "{\"junk\": 1}").unwrap();
+    // only the bad file is named (u-tree: in the plan, so its file is read).
+    std::fs::write(units.join("u-tree.json"), "{\"junk\": 1}").unwrap();
     let mut u001 = res::UnitResults::new("u001-katajainen");
     let digest = format!("blake3:{}", "a".repeat(64));
     let crates = serde_json::json!({"crates": [{"id": "u001-katajainen", "digest": digest}]});
@@ -1012,7 +1012,7 @@ fn show_prints_the_rows_that_read_before_a_bad_unit_file() {
         "{}",
         r.stdout
     );
-    assert!(r.stderr.contains("units/u000-junk.json"), "{}", r.stderr);
+    assert!(r.stderr.contains("units/u-tree.json"), "{}", r.stderr);
     assert!(!r.stderr.contains("u001-katajainen.json"), "{}", r.stderr);
 }
 
@@ -1445,5 +1445,301 @@ fn run_reads_the_compilers_as_show_does() {
         show.stdout.contains("perf: compilers not checked"),
         "{}",
         show.stdout
+    );
+}
+
+/// Checker's addition: the units' error line belongs to the program as it
+/// stands only — with C-alone rows alone, facts that read and units that do
+/// not (u001's folder is a file), nothing is said not checked.
+#[test]
+fn show_says_the_units_error_only_beside_an_as_it_stands_row() {
+    let t = zopfli("units-error-c-alone");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let unit_dir = t.join("migration/units/u001-katajainen");
+    std::fs::rename(&unit_dir, t.join("u001-moved")).unwrap();
+    std::fs::write(&unit_dir, "not a folder").unwrap();
+    let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
+    assert!(!r.stdout.contains("not checked"), "{}", r.stdout);
+}
+
+/// Checker's addition: the wider not-checked line is said once for the
+/// show, not once per as-it-stands row (two workloads, two rows).
+#[test]
+fn show_without_facts_says_the_wider_line_once_over_two_rows() {
+    use harness_core::perf::results as res;
+    let t = zopfli("no-facts-two-rows");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(
+        t.join("migration/perf/workloads.toml"),
+        "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = [\"-h\"]\n\
+         [[workload]]\nid = \"w2\"\nargs = [\"-h\"]\n",
+    )
+    .unwrap();
+    let crate_dir = t.join("migration/units/u001-katajainen/katajainen_rs");
+    let digest = harness_core::hash::unit_crate_file_set_hash(&t, &crate_dir).unwrap();
+    let held = serde_json::json!({"units": [{"id": "u001-katajainen", "crate": digest}]});
+    let mut file = res::ProgramResults::default();
+    for w in ["w", "w2"] {
+        file.as_it_stands
+            .push(serde_json::from_value(stored_row_on(&t, w, "measured", held.clone())).unwrap());
+    }
+    res::write_program(&t.join("migration/perf/program.json"), &file).unwrap();
+    std::fs::remove_file(t.join("migration/facts.jsonl")).unwrap();
+    let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let wider = "perf: the C and the units the program as it stands holds not checked: no facts \
+                 — run harness scan";
+    assert_eq!(r.stdout.matches(wider).count(), 1, "{}", r.stdout);
+    let first = r.stdout.lines().next().unwrap_or_default();
+    assert_eq!(first, wider, "said before the rows: {}", r.stdout);
+}
+
+/// Checker's addition: several left-out units are named in plan order,
+/// separated as the run's own line separates them ("; ").
+#[test]
+fn as_it_stands_only_names_several_left_out_units() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("as-it-stands-several");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    let plan = t.join("migration/plan.toml");
+    edit(
+        &plan,
+        "id = \"u-tree\"\nstatus = \"pending\"",
+        "id = \"u-tree\"\nstatus = \"verified\"",
+    );
+    edit(
+        &plan,
+        "id = \"u-hash\"\nstatus = \"pending\"",
+        "id = \"u-hash\"\nstatus = \"merged\"",
+    );
+    let r = harness(
+        &["perf", "run", "--target", target, "--as-it-stands-only"],
+        None,
+    );
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        r.stderr.contains(
+            "one measurable unit (u001-katajainen) — u-hash left out: verify it first; \
+             u-tree left out: verify it first — the program as it stands needs two"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(!t.join("migration/perf/program.json").exists());
+}
+
+/// Checker's addition: every unit file that does not read is named, not
+/// only the first; and a bad file alone is an error, never "nothing
+/// measured yet". (Both units are in the plan: the file of a unit no
+/// longer in it is named without being read.)
+#[test]
+fn show_names_every_bad_unit_file() {
+    let t = zopfli("bad-unit-files");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let units = t.join("migration/perf/units");
+    std::fs::create_dir_all(&units).unwrap();
+    std::fs::write(units.join("u-hash.json"), "{\"junk\": 1}").unwrap();
+    std::fs::write(units.join("u-tree.json"), "not json").unwrap();
+    let show = || harness(&["perf", "show", "--target", target, "--no-check"], None);
+    let r = show();
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
+    assert!(r.stderr.contains("units/u-hash.json"), "{}", r.stderr);
+    assert!(r.stderr.contains("units/u-tree.json"), "{}", r.stderr);
+
+    std::fs::remove_file(t.join("migration/perf/program.json")).unwrap();
+    std::fs::remove_file(units.join("u-tree.json")).unwrap();
+    let r = show();
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(r.stderr.contains("units/u-hash.json"), "{}", r.stderr);
+    assert!(!r.stdout.contains("nothing measured yet"), "{}", r.stdout);
+}
+
+/// zopfli's plan with `extra` more verified units (never verified in
+/// fact: each is left out, "verify it first"), named `u-extra-0000`, ….
+fn add_verified_units(t: &Path, extra: usize) {
+    let plan = t.join("migration/plan.toml");
+    let mut text = std::fs::read_to_string(&plan).unwrap();
+    for i in 0..extra {
+        text.push_str(&format!(
+            "\n[[unit]]\nid = \"u-extra-{i:04}\"\nstatus = \"verified\"\n\
+             files = [\"src/zopfli/cache.c\"]\n"
+        ));
+    }
+    std::fs::write(&plan, text).unwrap();
+}
+
+/// `--as-it-stands-only` on a plan over 999 units is refused by its size,
+/// as the run refuses it — not by a "needs two" line naming a thousand
+/// units.
+#[test]
+fn as_it_stands_only_refuses_a_plan_over_999_units_by_its_size() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("as-it-stands-plan-cap");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    let have = std::fs::read_to_string(t.join("migration/plan.toml"))
+        .unwrap()
+        .matches("[[unit]]")
+        .count();
+    add_verified_units(&t, 1000 - have);
+    let r = harness(
+        &["perf", "run", "--target", target, "--as-it-stands-only"],
+        None,
+    );
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        r.stderr
+            .contains("perf measures a plan of at most 999 units — this plan has 1000"),
+        "{}",
+        &r.stderr[..r.stderr.len().min(400)]
+    );
+    assert!(!r.stderr.contains("left out"), "{}", r.stderr.len());
+    assert!(!t.join("migration/perf/program.json").exists());
+}
+
+/// The early refusal names ten left-out units, then counts the rest.
+#[test]
+fn as_it_stands_only_names_ten_left_out_units_then_counts_the_rest() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("as-it-stands-twelve-left");
+    let target = t.to_str().unwrap();
+    std::fs::create_dir_all(t.join("migration/perf")).unwrap();
+    std::fs::write(t.join("migration/perf/workloads.toml"), ONE_WORKLOAD).unwrap();
+    add_verified_units(&t, 12);
+    let r = harness(
+        &["perf", "run", "--target", target, "--as-it-stands-only"],
+        None,
+    );
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    let named: Vec<String> = (0..10)
+        .map(|i| format!("u-extra-{i:04} left out: verify it first"))
+        .collect();
+    let want = format!(
+        "one measurable unit (u001-katajainen) — {} and 2 more — the program as it stands \
+         needs two",
+        named.join("; ")
+    );
+    assert!(r.stderr.contains(&want), "{}", r.stderr);
+    assert!(!r.stderr.contains("u-extra-0010"), "{}", r.stderr);
+}
+
+/// u001's results file with one measured row, as `perf run` stores it
+/// (the crate's digest made up: the row's words do not need it).
+fn store_a_unit_row(t: &Path) {
+    use harness_core::perf::results as res;
+    let units = t.join("migration/perf/units");
+    std::fs::create_dir_all(&units).unwrap();
+    let mut u001 = res::UnitResults::new("u001-katajainen");
+    let digest = format!("blake3:{}", "a".repeat(64));
+    let crates = serde_json::json!({"crates": [{"id": "u001-katajainen", "digest": digest}]});
+    u001.rows
+        .push(serde_json::from_value(stored_row(t, "measured", crates)).unwrap());
+    res::write_unit(&units.join("u001-katajainen.json"), &u001).unwrap();
+}
+
+/// A junk program.json hides no unit's row: the rows that read, then the
+/// file named, exit 1 — and with a bad unit file too, both named.
+#[test]
+fn show_names_a_junk_program_file_after_the_rows_that_read() {
+    let t = zopfli("show-junk-program");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    store_a_unit_row(&t);
+    std::fs::write(t.join("migration/perf/program.json"), "{\"junk\": 1}").unwrap();
+    let show = || harness(&["perf", "show", "--target", target, "--no-check"], None);
+    let r = show();
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        r.stdout.contains("perf: u001-katajainen on w — "),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stderr.contains("migration/perf/program.json"),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stdout.contains("nothing measured yet"), "{}", r.stdout);
+
+    std::fs::write(t.join("migration/perf/units/u-tree.json"), "not json").unwrap();
+    let r = show();
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(r.stderr.contains("program.json"), "{}", r.stderr);
+    assert!(r.stderr.contains("units/u-tree.json"), "{}", r.stderr);
+}
+
+/// A units folder that is a file, a link, or unreadable hides no row of
+/// the program's file: the C's row, then the folder named, exit 1.
+#[test]
+fn show_names_a_units_folder_it_cannot_read_after_the_rows() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = zopfli("show-units-folder");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let units = t.join("migration/perf/units");
+    let show = || harness(&["perf", "show", "--target", target, "--no-check"], None);
+    let c_row_then = |r: &Run, words: &str| {
+        assert_eq!(r.code, 1, "{}", r.stdout);
+        assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
+        assert!(
+            r.stderr.contains(&format!("migration/perf/units: {words}")),
+            "{}",
+            r.stderr
+        );
+    };
+    // A file.
+    std::fs::write(&units, "not a folder").unwrap();
+    c_row_then(&show(), "must be a directory (a link is refused)");
+    // A link to a real folder.
+    std::fs::remove_file(&units).unwrap();
+    let outside = t.with_extension("units-outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, &units).unwrap();
+    c_row_then(&show(), "must be a directory (a link is refused)");
+    // Unreadable.
+    std::fs::remove_file(&units).unwrap();
+    std::fs::create_dir(&units).unwrap();
+    std::fs::set_permissions(&units, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let r = show();
+    std::fs::set_permissions(&units, std::fs::Permissions::from_mode(0o755)).unwrap();
+    c_row_then(&r, "Permission denied");
+}
+
+/// A results file for a unit no longer in the plan is named, never read
+/// (as the cockpit does): junk in it fails nothing.
+#[test]
+fn show_names_a_unit_no_longer_in_the_plan_without_reading_it() {
+    let t = zopfli("show-orphan");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let units = t.join("migration/perf/units");
+    std::fs::create_dir_all(&units).unwrap();
+    std::fs::write(units.join("u-gone.json"), "not json").unwrap();
+    let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("perf: u-gone — no longer in the plan"),
+        "{}",
+        r.stdout
     );
 }

@@ -1075,7 +1075,7 @@ pub fn perf_run(
             if left.is_empty() {
                 String::new()
             } else {
-                format!(" ({})", left.join("; "))
+                format!(" ({})", left_out_list(&left))
             }
         ));
         let all_slot = slot(Slot::AsItStands)?;
@@ -1096,7 +1096,7 @@ pub fn perf_run(
         let tail = if left.is_empty() {
             String::new()
         } else {
-            format!(" — {}", left.join("; "))
+            format!(" — {}", left_out_list(&left))
         };
         progress.message(&match held.len() {
             0 => format!("no accepted unit to compare yet{tail}"),
@@ -1110,17 +1110,11 @@ pub fn perf_run(
         });
     }
     if req.as_it_stands_only && matches!(program, Program::None) {
-        let why = match built.len() {
-            0 => "no accepted unit to compare yet".to_string(),
-            _ => format!(
-                "one measurable unit ({}) — the program as it stands needs two",
-                held.iter()
-                    .map(|u| u.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        };
-        return Err(Error::Invariant(why));
+        // The early refusal's words, from what built: a unit whose crate
+        // did not build is named with why, as the early one names a unit
+        // left out before the builds.
+        let measurable: Vec<&str> = held.iter().map(|u| u.id.as_str()).collect();
+        return Err(Error::Invariant(needs_two_words(&measurable, &left)));
     }
     if !log.is_empty() {
         let _ = harness_core::ledger::write_atomic(&log_path, log.as_bytes());
@@ -1462,40 +1456,102 @@ fn left_out_words(reason: &str) -> &'static str {
     }
 }
 
-/// The units perf could measure today, in plan order (read-only: no lock,
-/// no build) — for `perf show`'s currency of the program as it stands.
+/// How many left-out units a line names before "and N more": a plan of
+/// hundreds of unverified units still gets a line one can read.
+const LEFT_OUT_NAMED: usize = 10;
+
+/// The left-out units' words for a line ("u-tree left out: verify it
+/// first; …"), the first [`LEFT_OUT_NAMED`] named and the rest counted.
+fn left_out_list(left: &[String]) -> String {
+    let named = left.len().min(LEFT_OUT_NAMED);
+    let list = left[..named].join("; ");
+    match left.len() - named {
+        0 => list,
+        more => format!("{list} and {more} more"),
+    }
+}
+
+/// `--as-it-stands-only`'s refusal with fewer than two measurable units —
+/// the same words before the builds (from the selection) and after them
+/// (from the units that built): the measurable units, then each verified
+/// unit left out with why. "no accepted unit to compare yet" only when no
+/// unit was verified at all.
+fn needs_two_words(measurable: &[&str], left: &[String]) -> String {
+    let tail = if left.is_empty() {
+        String::new()
+    } else {
+        format!(" — {}", left_out_list(left))
+    };
+    match measurable {
+        [] if left.is_empty() => "no accepted unit to compare yet".to_string(),
+        [] => format!("no measurable unit{tail} — the program as it stands needs two"),
+        [one, ..] => {
+            format!("one measurable unit ({one}){tail} — the program as it stands needs two")
+        }
+    }
+}
+
+/// What perf could measure today, from one selection: the plan's verified
+/// or merged units that are measurable, and those left out with why in the
+/// progress lines' words ("verify it first"), each in plan order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PerfSelection {
+    /// The measurable units' ids.
+    pub measurable: Vec<String>,
+    /// Each verified unit left out, with why.
+    pub left_out: Vec<(String, &'static str)>,
+}
+
+impl PerfSelection {
+    /// `perf run --as-it-stands-only`'s refusal before anything is built
+    /// (§3.10: "says why"), when fewer than two units are measurable — the
+    /// words the run itself refuses with after the builds. Nothing is
+    /// measured yet, so a unit is "measurable", never "measured".
+    pub fn needs_two(&self) -> Option<String> {
+        if self.measurable.len() >= 2 {
+            return None;
+        }
+        let measurable: Vec<&str> = self.measurable.iter().map(String::as_str).collect();
+        let left: Vec<String> = self
+            .left_out
+            .iter()
+            .map(|(id, why)| format!("{id} left out: {why}"))
+            .collect();
+        Some(needs_two_words(&measurable, &left))
+    }
+}
+
+/// What perf could measure today (read-only: no lock, no build) — for
+/// `perf show`'s currency of the program as it stands and `perf run
+/// --as-it-stands-only`'s early refusal. A plan over the size perf
+/// measures is refused by name first, as the run refuses it (§3.2).
+pub fn perf_selection(
+    target: &TargetContext,
+    plan: &Plan,
+    facts: &Facts,
+) -> Result<PerfSelection, Error> {
+    build::check_plan_size(plan.units.len())?;
+    let ledger = Ledger::new(target.root.clone());
+    let mut out = PerfSelection::default();
+    for s in select(target, &ledger, facts, plan)? {
+        match s {
+            Selected::Ready(c) => out.measurable.push(c.id),
+            Selected::NotVerified { id, reason, .. } => {
+                out.left_out.push((id, left_out_words(reason)));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The units perf could measure today, in plan order — [`perf_selection`]'s
+/// measurable ids (a plan over perf's size refused by name).
 pub fn perf_measurable(
     target: &TargetContext,
     plan: &Plan,
     facts: &Facts,
 ) -> Result<Vec<String>, Error> {
-    let ledger = Ledger::new(target.root.clone());
-    Ok(select(target, &ledger, facts, plan)?
-        .into_iter()
-        .filter_map(|s| match s {
-            Selected::Ready(c) => Some(c.id),
-            Selected::NotVerified { .. } => None,
-        })
-        .collect())
-}
-
-/// The verified or merged units perf could not measure today, in plan
-/// order, each with why in the progress lines' words ("verify it first") —
-/// for `perf run --as-it-stands-only`'s early refusal, which names them as
-/// the run does (§3.10: "says why"). Read-only, as [`perf_measurable`].
-pub fn perf_left_out(
-    target: &TargetContext,
-    plan: &Plan,
-    facts: &Facts,
-) -> Result<Vec<(String, &'static str)>, Error> {
-    let ledger = Ledger::new(target.root.clone());
-    Ok(select(target, &ledger, facts, plan)?
-        .into_iter()
-        .filter_map(|s| match s {
-            Selected::Ready(_) => None,
-            Selected::NotVerified { id, reason, .. } => Some((id, left_out_words(reason))),
-        })
-        .collect())
+    Ok(perf_selection(target, plan, facts)?.measurable)
 }
 
 /// The computer's facts when perf's launcher cache is current (never
@@ -3380,7 +3436,9 @@ mod tests {
         // `--as-it-stands-only` refusal names them).
         let interrupted = "its Accept was interrupted — Re-check it to finish or undo it";
         assert_eq!(
-            perf_left_out(&target, &plan, &facts).expect("reads"),
+            perf_selection(&target, &plan, &facts)
+                .expect("reads")
+                .left_out,
             vec![
                 ("s2".to_string(), interrupted),
                 ("s3".to_string(), interrupted),
@@ -3895,6 +3953,42 @@ mod tests {
         );
     }
 
+    /// `--as-it-stands-only`'s refusal names at most ten left-out units,
+    /// then counts the rest; with none verified it says so plainly.
+    #[test]
+    fn the_refusal_names_ten_left_out_units_then_counts_the_rest() {
+        let left: Vec<String> = (1..=12)
+            .map(|i| format!("u{i:02} left out: verify it first"))
+            .collect();
+        let named: Vec<String> = left[..10].to_vec();
+        assert_eq!(
+            needs_two_words(&["ua"], &left),
+            format!(
+                "one measurable unit (ua) — {} and 2 more — the program as it stands needs two",
+                named.join("; ")
+            )
+        );
+        assert_eq!(left_out_list(&left[..10]), named.join("; "));
+        assert_eq!(
+            needs_two_words(&[], &left[..1]),
+            "no measurable unit — u01 left out: verify it first — the program as it stands \
+             needs two"
+        );
+        assert_eq!(needs_two_words(&[], &[]), "no accepted unit to compare yet");
+        let sel = PerfSelection {
+            measurable: vec!["ua".into()],
+            left_out: (1..=12)
+                .map(|i| (format!("u{i:02}"), "verify it first"))
+                .collect(),
+        };
+        assert_eq!(sel.needs_two(), Some(needs_two_words(&["ua"], &left)));
+        let two = PerfSelection {
+            measurable: vec!["ua".into(), "ub".into()],
+            left_out: Vec::new(),
+        };
+        assert_eq!(two.needs_two(), None);
+    }
+
     /// Step 1 has a minute more than the target's timeout (§3.3 step 6):
     /// every new binary's first exec falls there.
     #[test]
@@ -4156,6 +4250,57 @@ mod tests {
         let (c, u, log) = cause(&[&not_a, &std_b]);
         assert_eq!((c.as_str(), u), ("unknown", ids(&["nota", "stdb"])));
         assert!(log.contains("_a"), "{log}");
+    }
+
+    /// `--as-it-stands-only` with two measurable units, one of whose crates
+    /// does not build: the refusal after the builds says why, in the early
+    /// refusal's words (the a-holds checker's test, fix pass 3's check).
+    #[test]
+    fn as_it_stands_only_refused_after_a_crate_fails_to_build() {
+        if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let dir = Beside::new("e2e-ais");
+        let root = dir.0.clone();
+        let ids = ["ua", "ud"];
+        mini_program(&root, &ids);
+        let build_rs = "fn main() {\n    panic!(\"this crate does not build\");\n}\n";
+        for (i, id) in ids.iter().enumerate() {
+            let script = (*id == "ud").then_some(build_rs);
+            unit_crate(&root, id, i + 1, script, true);
+        }
+        let facts = facts_of(&root);
+        let mut plan = "schema_version = 1\ntarget = \"tool\"\n".to_string();
+        for id in ids {
+            plan += &plan_unit(&root, &facts, id, "verified", true, None);
+        }
+        put(&root, "migration/plan.toml", &plan);
+        let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+        let target = TargetContext::load(&root).expect("target");
+        let perf_dir = root.join("migration/perf");
+        std::fs::create_dir_all(&perf_dir).expect("perf dir");
+        let workloads = wl::parse(
+            "schema_version = 1\n[[workload]]\nid = \"tiny\"\nargs = []\nruns = 5\n",
+            Path::new("w.toml"),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let sel = perf_selection(&target, &plan, &facts).expect("reads");
+        assert_eq!(sel.measurable.len(), 2);
+        assert_eq!(sel.needs_two(), None);
+        let mut s = seen();
+        let req = PerfRequest {
+            as_it_stands_only: true,
+            ..PerfRequest::default()
+        };
+        let got = perf_run(&target, &plan, &facts, &workloads, &perf_dir, &req, &mut s);
+        let Err(Error::Invariant(words)) = &got else {
+            panic!("{got:?}")
+        };
+        assert_eq!(
+            words,
+            "one measurable unit (ua) — ud left out: its crate does not build — the program as \
+             it stands needs two"
+        );
     }
 
     /// `perf run` end to end on a small target of five verified units and a

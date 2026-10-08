@@ -152,28 +152,13 @@ fn fresh_facts(ctx: &TargetContext, ledger: &Ledger) -> Result<Facts> {
 /// `--as-it-stands-only` with fewer than two measurable units, refused
 /// before the launcher, the C or any crate is built (§3.10: "says why"):
 /// the measurable units, and each verified unit left out with why, as the
-/// run's own line names them ("u-tree left out: verify it first"). Nothing
-/// is measured yet, so a unit is "measurable", never "measured".
+/// run's own line names them ("u-tree left out: verify it first"; ten
+/// named, the rest counted). A plan over perf's size is refused by its size
+/// first, as the run refuses it.
 fn as_it_stands_needs_two(ctx: &TargetContext, plan: &Plan, facts: &Facts) -> Result<()> {
-    let measurable = harness_oracle::perf_measurable(ctx, plan, facts)?;
-    if measurable.len() >= 2 {
-        return Ok(());
-    }
-    let left: Vec<String> = harness_oracle::perf_left_out(ctx, plan, facts)?
-        .into_iter()
-        .map(|(id, why)| format!("{id} left out: {why}"))
-        .collect();
-    let tail = if left.is_empty() {
-        String::new()
-    } else {
-        format!(" — {}", left.join("; "))
-    };
-    match measurable.as_slice() {
-        [] if left.is_empty() => bail!("no accepted unit to compare yet"),
-        [] => bail!("no measurable unit{tail} — the program as it stands needs two"),
-        [one, ..] => {
-            bail!("one measurable unit ({one}){tail} — the program as it stands needs two")
-        }
+    match harness_oracle::perf_selection(ctx, plan, facts)?.needs_two() {
+        Some(words) => bail!("{words}"),
+        None => Ok(()),
     }
 }
 
@@ -390,17 +375,26 @@ struct StoredUnit {
 }
 
 /// Every unit's results file in `units_dir` (checked by [`stored_dir`]), in
-/// id order, each read strictly; a name that is not a clean unit id is not
-/// read. A file that cannot be read is kept as its error, beside the units
-/// that read: one bad file hides no other row (the cockpit shows the rest
-/// too), and `perf show` reports it after the rows.
+/// id order; a name that is not a clean unit id is not read. A unit still
+/// in the plan has its file read strictly; one no longer in the plan is
+/// named without being read, as the cockpit does. A file (or the folder)
+/// that cannot be read is kept as its error, beside the units that read:
+/// one bad file hides no other row (the cockpit shows the rest too), and
+/// `perf show` reports it after the rows.
 fn stored_units(
     root: &Path,
     units_dir: &Path,
     plan: &Plan,
-) -> Result<(Vec<StoredUnit>, Vec<anyhow::Error>)> {
-    let entries = std::fs::read_dir(units_dir)
-        .with_context(|| format!("reading {}", shown(root, units_dir)))?;
+) -> (Vec<StoredUnit>, Vec<anyhow::Error>) {
+    let entries = match std::fs::read_dir(units_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            return (
+                Vec::new(),
+                vec![anyhow::anyhow!("{}: {e}", shown(root, units_dir))],
+            )
+        }
+    };
     let mut ids: Vec<String> = entries
         .filter_map(|e| e.ok())
         .filter_map(|e| {
@@ -415,6 +409,14 @@ fn stored_units(
     let mut units = Vec::new();
     let mut bad = Vec::new();
     for id in ids {
+        let Some(unit) = plan.units.iter().find(|u| u.id == id) else {
+            units.push(StoredUnit {
+                id,
+                rows: Vec::new(),
+                replaces: None,
+            });
+            continue;
+        };
         let file = match res::read_unit(&units_dir.join(format!("{id}.json")), &id) {
             Ok(Some(file)) => file,
             Ok(None) => continue,
@@ -423,18 +425,13 @@ fn stored_units(
                 continue;
             }
         };
-        let replaces = plan
-            .units
-            .iter()
-            .find(|u| u.id == id)
-            .map(|u| u.oracle_param_list("replaces"));
         units.push(StoredUnit {
             id,
             rows: file.rows,
-            replaces,
+            replaces: Some(unit.oracle_param_list("replaces")),
         });
     }
-    Ok((units, bad))
+    (units, bad)
 }
 
 /// `harness perf show` (§3.9): every stored row's words, rebuilt, with why
@@ -445,9 +442,10 @@ fn stored_units(
 /// "nothing measured yet" is the line. Without facts the C cannot be
 /// hashed: it is not judged (said once), never "the C changed" on every
 /// row; nor are the units the program as it stands holds, said in the same
-/// line when such a row is stored. A unit results file that cannot be read
-/// hides no other row: the rows that read are shown, then the file is
-/// named and the show exits 1. It writes nothing.
+/// line when such a row is stored. A results file that cannot be read (the
+/// program's or a unit's), or a units folder that is not one, hides no
+/// other row: the rows that read are shown, then every error is named and
+/// the show exits 1. It writes nothing.
 pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool) -> Result<u8> {
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
@@ -456,11 +454,24 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
         harness_core::perf::PERF_DIR,
     ];
     let dir = stored_dir(&ctx.root, &perf_parts)?;
+    // What cannot be read is named after the rows that read (exit 1): the
+    // program's file, the units' folder, each unit's file.
+    let mut bad: Vec<anyhow::Error> = Vec::new();
+    let program = match &dir {
+        Some(dir) => res::read_program(&res::program_path(dir)).unwrap_or_else(|e| {
+            bad.push(e.into());
+            None
+        }),
+        None => None,
+    };
     // The units' folder is checked the same way: a linked one would show
     // another folder's files as this target's rows.
-    let units_dir = stored_dir(&ctx.root, &[perf_parts[0], perf_parts[1], res::UNITS_DIR])?;
-    let program = match &dir {
-        Some(dir) => res::read_program(&res::program_path(dir))?,
+    let units_dir = match &dir {
+        Some(_) => stored_dir(&ctx.root, &[perf_parts[0], perf_parts[1], res::UNITS_DIR])
+            .unwrap_or_else(|e| {
+                bad.push(e);
+                None
+            }),
         None => None,
     };
     let workloads = match wl::load(&ctx.root)? {
@@ -472,9 +483,13 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
     };
     let facts = Facts::load(&ledger.facts_path()).ok();
     let plan = plan(&ledger)?;
-    let (units, bad_units) = match &units_dir {
-        Some(units_dir) => stored_units(&ctx.root, units_dir, &plan)?,
-        None => (Vec::new(), Vec::new()),
+    let units = match &units_dir {
+        Some(units_dir) => {
+            let (units, bad_units) = stored_units(&ctx.root, units_dir, &plan);
+            bad.extend(bad_units);
+            units
+        }
+        None => Vec::new(),
     };
     // The rows to judge (a unit no longer in the plan shows none): with
     // none, no check is worth its runs (§3.9).
@@ -608,15 +623,15 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
             None => out(format!("perf: {} — no longer in the plan", unit.id)),
         }
     }
-    // The rows that read are shown; then each unit file that did not read
-    // is named, and the show fails (exit 1).
-    let mut bad_units = bad_units.into_iter();
-    if let Some(first) = bad_units.next() {
-        let rest: Vec<String> = bad_units.map(|e| e.to_string()).collect();
+    // The rows that read are shown; then each thing that did not read is
+    // named, one a line, and the show fails (exit 1).
+    let mut bad = bad.into_iter();
+    if let Some(first) = bad.next() {
+        let rest: Vec<String> = bad.map(|e| format!("{e:#}")).collect();
         if rest.is_empty() {
             return Err(first);
         }
-        bail!("{first}\n{}", rest.join("\n"));
+        bail!("{first:#}\n{}", rest.join("\n"));
     }
     if printed == 0 {
         out("perf: nothing measured yet — run harness perf run".into());
