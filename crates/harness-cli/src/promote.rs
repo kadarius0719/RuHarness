@@ -380,7 +380,7 @@ pub(crate) fn cmd_promote(
     allow_unsandboxed: bool,
 ) -> Result<u8> {
     require_sandbox(allow_unsandboxed, "harness promote")?;
-    let ctx = target.load_folder("harness promote")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = crate::lock_ledger(&ledger, &format!("promote {unit_id} {attempt_id}"))?;
     let plan_doc = Plan::load(&ledger.plan_path())?;

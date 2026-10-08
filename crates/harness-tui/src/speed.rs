@@ -229,6 +229,9 @@ pub struct SpeedModel {
     /// Why perf cannot measure, in the words `perf run` refuses with (the
     /// workloads file's state, §3.1): `None` when it can.
     pub blocker: Option<String>,
+    /// The ledger folder, root-relative (`migration`, or a tool's), in the
+    /// words that name perf's files.
+    pub ledger_rel: String,
 }
 
 impl SpeedModel {
@@ -317,11 +320,11 @@ impl SpeedModel {
         } else if u.rows.iter().any(|r| {
             r.out_of_date.is_empty() && matches!(r.words.answer, "slower" | "probably-slower")
         }) {
-            advice.next = Some(
+            advice.next = Some(format!(
                 "perf times the Rust in use. If speed matters here — note these numbers first (or \
-                 commit migration/perf/): measuring again replaces them —"
-                    .into(),
-            );
+                 commit {}/perf/): measuring again replaces them —",
+                self.ledger_rel
+            ));
         }
         if advice.next.is_some() {
             advice.change = Some(change_words(unit, has_provider));
@@ -632,6 +635,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         workloads: Vec::new(),
         c_clock: BTreeMap::new(),
         blocker: None,
+        ledger_rel: snapshot.ledger_rel(),
     };
     let workloads = match &perf.workloads {
         Ok(WorkloadsState::Ready(w)) => w,
@@ -1397,6 +1401,7 @@ mod tests {
             workloads: Vec::new(),
             c_clock: BTreeMap::new(),
             blocker: None,
+            ledger_rel: "migration".into(),
         };
         for g in [
             Group::NoFile,

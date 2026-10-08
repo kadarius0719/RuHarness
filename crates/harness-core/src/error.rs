@@ -152,13 +152,6 @@ pub enum Error {
         /// What is wrong and what to do.
         why: String,
     },
-    /// The target lists its files (`harness.toml` schema_version 2) and this
-    /// reader does not read that form yet.
-    #[error("this target lists its files; {what} does not read that form yet")]
-    FileListNotRead {
-        /// The reader (`harness scan`, `the scanner`).
-        what: String,
-    },
 }
 
 impl Error {

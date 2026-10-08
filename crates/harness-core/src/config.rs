@@ -337,12 +337,23 @@ impl TargetSection {
         self.file_list().map(|l| &l.configuration)
     }
 
-    /// The folder form, or the one-sentence refusal of a reader that does
-    /// not read the file-list form yet: `what` names it (`harness scan`).
-    pub fn folder(&self, what: &str) -> Result<&FolderForm, Error> {
+    /// Whether the repo-relative `path` is one of the whole program's own
+    /// files: directly in `source_dir` for the folder form (top level, not
+    /// below), a listed file for the file-list form. Paths compare
+    /// lexically, `.` components dropped ([`crate::features::directly_in`]).
+    pub fn is_program_file(&self, path: &str) -> bool {
         match &self.form {
-            Form::Folder(f) => Ok(f),
-            Form::FileList(_) => Err(Error::FileListNotRead { what: what.into() }),
+            Form::Folder(f) => crate::features::directly_in(&f.source_dir, path),
+            Form::FileList(l) => {
+                let norm = |s: &str| -> PathBuf {
+                    Path::new(s)
+                        .components()
+                        .filter(|c| !matches!(c, std::path::Component::CurDir))
+                        .collect()
+                };
+                let path = norm(path);
+                l.files.iter().any(|f| norm(&f.path) == path)
+            }
         }
     }
 }
@@ -1011,7 +1022,9 @@ mod tests {
         assert!(config.target.include_dirs().is_empty());
         assert!(config.target.files().is_none());
         assert!(config.target.configuration().is_none());
-        assert!(config.target.folder("harness scan").is_ok());
+        assert!(config.target.is_program_file("src/a.c"));
+        assert!(config.target.is_program_file("./src/a.c"));
+        assert!(!config.target.is_program_file("src/sub/a.c"));
         let err = load_text(&root, "schema_version = 1\n[target]\nname = \"x\"\n").unwrap_err();
         assert!(
             err.to_string().contains("missing field `source_dir`"),
@@ -1066,12 +1079,11 @@ mod tests {
                 .and_then(|v| v.as_integer()),
             Some(30)
         );
-        // A reader of the folder form refuses it in one sentence.
-        let err = config.target.folder("harness scan").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "this target lists its files; harness scan does not read that form yet"
-        );
+        // The program's own files are the listed ones, wherever they sit.
+        assert!(config.target.is_program_file("src/tools/lzg.c"));
+        assert!(config.target.is_program_file("./src/lib/decode.c"));
+        assert!(!config.target.is_program_file("src/lib/version.c"));
+        assert!(!config.target.is_program_file("src/include/lzg.h"));
     }
 
     #[test]

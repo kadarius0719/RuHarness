@@ -22,7 +22,7 @@ pub(crate) fn cmd_override(
     allow_unsandboxed: bool,
 ) -> Result<u8> {
     require_sandbox(allow_unsandboxed, "harness override")?;
-    let ctx = target.load_folder("harness override")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("override {unit_id}"))?;
     let plan_doc = Plan::load(&ledger.plan_path())?;

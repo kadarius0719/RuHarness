@@ -1,8 +1,8 @@
 //! Mapped tools through the binary (docs/PROJECT-MAP-DESIGN.md §3.7): the
 //! lookup order of `--target` and `--tool`, every ledger path of a tool
 //! under `migration/tools/<id>/`, one `sync-runtime` block per tool, and a
-//! file-list target scanned and detected, and refused in one sentence by the
-//! commands that do not read that form yet.
+//! file-list target read by every command (tests/file_list.rs runs them in
+//! full).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -213,7 +213,7 @@ fn sync_runtime_keeps_one_block_per_tool() {
 }
 
 #[test]
-fn a_file_list_target_is_scanned_and_refused_elsewhere_in_one_sentence() {
+fn a_file_list_target_is_refused_by_no_command() {
     let root = tmp("file-list");
     for dir in ["src/lib", "src/include"] {
         std::fs::create_dir_all(root.join(dir)).unwrap();
@@ -236,25 +236,29 @@ fn a_file_list_target_is_scanned_and_refused_elsewhere_in_one_sentence() {
     assert!(facts.contains("src/lib/lzg.c"), "{facts}");
     let r = harness(&["detect", "--target", target]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
-    for (args, command) in [
-        (vec!["plan"], "harness plan"),
-        (
-            vec!["verify", "u-x", "--allow-unsandboxed"],
-            "harness verify",
-        ),
-        (vec!["observe"], "harness observe"),
+    // Every other command opens it: plan writes the tool's plan; verify
+    // and observe go as far as their own reasons (no such unit; no
+    // provider), never refusing the form.
+    let r = harness(&["plan", "--target", target, "--tool", "t-lzg"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(Path::new(&tool).join("plan.toml").is_file());
+    for args in [
+        vec!["verify", "u-x", "--allow-unsandboxed"],
+        vec!["observe"],
+        vec!["gen-driver", "u-x"],
+        vec!["perf", "run"],
     ] {
         let mut argv = args.clone();
         argv.extend(["--target", target, "--tool", "t-lzg"]);
         let r = harness(&argv);
-        assert_eq!(r.code, 1, "{args:?}: {}\n{}", r.stdout, r.stderr);
-        assert!(
-            r.stderr.contains(&format!(
-                "this target lists its files; {command} does not read that form yet"
-            )),
-            "{args:?}: {}",
-            r.stderr
-        );
+        for words in ["lists its files", "does not read that form"] {
+            assert!(
+                !r.stderr.contains(words),
+                "{args:?}: {}\n{}",
+                r.stdout,
+                r.stderr
+            );
+        }
     }
     // A too-new schema says so, before anything else.
     std::fs::write(tool.join("harness.toml"), "schema_version = 3\n").unwrap();
@@ -265,6 +269,4 @@ fn a_file_list_target_is_scanned_and_refused_elsewhere_in_one_sentence() {
         "{}",
         r.stderr
     );
-    // No plan was written in the tool's ledger.
-    assert!(!Path::new(&tool).join("plan.toml").exists());
 }

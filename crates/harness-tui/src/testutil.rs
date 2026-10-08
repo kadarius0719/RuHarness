@@ -51,6 +51,103 @@ pub fn scratch_target_without_features(rel: &str, tag: &str) -> PathBuf {
     }
 }
 
+/// The mapped tool of [`file_list_tool`].
+pub const LZG_TOOL: &str = "t-lzg";
+
+/// A liblzg-shaped project (docs/PROJECT-MAP-DESIGN.md §4) with the
+/// hand-written file-list tool [`LZG_TOOL`]: `src/lib/encode.c` (through
+/// `internal.h`, which includes `"../include/lzg.h"`) and `src/tools/lzg.c`
+/// (`<lzg.h>` through `src/include`) listed; `src/include/unused.h` and
+/// `src/other/decode.c` not part of the tool; a C file in the tool's ledger.
+/// The facts are written as the scanner records them, the plan by the
+/// planner, `u-encode` given its `replaces`; adopted.
+pub fn file_list_tool(tag: &str) -> TmpDir {
+    use harness_core::facts::{FileRecord, SymbolRecord};
+    let dir = TmpDir::new(tag);
+    let root = &dir.0;
+    let put = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    put(
+        "src/lib/encode.c",
+        "#include \"internal.h\"\nunsigned lzg_encode(unsigned n) { return lzg_min(n, 9); }\n",
+    );
+    put(
+        "src/lib/internal.h",
+        "#include \"../include/lzg.h\"\n\
+         static inline unsigned lzg_min(unsigned a, unsigned b) { return a < b ? a : b; }\n",
+    );
+    put("src/include/lzg.h", "unsigned lzg_encode(unsigned n);\n");
+    put(
+        "src/tools/lzg.c",
+        "#include <lzg.h>\nint main(void) { return (int)lzg_encode(3); }\n",
+    );
+    put("src/include/unused.h", "#define NEVER_READ 1\n");
+    put("src/other/decode.c", "int lzg_decode(void) { return 1; }\n");
+    let ledger = format!("migration/tools/{LZG_TOOL}");
+    put(
+        &format!("{ledger}/harness.toml"),
+        "schema_version = 2\n[target]\nname = \"lzg\"\nfiles = [\n\
+         { path = \"src/lib/encode.c\", include_dirs = [\"src/include\"] },\n\
+         { path = \"src/tools/lzg.c\", include_dirs = [\"src/include\"] },\n]\n\
+         configuration = { name = \"make\", from = \"stated\", flags = [] }\n",
+    );
+    put(
+        &format!("{ledger}/units/u-encode/driver.c"),
+        "int model_written(void) { return 1; }\n",
+    );
+    let file = |path: &str, includes: &[&str]| FileRecord {
+        path: path.into(),
+        hash: harness_core::hash::file_hash(&root.join(path)).unwrap(),
+        includes: includes.iter().map(|s| (*s).to_string()).collect(),
+    };
+    let sym = |file: &str, name: &str| SymbolRecord {
+        name: name.into(),
+        kind: "function".into(),
+        file: file.into(),
+        visibility: "public".into(),
+        signature: format!("int {name}(void)"),
+        span: (1, 1),
+    };
+    let facts = harness_core::Facts {
+        frontend: "test-inline".into(),
+        files: vec![
+            file("src/include/lzg.h", &[]),
+            file("src/lib/encode.c", &["src/lib/internal.h"]),
+            file("src/lib/internal.h", &["src/include/lzg.h"]),
+            file("src/tools/lzg.c", &["src/include/lzg.h"]),
+        ],
+        symbols: vec![
+            sym("src/lib/encode.c", "lzg_encode"),
+            sym("src/tools/lzg.c", "main"),
+        ],
+        ..harness_core::Facts::default()
+    };
+    facts
+        .store(&root.join(&ledger).join("facts.jsonl"))
+        .unwrap();
+    let computed = harness_core::planner::compute_units(&facts).unwrap();
+    let plan_path = root.join(&ledger).join("plan.toml");
+    let (text, _) =
+        harness_core::plan::reconcile_to_string(&plan_path, None, "lzg", &computed).unwrap();
+    // The oracle table closes u-encode's block (keys after it would be its).
+    let mut blocks: Vec<String> = text.split("[[unit]]").map(str::to_string).collect();
+    let at = blocks
+        .iter()
+        .position(|b| b.contains("id = \"u-encode\""))
+        .unwrap();
+    blocks[at] = format!(
+        "{}\n\n[unit.oracle]\nkind = \"c-abi-differential\"\n\
+         replaces = [\"src/lib/encode.c\"]\n\n",
+        blocks[at].trim_end()
+    );
+    std::fs::write(&plan_path, blocks.join("[[unit]]")).unwrap();
+    harness_core::adopt::testing::adopt(root);
+    dir
+}
+
 /// A scratch directory removed on drop — also when a test fails.
 pub struct TmpDir(pub PathBuf);
 

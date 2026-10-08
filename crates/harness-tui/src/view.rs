@@ -626,7 +626,28 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     } else {
         (ellipsis(&name, room), 0, String::new())
     };
-    let mut name_style = if internal { dim() } else { Style::default() };
+    // A file-list target's tree greys the project's other files, and a
+    // folder holding only those.
+    let not_in_tool = |f: &files::FileInfo| f.state == FileState::NotInTool;
+    let greyed = match sel {
+        Selection::File(p) => app.files.file(p).is_some_and(not_in_tool),
+        Selection::Dir(d) => {
+            let prefix = format!("{d}/");
+            let mut under = app
+                .files
+                .files
+                .iter()
+                .filter(|f| f.path.starts_with(&prefix))
+                .peekable();
+            under.peek().is_some() && under.all(not_in_tool)
+        }
+        _ => false,
+    };
+    let mut name_style = if internal || greyed {
+        dim()
+    } else {
+        Style::default()
+    };
     if matches!(
         sel,
         Selection::Project | Selection::Units | Selection::Features | Selection::Speed
@@ -1672,7 +1693,8 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         lines.push(Line::from(""));
         lines.extend(wrapped(
             &format!(
-                "Results of units no longer in the plan (in migration/perf/units/): {}{more}",
+                "Results of units no longer in the plan (in {}/perf/units/): {}{more}",
+                model.ledger_rel,
                 model.orphans.join(", ")
             ),
             width,
@@ -2947,7 +2969,8 @@ const HELP_FEATURES: &[&str] = &[
      functions it could put a note in (\"watches\"). Changing a scenario makes verdicts made \
      before say \"not checked since you changed them\" until re-checked; renaming a feature does \
      not.",
-    "The file, migration/features/features.toml: schema_version = 1, then a [[feature]] table \
+    "The file, features/features.toml in the ledger (migration/, or a mapped tool's \
+     migration/tools/<id>/): schema_version = 1, then a [[feature]] table \
      per feature (id = \"zlib\", name = \"Compress to zlib\") and a [[scenario]] table per \
      run (feature = \"zlib\", id = \"text\", args = [\"--zlib\", \"-c\", \"{input}\"], \
      input = \"sample:text\"). Ids are lowercase letters, digits and dashes; \"{input}\" \
@@ -2955,7 +2978,7 @@ const HELP_FEATURES: &[&str] = &[
     "Enter on Features: Write / Edit the features file (in your editor — the cockpit says how \
      to save and leave: in nano, Ctrl-O then Enter saves and Ctrl-X leaves; in vi, press i to \
      type, then Esc and :wq and Enter to save and leave), Map the features. Edited it outside \
-     the cockpit? Press g. Commit migration/features/ with your work.",
+     the cockpit? Press g. Commit the ledger's features/ with your work.",
 ];
 
 const HELP_FEATURE_LEGEND: &[(&str, &str)] = &[
@@ -2990,11 +3013,12 @@ const HELP_SPEED: &[&str] = &[
      Compare the outputs shows them around their first difference. Verify does not run your \
      workloads, so only perf finds this. perf stops even a fork; verify allows a fork but not \
      starting another program.",
-    "The file, migration/perf/workloads.toml: schema_version = 1, then a [[workload]] table per \
+    "The file, perf/workloads.toml in the ledger (migration/, or a mapped tool's \
+     migration/tools/<id>/): schema_version = 1, then a [[workload]] table per \
      run (id = \"big-text\", args = [\"-c\", \"{input}\"], input = \"bench/big.txt\", \
      runs = 15). Enter on Speed: Write / Edit the workloads file, Measure speed; on a verified \
      unit, Measure this unit's speed. Keep the computer quiet while it measures. Commit \
-     migration/perf/ to keep a history: measuring again replaces a row.",
+     the ledger's perf/ to keep a history: measuring again replaces a row.",
     "When a unit's Rust is slower and speed matters, change the Rust the way it was made: \
      made by a model — Modify its attempt with a note about speed, Replace the verified crate \
      with the new attempt, measure again, and Replace it back if it is not faster; a hand \

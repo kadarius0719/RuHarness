@@ -1279,9 +1279,9 @@ impl App {
                 "plan: no changes".into()
             } else {
                 format!(
-                    "plan changed {n} unit{} — review `git diff migration/plan.toml` (c for the \
-                     lines)",
-                    if n == 1 { "" } else { "s" }
+                    "plan changed {n} unit{} — review `git diff {}/plan.toml` (c for the lines)",
+                    if n == 1 { "" } else { "s" },
+                    self.snapshot.ledger_rel()
                 )
             });
         }
@@ -2337,7 +2337,14 @@ impl App {
                 (
                     "Scan the project?".to_string(),
                     vec![
-                        "Reads every C file and rewrites migration/facts.jsonl.".into(),
+                        format!(
+                            "Reads {} and rewrites {}/facts.jsonl.",
+                            match self.snapshot.target.source_dir() {
+                                Some(_) => "every C file",
+                                None => "the tool's listed C files and the headers they reach",
+                            },
+                            self.snapshot.ledger_rel()
+                        ),
                         "A changed C file makes the verdicts that used it out of date.".into(),
                     ]
                     .into_iter()
@@ -2351,11 +2358,16 @@ impl App {
             Act::Plan => (
                 "Refresh the plan?".into(),
                 vec![
-                    "Rewrites migration/plan.toml: re-approves the changed sources of every \
-                     unit whose C changed, verified units included; adds and removes units; \
-                     blocks units whose files left."
-                        .into(),
-                    "Review `git diff migration/plan.toml` afterwards.".into(),
+                    format!(
+                        "Rewrites {}/plan.toml: re-approves the changed sources of every \
+                         unit whose C changed, verified units included; adds and removes units; \
+                         blocks units whose files left.",
+                        self.snapshot.ledger_rel()
+                    ),
+                    format!(
+                        "Review `git diff {}/plan.toml` afterwards.",
+                        self.snapshot.ledger_rel()
+                    ),
                 ],
             ),
             Act::Detect => (
@@ -2372,14 +2384,17 @@ impl App {
                 (
                     "Map the features?".to_string(),
                     vec![
-                        "Builds the C program twice in a scratch copy under \
-                         migration/build/.features — once as it is, once with a note at the \
-                         start of every function; your C is not changed."
-                            .into(),
+                        format!(
+                            "Builds the C program twice in a scratch copy under \
+                             {}/build/.features — once as it is, once with a note at the \
+                             start of every function; your C is not changed.",
+                            self.snapshot.ledger_rel()
+                        ),
                         format!(
                             "Runs each of your {n} scenario{} three times and records which \
-                             functions each ran in migration/features/map.json.",
-                            if n == 1 { "" } else { "s" }
+                             functions each ran in {}/features/map.json.",
+                            if n == 1 { "" } else { "s" },
+                            self.snapshot.ledger_rel()
                         ),
                         "Changes no verdict.".into(),
                     ],

@@ -6,6 +6,7 @@
 
 use crate::files::Files;
 use crate::model::{Snapshot, UnitView};
+use harness_core::config::TargetSection;
 use harness_core::features::{
     self, FeatureMap, FeatureSnapshot, MapInputs, MapState, ScenarioRecord, SkipReason,
 };
@@ -261,12 +262,13 @@ fn has_rust(u: &UnitView) -> bool {
     matches!(u.unit.status, UnitStatus::Verified | UnitStatus::Merged)
 }
 
-/// The unit's `replaces` are not all top-level `.c` of `source_dir`.
-fn outside(u: &UnitView, source_dir: &str) -> bool {
+/// The unit's `replaces` are not all the whole program's own `.c`: the
+/// top-level `.c` of `source_dir`, or the listed `.c` of a file-list target.
+fn outside(u: &UnitView, target: &TargetSection) -> bool {
     let replaces = u.unit.oracle_param_list("replaces");
     !replaces.is_empty()
         && !replaces.iter().all(|r| {
-            features::directly_in(source_dir, r)
+            target.is_program_file(r)
                 && Path::new(r).extension().and_then(|e| e.to_str()) == Some("c")
         })
 }
@@ -304,13 +306,13 @@ fn result(
     scenarios: &[&str],
     now_features: &str,
     now_program: &str,
-    source_dir: &str,
+    target: &TargetSection,
 ) -> UnitResult {
     // A current verdict says whether the oracle ran the unit in the program
     // (it compares canonical paths); the plan's paths decide only without
     // one (review O5).
     let not_checked = || {
-        if outside(u, source_dir) {
+        if outside(u, target) {
             UnitResult::Outside
         } else {
             UnitResult::NotChecked
@@ -359,7 +361,7 @@ fn result(
     });
     if all {
         UnitResult::Passed
-    } else if outside(u, source_dir) {
+    } else if outside(u, target) {
         UnitResult::Outside
     } else {
         UnitResult::Absent
@@ -405,7 +407,7 @@ pub fn build(
         .as_ref()
         .map(|n| n.program.clone())
         .unwrap_or_default();
-    let source_dir = snapshot.source_dir.as_str();
+    let target = &snapshot.target;
 
     // The map, and whether it is current.
     let loaded: Option<&FeatureMap> = match map {
@@ -538,16 +540,7 @@ pub fn build(
         let results: Vec<UnitResult> = snapshot
             .units
             .iter()
-            .map(|u| {
-                result(
-                    u,
-                    &f.id,
-                    &scenario_ids,
-                    &now_features,
-                    &now_program,
-                    source_dir,
-                )
-            })
+            .map(|u| result(u, &f.id, &scenario_ids, &now_features, &now_program, target))
             .collect();
         // Which units its functions touch.
         let mut ran_in: BTreeMap<usize, usize> = BTreeMap::new();
@@ -722,7 +715,7 @@ pub fn build(
         // The verdict first, as for the results (fix check N4).
         let mut entry = UnitFeatures {
             outside: verdict_outside(u, &now_features, &now_program)
-                .unwrap_or_else(|| outside(u, source_dir)),
+                .unwrap_or_else(|| outside(u, target)),
             ..UnitFeatures::default()
         };
         for (f, funcs) in list.features.iter().zip(&per_feature_functions) {
@@ -741,8 +734,9 @@ pub fn build(
     model
 }
 
-/// The facts record no single `main` among the top-level `.c` of the
-/// program (advisory: the link decides).
+/// The facts record no single `main` among the program's own files (the
+/// top-level `.c` of `source_dir`, or the listed files; advisory: the link
+/// decides).
 fn no_single_main(snapshot: &Snapshot) -> bool {
     let Some(facts) = &snapshot.facts else {
         return false;
@@ -750,7 +744,7 @@ fn no_single_main(snapshot: &Snapshot) -> bool {
     let files: BTreeSet<&str> = facts
         .symbols
         .iter()
-        .filter(|s| s.name == "main" && features::directly_in(&snapshot.source_dir, &s.file))
+        .filter(|s| s.name == "main" && snapshot.target.is_program_file(&s.file))
         .map(|s| s.file.as_str())
         .collect();
     files.len() != 1
@@ -772,6 +766,38 @@ mod tests {
 [[scenario]]\nfeature = \"inline\"\nid = \"x\"\nargs = [\"-x\"]\n";
 
     const U001: &str = "u001-katajainen";
+
+    /// A file-list tool's program is its listed files, wherever their
+    /// folders: a unit replacing a listed `.c` is in it, one replacing a
+    /// file the list leaves out is outside; its one listed `main` is the
+    /// program's.
+    #[test]
+    fn a_file_list_tools_listed_files_are_the_program() {
+        use crate::testutil::{file_list_tool, LZG_TOOL};
+        let dir = file_list_tool("featmap-file-list");
+        let read = crate::load::read_tool(&dir.0, Some(LZG_TOOL)).expect("reads");
+        let mut snap = read.snapshot.clone();
+        assert!(!no_single_main(&snap));
+        let at = snap
+            .units
+            .iter()
+            .position(|u| u.unit.id == "u-encode")
+            .unwrap();
+        assert_eq!(
+            snap.units[at].unit.oracle_param_list("replaces"),
+            ["src/lib/encode.c"]
+        );
+        assert!(!outside(&snap.units[at], &snap.target));
+        let replaces = snap.units[at]
+            .unit
+            .oracle
+            .as_mut()
+            .and_then(|t| t.get_mut("replaces"))
+            .and_then(|v| v.as_array_mut())
+            .unwrap();
+        replaces[0] = "src/other/decode.c".into();
+        assert!(outside(&snap.units[at], &snap.target));
+    }
 
     struct Fx {
         _dir: TmpDir,
@@ -922,6 +948,17 @@ mod tests {
         assert_eq!(m.map, MapStatus::None);
     }
 
+    /// The snapshot's `[target]` with the folder form at `dir`.
+    fn folder_at(snap: &Snapshot, dir: &str) -> TargetSection {
+        TargetSection {
+            name: snap.target.name.clone(),
+            form: harness_core::config::Form::Folder(harness_core::config::FolderForm {
+                source_dir: dir.into(),
+                include_dirs: Vec::new(),
+            }),
+        }
+    }
+
     /// Review M1/O5: a `source_dir` of `.` is the root — every top-level
     /// `.c` is in the program, and its `main` is the program's.
     #[test]
@@ -931,7 +968,7 @@ mod tests {
         let read = fx.read();
         let mut snap = read.snapshot.clone();
         let strip = |s: &str| s.strip_prefix("src/zopfli/").unwrap_or(s).to_string();
-        snap.source_dir = ".".into();
+        snap.target = folder_at(&snap, ".");
         for sym in &mut snap.facts.as_mut().unwrap().symbols {
             sym.file = strip(&sym.file);
         }
@@ -949,9 +986,9 @@ mod tests {
         assert!(!no_single_main(&snap));
         let u001 = snap.units.iter().find(|u| u.unit.id == U001).unwrap();
         assert_eq!(u001.unit.oracle_param_list("replaces"), ["katajainen.c"]);
-        assert!(!outside(u001, "."));
-        assert!(!outside(u001, "./"));
-        assert!(outside(u001, "src"));
+        assert!(!outside(u001, &folder_at(&snap, ".")));
+        assert!(!outside(u001, &folder_at(&snap, "./")));
+        assert!(outside(u001, &folder_at(&snap, "src")));
         let files = crate::files::build(&snap, &read.walk);
         let m = build(&snap, &files, &read.map, read.map_now.as_ref());
         assert_eq!(state(&m, "gzip"), FeatureState::NeedsRecheck, "u001 counts");
@@ -967,7 +1004,7 @@ mod tests {
         let mut snap = read.snapshot.clone();
         // The plan's path no longer reads as a top-level `.c` (a symlinked
         // one, say), but the oracle ran the unit: its failure shows.
-        snap.source_dir = "elsewhere".into();
+        snap.target = folder_at(&snap, "elsewhere");
         let files = crate::files::build(&snap, &read.walk);
         let m = build(&snap, &files, &read.map, read.map_now.as_ref());
         assert_eq!(state(&m, "help"), FeatureState::Failing);
@@ -1058,7 +1095,7 @@ mod tests {
         fx.verdict(&[], &[]);
         let read = fx.read();
         let mut snap = read.snapshot.clone();
-        snap.source_dir = "elsewhere".into();
+        snap.target = folder_at(&snap, "elsewhere");
         let files = crate::files::build(&snap, &read.walk);
         let m = build(&snap, &files, &read.map, read.map_now.as_ref());
         let gzip = m.feature("gzip").unwrap();

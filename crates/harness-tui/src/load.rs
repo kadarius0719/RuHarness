@@ -55,28 +55,36 @@ pub fn read_tool(target: &Path, tool: Option<&str>) -> Result<Read, String> {
     // source_dir that leaves it is refused, as is one that resolves outside.
     // An empty source_dir is the root, as the scanner reads it; a missing
     // one lists nothing (the tree says why) — only one that leaves the
-    // target is refused (review NEW-6/NEW-7).
-    let source_dir = match snapshot.source_dir.as_str() {
-        "" => ".",
-        dir => dir,
-    };
-    let clean = Path::new(source_dir).components().all(|c| {
-        matches!(
-            c,
-            std::path::Component::Normal(_) | std::path::Component::CurDir
-        )
-    });
-    let outside = snapshot
-        .root
-        .join(source_dir)
-        .canonicalize()
-        .is_ok_and(|dir| !dir.starts_with(&snapshot.root));
-    if !clean || outside {
-        return Err(format!(
-            "harness.toml's source_dir {source_dir:?} is not a directory inside the target"
-        ));
+    // target is refused (review NEW-6/NEW-7). A file-list target's paths
+    // were checked clean and inside the project when harness.toml loaded;
+    // its tree is the whole project, walked confined.
+    if let Some(source_dir) = snapshot.target.source_dir() {
+        let source_dir = match source_dir {
+            "" => ".",
+            dir => dir,
+        };
+        let clean = Path::new(source_dir).components().all(|c| {
+            matches!(
+                c,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        });
+        let outside = snapshot
+            .root
+            .join(source_dir)
+            .canonicalize()
+            .is_ok_and(|dir| !dir.starts_with(&snapshot.root));
+        if !clean || outside {
+            return Err(format!(
+                "harness.toml's source_dir {source_dir:?} is not a directory inside the target"
+            ));
+        }
     }
-    let walk = files::walk_tree(&snapshot.root, source_dir, snapshot.facts.as_ref());
+    let walk = files::walk_tree(
+        &snapshot.root,
+        &snapshot.target.form,
+        snapshot.facts.as_ref(),
+    );
     let holder =
         harness_core::status::live_holder(&snapshot.ledger()).map_err(|e| e.to_string())?;
     let llm = &ctx.config.llm;

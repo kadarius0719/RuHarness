@@ -92,7 +92,7 @@ pub(crate) fn cmd_save(target: TargetArg, expect: String, bytes: u64) -> Result<
 /// `harness features map` (§5.1).
 pub(crate) fn cmd_map(target: TargetArg, allow_unsandboxed: bool) -> Result<u8> {
     require_sandbox(allow_unsandboxed, "harness features map")?;
-    let ctx = target.load_folder("harness features map")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "features map")?;
     let (features, digest) = match FeatureSnapshot::load(&ctx) {
@@ -239,19 +239,15 @@ impl harness_oracle::MapProgress for Progress {
     }
 }
 
-/// How many distinct public `main`s the facts record among the top-level
-/// `.c` of `source_dir` — advisory only: the link decides (§5.1).
+/// How many distinct public `main`s the facts record among the whole
+/// program's own files — the top-level `.c` of `source_dir`, or every listed
+/// file of a file-list target — advisory only: the link decides (§5.1).
 fn main_count(ctx: &TargetContext, facts: &Facts) -> usize {
     let mut files: Vec<&str> = facts
         .symbols
         .iter()
         .filter(|s| s.name == "main")
-        .filter(|s| {
-            ctx.config
-                .target
-                .source_dir()
-                .is_some_and(|dir| features::directly_in(dir, &s.file))
-        })
+        .filter(|s| ctx.config.target.is_program_file(&s.file))
         .map(|s| s.file.as_str())
         .collect();
     files.sort();
@@ -289,6 +285,50 @@ fn display(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The main() count reads the program's own files by the target's form:
+    /// top-level `.c` of `source_dir`, or every listed file of a file list
+    /// (wherever its folder) — never a file the list leaves out.
+    #[test]
+    fn mains_are_counted_among_the_programs_own_files() {
+        let facts = Facts {
+            symbols: ["src/tools/lzg.c", "src/other/demo.c", "src/lib/lib.c"]
+                .iter()
+                .map(|file| harness_core::facts::SymbolRecord {
+                    name: if file.ends_with("lib.c") { "f" } else { "main" }.into(),
+                    kind: "function".into(),
+                    file: (*file).into(),
+                    visibility: "public".into(),
+                    signature: String::new(),
+                    span: (1, 1),
+                })
+                .collect(),
+            ..Facts::default()
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "harness-cli-mains-{}-{}",
+            std::process::id(),
+            harness_core::hash::random_hex(4)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = |text: &str| {
+            std::fs::write(dir.join("harness.toml"), text).unwrap();
+            TargetContext::folder_form(
+                dir.clone(),
+                harness_core::config::TargetConfig::load(&dir).unwrap(),
+            )
+        };
+        let listed = ctx("schema_version = 2\n[target]\nname = \"lzg\"\n\
+             files = [{ path = \"src/tools/lzg.c\" }, { path = \"src/lib/lib.c\" }]\n\
+             configuration = { name = \"make\", from = \"stated\", flags = [] }\n");
+        assert_eq!(main_count(&listed, &facts), 1);
+        let folder = ctx("schema_version = 1\n[target]\nname = \"x\"\nsource_dir = \"src\"\n");
+        assert_eq!(main_count(&folder, &facts), 0);
+        let folder =
+            ctx("schema_version = 1\n[target]\nname = \"x\"\nsource_dir = \"src/other\"\n");
+        assert_eq!(main_count(&folder, &facts), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Review: the main() hint is for a link that failed on main, not for
     /// any refusal whose words name a file such as src/main.c.
