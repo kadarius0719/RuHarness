@@ -2826,6 +2826,20 @@ link as the run does; test loops bound themselves to their parent (`kill -0 $PPI
 error kind ("results file: <path>: …", no longer "invalid plan: …"); the version is read only from an
 object. The checkers' own killing tests (17) were adopted.
 
+**Fix pass 4's check** (docs/reviews/2026-10-07-perf-fix4-check.md: three Opus checkers; 48 mutants —
+35 killed, 7 given a test, 1 a finding, 4 by design, 1 equivalent): every item holds, 0 high, 3
+narrow mediums, 21 low → **fix pass 5** (two fixers, the docs by the main session): `perf show` judges
+currency without the plan cap (it had called a 1 000-unit plan's held units "not checked" while the
+cockpit judged them); the capped list reads "; and N more left out"; the full run's progress line and
+the post-build list follow the refusal's rule and plan order; a results file must be a JSON object;
+harness-mcp lists the units with rows without facts (each with its rows, since `harness_unit` needs
+the facts), names orphan results files (`orphans`, ≤ 20) and gives unreadable reasons without the
+path; the cache answer gives the run's own error for a `.lock` that is a folder. **Decided: no check
+round after fix pass 5** beyond the full gates — the pass is small and every item adopted a checker's
+test or added one that fails without the fix; the next review of this area is the next track's.
+**Decided: an unreadable facts file stays a whole-target refusal in the cockpit and harness-mcp**
+(a corrupt ledger is worth stopping on); `perf show` alone treats it as missing, and the docs say so.
+
 **Decided: harness-mcp copies the 999-unit words rather than calling the oracle** (its read model
 stays harness-core only, and the cockpit's gate must not select units on the UI thread): the cockpit's
 and harness-mcp's tests pin the same string as `check_plan_size`'s; a reword must change both.
