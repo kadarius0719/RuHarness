@@ -616,8 +616,43 @@ pub fn features_digest(features: &Features, config: &TargetConfig) -> String {
 /// listed file with its include folders as written, the configuration's
 /// name and flags in order, the link arguments and the run name — so two
 /// configurations of one project differ. The map stamp is not in it: a
-/// changed `root_hash` is a notice, never a new program.
+/// changed `root_hash` is a notice, never a new program. The paths and the
+/// path flags are hashed in their resolved forms (`src/include/` and
+/// `./src/include` are `src/include`, `-I./x` is `-Ix`), so a cosmetic
+/// edit is not a new program: lexically here, with links resolved too in
+/// [`program_digest_now`] (they agree wherever no link is involved).
 pub fn program_digest(config: &TargetConfig, files: &[(String, Option<String>)]) -> String {
+    digest_of(config, files, None)
+}
+
+/// A path of the file-list form as the digest hashes it without the
+/// project at hand: `./` and a trailing `/` dropped, `.` for the root.
+fn lexical_form(path: &str) -> String {
+    let mut p = path.trim_end_matches('/');
+    while let Some(rest) = p.strip_prefix("./") {
+        p = rest.trim_start_matches('/');
+    }
+    if p.is_empty() {
+        ".".into()
+    } else {
+        p.to_string()
+    }
+}
+
+/// `.` for the root's `""`.
+fn shown_form(path: &str) -> String {
+    if path.is_empty() {
+        ".".into()
+    } else {
+        path.to_string()
+    }
+}
+
+fn digest_of(
+    config: &TargetConfig,
+    files: &[(String, Option<String>)],
+    resolver: Option<&crate::sources::Resolver>,
+) -> String {
     let mut pairs: Vec<(&str, &str)> = files
         .iter()
         .map(|(path, h)| (path.as_str(), h.as_deref().unwrap_or("missing")))
@@ -633,20 +668,56 @@ pub fn program_digest(config: &TargetConfig, files: &[(String, Option<String>)])
             "include_dirs": config.target.include_dirs(),
             "extra_link_args": link_args,
         }),
-        Some(list) => serde_json::json!({
+        Some(list) => {
+            let (listed, flags): (Vec<serde_json::Value>, Vec<String>) = match resolver {
+                Some(r) => (
+                    r.listed()
+                        .iter()
+                        .map(|f| {
+                            serde_json::json!({
+                                "path": shown_form(&f.path),
+                                "include_dirs": f.include_dirs.iter().map(|d| shown_form(d)).collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect(),
+                    r.resolved_flags(&list.configuration.flags),
+                ),
+                None => (
+                    list.files
+                        .iter()
+                        .map(|f| {
+                            serde_json::json!({
+                                "path": lexical_form(&f.path),
+                                "include_dirs": f.include_dirs.iter().map(|d| lexical_form(d)).collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect(),
+                    list.configuration
+                        .flags
+                        .iter()
+                        .map(|flag| match crate::config::flags::check_flag(flag) {
+                            Ok(crate::config::flags::Flag::Path(path)) => format!(
+                                "{}{}",
+                                &flag[..flag.len() - path.len()],
+                                lexical_form(path)
+                            ),
+                            _ => flag.clone(),
+                        })
+                        .collect(),
+                ),
+            };
+            serde_json::json!({
             "v": 2,
             "files": pairs,
-            "listed": list.files.iter().map(|f| serde_json::json!({
-                "path": f.path,
-                "include_dirs": f.include_dirs,
-            })).collect::<Vec<_>>(),
+            "listed": listed,
             "configuration": {
                 "name": list.configuration.name,
-                "flags": list.configuration.flags,
+                "flags": flags,
             },
             "extra_link_args": link_args,
             "name": config.target.name,
-        }),
+            })
+        }
     };
     hash::bytes_hash(doc.to_string().as_bytes())
 }
@@ -1343,33 +1414,43 @@ pub const MAX_PROGRAM_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// walk's alias rule, docs/PROJECT-MAP-DESIGN.md §3.1 step 1), so its
 /// closure is the facts' and a scan clears its staleness.
 ///
-/// A file-list target's program is its listed files (as the scan records
-/// them, links resolved) and the include closure the facts record for them
-/// — nothing else (docs/PROJECT-MAP-DESIGN.md §3.7): a header no include
-/// reaches is not part of it; one that appears where an include would now
-/// find it is staleness ([`unrecorded_program_files`]).
+/// A file-list target's program is what the include rule
+/// ([`crate::sources::Resolver::walk`]) reaches from its listed files over
+/// today's bytes — the `-include` files and the headers reached through
+/// the configuration's folders included — nothing else
+/// (docs/PROJECT-MAP-DESIGN.md §3.7): a header no include reaches is not
+/// part of it. Where the facts record otherwise is staleness
+/// ([`unrecorded_program_files`]).
 pub fn program_paths(ctx: &crate::config::TargetContext, facts: &crate::Facts) -> Vec<String> {
     let Some(source_dir) = ctx.config.target.source_dir() else {
-        let listed = crate::sources::Confine::new(ctx)
-            .and_then(|c| c.listed_files(ctx))
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let start: Vec<String> = listed.into_iter().map(|f| f.path).collect();
-        let mut paths = facts.include_closure(&start);
-        paths.sort();
-        paths.dedup();
-        return paths;
+        // The include rule over today's bytes (one rule with the scanner,
+        // docs/PROJECT-MAP-DESIGN.md §3.7): every file the listed files
+        // reach, the `-include` files and the files an ambiguous include
+        // lands on included.
+        return match crate::sources::Resolver::of(ctx) {
+            Ok(Some(resolver)) => resolver
+                .walk(|rel| crate::sources::names_on_disk(resolver.root(), rel))
+                .files
+                .into_keys()
+                .collect(),
+            _ => Vec::new(),
+        };
     };
-    let canon_root = ctx.root.canonicalize().ok();
     let canon_src = ctx.root.join(source_dir).canonicalize().ok();
     // `path` (a link) as the scan records its file: its real path, when that
-    // is a regular file inside `source_dir`.
+    // is a regular file inside `source_dir`, named under `source_dir` as
+    // written — the scan walks `source_dir` as given, so a `source_dir`
+    // that is itself a link keeps its own name (the readers review, 11).
     let real = |path: &Path| -> Option<String> {
-        let (root, src) = (canon_root.as_deref()?, canon_src.as_deref()?);
+        let src = canon_src.as_deref()?;
         let target = path.canonicalize().ok()?;
         (target.starts_with(src) && target.is_file())
-            .then(|| target.strip_prefix(root).ok().and_then(repo_relative))
+            .then(|| {
+                target
+                    .strip_prefix(src)
+                    .ok()
+                    .and_then(|rest| repo_relative(&Path::new(source_dir).join(rest)))
+            })
             .flatten()
     };
     let mut top: Vec<String> = Vec::new();
@@ -1502,68 +1583,81 @@ pub fn program_digest_now(ctx: &crate::config::TargetContext, facts: &crate::Fac
     if stale || !unrecorded_program_files(ctx, facts).is_empty() {
         STALE_PROGRAM.to_string()
     } else {
-        program_digest(&ctx.config, &files)
+        let resolver = crate::sources::Resolver::of(ctx).ok().flatten();
+        digest_of(&ctx.config, &files, resolver.as_ref())
     }
 }
 
-/// The files a scan of a file-list target would record that its facts do
-/// not, root-relative and sorted; empty for a folder target (its rule is the
-/// walk's, in [`program_digest_now`]). Stale only where a scan would record
-/// otherwise, so a scan clears it (docs/PROJECT-MAP-DESIGN.md §3.7): a
-/// listed file not recorded, or a header an include of the program would
-/// now find first — a `.h` that appeared in a file's include folders (or,
-/// for a quoted include, beside the including file) under a name the
-/// program includes. A file elsewhere under the root, or a header no
-/// include names, is no sign. A changed or vanished recorded file is the
-/// hash rule's, not this one's; its includes are not followed here.
+/// The files a scan of a file-list target would record otherwise than its
+/// facts do, root-relative and sorted; empty for a folder target (its rule
+/// is the walk's, in [`program_digest_now`]). Stale only where a scan would
+/// record otherwise, so a scan clears it (docs/PROJECT-MAP-DESIGN.md
+/// §3.7). The include rule ([`crate::sources::Resolver::walk`]) is run over
+/// today's bytes and compared with the record, both ways:
+///
+/// - a file it reaches that the facts lack (a listed file, a header an
+///   include now finds first, a `-include` file);
+/// - a recorded file whose bytes are unchanged but whose includes now
+///   resolve to other files than its record names — a header that appeared
+///   earlier in the search, a changed folder list or configuration, a
+///   recorded include that no longer resolves.
+///
+/// A file elsewhere under the root, or a header no include names, is no
+/// sign. A changed or vanished recorded file is the hash rule's, not this
+/// one's: its includes are not compared here.
 pub fn unrecorded_program_files(
     ctx: &crate::config::TargetContext,
     facts: &crate::Facts,
 ) -> Vec<String> {
-    let Ok(confine) = crate::sources::Confine::new(ctx) else {
+    let Ok(Some(resolver)) = crate::sources::Resolver::of(ctx) else {
         return Vec::new();
     };
-    let Ok(Some(listed)) = confine.listed_files(ctx) else {
-        return Vec::new();
-    };
-    let recorded: std::collections::HashMap<&str, &str> = facts
-        .files
-        .iter()
-        .map(|f| (f.path.as_str(), f.hash.as_str()))
-        .collect();
-    let mut unrecorded = std::collections::BTreeSet::new();
-    let mut seen = std::collections::BTreeSet::new();
-    let mut queue: Vec<(String, Vec<String>)> = listed
-        .into_iter()
-        .map(|f| (f.path, f.include_dirs))
-        .collect();
-    while let Some((rel, dirs)) = queue.pop() {
-        if !seen.insert((rel.clone(), dirs.clone())) {
-            continue;
-        }
-        let abs = confine.root().join(&rel);
-        let Some(hash) = recorded.get(rel.as_str()) else {
-            // Only a regular file: the scan records nothing else.
-            if abs.is_file() {
-                unrecorded.insert(rel);
+    let recorded: std::collections::HashMap<&str, &crate::facts::FileRecord> =
+        facts.files.iter().map(|f| (f.path.as_str(), f)).collect();
+    // Each reached file's names, and whether its bytes are the record's.
+    let mut same_bytes: std::collections::BTreeSet<String> = Default::default();
+    let root = resolver.root().to_path_buf();
+    let program = resolver.walk(|rel| {
+        let abs = root.join(rel);
+        let meta = std::fs::metadata(&abs).ok()?;
+        if meta.is_file() && meta.len() > crate::sources::MAX_SOURCE_BYTES {
+            // Recorded with its streamed hash, never parsed: no includes.
+            if let (Some(record), Ok(now)) = (recorded.get(rel), hash::file_hash(&abs)) {
+                if record.hash == now {
+                    same_bytes.insert(rel.to_string());
+                }
             }
-            continue;
-        };
-        // The scan's parse of it is the facts' while its bytes are the
-        // same; a file it would not parse names nothing.
-        let Ok(bytes) = crate::ledger::read_regular(&abs, crate::sources::MAX_SOURCE_BYTES) else {
-            continue;
-        };
-        if hash::bytes_hash(&bytes) != *hash {
-            continue;
+            return Some(Vec::new());
         }
-        for (name, quoted) in crate::sources::include_names(&bytes) {
-            if let Some(to) = confine.resolve_include(&rel, &name, quoted, &dirs) {
-                queue.push((to, dirs.clone()));
+        let bytes = crate::ledger::read_regular(&abs, crate::sources::MAX_SOURCE_BYTES).ok()?;
+        if recorded
+            .get(rel)
+            .is_some_and(|r| r.hash == hash::bytes_hash(&bytes))
+        {
+            same_bytes.insert(rel.to_string());
+        }
+        Some(crate::sources::include_names(&bytes))
+    });
+    let mut differ = std::collections::BTreeSet::new();
+    for (rel, reaches) in &program.files {
+        match recorded.get(rel.as_str()) {
+            None => {
+                // Only a regular file: the scan records nothing else.
+                if root.join(rel).is_file() {
+                    differ.insert(rel.clone());
+                }
             }
+            Some(record) if same_bytes.contains(rel) => {
+                let names: std::collections::BTreeSet<&String> = record.includes.iter().collect();
+                if names != reaches.iter().collect() {
+                    differ.insert(rel.clone());
+                }
+            }
+            // Changed, vanished, or still unreadable: the hash rule's.
+            Some(_) => {}
         }
     }
-    unrecorded.into_iter().collect()
+    differ.into_iter().collect()
 }
 
 /// Two program digests describe the same program: equal, and neither
@@ -2084,6 +2178,103 @@ args = ["-h"]
              [oracle]\nextra_link_args = [\"-lm\"]\n",
         );
         assert_ne!(base, program_digest(&folder, &files));
+    }
+
+    /// The readers review, finding 10: the v2 digest hashes the resolved
+    /// forms of folders and path flags, so a cosmetic spelling is the same
+    /// program; the link arguments still move it. Through
+    /// [`program_digest_now`], a folder reached through a link is hashed as
+    /// the folder it names.
+    #[test]
+    fn the_v2_digest_hashes_resolved_forms_and_moves_with_the_link_arguments() {
+        let list = |file: &str, dirs: &str, flags: &str, link: &str| {
+            config_from(&format!(
+                "schema_version = 2\n[target]\nname = \"lzg\"\n\
+                 files = [{{ path = \"{file}\", include_dirs = [{dirs}] }}]\n\
+                 configuration = {{ name = \"make\", from = \"stated\", flags = [{flags}] }}\n\
+                 [oracle]\nextra_link_args = [{link}]\n"
+            ))
+        };
+        let files = vec![("src/tools/lzg.c".to_string(), Some("blake3:a".to_string()))];
+        let base = program_digest(
+            &list("src/tools/lzg.c", "\"src/include\"", "\"-Ix\"", "\"-lm\""),
+            &files,
+        );
+        // The grammar takes no `./`; a trailing `/` is the one spelling.
+        let slashed = list("src/tools/lzg.c", "\"src/include/\"", "\"-Ix/\"", "\"-lm\"");
+        assert_eq!(base, program_digest(&slashed, &files), "a trailing slash");
+        assert_ne!(
+            base,
+            program_digest(
+                &list("src/tools/lzg.c", "\"src/include\"", "\"-Ix\"", "\"-lz\""),
+                &files
+            ),
+            "the link arguments"
+        );
+        assert_ne!(
+            base,
+            program_digest(
+                &list("src/tools/lzg.c", "\"src/include\"", "\"-Ix\"", ""),
+                &files
+            ),
+            "no link arguments"
+        );
+
+        // Today's digest, links resolved: a folder named through a link is
+        // the folder it names.
+        let root = std::env::temp_dir().join(format!(
+            "ruharness-v2-forms-{}-{}",
+            std::process::id(),
+            crate::hash::random_hex(4)
+        ));
+        let put = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        put(
+            "src/main.c",
+            "#include \"x.h\"\nint main(void) { return X; }\n",
+        );
+        put("inc/x.h", "#define X 0\n");
+        std::os::unix::fs::symlink(root.join("inc"), root.join("alias")).unwrap();
+        let ctx_with = |dir: &str| {
+            let ledger = crate::config::tool_dir(&root, "t-m");
+            std::fs::create_dir_all(&ledger).unwrap();
+            let text = format!(
+                "schema_version = 2\n[target]\nname = \"m\"\n\
+                 files = [{{ path = \"src/main.c\", include_dirs = [\"{dir}\"] }}]\n\
+                 configuration = {{ name = \"make\", from = \"stated\", flags = [] }}\n"
+            );
+            std::fs::write(ledger.join("harness.toml"), &text).unwrap();
+            crate::config::TargetContext {
+                root: root.clone(),
+                config: TargetConfig::load_file(&ledger.join("harness.toml"), &root).unwrap(),
+                ledger,
+                tool: Some("t-m".into()),
+            }
+        };
+        let facts = |ctx: &crate::config::TargetContext| crate::Facts {
+            files: program_files(ctx, &crate::Facts::default())
+                .into_iter()
+                .map(|(path, hash)| crate::facts::FileRecord {
+                    includes: if path == "src/main.c" {
+                        vec!["inc/x.h".into()]
+                    } else {
+                        Vec::new()
+                    },
+                    path,
+                    hash: hash.unwrap(),
+                })
+                .collect(),
+            ..crate::Facts::default()
+        };
+        let real = ctx_with("inc");
+        let linked = ctx_with("alias/");
+        let a = program_digest_now(&real, &facts(&real));
+        assert!(a.starts_with("blake3:"), "{a}");
+        assert_eq!(a, program_digest_now(&linked, &facts(&linked)));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -1918,21 +1918,23 @@ pub(crate) fn read_sources(
         )));
     }
     let confine = sources::Confine::new(target)?;
-    // Where the target's sources may lie: a folder (canonical), or the
-    // file list's files and their reached headers (root-relative, as the
-    // scan records them).
-    let scope = match confine.listed_files(target)? {
+    // Where the target's sources may lie: a folder (canonical), or what the
+    // include rule reaches from the listed files over today's bytes
+    // (root-relative, as the scan records them) — never `facts.jsonl`'s
+    // edges, which the target owns (the readers review, finding 5).
+    let scope = match sources::Resolver::of(target)? {
         None => {
             let source_dir = target.config.target.source_dir().unwrap_or(".");
             let joined = root.join(source_dir);
             let confined = joined.canonicalize().map_err(|e| Error::io(&joined, e))?;
             Err((confined, source_dir))
         }
-        Some(listed) => {
-            let start: Vec<String> = listed.into_iter().map(|f| f.path).collect();
-            Ok(facts
-                .include_closure(&start)
-                .into_iter()
+        Some(resolver) => {
+            let canon = resolver.root().to_path_buf();
+            Ok(resolver
+                .walk(|rel| sources::names_on_disk(&canon, rel))
+                .files
+                .into_keys()
                 .collect::<std::collections::BTreeSet<String>>())
         }
     };
@@ -1963,6 +1965,20 @@ pub(crate) fn read_sources(
                 unit.id
             )));
         }
+        // No scan reads a dot-folder (`.git`, `.env`, `.cache`): neither
+        // does a prompt.
+        if confine
+            .rel(&resolved)
+            .is_some_and(|rel| sources::in_dot_folder(&rel))
+            || sources::in_dot_folder(&path)
+        {
+            return Err(Error::InvalidPlan(format!(
+                "unit `{}`: source path {path:?} lies in a folder whose name starts with a dot, \
+                 which no scan reads; refusing to send it to a model provider (re-run `harness \
+                 scan`)",
+                unit.id
+            )));
+        }
         match &scope {
             Err((confined, source_dir)) if !resolved.starts_with(confined) => {
                 return Err(Error::InvalidPlan(format!(
@@ -1980,14 +1996,15 @@ pub(crate) fn read_sources(
             {
                 return Err(Error::InvalidPlan(format!(
                     "unit `{}`: source path {path:?} is not one of the target's listed files or \
-                     the headers they include — prompt-bound reads are confined to them; \
-                     refusing to send it to a model provider",
+                     the headers their includes reach today — prompt-bound reads are confined \
+                     to them; refusing to send it to a model provider (re-run `harness scan`)",
                     unit.id
                 )));
             }
             _ => {}
         }
-        let bytes = std::fs::read(&resolved).map_err(|e| Error::io(&resolved, e))?;
+        // Never a FIFO, never more than the scanner's cap.
+        let bytes = harness_core::ledger::read_regular(&resolved, sources::MAX_SOURCE_BYTES)?;
         sources.push(SourceFile { path, bytes });
     }
     Ok(sources)
@@ -2442,6 +2459,70 @@ mod read_sources_tests {
                 .contains("not one of the target's listed files"),
             "{err}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The readers review, finding 5: the scope is what the includes reach
+    /// today, never `facts.jsonl`'s edges, which the target owns. A forged
+    /// edge from a listed file to another project file, or into a
+    /// dot-folder, puts nothing in a prompt; the configuration's `-include`
+    /// file is in scope, as the compile reads it.
+    #[test]
+    fn a_forged_include_edge_reaches_no_prompt() {
+        let root = tmp("forged");
+        write(&root, "src/a.c", "#include \"a.h\"\n");
+        write(&root, "src/a.h", "int a(void);\n");
+        write(&root, "src/cfg.h", "#define A 1\n");
+        write(&root, "notes/secret.h", "const char *key = \"s3cret\";\n");
+        write(&root, ".env/secret.h", "const char *key = \"s3cret\";\n");
+        let ledger = harness_core::config::tool_dir(&root, "t-a");
+        write(
+            &ledger,
+            "harness.toml",
+            "schema_version = 2\n[target]\nname = \"a\"\n\
+             files = [{ path = \"src/a.c\" }]\n\
+             configuration = { name = \"make\", from = \"stated\", flags = [\"-includesrc/cfg.h\"] }\n",
+        );
+        let ctx = TargetContext {
+            root: root.clone(),
+            config: TargetConfig::load_file(&ledger.join("harness.toml"), &root).unwrap(),
+            ledger,
+            tool: Some("t-a".into()),
+        };
+        for forged in ["notes/secret.h", ".env/secret.h"] {
+            let err = read_sources(&root, &ctx, &facts("src/a.c", forged), &unit(&["src/a.c"]))
+                .err()
+                .unwrap_or_else(|| panic!("{forged} refused"));
+            assert!(
+                err.to_string().contains("refusing to send it"),
+                "{forged}: {err}"
+            );
+        }
+        let read = read_sources(
+            &root,
+            &ctx,
+            &facts("src/a.c", "src/cfg.h"),
+            &unit(&["src/a.c"]),
+        )
+        .unwrap();
+        let paths: Vec<&str> = read.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, ["src/a.c", "src/cfg.h"]);
+        // A folder target refuses a dot-folder inside `source_dir` too.
+        write(
+            &root,
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \".\"\n",
+        );
+        let folder = TargetContext::folder_form(root.clone(), TargetConfig::load(&root).unwrap());
+        let err = read_sources(
+            &root,
+            &folder,
+            &facts("src/a.c", ".env/secret.h"),
+            &unit(&["src/a.c"]),
+        )
+        .err()
+        .expect("refused");
+        assert!(err.to_string().contains("starts with a dot"), "{err}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

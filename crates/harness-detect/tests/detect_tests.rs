@@ -936,3 +936,94 @@ fn the_detectors_prune_the_ledger_when_source_dir_is_the_root() {
     assert!(findings.is_empty(), "{findings:#?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The readers review, finding 5: detect reads what the include rule
+/// reaches today, never `facts.jsonl`'s edges, which the target owns. A
+/// forged edge from a listed file to another project file, or into a
+/// dot-folder, reads nothing.
+#[test]
+fn a_forged_include_edge_reads_nothing() {
+    let root = temp_target("forged");
+    put(&root, "src/a.c", "#include \"a.h\"\nint a_global;\n");
+    put(
+        &root,
+        "src/a.h",
+        "#define A_MAX(a, b) ((a) > (b) ? (a) : (b))\n",
+    );
+    put(&root, "notes/secret.h", "int secret_global;\n");
+    put(&root, ".env/secret.h", "int env_global;\n");
+    let root = root.canonicalize().unwrap();
+    let ledger = harness_core::config::tool_dir(&root, "t-a");
+    put(
+        &ledger,
+        "harness.toml",
+        "schema_version = 2\n[target]\nname = \"a\"\nfiles = [{ path = \"src/a.c\" }]\n\
+         configuration = { name = \"make\", from = \"stated\", flags = [] }\n",
+    );
+    let config =
+        harness_core::config::TargetConfig::load_file(&ledger.join("harness.toml"), &root).unwrap();
+    let ctx = TargetContext {
+        root: root.clone(),
+        ledger,
+        tool: Some("t-a".into()),
+        config,
+    };
+    let facts = Facts {
+        frontend: "c-tree-sitter".into(),
+        files: vec![
+            record(
+                &root,
+                "src/a.c",
+                &["src/a.h", "notes/secret.h", ".env/secret.h"],
+            ),
+            record(&root, "src/a.h", &[]),
+            record(&root, "notes/secret.h", &[]),
+            record(&root, ".env/secret.h", &[]),
+        ],
+        ..Facts::default()
+    };
+    let findings = CTreeSitterSuite.detect(&ctx, &facts).expect("detect");
+    assert_eq!(files_of(&findings), ["src/a.c", "src/a.h"], "{findings:#?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The readers review, finding 4: a file that cannot be read is skipped
+/// with the scan's note ("cannot be read: …"), never a stop.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_file_is_skipped_with_a_note() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = temp_target("unreadable");
+    put(&root, "src/a.c", "int a_global;\n");
+    put(&root, "src/b.c", "int b_global;\n");
+    put(
+        &root,
+        "harness.toml",
+        "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"src\"\n",
+    );
+    let root = root.canonicalize().unwrap();
+    let b = root.join("src/b.c");
+    std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&b).is_ok() {
+        // Run as root: nothing is unreadable.
+        let _ = std::fs::remove_dir_all(&root);
+        return;
+    }
+    let ctx = TargetContext::folder_form(
+        root.clone(),
+        harness_core::config::TargetConfig::load(&root).unwrap(),
+    );
+    let facts = Facts {
+        frontend: "c-tree-sitter".into(),
+        files: vec![record(&root, "src/a.c", &[])],
+        ..Facts::default()
+    };
+    let result = CTreeSitterSuite.detect_reporting(&ctx, &facts);
+    std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let (findings, skipped) = result.expect("detect goes on");
+    assert_eq!(files_of(&findings), ["src/a.c"], "{findings:#?}");
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    assert_eq!(skipped[0].0, b);
+    assert!(skipped[0].1.starts_with("cannot be read"), "{skipped:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
