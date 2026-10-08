@@ -19,3 +19,6 @@ Rules that are never skipped, whatever the task:
   on Opus — Agent subagents with `model: "opus"`, every Workflow `agent()` call with
   `{model: 'opus'}` (the default inherits the main session's model), hand-off answers with
   `--model claude-opus-5-5`. Ask the person before giving any handed-off work Fable.
+- Effort: a session cannot change its own; it stops and asks the person, in one plain line, at the
+  switch points in docs/NEXT-SESSION.md (medium by default, high for design judgement). Handed-off
+  agents get their effort set on each call (medium for mechanical work, high for checkers/judges).
