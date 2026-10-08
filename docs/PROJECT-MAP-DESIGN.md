@@ -1,8 +1,8 @@
-# Real project layouts: the project map (design, revision 2)
+# Real project layouts: the project map (design, revision 2.2)
 
-Status: **revision 2.1 — 2026-10-08; the person's decisions taken (§7); revision 2 re-checked by three
-readers (docs/reviews/2026-10-08-project-map-rev2-check.md) and corrected in place; ready to build in
-§5's order.** Draft 0 (2026-10-02) was reviewed from four lenses with every
+Status: **revision 2.2 — 2026-10-08; the person's decisions taken (§7); revision 2 re-checked by three
+readers and corrected in place as 2.1, then read once more and corrected as 2.2
+(docs/reviews/2026-10-08-project-map-rev2-check.md holds both rounds); ready to build in §5's order.** Draft 0 (2026-10-02) was reviewed from four lenses with every
 finding verified (docs/reviews/2026-10-07-project-map-design-review.md, the triage at its end);
 revision 1 answered that review and was checked by five readers (docs/reviews/2026-10-08-project-
 map-rev1-check.md: four lenses against the code and the spike, one for the document as a whole);
@@ -98,21 +98,25 @@ and the recorded toolchain (§3.3).
    tries the including file's folder (liblzg's tools include `<lzg.h>` from `src/include/`). Headers'
    own includes are followed the same way to closure, and each header's status is recorded
    (`included by: [files]`, or "included by no file"; a header included by no file is still a
-   candidate). A file gets only the folders its includes need. When more than one project candidate
-   holds N, or a project candidate and the system both hold N (two `config.h`; a project `util.h` or
-   `unistd.h` beside the system's), the walk records an **ambiguous include** fact listing every
-   candidate and picks none. The compile in step 5 passes the folders the file needs with `-I`, and
-   `-I` folders are searched before the system's, so a project header in such a folder shadows the
-   system's: the header the compile actually used is read from its dependency list (step 5) and
-   recorded in the fact (`used: path | system`). The configuration settles it — an `-I`, `-iquote`
-   or `-isystem` for the folder meant, or `system_headers = ["unistd.h"]` in `config.toml` for a
-   name the project means the system's — and `accept` refuses while a file of the closure has an
-   ambiguous include the configuration does not settle (§3.6).
+   candidate). A file gets only the folders its includes need. A quoted include found in the including file's own folder is that file — the compiler takes it
+   first whatever the flags (zopfli's `"util.h"` beside the SDK's `util.h`; lz4's `programs/util.h`)
+   — and is never ambiguous. An include is **ambiguous** only when the map would add a folder to
+   reach it and either another project folder or the system also holds the name (two `config.h`; a
+   `<unistd.h>` with a project `compat/unistd.h`): the walk records an **ambiguous include** fact
+   listing every candidate and picks none. The compile in step 5 passes the folders the file needs
+   with `-I`, and `-I` folders are searched before the system's, so a project header in such a
+   folder shadows the system's: the header the compile actually used is read from its dependency
+   list (step 5) and recorded in the fact (`used: path | system`). The configuration settles it — an
+   `-I`, `-iquote` or `-isystem` for the folder meant, or `system_headers = ["unistd.h"]` in
+   `config.toml` for a name the project means the system's, whose folders are then passed with
+   `-idirafter` so the system's header is found first — and `accept` refuses while a file of the
+   closure has an ambiguous include the configuration does not settle (§3.6).
 4. **Build evidence.** `compile_commands.json` at the root or one level down is read, never executed:
    for each file it names, its `command` is split by POSIX shell word rules with no expansion (or
    its `arguments` taken as they are), a separate-form option (`-I`, `-D`, `-U`, `-include`,
-   `-iquote`, `-isystem`, `-o`, `-MF`, `-MT`, `-MQ`, `-x`, `-arch`, `-isysroot`) takes its next
-   argument and is checked joined, a refused option drops its value with it, relative paths resolve
+   `-imacros`, `-iquote`, `-isystem`, `-idirafter`, `-F`, `-L`, `-o`, `-MF`, `-MT`, `-MQ`, `-x`,
+   `-arch`, `-isysroot`, `-target`, `-Xclang`, `-Xpreprocessor`, `-mllvm`) takes its next argument
+   and is checked joined, a refused option drops its value with it, relative paths resolve
    against the entry's `directory`, and the flags that pass the grammar of §3.2 are kept with the
    rest counted as ignored; the entry's own compiler (`arguments[0]`, or the first word of `command`) and its
    `output` are never used — `cc` from the allowlist always compiles; an entry whose `directory`
@@ -125,8 +129,8 @@ and the recorded toolchain (§3.3).
    named by the file's index: `cc -c -w` with the judge's own base flags — today `-O2
    -ffp-contract=off` — then the flags of the configuration (§3.2; when `compile_commands.json` is
    the source, the file's own entry's flags), then the file's include folders, each as `-I<abs>`,
-   then `--` and the file's absolute path (`--` only in compiles: a link must take `-l` after its
-   objects); plus `-MD -MF <temp>/<index>.d`, so the compiler itself lists every file the compile
+   then the file's absolute path (every path starts with `/`, so no separator is needed and none is
+   passed); plus `-MD -MF <temp>/<index>.d`, so the compiler itself lists every file the compile
    read (macro-built includes and `#embed` included; every listed path is canonicalized before it is
    compared with the root; a listed file inside the root that the walk did not record — a `.inc`, a
    `.def` — is recorded as `included_other` and counted in `root_hash`; the `.d` file is deleted with
@@ -188,7 +192,8 @@ and the recorded toolchain (§3.3).
 8. **Shared files, after the choices.** A file in two or more closures is shared by those programs.
    Duplicates between programs that never meet in one closure (lz4's 14 helper names across
    `examples/` and `tests/`) are listed, not questions.
-9. **Libraries.** A `.c` that is no program, no pending alternative and in no closure is unreached.
+9. **Libraries.** A `.c` that is no program, no alternative (pending or not kept) and in no closure
+   is unreached.
    Two unreached files join when one needs a symbol the other alone defines; the groups so formed
    (a lone file is a group) are **libraries**, each listing the files outside it that it needs. That is
    the benchmark's shape (all 100 cases have zero programs and one library), and the shape of a
@@ -254,8 +259,7 @@ configuration per accepted tool**, and a map's closures carry the configuration 
     `-fvisibility=default`;
   - `-O0`–`-O3` are accepted and **recorded, never applied**: every compile keeps its own level (the
     map and the judge `-O2`; the boundary check and the driver's validation their own);
-  - every path is absolute when passed, and `--` separates the options from the source in a
-    compile; no value may start with `@` or `-` (clang reads an `@file` argument as a file of
+  - every path is absolute when passed; no value may start with `@` or `-` (clang reads an `@file` argument as a file of
     options, joined or not);
   - nothing else — never `-B`, `-fplugin`, `-fpass-plugin`, `-fuse-ld`, `-Xclang`, `-load`, `-o`, the
     `-M` family, `-Wl`, `-Wa`, `-wrapper`, `-x`, `-ftime-trace`, `-fprofile-instr-use`,
@@ -289,7 +293,7 @@ shown; it is fenced as untrusted when handed on: in a prompt with triage's deter
               included_by: [path], included_other: [path],
               defined_symbols: [{name, kind, weak?}], needed_symbols: [{name, weak?}],
               odd_names: n, withheld_names?: n}],
-  programs: [{id, index: "p1", path, kind: main | fuzz | driver,
+  programs: [{id, index?: "p1", path, kind: main | fuzz | driver,
               kind_guess: tool | test | example | benchmark, serves?: [path]}],
   programs_not_compiled: [path],
   closures: [{program: id, files: [path], flags?: [flag], flags_differ?: [{path, flags}],
@@ -313,7 +317,7 @@ shown; it is fenced as untrusted when handed on: in a prompt with triage's deter
 ```
 
 - `root_hash` is SCHEMAS' file-set hash (blake3 over the sorted paths and contents) of every walked
-  `.c`/`.h` plus `compile_commands.json` when present. `configuration.digest` is blake3 of the
+  `.c`/`.h`, every `included_other` file, plus `compile_commands.json` when present. `configuration.digest` is blake3 of the
   canonical JSON of `{name, from, flags (in order)}`. `toolchain` is `{cc: the first line of cc
   --version, target: cc -dumpmachine, cflags: the judge's base flags, system_include_dirs}`.
   `inputs_hash` is blake3 of the canonical JSON of `{configuration.digest, toolchain}` (a stale
@@ -323,8 +327,9 @@ shown; it is fenced as untrusted when handed on: in a prompt with triage's deter
   so two runs give byte-identical files (the golden test; SCHEMAS' canonical-serialization rule).
 - **Ids** are made by the harness, never by a model: a program's id is `t-<stem>` where the stem is
   its file name without `.c`, lowercased, with every character outside `[a-z0-9_-]` replaced by `-`;
-  when two collide (ignoring case) the whole relative folder joins in, its `/` turned into `-`
-  (`t-<folder>-<stem>`), cut to 64 characters, then `-2`, `-3`… until unique; a program at the path
+  when two collide (ignoring case) the whole relative folder joins in, its characters replaced the
+  same way and its `/` turned into `-` (`t-<folder>-<stem>`), the part after `t-` cut to 60
+  characters, then `-2`, `-3`… until unique; a program at the path
   of an accepted tool keeps that tool's id across maps. A library's id is `l-<stem of its first
   file in path order>`, made unique the same way; `--tool` is checked against
   `^[tl]-[a-z0-9_-]{1,64}$`. **Indexes** are assigned by `map` in path order and recorded in the
@@ -461,10 +466,12 @@ report, for each accepted tool: closure changed, configuration changed, new prog
 no longer links. The acceptance is the written `harness.toml`, reviewed with `git diff` as the plan
 is; no separate record. **Accepting an id again** (after the notice of §3.7) takes the project lock,
 then that tool's ledger lock, in that order; rewrites only its `harness.toml`; keeps its ledger (the
-plan, the units, the verdicts, which the moved program digest then marks `program`). A shared file accepted
+plan, the units, the verdicts — a verdict made under another program digest reads `program` beside
+it, as today). A shared file accepted
 with two tools becomes units in each tool's target (two ledgers, two Rust copies; §6). A library is
-accepted the same way: `accept l-<stem>` compiles its files (no link, no run name) and writes the
-target with no program.
+accepted the same way: `accept l-<stem>` compiles its files (no link) and writes the target with no
+program and its id as `name` (today `[target] name` is both the label and the program features
+run; a library runs nothing).
 
 ### 3.7 Where a mapped tool lives, and what the rest of the harness must learn
 
@@ -489,8 +496,7 @@ jobs split from the other three:
   harness-mcp (the id checked by the id rule of §3.3). `TargetContext` gains the ledger folder
   beside `root`; the `Ledger` API, `features_dir`, `perf_dir`, the component lists passed to
   `safe_ledger_dir`, the driver path `gen-driver` writes, perf's output paths and the cockpit's draft
-  paths derive from it (about 51 production `Ledger::new` sites and a dozen path helpers, by the
-  review's count). The plan's `driver` paths stay root-relative. The writer lock stays per ledger;
+  paths derive from it (about 51 production `Ledger::new` sites and a dozen path helpers). The plan's `driver` paths stay root-relative. The writer lock stays per ledger;
   `project map`, `ask` and `accept` take a project-level lock, `migration/map/.lock` (and `map` on a
   folder-form project takes that target's ledger lock too, since `map/` sits inside it); `accept`
   of an existing id then takes the tool's ledger lock (§3.6). `sync-runtime` writes one generated
@@ -511,26 +517,35 @@ decision kept outside the project**: the file `$RUHARNESS_ADOPTED` when that var
 atomically under a lock, records the canonical roots whose ledgers the harness created on this
 computer (any command that creates `migration/` — the first `scan`, `map`, `features init`) and the
 roots the person adopted, each paired with a random token the harness also writes to
-`<ledger>/.ruharness-adopted` (git-ignored), so a different tree unpacked at the same path is not
-trusted by its path alone. The check lives in `TargetContext::load`, so every command that opens a
-ledger — the CLI, the cockpit, harness-mcp — refuses a ledger whose root is not listed or whose token
-is missing or different, in one sentence: "this folder already holds migration results made
+`<project>/migration/.ruharness-adopted` (one per project root; a benchmark suite's at
+`<suite>/.ruharness-adopted`; git-ignored), so a different tree unpacked at the same path is not
+trusted by its path alone; adopting a root whose token file already exists records that token and
+writes none. The check is one harness-core function, called by `TargetContext::load` (so every
+command that opens a ledger — the CLI, the cockpit's read model, harness-mcp — goes through it) and
+by the three `project` commands, which run on a root with no `harness.toml`. It refuses a ledger
+whose root is not listed or whose token is missing or different, in one sentence: "this folder already holds migration results made
 elsewhere (N units, M verified): to trust them here, add `--adopt` once". The cockpit asks the same
 in a dialog; harness-mcp never adopts (an agent is not the person; the `sync-runtime` block tells
 agents never to pass `--adopt` unasked). A `migration/` is the harness's when it holds `facts.jsonl`,
-`plan.toml`, `map/` or `tools/` and nothing outside the ledger's fixed names; otherwise it is the
-project's own and `--adopt` is refused for it (§3.7's plain refusal). Adopting records the root and
+`plan.toml`, `map/` or `tools/` and nothing outside the ledger's fixed names (one table in SCHEMAS:
+`facts.jsonl`, `plan.toml`, `DECISIONS.md`, `observer/`, `units/`, `features/`, `perf/`, `map/`,
+`tools/`, `build/`, `.lock`, `.gitignore`, `.ruharness-adopted`; Finder's `.DS_Store` is ignored);
+otherwise it is the project's own and `--adopt` is refused for it (§3.7's plain refusal). Adopting records the root and
 its token, deletes only `migration/build/`, each unit crate's `target/`, each attempt's
 `candidate/target/` and every `.promote-*/` (links themselves, never their targets), and says that
 the verdicts are claims made elsewhere until `verify` runs them here; adopting a root already
 listed deletes nothing. On a new computer the person is asked once again; the ledger alone still
 holds everything needed to resume (briefing §2.2), so cold resume is unaffected — only the one-time
 trust question is per computer. A ledger made on this computer before this rule existed has no
-token and is asked once, like any other. The test suite points `$RUHARNESS_ADOPTED` at a temporary
-file that lists its fixtures and never writes the person's own; a benchmark suite whose
-`corpus.lock` verifies is adopted as one root by any `bench` command, and adoption covers every
-ledger under an adopted root (the 100 cases). SCHEMAS' writer table gains the adoption file
-(outside the target): any command given `--adopt`, the first command that creates a ledger, `bench`.
+token and is asked once, like any other. The test suite adopts through the same function, by a test helper
+that points `$RUHARNESS_ADOPTED` at a temporary file once per test process and adopts the fixture it
+opens (zopfli and the cases carry a committed `.ruharness-adopted`, listed in RuHarness's own
+`.gitignore` rules for scratch files only where it is not committed); the e2e tests pass `--adopt`
+on their first command, and so does the documented `bench check` line, once per worktree: `bench`
+commands take `--adopt` like every other command and adopt the suite root as one root (its cases lie
+under it; a `corpus.lock` that verifies says nothing about the cases' ledgers, and decision 8 wants
+the person's word). SCHEMAS' writer table gains the adoption file (outside the target): any command
+given `--adopt`, and the first command that creates a ledger.
 
 **Every cargo and rustc child runs outside the project.** cargo reads `.cargo/config.toml` from its
 working folder and every folder above it, and rustup reads `rust-toolchain.toml` the same way, so a
@@ -547,10 +562,11 @@ toolchain refused in one sentence and never installed (the sandbox's standing ex
 ancestor `rust-toolchain.toml` goes), and a `PATH` of absolute entries outside the project root only. Before any
 cargo run on a unit crate (verify, perf, features, the benchmark build) the crate folder may hold
 only `Cargo.toml`, an optional `Cargo.lock`, `src/*.rs` and the harness-made `target/` (a real
-folder); a `build.rs`, a `.cargo/`, or any other file refuses the unit by name; the manifest gains
-`build = false` and must equal the harness-owned manifest or, for a crate made before the harness
-owned manifests (zopfli's hand-written `u001-katajainen`), hold no `build`, `links`,
-`[dependencies]`, `[build-dependencies]`, `[patch]` or `[target.*]` key (today only `promote`'s
+folder); `.DS_Store` is ignored; a `build.rs`, a `.cargo/`, or any other file refuses the unit by
+name; the harness's own manifest gains `build = false`, and a manifest that is not the harness's
+(zopfli's hand-written `u001-katajainen`; the benchmark's crates, which carry an earlier harness
+manifest) passes only when it holds no `build`, `links`, `[dependencies]`, `[dev-dependencies]`,
+`[build-dependencies]`, `[patch]` or `[target.*]` key and its `[workspace]`, if any, is empty (today only `promote`'s
 closed copy list keeps a `build.rs` out, and cargo runs one it finds beside an exact manifest).
 
 **The configuration's flags and each file's include folders reach every compile.** A unit's C and
@@ -616,9 +632,10 @@ writes them today.
 **The symbol readers.** verify's driver-shape check parses `nm`'s lines today over an object built
 from the project's headers, where an `asm` label can forge a line; it moves to `objsyms` (its
 `undefined()` exists) with the identifier filter. The capability and ABI-symbol checks read the Rust
-staticlib — an `ar` archive, member by member, with constructor sections — which `objsyms` cannot
-read; they keep `nm` for now, over the model's Rust rather than the project's headers (§6), and move
-once `objsyms` reads archives. `nm` stays among the required tools until then.
+staticlib — an `ar` archive, member by member (perf's `archive.rs` already reads BSD and GNU archives
+into `objsyms`), with constructor sections, which `objsyms` does not report; they keep `nm` for now,
+over the model's Rust rather than the project's headers (§6), and move once `objsyms` reports section
+names. `nm` stays among the required tools until then.
 
 **The plan:** no change in rule. Units and dependencies come from the facts over the tool's file
 list; a call to a project file outside the list reads as an outside call (the capability check
@@ -651,12 +668,13 @@ real folders, with the rest of the project greyed as "not part of this tool".
 - `harness project ask --target DIR [--build | --programs IDS] [--provider P] [--model M]
   [--allow-guessed]` — §3.4; builds nothing and needs no sandbox; exits 1 with the `awaiting` event
   and the resume command; writes `config.proposed.toml` (with `--build`) or
-  `project-map.reply.json`. Refused without open questions (a guessed configuration counts as one
-  only for `--build`).
-- `harness project accept <id> --target DIR [--keep d1=d1.2]… [--run-name NAME]
-  [--allow-unsandboxed]` — §3.6; exit 1 when refused.
+  `project-map.reply.json`. Refused when there are no open questions; `--build` is never refused
+  for that reason.
+- `harness project accept <id> --target DIR [--keep d1=d1.2 | --keep d1=<path>]…
+  [--run-name NAME] [--allow-unsandboxed]` — §3.6; exit 1 when refused.
 - Every other subcommand, the cockpit and harness-mcp gain `--tool <id>` (§3.7); `--adopt` is
-  accepted by every command that opens a ledger.
+  accepted by every CLI command that opens a ledger and by the cockpit's dialog, never by harness-mcp
+  (§3.7). `map`'s exit-1 list also holds a root that holds the cargo or rustup home (§3.9).
 - Events (`--json`): `project-file`, `project-program {id, path, kind, kind_guess, files, outside,
   incomplete, held: [index]}`, `project-link {id, ok | missing: [sym] | doubled: [sym]}`; they carry
   paths and symbol names verbatim as the ledger's events do, never a model's names. SCHEMAS' writer
@@ -679,8 +697,9 @@ and now the ledger lives inside the download.
   holds credentials; `cc` needs neither), and allows writes only to the map's fresh temporary
   folder, with `TMPDIR` pointed at it. The flag grammar of §3.2 is what keeps the compiler from loading or running anything
   from the project (`@file`, `-B`, `-fplugin`, `-fuse-ld`, `-Xclang -load`, `-o`, `-MF`); it is checked
-  at every source of flags and again when `harness.toml` is loaded. Every child's working folder is
-  the harness's work folder (§3.7) and its `PATH` holds absolute entries outside the project only (a
+  at every source of flags and again when `harness.toml` is loaded. Every compiler, cargo and rustc child's working folder is the harness's work folder (§3.7;
+  a built program keeps the working folder its run asks for, as today) and its `PATH` holds
+  absolute entries outside the project only (a
   relative or empty entry would run the project's own `cc`). Where no sandbox exists (Linux today),
   `project map` and `accept` refuse as every building command does unless `--allow-unsandboxed` is
   passed (`ask` builds nothing and needs none). A root that is the home folder, holds it, or holds the cargo or
@@ -860,16 +879,18 @@ are not in the repository):
 - lz4's shape: a fuzz driver of many (kind `driver`, ten `fuzz` programs, never asked "which to
   keep", never offered); a stated configuration whose `-D` adds a file and its pthread needs; without
   it every closure marked guessed; the same project mapped with and without it gives different
-  closures, each recorded with its configuration; `ask` refused while guessed, `ask --build` allowed
-  only then; a `compile_commands.json` whose entries differ per file gives a flags-differ fact and
+  closures, each recorded with its configuration; `ask` refused while guessed (unless `--allow-guessed`), `ask --build` allowed with a
+  guessed or a stated configuration; a `compile_commands.json` whose entries differ per file gives a flags-differ fact and
   stays guessed; between-program duplicates listed and never asked; the tool's closure smaller than
   the build's link list, said.
 - A made-up project with three `main()`s, a duplicate and a test: the closures, the kind guesses
   labelled, the shared file named after the choice; a collision of a symbol nothing needed inside one
-  closure; a definer already in the closure a collision, not a question; a weak/strong pair not a
+  closure; a definer already in the closure: the need met, no question, the other definer not added; two
+  definers that both end up in the closure for other symbols: a collision; a weak/strong pair not a
   duplicate; a weak need recorded as a need on Mach-O; common symbols merged; the `objsyms`
-  extension on Mach-O and on ELF objects made here with `cc -target x86_64-unknown-linux-gnu -c`
-  (no Linux machine needed), the same names without the underscore; an `asm`-label symbol and a data
+  extension on Mach-O and on ELF objects — made on this Mac with `cc -target
+  x86_64-unknown-linux-gnu -c`, gated per host (gcc has no `-target`; Mach-O objects cannot be made
+  on Linux) — the same names without the underscore; an `asm`-label symbol and a data
   symbol named `main` (no program); an identifier-shaped file content included into a declaration
   never stored (counted, `outside_includes`).
 - A file that does not compile, a file over 8 MiB, an object over 64 MiB, an unreadable folder: the
@@ -947,7 +968,13 @@ Each step committed green with its tests from §4; then the review, fix passes c
 checks, DECISIONS. The map's code lives in harness-oracle (`objsyms`, the sandboxed `Runner` and the
 profiles are there); the commands in harness-cli; the cockpit's acts in harness-tui.
 
-(a) **The walk and symbols over one folder**, replacing nothing: the walk's four additions
+Steps run (a), (c), (b): (c) comes before (b) on purpose — the file-list target is the riskiest
+change and is tested on a hand-written target before any map writes one.
+
+(a) **The walk and symbols over one folder** (`source_dir` of an existing target, as `harness scan`
+reads it; `project map` prints and writes nothing beyond the per-file facts yet), replacing nothing
+(the walk's additions are new behaviour for every caller, so the cockpit's tree and the features
+mirror stop descending folder links — a link's files appear once, under the real path): the walk's four additions
 (§3.1 step 1) in harness-core; the `objsyms` extension (kinds, weakness, commons; ELF and Mach-O
 tests); the map sandbox profile (its own renderer) and the targetless runner (extracted from bench.rs
 into harness-oracle, one allowlist and timeout); the harness's work folder and the children's `PATH`
@@ -965,7 +992,8 @@ multi-source builds on perf's compile-then-link path, the driver's folders; the 
 read (both include forms; walk errors and non-UTF-8 as facts; `migration/` pruned; detect's walk
 replaced); the v2 digest; confinement in every reader; cargo and rustc from the work folder with the
 toolchain pinned and `build = false` in the harness manifest; the unit-crate file check before cargo;
-verify's driver-shape check moved to `objsyms`; `sync-runtime` per tool under the project lock.
+verify's driver-shape check moved to `objsyms`; `sync-runtime` per tool (under the project
+lock once (b) makes it).
 
 (b) **The whole-root walk and the map**: the configuration file and `--configuration`, the flag
 grammar for every source, `compile_commands.json` as a proposal (its two-argument forms), the
@@ -1083,7 +1111,18 @@ for the shared `AGENTS.md`; ids stable across maps with a last resort; libc `$` 
 escapes, the "nothing open" zopfli example, the perf sentence and the "decision 7" reference
 corrected; the residuals on disk use and the temporary folder written down.
 
-### From revision 1 to revision 2
+**Revision 2.2** (after one more reader): a quoted include found beside the including file is never
+ambiguous (the rule as written had blocked zopfli and lz4 at `accept`), and `system_headers` folders
+are passed with `-idirafter`; `ask --build` is never refused for lack of questions, said in one way
+everywhere; the §4 collision line follows step 7; the adoption token is one per project root, the
+check is one function the `project` commands call too, the tests adopt through it, and `bench` takes
+`--adopt` like every command (decision 8; a `corpus.lock` says nothing about the cases' ledgers);
+`.DS_Store` is ignored and the ledger's fixed names are one table; the manifest rule covers the
+benchmark's earlier manifests and `[dev-dependencies]`; `--` dropped (every path is absolute);
+`objsyms` reads archives through perf's reader already and lacks only section names; the synopses
+complete; a library's `name` is its id; `root_hash` counts `included_other`.
+
+### From revision 1 to revision 2 (statements marked "changed in 2.1/2.2" are superseded above)
 
 Revision 1 answered every confirmed finding of the four-lens review on paper; its check (five
 readers) found that several answers did not fit the code or each other. This revision:
@@ -1108,9 +1147,11 @@ readers) found that several answers did not fit the code or each other. This rev
   scope" gone. (Coherence, the model step, integration.)
 - **Fixes the include rule**: candidates matched by whole path parts, the system's search folders
   read once and recorded, the system winning over a project header unless the configuration says
-  otherwise, headers scanned too and given a status. (Facts.)
+  otherwise (changed in 2.1 and 2.2: the header actually used is recorded; a header beside the
+  including file is never ambiguous), headers scanned too and given a status. (Facts.)
 - **Says what `objsyms` must learn** (kinds, weakness, commons; external only), writes the weak and
-  common rules into the closure step, and the definer-already-in-the-closure rule. (Facts.)
+  common rules into the closure step, and the definer-already-in-the-closure rule (changed in 2.1: such
+  a need is met, not a collision). (Facts.)
 - **Treats a file that did not compile, was too large or unreadable** like a cut-short walk: the
   closure incomplete, its symbols never outside, a program that did not compile listed, `accept`
   refusing; libraries defined so pending alternatives and programs are never one. (Facts,
@@ -1121,7 +1162,8 @@ readers) found that several answers did not fit the code or each other. This rev
   platform-independent; the binding is said to guard staleness, not forgery. (The model step,
   coherence.)
 - **Makes the multi-source compiles per file** (perf's path), says the driver's folders, keeps
-  today's staleness rule and makes `root_hash` a notice, moves verify's `nm` uses to `objsyms`.
+  today's staleness rule and makes `root_hash` a notice, moves verify's `nm` uses to `objsyms`
+  (changed in 2.1: the driver-shape check only, until `objsyms` reports section names).
   (Integration.)
 - **Corrects the wrong examples and claims**: `lib/lz4file.c` is reached by an example and a test;
   the spike's script did less than steps 5–9; the cockpit shows "Features (none yet)", not

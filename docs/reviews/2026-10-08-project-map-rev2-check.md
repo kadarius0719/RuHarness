@@ -66,3 +66,30 @@ F. **Nested sets**: a chosen definer's recomputed closure can raise a new pendin
 **Low**: G zopfli is not "nothing open" (no `compile_commands.json`: its configuration is a guess until `config.toml` states its build); H program indexes half-defined (`p<n>` for every `main` program in path order, `programs[].index`; `--programs` takes indexes or ids; does it also send held sets?); I validator details (serde ignores field order — ask, cannot check; `RawVerdict` accepts unknown fields — `deny_unknown_fields` is new; "control characters" → any `unsafe_to_show` character (text.rs:9 covers bidi/invisible); `keep` must be one of the set's own indexes; a repeated item refused; in replay the way forward is "record a live run"); J the resume command "every flag given except `--adopt` and `--json`" and always naming the provider and model used (fallbacks: `external`, `claude-sonnet-5`, 8192 from `LlmSection::default()`); K a faithful `--build` reply will often be refused in full (lz4 `programs/Makefile:60` `-lrt`; `Makefile:226` `-std=c90`/`gnu90` not in the set; `-W` flags everywhere) — the prompt carries the grammar and says link and warning flags are not asked for; accept `c90`/`gnu90`; who sets `name`/`from` in `config.proposed.toml`; which files drop first over 128 KiB; L "perf refuses to compare rows across it" → "perf marks such rows out of date (the C changed)"; M `picks = [{definers: [path], keep: path, by: "person"}]`; N indexes shift after a re-map — `accept` prints "keeping <path> over <path> for <symbols>" and `--keep` also takes a path; O a second configuration can never be proposed once one exists (and `map` with two entries and no `--configuration` unsaid); P §9 claims "a non-linking program refused while the reply stands" with no rule in §3.
 
 Holds: the hand-off reuse buildable (`TraceAdapter`, `checked_complete` unchanged; the external profile's missing `context_tokens` covered by the harness constant; one module like triage.rs; batches copy `MAX_BATCH`; in external mode every batch's request written in one run, exit with the first awaiting path as triage does, triage.rs:639–697); the key and the fixture work (blake3 of {model, system, user, max_tokens}; no digests, no absolute paths → depends on the fixture, `--model`, max_tokens); the error path matches triage; the awaiting event and `resume_command` exist to copy (main.rs:1061–1069, 1273); the person's decisions kept (answer 2, answer 5, decision 12, Tier 0 first, kinds are labels, accept re-links, the `not-yet` sentence now true).
+
+---
+
+# The final read of revision 2.1 (one Opus reader, 2026-10-08) → revision 2.2
+
+Verdict: 2.1 answers nearly every re-check finding and the answers that touch code hold (the crate
+rule against zopfli's u001 and `prepare_target_dir`; the walk's description; `objsyms`; the model
+step's reuse of triage; the map profile probed with `sandbox-exec`). One new high: the ambiguous-
+include rule counted a quoted header found beside the including file as ambiguous, which would have
+blocked zopfli (`"util.h"` beside the SDK's `util.h`) and lz4 at `accept`. Five mediums: `ask --build`
+said two ways; a §4 test line against step 7's rule; the adoption mechanics (the `project` commands
+never load a `TargetContext`; one token per what; the tests' tokens; the test churn); the benchmark
+suite adopted without the person (a `corpus.lock` verifies the vendored files, not the cases'
+ledgers) against decision 8; `.DS_Store` tripping two checks and the ledger's fixed names listed
+nowhere. Lows: the manifest rule's gaps (`[dev-dependencies]`, `[workspace]`, the benchmark's
+earlier manifests), `objsyms` "cannot read archives" overstated (perf's `archive.rs` does), `--`
+unverified on gcc and ELF test objects on Linux, synopsis gaps, a library's `name`, step 9's
+"pending", `root_hash` and `included_other`, the id cut, other value-taking options in
+`compile_commands.json`, §9's superseded sentences unmarked, the title. All taken into revision 2.2
+in place (§9 of the design). Open for the implementer, by step: (a) what "over one folder" means
+(answered: `source_dir` as `scan` reads it; the walk's additions apply to every caller); which
+children move to the work folder (answered: compilers, cargo, rustc; built programs keep theirs);
+(b) the map-level configuration record and digest under `compile_commands.json` and the flags for a
+`.c` the file omits (the shared flags of its closure; a file in no closure: the entry's own); how
+"zlib is on the system" is decided (a test link of the guessed `-l`); a "flags differ" fact for a
+file in no closure (on the file); (d) `ask`'s exit code on a completed run (0), whether `--programs`
+also sends open sets (no), whether `--build` shares `traces/` (yes).
