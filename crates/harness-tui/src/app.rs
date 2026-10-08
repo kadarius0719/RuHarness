@@ -134,6 +134,38 @@ pub struct Config {
     /// for a record whose provider is listed. The target's `harness.toml`
     /// never chooses the provider (docs/COCKPIT-WRAPPER-DESIGN.md §4.3).
     pub providers: Vec<String>,
+    /// The mapped tool opened (`--tool`, or the project's only tool), passed
+    /// to every spawn as `--tool=` after `--target=`; `None` for a
+    /// folder-form target (docs/PROJECT-MAP-DESIGN.md §3.7).
+    pub tool: Option<String>,
+}
+
+impl Config {
+    /// The target's ledger: `migration/`, or the tool's
+    /// `migration/tools/<id>/`.
+    pub fn ledger(&self) -> Ledger {
+        match &self.tool {
+            None => Ledger::new(&self.target),
+            Some(id) => Ledger::at(
+                &self.target,
+                harness_core::config::tool_dir(&self.target, id),
+            ),
+        }
+    }
+
+    /// The target's `harness.toml`: the root's, or the tool's.
+    pub fn config_file(&self) -> PathBuf {
+        match &self.tool {
+            None => self.target.join(harness_core::config::CONFIG_FILE),
+            Some(id) => harness_core::config::tool_dir(&self.target, id)
+                .join(harness_core::config::CONFIG_FILE),
+        }
+    }
+
+    /// The target's parsed `harness.toml`.
+    pub fn target_config(&self) -> Result<harness_core::TargetConfig, harness_core::Error> {
+        harness_core::TargetConfig::load_file(&self.config_file(), &self.target)
+    }
 }
 
 /// The focused pane.
@@ -1178,7 +1210,7 @@ impl App {
     /// the walk): what a test does in place of the loader.
     pub fn reload(&mut self, pairs: bool) -> bool {
         self.load_request = None;
-        let result = crate::load::read(&self.config.target);
+        let result = crate::load::read_tool(&self.config.target, self.config.tool.as_deref());
         self.on_loaded(result, if pairs { LoadWhy::Key } else { LoadWhy::Tick })
     }
 
@@ -1186,7 +1218,8 @@ impl App {
     pub fn load_now(&mut self) -> bool {
         match self.load_request.take() {
             Some(why) => {
-                let result = crate::load::read(&self.config.target);
+                let result =
+                    crate::load::read_tool(&self.config.target, self.config.tool.as_deref());
                 self.on_loaded(result, why)
             }
             None => false,
@@ -1264,7 +1297,7 @@ impl App {
     /// Read the writer lock's live holder now (the menu opens with it, a
     /// dialog confirms with it).
     pub fn refresh_holder(&mut self) {
-        match harness_core::status::live_holder(&Ledger::new(&self.config.target)) {
+        match harness_core::status::live_holder(&self.config.ledger()) {
             Ok(holder) => {
                 self.holder = holder;
                 self.holder_error = None;
@@ -1879,7 +1912,16 @@ impl App {
             .as_ref()
             .ok_or("no `harness` binary found (PATH, or --harness <path>): read-only")?;
         let mut argv = vec![harness.clone().into_os_string(), os("--json")];
-        argv.extend_from_slice(rest);
+        let target = self.target_arg();
+        for arg in rest {
+            argv.push(arg.clone());
+            // The tool travels with the target, attached, right after it.
+            if *arg == target {
+                if let Some(tool) = &self.config.tool {
+                    argv.push(os(format!("--tool={tool}")));
+                }
+            }
+        }
         Ok(argv)
     }
 
@@ -2654,13 +2696,13 @@ impl App {
         // (review NEW-6).
         if matches!(p.act, Act::Verify | Act::Accept | Act::Retry | Act::Resume) || p.chat.is_some()
         {
-            crate::preflight::preflight(&target)
+            crate::preflight::preflight_tool(&target, self.config.tool.as_deref())
                 .map_err(|why| format!("the project cannot be read safely: {why}"))?;
         }
         if let Some(tag) = &p.chat {
             return self.chat_gate(p, tag);
         }
-        let ledger = Ledger::new(&target);
+        let ledger = self.config.ledger();
         let record = |unit: &str, attempt: &str| {
             let dir = harness_core::attempts::attempt_dir(&ledger, unit, attempt);
             AttemptRecord::load(&dir)
@@ -2769,7 +2811,7 @@ impl App {
     /// the harness knows — read fresh: a recorded attempt's candidate, or
     /// what the oracle last judged (§4.3).
     fn known_now(&self, id: &str, dir: &Path, now: &str) -> Result<(), String> {
-        let ledger = Ledger::new(&self.config.target);
+        let ledger = self.config.ledger();
         // The last read's digests pick the candidates; each is confirmed
         // fresh (review N2-6: never every record parsed on the UI thread).
         let recorded = self.snapshot.unit(id).is_some_and(|unit| {
@@ -4871,6 +4913,7 @@ pub(crate) mod tests {
         App::new(
             Config {
                 target,
+                tool: None,
                 harness: Some(PathBuf::from(HARNESS)),
                 allow_unsandboxed: false,
                 layout: LayoutMode::Auto,
@@ -4895,6 +4938,7 @@ pub(crate) mod tests {
         App::new(
             Config {
                 target: target.to_path_buf(),
+                tool: None,
                 harness: Some(PathBuf::from(HARNESS)),
                 allow_unsandboxed: false,
                 layout: LayoutMode::Auto,
@@ -5643,6 +5687,44 @@ pub(crate) mod tests {
         assert_eq!(
             app.run.as_ref().unwrap().exit.as_deref(),
             Some("exited without result (exit 3)")
+        );
+    }
+
+    /// A mapped tool (docs/PROJECT-MAP-DESIGN.md §3.7): every act carries
+    /// `--tool=<id>` right after `--target=`, and the cockpit's ledger paths
+    /// are the tool's.
+    #[test]
+    fn a_tools_acts_carry_its_id_after_the_target() {
+        let mut app = app("tool-argv");
+        let root = app.config.target.display().to_string();
+        app.config.tool = Some("t-lib".into());
+        let p = app.act_argv(Act::Scan, None, None, None).unwrap();
+        assert_eq!(
+            strs(&p.argv),
+            [
+                HARNESS,
+                "--json",
+                "scan",
+                &format!("--target={root}"),
+                "--tool=t-lib"
+            ]
+        );
+        let p = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
+        let argv = strs(&p.argv);
+        let at = argv
+            .iter()
+            .position(|a| a.starts_with("--target="))
+            .unwrap();
+        assert_eq!(argv[at + 1], "--tool=t-lib", "{argv:?}");
+        assert_eq!(
+            app.config.ledger().dir(),
+            app.config.target.join("migration/tools/t-lib")
+        );
+        assert_eq!(
+            app.config.config_file(),
+            app.config.target.join("migration/tools/t-lib/harness.toml")
         );
     }
 

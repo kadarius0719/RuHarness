@@ -776,12 +776,13 @@ pub fn perf_run(
     // The results first: a units folder that is a link or not a folder is
     // refused before anything is built, read or written (§3.9).
     let mut store = Store::load(perf_dir, workloads)?;
-    let ledger = Ledger::new(target.root.clone());
+    let ledger = Ledger::of(target);
     let host = HostDirs::from_env()?;
     let launcher = launcher::launcher(&host, &mut |w: &str| progress.message(w))?;
     let link_args = extra_link_args(target)?;
     let base = Base::resolve(target, "perf", &["cc", "cargo", "rustc"])?;
     let root = base.root.clone();
+    let build_ledger = Ledger::at(root.clone(), base.ledger.clone());
     let selected = select(target, &ledger, facts, plan)?;
     // Unknown ids: refused naming the known ones.
     for id in &req.units {
@@ -806,9 +807,9 @@ pub fn perf_run(
             )));
         }
     }
-    let scratch = build::perf_scratch(&root)?;
+    let scratch = build::perf_scratch(&build_ledger)?;
     let obj_dir = build::sub_folder(&scratch, "obj")?;
-    let logs = build::perf_logs(&root)?;
+    let logs = build::perf_logs(&build_ledger)?;
     let log_name = format!("perf-{}.log", harness_core::hash::random_hex(6));
     let log_path = logs.join(&log_name);
     let mut log = String::new();
@@ -1156,7 +1157,7 @@ pub fn perf_run(
         name: &name,
         timeout_secs: base.timeout.as_secs().max(1),
     };
-    let out_root = build::perf_out(&root)?;
+    let out_root = build::perf_out(&build_ledger)?;
     let mut summary = PerfSummary::default();
 
     let chosen: Vec<&Workload> = workloads
@@ -1548,7 +1549,7 @@ pub fn perf_selection(
 
 /// The selection itself, whatever the plan's size.
 fn selection(target: &TargetContext, plan: &Plan, facts: &Facts) -> Result<PerfSelection, Error> {
-    let ledger = Ledger::new(target.root.clone());
+    let ledger = Ledger::of(target);
     let mut out = PerfSelection::default();
     for s in select(target, &ledger, facts, plan)? {
         match s {
@@ -2907,7 +2908,8 @@ mod tests {
         harness_core::adopt::testing::adopt(&root);
         let target = harness_core::TargetContext::load(&root).expect("target");
         let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
-        let scratch = build::perf_scratch(&root).expect("scratch");
+        let scratch =
+            build::perf_scratch(&harness_core::ledger::Ledger::new(&root)).expect("scratch");
         let obj = build::sub_folder(&scratch, "obj").expect("obj");
         let c_files = program_c_files_in(&base, "perf").expect("files");
         let objects = build::compile_objects(&base, bench.runner(), &c_files, &obj)
@@ -4145,7 +4147,8 @@ mod tests {
         harness_core::adopt::testing::adopt(&root);
         let target = harness_core::TargetContext::load(&root).expect("target");
         let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
-        let scratch = build::perf_scratch(&root).expect("scratch");
+        let scratch =
+            build::perf_scratch(&harness_core::ledger::Ledger::new(&root)).expect("scratch");
         let obj = build::sub_folder(&scratch, "obj").expect("obj");
         let c_files = program_c_files_in(&base, "perf").expect("files");
         let objects = build::compile_objects(&base, bench.runner(), &c_files, &obj)

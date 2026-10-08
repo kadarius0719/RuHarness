@@ -409,7 +409,7 @@ fn repo() -> PathBuf {
 fn zopfli_maps_to_its_committed_target() {
     let root = repo().join("targets/zopfli");
     let config = harness_core::config::TargetConfig::load(&root).expect("harness.toml");
-    let map = map_folder(&root, Path::new(&config.target.source_dir)).expect("maps");
+    let map = map_folder(&root, Path::new(&config.target.source_dir().unwrap())).expect("maps");
     assert_eq!(map.folder, "src/zopfli");
     let c: Vec<&FileFacts> = map.files.iter().filter(|f| f.kind == FileKind::C).collect();
     assert_eq!(c.len(), 13);
@@ -424,7 +424,7 @@ fn zopfli_maps_to_its_committed_target() {
         assert!(!f.outside_includes, "{}", f.path);
     }
     for f in &map.files {
-        assert_eq!(f.include_dirs, config.target.include_dirs, "{}", f.path);
+        assert_eq!(f.include_dirs, config.target.include_dirs(), "{}", f.path);
         assert!(f.ambiguous.is_empty(), "{}: {:?}", f.path, f.ambiguous);
     }
     // `-lm`'s symbols are among the needs.
@@ -444,10 +444,10 @@ fn zopfli_maps_to_its_committed_target() {
 fn a_benchmark_case_maps_to_the_include_folder_bench_init_writes() {
     let root = repo().join("targets/tractor/cases/Hidden-Tests/B01_organic/ima_decode_lib");
     let config = harness_core::config::TargetConfig::load(&root).expect("harness.toml");
-    assert_eq!(config.target.include_dirs, ["test_case/include"]);
-    let map = map_folder(&root, Path::new(&config.target.source_dir)).expect("maps");
+    assert_eq!(config.target.include_dirs(), ["test_case/include"]);
+    let map = map_folder(&root, Path::new(&config.target.source_dir().unwrap())).expect("maps");
     let lib = file(&map, "test_case/src/lib.c");
-    assert_eq!(lib.include_dirs, config.target.include_dirs);
+    assert_eq!(lib.include_dirs, config.target.include_dirs());
     assert!(lib.ambiguous.is_empty());
     assert_eq!(lib.compiled, Some(Compiled::Ok), "{:?}", lib.message);
     assert!(defined(lib).contains(&"ima_decode"));

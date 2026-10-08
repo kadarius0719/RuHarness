@@ -63,6 +63,7 @@ fn app(root: &Path) -> App {
     App::new(
         Config {
             target: root.to_path_buf(),
+            tool: None,
             harness: Some(harness_bin()),
             allow_unsandboxed: true,
             layout: LayoutMode::Auto,

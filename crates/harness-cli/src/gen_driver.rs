@@ -12,14 +12,16 @@ use harness_core::driver::DriverValidation;
 use harness_core::ledger::Ledger;
 use harness_core::plan::{self as plan_mod, OracleValue};
 use harness_core::{hash, Facts, Plan, TargetContext};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::{lock_ledger, out, report, require_sandbox, safe_ledger_dir, EXIT_ORACLE_RED};
+use crate::{
+    lock_ledger, out, report, require_sandbox, safe_ledger_dir, TargetArg, EXIT_ORACLE_RED,
+};
 
 /// Arguments of `harness gen-driver`.
 pub struct GenDriverArgs {
     pub unit: String,
-    pub target: PathBuf,
+    pub target: TargetArg,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub promote: bool,
@@ -36,7 +38,7 @@ impl GenDriverArgs {
     pub fn resume_command(&self) -> String {
         let q = report::shell_quote;
         let mut cmd = format!("harness gen-driver {}", q(&self.unit));
-        cmd.push_str(&format!(" --target={}", q(&self.target.to_string_lossy())));
+        cmd.push_str(&self.target.resume_args());
         if let Some(p) = &self.provider {
             cmd.push_str(&format!(" --provider={}", q(p)));
         }
@@ -59,15 +61,24 @@ impl GenDriverArgs {
     }
 }
 
+/// A unit's generated driver, root-relative: `<ledger_rel>/units/<id>/driver.c`
+/// (the plan's `driver` paths stay root-relative).
+fn driver_rel(ledger_rel: &str, unit_id: &str) -> String {
+    format!("{ledger_rel}/units/{unit_id}/driver.c")
+}
+
 /// The default `[unit.oracle]` table for a unit (shared with `bench init`):
-/// the generated driver lives at `migration/units/<id>/driver.c`.
-pub fn default_oracle_entries(unit_id: &str, files: &[String]) -> Vec<(&'static str, OracleValue)> {
+/// the generated driver lives at `<ledger>/units/<id>/driver.c`, written
+/// root-relative (`ledger_rel` is `migration`, or a mapped tool's
+/// `migration/tools/<id>`).
+pub fn default_oracle_entries(
+    ledger_rel: &str,
+    unit_id: &str,
+    files: &[String],
+) -> Vec<(&'static str, OracleValue)> {
     vec![
         ("kind", OracleValue::Str("c-abi-differential".into())),
-        (
-            "driver",
-            OracleValue::Str(format!("migration/units/{unit_id}/driver.c")),
-        ),
+        ("driver", OracleValue::Str(driver_rel(ledger_rel, unit_id))),
         (
             "rust_crate",
             OracleValue::Str(format!("{}_rs", unit_id.replace('-', "_"))),
@@ -89,8 +100,8 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         attempt,
     } = args;
     require_sandbox(allow_unsandboxed, "harness gen-driver")?;
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load_folder("harness gen-driver")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("gen-driver {unit_id}"))?;
     let plan_doc = Plan::load(&ledger.plan_path())?;
     plan_doc
@@ -110,7 +121,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
     // Where a promoted driver will live; refuse up front (before any model
     // call) when promotion could only ever clobber a human-written driver.
     let dest = ledger.driver_path(&unit_id);
-    let dest_rel = format!("migration/units/{unit_id}/driver.c");
+    let dest_rel = driver_rel(&ctx.ledger_rel(), &unit_id);
     if let Some(configured) = unit.oracle_param_str("driver") {
         if configured != dest_rel {
             bail!(
@@ -140,10 +151,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
     let max_repairs = stage.and_then(|m| m.max_repairs).unwrap_or(3);
 
     // Driver-stage hand-offs/traces never mix with the migrate stage's.
-    let traces = safe_ledger_dir(
-        &ctx.root,
-        &["migration", "units", &unit_id, "driver-traces"],
-    )?;
+    let traces = safe_ledger_dir(&ctx, &["units", &unit_id, "driver-traces"])?;
     let resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
     let params = harness_llm::migrate::MigrateParams {
         requester: None,
@@ -241,7 +249,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         plan_mod::set_oracle_table_if_absent(
             &ledger.plan_path(),
             &unit_id,
-            &default_oracle_entries(&unit_id, &unit.files),
+            &default_oracle_entries(&ctx.ledger_rel(), &unit_id, &unit.files),
         )?;
     }
     out(format!(

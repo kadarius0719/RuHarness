@@ -195,7 +195,7 @@ pub fn compute_inputs(
     unit: &Unit,
     facts: &Facts,
 ) -> Result<VerdictInputs, Error> {
-    let ledger = Ledger::new(target.root.clone());
+    let ledger = Ledger::of(target);
     let closure = facts.include_closure(&unit.files);
     let unit_source = hash::file_set_hash_on_disk(&target.root, &closure)?;
     let driver = match unit.oracle_param_str("driver") {
@@ -222,6 +222,9 @@ pub fn compute_inputs(
 pub(crate) struct Base {
     /// Canonical target root (cwd of every child).
     pub root: PathBuf,
+    /// The target's ledger folder under the canonical root (`migration/`,
+    /// or a mapped tool's `migration/tools/<id>/`).
+    pub ledger: PathBuf,
     /// Canonical source dir (`[target] source_dir`), inside `root`.
     pub source_dir: PathBuf,
     /// Canonical `[target] include_dirs`, in order, each inside `source_dir`.
@@ -268,16 +271,17 @@ impl Base {
             .root
             .canonicalize()
             .map_err(|e| Error::io(&target.root, e))?;
+        let folder = target.config.target.folder("the oracle")?;
         let source_dir = inside(
             who,
             "[target] source_dir",
-            &root.join(&target.config.target.source_dir),
+            &root.join(&folder.source_dir),
             &root,
         )?;
         // Include dirs must stay inside source_dir after symlink resolution
         // too (R2: nothing outside source_dir reaches a compile or a prompt).
         let mut include_dirs = Vec::new();
-        for dir in &target.config.target.include_dirs {
+        for dir in &folder.include_dirs {
             include_dirs.push(inside(
                 who,
                 "[target] include_dirs entry",
@@ -286,6 +290,7 @@ impl Base {
             )?);
         }
         Ok(Base {
+            ledger: Ledger::of_under(target, root.clone()).dir(),
             root,
             source_dir,
             include_dirs,
@@ -305,7 +310,7 @@ impl Base {
     /// Build dirs are gitignored scratch, but their location is still
     /// target-controlled (a committed symlink): resolve, then check.
     pub(crate) fn build_dirs(&self, unit_id: &str) -> Result<(PathBuf, PathBuf), Error> {
-        let build_root_raw = Ledger::new(self.root.clone()).build_dir();
+        let build_root_raw = Ledger::at(self.root.clone(), self.ledger.clone()).build_dir();
         std::fs::create_dir_all(&build_root_raw).map_err(|e| Error::io(&build_root_raw, e))?;
         let build_root = inside(unit_id, "ledger build dir", &build_root_raw, &self.root)?;
         let build_raw = build_root.join(unit_id);
@@ -354,7 +359,7 @@ impl Prepared {
         let rust_crate = required_param(unit, "rust_crate")?;
 
         let root = base.root.clone();
-        let ledger = Ledger::new(root.clone());
+        let ledger = Ledger::of_under(target, root.clone());
         let inside_root = |what: &str, path: &Path| inside(&unit.id, what, path, &root);
 
         let driver = inside_root("driver", &root.join(driver_rel))?;
@@ -1343,7 +1348,7 @@ fn is_allowed_whole_program_flag(flag: &str) -> bool {
 
 /// Load the ledger's facts (written by `harness scan`).
 pub(crate) fn load_facts(target: &TargetContext) -> Result<Facts, Error> {
-    let facts_path = Ledger::new(target.root.clone()).facts_path();
+    let facts_path = Ledger::of(target).facts_path();
     if !facts_path.exists() {
         return Err(Error::Invariant(format!(
             "facts file missing at {}; run `harness scan` first",
@@ -1363,9 +1368,22 @@ pub(crate) fn unit_header_names(target: &TargetContext, facts: &Facts, unit: &Un
             .collect::<Vec<_>>()
             .join("/")
     };
-    let search: Vec<String> = std::iter::once(&target.config.target.source_dir)
-        .chain(target.config.target.include_dirs.iter())
-        .map(|d| clean(d))
+    // A file-list target has no `source_dir` (its commands refuse it before
+    // a driver is written).
+    let search: Vec<String> = target
+        .config
+        .target
+        .source_dir()
+        .into_iter()
+        .chain(
+            target
+                .config
+                .target
+                .include_dirs()
+                .iter()
+                .map(String::as_str),
+        )
+        .map(clean)
         .collect();
     let mut names = std::collections::BTreeSet::new();
     for header in facts
@@ -1787,6 +1805,8 @@ mod tests {
         ))
         .expect("config snippet parses");
         TargetContext {
+            ledger: (PathBuf::from("/nonexistent/ruharness-target")).join("migration"),
+            tool: None,
             root: PathBuf::from("/nonexistent/ruharness-target"),
             config,
         }
@@ -1878,8 +1898,11 @@ mod tests {
     #[test]
     fn unit_header_names_cover_paths_basenames_and_search_relative_forms() {
         let mut target = context_with_oracle("");
-        target.config.target.source_dir = "./src/".into();
-        target.config.target.include_dirs = vec!["src/include".into()];
+        target.config.target.form =
+            harness_core::config::Form::Folder(harness_core::config::FolderForm {
+                source_dir: "./src/".into(),
+                include_dirs: vec!["src/include".into()],
+            });
         let facts = Facts {
             frontend: "t".into(),
             files: vec![
@@ -2270,7 +2293,7 @@ mod tests {
     fn smoke_compute_inputs_zopfli() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../targets/zopfli");
         let target = TargetContext::load(&root).expect("harness.toml loads");
-        let facts_path = Ledger::new(target.root.clone()).facts_path();
+        let facts_path = Ledger::of(&target).facts_path();
         let facts = if facts_path.exists() {
             Facts::load(&facts_path).expect("facts.jsonl loads")
         } else {

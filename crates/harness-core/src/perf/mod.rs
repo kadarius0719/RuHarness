@@ -4,7 +4,7 @@
 //! read. Information only: nothing here gates `verify`, `migrate`,
 //! `promote` or `bench check`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub mod currency;
 pub mod estimate;
@@ -30,9 +30,9 @@ pub const PERF_RECIPE: &str = "perf-recipe-2";
 /// Directory of perf's files, inside the ledger dir.
 pub const PERF_DIR: &str = "perf";
 
-/// `migration/perf/` under `root`.
-pub fn perf_dir(root: &Path) -> PathBuf {
-    root.join(crate::ledger::MIGRATION_DIR).join(PERF_DIR)
+/// `perf/` in the ledger (`migration/perf/` for a folder-form target).
+pub fn perf_dir(ledger: &crate::ledger::Ledger) -> PathBuf {
+    ledger.dir().join(PERF_DIR)
 }
 
 /// The kept outputs of behaves-differently rows, in `migration/build/`.
@@ -43,13 +43,11 @@ pub const KEPT_UNITS: &str = "units";
 /// [`PERF_OUT_DIR`].
 pub const KEPT_PROGRAM: &str = "program";
 
-/// Where a side's kept outputs are under `root`:
-/// `migration/build/.perf-out/units/<id>/`, or `…/program/` without a
-/// unit. Each is `<workload>.{c,other}.{stdout,stderr}`.
-pub fn kept_outputs_dir(root: &Path, unit: Option<&str>) -> PathBuf {
-    let out = crate::ledger::Ledger::new(root)
-        .build_dir()
-        .join(PERF_OUT_DIR);
+/// Where a side's kept outputs are in the ledger:
+/// `build/.perf-out/units/<id>/`, or `…/program/` without a unit. Each is
+/// `<workload>.{c,other}.{stdout,stderr}`.
+pub fn kept_outputs_dir(ledger: &crate::ledger::Ledger, unit: Option<&str>) -> PathBuf {
+    let out = ledger.build_dir().join(PERF_OUT_DIR);
     match unit {
         Some(id) => out.join(KEPT_UNITS).join(id),
         None => out.join(KEPT_PROGRAM),

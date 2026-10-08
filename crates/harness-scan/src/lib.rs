@@ -131,17 +131,16 @@ impl CFrontend {
     /// `source_dir` is scanned once, under its path with no link in it; a
     /// dot-folder is not scanned (harness-core's walk).
     pub fn scan_reporting(&self, target: &TargetContext) -> Result<(Facts, Vec<PathBuf>), Error> {
-        let src_dir = target.root.join(&target.config.target.source_dir);
+        let folder = target.config.target.folder("the scanner")?;
+        let src_dir = target.root.join(&folder.source_dir);
         let walked = walk::confined(&src_dir, &C_EXTENSIONS, walk::Limits::default());
         if let Some((path, why)) = walked.first_unreadable() {
             return Err(Error::io(path, std::io::Error::other(why.to_string())));
         }
         let skipped: Vec<PathBuf> = walked.not_regular().map(Path::to_path_buf).collect();
         let abs_files = walked.files;
-        let source_rel = lexical_segments(&target.config.target.source_dir).unwrap_or_default();
-        let include_dirs: Vec<Vec<String>> = target
-            .config
-            .target
+        let source_rel = lexical_segments(&folder.source_dir).unwrap_or_default();
+        let include_dirs: Vec<Vec<String>> = folder
             .include_dirs
             .iter()
             .filter_map(|d| lexical_segments(d))

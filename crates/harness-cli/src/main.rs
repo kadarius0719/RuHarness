@@ -50,6 +50,53 @@ struct Cli {
     cmd: Cmd,
 }
 
+/// `--target` and `--tool`, on every subcommand that opens a target
+/// (docs/PROJECT-MAP-DESIGN.md §3.7 "Finding a target").
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TargetArg {
+    /// Target repository root: a folder with a harness.toml, or a project
+    /// whose mapped tools live under migration/tools/
+    #[arg(long, default_value = ".")]
+    pub(crate) target: PathBuf,
+    /// The mapped tool to open (its id, as `harness project map` prints it):
+    /// loads migration/tools/<ID>/harness.toml, never the root's. Without
+    /// it: the root's harness.toml, else the project's only tool
+    #[arg(long, value_name = "ID", value_parser = parse_tool)]
+    pub(crate) tool: Option<String>,
+}
+
+/// `--tool`'s value: a tool id, else the one-sentence refusal (exit 2).
+fn parse_tool(id: &str) -> std::result::Result<String, String> {
+    harness_core::config::check_tool_id(id).map(|()| id.to_string())
+}
+
+impl TargetArg {
+    /// Load the target by the lookup order.
+    pub(crate) fn load(&self) -> Result<TargetContext> {
+        Ok(TargetContext::open(&self.target, self.tool.as_deref())?)
+    }
+
+    /// [`TargetArg::load`] for a command that reads the target's sources:
+    /// a file-list target is refused in one sentence until it reads that
+    /// form.
+    pub(crate) fn load_folder(&self, command: &str) -> Result<TargetContext> {
+        let ctx = self.load()?;
+        ctx.config.target.folder(command)?;
+        Ok(ctx)
+    }
+
+    /// The flags that name this target again in a resume command line,
+    /// each value shell-quoted and attached.
+    pub(crate) fn resume_args(&self) -> String {
+        let q = report::shell_quote;
+        let mut args = format!(" --target={}", q(&self.target.to_string_lossy()));
+        if let Some(tool) = &self.tool {
+            args.push_str(&format!(" --tool={}", q(tool)));
+        }
+        args
+    }
+}
+
 impl Cmd {
     /// The folder whose ledger(s) this command opens, and how it is adopted
     /// (docs/PROJECT-MAP-DESIGN.md §3.7): a target is one project; a bench
@@ -70,11 +117,11 @@ impl Cmd {
             | Cmd::Override { target, .. }
             | Cmd::Promote { target, .. }
             | Cmd::GenDriver { target, .. }
-            | Cmd::SyncRuntime { target, .. } => project(target),
+            | Cmd::SyncRuntime { target, .. } => project(&target.target),
             Cmd::Features { cmd } => match cmd {
                 FeaturesCmd::Init { target }
                 | FeaturesCmd::Save { target, .. }
-                | FeaturesCmd::Map { target, .. } => project(target),
+                | FeaturesCmd::Map { target, .. } => project(&target.target),
             },
             Cmd::Project {
                 cmd: ProjectCmd::Map { target, .. },
@@ -83,7 +130,7 @@ impl Cmd {
                 PerfCmd::Run { target, .. }
                 | PerfCmd::Init { target }
                 | PerfCmd::Save { target, .. }
-                | PerfCmd::Show { target, .. } => project(target),
+                | PerfCmd::Show { target, .. } => project(&target.target),
             },
             Cmd::Bench { cmd } => bench::suite_root(cmd).map(|s| (s, adopt::Scope::Suite)),
         }
@@ -125,23 +172,20 @@ fn open_ledger(root: &Path, scope: adopt::Scope, adopt_it: bool) -> Result<bool>
 enum Cmd {
     /// Scan the target and regenerate migration/facts.jsonl
     Scan {
-        /// Target repository root (contains harness.toml)
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
     /// Reconcile migration/plan.toml against the facts
     Plan {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
     /// Run a unit's oracle and record the verdict
     Verify {
         /// Unit id from plan.toml
         unit: String,
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
         /// Run target/model-derived code even though no sandbox is available
         #[arg(long)]
         allow_unsandboxed: bool,
@@ -171,15 +215,13 @@ enum Cmd {
     },
     /// Run the hazard detectors and regenerate observer findings
     Detect {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
     /// Triage findings (LLM pass) and render observations.md
     Observe {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
     /// Record a human review of a triaged finding
     Review {
@@ -194,17 +236,15 @@ enum Cmd {
         /// Optional note
         #[arg(long, default_value = "")]
         note: String,
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
     /// Translate a unit through the configured LLM provider and verify it
     Migrate {
         /// Unit id from plan.toml
         unit: String,
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
         /// Provider profile override (built-in or user-level profile name)
         #[arg(long)]
         provider: Option<String>,
@@ -264,9 +304,8 @@ enum Cmd {
         /// A short note recorded with the attempt
         #[arg(long)]
         note: Option<String>,
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
         /// Run target/model-derived code even though no sandbox is available
         #[arg(long)]
         allow_unsandboxed: bool,
@@ -278,9 +317,8 @@ enum Cmd {
         unit: String,
         /// The attempt id (`a-…`, or `a-….r2` for a later sample)
         attempt: String,
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
         /// Replace the crate of an already verified unit, or re-promote an
         /// attempt that is already promoted
         #[arg(long)]
@@ -299,9 +337,8 @@ enum Cmd {
     GenDriver {
         /// Unit id from plan.toml
         unit: String,
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
         /// Provider profile override (built-in or user-level profile name)
         #[arg(long)]
         provider: Option<String>,
@@ -323,9 +360,8 @@ enum Cmd {
     },
     /// Refresh the generated runtime view (AGENTS.md managed block)
     SyncRuntime {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
         /// Exit 1 if regeneration would change the block (CI mode)
         #[arg(long)]
         check: bool,
@@ -336,9 +372,8 @@ enum Cmd {
 enum FeaturesCmd {
     /// Write a starter migration/features/features.toml (never over one)
     Init {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
     /// Save a new features.toml read from stdin, when it validates and the
     /// file is still the one --expect names
@@ -349,16 +384,14 @@ enum FeaturesCmd {
         /// The new file's length in bytes (a read cut short is refused)
         #[arg(long)]
         bytes: u64,
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
     /// Run every scenario on a probed copy of the C and record which
     /// functions each ran (migration/features/map.json)
     Map {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
         /// Run target code even though no sandbox is available
         #[arg(long)]
         allow_unsandboxed: bool,
@@ -385,9 +418,8 @@ enum PerfCmd {
     /// Measure: the C alone, the program as it stands and every measurable
     /// unit on each workload (writes migration/perf/)
     Run {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
         /// Only this unit (repeatable)
         #[arg(long = "unit")]
         units: Vec<String>,
@@ -407,9 +439,8 @@ enum PerfCmd {
     },
     /// Write a starter migration/perf/workloads.toml (never over one)
     Init {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
     /// Save a new workloads.toml read from stdin, when it validates and the
     /// file is still the one --expect names
@@ -420,15 +451,13 @@ enum PerfCmd {
         /// The new file's length in bytes (a read cut short is refused)
         #[arg(long)]
         bytes: u64,
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
     /// Show every stored row's words and whether it is current
     Show {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
         /// Skip checking the computer and the compilers
         #[arg(long)]
         no_check: bool,
@@ -444,9 +473,8 @@ enum PerfCmd {
 enum StateCmd {
     /// Staleness report: facts vs tree, plan vs tree, verdicts vs tree
     Status {
-        /// Target repository root
-        #[arg(long, default_value = ".")]
-        target: PathBuf,
+        #[command(flatten)]
+        target: TargetArg,
     },
 }
 
@@ -714,9 +742,9 @@ fn run(cmd: Cmd) -> Result<u8> {
     }
 }
 
-fn cmd_scan(target: PathBuf) -> Result<u8> {
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+fn cmd_scan(target: TargetArg) -> Result<u8> {
+    let ctx = target.load_folder("harness scan")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "scan")?;
     let facts = scan_target(&ctx)?;
     out(format!(
@@ -731,7 +759,7 @@ fn cmd_scan(target: PathBuf) -> Result<u8> {
 
 /// Scan `ctx` and write `facts.jsonl` (the body of `harness scan`).
 pub(crate) fn scan_target(ctx: &TargetContext) -> Result<Facts> {
-    let ledger = Ledger::new(&ctx.root);
+    let ledger = Ledger::of(ctx);
     let (facts, skipped) = harness_scan::CFrontend.scan_reporting(ctx)?;
     for path in &skipped {
         // Never read: a FIFO or a device would block the scan forever.
@@ -766,9 +794,9 @@ pub(crate) fn stale_fact_files(ctx: &TargetContext, facts: &Facts) -> usize {
         .count()
 }
 
-fn cmd_plan(target: PathBuf) -> Result<u8> {
-    let ctx = TargetContext::load(&target)?;
-    let _lock = lock_ledger(&Ledger::new(&ctx.root), "plan")?;
+fn cmd_plan(target: TargetArg) -> Result<u8> {
+    let ctx = target.load_folder("harness plan")?;
+    let _lock = lock_ledger(&Ledger::of(&ctx), "plan")?;
     let (changes, order_line, units) = plan_target(&ctx)?;
     if changes.is_empty() {
         out(format!("plan: no changes ({units} units)"));
@@ -784,7 +812,7 @@ fn cmd_plan(target: PathBuf) -> Result<u8> {
 /// Reconcile and write `plan.toml` (the body of `harness plan`): returns the
 /// change lines, the execution-order line and the unit count.
 pub(crate) fn plan_target(ctx: &TargetContext) -> Result<(Vec<String>, String, usize)> {
-    let ledger = Ledger::new(&ctx.root);
+    let ledger = Ledger::of(ctx);
     let facts =
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
     // Planning from stale facts would write stale hashes and strand verify
@@ -839,9 +867,9 @@ pub(crate) fn require_sandbox(allow_unsandboxed: bool, what: &str) -> Result<()>
 
 /// [`safe_ledger_dir`] for a run that must create nothing: every component
 /// must already be a real directory (never a symlink).
-fn existing_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<PathBuf> {
-    let mut cur = root.to_path_buf();
-    for comp in components {
+fn existing_ledger_dir(ctx: &TargetContext, components: &[&str]) -> Result<PathBuf> {
+    let mut cur = ctx.root.clone();
+    for comp in ledger_components(ctx, components) {
         cur = cur.join(comp);
         match std::fs::symlink_metadata(&cur) {
             Ok(meta) if meta.file_type().is_dir() => {}
@@ -851,13 +879,22 @@ fn existing_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<Pa
     Ok(cur)
 }
 
-/// A ledger directory that is guaranteed not to be (or pass through) a
-/// symlink: created level by level under the canonical target root, refusing
-/// any component that is not a real directory. Target-owned trees are hostile
-/// — a committed `traces -> /elsewhere` must not redirect harness writes.
-pub(crate) fn safe_ledger_dir(root: &std::path::Path, components: &[&str]) -> Result<PathBuf> {
-    let mut cur = root.to_path_buf();
-    for comp in components {
+/// The parts from the target root down to `components` inside its ledger:
+/// the ledger's own (`migration`, or `migration/tools/<id>`), then them.
+fn ledger_components(ctx: &TargetContext, components: &[&str]) -> Vec<String> {
+    let mut parts = ctx.ledger_parts();
+    parts.extend(components.iter().map(|c| c.to_string()));
+    parts
+}
+
+/// A directory inside the target's ledger (`components` below the ledger
+/// folder) that is guaranteed not to be (or pass through) a symlink: created
+/// level by level under the canonical target root, refusing any component
+/// that is not a real directory. Target-owned trees are hostile — a
+/// committed `traces -> /elsewhere` must not redirect harness writes.
+pub(crate) fn safe_ledger_dir(ctx: &TargetContext, components: &[&str]) -> Result<PathBuf> {
+    let mut cur = ctx.root.clone();
+    for comp in ledger_components(ctx, components) {
         cur = cur.join(comp);
         match std::fs::symlink_metadata(&cur) {
             Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
@@ -876,10 +913,10 @@ pub(crate) fn safe_ledger_dir(root: &std::path::Path, components: &[&str]) -> Re
     Ok(cur)
 }
 
-fn cmd_verify(unit_id: String, target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
+fn cmd_verify(unit_id: String, target: TargetArg, allow_unsandboxed: bool) -> Result<u8> {
     require_sandbox(allow_unsandboxed, "harness verify")?;
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load_folder("harness verify")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("verify {unit_id}"))?;
     let plan_path = ledger.plan_path();
     let plan_doc = Plan::load(&plan_path)?;
@@ -997,9 +1034,9 @@ pub(crate) fn announce_skips(verdict: &harness_core::Verdict) {
     }
 }
 
-fn cmd_status(target: PathBuf) -> Result<u8> {
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+fn cmd_status(target: TargetArg) -> Result<u8> {
+    let ctx = target.load()?;
+    let ledger = Ledger::of(&ctx);
 
     let facts = match Facts::load(&ledger.facts_path()) {
         Ok(f) => f,
@@ -1083,11 +1120,11 @@ fn facts_records_hash(facts: &Facts) -> String {
     hash::file_set_hash(&pairs)
 }
 
-fn cmd_detect(target: PathBuf) -> Result<u8> {
+fn cmd_detect(target: TargetArg) -> Result<u8> {
     use harness_core::observer::{FindingsFile, ObserverPaths};
     use harness_core::traits::Detector;
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load_folder("harness detect")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "detect")?;
     let facts =
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
@@ -1164,22 +1201,19 @@ fn observer_inputs(ctx: &TargetContext, ledger: &Ledger) -> Result<ObserverInput
 }
 
 /// `observe`'s `awaiting` hint: the target attached (a relative target
-/// named `-x` must not become a flag).
-fn observe_resume(target: &Path) -> String {
-    format!(
-        "harness observe --target={}",
-        report::shell_quote(&target.to_string_lossy())
-    )
+/// named `-x` must not become a flag), and its tool.
+fn observe_resume(target: &TargetArg) -> String {
+    format!("harness observe{}", target.resume_args())
 }
 
-fn cmd_observe(target: PathBuf) -> Result<u8> {
+fn cmd_observe(target: TargetArg) -> Result<u8> {
     use harness_core::observer::{self, ObserverPaths};
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load_folder("harness observe")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "observe")?;
     let (facts, plan_doc, findings, annotations, _, reviews) = observer_inputs(&ctx, &ledger)?;
 
-    let traces = safe_ledger_dir(&ctx.root, &["migration", "observer", "traces"])?;
+    let traces = safe_ledger_dir(&ctx, &["observer", "traces"])?;
     let llm = &ctx.config.llm;
     let resolved = harness_llm::providers::resolve(&llm.provider, &traces)?;
     let outcome = match harness_llm::run_triage(
@@ -1255,14 +1289,14 @@ fn cmd_review(
     uphold_dismiss: bool,
     reinstate: bool,
     note: String,
-    target: PathBuf,
+    target: TargetArg,
 ) -> Result<u8> {
     use harness_core::observer::{self, ObserverPaths};
     if uphold_dismiss == reinstate {
         bail!("pass exactly one of --uphold-dismiss or --reinstate");
     }
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load()?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("review {finding}"))?;
     let findings = harness_core::observer::FindingsFile::load(&ObserverPaths::findings(&ledger))
         .context("loading findings (run `harness detect` first)")?;
@@ -1291,10 +1325,10 @@ fn cmd_review(
     Ok(0)
 }
 
-fn cmd_sync_runtime(target: PathBuf, check: bool) -> Result<u8> {
+fn cmd_sync_runtime(target: TargetArg, check: bool) -> Result<u8> {
     use harness_core::observer::{self, ObserverPaths};
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load()?;
+    let ledger = Ledger::of(&ctx);
     let _lock = if check {
         None
     } else {
@@ -1319,20 +1353,35 @@ fn cmd_sync_runtime(target: PathBuf, check: bool) -> Result<u8> {
     all_findings.extend(annotations);
     let risk = harness_core::risk::score_units(&facts, &plan_doc, &all_findings, &triage, &reviews);
 
-    let body =
-        harness_core::runtime_view::render_block_body(&ctx.config.target.name, &plan_doc, &risk);
-    let block = harness_core::runtime_view::wrap_block(&body);
+    // One block per target: a folder-form target's, and each mapped tool's
+    // marked with its id; the other tools' blocks are kept as they are.
+    // (Two tools synced at the same moment could race on the shared
+    // AGENTS.md: the project lock of step (b) will cover it.)
+    let ledger_rel = ctx.ledger_rel();
+    let at = harness_core::runtime_view::BlockTarget {
+        tool: ctx.tool.as_deref(),
+        ledger: &ledger_rel,
+    };
+    let body = harness_core::runtime_view::render_block_body(
+        &ctx.config.target.name,
+        at,
+        &plan_doc,
+        &risk,
+    );
+    let block = harness_core::runtime_view::wrap_block(&body, at);
     let agents_path = ctx.root.join("AGENTS.md");
     let existing = std::fs::read_to_string(&agents_path).ok();
-    let updated = harness_core::runtime_view::apply(existing.as_deref(), &block)?;
+    let updated = harness_core::runtime_view::apply(existing.as_deref(), at, &block)?;
     if check {
         if existing.as_deref() == Some(updated.as_str()) {
             out("sync-runtime: up to date".into());
             return Ok(0);
         }
-        eprintln!(
-            "sync-runtime: AGENTS.md managed block is out of date; run `harness sync-runtime`"
-        );
+        let run = match &ctx.tool {
+            None => "harness sync-runtime".to_string(),
+            Some(id) => format!("harness sync-runtime --tool {id}"),
+        };
+        eprintln!("sync-runtime: AGENTS.md managed block is out of date; run `{run}`");
         return Ok(1);
     }
     harness_core::ledger::write_atomic(&agents_path, updated.as_bytes())?;
@@ -1385,7 +1434,7 @@ pub(crate) fn confirmed_hazards(
 /// Arguments of `harness migrate`.
 struct MigrateArgs {
     unit: String,
-    target: PathBuf,
+    target: TargetArg,
     provider: Option<String>,
     model: Option<String>,
     promote: bool,
@@ -1413,7 +1462,7 @@ impl MigrateArgs {
     fn resume_command(&self) -> String {
         let q = report::shell_quote;
         let mut cmd = format!("harness migrate {}", q(&self.unit));
-        cmd.push_str(&format!(" --target={}", q(&self.target.to_string_lossy())));
+        cmd.push_str(&self.target.resume_args());
         if let Some(p) = &self.provider {
             cmd.push_str(&format!(" --provider={}", q(p)));
         }
@@ -1546,8 +1595,8 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         (Some(file), Some(key)) => Some(read_answer(file, key, answer_bytes)?),
         _ => None,
     };
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load_folder("harness migrate")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("migrate {unit_id}"))?;
     let plan_path = ledger.plan_path();
     let plan_doc = Plan::load(&plan_path)?;
@@ -1604,12 +1653,12 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     // blind attempt of the same model (docs/CHAT-PANE-DESIGN.md §4.1). An
     // answer or a replay creates no directory: the hand-off was posed there,
     // or there is nothing to replay (§R4 CS-12).
-    let mut components = vec!["migration", "units", unit_id.as_str(), "traces"];
+    let mut components = vec!["units", unit_id.as_str(), "traces"];
     if requester.is_some() {
         components.push(attempts::CHAT_TRACES);
     }
     let traces = if answer.is_some() || provider_name == "replay" {
-        existing_ledger_dir(&ctx.root, &components).map_err(|e| {
+        existing_ledger_dir(&ctx, &components).map_err(|e| {
             if answer.is_some() {
                 anyhow::Error::new(Error::AnswerRefused {
                     why: format!("no hand-off was posed there: {e}"),
@@ -1622,7 +1671,7 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
             }
         })?
     } else {
-        safe_ledger_dir(&ctx.root, &components)?
+        safe_ledger_dir(&ctx, &components)?
     };
     let mut resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
     let slot = match answer {
@@ -1877,7 +1926,10 @@ mod tests {
                 answer_key: None,
                 answer_bytes: None,
                 unit: "u-lib".into(),
-                target: PathBuf::from("/tmp/a target"),
+                target: TargetArg {
+                    target: PathBuf::from("/tmp/a target"),
+                    tool: Some("t-lz4".into()),
+                },
                 provider: Some("external".into()),
                 model: Some("-m".into()),
                 promote: false,
@@ -1904,7 +1956,8 @@ mod tests {
                 panic!("{hint}: not a migrate command");
             };
             assert_eq!(unit, "u-lib");
-            assert_eq!(target, PathBuf::from("/tmp/a target"));
+            assert_eq!(target.target, PathBuf::from("/tmp/a target"));
+            assert_eq!(target.tool.as_deref(), Some("t-lz4"), "{hint}");
             assert_eq!(model.as_deref(), Some("-m"));
             assert!(no_promote, "{hint}");
             assert_eq!(steer.as_deref(), Some(note), "{hint}");
@@ -1917,15 +1970,22 @@ mod tests {
     /// way, every run flag kept (§R2 5, fix-pass review).
     #[test]
     fn the_observe_and_gen_driver_hints_round_trip() {
-        let hint = observe_resume(Path::new("-scratch dir"));
+        let hint = observe_resume(&TargetArg {
+            target: PathBuf::from("-scratch dir"),
+            tool: None,
+        });
         let cli = Cli::try_parse_from(sh_words(&hint)).unwrap_or_else(|e| panic!("{hint}\n{e}"));
         let Cmd::Observe { target } = cli.cmd else {
             panic!("{hint}: not observe");
         };
-        assert_eq!(target, PathBuf::from("-scratch dir"));
+        assert_eq!(target.target, PathBuf::from("-scratch dir"));
+        assert_eq!(target.tool, None);
         let args = gen_driver::GenDriverArgs {
             unit: "u-lib".into(),
-            target: PathBuf::from("-t"),
+            target: TargetArg {
+                target: PathBuf::from("-t"),
+                tool: Some("l-x".into()),
+            },
             provider: Some("external".into()),
             model: Some("-m".into()),
             promote: true,
@@ -1949,9 +2009,15 @@ mod tests {
             panic!("{hint}: not gen-driver");
         };
         assert_eq!(
-            (unit.as_str(), target, provider.as_deref(), model.as_deref()),
+            (
+                unit.as_str(),
+                target.target,
+                provider.as_deref(),
+                model.as_deref()
+            ),
             ("u-lib", PathBuf::from("-t"), Some("external"), Some("-m"))
         );
+        assert_eq!(target.tool.as_deref(), Some("l-x"), "{hint}");
         assert!(promote && allow_unsandboxed && retry, "{hint}");
         assert_eq!(attempt.as_deref(), Some("d-0123456789ab"));
     }

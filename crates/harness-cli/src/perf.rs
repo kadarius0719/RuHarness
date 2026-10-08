@@ -2,7 +2,7 @@
 //! information only — perf writes no verdict and no plan status, and
 //! `verify`, `migrate`, `promote` and `bench check` never read it.
 
-use crate::{lock_ledger, out, report, safe_ledger_dir};
+use crate::{lock_ledger, out, report, safe_ledger_dir, TargetArg};
 use anyhow::{bail, Context, Result};
 use harness_core::ledger::Ledger;
 use harness_core::perf::results::{self as res, Row, RowKind};
@@ -11,15 +11,9 @@ use harness_core::perf::workloads::{self as wl, Workloads, WorkloadsState};
 use harness_core::{Facts, Plan, TargetContext};
 use std::path::{Path, PathBuf};
 
-/// `migration/perf/`, resolved with links refused.
+/// The ledger's `perf/`, resolved with links refused.
 fn perf_dir(ctx: &TargetContext) -> Result<PathBuf> {
-    safe_ledger_dir(
-        &ctx.root,
-        &[
-            harness_core::ledger::MIGRATION_DIR,
-            harness_core::perf::PERF_DIR,
-        ],
-    )
+    safe_ledger_dir(ctx, &[harness_core::perf::PERF_DIR])
 }
 
 fn shown(root: &Path, path: &Path) -> String {
@@ -30,9 +24,9 @@ fn shown(root: &Path, path: &Path) -> String {
 }
 
 /// `harness perf init`: the starter, never over an existing file.
-pub(crate) fn cmd_init(target: PathBuf) -> Result<u8> {
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+pub(crate) fn cmd_init(target: TargetArg) -> Result<u8> {
+    let ctx = target.load()?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "perf init")?;
     let dir = perf_dir(&ctx)?;
     let path = dir.join(wl::WORKLOADS_FILE);
@@ -56,7 +50,7 @@ pub(crate) fn cmd_init(target: PathBuf) -> Result<u8> {
 /// when it validates and the file on disk is still the one `--expect` names
 /// (its blake3, or `none`). The input's existence and size are checked when
 /// perf reads it (§3.1).
-pub(crate) fn cmd_save(target: PathBuf, expect: String, bytes: u64) -> Result<u8> {
+pub(crate) fn cmd_save(target: TargetArg, expect: String, bytes: u64) -> Result<u8> {
     use std::io::{IsTerminal, Read};
     if bytes > wl::MAX_WORKLOADS_BYTES {
         bail!(
@@ -83,8 +77,8 @@ pub(crate) fn cmd_save(target: PathBuf, expect: String, bytes: u64) -> Result<u8
     if expect != "none" && !expect.starts_with(harness_core::hash::HASH_PREFIX) {
         bail!("--expect takes the blake3 of the file's current bytes, or `none`");
     }
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load()?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "perf save")?;
     let dir = perf_dir(&ctx)?;
     let path = dir.join(wl::WORKLOADS_FILE);
@@ -117,7 +111,7 @@ pub(crate) fn cmd_save(target: PathBuf, expect: String, bytes: u64) -> Result<u8
 
 /// The workloads, or the state's words as an error (exit 1, §3.1 States).
 fn workloads(ctx: &TargetContext) -> Result<Workloads> {
-    match wl::load(&ctx.root)? {
+    match wl::load(&Ledger::of(ctx))? {
         WorkloadsState::Ready(w) => Ok(w),
         state => bail!("{}", state.blocker().unwrap_or_default()),
     }
@@ -164,7 +158,7 @@ fn as_it_stands_needs_two(ctx: &TargetContext, plan: &Plan, facts: &Facts) -> Re
 
 /// `harness perf run` (§3.10).
 pub(crate) fn cmd_run(
-    target: PathBuf,
+    target: TargetArg,
     units: Vec<String>,
     workload_ids: Vec<String>,
     runs: Option<u32>,
@@ -173,8 +167,8 @@ pub(crate) fn cmd_run(
     if !cfg!(target_os = "macos") {
         bail!("perf runs on macOS only for now — the Linux launcher is not built yet");
     }
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load_folder("harness perf run")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, harness_core::perf::PERF_RUN_LOCK)?;
     let workloads = workloads(&ctx)?;
     let facts = fresh_facts(&ctx, &ledger)?;
@@ -192,6 +186,7 @@ pub(crate) fn cmd_run(
     let mut progress = Progress {
         workloads: &workloads,
         root: ctx.root.clone(),
+        ledger_rel: ctx.ledger_rel(),
     };
     let summary = harness_oracle::perf_run(
         &ctx,
@@ -287,6 +282,8 @@ fn row_words(row: &Row, side: Side<'_>, input: Option<&str>) -> words::RowWords 
 struct Progress<'a> {
     workloads: &'a Workloads,
     root: PathBuf,
+    /// The ledger, root-relative (`migration`, or a tool's).
+    ledger_rel: String,
 }
 
 impl harness_oracle::PerfProgress for Progress<'_> {
@@ -307,11 +304,12 @@ impl harness_oracle::PerfProgress for Progress<'_> {
                 .as_ref()
                 .is_some_and(|d| !d.kept.is_empty())
         {
+            let ledger = &self.ledger_rel;
             let folder = match side {
                 harness_oracle::RowSide::Unit(id) => {
-                    format!("migration/build/.perf-out/units/{id}/")
+                    format!("{ledger}/build/.perf-out/units/{id}/")
                 }
-                _ => "migration/build/.perf-out/program/".to_string(),
+                _ => format!("{ledger}/build/.perf-out/program/"),
             };
             w.details.push(format!("both outputs are kept in {folder}"));
         }
@@ -446,13 +444,12 @@ fn stored_units(
 /// program's or a unit's), or a units folder that is not one, hides no
 /// other row: the rows that read are shown, then every error is named and
 /// the show exits 1. It writes nothing.
-pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool) -> Result<u8> {
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
-    let perf_parts = [
-        harness_core::ledger::MIGRATION_DIR,
-        harness_core::perf::PERF_DIR,
-    ];
+pub(crate) fn cmd_show(target: TargetArg, no_check: bool, allow_unsandboxed: bool) -> Result<u8> {
+    let ctx = target.load()?;
+    let ledger = Ledger::of(&ctx);
+    let mut perf_parts = ctx.ledger_parts();
+    perf_parts.push(harness_core::perf::PERF_DIR.to_string());
+    let perf_parts: Vec<&str> = perf_parts.iter().map(String::as_str).collect();
     let dir = stored_dir(&ctx.root, &perf_parts)?;
     // What cannot be read is named after the rows that read (exit 1): the
     // program's file, the units' folder, each unit's file.
@@ -467,14 +464,14 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
     // The units' folder is checked the same way: a linked one would show
     // another folder's files as this target's rows.
     let units_dir = match &dir {
-        Some(_) => stored_dir(&ctx.root, &[perf_parts[0], perf_parts[1], res::UNITS_DIR])
+        Some(_) => stored_dir(&ctx.root, &[&perf_parts[..], &[res::UNITS_DIR]].concat())
             .unwrap_or_else(|e| {
                 bad.push(e);
                 None
             }),
         None => None,
     };
-    let workloads = match wl::load(&ctx.root)? {
+    let workloads = match wl::load(&Ledger::of(&ctx))? {
         WorkloadsState::Ready(w) => Some(w),
         state => {
             out(format!("perf: {}", state.blocker().unwrap_or_default()));

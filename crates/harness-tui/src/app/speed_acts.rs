@@ -449,7 +449,7 @@ impl App {
             SideKey::Unit(id) => Some(id.as_str()),
             _ => None,
         };
-        let dir = harness_core::perf::kept_outputs_dir(&self.config.target, unit);
+        let dir = harness_core::perf::kept_outputs_dir(&self.config.ledger(), unit);
         let gone = || "the two outputs are not on this computer — measure again".to_string();
         let read = |which: &str| -> Result<Vec<u8>, String> {
             let name = format!("{workload}.{which}.{stream}");
@@ -697,7 +697,7 @@ mod tests {
     /// acts are offered (on macOS), u001 the one verified unit.
     fn measurable_app(tag: &str) -> App {
         let target = crate::testutil::scratch_target("targets/zopfli", tag);
-        let perf = harness_core::perf::perf_dir(&target);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&target));
         std::fs::create_dir_all(target.join("bench")).unwrap();
         std::fs::write(target.join("bench/big.txt"), "big ".repeat(1000)).unwrap();
         std::fs::write(target.join("bench/small.txt"), "small\n").unwrap();
@@ -1026,6 +1026,7 @@ mod tests {
             App::new_from(
                 crate::app::Config {
                     target: target.clone(),
+                    tool: None,
                     harness: Some(harness.to_path_buf()),
                     allow_unsandboxed: false,
                     layout: crate::app::LayoutMode::Auto,

@@ -1,21 +1,18 @@
 //! `harness features init | save | map` (docs/FEATURES-DESIGN.md §5, §7).
 
-use crate::{lock_ledger, out, report, require_sandbox, safe_ledger_dir};
+use crate::{lock_ledger, out, report, require_sandbox, safe_ledger_dir, TargetArg};
 use anyhow::{bail, Context, Result};
 use harness_core::features::{self, FeatureSnapshot};
 use harness_core::ledger::Ledger;
 use harness_core::{Facts, TargetContext};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// `harness features init`: the starter, never over an existing file.
-pub(crate) fn cmd_init(target: PathBuf) -> Result<u8> {
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+pub(crate) fn cmd_init(target: TargetArg) -> Result<u8> {
+    let ctx = target.load()?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "features init")?;
-    let dir = safe_ledger_dir(
-        &ctx.root,
-        &[harness_core::ledger::MIGRATION_DIR, features::FEATURES_DIR],
-    )?;
+    let dir = safe_ledger_dir(&ctx, &[features::FEATURES_DIR])?;
     let path = dir.join(features::FEATURES_FILE);
     match std::fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -39,7 +36,7 @@ const MAX_SAVE_BYTES: u64 = features::MAX_FEATURES_BYTES;
 /// `harness features save`: the new text on stdin, `--bytes` long, saved
 /// only when it validates and the file on disk is still the one `--expect`
 /// names (its blake3, or `none`).
-pub(crate) fn cmd_save(target: PathBuf, expect: String, bytes: u64) -> Result<u8> {
+pub(crate) fn cmd_save(target: TargetArg, expect: String, bytes: u64) -> Result<u8> {
     use std::io::{IsTerminal, Read};
     if bytes > MAX_SAVE_BYTES {
         bail!("--bytes {bytes} is more than the {MAX_SAVE_BYTES} a features file may hold");
@@ -64,13 +61,10 @@ pub(crate) fn cmd_save(target: PathBuf, expect: String, bytes: u64) -> Result<u8
         bail!("--expect takes the blake3 of the file's current bytes, or `none`");
     }
 
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load()?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "features save")?;
-    let dir = safe_ledger_dir(
-        &ctx.root,
-        &[harness_core::ledger::MIGRATION_DIR, features::FEATURES_DIR],
-    )?;
+    let dir = safe_ledger_dir(&ctx, &[features::FEATURES_DIR])?;
     let path = dir.join(features::FEATURES_FILE);
     let current = match std::fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "none".to_string(),
@@ -96,15 +90,15 @@ pub(crate) fn cmd_save(target: PathBuf, expect: String, bytes: u64) -> Result<u8
 }
 
 /// `harness features map` (§5.1).
-pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
+pub(crate) fn cmd_map(target: TargetArg, allow_unsandboxed: bool) -> Result<u8> {
     require_sandbox(allow_unsandboxed, "harness features map")?;
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load_folder("harness features map")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "features map")?;
     let (features, digest) = match FeatureSnapshot::load(&ctx) {
         FeatureSnapshot::None => bail!(
             "there is no {}; write one first (`harness features init` gives a starter)",
-            display(&ctx.root, &features::features_path(&ctx.root))
+            display(&ctx.root, &features::features_path(&Ledger::of(&ctx)))
         ),
         FeatureSnapshot::Invalid(why) => bail!("{why}"),
         FeatureSnapshot::Valid { features, digest } => (features, digest),
@@ -171,7 +165,7 @@ pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
             )
         });
     }
-    let path = features::map_path(&ctx.root);
+    let path = features::map_path(&Ledger::of(&ctx));
     harness_core::ledger::write_atomic(&path, &map.to_bytes()?)?;
     let look = map
         .scenarios
@@ -252,7 +246,12 @@ fn main_count(ctx: &TargetContext, facts: &Facts) -> usize {
         .symbols
         .iter()
         .filter(|s| s.name == "main")
-        .filter(|s| features::directly_in(&ctx.config.target.source_dir, &s.file))
+        .filter(|s| {
+            ctx.config
+                .target
+                .source_dir()
+                .is_some_and(|dir| features::directly_in(dir, &s.file))
+        })
         .map(|s| s.file.as_str())
         .collect();
     files.sort();

@@ -443,7 +443,7 @@ pub fn current_binding(
     facts: &crate::Facts,
     unit: &crate::Unit,
 ) -> Result<(String, String), Error> {
-    let ledger = Ledger::new(&ctx.root);
+    let ledger = Ledger::of(ctx);
     let closure = facts.include_closure(&unit.files);
     let unit_source = crate::hash::file_set_hash_on_disk(&ctx.root, &closure)?;
     let driver_path = match unit.oracle_param_str("driver") {

@@ -144,6 +144,21 @@ pub enum Error {
         /// The project root.
         root: PathBuf,
     },
+    /// `--target`/`--tool` name no target: a bad tool id, a tool the project
+    /// does not have, or several tools and no `--tool`
+    /// (docs/PROJECT-MAP-DESIGN.md §3.7). `why` is the one sentence.
+    #[error("{why}")]
+    NoTarget {
+        /// What is wrong and what to do.
+        why: String,
+    },
+    /// The target lists its files (`harness.toml` schema_version 2) and this
+    /// reader does not read that form yet.
+    #[error("this target lists its files; {what} does not read that form yet")]
+    FileListNotRead {
+        /// The reader (`harness scan`, `the scanner`).
+        what: String,
+    },
 }
 
 impl Error {

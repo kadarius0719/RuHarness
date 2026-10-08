@@ -10,7 +10,7 @@ use crate::files::{self, TreeWalk};
 use crate::model::Snapshot;
 use crate::preflight;
 use harness_core::features::{self, FeatureSnapshot, MapInputs, MapState};
-use harness_core::ledger::{Holder, Ledger};
+use harness_core::ledger::Holder;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
@@ -39,18 +39,24 @@ pub struct Read {
 /// Read the target at `target`: the preflight, then the snapshot, the walk
 /// and the lock holder. `Err` is a reason in words.
 pub fn read(target: &Path) -> Result<Read, String> {
+    read_tool(target, None)
+}
+
+/// [`read`] of the target `--target <target> [--tool <tool>]` names (the
+/// lookup order of docs/PROJECT-MAP-DESIGN.md §3.7).
+pub fn read_tool(target: &Path, tool: Option<&str>) -> Result<Read, String> {
     // A ledger made elsewhere is refused before anything of it is read —
     // the preflight measures its files (docs/PROJECT-MAP-DESIGN.md §3.7).
     harness_core::adopt::check(target).map_err(|e| e.to_string())?;
-    preflight::preflight(target)?;
-    let snapshot = Snapshot::load(target).map_err(|e| e.to_string())?;
-    let ctx = harness_core::TargetContext::load(target).map_err(|e| e.to_string())?;
+    preflight::preflight_tool(target, tool)?;
+    let snapshot = Snapshot::open(target, tool).map_err(|e| e.to_string())?;
+    let ctx = harness_core::TargetContext::open(target, tool).map_err(|e| e.to_string())?;
     // The tree lists only what lies inside the target (review SAFE-11): a
     // source_dir that leaves it is refused, as is one that resolves outside.
     // An empty source_dir is the root, as the scanner reads it; a missing
     // one lists nothing (the tree says why) — only one that leaves the
     // target is refused (review NEW-6/NEW-7).
-    let source_dir = match ctx.config.target.source_dir.as_str() {
+    let source_dir = match snapshot.source_dir.as_str() {
         "" => ".",
         dir => dir,
     };
@@ -71,8 +77,8 @@ pub fn read(target: &Path) -> Result<Read, String> {
         ));
     }
     let walk = files::walk_tree(&snapshot.root, source_dir, snapshot.facts.as_ref());
-    let holder = harness_core::status::live_holder(&Ledger::new(&snapshot.root))
-        .map_err(|e| e.to_string())?;
+    let holder =
+        harness_core::status::live_holder(&snapshot.ledger()).map_err(|e| e.to_string())?;
     let llm = &ctx.config.llm;
     let migrate_model = llm
         .migrate
@@ -88,7 +94,7 @@ pub fn read(target: &Path) -> Result<Read, String> {
     let (map, map_now) = match (&snapshot.features, &snapshot.facts, &snapshot.features_now) {
         (FeatureSnapshot::None, _, _) | (_, None, _) => (MapState::None, None),
         (_, Some(facts), now) => (
-            features::load_map(&snapshot.root, facts),
+            features::load_map(&snapshot.ledger(), facts),
             match (features::facts_digest(facts), now) {
                 (Ok(facts_digest), Some(now)) => Some(MapInputs {
                     facts: facts_digest,
@@ -134,8 +140,11 @@ pub struct Loader {
 }
 
 impl Loader {
-    /// Start the thread; it runs `read` for each request.
-    pub fn spawn(read: ReadFn) -> std::io::Result<Loader> {
+    /// Start the thread; it runs `read` for each request (a [`ReadFn`], or
+    /// a closure that carries the tool the cockpit opened).
+    pub fn spawn(
+        read: impl Fn(&Path) -> Result<Read, String> + Send + 'static,
+    ) -> std::io::Result<Loader> {
         let (requests, inbox) = mpsc::channel::<(u64, PathBuf)>();
         let (outbox, results) = mpsc::channel();
         std::thread::Builder::new()

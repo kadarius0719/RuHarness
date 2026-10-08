@@ -143,6 +143,8 @@ pub struct Chat {
     pub model_flag: Option<String>,
     /// The target (canonical).
     pub target: PathBuf,
+    /// The mapped tool the cockpit opened (`None`: a folder-form target).
+    pub tool: Option<String>,
     /// Where chat directories are made.
     pub temp: PathBuf,
     /// Every chat process not yet reaped (shared with the signal path).
@@ -279,6 +281,7 @@ impl Chat {
             sign_in,
             model_flag,
             target,
+            tool: None,
             temp: std::env::temp_dir(),
             procs,
             gen: 0,
@@ -395,7 +398,14 @@ impl Chat {
             }
         }
         self.gen += 1;
-        let argv = runtime::argv(&bins, &dir, &self.target, BRIEF, self.model_flag.as_deref());
+        let argv = runtime::argv(
+            &bins,
+            &dir,
+            &self.target,
+            self.tool.as_deref(),
+            BRIEF,
+            self.model_flag.as_deref(),
+        );
         let rt = match Runtime::spawn(self.gen, argv, dir.clone(), &self.env, &self.procs) {
             Ok(rt) => rt,
             Err(e) => {

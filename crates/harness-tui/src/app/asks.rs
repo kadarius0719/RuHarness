@@ -777,7 +777,8 @@ impl App {
 
     /// The response file of `key` in `unit`'s chat traces.
     fn chat_response(&self, unit: &str, key: &str) -> PathBuf {
-        Ledger::new(&self.config.target)
+        self.config
+            .ledger()
             .unit_dir(unit)
             .join("traces")
             .join(harness_core::attempts::CHAT_TRACES)
@@ -917,7 +918,7 @@ impl App {
         if tag.gen != self.chat.gen || !self.chat.held.contains(&tag.request_id) {
             return Err("the chat withdrew this request".into());
         }
-        let ledger = Ledger::new(&self.config.target);
+        let ledger = self.config.ledger();
         let unit = p.unit.as_deref().ok_or("no unit")?;
         let load = |a: &str| {
             AttemptRecord::load(&harness_core::attempts::attempt_dir(&ledger, unit, a))
@@ -1349,9 +1350,11 @@ impl App {
         self.refresh_holder();
         let gate = match self.busy() {
             Some(why) => Err(why),
-            None => crate::preflight::preflight(&self.config.target)
-                .map_err(|why| format!("the project cannot be read safely: {why}"))
-                .and_then(|()| self.chat_gate(&r.pending, &tag)),
+            None => {
+                crate::preflight::preflight_tool(&self.config.target, self.config.tool.as_deref())
+                    .map_err(|why| format!("the project cannot be read safely: {why}"))
+                    .and_then(|()| self.chat_gate(&r.pending, &tag))
+            }
         };
         match gate {
             Ok(()) => Command::Spawn(r.pending),

@@ -6070,7 +6070,9 @@ mod tests {
             ],
         };
         std::fs::write(
-            harness_core::features::map_path(&app.config.target),
+            harness_core::features::map_path(&harness_core::ledger::Ledger::new(
+                &app.config.target,
+            )),
             map.to_bytes().unwrap(),
         )
         .unwrap();
@@ -6085,7 +6087,7 @@ mod tests {
             Run, Step1, Step1Run, UnitRef, UnitResults,
         };
         let root = app.config.target.clone();
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         std::fs::create_dir_all(root.join("bench")).unwrap();
         std::fs::write(root.join("bench/big.txt"), "big ".repeat(1000)).unwrap();
         std::fs::write(root.join("bench/small.txt"), "small\n").unwrap();
@@ -6294,7 +6296,7 @@ mod tests {
         use harness_core::perf::results::{self as res, LastTry};
         let app = write_speed_results(app, false);
         let root = app.config.target.clone();
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         assert_eq!(LONG_WORKLOAD.len(), 24);
         let workloads = perf.join("workloads.toml");
         let mut text = std::fs::read_to_string(&workloads).unwrap();
@@ -6517,7 +6519,8 @@ mod tests {
             "a unit still in C has no speed of its own"
         );
         // A row that cannot tell asks for 31 runs on its workload only.
-        let perf = harness_core::perf::perf_dir(&app.config.target);
+        let perf =
+            harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&app.config.target));
         let path = harness_core::perf::results::unit_path(&perf, "u001-katajainen");
         let mut file = harness_core::perf::results::read_unit(&path, "u001-katajainen")
             .unwrap()
@@ -6572,11 +6575,14 @@ mod tests {
         );
         // Now its row prints differently, both outputs kept.
         let root = app.config.target.clone();
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         let id = "u001-katajainen";
         let path = res::unit_path(&perf, id);
         let mut file = res::read_unit(&path, id).unwrap().unwrap();
-        let kept_dir = harness_core::perf::kept_outputs_dir(&root, Some(id));
+        let kept_dir = harness_core::perf::kept_outputs_dir(
+            &harness_core::ledger::Ledger::new(&root),
+            Some(id),
+        );
         std::fs::create_dir_all(&kept_dir).unwrap();
         let outputs = [
             ("big-text.c.stdout", &b"line one\nline two\n"[..]),
@@ -6669,11 +6675,14 @@ mod tests {
         let app = app_of("targets/zopfli", "speed-differs-accept");
         let app = write_speed_results(&app, false);
         let root = app.config.target.clone();
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         let id = "u001-katajainen";
         let path = res::unit_path(&perf, id);
         let mut file = res::read_unit(&path, id).unwrap().unwrap();
-        let kept_dir = harness_core::perf::kept_outputs_dir(&root, Some(id));
+        let kept_dir = harness_core::perf::kept_outputs_dir(
+            &harness_core::ledger::Ledger::new(&root),
+            Some(id),
+        );
         std::fs::create_dir_all(&kept_dir).unwrap();
         let mut kept = Vec::new();
         for (name, bytes) in [
@@ -6771,7 +6780,8 @@ mod tests {
         use harness_core::perf::results::{self as res, Difference};
         let app = app_of("targets/zopfli", "speed-differs-ais");
         let mut app = write_speed_results(&app, false);
-        let perf = harness_core::perf::perf_dir(&app.config.target);
+        let perf =
+            harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&app.config.target));
         let path = res::program_path(&perf);
         let mut program = res::read_program(&path).unwrap().unwrap();
         let r = &mut program.as_it_stands[0];
@@ -6936,7 +6946,8 @@ mod tests {
             !screen.contains("Speed:"),
             "no workloads file, no line: {screen}"
         );
-        let dir = harness_core::perf::perf_dir(&app.config.target);
+        let dir =
+            harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&app.config.target));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("workloads.toml"),
@@ -7029,7 +7040,7 @@ mod tests {
         }
         // A row that left it out for that reason is current: nothing was
         // verified since.
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         let path = res::program_path(&perf);
         let mut program = res::read_program(&path).unwrap().unwrap();
         for r in &mut program.as_it_stands {
@@ -7058,7 +7069,7 @@ mod tests {
         let app = app_of("targets/zopfli", "speed-header");
         let app = write_speed_golden(&app);
         let root = app.config.target.clone();
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         let id = "u001-katajainen";
         let path = res::unit_path(&perf, id);
         // The other side `f` times the C's cycles, on four cores.
@@ -7114,7 +7125,7 @@ mod tests {
         let app = app_of("targets/zopfli", "speed-set-up-only");
         let mut app = write_speed_results(&app, false);
         let root = app.config.target.clone();
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         let id = "u001-katajainen";
         let path = res::unit_path(&perf, id);
         let mut file = res::read_unit(&path, id).unwrap().unwrap();
@@ -7151,7 +7162,7 @@ mod tests {
         let app = write_speed_results(&app, false);
         let root = app.config.target.clone();
         std::fs::remove_file(harness_core::perf::results::program_path(
-            &harness_core::perf::perf_dir(&root),
+            &harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root)),
         ))
         .unwrap();
         let mut app = crate::app::tests::app_of_path(&root);
@@ -7177,7 +7188,9 @@ mod tests {
         let app = app_of("targets/zopfli", "speed-computers");
         let app = write_speed_golden(&app);
         let root = app.config.target.clone();
-        let path = res::program_path(&harness_core::perf::perf_dir(&root));
+        let path = res::program_path(&harness_core::perf::perf_dir(
+            &harness_core::ledger::Ledger::new(&root),
+        ));
         let mut program = res::read_program(&path).unwrap().unwrap();
         for r in &mut program.c_alone {
             r.inputs.computer.cpu = "Apple M1".into();
@@ -7297,7 +7310,7 @@ mod tests {
         let app = write_speed_results(&app, false);
         let root = app.config.target.clone();
         let id = "u001-katajainen";
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         let path = res::program_path(&perf);
         let mut program = res::read_program(&path).unwrap().unwrap();
         for r in &mut program.as_it_stands {
@@ -7383,7 +7396,9 @@ mod tests {
             .unwrap()
             .set_len(harness_core::perf::workloads::MAX_INPUT_BYTES + 1)
             .unwrap();
-        let workloads = harness_core::perf::workloads::workloads_path(&root);
+        let workloads = harness_core::perf::workloads::workloads_path(
+            &harness_core::ledger::Ledger::new(&root),
+        );
         let text = std::fs::read_to_string(&workloads).unwrap();
         std::fs::write(&workloads, text.replace("bench/big.txt", "bench/huge.bin")).unwrap();
         let app = crate::app::tests::app_of_path(&root);
@@ -7457,7 +7472,7 @@ mod tests {
             greyed(&mut app, Selection::Speed, "Measure speed"),
             WorkloadsState::NoFile.blocker()
         );
-        let dir = harness_core::perf::perf_dir(&root);
+        let dir = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("workloads.toml"), wl::STARTER).unwrap();
         let mut app = crate::app::tests::app_of_path(&root);
@@ -7472,7 +7487,12 @@ mod tests {
         .unwrap();
         let mut app = crate::app::tests::app_of_path(&root);
         let words = greyed(&mut app, Selection::Speed, "Measure speed").unwrap();
-        assert_eq!(Some(words.clone()), wl::load(&root).unwrap().blocker());
+        assert_eq!(
+            Some(words.clone()),
+            wl::load(&harness_core::ledger::Ledger::new(&root))
+                .unwrap()
+                .blocker()
+        );
         assert!(
             words.contains("workloads.toml line 4, column")
                 && words.ends_with("— fix it, or Edit the workloads file"),
@@ -7581,7 +7601,9 @@ mod tests {
             "{screen}"
         );
         assert!(!screen.contains("not re-checked"), "{screen}");
-        let path = harness_core::features::features_path(&app.config.target);
+        let path = harness_core::features::features_path(&harness_core::ledger::Ledger::new(
+            &app.config.target,
+        ));
         let text_now = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, text_now.replace("\"--i1\"", "\"--i2\"")).unwrap();
         let mut app = crate::app::tests::app_of_path(&app.config.target);
@@ -7650,7 +7672,9 @@ mod tests {
             ],
         };
         std::fs::write(
-            harness_core::features::map_path(&app.config.target),
+            harness_core::features::map_path(&harness_core::ledger::Ledger::new(
+                &app.config.target,
+            )),
             map.to_bytes().unwrap(),
         )
         .unwrap();
