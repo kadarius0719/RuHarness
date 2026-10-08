@@ -407,9 +407,9 @@ fn run_refuses_stale_facts_before_building() {
 }
 
 /// `perf run --as-it-stands-only` with one measurable unit (zopfli's u001),
-/// or none, is refused before anything is built (§3.10), in the words the
-/// run uses when fewer than two units build: no build step said, no build
-/// folder, no results.
+/// or none, is refused before anything is built (§3.10), naming the units
+/// left out and why as the run does ("says why"): no build step said, no
+/// build folder, no results.
 #[test]
 fn as_it_stands_only_refuses_before_building() {
     if !cfg!(target_os = "macos") {
@@ -438,12 +438,33 @@ fn as_it_stands_only_refuses_before_building() {
         );
         assert!(!t.join("migration/perf/program.json").exists(), "{words}");
     };
-    refused("one unit measured (u001-katajainen) — the program as it stands needs two");
-    // No measurable unit at all: u001 is no longer verified.
+    refused("one measurable unit (u001-katajainen) — the program as it stands needs two");
+    // A second verified unit that cannot be measured (no verdict) is named
+    // with why, as the run names it — never "measured" before a build.
     edit(
         &t.join("migration/plan.toml"),
-        "status = \"verified\"",
-        "status = \"pending\"",
+        "id = \"u-tree\"\nstatus = \"pending\"",
+        "id = \"u-tree\"\nstatus = \"verified\"",
+    );
+    refused(
+        "one measurable unit (u001-katajainen) — u-tree left out: verify it first — the \
+         program as it stands needs two",
+    );
+    // No measurable unit, one left out: u001 is no longer verified.
+    edit(
+        &t.join("migration/plan.toml"),
+        "id = \"u001-katajainen\"\nstatus = \"verified\"",
+        "id = \"u001-katajainen\"\nstatus = \"pending\"",
+    );
+    refused(
+        "no measurable unit — u-tree left out: verify it first — the program as it stands \
+         needs two",
+    );
+    // No accepted unit at all.
+    edit(
+        &t.join("migration/plan.toml"),
+        "id = \"u-tree\"\nstatus = \"verified\"",
+        "id = \"u-tree\"\nstatus = \"pending\"",
     );
     refused("no accepted unit to compare yet");
 }
@@ -674,6 +695,59 @@ fn show_checks_the_compilers_in_the_sandbox() {
     );
 }
 
+/// `perf show` stops at the first compiler that fails (§3.9): when `cc
+/// --version` fails the compilers are already "not checked", so `rustc -V`
+/// is never started — a hung one would cost a whole `[oracle]
+/// timeout_secs` more. The stand-in rustc leaves a mark in a temp folder
+/// (which every tool profile may write) before it hangs.
+#[test]
+fn show_stops_at_the_first_compiler_that_fails() {
+    if !cfg!(target_os = "macos") {
+        eprintln!("perf runs on macOS only: skipped");
+        return;
+    }
+    let t = zopfli("first-compiler");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let bin = t.join("stand-in/bin");
+    let marks = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("perf-cli-rustc-started-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&marks);
+    std::fs::create_dir_all(&marks).unwrap();
+    let mark = marks.join("rustc-started");
+    script(&bin.join("cc"), "exit 1\n");
+    script(
+        &bin.join("rustc"),
+        &format!("echo started > '{}'\nexec sleep 60\n", mark.display()),
+    );
+    edit(
+        &t.join("harness.toml"),
+        "allowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n",
+        "allowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\ntimeout_secs = 30\n",
+    );
+    let path = path_with(&bin);
+    let started = Instant::now();
+    let r = harness_env(
+        &["perf", "show", "--target", target],
+        None,
+        &[("PATH", &path)],
+    );
+    let took = started.elapsed();
+    let rustc_ran = mark.exists();
+    let _ = std::fs::remove_dir_all(&marks);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains("perf: compilers not checked"),
+        "{}",
+        r.stdout
+    );
+    assert!(!rustc_ran, "rustc was started after cc failed");
+    // Generous: a started rustc would be stopped only at 30 s.
+    assert!(took < Duration::from_secs(25), "{took:?}");
+}
+
 /// With no row stored there is nothing to judge (§3.9): `perf show` runs no
 /// compiler, checks no computer and does not say the C is not checked, and
 /// says only that nothing is measured yet — on a target whose allowlist
@@ -810,6 +884,136 @@ fn show_without_facts_does_not_judge_the_c() {
     let r = show();
     assert!(r.stdout.contains("the C changed"), "{}", r.stdout);
     assert!(!r.stdout.contains("not checked"), "{}", r.stdout);
+}
+
+/// Without facts `perf show` cannot tell which units the program as it
+/// stands holds today either ("left out now", "accepted since", the plan's
+/// order): with such a row stored, the one not-checked line says so — once
+/// — instead of letting the row read current unjudged. With the facts the
+/// row is judged ("u001-katajainen is left out now"); and when the units
+/// cannot be read although the facts can, the line says that too.
+#[test]
+fn show_without_facts_says_the_held_units_are_not_checked() {
+    use harness_core::perf::results as res;
+    let t = zopfli("no-facts-held");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let crate_dir = t.join("migration/units/u001-katajainen/katajainen_rs");
+    let digest = harness_core::hash::unit_crate_file_set_hash(&t, &crate_dir).unwrap();
+    let held = serde_json::json!({"units": [{"id": "u001-katajainen", "crate": digest}]});
+    let program = t.join("migration/perf/program.json");
+    let mut file = res::read_program(&program).unwrap().unwrap();
+    file.as_it_stands
+        .push(serde_json::from_value(stored_row(&t, "measured", held)).unwrap());
+    res::write_program(&program, &file).unwrap();
+    let show = || harness(&["perf", "show", "--target", target, "--no-check"], None);
+    let r = show();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let rows = rows_of(&r.stdout);
+    let stands = row(&rows, "perf: the program as it stands on w — ");
+    assert!(
+        !stands.contains("out of date"),
+        "current at first: {stands}"
+    );
+
+    let plan = t.join("migration/plan.toml");
+    edit(
+        &plan,
+        "id = \"u001-katajainen\"\nstatus = \"verified\"",
+        "id = \"u001-katajainen\"\nstatus = \"pending\"",
+    );
+    let r = show();
+    let rows = rows_of(&r.stdout);
+    let stands = row(&rows, "perf: the program as it stands on w — ");
+    assert!(
+        stands.contains("out of date: u001-katajainen is left out now"),
+        "{stands}"
+    );
+    assert!(!r.stdout.contains("not checked"), "{}", r.stdout);
+
+    let wider = "perf: the C and the units the program as it stands holds not checked: no facts \
+                 — run harness scan";
+    let facts = t.join("migration/facts.jsonl");
+    let kept = std::fs::read(&facts).unwrap();
+    std::fs::remove_file(&facts).unwrap();
+    let r = show();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(r.stdout.matches(wider).count(), 1, "{}", r.stdout);
+    assert!(
+        !r.stdout.contains("perf: the C not checked"),
+        "one line, not two: {}",
+        r.stdout
+    );
+    let rows = rows_of(&r.stdout);
+    let stands = row(&rows, "perf: the program as it stands on w — ");
+    assert!(!stands.contains("out of date"), "{stands}");
+    std::fs::write(&facts, kept).unwrap();
+
+    // The facts read but the units do not (u001's folder is a file): the
+    // held units are not checked, and the line says why.
+    edit(
+        &plan,
+        "id = \"u001-katajainen\"\nstatus = \"pending\"",
+        "id = \"u001-katajainen\"\nstatus = \"verified\"",
+    );
+    let unit_dir = t.join("migration/units/u001-katajainen");
+    std::fs::rename(&unit_dir, t.join("u001-moved")).unwrap();
+    std::fs::write(&unit_dir, "not a folder").unwrap();
+    let r = show();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        r.stdout
+            .matches("perf: the units the program as it stands holds not checked: ")
+            .count(),
+        1,
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("left out now"), "{}", r.stdout);
+}
+
+/// One unit results file that cannot be read hides no other row in `perf
+/// show` (as in the cockpit): the C alone's row and the units that read are
+/// printed first, then the error names the bad file, and the show exits 1.
+#[test]
+fn show_prints_the_rows_that_read_before_a_bad_unit_file() {
+    use harness_core::perf::results as res;
+    let t = zopfli("bad-unit-file");
+    let target = t.to_str().unwrap();
+    store_a_baseline(&t);
+    let units = t.join("migration/perf/units");
+    std::fs::create_dir_all(&units).unwrap();
+    std::fs::write(units.join("u001-katajainen.json"), "{\"junk\": 1}").unwrap();
+    let show = || harness(&["perf", "show", "--target", target, "--no-check"], None);
+    let r = show();
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
+    assert!(
+        r.stderr.contains("units/u001-katajainen.json"),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stdout.contains("nothing measured yet"), "{}", r.stdout);
+
+    // A bad file beside a good one: the good unit's row is shown too, and
+    // only the bad file is named.
+    std::fs::write(units.join("u000-junk.json"), "{\"junk\": 1}").unwrap();
+    let mut u001 = res::UnitResults::new("u001-katajainen");
+    let digest = format!("blake3:{}", "a".repeat(64));
+    let crates = serde_json::json!({"crates": [{"id": "u001-katajainen", "digest": digest}]});
+    u001.rows
+        .push(serde_json::from_value(stored_row(&t, "measured", crates)).unwrap());
+    res::write_unit(&units.join("u001-katajainen.json"), &u001).unwrap();
+    let r = show();
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(r.stdout.contains("perf: the C on w — "), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("perf: u001-katajainen on w — "),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stderr.contains("units/u000-junk.json"), "{}", r.stderr);
+    assert!(!r.stderr.contains("u001-katajainen.json"), "{}", r.stderr);
 }
 
 /// `perf show` only reads: it creates no folder, and it refuses a linked

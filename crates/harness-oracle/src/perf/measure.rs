@@ -1110,7 +1110,7 @@ pub fn perf_run(
         let why = match built.len() {
             0 => "no accepted unit to compare yet".to_string(),
             _ => format!(
-                "one unit measured ({}) — the program as it stands needs two",
+                "one measurable unit ({}) — the program as it stands needs two",
                 held.iter()
                     .map(|u| u.id.as_str())
                     .collect::<Vec<_>>()
@@ -1472,6 +1472,25 @@ pub fn perf_measurable(
         .filter_map(|s| match s {
             Selected::Ready(c) => Some(c.id),
             Selected::NotVerified { .. } => None,
+        })
+        .collect())
+}
+
+/// The verified or merged units perf could not measure today, in plan
+/// order, each with why in the progress lines' words ("verify it first") —
+/// for `perf run --as-it-stands-only`'s early refusal, which names them as
+/// the run does (§3.10: "says why"). Read-only, as [`perf_measurable`].
+pub fn perf_left_out(
+    target: &TargetContext,
+    plan: &Plan,
+    facts: &Facts,
+) -> Result<Vec<(String, &'static str)>, Error> {
+    let ledger = Ledger::new(target.root.clone());
+    Ok(select(target, &ledger, facts, plan)?
+        .into_iter()
+        .filter_map(|s| match s {
+            Selected::Ready(_) => None,
+            Selected::NotVerified { id, reason, .. } => Some((id, left_out_words(reason))),
         })
         .collect())
 }

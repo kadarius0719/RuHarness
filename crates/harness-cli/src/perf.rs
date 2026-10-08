@@ -150,13 +150,30 @@ fn fresh_facts(ctx: &TargetContext, ledger: &Ledger) -> Result<Facts> {
 }
 
 /// `--as-it-stands-only` with fewer than two measurable units, refused
-/// before the launcher, the C or any crate is built (§3.10: "says why"),
-/// in the words the run itself uses when fewer than two units build.
-fn as_it_stands_needs_two(measurable: &[String]) -> Result<()> {
-    match measurable {
-        [] => bail!("no accepted unit to compare yet"),
-        [one] => bail!("one unit measured ({one}) — the program as it stands needs two"),
-        _ => Ok(()),
+/// before the launcher, the C or any crate is built (§3.10: "says why"):
+/// the measurable units, and each verified unit left out with why, as the
+/// run's own line names them ("u-tree left out: verify it first"). Nothing
+/// is measured yet, so a unit is "measurable", never "measured".
+fn as_it_stands_needs_two(ctx: &TargetContext, plan: &Plan, facts: &Facts) -> Result<()> {
+    let measurable = harness_oracle::perf_measurable(ctx, plan, facts)?;
+    if measurable.len() >= 2 {
+        return Ok(());
+    }
+    let left: Vec<String> = harness_oracle::perf_left_out(ctx, plan, facts)?
+        .into_iter()
+        .map(|(id, why)| format!("{id} left out: {why}"))
+        .collect();
+    let tail = if left.is_empty() {
+        String::new()
+    } else {
+        format!(" — {}", left.join("; "))
+    };
+    match measurable.as_slice() {
+        [] if left.is_empty() => bail!("no accepted unit to compare yet"),
+        [] => bail!("no measurable unit{tail} — the program as it stands needs two"),
+        [one, ..] => {
+            bail!("one measurable unit ({one}){tail} — the program as it stands needs two")
+        }
     }
 }
 
@@ -178,7 +195,7 @@ pub(crate) fn cmd_run(
     let facts = fresh_facts(&ctx, &ledger)?;
     let plan = plan(&ledger)?;
     if as_it_stands_only {
-        as_it_stands_needs_two(&harness_oracle::perf_measurable(&ctx, &plan, &facts)?)?;
+        as_it_stands_needs_two(&ctx, &plan, &facts)?;
     }
     let dir = perf_dir(&ctx)?;
     let request = harness_oracle::PerfRequest {
@@ -374,8 +391,14 @@ struct StoredUnit {
 
 /// Every unit's results file in `units_dir` (checked by [`stored_dir`]), in
 /// id order, each read strictly; a name that is not a clean unit id is not
-/// read.
-fn stored_units(root: &Path, units_dir: &Path, plan: &Plan) -> Result<Vec<StoredUnit>> {
+/// read. A file that cannot be read is kept as its error, beside the units
+/// that read: one bad file hides no other row (the cockpit shows the rest
+/// too), and `perf show` reports it after the rows.
+fn stored_units(
+    root: &Path,
+    units_dir: &Path,
+    plan: &Plan,
+) -> Result<(Vec<StoredUnit>, Vec<anyhow::Error>)> {
     let entries = std::fs::read_dir(units_dir)
         .with_context(|| format!("reading {}", shown(root, units_dir)))?;
     let mut ids: Vec<String> = entries
@@ -390,9 +413,15 @@ fn stored_units(root: &Path, units_dir: &Path, plan: &Plan) -> Result<Vec<Stored
         .collect();
     ids.sort();
     let mut units = Vec::new();
+    let mut bad = Vec::new();
     for id in ids {
-        let Some(file) = res::read_unit(&units_dir.join(format!("{id}.json")), &id)? else {
-            continue;
+        let file = match res::read_unit(&units_dir.join(format!("{id}.json")), &id) {
+            Ok(Some(file)) => file,
+            Ok(None) => continue,
+            Err(e) => {
+                bad.push(anyhow::Error::from(e));
+                continue;
+            }
         };
         let replaces = plan
             .units
@@ -405,7 +434,7 @@ fn stored_units(root: &Path, units_dir: &Path, plan: &Plan) -> Result<Vec<Stored
             replaces,
         });
     }
-    Ok(units)
+    Ok((units, bad))
 }
 
 /// `harness perf show` (§3.9): every stored row's words, rebuilt, with why
@@ -415,7 +444,10 @@ fn stored_units(root: &Path, units_dir: &Path, plan: &Plan) -> Result<Vec<Stored
 /// row stored there is nothing to judge, so neither is checked or said —
 /// "nothing measured yet" is the line. Without facts the C cannot be
 /// hashed: it is not judged (said once), never "the C changed" on every
-/// row. It writes nothing.
+/// row; nor are the units the program as it stands holds, said in the same
+/// line when such a row is stored. A unit results file that cannot be read
+/// hides no other row: the rows that read are shown, then the file is
+/// named and the show exits 1. It writes nothing.
 pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool) -> Result<u8> {
     let ctx = TargetContext::load(&target)?;
     let ledger = Ledger::new(&ctx.root);
@@ -440,9 +472,9 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
     };
     let facts = Facts::load(&ledger.facts_path()).ok();
     let plan = plan(&ledger)?;
-    let units = match &units_dir {
+    let (units, bad_units) = match &units_dir {
         Some(units_dir) => stored_units(&ctx.root, units_dir, &plan)?,
-        None => Vec::new(),
+        None => (Vec::new(), Vec::new()),
     };
     // The rows to judge (a unit no longer in the plan shows none): with
     // none, no check is worth its runs (§3.9).
@@ -460,9 +492,17 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
         .as_ref()
         .map(|f| harness_core::features::program_digest_now(&ctx, f));
     let name = harness_core::features::program_name(&ctx.config);
+    // `None` (no facts, or the units could not be read): which units the
+    // program as it stands holds today is not judged — said below.
     let measurable = facts
         .as_ref()
-        .and_then(|f| harness_oracle::perf_measurable(&ctx, &plan, f).ok());
+        .map(|f| harness_oracle::perf_measurable(&ctx, &plan, f));
+    let (measurable, measurable_error) = match measurable {
+        Some(Ok(ids)) => (Some(ids), None),
+        Some(Err(e)) => (None, Some(e)),
+        None => (None, None),
+    };
+    let as_it_stands_stored = program.as_ref().is_some_and(|p| !p.as_it_stands.is_empty());
     let computer = if check {
         harness_oracle::perf_computer_if_cached()
     } else {
@@ -479,8 +519,21 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
     if check && compilers.is_none() {
         out("perf: compilers not checked".into());
     }
+    // Said once for the show. Without facts the units the program as it
+    // stands holds cannot be checked either ("left out now", "accepted
+    // since", the plan's order): a row of it would read current unjudged.
     if to_judge > 0 && program_digest.is_none() {
-        out("perf: the C not checked: no facts — run harness scan".into());
+        out(if as_it_stands_stored {
+            "perf: the C and the units the program as it stands holds not checked: no facts \
+             — run harness scan"
+                .into()
+        } else {
+            "perf: the C not checked: no facts — run harness scan".into()
+        });
+    } else if let (true, Some(e)) = (as_it_stands_stored, &measurable_error) {
+        out(format!(
+            "perf: the units the program as it stands holds not checked: {e}"
+        ));
     }
     let crate_digest = |id: &str| -> Option<String> {
         let unit = plan.units.iter().find(|u| u.id == id)?;
@@ -554,6 +607,16 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
             ),
             None => out(format!("perf: {} — no longer in the plan", unit.id)),
         }
+    }
+    // The rows that read are shown; then each unit file that did not read
+    // is named, and the show fails (exit 1).
+    let mut bad_units = bad_units.into_iter();
+    if let Some(first) = bad_units.next() {
+        let rest: Vec<String> = bad_units.map(|e| e.to_string()).collect();
+        if rest.is_empty() {
+            return Err(first);
+        }
+        bail!("{first}\n{}", rest.join("\n"));
     }
     if printed == 0 {
         out("perf: nothing measured yet — run harness perf run".into());
