@@ -12,8 +12,8 @@ use crate::probecopy::{self, scan_text, Kind, Probe, Reason};
 use crate::sandbox::{self, HostDirs, ProfileSpec};
 use crate::scrub::Scrubber;
 use crate::{
-    cc_compile, extra_link_args, inside, irregular_c_file, program_c_files_in, sandbox_mode, Base,
-    CcInvocation,
+    cc_compile, extra_link_args, inside, irregular_c_file, program_c_files_in, project_path,
+    sandbox_mode, Base, CcInvocation, FileArgs, Layout,
 };
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
@@ -79,30 +79,33 @@ fn map_inner(
     let root = base.root.clone();
     // The facts name files by the configured `source_dir`, the mirror by the
     // path under the canonical one: a `source_dir` reached through a link or
-    // spelled in another case would probe nothing (fix check 4 F5).
-    let source_dir = &target.config.target.folder("the features map")?.source_dir;
-    let configured = Path::new(source_dir);
-    let configured = configured
-        .strip_prefix(&target.root)
-        .or_else(|_| configured.strip_prefix(&root))
-        .unwrap_or(configured);
-    let spelled: PathBuf = configured
-        .components()
-        .filter(|c| !matches!(c, std::path::Component::CurDir))
-        .collect();
-    let canonical = base
-        .source_dir
-        .strip_prefix(&root)
-        .unwrap_or(&base.source_dir);
-    if spelled != canonical {
-        return Err(Error::Invariant(format!(
-            "source_dir = {:?} resolves to {} (through a link, or in another case): the \
-             features map finds functions by the path the scan recorded — set source_dir to \
-             {:?}",
-            source_dir,
-            canonical.display(),
-            canonical.display().to_string()
-        )));
+    // spelled in another case would probe nothing (fix check 4 F5). A file
+    // list's files are checked one by one where the mirror copies them.
+    if let (Some(source_dir), Some(base_source_dir)) =
+        (target.config.target.source_dir(), base.source_dir())
+    {
+        let configured = Path::new(source_dir);
+        let configured = configured
+            .strip_prefix(&target.root)
+            .or_else(|_| configured.strip_prefix(&root))
+            .unwrap_or(configured);
+        let spelled: PathBuf = configured
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect();
+        let canonical = base_source_dir
+            .strip_prefix(&root)
+            .unwrap_or(base_source_dir);
+        if spelled != canonical {
+            return Err(Error::Invariant(format!(
+                "source_dir = {:?} resolves to {} (through a link, or in another case): the \
+                 features map finds functions by the path the scan recorded — set source_dir \
+                 to {:?}",
+                source_dir,
+                canonical.display(),
+                canonical.display().to_string()
+            )));
+        }
     }
     let build = scratch_dir(&Ledger::of_under(target, &root))?;
     // Everything made after the mirror goes to a fresh folder outside the
@@ -178,19 +181,24 @@ fn map_inner(
             shown(odd, &root).display()
         )));
     }
-    if let Some(out) = c_files.iter().find(|p| !p.starts_with(&base.source_dir)) {
-        return Err(Error::Invariant(format!(
-            "a .c file in source_dir links outside source_dir (to {}): the features map \
-             copies only source_dir, so it cannot map this program",
-            shown(out, &root).display()
-        )));
+    if let Some(source_dir) = base.source_dir() {
+        if let Some(out) = c_files.iter().find(|p| !p.starts_with(source_dir)) {
+            return Err(Error::Invariant(format!(
+                "a .c file in source_dir links outside source_dir (to {}): the features map \
+                 copies only source_dir, so it cannot map this program",
+                shown(out, &root).display()
+            )));
+        }
     }
 
     let cc = Cc::detect(&runner)?;
     let gcc = matches!(cc, Cc::Gcc(_));
 
     // The probed copy: the mirror, the notes, the runtime.
-    progress.message("Copying source_dir into a scratch copy that notes each function it runs…");
+    progress.message(match base.source_dir() {
+        Some(_) => "Copying source_dir into a scratch copy that notes each function it runs…",
+        None => "Copying the listed files into a scratch copy that notes each function it runs…",
+    });
     let index = PairIndex::from_facts(facts);
     let mirror = build.join("mirror");
     let mut probe = Probe::new(gcc);
@@ -206,10 +214,25 @@ fn map_inner(
         })?;
         Ok(mirror.join(rel))
     };
-    let includes: Vec<PathBuf> = base
-        .includes()
+    // Each file's own arguments, for the program and for its copy (every
+    // folder and every configuration path moved into the mirror).
+    let program_args: Vec<FileArgs> = c_files
         .iter()
-        .map(|d| to_mirror(d))
+        .map(|c| base.file_args(c))
+        .collect::<Result<_, _>>()?;
+    let copy_flags = base.flags_mapped(&|p| to_mirror(p))?;
+    let copy_args: Vec<FileArgs> = program_args
+        .iter()
+        .map(|a| -> Result<FileArgs, Error> {
+            Ok(FileArgs {
+                flags: copy_flags.clone(),
+                includes: a
+                    .includes
+                    .iter()
+                    .map(|d| to_mirror(d))
+                    .collect::<Result<_, _>>()?,
+            })
+        })
         .collect::<Result<_, _>>()?;
     let header = out.path().join("fnprobe.h");
     let runtime_src = out.path().join("fnprobe.c");
@@ -281,7 +304,7 @@ fn map_inner(
         header: &header,
         mirror: &mirror,
         root: &root,
-        source_dir: &base.source_dir,
+        source_dir: base.source_dir().unwrap_or(&root),
     };
     let listing_out = |side: &str, n: usize| {
         (
@@ -293,7 +316,7 @@ fn map_inner(
     for (n, c_file) in c_files.iter().enumerate() {
         let (i, d) = listing_out("program", n);
         let program =
-            reads(&runner, &base.includes(), &[], c_file, (&i, &d), None)?.map_err(|why| {
+            reads(&runner, &program_args[n], &[], c_file, (&i, &d), None)?.map_err(|why| {
                 // A list the compiler printed but that cannot be read back
                 // is not a build failure (check 7).
                 if why.to_string().contains("the compiler's list names") {
@@ -335,8 +358,14 @@ fn map_inner(
         for (n, (c_file, copied)) in c_files.iter().zip(&probed_inputs).enumerate() {
             let program = &programs[n];
             let (ci, cd) = listing_out("copy", n);
-            let copied_reads =
-                match reads(&runner, &includes, &cflags, copied, (&ci, &cd), Some(&copy))? {
+            let copied_reads = match reads(
+                &runner,
+                &copy_args[n],
+                &cflags,
+                copied,
+                (&ci, &cd),
+                Some(&copy),
+            )? {
                     Ok(reads) => reads,
                     Err(why) => {
                         return Err(Error::Invariant(format!(
@@ -383,7 +412,7 @@ fn map_inner(
                 let why = format!("read by .incbin in {}", shown(c_file, &root).display());
                 let found = name.as_ref().and_then(|name| {
                     std::iter::once(root.join(name))
-                        .chain(includes.iter().map(|d| d.join(name)))
+                        .chain(copy_args[n].includes.iter().map(|d| d.join(name)))
                         .find_map(|p| p.canonicalize().ok())
                 });
                 match (name, found) {
@@ -456,7 +485,7 @@ fn map_inner(
     // The plain program: the whole-program check's build of `whole_c`.
     progress.message("Building the C program…");
     let plain = out.path().join("plain");
-    compile(&runner, &base.includes(), &[], &plain, &c_files, &link_args)
+    crate::perf::build::whole_cc_into(&base, &link_args, &runner, &plain, &c_files)
         .map_err(|e| build_failed("the C program does not build", e))?;
     progress.message("Building the scratch copy…");
     // The runtime: its own compile — no target include folder, no builtins
@@ -466,7 +495,7 @@ fn map_inner(
     cc_compile(
         &runner,
         &CcInvocation {
-            includes: &[],
+            args: &FileArgs::default(),
             cflags: &[
                 "-c".to_string(),
                 "-fno-builtin".to_string(),
@@ -480,17 +509,24 @@ fn map_inner(
     )
     .map_err(|e| build_failed("the probe's runtime does not build", e))?;
     let index_pair = |rel: &str, id: &str| index.of(rel, id);
+    // The configuration's `-pthread` reaches the copy's link too.
+    let copy_link_args: Vec<String> = base
+        .link_file_args()
+        .flags
+        .into_iter()
+        .chain(link_args.iter().cloned())
+        .collect();
     let build_copy = Build {
         runner: &runner,
         cc,
         root: &root,
         mirror: &mirror,
-        includes: &includes,
+        args: &copy_args,
         cflags: &cflags,
         units: &probed_inputs,
         reads: &unit_reads,
         runtime: &runtime,
-        link_args: &link_args,
+        link_args: &copy_link_args,
         out: out.path(),
         index_of: &index_pair,
         functions: &index.pairs,
@@ -818,27 +854,6 @@ fn scratch_dir(ledger: &Ledger) -> Result<PathBuf, Error> {
     inside(FEATURES_BUILD_DIR, "features build dir", &raw, &build_root)
 }
 
-fn compile(
-    runner: &Runner,
-    includes: &[PathBuf],
-    cflags: &[String],
-    out: &Path,
-    inputs: &[PathBuf],
-    libs: &[String],
-) -> Result<(), Error> {
-    cc_compile(
-        runner,
-        &CcInvocation {
-            includes,
-            cflags,
-            quiet: true,
-            out,
-            inputs,
-            libs,
-        },
-    )
-}
-
 /// `path` relative to the target root when it is under it.
 fn shown<'a>(path: &'a Path, root: &Path) -> &'a Path {
     path.strip_prefix(root).unwrap_or(path)
@@ -951,7 +966,7 @@ struct Reads {
 /// bury them; fix check 6 L2), or named a file that does not resolve.
 fn reads(
     runner: &Runner,
-    includes: &[PathBuf],
+    args: &FileArgs,
     cflags: &[String],
     input: &Path,
     out: (&Path, &Path),
@@ -967,7 +982,7 @@ fn reads(
         "-H".to_string(),
     ]);
     let mut argv = crate::cc_argv(&CcInvocation {
-        includes,
+        args,
         cflags: &listing,
         quiet: true,
         out: text_path,
@@ -1173,9 +1188,15 @@ fn write_mirror(
     mirror: &Path,
     probe: &mut Probe,
 ) -> Result<Vec<(PathBuf, std::time::SystemTime)>, Error> {
+    let source_dir = match &base.layout {
+        Layout::Folder { source_dir, .. } => source_dir,
+        Layout::FileList { files } => {
+            return write_mirror_files(base, facts, index, mirror, probe, files)
+        }
+    };
     let skipped_dirs = [base.root.join("migration")];
     let walked = walk::confined_except(
-        &base.source_dir,
+        source_dir,
         walk::ALL_FILES,
         walk::Limits {
             max_files: Some(MIRROR_MAX_FILES),
@@ -1234,6 +1255,98 @@ fn write_mirror(
             probe.add(mirror, rel, bytes, &|id| index.of(rel, id), true)?;
         } else {
             write(&mirror.join(rel_path), &bytes)?;
+        }
+    }
+    keep_times(&times);
+    Ok(times)
+}
+
+/// [`write_mirror`] for a file-list target: the listed files and every
+/// header they reach (the facts' include closure), and every file the
+/// configuration `-include`s, each copied at its project-relative path — and
+/// each inside the root, never under `migration/` (any tool's ledger, the
+/// map) and not reached through a link: nothing the harness or a model
+/// wrote reaches the copy as the project's C (docs/PROJECT-MAP-DESIGN.md
+/// §3.7, "Confinement").
+fn write_mirror_files(
+    base: &Base,
+    facts: &Facts,
+    index: &PairIndex,
+    mirror: &Path,
+    probe: &mut Probe,
+    files: &[crate::Listed],
+) -> Result<Vec<(PathBuf, std::time::SystemTime)>, Error> {
+    let listed: Vec<String> = files.iter().map(|l| l.rel.clone()).collect();
+    let mut copied: std::collections::BTreeSet<String> =
+        facts.include_closure(&listed).into_iter().collect();
+    copied.extend(listed);
+    if copied.len() > MIRROR_MAX_FILES {
+        return Err(Error::Invariant(format!(
+            "the listed files and their headers are more than {MIRROR_MAX_FILES} files; the \
+             features map does not copy that many"
+        )));
+    }
+    let mut paths: Vec<(String, PathBuf)> = Vec::with_capacity(copied.len());
+    for rel in copied {
+        let path = project_path(
+            FEATURES_BUILD_DIR,
+            "a file the scratch copy holds",
+            &base.root,
+            &base.ledger,
+            &rel,
+        )?;
+        if path != base.root.join(&rel) {
+            return Err(Error::Invariant(format!(
+                "{} is reached through a link: the features map copies each listed file and \
+                 header once, at its own path, so it cannot map this program",
+                harness_core::text::safe_line(&rel)
+            )));
+        }
+        paths.push((rel, path));
+    }
+    for path in base.forced_includes() {
+        let rel = path
+            .strip_prefix(&base.root)
+            .ok()
+            .and_then(|r| r.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                Error::Invariant(format!("{} is not under the target root", path.display()))
+            })?;
+        if !paths.iter().any(|(r, _)| *r == rel) {
+            paths.push((rel, path));
+        }
+    }
+    let with_functions: std::collections::BTreeSet<&str> =
+        facts.symbols.iter().map(|s| s.file.as_str()).collect();
+    let mut total: u64 = 0;
+    let mut times: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+    for (rel, path) in &paths {
+        let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
+        total += bytes.len() as u64;
+        if total > MIRROR_MAX_BYTES {
+            return Err(Error::Invariant(format!(
+                "the listed files and their headers hold more than {} MiB; the features map \
+                 does not copy that much",
+                MIRROR_MAX_BYTES / (1024 * 1024)
+            )));
+        }
+        if let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) {
+            times.push((mirror.join(rel), modified));
+        }
+        if with_functions.contains(rel.as_str()) {
+            probe.add(mirror, rel, bytes, &|id| index.of(rel, id), true)?;
+        } else {
+            write(&mirror.join(rel), &bytes)?;
+        }
+    }
+    // Every folder a compile of the copy searches exists there.
+    for listed in files {
+        for dir in &listed.includes {
+            if let Ok(rel) = dir.strip_prefix(&base.root) {
+                let made = mirror.join(rel);
+                std::fs::create_dir_all(&made).map_err(|e| Error::io(&made, e))?;
+            }
         }
     }
     keep_times(&times);

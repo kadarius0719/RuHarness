@@ -15,7 +15,7 @@ use crate::confine::Confinement;
 use crate::exec::{RunFailure, RunOutput, Runner};
 use crate::sandbox::{self, HostDirs, ProfileSpec};
 use crate::scrub::Scrubber;
-use crate::{shape, Base, CcInvocation};
+use crate::{shape, Base, CcInvocation, FileArgs};
 use harness_core::config::TargetContext;
 use harness_core::driver::{
     evaluate_mutation, sample_mutants, DriverValidation, DriverValidationInputs, MutantOutcome,
@@ -141,10 +141,12 @@ fn run(
             crate::OBSERVABLE_TOOLCHAIN_ENTRY.to_string(),
         ],
     };
+    let driver_args = base.unit_args(target, &facts, unit)?;
     let ctx = Ctx {
         target,
         unit,
         base: &base,
+        driver_args: &driver_args,
         driver: &driver,
         unit_c: &unit_c,
         dv: &dv,
@@ -174,6 +176,8 @@ struct Ctx<'a> {
     target: &'a TargetContext,
     unit: &'a Unit,
     base: &'a Base,
+    /// The driver's arguments ([`Base::unit_args`]).
+    driver_args: &'a FileArgs,
     driver: &'a Path,
     /// `(repo-relative, canonical)` of the unit's `.c` files.
     unit_c: &'a [(String, PathBuf)],
@@ -205,24 +209,48 @@ impl Ctx<'_> {
         self.unit_c.iter().map(|(_, p)| p.clone()).collect()
     }
 
-    /// Compile with the usual include path; a compiler failure is `Ok(Err)`.
-    fn cc(
+    /// Compile the driver alone with its arguments; a compiler failure is
+    /// `Ok(Err)`.
+    fn cc_driver(
         &self,
         out: &Path,
-        inputs: &[PathBuf],
         cflags: &[String],
         quiet: bool,
     ) -> Result<Result<(), String>, Error> {
         crate::cc_outcome(
             self.runner,
             &CcInvocation {
-                includes: &self.base.includes(),
+                args: self.driver_args,
                 cflags,
                 quiet,
                 out,
-                inputs,
+                inputs: &[self.driver.to_path_buf()],
                 libs: &[],
             },
+        )
+    }
+
+    /// Build a program from `inputs` (the driver or its object, the unit's
+    /// C): each `.c` compiled with its own arguments, then one link; a
+    /// failure is `Ok(Err)`.
+    fn build(
+        &self,
+        out: &Path,
+        inputs: &[PathBuf],
+        cflags: &[String],
+    ) -> Result<Result<(), String>, Error> {
+        let compile = crate::perf::build::Compile {
+            runner: self.runner,
+            cflags,
+            strict: false,
+        };
+        crate::build_driver(
+            &compile,
+            self.base,
+            self.driver,
+            self.driver_args,
+            out,
+            inputs,
         )
     }
 
@@ -254,12 +282,12 @@ impl Ctx<'_> {
         let o2 = self.dv.join("drv_o2");
         let mut o2_inputs = vec![obj.clone()];
         o2_inputs.extend(self.unit_paths());
-        gate!(match self.cc(&obj, &driver_in, &strict, false)? {
+        gate!(match self.cc_driver(&obj, &strict, false)? {
             Err(stderr) => fail(
                 "driver-build",
                 format!("the driver does not compile: {stderr}")
             ),
-            Ok(()) => match self.cc(&o2, &o2_inputs, &[], true)? {
+            Ok(()) => match self.build(&o2, &o2_inputs, &[])? {
                 Err(stderr) => fail(
                     "driver-build",
                     format!("the driver does not link against the unit: {stderr}"),
@@ -276,7 +304,7 @@ impl Ctx<'_> {
         });
 
         // 2. driver-shape (R1), on the object just built.
-        let syms = shape::object_symbols(self.runner, &obj)?;
+        let syms = shape::object_symbols(&obj)?;
         let source = std::fs::read(self.driver).map_err(|e| Error::io(self.driver, e))?;
         let lint = harness_scan::lint_driver(
             &source,
@@ -358,31 +386,29 @@ impl Ctx<'_> {
         let o0 = self.dv.join("drv_o0");
         let mut o0_inputs = driver_in.to_vec();
         o0_inputs.extend(self.unit_paths());
-        gate!(
-            match self.cc(&o0, &o0_inputs, &["-O0".to_string()], true)? {
-                Err(stderr) => fail("opt-levels", format!("the -O0 build failed: {stderr}")),
-                Ok(()) => match self.confined.run(&o0, &[], &[])? {
-                    Err(e) => fail("opt-levels", format!("the -O0 build's run failed: {e}")),
-                    Ok(out) if out == pinned => pass(
+        gate!(match self.build(&o0, &o0_inputs, &["-O0".to_string()])? {
+            Err(stderr) => fail("opt-levels", format!("the -O0 build failed: {stderr}")),
+            Ok(()) => match self.confined.run(&o0, &[], &[])? {
+                Err(e) => fail("opt-levels", format!("the -O0 build's run failed: {e}")),
+                Ok(out) if out == pinned => pass(
+                    "opt-levels",
+                    format!("-O0 output identical to -O2 ({} bytes)", out.stdout.len()),
+                ),
+                Ok(out) => {
+                    let (stream, a, b) = differing_stream(&out, &pinned);
+                    fail(
                         "opt-levels",
-                        format!("-O0 output identical to -O2 ({} bytes)", out.stdout.len()),
-                    ),
-                    Ok(out) => {
-                        let (stream, a, b) = differing_stream(&out, &pinned);
-                        fail(
-                            "opt-levels",
-                            format!(
-                                "the -O0 build prints something else than -O2{stream} (lens {} vs \
+                        format!(
+                            "the -O0 build prints something else than -O2{stream} (lens {} vs \
                                  {}, first diff at byte {}) — undefined or unspecified behavior?",
-                                a.len(),
-                                b.len(),
-                                first_diff(a, b)
-                            ),
-                        )
-                    }
-                },
-            }
-        );
+                            a.len(),
+                            b.len(),
+                            first_diff(a, b)
+                        ),
+                    )
+                }
+            },
+        });
 
         // 6. sanitizers: the same flags as verify's.
         let san = self.dv.join("drv_san");
@@ -390,7 +416,7 @@ impl Ctx<'_> {
             .iter()
             .map(|s| (*s).to_string())
             .collect();
-        gate!(match self.cc(&san, &o0_inputs, &san_flags, true)? {
+        gate!(match self.build(&san, &o0_inputs, &san_flags)? {
             Err(stderr) => fail("sanitizers", format!("sanitizer build failed: {stderr}")),
             Ok(()) => crate::sanitizer_check(self.confined.run(&san, &[], &[])?),
         });
@@ -430,7 +456,7 @@ impl Ctx<'_> {
         // once to an object with exactly the flags a mutant gets; a mutant
         // whose object is byte-identical is provably equivalent (identical
         // object code => identical linked program) and is never counted.
-        let mut originals: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut originals: Vec<Original> = Vec::new();
         for (rel, path) in self.unit_c {
             let dir = self.dv.join(format!("orig-{}", originals.len()));
             std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
@@ -439,10 +465,11 @@ impl Ctx<'_> {
                     "mutation: the ORIGINAL {rel} does not compile to an object on its own"
                 ))
             })?;
-            originals.push((
-                rel.clone(),
-                std::fs::read(&obj).map_err(|e| Error::io(&obj, e))?,
-            ));
+            originals.push(Original {
+                rel: rel.clone(),
+                bytes: std::fs::read(&obj).map_err(|e| Error::io(&obj, e))?,
+                object: obj,
+            });
         }
         let mut results = Vec::with_capacity(sampled.len());
         for (index, mutant) in sampled.into_iter().enumerate() {
@@ -460,7 +487,7 @@ impl Ctx<'_> {
         driver_obj: &Path,
         pinned: &RunOutput,
         confined: &Confinement<'_>,
-        originals: &[(String, Vec<u8>)],
+        originals: &[Original],
     ) -> Result<MutantOutcome, Error> {
         let (_, original) = self
             .unit_c
@@ -491,22 +518,25 @@ impl Ctx<'_> {
         let obj_bytes = std::fs::read(&mutant_obj).map_err(|e| Error::io(&mutant_obj, e))?;
         if originals
             .iter()
-            .any(|(rel, bytes)| *rel == mutant.file && *bytes == obj_bytes)
+            .any(|o| o.rel == mutant.file && o.bytes == obj_bytes)
         {
             return Ok(MutantOutcome::Equivalent);
         }
+        // One link: the driver's object, the mutant's, and the other unit
+        // files' objects, each compiled once with its own arguments.
         let mut inputs = vec![driver_obj.to_path_buf(), mutant_obj];
         inputs.extend(
-            self.unit_c
+            originals
                 .iter()
-                .filter(|(_, p)| p != original)
-                .map(|(_, p)| p.clone()),
+                .filter(|o| o.rel != mutant.file)
+                .map(|o| o.object.clone()),
         );
         let bin = dir.join("bin");
+        let link_args = self.base.link_file_args();
         let built = crate::cc_outcome(
             self.runner,
             &CcInvocation {
-                includes: &includes,
+                args: &link_args,
                 cflags: &[],
                 quiet: true,
                 out: &bin,
@@ -527,16 +557,14 @@ impl Ctx<'_> {
 }
 
 impl Ctx<'_> {
-    /// `-I` order for a (possibly mutated copy of a) unit file: the
-    /// ORIGINAL file's directory first, then the usual include dirs.
-    fn mutant_includes(&self, original: &Path) -> Result<Vec<PathBuf>, Error> {
+    /// The arguments of a (possibly mutated copy of a) unit file: the
+    /// ORIGINAL file's own, its directory searched first.
+    fn mutant_includes(&self, original: &Path) -> Result<FileArgs, Error> {
         let orig_dir = original
             .parent()
             .ok_or_else(|| Error::Invariant(format!("{} has no parent", original.display())))?
             .to_path_buf();
-        Ok(std::iter::once(orig_dir)
-            .chain(self.base.includes())
-            .collect())
+        Ok(self.base.file_args(original)?.with_first(orig_dir))
     }
 
     /// Compile an original unit file to `<dir>/<stem>.o`.
@@ -551,7 +579,7 @@ impl Ctx<'_> {
         &self,
         source: &Path,
         dir: &Path,
-        includes: &[PathBuf],
+        args: &FileArgs,
     ) -> Result<Option<PathBuf>, Error> {
         let stem = source
             .file_stem()
@@ -562,7 +590,7 @@ impl Ctx<'_> {
         let built = crate::cc_outcome(
             self.runner,
             &CcInvocation {
-                includes,
+                args,
                 cflags: &["-c".to_string()],
                 quiet: true,
                 out: &obj,
@@ -572,6 +600,16 @@ impl Ctx<'_> {
         )?;
         Ok(built.is_ok().then_some(obj))
     }
+}
+
+/// An original unit file compiled once with the mutants' flags.
+struct Original {
+    /// Its repo-relative path.
+    rel: String,
+    /// Its object's bytes (Trivial Compiler Equivalence).
+    bytes: Vec<u8>,
+    /// Its object, linked with every mutant of another file.
+    object: PathBuf,
 }
 
 /// The `determinism` check over the collected runs.

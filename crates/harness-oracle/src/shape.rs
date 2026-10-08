@@ -15,8 +15,7 @@
 //! - **source lint** — [`harness_scan::lint_driver`] with the unit's symbols
 //!   and the paths/basenames of the unit's include-closure headers.
 
-use crate::exec::Runner;
-use crate::symbols::{nm_argv, normalize, parse_nm};
+use crate::objsyms;
 use harness_core::error::Error;
 use harness_core::verdict::Check;
 use std::collections::BTreeSet;
@@ -267,85 +266,80 @@ impl LibcAllowlist {
     }
 }
 
-/// What `nm` says about a driver object, names normalized.
+/// The external symbols of a driver object, read from its own symbol table
+/// ([`objsyms::external`]: no `nm` line to parse, so an `asm` label cannot
+/// forge one), names as C sees them (Mach-O's leading `_` dropped; a libc
+/// name with a `$` suffix, `realpath$DARWIN_EXTSN`, by its base).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ObjectSymbols {
-    /// Defined external symbols.
+    /// Defined external symbols (common ones too).
     pub defined: BTreeSet<String>,
     /// Undefined symbols.
     pub undefined: BTreeSet<String>,
     /// Weak symbols (references or definitions).
     pub weak: BTreeSet<String>,
+    /// Names that are not shaped like a C identifier (an `asm` label can
+    /// name a symbol with any text), shown escaped; refused by
+    /// [`object_violations`].
+    pub odd: BTreeSet<String>,
 }
 
-/// Run `nm` three ways on the driver object `obj`.
-pub(crate) fn object_symbols(runner: &Runner, obj: &Path) -> Result<ObjectSymbols, Error> {
-    let macos = cfg!(target_os = "macos");
-    let obj_str = obj
-        .to_str()
-        .ok_or_else(|| Error::Invariant(format!("non-UTF-8 path: {}", obj.display())))?;
-    let defined_out = runner.tool(&nm_argv(obj_str))?;
-    let undefined_out = runner.tool(&["nm".to_string(), "-u".to_string(), obj_str.to_string()])?;
-    let weak_argv: Vec<String> = if macos {
-        vec!["nm".into(), "-m".into(), obj_str.to_string()]
-    } else {
-        vec!["nm".into(), obj_str.to_string()]
+/// Read the driver object `obj`'s external symbols. `nm` stays a required
+/// tool for the staticlib checks (`symbol-set`, `capabilities`), which read
+/// the Rust archive member by member, constructor sections included —
+/// `objsyms` does not report section names yet (docs/PROJECT-MAP-DESIGN.md
+/// §3.7, "The symbol readers").
+pub(crate) fn object_symbols(obj: &Path) -> Result<ObjectSymbols, Error> {
+    let bytes = std::fs::read(obj).map_err(|e| Error::io(obj, e))?;
+    let read = objsyms::external(&bytes).map_err(|why| {
+        Error::Invariant(format!(
+            "the driver object {} could not be read: {why}",
+            obj.display()
+        ))
+    })?;
+    Ok(symbols_of(&read))
+}
+
+/// [`ObjectSymbols`] from an object's external symbols.
+fn symbols_of(read: &objsyms::External) -> ObjectSymbols {
+    let mut syms = ObjectSymbols::default();
+    let name_of = |raw: &str, syms: &mut ObjectSymbols| -> Option<String> {
+        if !objsyms::identifier_shaped(raw) {
+            syms.odd.insert(raw.escape_debug().to_string());
+            return None;
+        }
+        Some(objsyms::dollar_base(raw).unwrap_or(raw).to_string())
     };
-    let weak_out = runner.tool(&weak_argv)?;
-    Ok(ObjectSymbols {
-        defined: parse_nm(&String::from_utf8_lossy(&defined_out))
-            .into_iter()
-            .map(|s| normalize(&s.name, macos).to_string())
-            .collect(),
-        undefined: parse_undefined(&String::from_utf8_lossy(&undefined_out))
-            .into_iter()
-            .map(|n| normalize(&n, macos).to_string())
-            .collect(),
-        weak: parse_weak(&String::from_utf8_lossy(&weak_out), macos)
-            .into_iter()
-            .map(|n| normalize(&n, macos).to_string())
-            .collect(),
-    })
-}
-
-/// Names from `nm -u` output: the last token of every line that is not an
-/// archive member header (`foo.o:`). Works for both the bare-name (macOS)
-/// and the `U name` (GNU) layouts.
-pub(crate) fn parse_undefined(nm_u_output: &str) -> Vec<String> {
-    nm_u_output
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.ends_with(':'))
-        .filter_map(|l| l.split_whitespace().last().map(str::to_string))
-        .collect()
-}
-
-/// Weak symbols: from `nm -m` (Mach-O: a `weak` attribute token) or plain
-/// `nm` (ELF: type `w`/`W`/`v`/`V`).
-pub(crate) fn parse_weak(output: &str, macho: bool) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in output.lines() {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        let Some((name, rest)) = tokens.split_last() else {
-            continue;
-        };
-        let weak = if macho {
-            rest.contains(&"weak")
-        } else {
-            rest.last()
-                .is_some_and(|t| matches!(*t, "w" | "W" | "v" | "V"))
-        };
-        if weak {
-            out.push((*name).to_string());
+    for d in &read.defines {
+        if let Some(name) = name_of(&d.name, &mut syms) {
+            if d.weak {
+                syms.weak.insert(name.clone());
+            }
+            syms.defined.insert(name);
         }
     }
-    out
+    for n in &read.needs {
+        if let Some(name) = name_of(&n.name, &mut syms) {
+            if n.weak {
+                syms.weak.insert(name.clone());
+            }
+            syms.undefined.insert(name);
+        }
+    }
+    syms
 }
 
 /// The object half of the gate: violations of the `{main}`-only export
 /// rule, the undefined-symbol allowlist and the no-weak rule.
 pub(crate) fn object_violations(syms: &ObjectSymbols, unit_symbols: &[String]) -> Vec<String> {
     let mut out = Vec::new();
+    if !syms.odd.is_empty() {
+        let odd: Vec<&str> = syms.odd.iter().map(String::as_str).collect();
+        out.push(format!(
+            "the driver object names symbols that are not C identifiers (an asm label?): {}",
+            odd.join(", ")
+        ));
+    }
     let main: BTreeSet<String> = std::iter::once("main".to_string()).collect();
     if syms.defined != main {
         let extra: Vec<&str> = syms
@@ -430,6 +424,7 @@ pub(crate) fn not_compiled(stderr: &str) -> Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn set(items: &[&str]) -> BTreeSet<String> {
         items.iter().map(|s| (*s).to_string()).collect()
@@ -473,26 +468,86 @@ mod tests {
         }
     }
 
+    /// The driver object's symbols come from its own table: an `asm` label
+    /// that names a symbol with any text (here a space and a quote, which
+    /// an `nm` line would split) is refused by the object rules; a libc
+    /// name with a `$` suffix counts by its base; weak references and
+    /// definitions are seen.
     #[test]
-    fn nm_parsers_handle_both_layouts() {
-        assert_eq!(
-            parse_undefined("_printf\n___stack_chk_fail\n"),
-            vec!["_printf".to_string(), "___stack_chk_fail".to_string()]
+    fn the_object_is_read_without_nm_and_odd_names_are_refused() {
+        let tmp = crate::testutil::TempDir::new("shape-objsyms");
+        let compile = |name: &str, text: &str| -> PathBuf {
+            let src = tmp.path().join(format!("{name}.c"));
+            std::fs::write(&src, text).expect("write");
+            let obj = tmp.path().join(format!("{name}.o"));
+            let status = std::process::Command::new("cc")
+                .args(["-c", "-O2", "-o"])
+                .arg(&obj)
+                .arg(&src)
+                .status()
+                .expect("cc runs");
+            assert!(status.success(), "{name} compiles");
+            obj
+        };
+        let unit = vec!["unit_f".to_string()];
+        let clean = compile(
+            "clean",
+            "#include <stdio.h>\nint unit_f(int);\n\
+             int main(void) { printf(\"%d\\n\", unit_f(1)); return 0; }\n",
         );
-        assert_eq!(
-            parse_undefined("\nx.o:\n                 U printf\n                 w weakling\n"),
-            vec!["printf".to_string(), "weakling".to_string()]
+        let syms = object_symbols(&clean).expect("reads");
+        assert!(syms.defined.contains("main"), "{syms:?}");
+        assert!(syms.undefined.contains("unit_f"), "{syms:?}");
+        assert!(syms.odd.is_empty(), "{syms:?}");
+        assert!(object_violations(&syms, &unit).is_empty(), "{syms:?}");
+
+        // An asm-forged name: `fopen` called under a label an nm line
+        // would read as two harmless tokens.
+        let forged = compile(
+            "forged",
+            "int unit_f(int);\n\
+             extern void *sneaky(const char *, const char *) __asm__(\"x printf\");\n\
+             int main(void) { sneaky(\"/etc/passwd\", \"r\"); return unit_f(1); }\n",
         );
-        let macho = "                 (undefined) external _printf\n\
-                     0000000000000000 (__TEXT,__text) external _main\n\
-                     \x20                (undefined) weak external _rust_probe\n";
-        assert_eq!(parse_weak(macho, true), vec!["_rust_probe".to_string()]);
-        let elf = "                 U printf\n                 w rust_probe\n\
-                   0000000000000000 T main\n0000000000000010 W helper\n";
-        assert_eq!(
-            parse_weak(elf, false),
-            vec!["rust_probe".to_string(), "helper".to_string()]
+        let syms = object_symbols(&forged).expect("reads");
+        assert!(!syms.odd.is_empty(), "{syms:?}");
+        assert!(!syms.undefined.contains("printf"), "{syms:?}");
+        let v = object_violations(&syms, &unit);
+        assert!(v.iter().any(|v| v.contains("not C identifiers")), "{v:?}");
+        assert!(!shape_check(v, Vec::new()).passed);
+
+        // Weak references count.
+        let weak = compile(
+            "weak",
+            "int unit_f(int);\nextern int rust_probe(void) __attribute__((weak));\n\
+             int main(void) { return rust_probe ? rust_probe() : unit_f(1); }\n",
         );
+        let syms = object_symbols(&weak).expect("reads");
+        assert!(syms.weak.contains("rust_probe"), "{syms:?}");
+    }
+
+    #[test]
+    fn a_dollar_suffix_counts_by_its_base() {
+        let read = objsyms::External {
+            defines: vec![objsyms::Definition {
+                name: "main".into(),
+                kind: objsyms::Kind::Function,
+                weak: false,
+            }],
+            needs: vec![
+                objsyms::Need {
+                    name: "realpath$DARWIN_EXTSN".into(),
+                    weak: false,
+                },
+                objsyms::Need {
+                    name: "printf".into(),
+                    weak: false,
+                },
+            ],
+        };
+        let syms = symbols_of(&read);
+        assert!(syms.undefined.contains("realpath"), "{syms:?}");
+        assert!(syms.odd.is_empty());
     }
 
     #[test]
@@ -502,6 +557,7 @@ mod tests {
             defined: set(&["main"]),
             undefined: set(&["printf", "unit_f", "__stack_chk_guard"]),
             weak: BTreeSet::new(),
+            odd: BTreeSet::new(),
         };
         assert!(object_violations(&clean, &unit).is_empty());
 
@@ -509,6 +565,7 @@ mod tests {
             defined: set(&["main", "helper", "table"]),
             undefined: set(&["printf", "fopen", "getenv"]),
             weak: set(&["rust_eh_personality"]),
+            odd: BTreeSet::new(),
         };
         let v = object_violations(&bad, &unit);
         assert_eq!(v.len(), 3, "{v:?}");

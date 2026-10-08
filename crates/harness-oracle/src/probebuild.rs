@@ -206,7 +206,9 @@ pub(crate) struct Build<'a> {
     pub cc: Cc,
     pub root: &'a Path,
     pub mirror: &'a Path,
-    pub includes: &'a [PathBuf],
+    /// Per top-level file: its arguments in the copy (the configuration's
+    /// flags and its folders, moved into the mirror).
+    pub args: &'a [crate::FileArgs],
     pub cflags: &'a [String],
     /// The copy's top-level files (mirror paths), in the plain build's
     /// input order.
@@ -339,7 +341,7 @@ impl Build<'_> {
         cflags.extend(self.cc.error_flags());
         cflags.push(if syntax_only { "-fsyntax-only" } else { "-c" }.to_string());
         let mut argv = crate::cc_argv(&CcInvocation {
-            includes: self.includes,
+            args: &self.args[n],
             cflags: &cflags,
             quiet: true,
             out: &object,

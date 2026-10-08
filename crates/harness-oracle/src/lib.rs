@@ -36,8 +36,10 @@
 //! M4 additions (docs/M4-DESIGN.md §R):
 //! - every C compile passes `-ffp-contract=off` (R4: Apple clang on arm64
 //!   fuses multiply-add even at `-O0`; the reference Linux build and Rust do
-//!   not) and gets `-I` for `[target] include_dirs` after the source dir;
-//!   the flag is recorded as `cflags: -ffp-contract=off` in `toolchain`;
+//!   not) and gets `-I` for `[target] include_dirs` after the source dir
+//!   (a file-list target: the configuration's flags, then each file's own
+//!   folders, `Base::file_args`; several C sources are compiled one by one
+//!   and linked once); the flag is recorded as `cflags: -ffp-contract=off` in `toolchain`;
 //! - (post-M4) a clean run's observable behavior is stdout AND stderr,
 //!   recorded as `observable: stdout+stderr` in `toolchain` — records
 //!   without it were judged by the stdout-only oracle;
@@ -109,7 +111,8 @@ pub use validate::validate_driver;
 use confine::Confinement;
 use exec::{RunFailure, RunOutput, Runner};
 use features::{feature_step, FeatureStepCtx};
-use harness_core::config::TargetContext;
+use harness_core::config::flags::Flag;
+use harness_core::config::{Form, TargetContext};
 use harness_core::error::Error;
 use harness_core::features::{FeatureSnapshot, Sample};
 use harness_core::hash;
@@ -215,6 +218,78 @@ pub fn compute_inputs(
     })
 }
 
+/// What the target adds to the compile of one C file
+/// (docs/PROJECT-MAP-DESIGN.md §3.7): the configuration's flags, then the
+/// file's include folders. [`cc_argv`] places them after the judge's own
+/// flags, so `-ffp-contract=off`, the level and `-w` always come first.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct FileArgs {
+    /// The configuration's flags, in order: paths absolute, `-O` left out
+    /// (recorded, never applied — every compile keeps its own level).
+    pub flags: Vec<String>,
+    /// The `-I` folders, in search order.
+    pub includes: Vec<PathBuf>,
+}
+
+impl FileArgs {
+    /// No flags, these folders (the boundary check's own runtime, tests).
+    pub(crate) fn includes(includes: Vec<PathBuf>) -> FileArgs {
+        FileArgs {
+            flags: Vec::new(),
+            includes,
+        }
+    }
+
+    /// The same flags, `dir` searched first.
+    pub(crate) fn with_first(&self, dir: PathBuf) -> FileArgs {
+        FileArgs {
+            flags: self.flags.clone(),
+            includes: std::iter::once(dir)
+                .chain(self.includes.iter().cloned())
+                .collect(),
+        }
+    }
+}
+
+/// Which files make up the target, resolved (canonical, contained).
+#[derive(Debug)]
+pub(crate) enum Layout {
+    /// The folder form: every top-level `.c` of `source_dir`, one include
+    /// list for every file.
+    Folder {
+        /// Canonical source dir (`[target] source_dir`), inside the root.
+        source_dir: PathBuf,
+        /// Canonical `[target] include_dirs`, in order, each inside
+        /// `source_dir`.
+        include_dirs: Vec<PathBuf>,
+    },
+    /// The file-list form: the listed files, each with its own folders.
+    FileList {
+        /// The listed files, in file order.
+        files: Vec<Listed>,
+    },
+}
+
+/// One listed file of a file-list target.
+#[derive(Debug)]
+pub(crate) struct Listed {
+    /// Its path as `harness.toml` lists it (project-relative).
+    pub rel: String,
+    /// Canonical, inside the root, never under `migration/`.
+    pub path: PathBuf,
+    /// Its include folders, canonical, in order.
+    pub includes: Vec<PathBuf>,
+}
+
+/// One configuration flag, resolved: a path flag keeps its prefix (`-I`,
+/// `-iquote`, `-isystem`, `-include`) and its canonical path, so a scratch
+/// copy can move it (the features map's mirror).
+#[derive(Debug, Clone)]
+enum ConfigFlag {
+    Plain(String),
+    Path { prefix: String, path: PathBuf },
+}
+
 /// The target-level resolution `verify` and `validate_driver` share:
 /// validated config and canonical, containment-checked directories. Pure
 /// inspection — building it never spawns a process or creates anything.
@@ -225,10 +300,10 @@ pub(crate) struct Base {
     /// The target's ledger folder under the canonical root (`migration/`,
     /// or a mapped tool's `migration/tools/<id>/`).
     pub ledger: PathBuf,
-    /// Canonical source dir (`[target] source_dir`), inside `root`.
-    pub source_dir: PathBuf,
-    /// Canonical `[target] include_dirs`, in order, each inside `source_dir`.
-    pub include_dirs: Vec<PathBuf>,
+    /// Which files make up the target.
+    pub layout: Layout,
+    /// The configuration's flags (empty for the folder form).
+    flags: Vec<ConfigFlag>,
     /// `[oracle] timeout_secs`.
     pub timeout: Duration,
     /// The core-owned tool allowlist.
@@ -271,38 +346,207 @@ impl Base {
             .root
             .canonicalize()
             .map_err(|e| Error::io(&target.root, e))?;
-        let folder = target.config.target.folder("the oracle")?;
-        let source_dir = inside(
-            who,
-            "[target] source_dir",
-            &root.join(&folder.source_dir),
-            &root,
-        )?;
-        // Include dirs must stay inside source_dir after symlink resolution
-        // too (R2: nothing outside source_dir reaches a compile or a prompt).
-        let mut include_dirs = Vec::new();
-        for dir in &folder.include_dirs {
-            include_dirs.push(inside(
-                who,
-                "[target] include_dirs entry",
-                &root.join(dir),
-                &source_dir,
-            )?);
-        }
+        let ledger = Ledger::of_under(target, root.clone()).dir();
+        let (layout, flags) = match &target.config.target.form {
+            Form::Folder(folder) => {
+                let source_dir = inside(
+                    who,
+                    "[target] source_dir",
+                    &root.join(&folder.source_dir),
+                    &root,
+                )?;
+                // Include dirs must stay inside source_dir after symlink
+                // resolution too (R2: nothing outside source_dir reaches a
+                // compile or a prompt).
+                let mut include_dirs = Vec::new();
+                for dir in &folder.include_dirs {
+                    include_dirs.push(inside(
+                        who,
+                        "[target] include_dirs entry",
+                        &root.join(dir),
+                        &source_dir,
+                    )?);
+                }
+                (
+                    Layout::Folder {
+                        source_dir,
+                        include_dirs,
+                    },
+                    Vec::new(),
+                )
+            }
+            Form::FileList(list) => {
+                let project = |what: &str, rel: &str| project_path(who, what, &root, &ledger, rel);
+                let mut files = Vec::with_capacity(list.files.len());
+                for file in &list.files {
+                    let path = project("listed file", &file.path)?;
+                    let mut includes = Vec::with_capacity(file.include_dirs.len());
+                    for dir in &file.include_dirs {
+                        includes.push(project("include folder", dir)?);
+                    }
+                    files.push(Listed {
+                        rel: file.path.clone(),
+                        path,
+                        includes,
+                    });
+                }
+                let mut flags = Vec::with_capacity(list.configuration.flags.len());
+                for flag in &list.configuration.flags {
+                    match harness_core::config::flags::check_flag(flag)
+                        .map_err(Error::InvalidPlan)?
+                    {
+                        Flag::Optimization => {}
+                        Flag::Path(rel) => flags.push(ConfigFlag::Path {
+                            prefix: flag[..flag.len() - rel.len()].to_string(),
+                            path: project("configuration flag's path", rel)?,
+                        }),
+                        Flag::Define | Flag::Undefine | Flag::Plain => {
+                            flags.push(ConfigFlag::Plain(flag.clone()))
+                        }
+                    }
+                }
+                (Layout::FileList { files }, flags)
+            }
+        };
         Ok(Base {
-            ledger: Ledger::of_under(target, root.clone()).dir(),
+            ledger,
             root,
-            source_dir,
-            include_dirs,
+            layout,
+            flags,
             timeout,
             allowlist,
         })
     }
 
-    /// `-I` dirs in search order: the source dir, then the include dirs.
-    pub(crate) fn includes(&self) -> Vec<PathBuf> {
-        std::iter::once(self.source_dir.clone())
-            .chain(self.include_dirs.iter().cloned())
+    /// The folder form's canonical source dir; `None` for a file list.
+    pub(crate) fn source_dir(&self) -> Option<&Path> {
+        match &self.layout {
+            Layout::Folder { source_dir, .. } => Some(source_dir),
+            Layout::FileList { .. } => None,
+        }
+    }
+
+    /// The configuration's flags as passed, each path moved by `map` (the
+    /// identity for a compile of the project itself).
+    pub(crate) fn flags_mapped(
+        &self,
+        map: &dyn Fn(&Path) -> Result<PathBuf, Error>,
+    ) -> Result<Vec<String>, Error> {
+        self.flags
+            .iter()
+            .map(|f| match f {
+                ConfigFlag::Plain(s) => Ok(s.clone()),
+                ConfigFlag::Path { prefix, path } => {
+                    Ok(format!("{prefix}{}", path_str(&map(path)?)?))
+                }
+            })
+            .collect()
+    }
+
+    /// The files the configuration's `-include` flags name (canonical).
+    pub(crate) fn forced_includes(&self) -> Vec<PathBuf> {
+        self.flags
+            .iter()
+            .filter_map(|f| match f {
+                ConfigFlag::Path { prefix, path } if prefix == "-include" => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The configuration's flags as passed.
+    pub(crate) fn flags(&self) -> Result<Vec<String>, Error> {
+        self.flags_mapped(&|p| Ok(p.to_path_buf()))
+    }
+
+    /// The arguments of a link: the configuration's `-pthread` (the only
+    /// configuration flag that reaches a link), no folder.
+    pub(crate) fn link_file_args(&self) -> FileArgs {
+        FileArgs {
+            flags: self
+                .flags
+                .iter()
+                .filter(|f| matches!(f, ConfigFlag::Plain(s) if s == "-pthread"))
+                .map(|_| "-pthread".to_string())
+                .collect(),
+            includes: Vec::new(),
+        }
+    }
+
+    /// What the compile of the project's C file `file` (canonical) gets:
+    /// the folder form's one list for every file (the source dir, then the
+    /// include dirs); a listed file's own folders after the configuration's
+    /// flags. A file that is not listed is refused by name.
+    pub(crate) fn file_args(&self, file: &Path) -> Result<FileArgs, Error> {
+        match &self.layout {
+            Layout::Folder {
+                source_dir,
+                include_dirs,
+            } => Ok(FileArgs::includes(
+                std::iter::once(source_dir.clone())
+                    .chain(include_dirs.iter().cloned())
+                    .collect(),
+            )),
+            Layout::FileList { files } => match files.iter().find(|l| l.path == file) {
+                Some(listed) => Ok(FileArgs {
+                    flags: self.flags()?,
+                    includes: listed.includes.clone(),
+                }),
+                None => Err(Error::Invariant(format!(
+                    "{} is not one of the files harness.toml lists, so the harness has no \
+                     include folders for it",
+                    file.strip_prefix(&self.root).unwrap_or(file).display()
+                ))),
+            },
+        }
+    }
+
+    /// What a harness-written file for `unit` gets (its driver, the boundary
+    /// check's wrapper and probes): the folder form's one list; for a file
+    /// list, the driver's folders ([`driver_folders`]), each canonical and
+    /// contained, after the configuration's flags.
+    pub(crate) fn unit_args(
+        &self,
+        target: &TargetContext,
+        facts: &Facts,
+        unit: &Unit,
+    ) -> Result<FileArgs, Error> {
+        match &self.layout {
+            // The one list, whatever the file.
+            Layout::Folder { .. } => self.file_args(&self.root),
+            Layout::FileList { .. } => {
+                let mut includes: Vec<PathBuf> = Vec::new();
+                for rel in driver_folders(target, facts, unit) {
+                    let dir =
+                        project_path(&unit.id, "include folder", &self.root, &self.ledger, &rel)?;
+                    if !includes.contains(&dir) {
+                        includes.push(dir);
+                    }
+                }
+                Ok(FileArgs {
+                    flags: self.flags()?,
+                    includes,
+                })
+            }
+        }
+    }
+
+    /// The unit's headers (the `.h` files of its include closure), canonical:
+    /// inside the source dir for the folder form; inside the root and never
+    /// under `migration/` for a file list.
+    pub(crate) fn unit_headers(&self, facts: &Facts, unit: &Unit) -> Result<Vec<PathBuf>, Error> {
+        facts
+            .include_closure(&unit.files)
+            .into_iter()
+            .filter(|p| p.ends_with(".h"))
+            .map(|rel| match &self.layout {
+                Layout::Folder { source_dir, .. } => {
+                    inside(&unit.id, "unit header", &self.root.join(rel), source_dir)
+                }
+                Layout::FileList { .. } => {
+                    project_path(&unit.id, "unit header", &self.root, &self.ledger, &rel)
+                }
+            })
             .collect()
     }
 
@@ -317,6 +561,84 @@ impl Base {
         std::fs::create_dir_all(&build_raw).map_err(|e| Error::io(&build_raw, e))?;
         let build = inside(unit_id, "unit build dir", &build_raw, &build_root)?;
         Ok((build_root, build))
+    }
+}
+
+/// A project path of a file-list target (`rel` relative to the canonical
+/// `root`), canonical: inside the root, and never under `migration/` nor the
+/// ledger — nothing the harness or a model wrote reaches a compile as the
+/// project's C (docs/PROJECT-MAP-DESIGN.md §3.7, "Confinement").
+pub(crate) fn project_path(
+    who: &str,
+    what: &str,
+    root: &Path,
+    ledger: &Path,
+    rel: &str,
+) -> Result<PathBuf, Error> {
+    let canon = inside(who, what, &root.join(rel), root)?;
+    if canon.starts_with(root.join(harness_core::ledger::MIGRATION_DIR))
+        || canon.starts_with(ledger)
+    {
+        return Err(Error::InvalidPlan(format!(
+            "`{who}`: {what} {} resolves under migration/, where the harness keeps its own \
+             files: list the project's own files and folders only",
+            harness_core::text::safe_line(rel)
+        )));
+    }
+    Ok(canon)
+}
+
+/// The driver's include folders for a file-list target, project-relative
+/// and in order (docs/PROJECT-MAP-DESIGN.md §3.7): for each `.c` of the
+/// unit, its own folder, then its listed folders; then the folder of every
+/// header of the unit's include closure; without repeats. `.` is the root.
+/// Lexical — the spelling the facts use; [`Base::unit_args`] resolves them.
+/// Empty for a folder-form target.
+pub(crate) fn driver_folders(target: &TargetContext, facts: &Facts, unit: &Unit) -> Vec<String> {
+    let Some(files) = target.config.target.files() else {
+        return Vec::new();
+    };
+    let parent = |p: &str| -> String {
+        match p.rsplit_once('/') {
+            Some((dir, _)) if !dir.is_empty() => dir.to_string(),
+            _ => ".".to_string(),
+        }
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |dir: String| {
+        let dir = clean_rel(&dir);
+        if !out.contains(&dir) {
+            out.push(dir);
+        }
+    };
+    for c in unit.files.iter().filter(|f| f.ends_with(".c")) {
+        push(parent(c));
+        if let Some(listed) = files.iter().find(|f| clean_rel(&f.path) == clean_rel(c)) {
+            for dir in &listed.include_dirs {
+                push(dir.clone());
+            }
+        }
+    }
+    for header in facts
+        .include_closure(&unit.files)
+        .into_iter()
+        .filter(|p| p.ends_with(".h"))
+    {
+        push(parent(&header));
+    }
+    out
+}
+
+/// A relative path's clean spelling: no empty or `.` parts; the root `.`.
+fn clean_rel(p: &str) -> String {
+    let parts: Vec<&str> = p
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
     }
 }
 
@@ -648,12 +970,14 @@ impl CAbiDifferential {
         // 4. Driver shape (R1): the driver, compiled alone with the flags of
         // its real builds, may define only `main`, call only the unit and the
         // libc allowlist, carry no weak symbol, and pass the source lint.
-        let includes = prep.base.includes();
+        // The driver's arguments: the configuration's flags and the unit's
+        // folders (the target's one list for the folder form).
+        let driver_args = prep.base.unit_args(target, &facts, unit)?;
         let shape_obj = prep.build.join("driver_shape.o");
         let shape_check = match cc_outcome(
             &runner,
             &CcInvocation {
-                includes: &includes,
+                args: &driver_args,
                 cflags: &["-c".to_string()],
                 quiet: true,
                 out: &shape_obj,
@@ -663,7 +987,7 @@ impl CAbiDifferential {
         )? {
             Err(stderr) => shape::not_compiled(&stderr),
             Ok(_) => {
-                let syms = shape::object_symbols(&runner, &shape_obj)?;
+                let syms = shape::object_symbols(&shape_obj)?;
                 let source = std::fs::read(&prep.driver).map_err(|e| Error::io(&prep.driver, e))?;
                 let lint = harness_scan::lint_driver(
                     &source,
@@ -688,21 +1012,26 @@ impl CAbiDifferential {
         let mut drv_c_inputs = vec![prep.driver.clone()];
         drv_c_inputs.extend(replace_paths.iter().cloned());
         let drv_rs_inputs = vec![prep.driver.clone(), rust_lib.clone()];
-        let cc = |out: &Path, inputs: &[PathBuf], cflags: &[String], libs: &[String]| {
-            cc_compile(
-                &runner,
-                &CcInvocation {
-                    includes: &includes,
-                    cflags,
-                    quiet: true,
-                    out,
-                    inputs,
-                    libs,
-                },
-            )
+        // Each C file compiled with its own arguments, the driver with the
+        // unit's, then one link; a failure is a harness error, as ever.
+        let cc = |out: &Path, inputs: &[PathBuf], cflags: &[String]| -> Result<(), Error> {
+            let compile = perf::build::Compile {
+                runner: &runner,
+                cflags,
+                strict: true,
+            };
+            build_driver(
+                &compile,
+                &prep.base,
+                &prep.driver,
+                &driver_args,
+                out,
+                inputs,
+            )?
+            .map_err(Error::Invariant)
         };
-        cc(&build.join("drv_c"), &drv_c_inputs, &[], &[])?;
-        cc(&build.join("drv_rs"), &drv_rs_inputs, &[], &[])?;
+        cc(&build.join("drv_c"), &drv_c_inputs, &[])?;
+        cc(&build.join("drv_rs"), &drv_rs_inputs, &[])?;
         match (
             confined.run(&build.join("drv_c"), &[], &[])?,
             confined.run(&build.join("drv_rs"), &[], &[])?,
@@ -738,7 +1067,7 @@ impl CAbiDifferential {
         // 7. Sanitizers on the C-side driver (validates driver + baseline).
         let san_flags: Vec<String> = SANITIZER_FLAGS.iter().map(|s| (*s).to_string()).collect();
         let san_bin = build.join("drv_c_san");
-        match cc(&san_bin, &drv_c_inputs, &san_flags, &[]) {
+        match cc(&san_bin, &drv_c_inputs, &san_flags) {
             Ok(()) => checks.push(sanitizer_check(confined.run(&san_bin, &[], &[])?)),
             Err(e) => checks.push(Check {
                 name: "sanitizers".into(),
@@ -755,7 +1084,8 @@ impl CAbiDifferential {
                 boundary_run::run(&boundary_run::BoundaryCtx {
                     runner: &runner,
                     confined: &confined,
-                    includes: &includes,
+                    base: &prep.base,
+                    unit_args: &driver_args,
                     headers: &headers,
                     unit_c: &unit_c,
                     driver: &prep.driver,
@@ -852,30 +1182,13 @@ impl CAbiDifferential {
             crate_dir,
             &crate_target_dir,
         )?;
-        let includes = prep.base.includes();
-        let headers: Vec<PathBuf> = facts
-            .include_closure(&unit.files)
-            .into_iter()
-            .filter(|p| p.ends_with(".h"))
-            .map(|rel| {
-                inside(
-                    &unit.id,
-                    "unit header",
-                    &root.join(rel),
-                    &prep.base.source_dir,
-                )
-            })
-            .collect::<Result<_, _>>()?;
-        let unit_c: Vec<PathBuf> = unit
-            .files
-            .iter()
-            .filter(|f| f.ends_with(".c"))
-            .map(|rel| inside(&unit.id, "unit file", &root.join(rel), root))
-            .collect::<Result<_, _>>()?;
+        let unit_args = prep.base.unit_args(target, &facts, unit)?;
+        let (headers, unit_c) = boundary_inputs(&prep, &facts, unit)?;
         boundary_run::run(&boundary_run::BoundaryCtx {
             runner: &runner,
             confined: &confined,
-            includes: &includes,
+            base: &prep.base,
+            unit_args: &unit_args,
             headers: &headers,
             unit_c: &unit_c,
             driver: &prep.driver,
@@ -897,7 +1210,6 @@ impl CAbiDifferential {
         args: &[String],
         rust_lib: &Path,
     ) -> Result<(Vec<Check>, WholePrograms), Error> {
-        let source_dir = &prep.base.source_dir;
         let build = &prep.build;
         let c_files = program_c_files(prep, unit)?;
         // Every `replaces` entry must actually match a collected C file —
@@ -908,7 +1220,11 @@ impl CAbiDifferential {
                 "unit `{}`: replaces entry `{}` does not match any .c file in {}",
                 unit.id,
                 prep.replaces[i].0,
-                source_dir.display()
+                prep.base
+                    .source_dir()
+                    .map_or("the files harness.toml lists".to_string(), |d| d
+                        .display()
+                        .to_string())
             )));
         }
         let c = build_whole_c(prep, confined.runner, &c_files)?;
@@ -975,8 +1291,21 @@ pub(crate) fn program_c_files(prep: &Prepared, unit: &Unit) -> Result<Vec<PathBu
 }
 
 /// [`program_c_files`] for `base`; `who` names the caller in messages.
+/// A file-list target's are its listed `.c` files, canonical and contained
+/// ([`Base::resolve`] checked them), in file order.
 pub(crate) fn program_c_files_in(base: &Base, who: &str) -> Result<Vec<PathBuf>, Error> {
-    let source_dir = &base.source_dir;
+    let source_dir = match &base.layout {
+        Layout::Folder { source_dir, .. } => source_dir,
+        Layout::FileList { files } => {
+            let mut c_files: Vec<PathBuf> = Vec::new();
+            for listed in files.iter().filter(|l| l.rel.ends_with(".c")) {
+                if !c_files.contains(&listed.path) {
+                    c_files.push(listed.path.clone());
+                }
+            }
+            return Ok(c_files);
+        }
+    };
     let mut c_files: Vec<PathBuf> = Vec::new();
     for entry in std::fs::read_dir(source_dir).map_err(|e| Error::io(source_dir, e))? {
         let path = entry.map_err(|e| Error::io(source_dir, e))?.path();
@@ -989,6 +1318,28 @@ pub(crate) fn program_c_files_in(base: &Base, who: &str) -> Result<Vec<PathBuf>,
     c_files.sort();
     c_files.dedup();
     Ok(c_files)
+}
+
+/// Build a program of the driver's (the driver and the unit's C, or its
+/// staticlib) on the multi-source path ([`perf::build::build_program`]):
+/// each `.c` compiled alone with its own arguments — the driver, a
+/// harness-written file, with `driver_args` ([`Base::unit_args`]) — then
+/// one link.
+pub(crate) fn build_driver(
+    compile: &perf::build::Compile<'_>,
+    base: &Base,
+    driver: &Path,
+    driver_args: &FileArgs,
+    out: &Path,
+    inputs: &[PathBuf],
+) -> Result<Result<(), String>, Error> {
+    perf::build::build_program(compile, base, &[], out, inputs, &|c| {
+        if c == driver {
+            Ok(driver_args.clone())
+        } else {
+            base.file_args(c)
+        }
+    })
 }
 
 /// The first of `c_files` that is not a regular file — a FIFO or a folder
@@ -1100,26 +1451,14 @@ fn run_failure_check(
 
 /// The boundary check's unit inputs (shared by `verify` and the calibration
 /// entry point so both see the same files): the unit's headers (its include
-/// closure, inside the source dir) and its `.c` files (inside the root).
+/// closure, [`Base::unit_headers`]) and its `.c` files (inside the root).
 fn boundary_inputs(
     prep: &Prepared,
     facts: &Facts,
     unit: &Unit,
 ) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Error> {
     let root = &prep.base.root;
-    let headers = facts
-        .include_closure(&unit.files)
-        .into_iter()
-        .filter(|p| p.ends_with(".h"))
-        .map(|rel| {
-            inside(
-                &unit.id,
-                "unit header",
-                &root.join(rel),
-                &prep.base.source_dir,
-            )
-        })
-        .collect::<Result<_, _>>()?;
+    let headers = prep.base.unit_headers(facts, unit)?;
     let unit_c = unit
         .files
         .iter()
@@ -1360,7 +1699,9 @@ pub(crate) fn load_facts(target: &TargetContext) -> Result<Facts, Error> {
 
 /// The quoted-include names a driver may use for the unit's own headers:
 /// every header of the unit's include closure as its repo-relative path, its
-/// basename, and its path relative to `source_dir` and to each include dir.
+/// basename, and its path relative to each folder the driver is compiled
+/// with — `source_dir` and each include dir for the folder form, the
+/// driver's folders ([`driver_folders`]) for a file list.
 pub(crate) fn unit_header_names(target: &TargetContext, facts: &Facts, unit: &Unit) -> Vec<String> {
     let clean = |p: &str| {
         p.split('/')
@@ -1368,23 +1709,17 @@ pub(crate) fn unit_header_names(target: &TargetContext, facts: &Facts, unit: &Un
             .collect::<Vec<_>>()
             .join("/")
     };
-    // A file-list target has no `source_dir` (its commands refuse it before
-    // a driver is written).
-    let search: Vec<String> = target
-        .config
-        .target
-        .source_dir()
-        .into_iter()
-        .chain(
-            target
-                .config
-                .target
-                .include_dirs()
-                .iter()
-                .map(String::as_str),
-        )
-        .map(clean)
-        .collect();
+    let search: Vec<String> = match &target.config.target.form {
+        Form::Folder(folder) => std::iter::once(folder.source_dir.as_str())
+            .chain(folder.include_dirs.iter().map(String::as_str))
+            .map(clean)
+            .collect(),
+        Form::FileList(_) => driver_folders(target, facts, unit)
+            .iter()
+            .map(|d| clean(d))
+            .filter(|d| !d.is_empty())
+            .collect(),
+    };
     let mut names = std::collections::BTreeSet::new();
     for header in facts
         .include_closure(&unit.files)
@@ -1405,17 +1740,18 @@ pub(crate) fn unit_header_names(target: &TargetContext, facts: &Facts, unit: &Un
 }
 
 /// One C compiler invocation. EVERY compile the oracle runs goes through
-/// [`cc_argv`], so `-ffp-contract=off` (R4) and the include search order
-/// (source dir, then `[target] include_dirs`) are uniform:
+/// [`cc_argv`], so `-ffp-contract=off` (R4) and the order of the arguments
+/// are uniform — the judge's own flags, then the configuration's, then the
+/// file's folders ([`Base::file_args`]):
 /// `cc -ffp-contract=off <cflags> [-O2 unless cflags sets -O*] [-w]
-/// -I<dir>… -o <out> <inputs…> <libs…>`.
+/// <configuration flags…> -I<dir>… -o <out> <inputs…> <libs…>`.
 ///
 /// `libs` (e.g. `-lm` from `extra_link_args`) go AFTER the inputs: linkers
 /// with `--as-needed` defaults (Ubuntu gcc) drop libraries listed before the
 /// objects that reference them.
 pub(crate) struct CcInvocation<'a> {
-    /// `-I` dirs, in search order.
-    pub includes: &'a [PathBuf],
+    /// The configuration's flags and the `-I` folders, in search order.
+    pub args: &'a FileArgs,
     /// Extra flags (`-c`, `-O0`, sanitizers, warnings).
     pub cflags: &'a [String],
     /// Suppress warnings (`-w`); false for the strict driver build.
@@ -1438,7 +1774,8 @@ pub(crate) fn cc_argv(inv: &CcInvocation<'_>) -> Result<Vec<String>, Error> {
     if inv.quiet {
         argv.push("-w".to_string());
     }
-    for dir in inv.includes {
+    argv.extend(inv.args.flags.iter().cloned());
+    for dir in &inv.args.includes {
         argv.push(format!("-I{}", path_str(dir)?));
     }
     argv.push("-o".to_string());
@@ -1854,10 +2191,13 @@ mod tests {
     /// dirs in search order; `quiet` controls `-w`; an explicit `-O*` wins.
     #[test]
     fn cc_argv_is_uniform() {
-        let includes = vec![PathBuf::from("/t/src"), PathBuf::from("/t/src/include")];
+        let includes = FileArgs::includes(vec![
+            PathBuf::from("/t/src"),
+            PathBuf::from("/t/src/include"),
+        ]);
         let inputs = vec![PathBuf::from("/t/d.c")];
         let argv = cc_argv(&CcInvocation {
-            includes: &includes,
+            args: &includes,
             cflags: &["-c".to_string()],
             quiet: true,
             out: Path::new("/t/b/d.o"),
@@ -1882,7 +2222,7 @@ mod tests {
             ]
         );
         let strict = cc_argv(&CcInvocation {
-            includes: &includes,
+            args: &includes,
             cflags: &["-O0".to_string()],
             quiet: false,
             out: Path::new("/t/b/x"),
@@ -1893,6 +2233,34 @@ mod tests {
         assert!(!strict.contains(&"-w".to_string()), "{strict:?}");
         assert!(!strict.contains(&"-O2".to_string()), "{strict:?}");
         assert_eq!(strict[1], FP_CONTRACT_OFF);
+        // A configuration's flags come after the judge's and before the
+        // file's folders.
+        let configured = FileArgs {
+            flags: vec!["-DLAYOUT=2".to_string(), "-I/t/conf".to_string()],
+            includes: vec![PathBuf::from("/t/own")],
+        };
+        let argv = cc_argv(&CcInvocation {
+            args: &configured,
+            cflags: &["-c".to_string()],
+            quiet: true,
+            out: Path::new("/t/b/d.o"),
+            inputs: &inputs,
+            libs: &[],
+        })
+        .expect("argv");
+        assert_eq!(
+            argv[..8],
+            [
+                "cc",
+                "-ffp-contract=off",
+                "-c",
+                "-O2",
+                "-w",
+                "-DLAYOUT=2",
+                "-I/t/conf",
+                "-I/t/own"
+            ]
+        );
     }
 
     #[test]
@@ -2083,7 +2451,10 @@ mod tests {
         let prep = Prepared::new(&target, &unit).expect("valid unit prepares");
         let root = tmp.path();
         assert_eq!(prep.base.root, root);
-        assert_eq!(prep.base.source_dir, root.join("src"));
+        assert_eq!(
+            prep.base.source_dir().expect("folder form"),
+            root.join("src")
+        );
         assert_eq!(prep.driver, root.join("migration/units/u1/driver.c"));
         assert_eq!(
             prep.crate_dir.as_deref(),
@@ -2329,5 +2700,264 @@ mod tests {
         assert_eq!(inputs.unit_source, again.unit_source);
         assert_eq!(inputs.driver, again.driver);
         assert_eq!(inputs.rust_crate, again.rust_crate);
+    }
+
+    /// A hand-made file-list target over `root`: the mapped tool `t-x`,
+    /// its `files` and its configuration's `flags` (TOML array bodies).
+    fn file_list_context(root: &Path, files: &str, flags: &str) -> TargetContext {
+        let config: harness_core::TargetConfig = toml::from_str(&format!(
+            "schema_version = 2\n[target]\nname = \"t\"\nfiles = [{files}]\n\
+             configuration = {{ name = \"make\", from = \"stated\", flags = [{flags}] }}\n\
+             [oracle]\nallowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]\n"
+        ))
+        .expect("config parses");
+        TargetContext {
+            ledger: root.join("migration/tools/t-x"),
+            tool: Some("t-x".into()),
+            root: root.to_path_buf(),
+            config,
+        }
+    }
+
+    fn put(root: &Path, rel: &str, text: &str) -> PathBuf {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().expect("parent")).expect("dir");
+        std::fs::write(&p, text).expect("write");
+        p
+    }
+
+    fn record(path: &str, includes: &[&str]) -> harness_core::facts::FileRecord {
+        harness_core::facts::FileRecord {
+            path: path.into(),
+            hash: String::new(),
+            includes: includes.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    fn run_stdout(bin: &Path) -> String {
+        let out = std::process::Command::new(bin).output().expect("runs");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// A unit whose two files have different include folders, each holding
+    /// a `conf.h` of its own: each file is compiled with its own folders.
+    /// One list for both (the folder form's way) gives one file the other's
+    /// `conf.h`, and it does not compile.
+    #[test]
+    fn a_units_files_compile_each_with_its_own_folders() {
+        let bench = testutil::ToolBench::new("fl-folders");
+        let root = bench.root().to_path_buf();
+        let a = put(
+            &root,
+            "lib/a.c",
+            "#include \"conf.h\"\nint fa(void) { return CONF_A; }\n",
+        );
+        let b = put(
+            &root,
+            "lib/b.c",
+            "#include \"conf.h\"\nint fb(void) { return CONF_B; }\n",
+        );
+        put(&root, "inc_a/conf.h", "#define CONF_A 3\n");
+        put(&root, "inc_b/conf.h", "#define CONF_B 4\n");
+        let driver = put(
+            &root,
+            "migration/tools/t-x/units/u/driver.c",
+            "#include <stdio.h>\nint fa(void);\nint fb(void);\n\
+             int main(void) { printf(\"%d\\n\", fa() * 10 + fb()); return 0; }\n",
+        );
+        let target = file_list_context(
+            &root,
+            "{ path = \"lib/a.c\", include_dirs = [\"inc_a\"] }, \
+             { path = \"lib/b.c\", include_dirs = [\"inc_b\"] }",
+            "",
+        );
+        let facts = Facts {
+            frontend: "t".into(),
+            files: vec![
+                record("inc_a/conf.h", &[]),
+                record("inc_b/conf.h", &[]),
+                record("lib/a.c", &["inc_a/conf.h"]),
+                record("lib/b.c", &["inc_b/conf.h"]),
+            ],
+            ..Facts::default()
+        };
+        let unit: Unit = toml::from_str(
+            "id = \"u\"\nstatus = \"pending\"\nfiles = [\"lib/a.c\", \"lib/b.c\"]\n\
+             symbols = [\"fa\", \"fb\"]\n",
+        )
+        .expect("unit");
+        let base = Base::resolve(&target, "u", &["cc"]).expect("base");
+        let (_, build) = base.build_dirs("u").expect("build dirs");
+        let driver_args = base.unit_args(&target, &facts, &unit).expect("driver args");
+        assert_eq!(
+            driver_args.includes,
+            [root.join("lib"), root.join("inc_a"), root.join("inc_b")]
+        );
+        let compile = perf::build::Compile {
+            runner: bench.runner(),
+            cflags: &[],
+            strict: false,
+        };
+        let out = build.join("drv");
+        build_driver(
+            &compile,
+            &base,
+            &driver,
+            &driver_args,
+            &out,
+            &[driver.clone(), a.clone(), b.clone()],
+        )
+        .expect("runs")
+        .expect("builds");
+        assert_eq!(run_stdout(&out), "34\n");
+        // The whole program's path does the same.
+        let whole = build.join("whole");
+        perf::build::whole_cc_into(
+            &base,
+            &[],
+            bench.runner(),
+            &whole,
+            &[driver.clone(), a.clone(), b.clone()],
+        )
+        .expect_err("the driver is not a listed file: no folders for it");
+        // One list for both files: `b.c` reads `inc_a/conf.h`.
+        let merged = FileArgs::includes(vec![root.join("inc_a"), root.join("inc_b")]);
+        let one_list = cc_outcome(
+            bench.runner(),
+            &CcInvocation {
+                args: &merged,
+                cflags: &["-c".to_string()],
+                quiet: true,
+                out: &build.join("b.o"),
+                inputs: std::slice::from_ref(&b),
+                libs: &[],
+            },
+        )
+        .expect("runs");
+        assert!(one_list.is_err(), "CONF_B is not in inc_a/conf.h");
+    }
+
+    /// liblzg's shape: `lib/encode.c` includes `"internal.h"`, which
+    /// includes `"../include/lzg.h"`. The driver's folders reach
+    /// `include/` through the unit's include closure, so a driver writing
+    /// `#include "lzg.h"` compiles and passes the lint; the configuration's
+    /// `-D` reaches it too.
+    #[test]
+    fn the_driver_finds_a_header_through_the_units_include_closure() {
+        let bench = testutil::ToolBench::new("fl-lzg");
+        let root = bench.root().to_path_buf();
+        let encode = put(
+            &root,
+            "lib/encode.c",
+            "#include \"internal.h\"\nint lzg_encode(int x) { return LZG_MAGIC + x; }\n",
+        );
+        put(&root, "lib/internal.h", "#include \"../include/lzg.h\"\n");
+        put(
+            &root,
+            "include/lzg.h",
+            "#ifndef LZG_MAGIC\n#error \"no configuration\"\n#endif\nint lzg_encode(int x);\n",
+        );
+        let source = "#include <stdio.h>\n#include \"lzg.h\"\n\
+                      int main(void) { printf(\"%d\\n\", lzg_encode(1)); return 0; }\n";
+        let driver = put(&root, "migration/tools/t-x/units/u/driver.c", source);
+        let target = file_list_context(
+            &root,
+            "{ path = \"lib/encode.c\" }",
+            "\"-DLZG_MAGIC=7\", \"-O2\"",
+        );
+        let facts = Facts {
+            frontend: "t".into(),
+            files: vec![
+                record("include/lzg.h", &[]),
+                record("lib/encode.c", &["lib/internal.h"]),
+                record("lib/internal.h", &["include/lzg.h"]),
+            ],
+            ..Facts::default()
+        };
+        let unit: Unit = toml::from_str(
+            "id = \"u\"\nstatus = \"pending\"\nfiles = [\"lib/encode.c\"]\n\
+             symbols = [\"lzg_encode\"]\n",
+        )
+        .expect("unit");
+        assert_eq!(driver_folders(&target, &facts, &unit), ["lib", "include"]);
+        let names = unit_header_names(&target, &facts, &unit);
+        for name in ["lzg.h", "internal.h", "include/lzg.h", "lib/internal.h"] {
+            assert!(names.contains(&name.to_string()), "{name}: {names:?}");
+        }
+        assert!(
+            harness_scan::lint_driver(source.as_bytes(), &unit.symbols, &names).is_empty(),
+            "the lint takes the driver's include"
+        );
+        let base = Base::resolve(&target, "u", &["cc"]).expect("base");
+        assert_eq!(
+            base.flags().expect("flags"),
+            ["-DLZG_MAGIC=7"],
+            "-O recorded, never applied"
+        );
+        let (_, build) = base.build_dirs("u").expect("build dirs");
+        let driver_args = base.unit_args(&target, &facts, &unit).expect("driver args");
+        let out = build.join("drv");
+        let compile = perf::build::Compile {
+            runner: bench.runner(),
+            cflags: &[],
+            strict: false,
+        };
+        build_driver(
+            &compile,
+            &base,
+            &driver,
+            &driver_args,
+            &out,
+            &[driver.clone(), encode],
+        )
+        .expect("runs")
+        .expect("builds");
+        assert_eq!(run_stdout(&out), "8\n");
+    }
+
+    /// A file-list target's paths stay inside the project and out of
+    /// `migration/`: a listed file there, a header the facts place there,
+    /// an include folder linked out of the project.
+    #[test]
+    fn a_file_lists_paths_are_confined() {
+        let tmp = testutil::TempDir::new("fl-paths");
+        let root = tmp.path().join("p");
+        put(&root, "lib/a.c", "int a;\n");
+        put(&root, "migration/tools/t-x/x.c", "int x;\n");
+        put(&root, "migration/tools/t-x/x.h", "int y;\n");
+        let root = root.canonicalize().expect("root");
+        let refused = |files: &str| {
+            Base::resolve(&file_list_context(&root, files, ""), "u", &["cc"])
+                .expect_err("refused")
+                .to_string()
+        };
+        std::os::unix::fs::symlink(root.join("migration/tools/t-x/x.c"), root.join("lib/x.c"))
+            .expect("link");
+        assert!(refused("{ path = \"lib/x.c\" }").contains("under migration/"));
+        std::os::unix::fs::symlink(tmp.path(), root.join("up")).expect("link");
+        assert!(refused("{ path = \"lib/a.c\", include_dirs = [\"up\"] }").contains("outside"));
+        let target = file_list_context(&root, "{ path = \"lib/a.c\" }", "");
+        let base = Base::resolve(&target, "u", &["cc"]).expect("base");
+        let facts = Facts {
+            frontend: "t".into(),
+            files: vec![record("lib/a.c", &["migration/tools/t-x/x.h"])],
+            ..Facts::default()
+        };
+        let unit: Unit = toml::from_str(
+            "id = \"u\"\nstatus = \"pending\"\nfiles = [\"lib/a.c\"]\nsymbols = [\"a\"]\n",
+        )
+        .expect("unit");
+        let why = base
+            .unit_headers(&facts, &unit)
+            .expect_err("refused")
+            .to_string();
+        assert!(why.contains("under migration/"), "{why}");
+        let why = base
+            .unit_args(&target, &facts, &unit)
+            .expect_err("refused")
+            .to_string();
+        assert!(why.contains("under migration/"), "{why}");
+        // A file not listed has no folders.
+        assert!(base.file_args(&root.join("lib/x.c")).is_err());
     }
 }

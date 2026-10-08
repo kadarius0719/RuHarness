@@ -7,7 +7,7 @@
 //! refuse links.
 
 use crate::exec::Runner;
-use crate::{inside, Base, CcInvocation};
+use crate::{inside, Base, CcInvocation, FileArgs};
 use harness_core::error::Error;
 use harness_core::ledger::Ledger;
 use std::path::{Path, PathBuf};
@@ -164,9 +164,30 @@ impl Hashed {
     }
 }
 
-/// verify's whole-program compile: `cc` with the C's flags, the target's
-/// include dirs, `inputs` and the target's `extra_link_args` (shared by
-/// verify's whole-program and feature steps and by perf).
+/// How a build's compiles and link run: the judge's own flags (a level,
+/// the sanitizers) for every compile and the link, and whether a failure is
+/// an `Err` (a harness-side build) or evidence (`Ok(Err(first lines))`).
+#[derive(Clone, Copy)]
+pub(crate) struct Compile<'a> {
+    pub runner: &'a Runner,
+    pub cflags: &'a [String],
+    pub strict: bool,
+}
+
+impl Compile<'_> {
+    fn cc(&self, inv: &CcInvocation<'_>) -> Result<Result<(), String>, Error> {
+        if self.strict {
+            crate::cc_compile(self.runner, inv).map(Ok)
+        } else {
+            crate::cc_outcome(self.runner, inv)
+        }
+    }
+}
+
+/// verify's whole-program build: every `.c` of `inputs` compiled to an
+/// object with its own arguments ([`Base::file_args`]), then one link with
+/// the other inputs and the target's `extra_link_args` (shared by verify's
+/// whole-program and feature steps and by perf). A failure is an `Err`.
 pub(crate) fn whole_cc_into(
     base: &Base,
     link_args: &[String],
@@ -174,22 +195,85 @@ pub(crate) fn whole_cc_into(
     out: &Path,
     inputs: &[PathBuf],
 ) -> Result<(), Error> {
-    let includes = base.includes();
-    crate::cc_compile(
+    let compile = Compile {
         runner,
-        &CcInvocation {
-            includes: &includes,
-            cflags: &[],
-            quiet: true,
-            out,
-            inputs,
-            libs: link_args,
-        },
-    )
+        cflags: &[],
+        strict: true,
+    };
+    build_program(&compile, base, link_args, out, inputs, &|c| {
+        base.file_args(c)
+    })?
+    .map_err(Error::Invariant)
+}
+
+/// The oracle's one build of a program from several inputs
+/// (docs/PROJECT-MAP-DESIGN.md §3.7): each `.c` of `inputs` compiled alone
+/// into `<out>.obj/` with the arguments `args_of` gives it, then one link
+/// of the inputs in their order — objects in their sources' places, the
+/// other inputs (staticlibs, objects built before) as they are — with
+/// `link_args` after them.
+pub(crate) fn build_program(
+    compile: &Compile<'_>,
+    base: &Base,
+    link_args: &[String],
+    out: &Path,
+    inputs: &[PathBuf],
+    args_of: &dyn Fn(&Path) -> Result<FileArgs, Error>,
+) -> Result<Result<(), String>, Error> {
+    let (parent, name) = match (out.parent(), out.file_name().and_then(|n| n.to_str())) {
+        (Some(parent), Some(name)) => (parent, name),
+        _ => {
+            return Err(Error::Invariant(format!(
+                "{}: not a file to build",
+                out.display()
+            )))
+        }
+    };
+    let mut sources: Vec<(PathBuf, FileArgs)> = Vec::new();
+    for input in inputs.iter().filter(|p| is_c_source(p)) {
+        sources.push((input.clone(), args_of(input)?));
+    }
+    let objects = if sources.is_empty() {
+        Vec::new()
+    } else {
+        let obj_dir = sub_folder(parent, &format!("{name}.obj"))?;
+        match compile_objects_with(compile, &sources, &obj_dir)? {
+            Ok(objects) => objects,
+            Err(words) => return Ok(Err(words)),
+        }
+    };
+    for built in &objects {
+        built.check()?;
+    }
+    let mut next = objects.iter();
+    let mut link_inputs = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        if is_c_source(input) {
+            if let Some(object) = next.next() {
+                link_inputs.push(object.path.clone());
+            }
+        } else {
+            link_inputs.push(input.clone());
+        }
+    }
+    let args = base.link_file_args();
+    compile.cc(&CcInvocation {
+        args: &args,
+        cflags: compile.cflags,
+        quiet: true,
+        out,
+        inputs: &link_inputs,
+        libs: link_args,
+    })
+}
+
+/// A C source the build compiles to an object first.
+fn is_c_source(p: &Path) -> bool {
+    p.extension().and_then(|e| e.to_str()) == Some("c")
 }
 
 /// Compile each C file once into `obj_dir` (`<n>-<stem>.o`, `n` its place
-/// in `c_files` from 001), with the flags [`whole_cc_into`] gives them;
+/// in `c_files` from 001), with the arguments [`Base::file_args`] gives it;
 /// `Ok(Err(first lines))` when the compiler ran and failed — a set-up
 /// failure of the C, in its own words. The place keeps two files with one
 /// base name (a top-level link to a same-named file in a subfolder) apart,
@@ -200,24 +284,43 @@ pub(crate) fn compile_objects(
     c_files: &[PathBuf],
     obj_dir: &Path,
 ) -> Result<Result<Vec<Hashed>, String>, Error> {
-    let includes = base.includes();
-    let mut out = Vec::with_capacity(c_files.len());
-    for (i, c) in c_files.iter().enumerate() {
+    let mut sources = Vec::with_capacity(c_files.len());
+    for c in c_files {
+        sources.push((c.clone(), base.file_args(c)?));
+    }
+    let compile = Compile {
+        runner,
+        cflags: &[],
+        strict: false,
+    };
+    compile_objects_with(&compile, &sources, obj_dir)
+}
+
+/// [`compile_objects`] with each file's arguments given and `compile`'s
+/// flags: every object hashed right after its build.
+pub(crate) fn compile_objects_with(
+    compile: &Compile<'_>,
+    sources: &[(PathBuf, FileArgs)],
+    obj_dir: &Path,
+) -> Result<Result<Vec<Hashed>, String>, Error> {
+    let mut out = Vec::with_capacity(sources.len());
+    let mut cflags = compile.cflags.to_vec();
+    cflags.push("-c".to_string());
+    for (i, (c, args)) in sources.iter().enumerate() {
         let stem = c
             .file_stem()
             .and_then(|s| s.to_str())
             .ok_or_else(|| Error::Invariant(format!("{}: not a UTF-8 name", c.display())))?;
         let obj = obj_dir.join(format!("{:03}-{stem}.o", i + 1));
-        let cflags = ["-c".to_string()];
         let inv = CcInvocation {
-            includes: &includes,
+            args,
             cflags: &cflags,
             quiet: true,
             out: &obj,
             inputs: std::slice::from_ref(c),
             libs: &[],
         };
-        if let Err(words) = crate::cc_outcome(runner, &inv)? {
+        if let Err(words) = compile.cc(&inv)? {
             return Ok(Err(words));
         }
         out.push(Hashed::new(&obj)?);
@@ -244,7 +347,6 @@ pub(crate) fn link_side(
     for built in objects.iter().chain(libs) {
         built.check()?;
     }
-    let includes = base.includes();
     let mut inputs: Vec<PathBuf> = objects.iter().map(|h| h.path.clone()).collect();
     let mut tail: Vec<String> = Vec::new();
     if group && libs.len() > 1 {
@@ -257,8 +359,9 @@ pub(crate) fn link_side(
         inputs.extend(libs.iter().map(|h| h.path.clone()));
     }
     tail.extend(link_args.iter().cloned());
+    let args = base.link_file_args();
     let inv = CcInvocation {
-        includes: &includes,
+        args: &args,
         cflags: &[],
         quiet: true,
         out,
