@@ -47,6 +47,7 @@ fn c(path: &str, defs: &[&str], needs: &[&str]) -> FileFacts {
         functions: 0,
         includes: Vec::new(),
         include_dirs: Vec::new(),
+        flags: Vec::new(),
         ambiguous: Vec::new(),
         compiled: Some(Compiled::Ok),
         outside_includes: false,
