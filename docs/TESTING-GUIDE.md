@@ -3638,7 +3638,7 @@ mkdir -p targets/lzg/bench
 **Run.** This is one command.
 
 ```bash
-for i in $(seq 1 300); do cat targets/lzg/src/lzg/*.c; done > targets/lzg/bench/big.txt
+for i in $(seq 1 900); do cat targets/lzg/src/lzg/*.c; done > targets/lzg/bench/big.txt
 ```
 
 **Run.**
@@ -3647,9 +3647,9 @@ for i in $(seq 1 300); do cat targets/lzg/src/lzg/*.c; done > targets/lzg/bench/
 ls -lh targets/lzg/bench/big.txt
 ```
 
-**You should see** a file of about 10 to 20 MB.
+**You should see** a file of about 30 to 35 MB.
 
-**What just happened.** `bench/big.txt` is 300 copies of the target's own C files, one after another. It sits in the target's root folder, outside `src/lzg`, so the scan and the plan never see it.
+**What just happened.** `bench/big.txt` is 900 copies of the target's own C files, one after another. It sits in the target's root folder, outside `src/lzg`, so the scan and the plan never see it.
 
 ### Step 11.2 — Write the workloads file
 
@@ -3714,7 +3714,7 @@ A mistake is refused with its line and column, for example `error: migration/per
 
 ### Step 11.3 — Measure
 
-**Why.** Both your verified units are measured, alone and together. It takes several minutes: per workload about 17 runs of the C alone, then 33 for each unit and 33 for the program as it stands. Keep the computer quiet while it runs: other work makes the numbers noisier.
+**Why.** Both your verified units are measured, alone and together. It takes a minute or two (the cockpit's estimate says about 3 minutes): per workload about 17 runs of the C alone, then 30 timed runs for each unit and 30 for the program as it stands (the C and the Rust taking turns). Keep the computer quiet while it runs: other work makes the numbers noisier.
 
 **Run.**
 
@@ -3733,8 +3733,8 @@ perf: the C on best — checking it ends the same way twice…
 perf: keep the computer quiet while it measures
 perf: the C on best — timed run 1 of 15…
 …
-perf: the C on best — CPU about <n.nn> s here today (varies with load) · <n.n> MB
-      · <n.nn>e<nn> instructions
+perf: the C on best — CPU about <n.nn> s here today (varies with load) · <nnn> MB ·
+      <n.nn>e<n> instructions
       15 runs
 perf: u-checksum on best — C, u-checksum, C…
 …
@@ -3759,7 +3759,7 @@ The first time, it also says `building the launcher…`: perf builds its own sma
 
 **If it looks different.**
 
-- `too short to time` on a workload: your computer is faster than expected. Run Step 11.1 again with `seq 1 900`, and measure again.
+- `too short to time` on a workload: the message says how many times bigger the input should be. Run Step 11.1 again with a larger number (for example `seq 1 2700` for three times as big), use the same number in Step 11.4, and measure again.
 - `perf: the other rows on best are not run — the C failed there`: the original C crashed, timed out, printed too much or was stopped on that workload (the line above it says which), so perf has nothing to compare the Rust against there. Check the workload's options and input.
 - `perf: one unit measured (u-checksum) — u-version left out: verify it first — the program as it stands needs two`: that unit's verdict is no longer fresh. Re-check it in the cockpit (or run `harness verify u-version --target targets/lzg`), then measure again.
 - `error: the program's C changed since the scan: scan the project first, then measure`: run `harness scan --target targets/lzg`, and try again.
@@ -3773,7 +3773,7 @@ The first time, it also says `building the launcher…`: perf builds its own sma
 harness perf show --target targets/lzg
 ```
 
-**You should see** the same rows as at the end of Step 11.3.
+**You should see** the same rows as at the end of Step 11.3, grouped differently: the C on each workload first, then the program as it stands, then each unit.
 
 **Run.** Change the input.
 
@@ -3792,7 +3792,7 @@ harness perf show --target targets/lzg --no-check | head -4
 **Run.** Make the input again, exactly as Step 11.1 made it.
 
 ```bash
-for i in $(seq 1 300); do cat targets/lzg/src/lzg/*.c; done > targets/lzg/bench/big.txt
+for i in $(seq 1 900); do cat targets/lzg/src/lzg/*.c; done > targets/lzg/bench/big.txt
 ```
 
 **Run.**
@@ -3814,9 +3814,9 @@ harness-tui --target targets/lzg
 ```
 
 1. **The Speed row** is below Features in the tree, labelled `Speed (2 of 2)`: both verified units are measured.
-2. **The Speed view.** Select it. It starts with the computer and compilers the rows were measured with, then `The original C`, `As it stands (2 units)` and each unit, worst first, each workload with its short answer. Press `Tab` to move into the view, then `↓` onto a row: its full sentence shows below the list, with the computer and compilers that row was measured with.
+2. **The Speed view.** Select it. It starts with the computer and the Rust compiler the rows were measured with (a row's full sentence also names the C compiler), then `The original C`, `As it stands (2 units)` and each unit, worst first, each workload with its short answer. Press `Tab` to move into the view, then `↓` onto a row: its full sentence shows below the list, with the computer and compilers that row was measured with.
 3. **A unit.** Select `u-checksum`. Below its verdict lines it shows `Speed: <answer> on <workload>`, and on the next line its range (when the answer has one), `parallel` when the program uses several cores, and how many of the workloads say the same. If a row is slower, a `Next:` line says what you could do about it.
-4. **The actions.** Back on the Speed row, press `Enter`: **Edit the workloads file**, **Measure speed** and **Measure the program as it stands**. Each dialog says how many runs it makes, about how long it takes, and what it writes. Press `Esc` to close it without running anything.
+4. **The actions.** Back on the Speed row, press `Enter`: **Edit the workloads file**, **Measure speed** and **Measure the program as it stands**. The two Measure dialogs say how many runs they make, about how long they take, and what they write; the Edit dialog says nano opens a private copy and the cockpit checks it before saving. Press `Esc` to close it without running anything.
 5. **Help.** Press `?` and scroll to **Speed** for the words and what they mean.
 6. **Quit** with `q`.
 
@@ -3836,7 +3836,7 @@ git add targets/lzg/migration/perf
 git commit -m "lzg: workloads and the first speed measurement"
 ```
 
-**You should see** a line like `[practice-lzg <7hex>] lzg: workloads and the first speed measurement`, then `4 files changed`.
+**You should see** a line like `[practice-lzg <7hex>] lzg: workloads and the first speed measurement`, then `4 files changed`. (A hint that your name and email were "configured automatically" may come first; it is harmless.)
 
 **Run.**
 
