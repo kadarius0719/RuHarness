@@ -86,15 +86,12 @@ pub(crate) fn cmd_save(target: TargetArg, expect: String, bytes: u64) -> Result<
     }
     // The refusal names the file by its own path (a tool's is under
     // migration/tools/<id>/), in the reader's words.
-    features::parse(&text, &path).map_err(|e| {
+    features::parse(&text, &path, &ctx.ledger_rel()).map_err(|e| {
         let words = match e {
             harness_core::Error::InvalidPlan(m) => m,
             other => other.to_string(),
         };
-        anyhow::anyhow!(
-            "{}",
-            harness_core::error::in_ledger(&words, &ctx.ledger_rel())
-        )
+        anyhow::anyhow!("{words}")
     })?;
     harness_core::ledger::write_atomic(&path, text.as_bytes())?;
     out(format!("features: saved {}", display(&ctx.root, &path)));
@@ -113,18 +110,16 @@ pub(crate) fn cmd_map(target: TargetArg, allow_unsandboxed: bool) -> Result<u8> 
             display(&ctx.root, &features::features_path(&Ledger::of(&ctx))),
             crate::hint(&ctx, "features init")
         ),
-        FeatureSnapshot::Invalid(why) => {
-            bail!(
-                "{}",
-                harness_core::error::in_ledger(&why, &ctx.ledger_rel())
-            )
-        }
+        FeatureSnapshot::Invalid(why) => bail!("{why}"),
         FeatureSnapshot::Valid { features, digest } => (features, digest),
     };
     if features.scenarios.is_empty() {
-        bail!("your features file has no scenario to map");
+        bail!(
+            "your features file has no scenario to map: add a [[scenario]] to {}",
+            display(&ctx.root, &features::features_path(&ledger))
+        );
     }
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
+    let facts = crate::load_facts(&ctx, &ledger)?;
     let stale = crate::stale_fact_files(&ctx, &facts);
     if stale > 0 {
         bail!(

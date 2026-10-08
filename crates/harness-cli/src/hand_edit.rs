@@ -7,7 +7,7 @@ use crate::{lock_ledger, out, promote, report, require_sandbox, TargetArg, EXIT_
 use anyhow::{bail, Context, Result};
 use harness_core::attempts;
 use harness_core::ledger::Ledger;
-use harness_core::{Facts, Plan, TargetContext, Unit};
+use harness_core::{Plan, TargetContext, Unit};
 use std::path::{Path, PathBuf};
 
 /// Largest file of a hand edit that is read.
@@ -31,7 +31,7 @@ pub(crate) fn cmd_override(
         .context("plan.toml is structurally invalid; fix it first")?;
     let unit = plan_doc.unit(&unit_id)?;
     promote::recover_promotion(&ctx, &ledger, unit)?;
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
+    let facts = crate::load_facts(&ctx, &ledger)?;
     promote::migrate_preconditions(&ctx, &ledger, &facts, unit, "recording a hand edit")?;
     let (logic, ffi) = read_hand_edit(&ctx, unit, &dir)?;
 

@@ -11,7 +11,8 @@ Usage: python3 -I cockpit.py <workdir> <rows> <cols> -- <argv...>
     click <col> <row>  1-based SGR mouse press+release
     quit               end the driver (sends nothing)
 - Appends every event to <workdir>/log.txt; the raw bytes to <workdir>/raw.bin.
-The child's environment is plain (HOME PATH USER LOGNAME SHELL LANG TMPDIR + TERM),
+The child's environment is plain (HOME PATH USER LOGNAME SHELL LANG TMPDIR + TERM, and
+RUHARNESS_ADOPTED when set, so a checker's scratch adoption file is the one used),
 as from a plain Terminal window.
 """
 import codecs
@@ -35,7 +36,10 @@ KEYS = {
     "Home": b"\x1b[H", "End": b"\x1b[F", "Space": b" ",
 }
 
-env = {k: os.environ[k] for k in ("HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR")
+# RUHARNESS_ADOPTED passes through: a checker who points it at a scratch
+# file never adopts into the person's own adoption file.
+env = {k: os.environ[k] for k in ("HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR",
+                                  "RUHARNESS_ADOPTED")
        if k in os.environ}
 env["TERM"] = "xterm-256color"
 

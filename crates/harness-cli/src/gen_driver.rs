@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use harness_core::driver::DriverValidation;
 use harness_core::ledger::Ledger;
 use harness_core::plan::{self as plan_mod, OracleValue};
-use harness_core::{hash, Facts, Plan, TargetContext};
+use harness_core::{hash, Plan, TargetContext};
 use std::path::Path;
 
 use crate::{
@@ -108,7 +108,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         .execution_order()
         .context("plan.toml is structurally invalid; fix it first")?;
     let unit = plan_doc.unit(&unit_id)?;
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
+    let facts = crate::load_facts(&ctx, &ledger)?;
     let closure = facts.include_closure(&unit.files);
     if hash::file_set_hash_on_disk(&ctx.root, &closure)? != unit.source_hash {
         return Err(harness_core::Error::Stale {
@@ -176,7 +176,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
                 eprintln!("{e:#}");
                 eprintln!(
                     "gen-driver: external provider mode — supply the response file under {} and \
-                     re-run",
+                     re-run: {resume}",
                     traces.display()
                 );
                 if let harness_core::Error::Awaiting { path, attempt } = &e {

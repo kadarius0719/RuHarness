@@ -10,16 +10,18 @@ use std::path::Path;
 /// What adopting does, in the dialog's words.
 pub fn explanation(adoption_file: &str) -> String {
     format!(
-        "Adopting trusts these results on this computer from now on:\n\
+        "Adopting trusts these results in this folder on this computer from now on (a copy\n\
+         \x20 or another checkout of the project is asked again):\n\
          \x20 - the harness will build and run the code they hold — drivers, Rust crates,\n\
          \x20   features and workloads — in the sandbox;\n\
-         \x20 - the folder and a fresh random token are recorded in {adoption_file}\n\
+         \x20 - the folder, a fresh random token and the time are recorded in {adoption_file}\n\
          \x20   (the token is also written to migration/.ruharness-adopted, replacing any\n\
          \x20   that came with the folder);\n\
-         \x20 - the build folders that came with them are deleted: migration/build/, each unit\n\
-         \x20   crate's target/, each attempt's candidate/target/ and every .promote-*/ —\n\
-         \x20   nothing else;\n\
-         \x20 - the verdicts stay claims made elsewhere until `harness verify` runs them here.\n"
+         \x20 - the build folders that came with them are deleted, in the project's ledger and\n\
+         \x20   in each tool's under migration/tools/: build/, each unit crate's target/, each\n\
+         \x20   attempt's candidate/target/ and every .promote-*/ — nothing else;\n\
+         \x20 - each verdict that came with them is marked \"made elsewhere\" (in the tree and in\n\
+         \x20   `harness state status`) until `harness verify` runs it here.\n"
     )
 }
 
@@ -28,9 +30,11 @@ pub fn explanation(adoption_file: &str) -> String {
 /// made_elsewhere`]), on `input`/`output`; adopt it on a `y`. `Ok(true)` when
 /// the folder is now trusted; `Ok(false)` when the person declined; `Err`
 /// is a reason in words (the project's own `migration/`, an unwritable
-/// adoption file).
+/// adoption file). `tool` is the mapped tool the cockpit opens, for the
+/// commands the adoption lines name.
 pub fn ask(
     target: &Path,
+    tool: Option<&str>,
     refusal: &str,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
@@ -57,11 +61,15 @@ pub fn ask(
         .read_line(&mut line)
         .map_err(|e| format!("the terminal: {e}"))?;
     if !matches!(line.trim(), "y" | "Y") {
-        say(output, "not adopted; nothing was changed\n")?;
+        say(
+            output,
+            "not adopted; nothing was changed — start the cockpit again and type y when you \
+             want to adopt it\n",
+        )?;
         return Ok(false);
     }
     let done = harness_core::adopt::adopt(target).map_err(|e| e.to_string())?;
-    for l in done.describe() {
+    for l in done.describe(tool) {
         say(output, &format!("{l}\n"))?;
     }
     Ok(true)
@@ -93,7 +101,7 @@ mod tests {
         let refusal = harness_core::adopt::made_elsewhere(&root, units, verified);
         for declined in ["\n", "yes please\n", ""] {
             let mut out = Vec::new();
-            let adopted = ask(&dir, &refusal, &mut declined.as_bytes(), &mut out).unwrap();
+            let adopted = ask(&dir, None, &refusal, &mut declined.as_bytes(), &mut out).unwrap();
             assert!(!adopted);
             let text = String::from_utf8(out).unwrap();
             assert!(
@@ -112,12 +120,30 @@ mod tests {
                 "{text}"
             );
             assert!(text.contains("the build folders that came with them are deleted"));
-            assert!(text.contains("until `harness verify` runs them here"));
+            // Each tool's build folders are named too.
+            assert!(
+                text.contains("in each tool's under migration/tools/"),
+                "{text}"
+            );
+            assert!(
+                text.contains("is marked \"made elsewhere\" (in the tree and in"),
+                "{text}"
+            );
+            assert!(
+                text.contains("until `harness verify` runs it here"),
+                "{text}"
+            );
+            assert!(text.contains("another checkout of the project is asked again"));
+            // Declining names the way back.
+            assert!(
+                text.contains("start the cockpit again and type y when you want to adopt it"),
+                "{text}"
+            );
             assert!(harness_core::adopt::check(&dir).is_err());
             assert!(m.join("build").exists());
         }
         let mut out = Vec::new();
-        assert!(ask(&dir, &refusal, &mut "y\n".as_bytes(), &mut out).unwrap());
+        assert!(ask(&dir, None, &refusal, &mut "y\n".as_bytes(), &mut out).unwrap());
         harness_core::adopt::check(&dir).unwrap();
         assert!(!m.join("build").exists());
         let _ = std::fs::remove_dir_all(&dir);

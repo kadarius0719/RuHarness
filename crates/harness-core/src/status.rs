@@ -124,6 +124,12 @@ pub struct UnitReport {
     /// part of `stale` or `contradiction`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub features: Option<crate::features::Coverage>,
+    /// The verdict was written before the person adopted this folder
+    /// ([`crate::adopt::made_before_adoption`]): made elsewhere until
+    /// `harness verify` runs it here. A marker, never part of `stale` or
+    /// `contradiction`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub made_elsewhere: bool,
 }
 
 impl UnitReport {
@@ -173,6 +179,11 @@ impl UnitReport {
             }
             Some(crate::features::Coverage::Current) => format!("{desc} features=current"),
             None => desc,
+        };
+        let desc = if self.made_elsewhere {
+            format!("{desc} made-elsewhere")
+        } else {
+            desc
         };
         format!(
             "status: {} [{}] plan={} verdict={desc}{tail}",
@@ -321,9 +332,12 @@ fn compute(
     let source_fresh = source_now == unit.source_hash;
 
     let mut coverage = None;
-    let verdict = match Verdict::load(&ledger.verdict_latest_path(&unit.id)) {
+    let mut made_elsewhere = false;
+    let verdict_path = ledger.verdict_latest_path(&unit.id);
+    let verdict = match Verdict::load(&verdict_path) {
         Ok(v) => {
             coverage = features.map(|now| now.coverage(&v.inputs));
+            made_elsewhere = crate::adopt::made_before_adoption(&ctx.root, &verdict_path);
             let mut stale: Vec<String> = Vec::new();
             if v.inputs.unit_source != source_now {
                 stale.push("source".into());
@@ -411,6 +425,7 @@ fn compute(
         promotion_interrupted: None,
         attempts,
         features: coverage,
+        made_elsewhere,
     })
 }
 
@@ -513,6 +528,7 @@ mod tests {
             promotion_interrupted: None,
             attempts: Vec::new(),
             features: None,
+            made_elsewhere: false,
         }
     }
 
@@ -585,6 +601,26 @@ mod tests {
         assert!(serde_json::to_string(&missing)
             .unwrap()
             .contains("\"verdict\":{\"state\":\"missing\",\"stale\":[]}"));
+    }
+
+    /// A verdict made elsewhere is marked on the line and in the event,
+    /// and stays out of freshness and contradiction.
+    #[test]
+    fn a_verdict_made_elsewhere_is_marked() {
+        let mut r = report(VerdictState::Present, Some(true), &[]);
+        r.made_elsewhere = true;
+        assert!(r.fresh_green());
+        assert_eq!(
+            r.render_line(),
+            "status: u1 [verified] plan=fresh verdict=green (fresh) made-elsewhere"
+        );
+        assert!(serde_json::to_string(&r)
+            .unwrap()
+            .ends_with(",\"made_elsewhere\":true}"));
+        r.made_elsewhere = false;
+        assert!(!serde_json::to_string(&r)
+            .unwrap()
+            .contains("made_elsewhere"));
     }
 
     #[test]

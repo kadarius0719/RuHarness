@@ -726,7 +726,7 @@ fn state_status_says_when_the_project_changed_since_a_tool_was_accepted() {
                            project map`, then `accept` again";
     // The digests match: no notice.
     let out = status("t-alpha");
-    assert!(!out.contains("project"), "{out}");
+    assert!(!out.contains("project changed"), "{out}");
     // A header changes and the map is made again: the notice.
     tmp.write("lib/shared.h", "int shared_add(int a, int b);\n");
     let run = harness(&["project", "map", "--target", tmp.arg()]);
@@ -751,13 +751,13 @@ fn state_status_says_when_the_project_changed_since_a_tool_was_accepted() {
     );
     // A hand-written tool with no `map`: never a notice.
     let out = status("t-hand");
-    assert!(!out.contains("project"), "{out}");
+    assert!(!out.contains("project changed"), "{out}");
     // No map file: said so.
     std::fs::remove_file(tmp.0.join("migration/map/project-map.json")).unwrap();
     let out = status("t-alpha");
     assert!(out.contains("status: no map written yet"), "{out}");
     let out = status("t-hand");
-    assert!(!out.contains("map"), "{out}");
+    assert!(!out.contains("no map"), "{out}");
 }
 
 #[test]

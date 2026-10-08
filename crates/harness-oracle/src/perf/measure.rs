@@ -769,9 +769,10 @@ pub fn perf_run(
     if harness_core::features::program_digest_now(target, facts)
         == harness_core::features::STALE_PROGRAM
     {
-        return Err(Error::Invariant(
-            "the facts are out of date — run harness scan first, then measure".into(),
-        ));
+        return Err(Error::Invariant(format!(
+            "the facts are out of date — run {} first, then measure",
+            harness_core::runtime_view::command_line("scan", target.tool.as_deref())
+        )));
     }
     // The results first: a units folder that is a link or not a folder is
     // refused before anything is built, read or written (§3.9).
@@ -2612,6 +2613,7 @@ mod tests {
                 side: perf_words::Side::C,
                 workload: "long",
                 input: Some("bench/in.txt"),
+                tool: None,
             },
         );
         assert!(
@@ -2630,6 +2632,7 @@ mod tests {
                 side: perf_words::Side::C,
                 workload: "tiny",
                 input: Some("bench/tiny.txt"),
+                tool: None,
             },
         );
         assert!(
@@ -2822,6 +2825,7 @@ mod tests {
                 side: perf_words::Side::Unit("u001"),
                 workload: "w",
                 input: None,
+                tool: None,
             },
         );
         assert_eq!(words.short, "Rust crashed");
@@ -2991,6 +2995,7 @@ mod tests {
                 side: perf_words::Side::AsItStands,
                 workload: "w",
                 input: None,
+                tool: None,
             },
         );
         assert!(words.starts_with("ua aborts; ub unwinds — "), "{words}");
@@ -3922,6 +3927,7 @@ mod tests {
                 side: perf_words::Side::C,
                 workload: "w",
                 input: None,
+                tool: None,
             },
         );
         assert!(
@@ -4636,6 +4642,7 @@ mod tests {
                 side: perf_words::Side::C,
                 workload: "sys",
                 input: None,
+                tool: None,
             },
         );
         assert!(!words.headline.contains("crash"), "{}", words.headline);

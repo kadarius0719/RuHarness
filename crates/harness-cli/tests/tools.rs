@@ -7,14 +7,30 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn tmp(tag: &str) -> PathBuf {
+/// A scratch folder removed when the test ends — passed or failed.
+struct Tmp(PathBuf);
+
+impl std::ops::Deref for Tmp {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+
+impl Drop for Tmp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn tmp(tag: &str) -> Tmp {
     let dir = std::env::temp_dir().join(format!(
         "harness-cli-tools-{tag}-{}-{}",
         std::process::id(),
         harness_core::hash::random_hex(4)
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    dir.canonicalize().unwrap()
+    Tmp(dir.canonicalize().unwrap())
 }
 
 struct Run {
@@ -43,7 +59,7 @@ fn folder_toml(name: &str, source_dir: &str) -> String {
 
 /// A project of two programs, `src/a` and `src/b`, each mapped as a tool
 /// whose `harness.toml` is the folder form over its own folder.
-fn project(tag: &str) -> PathBuf {
+fn project(tag: &str) -> Tmp {
     let root = tmp(tag);
     for (dir, body) in [
         ("src/a", "int a_twice(int x) { return 2 * x; }\n"),
@@ -108,14 +124,18 @@ fn the_lookup_order_and_every_ledger_path_of_a_tool() {
     assert!(!root.join("migration/features").exists());
     assert!(!root.join("migration/perf").exists());
     // Everything the tool's commands wrote lies under its folder (the
-    // root's migration/ holds the token, the lock-free tools/ and nothing
-    // else).
+    // root's migration/ holds the token, its ignore rules, the lock-free
+    // tools/ and nothing else).
     let mut top: Vec<String> = std::fs::read_dir(root.join("migration"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     top.sort();
-    assert_eq!(top, [".ruharness-adopted", "tools"], "{top:?}");
+    assert_eq!(
+        top,
+        [".gitignore", ".ruharness-adopted", "tools"],
+        "{top:?}"
+    );
 
     // Only one tool left: opened without --tool.
     std::fs::remove_dir_all(root.join("migration/tools/t-b")).unwrap();
@@ -181,11 +201,10 @@ fn every_tool_command_opens_the_tool_it_names() {
     };
     let run = |args: &[String]| harness(&args.iter().map(String::as_str).collect::<Vec<_>>());
     // Before a scan: each reaches the tool's ledger and says to scan it.
+    // The test stands elsewhere, so each hint names the folder too.
+    let detect = format!("run `harness detect --tool t-a --target {target}` first");
     let cases: [(&[&str], &str); 4] = [
-        (
-            &["review", "f-x", "--uphold-dismiss"],
-            "run `harness detect --tool t-a` first",
-        ),
+        (&["review", "f-x", "--uphold-dismiss"], detect.as_str()),
         (
             &["migrate", "u-x", "--allow-unsandboxed"],
             "migration/tools/t-a",
@@ -280,6 +299,87 @@ fn every_tool_command_opens_the_tool_it_names() {
     );
 }
 
+/// Each refusal a person meets on a tool is one plain sentence that names
+/// the thing and the next step, spelled for the tool: no facts yet, a unit
+/// with no oracle, a features file with an error or with no scenario; and
+/// `sync-runtime` says "updated" only when it wrote.
+#[test]
+fn a_tools_refusals_name_the_next_step() {
+    let root = project("sentences");
+    let t = root.to_str().unwrap();
+    let on_tool = |args: &[&str]| {
+        let mut v: Vec<&str> = args.to_vec();
+        v.extend(["--target", t, "--tool", "t-a"]);
+        harness(&v)
+    };
+    // No facts yet: the scan to run, once, never the file system's error.
+    let r = on_tool(&["sync-runtime"]);
+    assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
+    assert_eq!(
+        r.stderr.trim_end(),
+        format!("error: there are no facts yet: run `harness scan --tool t-a --target {t}` first")
+    );
+    assert_eq!(on_tool(&["scan"]).code, 0);
+    assert_eq!(on_tool(&["plan"]).code, 0);
+    // Written once; the second run writes nothing and says so.
+    let r = on_tool(&["sync-runtime"]);
+    assert!(r.stdout.ends_with("AGENTS.md updated\n"), "{}", r.stdout);
+    let r = on_tool(&["sync-runtime"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .ends_with("AGENTS.md was already up to date; nothing written\n"),
+        "{}",
+        r.stdout
+    );
+    // A unit with no oracle: the command that writes its driver.
+    let plan = std::fs::read_to_string(root.join("migration/tools/t-a/plan.toml")).unwrap();
+    let unit = plan
+        .lines()
+        .find_map(|l| l.strip_prefix("id = \""))
+        .and_then(|l| l.strip_suffix('"'))
+        .unwrap();
+    let r = on_tool(&["verify", unit, "--allow-unsandboxed"]);
+    assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
+    assert!(
+        r.stderr.contains(&format!(
+            "unit `{unit}` has no [unit.oracle] configured, so nothing can check it yet; run \
+             `harness gen-driver {unit} --tool t-a --target {t}` to write its driver and \
+             configure it"
+        )),
+        "{}",
+        r.stderr
+    );
+    // A features file with no scenario: where to add one.
+    assert_eq!(on_tool(&["features", "init"]).code, 0);
+    let r = on_tool(&["features", "map", "--allow-unsandboxed"]);
+    assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
+    assert!(
+        r.stderr.contains(
+            "your features file has no scenario to map: add a [[scenario]] to \
+             migration/tools/t-a/features/features.toml"
+        ),
+        "{}",
+        r.stderr
+    );
+    // A features file with an error: verify names the tool's own file.
+    std::fs::write(
+        root.join("migration/tools/t-a/features/features.toml"),
+        "bogus = 3\n",
+    )
+    .unwrap();
+    let r = on_tool(&["verify", unit, "--allow-unsandboxed"]);
+    assert!(
+        r.stdout.contains(
+            "verify: your features file has an error — no feature scenario runs \
+             (migration/tools/t-a/features/features.toml: unknown key \"bogus\""
+        ),
+        "{}{}",
+        r.stdout,
+        r.stderr
+    );
+}
+
 /// No target here, and `--tool` on a project without tools: one sentence
 /// each, exit 1.
 #[test]
@@ -362,7 +462,9 @@ fn sync_runtime_keeps_one_block_per_tool() {
     ]);
     assert_eq!(r.code, 1, "{}", r.stderr);
     assert!(
-        r.stderr.contains("run `harness sync-runtime --tool t-b`"),
+        r.stderr.contains(&format!(
+            "run `harness sync-runtime --tool t-b --target {target}`"
+        )),
         "{}",
         r.stderr
     );
@@ -408,6 +510,10 @@ fn a_file_list_target_is_refused_by_no_command() {
     let r = harness(&["plan", "--target", target, "--tool", "t-lzg"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     assert!(Path::new(&tool).join("plan.toml").is_file());
+    let starter = format!(
+        "error: write your workloads file first — harness perf init --tool t-lzg --target \
+         {target} gives a starter"
+    );
     for (args, code, why) in [
         (
             vec!["verify", "u-x", "--allow-unsandboxed"],
@@ -416,12 +522,7 @@ fn a_file_list_target_is_refused_by_no_command() {
         ),
         (vec!["observe"], 0, ""),
         (vec!["gen-driver", "u-x"], 1, "error: unknown unit `u-x`"),
-        (
-            vec!["perf", "run"],
-            1,
-            "error: write your workloads file first — harness perf init --tool t-lzg gives a \
-             starter",
-        ),
+        (vec!["perf", "run"], 1, starter.as_str()),
     ] {
         let mut argv = args.clone();
         argv.extend(["--target", target, "--tool", "t-lzg"]);

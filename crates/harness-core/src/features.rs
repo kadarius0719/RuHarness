@@ -242,26 +242,35 @@ pub fn arg_problem(arg: &str) -> Option<&'static str> {
     }
 }
 
-fn invalid(message: String) -> Error {
+/// The refusal of a features file, named by its own path: the ledger at
+/// `ledger_rel` (`migration`, or `migration/tools/<id>` for a mapped tool)
+/// holds it, so a tool's error names the tool's file.
+pub fn invalid(ledger_rel: &str, message: &str) -> Error {
     Error::InvalidPlan(format!(
-        "{}/{FEATURES_DIR}/{FEATURES_FILE}: {message}",
-        crate::ledger::MIGRATION_DIR
+        "{ledger_rel}/{FEATURES_DIR}/{FEATURES_FILE}: {message}"
     ))
 }
 
-/// Load and validate `migration/features/features.toml` under `root`.
-/// `Ok(None)` when the file does not exist. Everything in
-/// docs/FEATURES-DESIGN.md §2.1 is checked; a violation is an
-/// [`Error::InvalidPlan`] naming the key and the rule, a newer
-/// `schema_version` an [`Error::SchemaTooNew`].
-pub fn load(ledger: &crate::ledger::Ledger) -> Result<Option<Features>, Error> {
+/// A rule the file's text breaks, before [`parse`] names the file.
+fn rule(message: String) -> Error {
+    Error::InvalidPlan(message)
+}
+
+/// Load and validate `features/features.toml` in `ledger`, whose folder
+/// is `ledger_rel` under the root (`migration`, or `migration/tools/<id>`):
+/// the errors name the file by that path. `Ok(None)` when the file does not
+/// exist. Everything in docs/FEATURES-DESIGN.md §2.1 is checked; a
+/// violation is an [`Error::InvalidPlan`] naming the key and the rule, a
+/// newer `schema_version` an [`Error::SchemaTooNew`].
+pub fn load(ledger: &crate::ledger::Ledger, ledger_rel: &str) -> Result<Option<Features>, Error> {
     let dir = features_dir(ledger);
     match std::fs::symlink_metadata(&dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(Error::io(&dir, e)),
         Ok(m) if !m.file_type().is_dir() => {
             return Err(invalid(
-                "migration/features must be a directory (a symlink is refused)".into(),
+                ledger_rel,
+                &format!("{ledger_rel}/{FEATURES_DIR} must be a directory (a symlink is refused)"),
             ))
         }
         Ok(_) => {}
@@ -273,13 +282,21 @@ pub fn load(ledger: &crate::ledger::Ledger) -> Result<Option<Features>, Error> {
         Ok(_) => {}
     }
     let bytes = crate::ledger::read_regular(&path, MAX_FEATURES_BYTES)?;
-    let text = std::str::from_utf8(&bytes).map_err(|_| invalid("not UTF-8 text".into()))?;
-    parse(text, &path).map(Some)
+    let text = std::str::from_utf8(&bytes).map_err(|_| invalid(ledger_rel, "not UTF-8 text"))?;
+    parse(text, &path, ledger_rel).map(Some)
 }
 
 /// Validate the text of a features file (see [`load`]); `path` names it in a
-/// too-new error.
-pub fn parse(text: &str, path: &Path) -> Result<Features, Error> {
+/// too-new error, `ledger_rel` (the ledger folder holding it, root-relative)
+/// in every other.
+pub fn parse(text: &str, path: &Path, ledger_rel: &str) -> Result<Features, Error> {
+    parse_rules(text, path).map_err(|e| match e {
+        Error::InvalidPlan(message) => invalid(ledger_rel, &message),
+        other => other,
+    })
+}
+
+fn parse_rules(text: &str, path: &Path) -> Result<Features, Error> {
     let table: toml::Table = text.parse().map_err(|e: toml::de::Error| {
         let at = e
             .span()
@@ -288,17 +305,17 @@ pub fn parse(text: &str, path: &Path) -> Result<Features, Error> {
                 format!(" at line {line}, column {column}")
             })
             .unwrap_or_default();
-        invalid(format!("not valid TOML{at}: {}", one_line(e.message())))
+        rule(format!("not valid TOML{at}: {}", one_line(e.message())))
     })?;
     for key in table.keys() {
         if !matches!(key.as_str(), "schema_version" | "feature" | "scenario") {
-            return Err(invalid(format!(
+            return Err(rule(format!(
                 "unknown key {key:?} (the keys are schema_version, [[feature]] and [[scenario]])"
             )));
         }
     }
     match table.get("schema_version") {
-        None => return Err(invalid("`schema_version = 1` is missing".into())),
+        None => return Err(rule("`schema_version = 1` is missing".into())),
         Some(toml::Value::Integer(v)) if *v == FEATURES_SCHEMA_VERSION => {}
         Some(toml::Value::Integer(v)) if *v > FEATURES_SCHEMA_VERSION => {
             return Err(Error::SchemaTooNew {
@@ -307,20 +324,20 @@ pub fn parse(text: &str, path: &Path) -> Result<Features, Error> {
                 supported: FEATURES_SCHEMA_VERSION as u64,
             })
         }
-        Some(v) => return Err(invalid(format!("schema_version must be 1, got {v}"))),
+        Some(v) => return Err(rule(format!("schema_version must be 1, got {v}"))),
     }
     let features = parse_features(tables(&table, "feature")?)?;
     let scenarios = parse_scenarios(tables(&table, "scenario")?, &features)?;
     for f in &features {
         match scenarios.iter().filter(|s| s.feature == f.id).count() {
             0 => {
-                return Err(invalid(format!(
+                return Err(rule(format!(
                     "feature \"{}\" has no [[scenario]] (every feature needs at least one)",
                     f.id
                 )))
             }
             n if n > MAX_SCENARIOS_PER_FEATURE => {
-                return Err(invalid(format!(
+                return Err(rule(format!(
                     "feature \"{}\" has {n} scenarios; at most {MAX_SCENARIOS_PER_FEATURE}",
                     f.id
                 )))
@@ -360,22 +377,18 @@ fn tables<'a>(table: &'a toml::Table, key: &str) -> Result<Vec<&'a toml::Table>,
             .enumerate()
             .map(|(i, v)| {
                 v.as_table()
-                    .ok_or_else(|| invalid(format!("{key}[{i}] must be a table ([[{key}]])")))
+                    .ok_or_else(|| rule(format!("{key}[{i}] must be a table ([[{key}]])")))
             })
             .collect(),
-        Some(_) => Err(invalid(format!(
-            "`{key}` must be written as [[{key}]] tables"
-        ))),
+        Some(_) => Err(rule(format!("`{key}` must be written as [[{key}]] tables"))),
     }
 }
 
 fn string_key<'a>(t: &'a toml::Table, key: &str, what: &str) -> Result<&'a str, Error> {
     match t.get(key) {
-        None => Err(invalid(format!("{what}: `{key}` is missing"))),
+        None => Err(rule(format!("{what}: `{key}` is missing"))),
         Some(toml::Value::String(s)) => Ok(s),
-        Some(v) => Err(invalid(format!(
-            "{what}: `{key}` must be a string, got {v}"
-        ))),
+        Some(v) => Err(rule(format!("{what}: `{key}` must be a string, got {v}"))),
     }
 }
 
@@ -383,7 +396,7 @@ fn check_id(id: &str, what: &str) -> Result<(), Error> {
     if is_id(id) {
         Ok(())
     } else {
-        Err(invalid(format!(
+        Err(rule(format!(
             "{what}: id {id:?} is not allowed — 1 to 24 of a-z, 0-9 and -, starting with a letter \
              or digit"
         )))
@@ -392,7 +405,7 @@ fn check_id(id: &str, what: &str) -> Result<(), Error> {
 
 fn parse_features(items: Vec<&toml::Table>) -> Result<Vec<Feature>, Error> {
     if items.len() > MAX_FEATURES {
-        return Err(invalid(format!(
+        return Err(rule(format!(
             "{} features; at most {MAX_FEATURES}",
             items.len()
         )));
@@ -402,7 +415,7 @@ fn parse_features(items: Vec<&toml::Table>) -> Result<Vec<Feature>, Error> {
         let what = format!("feature[{i}]");
         for key in t.keys() {
             if !matches!(key.as_str(), "id" | "name") {
-                return Err(invalid(format!(
+                return Err(rule(format!(
                     "{what}: unknown key {key:?} (a feature has id and name)"
                 )));
             }
@@ -413,17 +426,15 @@ fn parse_features(items: Vec<&toml::Table>) -> Result<Vec<Feature>, Error> {
         let name = string_key(t, "name", &what)?;
         let chars = name.chars().count();
         if chars == 0 || chars > MAX_NAME_CHARS {
-            return Err(invalid(format!(
+            return Err(rule(format!(
                 "{what}: name must be 1 to {MAX_NAME_CHARS} characters, got {chars}"
             )));
         }
         if name.chars().any(char::is_control) {
-            return Err(invalid(format!(
-                "{what}: name cannot hold control characters"
-            )));
+            return Err(rule(format!("{what}: name cannot hold control characters")));
         }
         if out.iter().any(|f| f.id == id) {
-            return Err(invalid(format!("{what}: the id is used twice")));
+            return Err(rule(format!("{what}: the id is used twice")));
         }
         out.push(Feature {
             id: id.to_string(),
@@ -435,7 +446,7 @@ fn parse_features(items: Vec<&toml::Table>) -> Result<Vec<Feature>, Error> {
 
 fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec<Scenario>, Error> {
     if items.len() > MAX_SCENARIOS {
-        return Err(invalid(format!(
+        return Err(rule(format!(
             "{} scenarios; at most {MAX_SCENARIOS}",
             items.len()
         )));
@@ -445,14 +456,14 @@ fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec
         let what = format!("scenario[{i}]");
         for key in t.keys() {
             if !matches!(key.as_str(), "feature" | "id" | "args" | "input") {
-                return Err(invalid(format!(
+                return Err(rule(format!(
                     "{what}: unknown key {key:?} (a scenario has feature, id, args and input)"
                 )));
             }
         }
         let feature = string_key(t, "feature", &what)?;
         if !features.iter().any(|f| f.id == feature) {
-            return Err(invalid(format!(
+            return Err(rule(format!(
                 "{what}: feature {feature:?} is not a [[feature]] id in this file"
             )));
         }
@@ -460,23 +471,19 @@ fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec
         check_id(id, &format!("{what} of feature \"{feature}\""))?;
         let what = format!("scenario \"{id}\" of feature \"{feature}\"");
         if out.iter().any(|s| s.feature == feature && s.id == id) {
-            return Err(invalid(format!("{what}: the id is used twice")));
+            return Err(rule(format!("{what}: the id is used twice")));
         }
         let input = match t.get("input") {
             None => None,
             Some(toml::Value::String(token)) => {
                 Some(Sample::from_token(token).ok_or_else(|| {
-                    invalid(format!(
+                    rule(format!(
                         "{what}: input {token:?} is not one of sample:text, sample:rand, \
                      sample:empty"
                     ))
                 })?)
             }
-            Some(v) => {
-                return Err(invalid(format!(
-                    "{what}: `input` must be a string, got {v}"
-                )))
-            }
+            Some(v) => return Err(rule(format!("{what}: `input` must be a string, got {v}"))),
         };
         let args: Vec<String> = match t.get("args") {
             None => Vec::new(),
@@ -484,26 +491,26 @@ fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec
                 .iter()
                 .enumerate()
                 .map(|(j, v)| {
-                    v.as_str().map(str::to_string).ok_or_else(|| {
-                        invalid(format!("{what}: args[{j}] must be a string, got {v}"))
-                    })
+                    v.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| rule(format!("{what}: args[{j}] must be a string, got {v}")))
                 })
                 .collect::<Result<_, _>>()?,
             Some(v) => {
-                return Err(invalid(format!(
+                return Err(rule(format!(
                     "{what}: `args` must be an array of strings, got {v}"
                 )))
             }
         };
         if args.len() > MAX_ARGS {
-            return Err(invalid(format!(
+            return Err(rule(format!(
                 "{what}: {} arguments; at most {MAX_ARGS}",
                 args.len()
             )));
         }
         for (j, arg) in args.iter().enumerate() {
             if let Some(why) = arg_problem(arg) {
-                return Err(invalid(format!(
+                return Err(rule(format!(
                     "{what}: args[{j}] {arg:?} is not allowed — {why}"
                 )));
             }
@@ -512,17 +519,17 @@ fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec
         match (input, uses) {
             (Some(_), 1) | (None, 0) => {}
             (Some(_), 0) => {
-                return Err(invalid(format!(
+                return Err(rule(format!(
                     "{what}: it has an input, so one argument must be \"{INPUT_ARG}\""
                 )))
             }
             (Some(_), _) => {
-                return Err(invalid(format!(
+                return Err(rule(format!(
                     "{what}: \"{INPUT_ARG}\" may appear only once"
                 )))
             }
             (None, _) => {
-                return Err(invalid(format!(
+                return Err(rule(format!(
                     "{what}: \"{INPUT_ARG}\" needs an input (input = \"sample:text\", …)"
                 )))
             }
@@ -744,7 +751,8 @@ pub enum FeatureSnapshot {
 impl FeatureSnapshot {
     /// Load the features of `ctx`'s target (see [`load`]).
     pub fn load(ctx: &crate::config::TargetContext) -> FeatureSnapshot {
-        match load(&crate::ledger::Ledger::of(ctx)) {
+        let rel = ctx.ledger_rel();
+        match load(&crate::ledger::Ledger::of(ctx), &rel) {
             Ok(None) => FeatureSnapshot::None,
             Ok(Some(features)) => FeatureSnapshot::Valid {
                 digest: features_digest(&features, &ctx.config),
@@ -753,14 +761,12 @@ impl FeatureSnapshot {
             Err(Error::SchemaTooNew {
                 found, supported, ..
             }) => FeatureSnapshot::Invalid(format!(
-                "{}/{FEATURES_DIR}/{FEATURES_FILE} was written by a newer harness \
-                 (schema_version {found}; this one reads {supported}) — update the harness",
-                crate::ledger::MIGRATION_DIR
+                "{rel}/{FEATURES_DIR}/{FEATURES_FILE} was written by a newer harness \
+                 (schema_version {found}; this one reads {supported}) — update the harness"
             )),
             Err(Error::InvalidPlan(message)) => FeatureSnapshot::Invalid(message),
             Err(e) => FeatureSnapshot::Invalid(format!(
-                "{}/{FEATURES_DIR}/{FEATURES_FILE} cannot be read: {}",
-                crate::ledger::MIGRATION_DIR,
+                "{rel}/{FEATURES_DIR}/{FEATURES_FILE} cannot be read: {}",
                 one_line(&e.to_string())
             )),
         }
@@ -1753,7 +1759,7 @@ args = ["-h"]
     }
 
     fn p(text: &str) -> Result<Features, Error> {
-        parse(text, Path::new("features.toml"))
+        parse(text, Path::new("features.toml"), "migration")
     }
 
     fn refused(text: &str) -> String {
@@ -1947,22 +1953,52 @@ args = ["-h"]
         assert!(refused(&seventeen).contains("17 scenarios; at most 16"));
     }
 
+    /// A mapped tool's features file is named by its own path in every
+    /// error, the snapshot's too (what `verify` and `promote` print).
+    #[test]
+    fn a_tools_features_errors_name_the_tools_file() {
+        let root = std::env::temp_dir().join(format!("rh-features-tool-{}", hash::random_hex(6)));
+        let rel = "migration/tools/t-a";
+        let ledger = crate::ledger::Ledger::at(&root, root.join(rel));
+        std::fs::create_dir_all(features_dir(&ledger)).expect("mkdir");
+        std::fs::write(features_path(&ledger), "bogus = 3\n").expect("write");
+        let err = load(&ledger, rel).expect_err("refused").to_string();
+        assert!(
+            err.contains("migration/tools/t-a/features/features.toml: unknown key \"bogus\""),
+            "{err}"
+        );
+        let ctx = crate::config::TargetContext {
+            root: root.clone(),
+            ledger: root.join(rel),
+            tool: Some("t-a".into()),
+            config: config(),
+        };
+        let FeatureSnapshot::Invalid(why) = FeatureSnapshot::load(&ctx) else {
+            panic!("not invalid");
+        };
+        assert!(
+            why.starts_with("migration/tools/t-a/features/features.toml: unknown key"),
+            "{why}"
+        );
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
     #[test]
     fn the_file_is_found_read_regularly_and_optional() {
         let dir = std::env::temp_dir().join(format!("rh-features-{}", hash::random_hex(6)));
         std::fs::create_dir_all(dir.join("migration")).expect("mkdir");
         assert_eq!(
-            load(&crate::ledger::Ledger::new(&dir)).expect("no dir"),
+            load(&crate::ledger::Ledger::new(&dir), "migration").expect("no dir"),
             None
         );
         std::fs::create_dir_all(features_dir(&crate::ledger::Ledger::new(&dir))).expect("mkdir");
         assert_eq!(
-            load(&crate::ledger::Ledger::new(&dir)).expect("no file"),
+            load(&crate::ledger::Ledger::new(&dir), "migration").expect("no file"),
             None
         );
         std::fs::write(features_path(&crate::ledger::Ledger::new(&dir)), GOOD).expect("write");
         assert_eq!(
-            load(&crate::ledger::Ledger::new(&dir))
+            load(&crate::ledger::Ledger::new(&dir), "migration")
                 .expect("ok")
                 .expect("some")
                 .features
@@ -1976,7 +2012,7 @@ args = ["-h"]
         )
         .expect("link");
         assert!(
-            load(&crate::ledger::Ledger::new(&dir)).is_err(),
+            load(&crate::ledger::Ledger::new(&dir), "migration").is_err(),
             "a symlinked file is refused"
         );
         std::fs::remove_file(features_path(&crate::ledger::Ledger::new(&dir))).expect("rm");
@@ -1985,7 +2021,7 @@ args = ["-h"]
             "x".repeat(64 * 1024 + 1),
         )
         .expect("write");
-        assert!(load(&crate::ledger::Ledger::new(&dir))
+        assert!(load(&crate::ledger::Ledger::new(&dir), "migration")
             .expect_err("too big")
             .to_string()
             .contains("longer than"));
@@ -1996,7 +2032,7 @@ args = ["-h"]
             features_dir(&crate::ledger::Ledger::new(&dir)),
         )
         .expect("link");
-        assert!(load(&crate::ledger::Ledger::new(&dir))
+        assert!(load(&crate::ledger::Ledger::new(&dir), "migration")
             .expect_err("dir link")
             .to_string()
             .contains("symlink is refused"));

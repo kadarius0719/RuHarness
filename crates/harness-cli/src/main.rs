@@ -44,8 +44,11 @@ struct Cli {
     /// computer, or shipped in a download) from now on, on this computer:
     /// the harness will build and run the code they hold — drivers, Rust
     /// crates, features and workloads — in the sandbox. Deletes their build
-    /// folders and writes a fresh token; their verdicts stay claims until
-    /// `harness verify` runs them here. Needed once per folder
+    /// folders (the project's and each tool's), writes a fresh token and
+    /// records the time; `state status` and the cockpit mark each verdict
+    /// that came with them "made elsewhere" until `harness verify` runs it
+    /// here. Needed once per checkout (a copy or another worktree of the
+    /// project is asked again)
     #[arg(long, global = true)]
     adopt: bool,
     #[command(subcommand)]
@@ -129,6 +132,40 @@ impl Cmd {
             Cmd::Bench { cmd } => bench::suite_root(cmd).map(|s| (s, adopt::Scope::Suite)),
         }
     }
+
+    /// The mapped tool this command opens (`--tool`), for the commands its
+    /// adoption lines name.
+    fn tool(&self) -> Option<&str> {
+        let target = match self {
+            Cmd::Scan { target }
+            | Cmd::Plan { target }
+            | Cmd::Verify { target, .. }
+            | Cmd::State {
+                cmd: StateCmd::Status { target },
+            }
+            | Cmd::Detect { target }
+            | Cmd::Observe { target }
+            | Cmd::Review { target, .. }
+            | Cmd::Migrate { target, .. }
+            | Cmd::Override { target, .. }
+            | Cmd::Promote { target, .. }
+            | Cmd::GenDriver { target, .. }
+            | Cmd::SyncRuntime { target, .. } => target,
+            Cmd::Features { cmd } => match cmd {
+                FeaturesCmd::Init { target }
+                | FeaturesCmd::Save { target, .. }
+                | FeaturesCmd::Map { target, .. } => target,
+            },
+            Cmd::Perf { cmd } => match cmd {
+                PerfCmd::Run { target, .. }
+                | PerfCmd::Init { target }
+                | PerfCmd::Save { target, .. }
+                | PerfCmd::Show { target, .. } => target,
+            },
+            Cmd::Project { .. } | Cmd::Bench { .. } => return None,
+        };
+        target.tool.as_deref()
+    }
 }
 
 /// Before a command opens its ledger: adopt it when `--adopt` was given
@@ -136,7 +173,12 @@ impl Cmd {
 /// (a target is refused by `TargetContext::load`), and note a folder that
 /// holds no ledger yet — what this command writes there is its own. `true`
 /// when the folder held no ledger.
-fn open_ledger(root: &Path, scope: adopt::Scope, adopt_it: bool) -> Result<bool> {
+fn open_ledger(
+    root: &Path,
+    scope: adopt::Scope,
+    adopt_it: bool,
+    tool: Option<&str>,
+) -> Result<bool> {
     if !root.is_dir() {
         // The command says what is wrong with its folder.
         return Ok(false);
@@ -152,7 +194,7 @@ fn open_ledger(root: &Path, scope: adopt::Scope, adopt_it: bool) -> Result<bool>
             adopt::Scope::Project => adopt::adopt(root)?,
             adopt::Scope::Suite => adopt::adopt_suite(root)?,
         };
-        for line in done.describe() {
+        for line in done.describe(tool) {
             out(line);
         }
     } else if scope == adopt::Scope::Suite {
@@ -570,8 +612,13 @@ fn main() -> ExitCode {
         report::header(&command, argv.get(1..).unwrap_or(&[]));
     }
     let opened = cli.cmd.ledger_root();
+    if let Some((root, adopt::Scope::Project)) = &opened {
+        // Every hint this run prints carries `--target` when the person
+        // stands somewhere else.
+        harness_core::runtime_view::set_hint_target(root);
+    }
     let fresh = match &opened {
-        Some((root, scope)) => open_ledger(root, *scope, cli.adopt),
+        Some((root, scope)) => open_ledger(root, *scope, cli.adopt, cli.cmd.tool()),
         None => Ok(false),
     };
     let (result, fresh) = match fresh {
@@ -589,6 +636,22 @@ fn main() -> ExitCode {
                 root.display(),
                 report::terminal_safe(&e.to_string())
             );
+        }
+        // The token and the locks are the harness's scratch: the ledger's
+        // first command writes the same `.gitignore` the map writes, so
+        // they never show up in `git status` (never over one already there).
+        if *scope == adopt::Scope::Project
+            && root.join(harness_core::ledger::MIGRATION_DIR).is_dir()
+        {
+            if let Err(e) = harness_oracle::projectmap::mapfile::write_gitignore(root) {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "harness: could not write {}/.gitignore ({}); git will list the harness's \
+                     scratch files until you add one",
+                    root.join(harness_core::ledger::MIGRATION_DIR).display(),
+                    report::terminal_safe(&e.to_string())
+                );
+            }
         }
     }
     let code = match result {
@@ -815,9 +878,21 @@ pub(crate) fn hint(ctx: &TargetContext, cmd: &str) -> String {
     harness_core::runtime_view::command_line(cmd, ctx.tool.as_deref())
 }
 
-/// What a facts load says when there are none: the scan to run.
+/// What a facts load says when it fails: the scan to run.
 pub(crate) fn loading_facts(ctx: &TargetContext) -> String {
     format!("loading facts (run `{}` first)", hint(ctx, "scan"))
+}
+
+/// The target's facts; none yet is one plain sentence naming the scan to
+/// run (never the file system's error twice over).
+pub(crate) fn load_facts(ctx: &TargetContext, ledger: &Ledger) -> Result<Facts> {
+    match Facts::load(&ledger.facts_path()) {
+        Ok(facts) => Ok(facts),
+        Err(e) if e.is_not_found() => {
+            bail!("there are no facts yet: run `{}` first", hint(ctx, "scan"))
+        }
+        Err(e) => Err(anyhow::Error::new(e).context(loading_facts(ctx))),
+    }
 }
 
 /// Count facts file records whose hash no longer matches the working tree
@@ -857,7 +932,7 @@ fn cmd_plan(target: TargetArg) -> Result<u8> {
 /// change lines, the execution-order line and the unit count.
 pub(crate) fn plan_target(ctx: &TargetContext) -> Result<(Vec<String>, String, usize)> {
     let ledger = Ledger::of(ctx);
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(ctx))?;
+    let facts = crate::load_facts(ctx, &ledger)?;
     // Planning from stale facts would write stale hashes and strand verify
     // in a refusal loop — refuse up front instead.
     let stale = stale_fact_files(ctx, &facts);
@@ -970,7 +1045,7 @@ fn cmd_verify(unit_id: String, target: TargetArg, allow_unsandboxed: bool) -> Re
         .context("plan.toml is structurally invalid; fix it before verifying")?;
     let unit = plan_doc.unit(&unit_id)?;
     promote::recover_promotion(&ctx, &ledger, unit)?;
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
+    let facts = crate::load_facts(&ctx, &ledger)?;
 
     // Stale-plan refusal (docs/SCHEMAS.md): the tree must match what was planned.
     let closure = facts.include_closure(&unit.files);
@@ -999,7 +1074,11 @@ fn cmd_verify(unit_id: String, target: TargetArg, allow_unsandboxed: bool) -> Re
             strategy.verify_with(&ctx, unit, &features)?
         }
         Some(kind) => bail!("unknown oracle kind `{kind}` for unit `{unit_id}`"),
-        None => bail!("unit `{unit_id}` has no [unit.oracle] configured"),
+        None => bail!(
+            "unit `{unit_id}` has no [unit.oracle] configured, so nothing can check it yet; run \
+             `{}` to write its driver and configure it",
+            hint(&ctx, &format!("gen-driver {unit_id}"))
+        ),
     };
     announce_skips(&verdict);
 
@@ -1150,6 +1229,7 @@ fn cmd_status(target: TargetArg) -> Result<u8> {
         &facts,
         &harness_core::features::FeatureSnapshot::load(&ctx),
     );
+    let mut elsewhere: Vec<String> = Vec::new();
     for unit in &plan_doc.units {
         // One computation renders both surfaces (docs/CLI-HARDENING.md §4).
         let r =
@@ -1158,12 +1238,36 @@ fn cmd_status(target: TargetArg) -> Result<u8> {
         if let Some(line) = r.render_attempts_line() {
             out(line);
         }
+        if r.made_elsewhere {
+            elsewhere.push(r.id.clone());
+        }
         report::event(&UnitEvent {
             k: "unit",
             report: &r,
         });
     }
+    if let Some(line) = made_elsewhere_line(&ctx, &elsewhere) {
+        out(line);
+    }
     Ok(0)
+}
+
+/// The line under the units when some verdicts were made elsewhere (written
+/// before the person adopted the folder): which, and the command that makes
+/// each one here.
+fn made_elsewhere_line(ctx: &TargetContext, units: &[String]) -> Option<String> {
+    let first = units.first()?;
+    let (n, s, were, verify) = match units.len() {
+        1 => (1, "", "was", format!("verify {first}")),
+        n => (n, "s", "were", "verify <unit>".to_string()),
+    };
+    Some(format!(
+        "status: {n} verdict{s} ({}) {were} made elsewhere, before you adopted this folder; run \
+         `{}` to make {} here",
+        units.join(", "),
+        hint(ctx, &verify),
+        if n == 1 { "it" } else { "each one" }
+    ))
 }
 
 // ---------- M2: observer commands ----------
@@ -1183,7 +1287,7 @@ fn cmd_detect(target: TargetArg) -> Result<u8> {
     let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "detect")?;
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
+    let facts = crate::load_facts(&ctx, &ledger)?;
     let stale = stale_fact_files(&ctx, &facts);
     if stale > 0 {
         return Err(facts_stale(&ctx, stale).into());
@@ -1238,7 +1342,7 @@ type ObserverInputs = (
 
 fn observer_inputs(ctx: &TargetContext, ledger: &Ledger) -> Result<ObserverInputs> {
     use harness_core::observer::{self, ObserverPaths};
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(ctx))?;
+    let facts = crate::load_facts(ctx, ledger)?;
     let plan_doc = Plan::load(&ledger.plan_path())?;
     plan_doc
         .execution_order()
@@ -1306,8 +1410,10 @@ fn cmd_observe(target: TargetArg) -> Result<u8> {
         Err(e @ Error::Awaiting { .. }) => {
             eprintln!("{e:#}");
             eprintln!(
-                "observe: external provider mode — supply the response file(s) under {} and re-run",
-                traces.display()
+                "observe: external provider mode — supply the response file(s) under {} and \
+                 re-run: {}",
+                traces.display(),
+                observe_resume(&target)
             );
             if let Error::Awaiting { path, .. } = &e {
                 report::event(&report::Awaiting {
@@ -1342,6 +1448,7 @@ fn cmd_observe(target: TargetArg) -> Result<u8> {
         plan: &plan_doc,
         facts: &facts,
         risk: &risk,
+        tool: ctx.tool.as_deref(),
     })?;
     harness_core::ledger::write_atomic(&ObserverPaths::observations(&ledger), rendered.as_bytes())?;
     let usage_in: u64 = outcome.usage.iter().map(|(_, i, _)| i).sum();
@@ -1416,7 +1523,7 @@ fn cmd_sync_runtime(target: TargetArg, check: bool) -> Result<u8> {
             lock_ledger(&ledger, "sync-runtime")?,
         ))
     };
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
+    let facts = crate::load_facts(&ctx, &ledger)?;
     let plan_doc = Plan::load(&ledger.plan_path())?;
     // Risk from whatever observer state exists: a MISSING file is fine
     // (empty), but parse errors and newer-schema refusals must propagate —
@@ -1461,7 +1568,11 @@ fn cmd_sync_runtime(target: TargetArg, check: bool) -> Result<u8> {
         eprintln!("sync-runtime: AGENTS.md managed block is out of date; run `{run}`");
         return Ok(1);
     }
-    harness_core::ledger::write_atomic(&agents_path, updated.as_bytes())?;
+    // Written only when it changes: "updated" is said only when it was.
+    let changed = existing.as_deref() != Some(updated.as_str());
+    if changed {
+        harness_core::ledger::write_atomic(&agents_path, updated.as_bytes())?;
+    }
     // Claude Code bridge: CLAUDE.md imports AGENTS.md (per §14.3 spike evidence).
     let claude_path = ctx.root.join("CLAUDE.md");
     let claude = std::fs::read_to_string(&claude_path).unwrap_or_default();
@@ -1473,7 +1584,14 @@ fn cmd_sync_runtime(target: TargetArg, check: bool) -> Result<u8> {
         updated_claude.push_str("@AGENTS.md\n");
         harness_core::ledger::write_atomic(&claude_path, updated_claude.as_bytes())?;
     }
-    out(format!("sync-runtime: {} updated", agents_path.display()));
+    out(if changed {
+        format!("sync-runtime: {} updated", agents_path.display())
+    } else {
+        format!(
+            "sync-runtime: {} was already up to date; nothing written",
+            agents_path.display()
+        )
+    });
     Ok(0)
 }
 
@@ -1683,7 +1801,7 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     let unit = plan_doc.unit(&unit_id)?;
     promote::recover_promotion(&ctx, &ledger, unit)?;
 
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
+    let facts = crate::load_facts(&ctx, &ledger)?;
     // The plan's staleness rule and R6 (a generated driver must carry a
     // FRESH green validation) — shared with `harness promote`.
     promote::migrate_preconditions(&ctx, &ledger, &facts, unit, "migrate")?;

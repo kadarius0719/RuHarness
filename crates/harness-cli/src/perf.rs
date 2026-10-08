@@ -133,7 +133,7 @@ fn plan(ledger: &Ledger) -> Result<Plan> {
 }
 
 fn fresh_facts(ctx: &TargetContext, ledger: &Ledger) -> Result<Facts> {
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(ctx))?;
+    let facts = crate::load_facts(ctx, ledger)?;
     if crate::stale_fact_files(ctx, &facts) > 0
         || harness_core::features::program_digest_now(ctx, &facts)
             == harness_core::features::STALE_PROGRAM
@@ -269,6 +269,7 @@ fn row_words(
             side,
             workload: &row.workload,
             input,
+            tool,
         },
     );
     if w.offers_more_runs {
@@ -488,6 +489,7 @@ pub(crate) fn cmd_show(target: TargetArg, no_check: bool, allow_unsandboxed: boo
             None
         }
     };
+    let workloads_ready = workloads.is_some();
     let facts = Facts::load(&ledger.facts_path()).ok();
     let plan = plan(&ledger)?;
     let units = match &units_dir {
@@ -645,7 +647,9 @@ pub(crate) fn cmd_show(target: TargetArg, no_check: bool, allow_unsandboxed: boo
         }
         bail!("{first:#}\n{}", rest.join("\n"));
     }
-    if printed == 0 {
+    // With no usable workloads file, `perf run` would refuse as the line
+    // above says: that line is the next step, not a run.
+    if printed == 0 && workloads_ready {
         out(format!(
             "perf: nothing measured yet — run {}",
             crate::hint(&ctx, "perf run")

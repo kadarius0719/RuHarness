@@ -391,7 +391,7 @@ pub(crate) fn cmd_promote(
         .context("plan.toml is structurally invalid; fix it before promoting")?;
     let unit = plan_doc.unit(&unit_id)?;
     recover_promotion(&ctx, &ledger, unit)?;
-    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
+    let facts = crate::load_facts(&ctx, &ledger)?;
 
     // 1–3: the record, by id, and what it claims.
     let record = attempts::load_pinned(&ledger, &unit_id, &attempt_id)?

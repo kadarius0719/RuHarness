@@ -111,11 +111,41 @@ fn a_ledger_made_elsewhere_is_refused_until_adopted_once() {
 
     let r = harness(&["state", "status", "--target", t, "--adopt"]);
     assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    // Each half of the adoption line only when it is true; the commands it
+    // names carry the folder, since the test stands elsewhere.
     assert!(
-        r.stdout
-            .contains("are claims made elsewhere until `harness verify` runs them here"),
+        r.stdout.contains(
+            "build folders made elsewhere; the harness builds what it needs again here\n"
+        ),
         "{}",
         r.stdout
+    );
+    assert!(
+        r.stdout.contains(&format!(
+            "adopt: 1 verified unit came with it, marked \"made elsewhere\" until you run \
+             `harness verify <unit> --target {t}` here (`harness state status --target {t}` \
+             lists them)\n"
+        )),
+        "{}",
+        r.stdout
+    );
+    // The status that follows marks the verdicts that came with it, and
+    // names the command that makes them here.
+    assert!(
+        r.stdout
+            .contains("status: u001-katajainen [verified] plan=fresh verdict=green (fresh) features=current made-elsewhere\n"),
+        "{}",
+        r.stdout
+    );
+    let elsewhere = r
+        .stdout
+        .lines()
+        .find(|l| l.contains("made elsewhere, before you adopted this folder"))
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    assert!(elsewhere.contains("u001-katajainen"), "{elsewhere}");
+    assert!(
+        elsewhere.contains(&format!("--target {t}` to make")),
+        "{elsewhere}"
     );
     assert!(!crate_target.exists());
     assert!(!root.join("migration/build").exists());
@@ -168,11 +198,15 @@ fn the_projects_own_migration_folder_is_not_adopted() {
     ] {
         let r = harness(args);
         assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
+        // The folder named, and what to do: no "map" on a command that
+        // does not map.
         assert!(
-            r.stderr.contains(
-                "this project has a migration/ folder of its own; move or rename it, or map a \
-                 copy"
-            ),
+            r.stderr.contains(&format!(
+                "{}/migration is the project's own folder, and the harness needs that name for \
+                 its ledger: rename the folder, or run the harness on a copy of the project with \
+                 it renamed",
+                std::path::Path::new(t).canonicalize().unwrap().display()
+            )),
             "{}",
             r.stderr
         );
@@ -216,7 +250,8 @@ fn a_hand_written_tool_is_made_here() {
     // claims (nothing was made elsewhere).
     let r = harness(&["plan", "--target", t, "--tool", "t-a", "--adopt"]);
     assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
-    assert!(!r.stdout.contains("claims"), "{}", r.stdout);
+    assert!(!r.stdout.contains("verified unit"), "{}", r.stdout);
+    assert!(!r.stdout.contains("build folder"), "{}", r.stdout);
 }
 
 #[test]
@@ -236,8 +271,41 @@ fn the_first_scan_on_a_fresh_folder_records_it() {
     let text = adoption_text();
     assert!(text.contains(t) && text.contains(token.trim()), "{text}");
     assert!(text.contains("how = \"created\""), "{text}");
-    // The next command is not asked.
-    let r = harness(&["plan", "--target", t]);
+    // The token and the lock never show in `git status`: the first command
+    // that made the ledger wrote its ignore rules.
+    let ignore = std::fs::read_to_string(root.join("migration/.gitignore")).unwrap();
+    assert!(
+        ignore.lines().any(|l| l == ".ruharness-adopted") && ignore.lines().any(|l| l == ".lock"),
+        "{ignore}"
+    );
+    // The hint names the folder (the test stands elsewhere), and run
+    // exactly as printed it works — and the next command is not asked.
+    let r = harness(&["state", "status", "--target", t]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    let hint = format!("harness plan --target {t}");
+    assert!(
+        r.stdout
+            .contains(&format!("status: no plan — run `{hint}`")),
+        "{}",
+        r.stdout
+    );
+    // From inside the folder the hint needs no `--target`.
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["state", "status"])
+        .current_dir(&root)
+        .env(
+            harness_core::adopt::ADOPTED_ENV,
+            harness_core::adopt::testing::adoption_file(),
+        )
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("status: no plan — run `harness plan`\n"),
+        "{stdout}"
+    );
+    let words: Vec<&str> = hint.split(' ').skip(1).collect();
+    let r = harness(&words);
     assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
 }
 

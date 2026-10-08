@@ -26,7 +26,7 @@ use crate::handedit;
 use crate::highlight::{Highlighter, Lang, Pieces};
 use crate::load::Read;
 use crate::menu::{self, Action, Item};
-use crate::model::{AttemptView, AuthorshipView, ProvenanceView, Snapshot, UnitView, NO_PLAN};
+use crate::model::{AttemptView, AuthorshipView, ProvenanceView, Snapshot, UnitView};
 use crate::narrate::{Ending, Narrator};
 use crate::pairs::{CSide, FunctionPair, RustNote, SourceSpan};
 use crate::spawn::ChildMsg;
@@ -1425,9 +1425,10 @@ impl App {
             .and_then(Path::file_name)
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "the crate".into());
+        let scan = self.snapshot.hint("scan");
         self.pairs = raw
             .iter()
-            .map(|p| pair_view(&mut self.highlighter, p, &crate_name))
+            .map(|p| pair_view(&mut self.highlighter, p, &crate_name, &scan))
             .collect();
         self.scroll = self.scroll.min(self.layout.total_rows);
     }
@@ -3196,7 +3197,10 @@ impl App {
             ));
         }
         // Only a missing plan: a plan with no units is a plan (review ENG-3).
-        if self.snapshot.units.is_empty() && self.snapshot.note.as_deref() == Some(NO_PLAN) {
+        if self.snapshot.units.is_empty()
+            && self.snapshot.note.as_deref()
+                == Some(crate::model::no_plan(&self.snapshot.ledger_rel()).as_str())
+        {
             return Some(("No plan yet — Refresh the plan".into(), Some(Act::Plan)));
         }
         // A blocked unit's files left: refreshing the plan never makes it
@@ -4811,7 +4815,13 @@ fn code_lines(highlighter: &mut Highlighter, lang: Lang, span: &SourceSpan) -> V
         .collect()
 }
 
-fn pair_view(highlighter: &mut Highlighter, p: &FunctionPair, crate_name: &str) -> PairView {
+/// `scan` is the scan command as the hint spells it for the open target.
+fn pair_view(
+    highlighter: &mut Highlighter,
+    p: &FunctionPair,
+    crate_name: &str,
+    scan: &str,
+) -> PairView {
     let short = p.symbol.rsplit("::").next().unwrap_or(&p.symbol);
     let (c_title, c) = match &p.c {
         CSide::Source(span) => (
@@ -4828,7 +4838,7 @@ fn pair_view(highlighter: &mut Highlighter, p: &FunctionPair, crate_name: &str) 
         CSide::StaleFacts { file } => (
             short.to_string(),
             vec![CodeLine::Note(format!(
-                "facts predate {file} — run `harness scan`"
+                "facts predate {file} — run `{scan}`"
             ))],
         ),
         CSide::NotInFacts => (

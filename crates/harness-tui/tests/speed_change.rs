@@ -151,7 +151,11 @@ fn replace(root: &Path, attempt: &str) {
 
 fn words(root: &Path) -> String {
     let app = app(root);
-    harness_tui::speed::change_words(app.snapshot.unit(UNIT).unwrap(), true)
+    harness_tui::speed::change_words(
+        app.snapshot.unit(UNIT).unwrap(),
+        true,
+        &app.snapshot.ledger_rel(),
+    )
 }
 
 #[test]

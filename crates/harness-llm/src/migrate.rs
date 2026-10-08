@@ -418,7 +418,14 @@ pub fn run_migration(
     let unit_source = unit_source_hash(&sources);
     let driver = hash::file_hash(&root.join(driver_rel))?;
     let stdio = stdio_output_calls(facts, &sources);
-    let pinned = pinned_sections(unit, &unit_source, hazards, &sources, &stdio)?;
+    let pinned = pinned_sections(
+        unit,
+        &unit_source,
+        hazards,
+        &sources,
+        &stdio,
+        target.tool.as_deref(),
+    )?;
 
     let first_turn = first_turn(params, &ledger, &root, target, unit, &unit_source, &driver)?;
     let stage = MigrateStage {
@@ -877,8 +884,12 @@ impl Stage for MigrateStage<'_> {
         {
             return Err(Error::Invariant(format!(
                 "the unit's differential driver failed the driver-shape gate ({}); fix or \
-                 regenerate the driver (`harness gen-driver`) — this is not a candidate failure",
-                printable(&shape.detail, 300)
+                 regenerate the driver (`{}`) — this is not a candidate failure",
+                printable(&shape.detail, 300),
+                harness_core::runtime_view::command_line(
+                    &format!("gen-driver {}", self.unit.id),
+                    self.target.tool.as_deref()
+                )
             )));
         }
         // Likewise a boundary check that could not run on the C side (the
@@ -1020,6 +1031,7 @@ fn pinned_sections(
     hazards: &[Finding],
     sources: &[SourceFile],
     stdio: &[&str],
+    tool: Option<&str>,
 ) -> Result<String, Error> {
     let mut out = unit_section(unit, unit_source);
     out.push_str(&abi_section(
@@ -1036,8 +1048,9 @@ fn pinned_sections(
         if !is_kebab_token(&hazard.category) || !is_clean_relative_path(&hazard.file) {
             return Err(Error::Invariant(format!(
                 "hazard record `{}` is not well-formed (category must match ^[a-z0-9-]+$, file \
-                 must be a clean relative path) — regenerate with `harness detect`",
-                printable(&hazard.id, 64)
+                 must be a clean relative path) — regenerate with `{}`",
+                printable(&hazard.id, 64),
+                harness_core::runtime_view::command_line("detect", tool)
             )));
         }
         hazard_lines.push(format!(
