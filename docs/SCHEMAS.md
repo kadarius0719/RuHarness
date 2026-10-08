@@ -1395,7 +1395,8 @@ plan-order | computer | compilers`, and the cockpit's own `measuring | too-large
 
 `harness_status.speed`: `null` without a workloads file, else `{state: no-workload | file-error |
 not-yet-run | c-only | units, units_measured, units_measurable, measuring, program_checked,
-note, unreadable [{file, error}], unreadable_omitted?, c_alone [row], as_it_stands {units,
+note, unreadable [{file, error}], unreadable_omitted?, orphans [id], orphans_omitted?, c_alone
+[row], as_it_stands {units,
 units_omitted?, left_out [{id, reason}], left_out_omitted?, rows [row]}}` — `units_measured` the
 units with a row perf timed or ran (not
 only set-up rows), `units_measurable` those it would measure now (0 for a plan perf refuses, over
@@ -1410,9 +1411,13 @@ it stands holds are then not judged, and the C-alone and as-it-stands rows' `cur
 (not known), not `true` — unless a reason was found anyway (the workload changed), then `false`
 with the reason; unit rows are still judged, except their `replaces` check, which needs the facts.
 `unreadable` lists the results files that could not be read, each by its file name
-(`program.json`, `units/<id>.json`, or `units` for the folder) and its error's first line, both
-fenced, at most 20 and `unreadable_omitted` for the rest; the rows of the files that read are
-still given. Each unit's `speed` is its worst row; `harness_unit.speed`
+(`program.json`, `units/<id>.json`, or `units` for the folder) and its error's reason alone (no
+"results file: <path>: " head), both fenced, at most 20 and `unreadable_omitted` for the rest; the
+rows of the files that read are still given; `orphans` names the results files of units no longer
+in the plan (ids, fenced, sorted, at most 20 and `orphans_omitted`), never read. Without facts
+`harness_status.units` lists only the plan units with speed rows, each `{id, speed, speed_rows}`
+(`speed_rows` every row of a workload still in the file, worst first, since `harness_unit` needs
+the facts); `units_measured` counts those. Each unit's `speed` is its worst row; `harness_unit.speed`
 all of the unit's rows, worst first. A row: `workload`, `answer` (closed:
 `about-as-fast | slower | faster | probably-slower | probably-faster | close-call-slower |
 close-call-faster | no-clear-difference | cant-tell-estimate | cant-tell-short-run |
