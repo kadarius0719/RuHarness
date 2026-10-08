@@ -126,15 +126,17 @@ pub const C_EXTENSIONS: [&str; 2] = ["c", "h"];
 impl CFrontend {
     /// [`LanguageFrontend::scan`], also returning the matching entries the
     /// walk left out because they are not regular files (a FIFO named `a.c`
-    /// would block the scan forever): the caller reports them. A walk error
-    /// stays fatal.
+    /// would block the scan forever): the caller reports them. A folder the
+    /// walk cannot read stays fatal. A file reached through a link inside
+    /// `source_dir` is scanned once, under its path with no link in it; a
+    /// dot-folder is not scanned (harness-core's walk).
     pub fn scan_reporting(&self, target: &TargetContext) -> Result<(Facts, Vec<PathBuf>), Error> {
         let src_dir = target.root.join(&target.config.target.source_dir);
         let walked = walk::confined(&src_dir, &C_EXTENSIONS, walk::Limits::default());
-        if let Some((path, why)) = walked.errors.first() {
-            return Err(Error::io(path, std::io::Error::other(why.clone())));
+        if let Some((path, why)) = walked.first_unreadable() {
+            return Err(Error::io(path, std::io::Error::other(why.to_string())));
         }
-        let skipped: Vec<PathBuf> = walked.skipped.into_iter().map(|(p, _)| p).collect();
+        let skipped: Vec<PathBuf> = walked.not_regular().map(Path::to_path_buf).collect();
         let abs_files = walked.files;
         let source_rel = lexical_segments(&target.config.target.source_dir).unwrap_or_default();
         let include_dirs: Vec<Vec<String>> = target
@@ -1903,35 +1905,55 @@ mod tests {
         assert!(facts.files[0].includes.is_empty());
     }
 
-    /// docs/COCKPIT-WRAPPER-DESIGN.md §2.1: on the shared walk the facts are
-    /// byte-identical to the committed ones (zopfli, the read_scalefactors
-    /// case), and a synthetic copy with a symlink inside source_dir scans as
-    /// it did before (checked by hand against the old walk when switching).
+    /// docs/COCKPIT-WRAPPER-DESIGN.md §2.1 and docs/PROJECT-MAP-DESIGN.md
+    /// §5 (a): on the shared walk the facts are byte-identical to the
+    /// committed ones — every committed `migration/facts.jsonl` in the
+    /// repository: zopfli and the 100 benchmark cases.
     #[test]
     fn the_shared_walk_keeps_the_committed_facts_byte_identical() {
+        fn roots(dir: &Path, out: &mut Vec<PathBuf>) {
+            if dir.join("migration/facts.jsonl").is_file() {
+                out.push(dir.to_path_buf());
+            }
+            let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+                .expect("read dir")
+                .map(|e| e.expect("entry").path())
+                .collect();
+            entries.sort();
+            for path in entries {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let real_dir = std::fs::symlink_metadata(&path)
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false);
+                if real_dir && !name.starts_with('.') && name != "migration" && name != "target" {
+                    roots(&path, out);
+                }
+            }
+        }
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for rel in [
-            "targets/zopfli",
-            "targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib",
-        ] {
-            let root = repo.join(rel);
+        let mut found = Vec::new();
+        roots(&repo.join("targets"), &mut found);
+        assert_eq!(found.len(), 101, "{found:?}");
+        for root in found {
             let target = TargetContext::load(&root).expect("target loads");
             let facts = CFrontend.scan(&target).expect("scan");
             let committed =
                 std::fs::read(root.join("migration/facts.jsonl")).expect("committed facts");
             assert!(
                 facts.to_canonical_bytes().expect("bytes") == committed,
-                "{rel}: the facts differ from the committed ones"
+                "{}: the facts differ from the committed ones",
+                root.display()
             );
         }
     }
 
     /// A FIFO (or any non-regular file) with a C name is skipped and
-    /// reported — never read, so it can no longer hang a scan. A link to a
-    /// file inside source_dir is scanned at its own path.
+    /// reported — never read, so it can no longer hang a scan — and is a
+    /// walk issue. A link to a file inside source_dir is not a second file:
+    /// the file is scanned once, under its real path.
     #[cfg(unix)]
     #[test]
-    fn a_fifo_named_like_c_is_skipped_and_an_inside_link_is_scanned() {
+    fn a_fifo_named_like_c_is_skipped_and_an_inside_link_is_scanned_once() {
         let t = TempTarget::new("fifo", "[]");
         t.write("src/a.c", "int a(void) { return 0; }\n");
         std::os::unix::fs::symlink(t.0.join("src/a.c"), t.0.join("src/alias.c")).expect("symlink");
@@ -1943,7 +1965,16 @@ mod tests {
         let target = TargetContext::load(&t.0).expect("target loads");
         let (facts, skipped) = CFrontend.scan_reporting(&target).expect("scan terminates");
         let paths: Vec<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths, vec!["src/a.c", "src/alias.c"]);
+        assert_eq!(paths, vec!["src/a.c"]);
         assert_eq!(skipped, vec![t.0.join("src/pipe.c")]);
+        let walked = walk::confined(&t.0.join("src"), &C_EXTENSIONS, walk::Limits::default());
+        assert_eq!(
+            walked.issues,
+            [walk::Issue {
+                path: t.0.join("src/pipe.c"),
+                why: walk::Why::NotRegular,
+            }]
+        );
+        assert_eq!(walked.aliases.len(), 1);
     }
 }

@@ -342,7 +342,11 @@ mod tests {
         .unwrap();
         let r = read(&dir).expect("a missing source_dir still reads");
         assert!(r.walk.listed.is_empty());
-        assert_eq!(r.walk.errors.len(), 1, "{:?}", r.walk.errors);
+        assert_eq!(r.walk.issues.len(), 1, "{:?}", r.walk.issues);
+        assert!(matches!(
+            r.walk.issues[0].1,
+            harness_core::walk::Why::Unreadable(_)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

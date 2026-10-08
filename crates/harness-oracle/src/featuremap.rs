@@ -344,7 +344,7 @@ fn map_inner(
                     Err(why) => {
                         return Err(Error::Invariant(format!(
                             "the scratch copy cannot find what the program includes (an include \
-                         outside source_dir, or a folder linked into it) — the features map \
+                         outside source_dir, or a folder or file linked into it) — the features map \
                          copies only source_dir: {why}"
                         )))
                     }
@@ -1163,9 +1163,11 @@ fn make_prerequisites(rules: &str) -> Vec<String> {
         .collect()
 }
 
-/// Copy every regular file under `source_dir` (not `migration/` or `.git/`
-/// when it is the target root) into `mirror` at its repo-relative path, each
-/// file the facts give functions probed. Returns the unwatched pairs.
+/// Copy every regular file under `source_dir` (not `migration/`, nor a
+/// dot-folder such as `.git/`) into `mirror` at its repo-relative path, each
+/// file the facts give functions probed. A link inside `source_dir` is not
+/// descended: its files are copied once, under their real paths (the walk's
+/// aliases are not copied). Returns the unwatched pairs.
 fn write_mirror(
     base: &Base,
     facts: &Facts,
@@ -1173,7 +1175,7 @@ fn write_mirror(
     mirror: &Path,
     probe: &mut Probe,
 ) -> Result<Vec<(PathBuf, std::time::SystemTime)>, Error> {
-    let skipped_dirs = [base.root.join("migration"), base.root.join(".git")];
+    let skipped_dirs = [base.root.join("migration")];
     let walked = walk::confined_except(
         &base.source_dir,
         walk::ALL_FILES,
@@ -1183,8 +1185,8 @@ fn write_mirror(
         },
         &skipped_dirs,
     );
-    if let Some((path, why)) = walked.errors.first() {
-        return Err(Error::io(path, std::io::Error::other(why.clone())));
+    if let Some((path, why)) = walked.first_unreadable() {
+        return Err(Error::io(path, std::io::Error::other(why.to_string())));
     }
     if walked.truncated {
         return Err(Error::Invariant(format!(

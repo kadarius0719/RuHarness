@@ -1312,23 +1312,44 @@ pub const MAX_PROGRAM_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// `source_dir` and the `include_dirs` (the build's include path: a header
 /// reached with `<…>` is in no closure; fix check O2). What
 /// [`program_files`] hashes and what the read preflight budgets (review
-/// T1): one list for both.
+/// T1): one list for both. A top-level `.c` that is a link to a file inside
+/// `source_dir` is named by its real path, as the scan records it (the
+/// walk's alias rule, docs/PROJECT-MAP-DESIGN.md §3.1 step 1), so its
+/// closure is the facts' and a scan clears its staleness.
 pub fn program_paths(ctx: &crate::config::TargetContext, facts: &crate::Facts) -> Vec<String> {
     let source_dir = &ctx.config.target.source_dir;
+    let canon_root = ctx.root.canonicalize().ok();
+    let canon_src = ctx.root.join(source_dir).canonicalize().ok();
+    // `path` (a link) as the scan records its file: its real path, when that
+    // is a regular file inside `source_dir`.
+    let real = |path: &Path| -> Option<String> {
+        let (root, src) = (canon_root.as_deref()?, canon_src.as_deref()?);
+        let target = path.canonicalize().ok()?;
+        (target.starts_with(src) && target.is_file())
+            .then(|| target.strip_prefix(root).ok().and_then(repo_relative))
+            .flatten()
+    };
     let mut top: Vec<String> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(ctx.root.join(source_dir)) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
             if name.ends_with(".c") {
-                top.extend(repo_relative(&Path::new(source_dir).join(name)));
+                let linked = entry
+                    .file_type()
+                    .is_ok_and(|t| t.is_symlink())
+                    .then(|| real(&entry.path()))
+                    .flatten();
+                top.extend(linked.or_else(|| repo_relative(&Path::new(source_dir).join(name))));
             }
         }
     }
     top.sort();
+    top.dedup();
     let mut paths = facts.include_closure(&top);
     paths.extend(top);
-    let prune = [ctx.root.join("migration"), ctx.root.join(".git")];
+    // `migration/` by path; `.git` and every dot-folder by name (the walk).
+    let prune = [ctx.root.join("migration")];
     for dir in std::iter::once(source_dir).chain(&ctx.config.target.include_dirs) {
         let walked = crate::walk::confined_except(
             &ctx.root.join(dir),
@@ -2180,7 +2201,7 @@ args = ["-h"]
             root: dir.clone(),
             config: config_from(
                 "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"p\"\n\
-                 include_dirs = [\"p/src/include\"]\n",
+                 include_dirs = [\"p/include\"]\n",
             ),
         };
         let rec = |path: &str| crate::facts::FileRecord {
@@ -2188,12 +2209,34 @@ args = ["-h"]
             hash: hash::file_hash(&dir.join(path)).unwrap(),
             includes: Vec::new(),
         };
-        // The scan walks `p` in order: `include` (the alias) before `src`.
+        // The scan records the header once, under its real path (the walk
+        // does not descend the link `p/include`); the include dir named
+        // through the link keeps the scan's path.
         let facts = crate::Facts {
-            files: vec![rec("p/include/x.h"), rec("p/main.c")],
+            files: vec![rec("p/main.c"), rec("p/src/include/x.h")],
             ..crate::Facts::default()
         };
-        assert_eq!(program_paths(&ctx, &facts), ["p/include/x.h", "p/main.c"]);
+        assert_eq!(
+            program_paths(&ctx, &facts),
+            ["p/main.c", "p/src/include/x.h"]
+        );
+        assert!(program_digest_now(&ctx, &facts).starts_with("blake3:"));
+        // A top-level `.c` linked to a file inside source_dir is named by its
+        // real path, as the scan records it: its facts are not stale.
+        std::fs::write(dir.join("p/src/real.c"), "int r;").unwrap();
+        std::os::unix::fs::symlink("src/real.c", dir.join("p/b.c")).unwrap();
+        let facts = crate::Facts {
+            files: vec![
+                rec("p/main.c"),
+                rec("p/src/include/x.h"),
+                rec("p/src/real.c"),
+            ],
+            ..crate::Facts::default()
+        };
+        assert_eq!(
+            program_paths(&ctx, &facts),
+            ["p/main.c", "p/src/include/x.h", "p/src/real.c"]
+        );
         assert!(program_digest_now(&ctx, &facts).starts_with("blake3:"));
         std::fs::remove_dir_all(&dir).unwrap();
     }

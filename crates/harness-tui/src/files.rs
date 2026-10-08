@@ -10,7 +10,7 @@
 use crate::model::{ProvenanceView, Snapshot, UnitView};
 use harness_core::facts::Facts;
 use harness_core::status::VerdictState;
-use harness_core::walk::{self, Limits, Skip};
+use harness_core::walk::{self, Limits, Why};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -34,10 +34,13 @@ pub struct TreeWalk {
     /// absent (`lstat` says so) — "missing". One present but beyond the
     /// limits is simply not listed.
     pub absent: BTreeSet<String>,
-    /// Matching entries left out (a FIFO named `a.c`).
-    pub skipped: Vec<(String, Skip)>,
-    /// Entries that could not be read, and why.
-    pub errors: Vec<(String, String)>,
+    /// Entries the walk did not list, and why: a FIFO named `a.c`, a link
+    /// that leaves the source directory or points nowhere, a folder that
+    /// cannot be read. A link inside it is not listed again: its files
+    /// appear once, under their real paths.
+    pub issues: Vec<(String, Why)>,
+    /// Folders skipped by name (a dot-folder) and their matching files.
+    pub skipped_folders: Vec<(String, usize)>,
     /// A limit cut the listing short.
     pub truncated: bool,
 }
@@ -75,15 +78,15 @@ pub fn walk_tree(root: &Path, source_dir: &str, facts: Option<&Facts>) -> TreeWa
     TreeWalk {
         source_dir: relative(root, &root.join(source_dir)),
         absent,
-        skipped: walked
-            .skipped
+        issues: walked
+            .issues
             .iter()
-            .map(|(p, why)| (relative(root, p), *why))
+            .map(|i| (relative(root, &i.path), i.why.clone()))
             .collect(),
-        errors: walked
-            .errors
+        skipped_folders: walked
+            .skipped_folders
             .iter()
-            .map(|(p, e)| (relative(root, p), e.clone()))
+            .map(|f| (relative(root, &f.path), f.files))
             .collect(),
         truncated: walked.truncated,
         listed,
