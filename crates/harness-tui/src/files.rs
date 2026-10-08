@@ -8,6 +8,7 @@
 //! paths and each unit crate's content hash.
 
 use crate::model::{ProvenanceView, Snapshot, UnitView};
+use harness_core::config::Form;
 use harness_core::facts::Facts;
 use harness_core::status::VerdictState;
 use harness_core::walk::{self, Limits, Why};
@@ -23,13 +24,17 @@ pub const TREE_LIMITS: Limits = Limits {
     max_depth: Some(32),
 };
 
-/// What the loader's walk of the source directory found, repo-relative.
+/// What the loader's walk found, repo-relative: the source directory of a
+/// folder-form target, the whole project (its `migration/` pruned) for a
+/// file-list target.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TreeWalk {
-    /// The target's `source_dir`, repo-relative (`src/zopfli`).
-    pub source_dir: String,
     /// The files listed, repo-relative with `/`, in walk order.
     pub listed: Vec<String>,
+    /// Listed files that are not part of this tool (a file-list target): not
+    /// listed in its `harness.toml` and not a header the facts record its
+    /// files reaching. Empty for a folder-form target.
+    pub not_in_tool: BTreeSet<String>,
     /// Files the facts record that the walk did not return and that are
     /// absent (`lstat` says so) — "missing". One present but beyond the
     /// limits is simply not listed.
@@ -55,10 +60,44 @@ fn relative(root: &Path, path: &Path) -> String {
         .join("/")
 }
 
-/// Walk the target's source directory for the tree (on the loader thread).
-pub fn walk_tree(root: &Path, source_dir: &str, facts: Option<&Facts>) -> TreeWalk {
-    let walked = walk::confined(&root.join(source_dir), &C_EXTENSIONS, TREE_LIMITS);
+/// Walk the target for the tree (on the loader thread): a folder-form
+/// target's `source_dir` (`""` is the root); a file-list target's whole
+/// project, its `migration/` pruned (no tool's ledger, no map is project C),
+/// every file outside the tool marked [`TreeWalk::not_in_tool`]. Before a
+/// scan the facts name no headers: only a `.c` outside the list is marked.
+pub fn walk_tree(root: &Path, form: &Form, facts: Option<&Facts>) -> TreeWalk {
+    let ledger = root.join(harness_core::ledger::MIGRATION_DIR);
+    let walked = match form {
+        Form::Folder(folder) => {
+            let source_dir = match folder.source_dir.as_str() {
+                "" => ".",
+                dir => dir,
+            };
+            walk::confined(&root.join(source_dir), &C_EXTENSIONS, TREE_LIMITS)
+        }
+        Form::FileList(_) => walk::confined_except(
+            root,
+            &C_EXTENSIONS,
+            TREE_LIMITS,
+            std::slice::from_ref(&ledger),
+        ),
+    };
     let listed: Vec<String> = walked.files.iter().map(|p| relative(root, p)).collect();
+    let not_in_tool: BTreeSet<String> = match form {
+        Form::Folder(_) => BTreeSet::new(),
+        Form::FileList(list) => {
+            let mut tool: BTreeSet<&str> = list.files.iter().map(|f| f.path.as_str()).collect();
+            if let Some(f) = facts {
+                tool.extend(f.files.iter().map(|r| r.path.as_str()));
+            }
+            listed
+                .iter()
+                .filter(|p| !tool.contains(p.as_str()))
+                .filter(|p| facts.is_some() || p.ends_with(".c"))
+                .cloned()
+                .collect()
+        }
+    };
     let seen: BTreeSet<&str> = listed.iter().map(String::as_str).collect();
     let absent = facts
         .map(|f| {
@@ -75,8 +114,10 @@ pub fn walk_tree(root: &Path, source_dir: &str, facts: Option<&Facts>) -> TreeWa
                 .collect()
         })
         .unwrap_or_default();
+    // The harness's own ledger is not a skipped project folder.
+    let ledger = ledger.canonicalize().unwrap_or(ledger);
     TreeWalk {
-        source_dir: relative(root, &root.join(source_dir)),
+        not_in_tool,
         absent,
         issues: walked
             .issues
@@ -86,6 +127,7 @@ pub fn walk_tree(root: &Path, source_dir: &str, facts: Option<&Facts>) -> TreeWa
         skipped_folders: walked
             .skipped_folders
             .iter()
+            .filter(|f| f.path != ledger)
             .map(|f| (relative(root, &f.path), f.files))
             .collect(),
         truncated: walked.truncated,
@@ -239,6 +281,9 @@ pub enum FileState {
     NoExports,
     /// 6 `○ not in the plan`.
     NotInPlan,
+    /// `◌ not part of this tool`: a project file a file-list target neither
+    /// lists nor reaches (greyed; no act takes it).
+    NotInTool,
 }
 
 /// One function of a file, from the facts' symbol records.
@@ -366,7 +411,7 @@ impl Files {
                         _ => {}
                     }
                 }
-                FileState::Header | FileState::NoExports => {}
+                FileState::Header | FileState::NoExports | FileState::NotInTool => {}
             }
         }
         r
@@ -505,6 +550,8 @@ pub fn build(snapshot: &Snapshot, walk: &TreeWalk) -> Files {
             fns.retain(|(_, name, _)| named.insert(*name));
             let state = if walk.absent.contains(path) {
                 FileState::Missing
+            } else if walk.not_in_tool.contains(path) {
+                FileState::NotInTool
             } else if stale.contains(path) {
                 FileState::Changed
             } else if !recorded.contains(path) {
@@ -551,6 +598,7 @@ pub fn file_label(files: &Files, state: &FileState) -> (&'static str, String) {
         FileState::Header => ("·", "header".into()),
         FileState::NoExports => ("–", "no exported functions".into()),
         FileState::NotInPlan => ("○", "not in the plan".into()),
+        FileState::NotInTool => ("◌", "not part of this tool".into()),
         FileState::Owned(u) => match files.units.get(*u) {
             Some(info) => (info.state.glyph(), info.state.word()),
             None => ("·", "owned".into()),
@@ -565,6 +613,43 @@ mod tests {
     use harness_core::facts::{FileRecord, SymbolRecord};
     use harness_core::ledger::Ledger;
     use std::path::PathBuf;
+
+    /// A file-list tool's tree (docs/PROJECT-MAP-DESIGN.md §3.7): its listed
+    /// files and the headers the facts record them reaching, under their
+    /// real folders, in their states; the project's other C files greyed as
+    /// "not part of this tool", counted nowhere, offering no Scan; nothing
+    /// of the ledger listed or noted as a skipped folder.
+    #[cfg(feature = "tui")]
+    #[test]
+    fn a_file_list_tools_tree_shows_its_files_and_greys_the_rest() {
+        use crate::testutil::{file_list_tool, LZG_TOOL};
+        let dir = file_list_tool("tree-file-list");
+        let read = crate::load::read_tool(&dir.0, Some(LZG_TOOL)).expect("the tool reads");
+        assert!(read.snapshot.target.files().is_some());
+        assert_eq!(read.snapshot.ledger_rel(), "migration/tools/t-lzg");
+        let files = build(&read.snapshot, &read.walk);
+        let state = |p: &str| files.file(p).unwrap_or_else(|| panic!("{p}")).state.clone();
+        assert!(matches!(state("src/lib/encode.c"), FileState::Owned(_)));
+        assert!(matches!(state("src/tools/lzg.c"), FileState::Owned(_)));
+        assert_eq!(state("src/lib/internal.h"), FileState::Header);
+        assert_eq!(state("src/include/lzg.h"), FileState::Header);
+        for outside in ["src/include/unused.h", "src/other/decode.c"] {
+            assert_eq!(state(outside), FileState::NotInTool, "{outside}");
+            assert_eq!(
+                file_label(&files, &state(outside)),
+                ("◌", "not part of this tool".to_string())
+            );
+        }
+        assert!(
+            files.files.iter().all(|f| !f.path.starts_with("migration")),
+            "{:?}",
+            files.files
+        );
+        assert!(read.walk.skipped_folders.is_empty(), "{:?}", read.walk);
+        // Counted nowhere: two files to migrate, none new.
+        assert_eq!(files.rollup("").text(), "✓0/2");
+        assert_eq!(files.rollup("src/other").text(), "");
+    }
 
     /// The interrupted-Accept words are perf's, word for word
     /// (docs/PERF-DESIGN.md §3.2).

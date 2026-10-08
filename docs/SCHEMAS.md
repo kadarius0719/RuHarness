@@ -1719,12 +1719,12 @@ it", "the flag `-DFOO BAR` does not define a C identifier; write -DNAME or -DNAM
 argument", "the flag `-I../x` names a path outside the project or under migration/; name a
 folder inside the project, relative to its root".
 
-**Readers that do not read the file-list form yet** refuse it in one sentence, never a panic:
-"this target lists its files; <command> does not read that form yet" — today `scan`, `plan`,
-`verify`, `detect`, `observe`, `migrate`, `gen-driver`, `override`, `promote`, `features map`,
-`perf run`, the cockpit's read model and harness-mcp's reads. (`state status`, `review`,
-`sync-runtime`, `features init|save` and `perf init|save|show` read it.) The builds and the
-scanner learn the form in the next parts of step c.
+**Every reader reads the file-list form**: every subcommand, the cockpit (its tree shows the
+tool's listed files and the headers the facts record them reaching under their real folders, the
+project's other C files greyed as "not part of this tool", `migration/` pruned) and harness-mcp's
+reads. The whole program's own files — where a folder target counts the top-level `.c` of
+`source_dir` (the features map's units "outside the program", the one-`main` hint) — are the
+listed files.
 
 ## `sync-runtime`, one block per tool
 

@@ -100,7 +100,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         attempt,
     } = args;
     require_sandbox(allow_unsandboxed, "harness gen-driver")?;
-    let ctx = target.load_folder("harness gen-driver")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("gen-driver {unit_id}"))?;
     let plan_doc = Plan::load(&ledger.plan_path())?;

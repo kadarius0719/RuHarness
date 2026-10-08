@@ -76,15 +76,6 @@ impl TargetArg {
         Ok(TargetContext::open(&self.target, self.tool.as_deref())?)
     }
 
-    /// [`TargetArg::load`] for a command that reads the target's sources:
-    /// a file-list target is refused in one sentence until it reads that
-    /// form.
-    pub(crate) fn load_folder(&self, command: &str) -> Result<TargetContext> {
-        let ctx = self.load()?;
-        ctx.config.target.folder(command)?;
-        Ok(ctx)
-    }
-
     /// The flags that name this target again in a resume command line,
     /// each value shell-quoted and attached.
     pub(crate) fn resume_args(&self) -> String {
@@ -817,7 +808,7 @@ pub(crate) fn stale_fact_files(ctx: &TargetContext, facts: &Facts) -> usize {
 }
 
 fn cmd_plan(target: TargetArg) -> Result<u8> {
-    let ctx = target.load_folder("harness plan")?;
+    let ctx = target.load()?;
     let _lock = lock_ledger(&Ledger::of(&ctx), "plan")?;
     let (changes, order_line, units) = plan_target(&ctx)?;
     if changes.is_empty() {
@@ -937,7 +928,7 @@ pub(crate) fn safe_ledger_dir(ctx: &TargetContext, components: &[&str]) -> Resul
 
 fn cmd_verify(unit_id: String, target: TargetArg, allow_unsandboxed: bool) -> Result<u8> {
     require_sandbox(allow_unsandboxed, "harness verify")?;
-    let ctx = target.load_folder("harness verify")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("verify {unit_id}"))?;
     let plan_path = ledger.plan_path();
@@ -1230,7 +1221,7 @@ fn observe_resume(target: &TargetArg) -> String {
 
 fn cmd_observe(target: TargetArg) -> Result<u8> {
     use harness_core::observer::{self, ObserverPaths};
-    let ctx = target.load_folder("harness observe")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "observe")?;
     let (facts, plan_doc, findings, annotations, _, reviews) = observer_inputs(&ctx, &ledger)?;
@@ -1617,7 +1608,7 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         (Some(file), Some(key)) => Some(read_answer(file, key, answer_bytes)?),
         _ => None,
     };
-    let ctx = target.load_folder("harness migrate")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("migrate {unit_id}"))?;
     let plan_path = ledger.plan_path();

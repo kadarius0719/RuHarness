@@ -183,8 +183,9 @@ pub struct Snapshot {
     pub features: FeatureSnapshot,
     /// Today's feature digests (`None` without a features file).
     pub features_now: Option<FeaturesNow>,
-    /// `[target] source_dir` as configured.
-    pub source_dir: String,
+    /// `[target]` as configured: the run name and the form — the folder
+    /// (`source_dir`) or the listed files.
+    pub target: harness_core::config::TargetSection,
     /// The file name the program runs under in a scenario.
     pub program_name: String,
     /// perf's files and today's inputs (docs/PERF-DESIGN.md §3.11).
@@ -202,17 +203,23 @@ impl Snapshot {
         Ledger::at(&self.root, &self.ledger_dir)
     }
 
+    /// The ledger folder relative to the root, `/`-joined (`migration`, or
+    /// `migration/tools/<id>`), for the words that name its files.
+    pub fn ledger_rel(&self) -> String {
+        match self.ledger_dir.strip_prefix(&self.root) {
+            Ok(rel) => rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/"),
+            Err(_) => harness_core::ledger::MIGRATION_DIR.to_string(),
+        }
+    }
+
     /// Read the ledger of the target `--target <target> [--tool <tool>]`
-    /// names. A target that lists its files is refused in one sentence
-    /// until the read model reads that form.
+    /// names, either form.
     pub fn open(target: &Path, tool: Option<&str>) -> Result<Snapshot, Error> {
         let ctx = TargetContext::open(target, tool)?;
-        let source_dir = ctx
-            .config
-            .target
-            .folder("the read model")?
-            .source_dir
-            .clone();
         let ledger = Ledger::of(&ctx);
         let mut snapshot = Snapshot {
             root: ctx.root.clone(),
@@ -223,7 +230,7 @@ impl Snapshot {
             note: None,
             features: FeatureSnapshot::load(&ctx),
             features_now: None,
-            source_dir,
+            target: ctx.config.target.clone(),
             program_name: harness_core::features::program_name(&ctx.config),
             perf: crate::perfread::PerfRead::default(),
         };

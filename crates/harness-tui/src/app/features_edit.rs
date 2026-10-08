@@ -638,7 +638,10 @@ impl App {
                     .into(),
             );
         }
-        body.push("Writes migration/features/features.toml — commit it with your work.".into());
+        body.push(format!(
+            "Writes {}/features/features.toml — commit it with your work.",
+            self.snapshot.ledger_rel()
+        ));
         ("Save the features file?".into(), body)
     }
 
@@ -668,7 +671,10 @@ impl App {
              of date: your workload changed\" until measured again."
                 .into(),
         );
-        body.push("Writes migration/perf/workloads.toml — commit it with your work.".into());
+        body.push(format!(
+            "Writes {}/perf/workloads.toml — commit it with your work.",
+            self.snapshot.ledger_rel()
+        ));
         (title, body)
     }
 

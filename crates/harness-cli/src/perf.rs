@@ -167,7 +167,7 @@ pub(crate) fn cmd_run(
     if !cfg!(target_os = "macos") {
         bail!("perf runs on macOS only for now — the Linux launcher is not built yet");
     }
-    let ctx = target.load_folder("harness perf run")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, harness_core::perf::PERF_RUN_LOCK)?;
     let workloads = workloads(&ctx)?;

@@ -203,6 +203,11 @@ fn map_inner(
     let mirror = build.join("mirror");
     let mut probe = Probe::new(gcc);
     let times = write_mirror(&base, facts, &index, &mirror, &mut probe)?;
+    // What the scratch copy holds, in the refusals below.
+    let copied_what = match base.source_dir() {
+        Some(_) => "source_dir",
+        None => "the listed files and the headers they reach",
+    };
     let index_of = |rel: &str| {
         let rel = rel.to_string();
         let index = &index;
@@ -256,7 +261,7 @@ fn map_inner(
     {
         return Err(Error::Invariant(format!(
             "{} is reached through a link the scratch copy does not hold: the features map \
-             copies each file of source_dir once, so it cannot map this program",
+             copies each file of {copied_what} once, so it cannot map this program",
             shown(c, &root).display()
         )));
     }
@@ -366,16 +371,16 @@ fn map_inner(
                 (&ci, &cd),
                 Some(&copy),
             )? {
-                    Ok(reads) => reads,
-                    Err(why) => {
-                        return Err(Error::Invariant(format!(
-                            "the scratch copy cannot find what the program includes (an include \
-                         outside source_dir, or a folder or file linked into it) — the features map \
-                         copies only source_dir: {why}"
-                        )))
-                    }
-                };
-            compare_reads(c_file, program, &copied_reads, &root)?;
+                Ok(reads) => reads,
+                Err(why) => {
+                    return Err(Error::Invariant(format!(
+                        "the scratch copy cannot find what the program includes (an include \
+                         outside {copied_what}, or a folder or file linked into it) — the features \
+                         map copies only {copied_what}: {why}"
+                    )))
+                }
+            };
+            compare_reads(c_file, program, &copied_reads, &root, copied_what)?;
             let own = copied.canonicalize().ok();
             // §3.3 step 1: a probed file listed and not entered is read as
             // data (`#embed`, `__has_embed`, `__has_include`).
@@ -649,7 +654,15 @@ fn map_inner(
 
 /// The same files, by the same names, and the same headers entered in order
 /// — the program's compile of `c_file` and the copy's (§5.3).
-fn compare_reads(c_file: &Path, program: &Reads, copied: &Reads, root: &Path) -> Result<(), Error> {
+/// `copied_what` names what the copy holds (`source_dir`, or the listed
+/// files and their headers).
+fn compare_reads(
+    c_file: &Path,
+    program: &Reads,
+    copied: &Reads,
+    root: &Path,
+    copied_what: &str,
+) -> Result<(), Error> {
     // One the program reads that the copy would not, or one only the copy
     // reads (a lookup that finds the harness's own build folder from the
     // mirror; fix check 6).
@@ -657,8 +670,8 @@ fn compare_reads(c_file: &Path, program: &Reads, copied: &Reads, root: &Path) ->
     if let Some(missed) = program.files.difference(&copied.files).next() {
         return Err(Error::Invariant(format!(
             "the program reads {}, which the scratch copy would not (it is outside \
-             source_dir, in migration/ or .git/ there, or reached through a folder linked \
-             into it): the features map copies only source_dir, so it cannot map this \
+             {copied_what}, in migration/ or .git/ there, or reached through a folder linked \
+             into it): the features map copies only {copied_what}, so it cannot map this \
              program",
             spelled(missed)
         )));

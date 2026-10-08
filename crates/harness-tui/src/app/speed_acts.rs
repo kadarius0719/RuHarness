@@ -398,9 +398,10 @@ impl App {
                  ~/Library/Caches/ruharness/perf"
             }
         };
+        let ledger = self.snapshot.ledger_rel();
         body.push(format!(
-            "Writes migration/perf/ (its rows replace the ones they measure again) and scratch \
-             folders under migration/build/ (.perf, .perf-out with the kept outputs, \
+            "Writes {ledger}/perf/ (its rows replace the ones they measure again) and scratch \
+             folders under {ledger}/build/ (.perf, .perf-out with the kept outputs, \
              perf-logs){cache_words}."
         ));
         if let Some(LauncherCache::CannotUse(why)) = &launcher {
