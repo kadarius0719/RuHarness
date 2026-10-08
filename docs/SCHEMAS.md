@@ -1283,8 +1283,8 @@ replaces-changed | rust-changed | accept-interrupted`, `attempt`, `never_started
 step-1 run was under both legs of the floor (fewer than 1e9 instructions and under half a second
 of CPU); never on the C alone.
 `inputs`: `workload`, `program` (the features' program digest), `crates [{id, digest}]` (unit
-rows, one; as-it-stands rows, one per held unit; a crate that does not build records its real
-digest), `replaces` (unit rows),
+rows, one; a built as-it-stands row, one per held unit — a set-up as-it-stands row has none; a
+crate that does not build records its real digest), `replaces` (unit rows),
 `program_name`, `units [{id, crate}]` and `left_out [{id, crate, reason}]`
 (every as-it-stands row, set-up ones included; reasons `not-fresh | replaces-mismatch |
 replaces-changed | crate-does-not-build | does-not-link | accept-interrupted`), `recipe`
@@ -1298,13 +1298,17 @@ the row's `replaces` when it holds them). Every list a row holds is capped, its 
 before its entries, and a row over a cap is refused by name ("left_out holds 1000 entries, at
 most 999"): `replaces` ≤ 65 536 paths; `crates`, `units`, `left_out`, a set-up's `runtimes` and
 `units` and a last try's `units` ≤ 999 entries each (perf measures a plan of at most 999 units,
-one slot each); `profile` ≤ 4 settings; `kept` ≤ 4 files. A file's rows lists (`c_alone`,
-`as_it_stands`, a unit file's `rows`) hold at most 16 rows each, one per workload (the workloads
-file's own cap; the writer already drops the rows of workloads no longer in it), and a longer list
-is refused by name. `schema_version` is read through that one field, without building the whole
-file first; the file is then parsed once, and the caps are checked after that parse. So the caps
-bound what the reader hands on (to the words, `perf show`, the cockpit and harness-mcp); the
-memory the parse itself takes is bounded only by the file's 4 MiB cap.
+one slot each); `profile` ≤ 4 settings; `kept` ≤ 4 files. A last try's `units` are checked as the
+row's own: only on an as-it-stands row ("only the program as it stands holds units"), unit ids,
+once each, with crate digests. A file's rows lists (`c_alone`, `as_it_stands`, a unit file's
+`rows`) hold at most 16 rows each, one per workload (the workloads file's own cap; the writer
+already drops the rows of workloads no longer in it), and a longer list is refused by name.
+`schema_version` is read first, through that one field: that read scans the whole file but skips
+every other value without building it; the typed parse then reads the file again and builds it
+once, and the caps are checked after that parse. So the caps bound what the reader hands on (to
+the words, `perf show`, the cockpit and harness-mcp); the memory the parse itself takes is bounded
+only by the file's 4 MiB cap. A results file the reader refuses is named in its error: "results
+file: <path>: <why>".
 
 **The replace rule** (one, in `harness-core`): a set-up outcome never replaces an earlier row that
 is not itself a set-up row — it is kept beside it as `last_try`; on the C-alone rows the C's own
@@ -1335,13 +1339,19 @@ plan-order | computer | compilers`, and the cockpit's own `measuring | too-large
 - `harness perf run [--target] [--unit ID]… [--workload ID]… [--runs 5–31] [--as-it-stands-only]
   [--allow-unsandboxed]` — the writer lock (`perf run …` is the holder's command); refuses without
   workloads, with stale facts ("scan the project first"), unknown ids (naming the known ones), a
-  plan of more than 999 units (by name, before anything is selected or built), and a link or a
-  non-folder at `migration/perf/units` ("…/migration/perf/units: must be a directory (a link is
-  refused)") — when the run starts, before anything is built, and again before each unit row is
-  written; it never reads through such a folder or removes it. `--as-it-stands-only` with fewer
-  than two measurable units is refused before anything is built, naming the units left out and why
-  ("one measurable unit (u001) — u-tree left out: verify it first", or "no measurable unit …"); the
-  same words when fewer than two units build. Without `--unit` / `--as-it-stands-only`: the C
+  plan of more than 999 units (by name, before anything is built or written; with
+  `--as-it-stands-only` the early check below refuses it by name too, in the same words), and a
+  link or a non-folder at `migration/perf/units` ("…/migration/perf/units: must be a directory (a
+  link is refused)") — when the run starts, before anything is built, and again before each unit
+  row is written; it never reads through such a folder or removes it. `--as-it-stands-only` with
+  fewer than two measurable units is refused before anything is built, naming the units left out
+  and why ("one measurable unit (u001) — u-tree left out: verify it first — the program as it
+  stands needs two", or "no measurable unit — … — the program as it stands needs two"; "no accepted
+  unit to compare yet" when no unit is verified or merged at all); the left-out list names at most
+  10 units, then "and N more". When fewer than two units build, the refusal after the builds uses
+  the same words, the units that did not build among those left out ("one measurable unit (ua) —
+  ud left out: its crate does not build — the program as it stands needs two"; "no accepted unit
+  to compare yet" only when no unit was verified). Without `--unit` / `--as-it-stands-only`: the C
   alone, each measurable unit (verified or merged, verdict green and fresh, no interrupted Accept),
   and the program as it stands; `--unit` alone builds and links only the units named. Each build
   step may write only its own folder (the compiles `.perf/obj`, each link its slot, each crate
@@ -1358,36 +1368,49 @@ plan-order | computer | compilers`, and the cockpit's own `measuring | too-large
   (only when its cache is current), it starts only `cc --version` and `rustc -V`, as tool runs
   (the tool sandbox, the tool environment, the allowlist, `[oracle] timeout_secs`); "compilers not
   checked" when either is not allowlisted, either run fails, or no sandbox is available and
-  `--allow-unsandboxed` was not given. `--no-check` checks neither the computer nor the compilers.
-  With no row stored it checks nothing and starts nothing, and says only "nothing measured yet —
-  run harness perf run". Without facts (none, or unreadable) the C is not judged, said once:
-  "perf: the C not checked: no facts — run harness scan", or, when a program-as-it-stands row is
-  stored, "perf: the C and the units the program as it stands holds not checked: no facts — run
-  harness scan" (its held and left-out units are then not judged either); with facts but units
-  that cannot be read, "perf: the units the program as it stands holds not checked: <error>"; the
-  rest of each row is still judged. A unit's results file that cannot be read does not hide the others: the rows that
-  read are shown, then the error naming the file, exit 1. Exit 0/1.
-- Events (`--json`): `perf-row {side: c | program | unit, unit (unit rows), workload, outcome,
-  words}` — `words` is a display-only courtesy (the CLI's line), never parsed.
+  `--allow-unsandboxed` was not given; the two run one at a time and it stops at the first that
+  fails (when `cc --version` fails, `rustc -V` is never started). `--no-check` checks neither the
+  computer nor the compilers. With no row stored it checks nothing and starts nothing, and its
+  last line is "nothing measured yet — run harness perf run". Without facts (none, or unreadable)
+  the C is not judged, said once: "perf: the C not checked: no facts — run harness scan", or, when
+  a program-as-it-stands row is stored, "perf: the C and the units the program as it stands holds
+  not checked: no facts — run harness scan" (whether each unit is still held or left out, accepted
+  or verified since, and the plan's order, are then not judged; a held unit whose Rust changed is
+  still said); with facts but units that cannot be read, and a program-as-it-stands row stored,
+  "perf: the units the program as it stands holds not checked: <error>"; the rest of each row is
+  still judged. A results file that cannot be read hides no other row: the rows that read are
+  shown, then every error — a `program.json` that does not read, a `migration/perf/units` that is
+  a file, a link or unreadable, each unit file that does not read — and the show exits 1. A
+  results file of a unit no longer in the plan is named ("perf: u009 — no longer in the plan"),
+  not read. Exit 0/1.
+- Events (`--json`) of `perf run` (`perf show` sends its lines as `message` events): `perf-row
+  {side: c | program | unit, unit (unit rows), workload, outcome, words}` — `words` is a
+  display-only courtesy (the CLI's line), never parsed.
 
 ## harness-mcp
 
 `harness_status.speed`: `null` without a workloads file, else `{state: no-workload | file-error |
-not-yet-run | c-only | units, units_measured, units_measurable, measuring, c_alone [row],
-as_it_stands {units, units_omitted?, left_out [{id, reason}], left_out_omitted?, rows [row]}}` —
-`units_measured` the units with a row perf timed or ran (not only set-up rows), `units_measurable`
-those it would measure now; the held and left-out units listed up to 20 each, with how many more;
-rows only of workloads still in the workloads file (one each, so at most 16 a side) — bounded
-whatever the plan holds. Each unit's `speed` is its worst row; `harness_unit.speed` all of the
-unit's rows, worst first. A row: `workload`, `answer` (closed:
+not-yet-run | c-only | units, units_measured, units_measurable, measuring, program_checked?,
+unreadable?, c_alone [row], as_it_stands {units, units_omitted?, left_out [{id, reason}],
+left_out_omitted?, rows [row]}}` — `units_measured` the units with a row perf timed or ran (not
+only set-up rows), `units_measurable` those it would measure now (0 for a plan perf refuses, over
+999 units, with perf's words in the status's note); the held and left-out units listed up to 20
+each, with how many more; rows only of workloads still in the workloads file (one each, so at
+most 16 a side) — bounded whatever the plan holds. `program_checked: false` when there are no
+facts (none, or unreadable), as `perf show` says it: the C's digest and the units the program as
+it stands holds are then not judged, and the C-alone and as-it-stands rows' `current` is `null`
+(not known), not `true`; unit rows are still judged. `unreadable` lists the results files that
+could not be read, each by its file name and its error's first line, fenced, at most 20; the rows
+of the files that read are still given. Each unit's `speed` is its worst row; `harness_unit.speed`
+all of the unit's rows, worst first. A row: `workload`, `answer` (closed:
 `about-as-fast | slower | faster | probably-slower | probably-faster | close-call-slower |
 close-call-faster | no-clear-difference | cant-tell-estimate | cant-tell-short-run |
 cant-tell-too-few | cant-tell-slow-cores | baseline | too-short | behaves-differently |
 stopped-by-sigkill | run-failed-timeout | run-failed-exit | run-failed-signal` and the C's and the
 set-up's outcomes), `outcome`, `platform_metrics`, `short`, `runs`, `shift_percent {estimate,
-low, high}` (only when the answer tells), `current`, `out_of_date` (the closed tokens above, each
-once), `environment_checked: false`; the C alone's adds `cpu_seconds` and `memory_bytes`
-(medians).
+low, high}` (only when the answer tells), `current` (`true`, `false`, or `null` as above),
+`out_of_date` (the closed tokens above, each once), `environment_checked: false`; the C alone's
+adds `cpu_seconds` and `memory_bytes` (medians).
 Ids and the workload are fenced as untrusted text; everything else is closed or a number.
 
 ## Trust boundaries
