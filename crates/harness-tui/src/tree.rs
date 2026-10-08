@@ -11,7 +11,7 @@
 use crate::featmap::FeatureModel;
 use crate::files::{Files, TreeWalk};
 use crate::model::Snapshot;
-use harness_core::walk::Skip;
+use harness_core::walk::Why;
 use std::collections::BTreeSet;
 
 /// What is selected.
@@ -209,21 +209,24 @@ pub fn rows(
     }
     let dirs = dirs_of(files);
     dir_rows(&mut rows, 1, "", &dirs, files, expansion);
-    for (path, why) in &walk.skipped {
-        let why = match why {
-            Skip::NotRegular => "not a regular file",
-        };
+    for (path, files) in &walk.skipped_folders {
         rows.push(Row {
             depth: 1,
-            kind: RowKind::Note(format!("skipped {path}: {why}")),
+            kind: RowKind::Note(format!(
+                "skipped folder {path}: {files} C file(s), not read"
+            )),
             expandable: false,
             open: false,
         });
     }
-    for (path, error) in &walk.errors {
+    for (path, why) in &walk.issues {
+        let note = match why {
+            Why::Unreadable(error) => format!("unreadable {path}: {error}"),
+            why => format!("skipped {path}: {}", why.words()),
+        };
         rows.push(Row {
             depth: 1,
-            kind: RowKind::Note(format!("unreadable {path}: {error}")),
+            kind: RowKind::Note(note),
             expandable: false,
             open: false,
         });

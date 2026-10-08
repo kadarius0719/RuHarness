@@ -171,7 +171,12 @@ deferred until artifact-writing code exists.)
 Subcommands, flags, and exit codes are append-only stable within a major version.
 Human stdout is NOT a contract — machine consumers read the ledger files.
 
-- `harness scan [--target DIR]` — regenerate facts.jsonl.
+- `harness scan [--target DIR]` — regenerate facts.jsonl. Its walk of `source_dir` (harness-core's
+  confined walk, shared with the cockpit's tree and the features mirror) descends real folders
+  only: a folder whose name starts with a dot is skipped at any depth; a file reached through a
+  link inside `source_dir` is scanned once, under its path with no link in it; a link out of
+  `source_dir`, a dangling link, a link into a skipped folder and a FIFO or device are never
+  read. A folder it cannot read fails the scan.
 - `harness plan [--target DIR]` — reconcile plan.toml against facts. Refuses
   (exit 1) when facts.jsonl is stale vs the tree — run `harness scan` first — and
   validates the reconciled plan (order, deps, ids) *before* writing it to disk.
@@ -1182,7 +1187,8 @@ the verdict, **never** part of `stale`, `fresh_green` or the contradiction rule.
 `features` = blake3 over each feature's scenarios by id (args, input bytes) + the program's run
 name + `[oracle] timeout_secs` (names excluded). `program` = blake3 over the top-level `.c` of
 `source_dir` (canonical when a contained symlink), their facts include closure and every `.h`
-under `source_dir` and `include_dirs`, as `(path, hash | missing)` (over 64 MiB reads as
+under `source_dir` and `include_dirs` (as the shared walk finds them: no dot-folder, no
+`migration/`, each header once under its real path), as `(path, hash | missing)` (over 64 MiB reads as
 missing), + `source_dir`, `include_dirs`, `[oracle] extra_link_args` — or the sentinel
 `facts-stale` when the facts do not describe the program: a recorded file changed or gone, or
 a file under `source_dir` they do not record (what a scan changes; never the same program as
@@ -1219,7 +1225,9 @@ C reads elsewhere are not covered (residual; the sandbox is the boundary). Every
 interpose libc): it gates nothing. The read preflight counts the program digest's files
 (each once; ≤ 50 000) against its hash budget. Human CLI lines and errors show control
 characters as `?` (a hostile file's key or a parse error's source line never drives the
-terminal); `--json` escapes them.
+terminal); `--json` writes every such character (`unsafe_to_show`: controls, DEL, the C1
+controls, bidi and invisible format characters) as a `\uXXXX` escape (a surrogate pair past
+U+FFFF), so the stream holds none raw and reads back as the same text.
 
 ## Writer table additions
 

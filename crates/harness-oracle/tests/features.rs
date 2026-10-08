@@ -836,11 +836,10 @@ fn the_map_refuses_a_copy_that_reads_other_files() {
     );
     std::os::unix::fs::symlink("zdir", tmp.path().join("src/tool/a_link")).unwrap();
     std::os::unix::fs::symlink("zdir/x.c", tmp.path().join("src/tool/b.c")).unwrap();
-    let err = map(tmp.path()).expect_err("refused").to_string();
-    assert!(
-        err.contains("src/tool/zdir/x.c is reached through a link"),
-        "{err}"
-    );
+    // The walk descends no link (docs/PROJECT-MAP-DESIGN.md §3.7): the copy
+    // holds `zdir/x.c` under its real path, whichever name sorts first, so
+    // the `.c` linked to it maps.
+    map(tmp.path()).expect("a .c linked to a file inside source_dir maps");
 }
 
 /// Fix check 5: the copy's reads are compared per compile and in order — a
@@ -907,10 +906,13 @@ fn the_map_compares_each_compile_in_order() {
     );
     std::os::unix::fs::symlink("y.h", tmp.path().join("src/tool/x.h")).unwrap();
     prepend(tmp.path(), "main.c", "#include \"y.h\"\n#include \"x.h\"\n");
+    // The copy holds the file once, under its real path `y.h` (the walk
+    // descends no link, docs/PROJECT-MAP-DESIGN.md §3.7): the copy cannot
+    // find `x.h`, and the map refuses before comparing the headers.
     let err = map(tmp.path()).expect_err("refused").to_string();
     assert!(
-        err.contains("the program's header #2 is")
-            && err.contains("would be src/tool/x.h (depth 1)"),
+        err.contains("the scratch copy cannot find what the program includes")
+            && err.contains("a folder or file linked into it"),
         "{err}"
     );
 

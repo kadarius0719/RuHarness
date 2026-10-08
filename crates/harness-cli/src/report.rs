@@ -76,7 +76,8 @@ fn write_line(line: &str) {
 /// `text` for a terminal: every control character but a newline or a tab
 /// shown as `?` (review T2) — target files (a features.toml key, a plan's
 /// parse error) reach human lines, and an escape sequence in them must not
-/// drive the person's terminal. The JSON mode escapes them already.
+/// drive the person's terminal. The JSON mode escapes the same characters
+/// as `\uXXXX` ([`json_safe`]).
 pub fn terminal_safe(text: &str) -> String {
     text.chars()
         .map(|c| {
@@ -107,10 +108,37 @@ pub fn event(ev: &impl Serialize) {
     if mode() != Mode::Json {
         return;
     }
-    match serde_json::to_string(ev) {
+    match event_json(ev) {
         Ok(json) => write_line(&json),
         Err(e) => eprintln!("events: cannot serialize an event: {e}"),
     }
+}
+
+/// One event as its line of JSON, escaped by [`json_safe`].
+fn event_json(ev: &impl Serialize) -> serde_json::Result<String> {
+    serde_json::to_string(ev).map(|json| json_safe(&json))
+}
+
+/// `json` with every character `harness_core::text::unsafe_to_show` names
+/// written as a `\uXXXX` escape (a pair of them past U+FFFF). serde_json
+/// escapes only U+0000–U+001F, `"` and `\`; DEL, the C1 controls, the bidi
+/// characters and the invisible format characters would otherwise reach a
+/// terminal that shows the stream raw. Outside strings JSON holds only
+/// ASCII punctuation, digits and letters, so every such character is inside
+/// a string, where the escape means the same character.
+fn json_safe(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if harness_core::text::unsafe_to_show(c) {
+            let mut units = [0u16; 2];
+            for unit in c.encode_utf16(&mut units) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[derive(Serialize)]
@@ -430,6 +458,22 @@ mod tests {
             "key `a?b?[31mRED?]0;x?` ?2J?"
         );
         assert_eq!(terminal_safe("two\nlines\tand é"), "two\nlines\tand é");
+    }
+
+    /// `--json` escapes every character a terminal must not be handed raw:
+    /// DEL, a C1 control (U+0085), a bidi override (U+202E), a tag character
+    /// past U+FFFF — and the line still reads back as the same text.
+    #[test]
+    fn json_events_escape_every_unsafe_character() {
+        let text = "a\u{7f}b\u{85}c\u{202e}d\u{e0041}e\u{1b}f é";
+        let json = event_json(&Message { k: "message", text }).expect("json");
+        assert_eq!(
+            json,
+            r#"{"k":"message","text":"a\u007fb\u0085c\u202ed\udb40\udc41e\u001bf é"}"#
+        );
+        assert!(!json.chars().any(harness_core::text::unsafe_to_show));
+        let back: serde_json::Value = serde_json::from_str(&json).expect("reads back");
+        assert_eq!(back["text"], text);
     }
 
     /// An `awaiting` event's `args` never carry the answer (§R4 CE-14):
