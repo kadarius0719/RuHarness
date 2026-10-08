@@ -122,3 +122,39 @@ Findings → answered: 1 answered; 2 partly (past the bound unsaid; scope unset;
 **Low**: 12 the `not-yet` sentence in §3.12 is false (`FeaturesNow::compute` returns None with no features file, features.rs:1272; the tree shows "Features (none yet)", view.rs:515; a changed configuration gives the `program` marker, not a refusal — "refuses to compare" overclaims); 13 batches need a fixed grouping and order (entries first, then definer sets, index order, 10 per call); 14 the resume command must carry `--build`, `--provider`, `--model`, `--allow-guessed` (the model id is part of the key; `observe`'s carries none, main.rs:1027); 15 report link failures from the `objsyms` facts, not the linker's text (project text); 16 tests to add: past the bound (held, never `by: model`), a `--build` reply with a bad flag or a cite to an unsent file, the resume command carrying `--model`, a refused hand-written response, a platform-independent request fixture; a stem outside the id rule.
 
 Holds: the hand-off reuse (one module like triage.rs; indexes; closed kinds; refusal in full; the nonce; `MAX_BATCH` 10); Tier 2 buildable (`LlmSection::default()` is `external`/`claude-sonnet-5`/8192); the link-check paragraph in the right places, the liblzg example exact; the person's decisions kept (bar 7's gap and 1's gap past the bound); `accept` re-links; statuses computed by the harness; every `main` linked whatever its label; driver/fuzz needs no model and is right on lz4; §5 (g) honest.
+
+---
+
+# The triage (the main session, Fable at high effort, 2026-10-08) → revision 2
+
+Kept: every finding above, with these decisions where the checkers' suggestions diverged or
+overreached:
+- **Adoption outside the project, per computer** (security 1, integration 8) over the in-ledger
+  record of revision 1 — a record inside the project can be shipped; cold resume is unaffected
+  because the ledger still holds everything and only the trust question is per computer. Every
+  command that opens a ledger checks it; the fixtures are adopted by the tests' set-up and `bench
+  init`. The residual (a forged ledger is trusted once adopted, as a clone is) is in §6.
+- **No `--ledger-dir`** for a project with its own `migration/` folder (security 8): a plain refusal
+  and a §6 residual, instead of a second ledger location everywhere (briefing §10.3).
+- **Every mapped tool under `migration/tools/<id>/`** (integration 2, coherence 3): the "first tool
+  at `migration/`" special case is dropped; a root `harness.toml` stays a folder-form target.
+- **The kind is a label, guessed by the harness; the model is asked only on request** (coherence 6,
+  model 9): no model call for a label that gates nothing (briefing §2.3).
+- **Linking settles duplicates in `map`; a model is asked only what linking leaves open** (coherence
+  7, model 11); past the bound the set is held, never the model's pick linked as settled (model 1).
+- **One `config.toml` with several named configurations, `--configuration` on `map`, the run name at
+  `accept`** (coherence 2, model 7, facts 6, integration 6); `compile_commands.json` a proposal until
+  named (coherence 14); flags-differ facts, not a refusal (coherence 1).
+- **Replay fixtures platform-independent and no compiler-derived counts in the request** (model 6).
+- **The `-f` list named; `-O` recorded, never applied** (security 2, integration 3).
+- **Multi-source compiles per file on perf's path** (integration 3) — the "one change" claim of
+  revision 1 was wrong; the driver's folders defined (integration 4).
+- **Staleness keeps today's rule; `root_hash` is a notice** (integration 5).
+- **verify's `nm` uses move to `objsyms`** (security 6) — a small item in step (c), since
+  `undefined()` exists; `nm` leaves the required tools.
+- **No commit hash in the map** (security low): running `git` in a hostile tree honours its config.
+Dropped: the security checker's warning about a root holding several `.git` folders is kept as a
+warning only; the model checker's "send no counts" taken; nothing else dropped. The §8 "open" items
+the coherence reader asked for are in §8 (the picture, the advice, a project's own `migration/`,
+Linux); the person's decisions on revision 1's proposals are recorded in §7 with the two places
+revision 2 refines them (the layout, the adoption record).

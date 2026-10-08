@@ -2880,3 +2880,21 @@ design of its own. The design is the session's to own.
 **Next:** the revision's check (five Opus checkers), revision 2 if it finds more than wording, then
 the build in §5's order — the map is chosen over the briefing's M5 for now (it is what stops a real
 download at the door); M5 after the map's first accepted tool.
+
+**Revision 2** (2026-10-08, after the check of revision 1 — five Opus readers: four lenses against the
+code and the spike, one for the document whole; docs/reviews/2026-10-08-project-map-rev1-check.md
+with the triage at its end). What it settles: every mapped tool under `migration/tools/<id>/`
+(revision 1's "first tool at `migration/`" nested later tools inside the first's ledger); the
+adoption of a ledger made elsewhere recorded **per computer, outside the project** and checked by
+every command that opens a ledger (a record inside the project could be shipped); one
+`config.toml` with several named configurations and the run name at `accept`;
+`compile_commands.json` a proposal until named; the `-f` flag list named and `-fuse-ld` forbidden;
+every cargo/rustc child run from the harness's work folder with the toolchain pinned and a
+unit crate's files checked before cargo; the include rule fixed (whole path parts, the system's
+search folders recorded, the system wins over a project header unless the configuration says so);
+`objsyms` extended (kinds, weakness, commons) and verify's own `nm` uses moved to it; linking settles
+duplicates in `map`, a model is asked only what linking leaves open, and a kind is a label the
+harness guesses; multi-source compiles go per file on perf's path; staleness keeps today's rule and
+`root_hash` is a notice. **Decided: a project with its own `migration/` folder is refused in
+place** (move, rename or map a copy) rather than a second ledger location. The re-check of the
+changed sections runs next; then the build in §5's order.
