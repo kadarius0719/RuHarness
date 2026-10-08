@@ -5,8 +5,14 @@
 //! Two profile shapes:
 //! - the **tool profile** ([`render_profile`]) for `cc`/`cargo`/`rustc`/`nm`:
 //!   network denied, reads under the user's home denied except the target
-//!   root and the Rust toolchain dirs, writes confined to explicitly listed
+//!   root, the Rust toolchain dirs and the harness's work folder (every tool
+//!   child's working folder), writes confined to explicitly listed
 //!   locations and temp;
+//! - the **map profile** ([`render_map_profile`], docs/PROJECT-MAP-DESIGN.md
+//!   §3.9) for the project map's compiler: network denied, reads of
+//!   `/Users`, `/Volumes` and `/private/tmp` denied except the project root
+//!   and one fresh folder, the cargo and rustup homes denied wherever they
+//!   are, and writes only to that fresh folder;
 //! - the **run profile** ([`render_run_profile`], M4 R1 run confinement) for
 //!   every binary the oracle built: network denied, `exec` of nothing but
 //!   the binary itself, reads denied under the user's home AND under the
@@ -51,6 +57,29 @@ pub(crate) struct HostDirs {
     /// perf's launcher cache (docs/PERF-DESIGN.md §3.2): no profile may
     /// write under it (build note 5).
     pub perf_cache: PathBuf,
+    /// The harness's work folder ([`work_root`]): every cargo, rustc and
+    /// compiler child starts there. A read root of the toolchain profile;
+    /// no profile may write it or any folder above it.
+    pub work: PathBuf,
+}
+
+/// The harness's work folder under `home` (docs/PROJECT-MAP-DESIGN.md §3.7):
+/// `~/Library/Caches/ruharness/work` on macOS (with `Library/Caches`
+/// canonical when it exists), `~/.cache/ruharness/work` elsewhere. Tool
+/// children start there, so a project's `.cargo/config.toml` and
+/// `rust-toolchain.toml` (read from the working folder upward) are never
+/// read.
+pub(crate) fn work_root(home: &Path) -> PathBuf {
+    let caches = if cfg!(target_os = "macos") {
+        home.join("Library").join("Caches")
+    } else {
+        home.join(".cache")
+    };
+    caches
+        .canonicalize()
+        .unwrap_or(caches)
+        .join("ruharness")
+        .join("work")
 }
 
 /// perf's launcher cache root under `home`: `~/Library/Caches/ruharness/
@@ -65,12 +94,24 @@ pub(crate) fn perf_cache_root(home: &Path) -> PathBuf {
 }
 
 /// The line every rendered profile ends its write rules with: nothing a
-/// sandboxed child runs may write perf's launcher cache (build note 5).
-fn perf_cache_tail(host: &HostDirs) -> Result<String, Error> {
-    Ok(format!(
-        "(deny file-write* (subpath {}))\n",
-        sbpl_string(&host.perf_cache)?
-    ))
+/// sandboxed child runs may write perf's launcher cache (build note 5), the
+/// harness's work folder, or a folder between the work folder and the home
+/// folder (a child that could move one could put a `.cargo/config.toml`
+/// where cargo looks).
+fn harness_dirs_tail(host: &HostDirs) -> Result<String, Error> {
+    let mut out = format!(
+        "(deny file-write* (subpath {}) (subpath {})",
+        sbpl_string(&host.perf_cache)?,
+        sbpl_string(&host.work)?
+    );
+    // Up to the home folder: no write rule reaches above it.
+    for anc in host.work.ancestors().skip(1) {
+        if anc.starts_with(&host.home) {
+            out.push_str(&format!(" (literal {})", sbpl_string(anc)?));
+        }
+    }
+    out.push_str(")\n");
+    Ok(out)
 }
 
 impl HostDirs {
@@ -96,6 +137,7 @@ impl HostDirs {
         };
         Ok(HostDirs {
             perf_cache: perf_cache_root(&home),
+            work: work_root(&home),
             cargo_home: or_default("CARGO_HOME", ".cargo"),
             rustup_home: or_default("RUSTUP_HOME", ".rustup"),
             tmpdir: std::env::var_os("TMPDIR")
@@ -148,6 +190,11 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
         }
     }
     if spec.toolchain {
+        // The work folder is every tool child's working folder (cargo
+        // canonicalizes it), so it is read like the toolchain's own.
+        if !read_roots.iter().any(|r| spec.host.work.starts_with(r)) {
+            read_roots.push(&spec.host.work);
+        }
         read_roots.extend(spec.host.cargo_home.as_deref());
         read_roots.extend(spec.host.rustup_home.as_deref());
 
@@ -174,27 +221,9 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
             out.push_str(")\n");
         }
 
-        // Narrow exception 2: rustup picks the toolchain from the nearest
-        // `rust-toolchain(.toml)` walking up from the cwd (the target root).
-        // Those ancestor files are user-owned, not target-owned; leaving them
-        // unreadable would make rustup silently fall back to the default
-        // toolchain, so sandboxed and unsandboxed runs could disagree about
-        // which rustc they test with. Allow exactly those two file names.
-        let root_ancestors: Vec<&Path> = spec
-            .target_root
-            .ancestors()
-            .skip(1)
-            .filter(|a| a.starts_with(home))
-            .collect();
-        if !root_ancestors.is_empty() {
-            out.push_str("(allow file-read*");
-            for anc in root_ancestors.iter().rev() {
-                for name in ["rust-toolchain", "rust-toolchain.toml"] {
-                    out.push_str(&format!(" (literal {})", sbpl_string(&anc.join(name))?));
-                }
-            }
-            out.push_str(")\n");
-        }
+        // No exception for an ancestor `rust-toolchain(.toml)`: every tool
+        // child starts in the work folder with `RUSTUP_TOOLCHAIN` pinned
+        // (exec.rs, `tool_env`), so rustup never looks for one.
     }
 
     out.push_str("(allow file-read*");
@@ -235,7 +264,91 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
     out.push_str(
         " (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n",
     );
-    out.push_str(&perf_cache_tail(spec.host)?);
+    out.push_str(&harness_dirs_tail(spec.host)?);
+    out.push_str(NO_STARTS_THROUGH_THE_SYSTEM);
+    Ok(out)
+}
+
+/// The places the map profile denies reading, whole, wherever the project
+/// lies: every person's home folder and `/Users/Shared`, mounted volumes,
+/// and the shared temporary folder (`/tmp` is a link to it).
+const MAP_DENIED_READS: [&str; 3] = ["/Users", "/Volumes", "/private/tmp"];
+
+/// What the project map's compiler may touch (docs/PROJECT-MAP-DESIGN.md
+/// §3.9).
+#[derive(Debug, Clone)]
+pub(crate) struct MapSpec<'a> {
+    /// Host directories.
+    pub host: &'a HostDirs,
+    /// Canonical project root: readable, never writable.
+    pub project_root: &'a Path,
+    /// The map's fresh, canonical folder: the only writable place (its
+    /// objects and dependency lists; `TMPDIR` points at it).
+    pub fresh: &'a Path,
+}
+
+/// The map profile, its own renderer (the tool profile always adds the
+/// temporary folders to its writable list): network denied; reads of
+/// `/Users`, `/Volumes`, `/private/tmp` and the home folder denied except
+/// the project root, the fresh folder and the work folder (the compiler's
+/// working folder, empty), with metadata only on the folders above them;
+/// `/private/var/folders` stays readable (the system's per-user caches);
+/// the cargo and rustup homes denied wherever they are (a custom
+/// `CARGO_HOME` holds credentials; `cc` needs neither); writes only to the
+/// fresh folder and three device nodes; nothing started through the system.
+pub(crate) fn render_map_profile(spec: &MapSpec<'_>) -> Result<String, Error> {
+    let home = spec.host.home.as_path();
+    let mut denied: Vec<&Path> = MAP_DENIED_READS.iter().map(Path::new).collect();
+    if !denied.iter().any(|d| home.starts_with(d)) {
+        denied.push(home);
+    }
+    let mut out = String::new();
+    out.push_str("(version 1)\n(allow default)\n(deny network*)\n(deny file-read*");
+    for dir in &denied {
+        out.push_str(&format!(" (subpath {})", sbpl_string(dir)?));
+    }
+    out.push_str(")\n");
+
+    let read_roots: [&Path; 3] = [spec.project_root, spec.fresh, &spec.host.work];
+    let mut ancestors: Vec<&Path> = Vec::new();
+    for root in read_roots {
+        for anc in root.ancestors().skip(1) {
+            if denied.iter().any(|d| anc.starts_with(d)) && !ancestors.contains(&anc) {
+                ancestors.push(anc);
+            }
+        }
+    }
+    ancestors.sort();
+    if !ancestors.is_empty() {
+        out.push_str("(allow file-read-metadata");
+        for anc in &ancestors {
+            out.push_str(&format!(" (literal {})", sbpl_string(anc)?));
+        }
+        out.push_str(")\n");
+    }
+    out.push_str("(allow file-read*");
+    for root in read_roots {
+        out.push_str(&format!(" (subpath {})", sbpl_string(root)?));
+    }
+    out.push_str(")\n");
+    let homes: Vec<&Path> = [&spec.host.cargo_home, &spec.host.rustup_home]
+        .into_iter()
+        .flatten()
+        .map(PathBuf::as_path)
+        .collect();
+    if !homes.is_empty() {
+        out.push_str("(deny file-read*");
+        for dir in homes {
+            out.push_str(&format!(" (subpath {})", sbpl_string(dir)?));
+        }
+        out.push_str(")\n");
+    }
+    out.push_str(&format!(
+        "(deny file-write* (subpath \"/\"))\n(allow file-write* (subpath {}) \
+         (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n",
+        sbpl_string(spec.fresh)?
+    ));
+    out.push_str(&harness_dirs_tail(spec.host)?);
     out.push_str(NO_STARTS_THROUGH_THE_SYSTEM);
     Ok(out)
 }
@@ -285,7 +398,7 @@ pub(crate) fn render_run_profile(spec: &RunSpec<'_>) -> Result<String, Error> {
         "(deny file-write* (subpath \"/\"))\n(allow file-write* (subpath {tmp}) \
          (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
     ));
-    out.push_str(&perf_cache_tail(spec.host)?);
+    out.push_str(&harness_dirs_tail(spec.host)?);
     out.push_str(NO_STARTS_THROUGH_THE_SYSTEM);
     Ok(out)
 }
@@ -332,7 +445,7 @@ pub(crate) fn render_perf_profile(spec: &PerfSpec<'_>) -> Result<String, Error> 
         "(deny file-write* (subpath \"/\"))\n(allow file-write* (subpath {tmp}) \
          (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
     ));
-    out.push_str(&perf_cache_tail(spec.host)?);
+    out.push_str(&harness_dirs_tail(spec.host)?);
     out.push_str(
         "(deny signal)\n(allow signal (target self))\n(deny process-fork (with send-signal SIGKILL))\n",
     );
@@ -424,6 +537,7 @@ mod tests {
             rustup_home: Some(PathBuf::from("/Users/u/.rustup")),
             tmpdir: Some(PathBuf::from("/private/var/folders/xy/T")),
             perf_cache: PathBuf::from("/Users/u/Library/Caches/ruharness/perf"),
+            work: PathBuf::from("/Users/u/Library/Caches/ruharness/work"),
         }
     }
 
@@ -453,7 +567,7 @@ mod tests {
 (allow file-read* (literal \"/Users/u/t/migration/build/.perf/bin/p001/tool\") (literal \"/Users/u/Library/Caches/ruharness/perf/perf-launcher-1-ab/perfgo\") (subpath \"/private/var/folders/xy/T/ruharness-perf-1\"))
 (deny file-write* (subpath \"/\"))
 (allow file-write* (subpath \"/private/var/folders/xy/T/ruharness-perf-1\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
-(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\") (subpath \"/Users/u/Library/Caches/ruharness/work\") (literal \"/Users/u/Library/Caches/ruharness\") (literal \"/Users/u/Library/Caches\") (literal \"/Users/u/Library\") (literal \"/Users/u\"))
 (deny signal)
 (allow signal (target self))
 (deny process-fork (with send-signal SIGKILL))
@@ -494,13 +608,12 @@ mod tests {
 (allow default)
 (deny network*)
 (deny file-read* (subpath \"/Users/u\"))
-(allow file-read-metadata (literal \"/Users/u\"))
-(allow file-read* (literal \"/Users/u/rust-toolchain\") (literal \"/Users/u/rust-toolchain.toml\"))
-(allow file-read* (subpath \"/Users/u/t\") (subpath \"/Users/u/.cargo\") (subpath \"/Users/u/.rustup\"))
+(allow file-read-metadata (literal \"/Users/u\") (literal \"/Users/u/Library\") (literal \"/Users/u/Library/Caches\") (literal \"/Users/u/Library/Caches/ruharness\"))
+(allow file-read* (subpath \"/Users/u/t\") (subpath \"/Users/u/Library/Caches/ruharness/work\") (subpath \"/Users/u/.cargo\") (subpath \"/Users/u/.rustup\"))
 (deny file-read* (literal \"/Users/u/.cargo/credentials.toml\") (literal \"/Users/u/.cargo/credentials\"))
 (deny file-write* (subpath \"/\"))
 (allow file-write* (subpath \"/Users/u/t/migration/build/u1\") (subpath \"/Users/u/t/migration/units/u1/c/target\") (literal \"/Users/u/t/migration/units/u1/c/Cargo.lock\") (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (subpath \"/private/var/folders/xy/T\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
-(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\") (subpath \"/Users/u/Library/Caches/ruharness/work\") (literal \"/Users/u/Library/Caches/ruharness\") (literal \"/Users/u/Library/Caches\") (literal \"/Users/u/Library\") (literal \"/Users/u\"))
 (deny lsopen appleevent-send job-creation)
 (deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") (global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") (global-name \"com.apple.xpc.loginitemregisterd\"))
 ";
@@ -525,7 +638,7 @@ mod tests {
         .expect("renders");
         assert!(
             text.contains(
-                "(allow file-read* (subpath \"/Users/u/t\") (subpath \"/Users/u/tmp/ruharness-map-0123456789abcdef\") (subpath \"/Users/u/tmp\") (subpath \"/Users/u/.cargo\")"
+                "(allow file-read* (subpath \"/Users/u/t\") (subpath \"/Users/u/tmp/ruharness-map-0123456789abcdef\") (subpath \"/Users/u/tmp\") (subpath \"/Users/u/Library/Caches/ruharness/work\") (subpath \"/Users/u/.cargo\")"
             ),
             "{text}"
         );
@@ -579,9 +692,14 @@ mod tests {
             write_files: &[],
         })
         .expect("renders");
-        // Only the toolchain dirs' ancestor (the home itself) needs metadata.
+        // Only the toolchain dirs' and the work folder's ancestors need
+        // metadata.
         assert!(
-            text.contains("(allow file-read-metadata (literal \"/Users/u\"))\n"),
+            text.contains(
+                "(allow file-read-metadata (literal \"/Users/u\") (literal \"/Users/u/Library\") \
+                 (literal \"/Users/u/Library/Caches\") \
+                 (literal \"/Users/u/Library/Caches/ruharness\"))\n"
+            ),
             "{text}"
         );
         assert!(!text.contains("rust-toolchain"), "{text}");
@@ -600,15 +718,16 @@ mod tests {
         .expect("renders");
         assert!(
             text.contains(
-                "(allow file-read-metadata (literal \"/Users/u\") (literal \"/Users/u/code\") \
+                "(allow file-read-metadata (literal \"/Users/u\") (literal \"/Users/u/Library\") \
+                 (literal \"/Users/u/Library/Caches\") \
+                 (literal \"/Users/u/Library/Caches/ruharness\") (literal \"/Users/u/code\") \
                  (literal \"/Users/u/code/repo\") (literal \"/Users/u/code/repo/targets\"))\n"
             ),
             "{text}"
         );
-        assert!(
-            text.contains("(literal \"/Users/u/code/repo/rust-toolchain.toml\")"),
-            "{text}"
-        );
+        // No ancestor's rust-toolchain file is readable any more: tools
+        // start in the work folder with the toolchain pinned.
+        assert!(!text.contains("rust-toolchain"), "{text}");
         // Nothing above the home directory is mentioned.
         assert!(!text.contains("(literal \"/Users\")"), "{text}");
     }
@@ -667,7 +786,7 @@ mod tests {
 (allow file-read* (literal \"/Users/u/t/migration/build/u1/drv_rs\") (literal \"/Users/u/t/migration/build/u1/sample_text.txt\") (subpath \"/private/var/folders/xy/T/ruharness-run-1-0\"))
 (deny file-write* (subpath \"/\"))
 (allow file-write* (subpath \"/private/var/folders/xy/T/ruharness-run-1-0\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
-(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\") (subpath \"/Users/u/Library/Caches/ruharness/work\") (literal \"/Users/u/Library/Caches/ruharness\") (literal \"/Users/u/Library/Caches\") (literal \"/Users/u/Library\") (literal \"/Users/u\"))
 (deny lsopen appleevent-send job-creation)
 (deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") (global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") (global-name \"com.apple.xpc.loginitemregisterd\"))
 ";
@@ -769,6 +888,196 @@ mod tests {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
+    }
+
+    /// The map profile, byte for byte (docs/PROJECT-MAP-DESIGN.md §3.9).
+    #[test]
+    fn the_map_profile() {
+        let host = host();
+        let text = render_map_profile(&MapSpec {
+            host: &host,
+            project_root: Path::new("/Users/u/code/lz4"),
+            fresh: Path::new("/private/var/folders/xy/T/ruharness-map-1"),
+        })
+        .expect("renders");
+        let expected = "\
+(version 1)
+(allow default)
+(deny network*)
+(deny file-read* (subpath \"/Users\") (subpath \"/Volumes\") (subpath \"/private/tmp\"))
+(allow file-read-metadata (literal \"/Users\") (literal \"/Users/u\") (literal \"/Users/u/Library\") (literal \"/Users/u/Library/Caches\") (literal \"/Users/u/Library/Caches/ruharness\") (literal \"/Users/u/code\"))
+(allow file-read* (subpath \"/Users/u/code/lz4\") (subpath \"/private/var/folders/xy/T/ruharness-map-1\") (subpath \"/Users/u/Library/Caches/ruharness/work\"))
+(deny file-read* (subpath \"/Users/u/.cargo\") (subpath \"/Users/u/.rustup\"))
+(deny file-write* (subpath \"/\"))
+(allow file-write* (subpath \"/private/var/folders/xy/T/ruharness-map-1\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))
+(deny file-write* (subpath \"/Users/u/Library/Caches/ruharness/perf\") (subpath \"/Users/u/Library/Caches/ruharness/work\") (literal \"/Users/u/Library/Caches/ruharness\") (literal \"/Users/u/Library/Caches\") (literal \"/Users/u/Library\") (literal \"/Users/u\"))
+(deny lsopen appleevent-send job-creation)
+(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name-prefix \"com.apple.CoreServices.\") (global-name \"com.apple.coreservicesd\") (global-name-prefix \"com.apple.lsd.\") (global-name \"com.apple.xpc.smd\") (global-name \"com.apple.xpc.loginitemregisterd\"))
+";
+        assert_eq!(text, expected);
+
+        // A home folder outside /Users is denied by name; a cargo home
+        // outside it too, wherever it is.
+        let mut host = host;
+        host.home = PathBuf::from("/home/u");
+        host.cargo_home = Some(PathBuf::from("/opt/cargo"));
+        host.rustup_home = None;
+        host.perf_cache = PathBuf::from("/home/u/.cache/ruharness/perf");
+        host.work = PathBuf::from("/home/u/.cache/ruharness/work");
+        let text = render_map_profile(&MapSpec {
+            host: &host,
+            project_root: Path::new("/srv/p"),
+            fresh: Path::new("/srv/fresh"),
+        })
+        .expect("renders");
+        assert!(
+            text.contains(
+                "(deny file-read* (subpath \"/Users\") (subpath \"/Volumes\") \
+                 (subpath \"/private/tmp\") (subpath \"/home/u\"))\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("(deny file-read* (subpath \"/opt/cargo\"))\n"),
+            "{text}"
+        );
+    }
+
+    /// Live (macOS): under the map profile `cc -c` and the link of a
+    /// two-file program succeed, the compiler starting in the work folder
+    /// with `TMPDIR` in the fresh folder, while a header under the home
+    /// folder outside the project (the stand-in for `/Users/Shared`) and the
+    /// cargo home cannot be read — and the same compile reads it unsandboxed.
+    #[test]
+    fn cc_compiles_and_links_under_the_map_profile() {
+        if !cfg!(target_os = "macos") || !Path::new(SANDBOX_EXEC).exists() {
+            return;
+        }
+        // Under the home folder, as a real project is: beside the test
+        // binary (never in a temporary folder, which the profile reads).
+        let exe = std::env::current_exe().expect("test exe");
+        let base = exe.parent().expect("exe dir").join(format!(
+            "ruharness-map-profile-{}-{}",
+            std::process::id(),
+            harness_core::hash::random_hex(4)
+        ));
+        struct Gone(PathBuf);
+        impl Drop for Gone {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        std::fs::create_dir_all(&base).expect("base");
+        let base = Gone(base.canonicalize().expect("canonical base"));
+        let host = HostDirs::from_env().expect("HOME");
+        if !base.0.starts_with(&host.home) {
+            eprintln!("skipped: the test binary does not lie under the home folder");
+            return;
+        }
+        let root = base.0.join("project");
+        let outside = base.0.join("outside");
+        for dir in [&root, &outside] {
+            std::fs::create_dir_all(dir).expect("dir");
+        }
+        let tmp = crate::testutil::TempDir::new("map-fresh");
+        let fresh = tmp.path().to_path_buf();
+        std::fs::write(outside.join("secret.h"), "#define SECRET 1\n").expect("secret");
+        std::fs::write(
+            root.join("a.c"),
+            "int b(void);\nint main(void) { return b(); }\n",
+        )
+        .expect("a.c");
+        std::fs::write(root.join("b.c"), "int b(void) { return 0; }\n").expect("b.c");
+        std::fs::write(
+            root.join("leak.c"),
+            format!(
+                "#include \"{}\"\nint x = SECRET;\n",
+                outside.join("secret.h").display()
+            ),
+        )
+        .expect("leak.c");
+        let runner = crate::exec::Runner::map(
+            &root,
+            &fresh,
+            &["cc", "sh"],
+            std::time::Duration::from_secs(120),
+        )
+        .expect("map runner");
+        assert!(runner.tool_profile.is_some());
+        let s = |p: &Path| p.to_str().expect("utf-8").to_string();
+        for name in ["a", "b"] {
+            runner
+                .tool(&[
+                    "cc".into(),
+                    "-c".into(),
+                    "-o".into(),
+                    s(&fresh.join(format!("{name}.o"))),
+                    s(&root.join(format!("{name}.c"))),
+                ])
+                .expect("cc -c under the map profile");
+        }
+        runner
+            .tool(&[
+                "cc".into(),
+                "-o".into(),
+                s(&fresh.join("prog")),
+                s(&fresh.join("a.o")),
+                s(&fresh.join("b.o")),
+            ])
+            .expect("the link under the map profile");
+        assert!(fresh.join("prog").is_file());
+
+        // Where it ran, and its TMPDIR.
+        let out = runner
+            .tool(&["sh".into(), "-c".into(), "pwd -P; echo \"$TMPDIR\"".into()])
+            .expect("sh");
+        let text = String::from_utf8_lossy(&out);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines,
+            [s(&host.work).as_str(), s(&fresh).as_str()],
+            "{text}"
+        );
+
+        // A header outside the project under the home folder is not read.
+        let leak = [
+            "cc".to_string(),
+            "-c".into(),
+            "-o".into(),
+            s(&fresh.join("leak.o")),
+            s(&root.join("leak.c")),
+        ];
+        let err = runner.tool(&leak).expect_err("the secret must not be read");
+        assert!(err.to_string().contains("secret.h"), "{err}");
+        let open = crate::exec::Runner {
+            tool_profile: None,
+            ..runner.clone()
+        };
+        open.tool(&leak)
+            .expect("the same compile reads it unsandboxed");
+
+        // Nor the cargo home, nor anything else under the home folder.
+        if let Some(cargo_home) = host.cargo_home.as_ref().filter(|c| c.is_dir()) {
+            runner
+                .tool(&["sh".into(), "-c".into(), format!("ls '{}'", s(cargo_home))])
+                .expect_err("the cargo home is denied");
+        }
+        runner
+            .tool(&[
+                "sh".into(),
+                "-c".into(),
+                format!("cat '{}'", s(&outside.join("secret.h"))),
+            ])
+            .expect_err("reads under the home folder are denied");
+        // Writes go to the fresh folder only.
+        runner
+            .tool(&[
+                "sh".into(),
+                "-c".into(),
+                format!("touch '{}'", s(&root.join("w"))),
+            ])
+            .expect_err("the project is not writable");
+        assert!(!root.join("w").exists());
     }
 
     #[test]

@@ -70,6 +70,8 @@ impl ToolBench {
         });
         let runner = Runner {
             cwd: tmp.path().to_path_buf(),
+            work: crate::exec::work_dir().expect("work folder"),
+            root: tmp.path().to_path_buf(),
             allowlist: ["cc", "cargo", "rustc", "nm"]
                 .iter()
                 .map(|s| (*s).to_string())

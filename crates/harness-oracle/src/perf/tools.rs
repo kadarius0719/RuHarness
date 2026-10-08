@@ -72,12 +72,14 @@ pub fn perf_compilers(target: &TargetContext, allow_unsandboxed: bool) -> Option
         None
     };
     let runner = Runner {
-        cwd: base.root.clone(),
-        allowlist: base.allowlist.clone(),
-        timeout: base.timeout,
         max_output: VERSION_OUTPUT_CAP,
-        tool_profile,
-        tool_tmpdir: None,
+        ..Runner::new(
+            &base.root,
+            base.allowlist.clone(),
+            base.timeout,
+            tool_profile,
+        )
+        .ok()?
     };
     // One at a time, stopping at the first failure: when `cc` fails the
     // answer is already "not checked", so `rustc` is never started (a hung
@@ -127,12 +129,14 @@ mod tests {
             // perf show reads is guarded by measure.rs's
             // a_run_over_verified_units_end_to_end.
             let runner = Runner {
-                cwd: t.root.canonicalize().expect("root"),
-                allowlist: vec!["rustc".into()],
-                timeout: std::time::Duration::from_secs(120),
                 max_output: VERSION_OUTPUT_CAP,
-                tool_profile: None,
-                tool_tmpdir: None,
+                ..Runner::new(
+                    &t.root.canonicalize().expect("root"),
+                    vec!["rustc".into()],
+                    std::time::Duration::from_secs(120),
+                    None,
+                )
+                .expect("runner")
             };
             assert_eq!(first_line(&runner, &["rustc", "-V"]), Some(rustc));
         } else {
@@ -154,6 +158,8 @@ mod tests {
         let tmp = TempDir::new("perf-first-line");
         let runner = Runner {
             cwd: tmp.path().to_path_buf(),
+            work: crate::exec::work_dir().expect("work folder"),
+            root: tmp.path().to_path_buf(),
             allowlist: vec!["sh".into()],
             timeout: std::time::Duration::from_secs(30),
             max_output: VERSION_OUTPUT_CAP,

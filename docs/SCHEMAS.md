@@ -404,10 +404,35 @@ shadowing forging green — all fixed below).
   a static initializer could otherwise print forged output and exit before `main`.
 - **Sandbox** (`sandbox-exec` on macOS) wraps every build AND every run of target- or
   model-derived code: network denied; reads under the user's home denied except the
-  target root and the Rust toolchain dirs; writes confined to the unit's build/
-  attempt dirs and temp. All oracle child processes get a scrubbed environment
-  (`PATH`, `HOME`, `TMPDIR`, `CARGO_HOME`, `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN` only) and
-  a wall-clock timeout (`[oracle] timeout_secs`, default 120, from 1 to 604 800 — a week; a
+  target root, the Rust toolchain dirs and the harness's work folder (metadata only on
+  the folders above them — no ancestor's `rust-toolchain.toml` is readable); writes
+  confined to the unit's build/attempt dirs and temp, and no profile may write the work
+  folder, perf's launcher cache, or a folder between the work folder and the home
+  folder. **Every tool child (`cc`, `cargo`, `rustc`, `nm`) starts in the work folder**
+  `~/Library/Caches/ruharness/work/` (`~/.cache/ruharness/work/` elsewhere; made at each
+  run, refused when it is or passes through a link or lies in a temporary folder), with
+  `--manifest-path` and every path absolute, so a project's `.cargo/config.toml` and
+  `rust-toolchain.toml` (read from the working folder upward) are never read; a built
+  program keeps the working folder its run asks for. All oracle child processes get a
+  scrubbed environment (`PATH`, `HOME`, `TMPDIR`, `CARGO_HOME`, `RUSTUP_HOME` copied;
+  a tool child also gets `SOURCE_DATE_EPOCH=0`, `RUSTUP_TOOLCHAIN` pinned to the
+  harness's own — the parent's value when set, else `stable` — and
+  `RUSTUP_AUTO_INSTALL=0`, so a toolchain that is not installed is refused in one
+  sentence and never downloaded). A child's `PATH` keeps only absolute entries outside
+  the project root (a relative or empty entry, or one under the root, would run the
+  project's own `cc`; nothing left gives `/usr/bin:/bin`). **Before any cargo run on a
+  unit crate** (verify, the boundary check, perf, the benchmark build) the crate folder
+  may hold only `Cargo.toml`, an optional `Cargo.lock`, `src/*.rs` and the harness-made
+  `target/` (a real folder; `.DS_Store` ignored), and its manifest no `build` key but
+  `build = false`, no `package.links` or `package.workspace`, no `[dependencies]`,
+  `[dev-dependencies]`, `[build-dependencies]`, `[patch]` or `[target.*]`, and an empty
+  `[workspace]` if any; anything else refuses the unit by name (perf leaves the unit out
+  as a crate that does not build). The project map's compiler runs under the **map
+  profile**: reads of `/Users`, `/Volumes`, `/private/tmp` and the home folder denied
+  except the project root, the map's fresh folder and the work folder;
+  `/private/var/folders` stays readable; the cargo and rustup homes denied wherever they
+  are; writes only to the fresh folder, which is its `TMPDIR`. Every child has a
+  wall-clock timeout (`[oracle] timeout_secs`, default 120, from 1 to 604 800 — a week; a
   value outside that is refused at load; expiry = failed
   check). The mode applied is recorded in the verdict (`inputs.toolchain` gains
   `sandbox: <mode>`). Built-binary runs additionally deny `process-exec` of anything

@@ -85,6 +85,7 @@ mod shape;
 mod symbols;
 #[cfg(test)]
 mod testutil;
+mod unit_crate;
 mod validate;
 
 pub use boundary::{BoundaryReport, ParamFigures};
@@ -457,6 +458,11 @@ impl CAbiDifferential {
         scrubber: &Scrubber,
     ) -> Result<Verdict, Error> {
         let prep = Prepared::new(target, unit)?;
+        // Refused before cargo ever sees it: a crate folder holding more
+        // than the unit's own sources, or a manifest that runs code.
+        if let Some(dir) = &prep.crate_dir {
+            unit_crate::check_unit_crate(&unit.id, dir)?;
+        }
         let facts = load_facts(target)?;
         let root = &prep.base.root;
 
@@ -496,14 +502,12 @@ impl CAbiDifferential {
             }
             None => None,
         };
-        let runner = Runner {
-            cwd: root.clone(),
-            allowlist: prep.base.allowlist.clone(),
-            timeout: prep.base.timeout,
-            max_output: exec::DEFAULT_MAX_OUTPUT,
+        let runner = Runner::new(
+            root,
+            prep.base.allowlist.clone(),
+            prep.base.timeout,
             tool_profile,
-            tool_tmpdir: None,
-        };
+        )?;
         let confined = Confinement {
             runner: &runner,
             host: host.as_ref(),
@@ -800,14 +804,15 @@ impl CAbiDifferential {
         unit: &Unit,
     ) -> Result<(Check, Option<BoundaryReport>), Error> {
         let prep = Prepared::new(target, unit)?;
-        let facts = load_facts(target)?;
-        let root = &prep.base.root;
         let Some(crate_dir) = &prep.crate_dir else {
             return Err(Error::Invariant(format!(
                 "unit crate directory {} does not exist",
                 prep.crate_dir_raw.display()
             )));
         };
+        unit_crate::check_unit_crate(&unit.id, crate_dir)?;
+        let facts = load_facts(target)?;
+        let root = &prep.base.root;
         let crate_target_dir = prepare_target_dir(crate_dir)?;
         let host = match sandbox_mode() {
             "sandbox-exec" => Some(HostDirs::from_env()?),
@@ -823,14 +828,12 @@ impl CAbiDifferential {
             })?),
             None => None,
         };
-        let runner = Runner {
-            cwd: root.clone(),
-            allowlist: prep.base.allowlist.clone(),
-            timeout: prep.base.timeout,
-            max_output: exec::DEFAULT_MAX_OUTPUT,
+        let runner = Runner::new(
+            root,
+            prep.base.allowlist.clone(),
+            prep.base.timeout,
             tool_profile,
-            tool_tmpdir: None,
-        };
+        )?;
         let confined = Confinement {
             runner: &runner,
             host: host.as_ref(),
@@ -1497,6 +1500,7 @@ pub fn build_crate_staticlib(target: &TargetContext, crate_dir: &Path) -> Result
         .canonicalize()
         .map_err(|e| Error::io(&target.root, e))?;
     let crate_dir = inside("bench", "crate dir", crate_dir, &root)?;
+    unit_crate::check_unit_crate("bench", &crate_dir)?;
     let target_dir = prepare_target_dir(&crate_dir)?;
     let host = match sandbox_mode() {
         "sandbox-exec" => Some(HostDirs::from_env()?),
@@ -1512,14 +1516,12 @@ pub fn build_crate_staticlib(target: &TargetContext, crate_dir: &Path) -> Result
         })?),
         None => None,
     };
-    let runner = Runner {
-        cwd: root.clone(),
-        allowlist: vec!["cargo".into(), "rustc".into()],
-        timeout: timeout_secs(target)?,
-        max_output: exec::DEFAULT_MAX_OUTPUT,
-        tool_profile: profile.clone(),
-        tool_tmpdir: None,
-    };
+    let runner = Runner::new(
+        &root,
+        vec!["cargo".into(), "rustc".into()],
+        timeout_secs(target)?,
+        profile.clone(),
+    )?;
     build_staticlib(&runner, profile.as_deref(), &crate_dir, &target_dir)
 }
 
@@ -1659,14 +1661,13 @@ mod tests {
                 whole_c.display()
             ),
         );
-        let runner = exec::Runner {
-            cwd: root.clone(),
-            allowlist: vec!["cc".into()],
-            timeout: Duration::from_secs(60),
-            max_output: exec::DEFAULT_MAX_OUTPUT,
-            tool_profile: None,
-            tool_tmpdir: None,
-        };
+        let runner = exec::Runner::new(
+            &root.canonicalize().unwrap(),
+            vec!["cc".into()],
+            Duration::from_secs(60),
+            None,
+        )
+        .unwrap();
         let confined = Confinement {
             runner: &runner,
             host: None,
@@ -2070,6 +2071,52 @@ mod tests {
         );
         assert_eq!(prep.link_args, vec!["-lm".to_string()]);
         assert_eq!(prep.base.timeout, Duration::from_secs(30));
+    }
+
+    /// A `build.rs` beside an exact harness manifest is refused by name
+    /// before cargo runs — by verify, the boundary check and the benchmark
+    /// build alike: the script never runs, and no `target/` is made.
+    #[test]
+    fn a_build_script_beside_the_harness_manifest_is_refused_before_cargo() {
+        let tmp = testutil::TempDir::new("unit-build-rs");
+        let target = scaffold(&tmp, "");
+        let crate_dir = tmp.path().join("migration/units/u1/u_rs");
+        let marker = tmp.path().join("build-script-ran");
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[package]\nname = \"u_rs\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [lib]\ncrate-type = [\"staticlib\", \"rlib\"]\n\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(crate_dir.join("src/lib.rs"), "\n").unwrap();
+        std::fs::write(
+            crate_dir.join("build.rs"),
+            format!(
+                "fn main() {{ std::fs::write({:?}, \"\").unwrap(); }}\n",
+                marker.display().to_string()
+            ),
+        )
+        .unwrap();
+        let unit = unit_with("u1", "migration/units/u1/driver.c", "u_rs", "src/u.c");
+        let err = CAbiDifferential
+            .verify_with(&target, &unit, &FeatureSnapshot::None)
+            .expect_err("refused")
+            .to_string();
+        assert!(
+            err.contains("unit `u1`") && err.contains("`build.rs`"),
+            "{err}"
+        );
+        let err = CAbiDifferential
+            .boundary_only(&target, &unit)
+            .expect_err("refused")
+            .to_string();
+        assert!(err.contains("`build.rs`"), "{err}");
+        let err = build_crate_staticlib(&target, &crate_dir)
+            .expect_err("refused")
+            .to_string();
+        assert!(err.contains("`build.rs`"), "{err}");
+        assert!(!marker.exists(), "the build script ran");
+        assert!(!crate_dir.join("target").exists(), "cargo was prepared for");
     }
 
     #[test]

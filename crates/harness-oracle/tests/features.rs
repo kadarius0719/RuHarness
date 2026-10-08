@@ -921,9 +921,10 @@ fn the_map_compares_each_compile_in_order() {
     program(tmp.path(), GOOD, Some(features), "");
     write(&tmp.path().join("src/tool/Icon\r"), "");
     map(tmp.path()).expect("an unread Icon\\r maps");
-    // A tab the program reads: `-M` leaves it unescaped, so both lists
-    // would split the name alike (`…/a` and `b.h`, each resolving) — the
-    // copy never holds it, and its compile fails instead.
+    // A tab the program reads: `-M` leaves it unescaped, so the list
+    // splits the name (`…/a` and `b.h`). The compiler starts in the
+    // harness's work folder, never the project, so a `b.h` at the project
+    // root resolves nothing: the list is refused as misread.
     let tabbed = TempDir::new("feat-map-tab");
     program(tabbed.path(), GOOD, Some(features), "");
     write(&tabbed.path().join("src/tool/a\tb.h"), "#define AB 1\n");
@@ -933,7 +934,10 @@ fn the_map_compares_each_compile_in_order() {
     let old = std::fs::read_to_string(&main).unwrap();
     std::fs::write(&main, format!("#include \"a\tb.h\"\n{old}")).unwrap();
     let err = map(tabbed.path()).expect_err("refused").to_string();
-    assert!(err.contains("the scratch copy cannot find"), "{err}");
+    assert!(
+        err.contains("the compiler's list names \"b.h\", which does not resolve"),
+        "{err}"
+    );
     write(
         &tmp.path().join("src/tool/a\nb.c"),
         "int ab(void) { return 1; }\n",

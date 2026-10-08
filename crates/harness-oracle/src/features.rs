@@ -350,6 +350,8 @@ mod tests {
         };
         let runner = Runner {
             cwd: root.clone(),
+            work: crate::exec::work_dir().expect("work folder"),
+            root: root.clone(),
             allowlist: Vec::new(),
             timeout: std::time::Duration::from_secs(30),
             max_output: crate::exec::DEFAULT_MAX_OUTPUT,

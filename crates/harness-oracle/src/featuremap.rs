@@ -5,7 +5,7 @@
 //! gates anything; the map only says which functions each scenario ran.
 
 use crate::confine::{Collected, Confinement, NotesFile, ScenarioEnd, ScenarioRun};
-use crate::exec::{self, Runner};
+use crate::exec::Runner;
 use crate::features::place;
 use crate::probebuild::{Build, Cc};
 use crate::probecopy::{self, scan_text, Kind, Probe, Reason};
@@ -138,12 +138,8 @@ fn map_inner(
         None => None,
     };
     let runner = Runner {
-        cwd: root.clone(),
-        allowlist: base.allowlist.clone(),
-        timeout: base.timeout,
-        max_output: exec::DEFAULT_MAX_OUTPUT,
-        tool_profile,
         tool_tmpdir: Some(tool_tmp),
+        ..Runner::new(&root, base.allowlist.clone(), base.timeout, tool_profile)?
     };
     let confined = Confinement {
         runner: &runner,
@@ -1024,7 +1020,7 @@ fn reads(
     };
     // `Ok(None)`: the probe's header, left out.
     let name = |token: &str| -> Result<Result<Option<Read>, Error>, Error> {
-        let spelled = runner.cwd.join(token);
+        let spelled = runner.work.join(token);
         // A file the compiler read resolves; one that does not is a list
         // misread, never a file to skip (fix check 3 N8).
         let Ok(canonical) = spelled.canonicalize() else {
@@ -1071,7 +1067,7 @@ fn reads(
     let mut listed = std::collections::BTreeSet::new();
     let mut entered_as_read = std::collections::BTreeSet::new();
     for token in make_prerequisites(&String::from_utf8_lossy(&rules)) {
-        if let Ok(read) = runner.cwd.join(&token).canonicalize() {
+        if let Ok(read) = runner.work.join(&token).canonicalize() {
             listed.insert(read);
         }
         match name(&token)? {
@@ -1091,7 +1087,7 @@ fn reads(
         let Some(path) = rest.strip_prefix(' ').filter(|_| depth > 0) else {
             continue;
         };
-        if let Ok(read) = runner.cwd.join(path).canonicalize() {
+        if let Ok(read) = runner.work.join(path).canonicalize() {
             entered_as_read.insert(read);
         }
         match name(path)? {

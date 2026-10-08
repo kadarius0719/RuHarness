@@ -612,6 +612,8 @@ int main(int argc, char **argv) {
     fn runner(root: &Path) -> Runner {
         Runner {
             cwd: root.to_path_buf(),
+            work: crate::exec::work_dir().expect("work folder"),
+            root: root.to_path_buf(),
             allowlist: Vec::new(),
             timeout: Duration::from_secs(30),
             max_output: DEFAULT_MAX_OUTPUT,

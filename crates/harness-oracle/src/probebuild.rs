@@ -409,7 +409,7 @@ impl Build<'_> {
             let canonical = if p.is_absolute() {
                 p.canonicalize().ok()?
             } else {
-                self.runner.cwd.join(p).canonicalize().ok()?
+                self.runner.work.join(p).canonicalize().ok()?
             };
             canonical
                 .strip_prefix(&mirror)
