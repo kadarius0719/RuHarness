@@ -107,9 +107,14 @@ change at the switch points below.
      record (`validate.rs`) carries no configuration entry (the triage named the verdict only);
      the committed B01 `read_scalefactors_lib` verdict holds the old boundary digest (status does
      not compare it).
-   **All four merged.** At the time of writing the whole-workspace tests and the bench replay run
-   on c8d5f58; then push, fast-forward main, a check round over the fix passes (Opus checkers,
-   high), DECISIONS' bench line; then (d), (e), (f), (g).
+   **All four merged; main at 1cded59 (1 529 tests green, pushed).** The bench replay on it was
+   running at the time of writing (DECISIONS gets its line). **The check round is RUNNING**
+   (launched 2026-10-08 from 1cded59, four Opus checkers at high, reports to the session's
+   scratchpad `check2/reports/{fix-ab, fix-c-flow, step-b, step-b-security}.md`): two verify fix
+   passes A+B and C (re-running the review's experiments and reverts), two review step (b) itself
+   (correctness clause by clause; security). Next: bundle the reports into
+   docs/reviews/2026-10-08-map-step-b-and-fix-check.md with a triage, fix pass(es) by ownership,
+   gates, bench replay, DECISIONS; then (d), (e), (f), (g).
    - `worktree-agent-ae7ea5096fdff60c7` — fix pass C MERGED (one conflict in main.rs: both
      sides' additions kept): a fresh token on every `--adopt` (the two token files untracked —
      **the person runs once per computer:** `harness state status --target targets/zopfli --adopt`
