@@ -2856,3 +2856,27 @@ decoy test — no fixed decoy catches every such rule; the early `--as-it-stands
 before the units-folder check (both refusals genuine); the cockpit refuses a target whose ledger unit
 folder is unreadable where the CLI shows rows (pre-existing); `stale_launchers_go_but_never_one_in_use`
 failed once at load ~100 (a flake to watch); without facts a unit row's `replaces` check is skipped.
+
+## 2026-10-08 — Project map: design revision 1, and the person's decisions
+
+**Revision 1** of docs/PROJECT-MAP-DESIGN.md (the four-lens review verified finding by finding, the
+triage at the end of docs/reviews/2026-10-07-project-map-design-review.md, §9 of the design maps
+every change). In plain words: one named build configuration per tool, stated by the person (or
+proposed by a model and confirmed), with one closed flag grammar for every source of flags; entry
+kinds `main` / `fuzz` / `driver`; duplicates held as pending alternatives, the closure recomputed
+after a choice, a choice both of whose sides link left to the person; the link check described for
+what it proves and does not; angle-bracket includes resolved; symbols read by `objsyms`, not `nm`;
+the project root stays the target root with the ledger at `migration/` (first tool) or
+`migration/tools/<id>/`; a shipped `migration/` refused until adopted; cargo and rustup run from
+outside the project with the toolchain pinned; closed reasons instead of raw compiler lines; the
+caps with one behaviour; the picture's security rules fixed before its design.
+
+**Decided (the person, 2026-10-08): the seven proposals of §8 as recommended**, under one rule —
+**simplicity means usability**: easy and intuitive, starting at the command line, and runnable from
+the cockpit too. The cockpit therefore gets the same three acts (Map the project, Ask, Accept a tool)
+as dialogs over the `harness project` commands in the build's step (e); only the project view is a
+design of its own. The design is the session's to own.
+
+**Next:** the revision's check (five Opus checkers), revision 2 if it finds more than wording, then
+the build in §5's order — the map is chosen over the briefing's M5 for now (it is what stops a real
+download at the door); M5 after the map's first accepted tool.

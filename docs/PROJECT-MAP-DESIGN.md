@@ -1,6 +1,6 @@
 # Real project layouts: the project map (design, revision 1)
 
-Status: **revision 1 — 2026-10-08, after the four-lens review; not yet checked, not to be built.**
+Status: **revision 1 — 2026-10-08, after the four-lens review; §8 answered by the person; under check, not to be built before the check.**
 Draft 0 (2026-10-02) was reviewed from four lenses (the facts, security, integration, the model step)
 with every finding verified against the code and the spike (docs/reviews/2026-10-07-project-map-
 design-review.md, with the triage at its end). This revision takes in the spike
@@ -362,11 +362,14 @@ runs it); the map itself needs only `cc`.
 list; a call to a project file outside the list reads as an outside call (the capability check
 already reads unresolved names). A shared file is a unit in each tool that holds it (§6).
 
-**The cockpit and harness-mcp:** for this design the command line is the only way in (`project
-map|ask|accept`); the cockpit refuses a folder without `harness.toml` today and a project mode (a map
-screen, a tree for a folder that is not yet a target) is a short design of its own, as is
-harness-mcp's read of the map. Once a tool is accepted, both work on it as on any target; the
-cockpit's tree shows the tool's files under their real folders.
+**The cockpit and harness-mcp:** the command line comes first (`project map|ask|accept`), and the
+cockpit runs the same three acts (the person's rule, §8): opened on a project folder that has no
+`harness.toml`, the cockpit offers **Map the project**, then **Ask** and **Accept a tool**, each a
+dialog that says what it runs, how long it takes and what it writes, and runs the `harness project`
+command — the person sees the same words as on the command line. The project *view* (a map screen,
+a tree for a folder that is not yet a target) is a short design of its own, as is harness-mcp's read
+of the map. Once a tool is accepted, both work on it as on any target; the cockpit's tree shows the
+tool's files under their real folders.
 
 ### 3.8 The CLI
 
@@ -623,7 +626,8 @@ and the file-list form** — `TargetContext`'s ledger folder, `harness.toml` v2 
 digest and staleness, confinement in every reader, the whole-program build on perf's path — tested
 by a hand-written file-list target over the untouched liblzg download before any map writes one;
 (b) the whole-root walk, the configuration, the closures, the entry kinds, the map file, the caps;
-(d) the model step and the check, with recorded traces; (e) `project accept`; (f) SCHEMAS, the
+(d) the model step and the check, with recorded traces; (e) `project accept`, and the cockpit's
+three acts (Map the project, Ask, Accept a tool) as dialogs over the same commands; (f) SCHEMAS, the
 tutorial, the testing guide; (g) after the first accepted tool: record its features before its first
 unit moves (the step this design adds to the briefing's loop — nothing enforces it yet). Each step
 committed green, with its tests from §4; then the review, fix passes checked, mutation checks,
@@ -672,7 +676,16 @@ DECISIONS. The picture (§3.11) and the advice (§3.12) come after, as agreed.
 6. The picture (§3.11) is read-only with one-way data flow and comes after the map; the advice
    (§3.12) after that; an improvements mode (intended mismatches) later still, the vocabulary settled.
 
-## 8. Decisions this revision proposes (for the person, before the build)
+## 8. Decisions this revision proposed — answered (the person, 2026-10-08)
+
+**Decided: all seven as recommended**, with one rule over them all — **simplicity means usability**:
+easy and intuitive, starting at the command line, and runnable from the cockpit too. So item 5 is
+narrowed, not dropped: the command line comes first, and the cockpit gets the same three acts
+(Map the project, Ask, Accept a tool) in §5's step (e), with the cockpit's confirm-and-show-the-
+command dialogs; only the project *view* (a map screen) stays a design of its own. Every refusal,
+hedge and question in this design is judged by that rule: one plain sentence, what to do next, no
+codes.
+
 
 1. **The layout for several tools** (§3.7): the project root stays the target root; the first tool's
    ledger at `<project>/migration/`, further tools at `<project>/migration/tools/<id>/` with `--tool`.
