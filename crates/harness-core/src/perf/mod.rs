@@ -57,15 +57,19 @@ pub fn kept_outputs_dir(ledger: &crate::ledger::Ledger, unit: Option<&str>) -> P
 /// What perf and the cockpit say about a unit whose Accept was interrupted
 /// (§3.2; the cockpit's `Cause::PromotionInterrupted` says the same):
 /// `attempt` is the `.promote-<id>/` marker's attempt id, or `legacy` for
-/// a bare `.<crate>.prev`. The next writing command — `verify` among them
-/// — finishes or undoes it by evidence.
-pub fn accept_interrupted_words(attempt: &str, unit: &str) -> String {
+/// a bare `.<crate>.prev`; `tool` is the open mapped tool, so the command
+/// runs as printed. The next writing command — `verify` among them —
+/// finishes or undoes it by evidence.
+pub fn accept_interrupted_words(attempt: &str, unit: &str, tool: Option<&str>) -> String {
     let what = if attempt == "legacy" {
         "an Accept".to_string()
     } else {
         format!("an Accept of {attempt}")
     };
-    format!("{what} was interrupted — Re-check {unit} (or run harness verify {unit}) to finish or undo it")
+    format!(
+        "{what} was interrupted — Re-check {unit} (or run {}) to finish or undo it",
+        crate::runtime_view::command_line(&format!("verify {unit}"), tool)
+    )
 }
 
 /// A crate manifest's `[profile.release]` settings away from Cargo's
@@ -128,10 +132,10 @@ mod tests {
     #[test]
     fn the_interrupted_accept_words() {
         assert_eq!(
-            accept_interrupted_words("a-1234", "u001"),
+            accept_interrupted_words("a-1234", "u001", None),
             "an Accept of a-1234 was interrupted — Re-check u001 (or run harness verify u001) \
              to finish or undo it"
         );
-        assert!(accept_interrupted_words("legacy", "u001").starts_with("an Accept was"));
+        assert!(accept_interrupted_words("legacy", "u001", None).starts_with("an Accept was"));
     }
 }

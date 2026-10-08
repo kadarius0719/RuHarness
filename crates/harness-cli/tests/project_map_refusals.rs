@@ -43,9 +43,15 @@ fn harness(args: &[&str]) -> (i32, String, String) {
 }
 
 /// Where no sandbox is available, `project map` compiles nothing unless
-/// the person passes `--allow-unsandboxed`. On a host with a sandbox there
-/// is nothing to refuse: the test says so and stops.
+/// the person passes `--allow-unsandboxed`. macOS always has its sandbox,
+/// so there the test is marked ignored (an honest "not run", never a pass
+/// that ran nothing); it runs on Linux, where the sandbox is "none". Any
+/// other host with a sandbox still says so and stops.
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS has its sandbox, so `project map` is never refused for one; this runs on Linux"
+)]
 fn the_map_is_refused_without_a_sandbox() {
     if harness_oracle::sandbox_mode() != "none" {
         eprintln!("skipped: this host has a sandbox, so `project map` is never refused for one");

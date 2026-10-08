@@ -623,11 +623,14 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         && (name_w + 2 + word_w <= room
             || selected
             || (glyph.is_empty() && matches!(sel, Selection::Unit(_) | Selection::File(_))));
-    // "not part of this tool" is read whole: the name is cut first.
-    let word_whole = glyph == files::NOT_IN_TOOL;
+    // A file outside the tool keeps its name whole: its mark says the
+    // rest (and the View's title says it in words), so its word is what
+    // gives way — dropped when too little of it would show.
+    let name_first = glyph == files::NOT_IN_TOOL;
+    let show_word = show_word && !(name_first && room.saturating_sub(name_w + 1) < 4);
     let (name_text, pad, word_text) = if show_word {
-        let name_keep = if word_whole {
-            name_w.min(room.saturating_sub(word_w + 1).max(1))
+        let name_keep = if name_first {
+            name_w.min(room)
         } else {
             name_w.min(room / 2)
         };
@@ -814,7 +817,10 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
         lines.push(Line::from(clipped(spans, width)));
         if let UnitState::Attention(cause) = s {
             lines.extend(wrapped(
-                &format!("Needs attention: {}", cause.words()),
+                &format!(
+                    "Needs attention: {}",
+                    cause.words(&app.snapshot.ledger_rel())
+                ),
                 width,
                 Style::default().fg(Color::Yellow),
             ));
@@ -1287,7 +1293,11 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
         None => lines.extend(wrapped("Nothing is scanned yet.", width, dim())),
         Some(s) => {
             let count = |st: FileState| app.files.files.iter().filter(|f| f.state == st).count();
-            let mut text = format!("{} files scanned", s.files);
+            let mut text = format!(
+                "{} file{} scanned",
+                s.files,
+                if s.files == 1 { "" } else { "s" }
+            );
             for (n, what) in [
                 // The stale paths hold the missing files too (ENG-6).
                 (s.stale.saturating_sub(count(FileState::Missing)), "changed"),
@@ -3043,8 +3053,8 @@ const HELP_SPEED: &[&str] = &[
      edit — Hand edit its crate, Replace the verified crate with the new attempt, measure \
      again, and Replace it back if it is not faster (a hand edit alone is recorded, never \
      accepted: perf would time the same crate); written outside the cockpit — commit the crate \
-     first (git), edit it in your editor, run harness verify <unit> in a terminal, then \
-     measure again.",
+     first (git), edit it in your editor, run harness verify <unit> in a terminal (with \
+     --tool <id> on a mapped tool), then measure again.",
 ];
 
 const HELP_SPEED_WORDS: &[(&str, &str)] = &[
@@ -3117,7 +3127,8 @@ const HELP_CHAT: &[&str] = &[
 
 const HELP_ROUTES: &[&str] = &[
     "Other routes for model work:",
-    "  harness migrate <unit>: a fresh translation (the blind hand-off, or a live provider)",
+    "  harness migrate <unit>: a fresh translation (the blind hand-off, or a live provider); \
+     each command takes --tool <id> on a mapped tool",
     "  harness-mcp in a separate Claude Code session: steer attempts (README)",
     "  harness override <unit> <dir>: record an outside edit as a hand edit",
     "Every act shows its exact command and waits until it is ready: keys typed or pasted ahead never answer it, and a held Enter never runs anything.",
@@ -6891,7 +6902,7 @@ mod tests {
         let mut unit = app.snapshot.unit("u-lib").unwrap().clone();
         unit.provenance = P::Pipeline("a-13c941dfff95".into());
         assert_eq!(
-            change_words(&unit, true),
+            change_words(&unit, true, "migration"),
             "Modify a-13c9 with a note about speed (give these numbers), then Replace u-lib's \
              verified crate with the new attempt, measure this unit again — and if it is not \
              faster, Replace it back with a-13c9"
@@ -6916,7 +6927,7 @@ mod tests {
             .expect("Modify offered, greyed");
         assert_eq!(modify.greyed.as_deref(), Some(crate::model::NO_PROVIDER));
         assert_eq!(
-            change_words(&unit, false),
+            change_words(&unit, false, "migration"),
             format!(
                 "Modify is greyed: {} — with one, Modify a-13c9 with a note about speed (give \
                  these numbers), then Replace u-lib's verified crate with the new attempt, \
@@ -6925,17 +6936,17 @@ mod tests {
             )
         );
         // A steer's attempt and a chat's are a model's too: the same words.
-        let modify = change_words(&unit, true);
+        let modify = change_words(&unit, true, "migration");
         for made in [
             P::Steered("a-13c941dfff95".into()),
             P::Chat("a-13c941dfff95".into()),
         ] {
             unit.provenance = made.clone();
-            assert_eq!(change_words(&unit, true), modify, "{made:?}");
+            assert_eq!(change_words(&unit, true, "migration"), modify, "{made:?}");
         }
         unit.provenance = P::Ambiguous(vec!["a-28d8aaaa".into(), "a-13c9bbbb".into()]);
         assert!(
-            change_words(&unit, true).starts_with("Modify a-13c9 "),
+            change_words(&unit, true, "migration").starts_with("Modify a-13c9 "),
             "the lowest id"
         );
         let dir = std::env::temp_dir().join(format!("speed-change-{}", std::process::id()));
@@ -6951,7 +6962,7 @@ mod tests {
             origin: "a-66c1bbbb".into(),
         };
         assert_eq!(
-            change_words(&unit, true),
+            change_words(&unit, true, "migration"),
             "Hand edit u-lib's crate, then Replace u-lib's verified crate with the new attempt \
              and measure this unit again — and if it is not faster, Replace it back with a-77b2"
         );
@@ -6959,7 +6970,8 @@ mod tests {
         for missing in ["src/ffi.rs", "src/logic.rs"] {
             std::fs::remove_file(dir.join(missing)).unwrap();
             assert!(
-                change_words(&unit, true).starts_with("Commit the unit's crate first (git)"),
+                change_words(&unit, true, "migration")
+                    .starts_with("Commit the unit's crate first (git)"),
                 "without {missing}"
             );
             std::fs::write(dir.join(missing), "").unwrap();
@@ -6967,8 +6979,13 @@ mod tests {
         // Code the cockpit did not record, even with both files: there is
         // no attempt to Replace it back with.
         unit.provenance = P::None;
-        assert!(change_words(&unit, true).starts_with("Commit the unit's crate first (git)"));
-        assert!(change_words(&unit, true).contains("run harness verify u-lib in a terminal"));
+        assert!(change_words(&unit, true, "migration")
+            .starts_with("Commit the unit's crate first (git)"));
+        assert!(change_words(&unit, true, "migration")
+            .contains("run harness verify u-lib in a terminal"));
+        // On a mapped tool the command carries its `--tool`.
+        assert!(change_words(&unit, true, "migration/tools/t-lzg")
+            .contains("run harness verify u-lib --tool t-lzg in a terminal"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -7462,7 +7479,10 @@ mod tests {
         let root = app.config.target.clone();
         std::fs::remove_file(root.join("migration/plan.toml")).unwrap();
         let app = crate::app::tests::app_of_path(&root);
-        assert_eq!(app.snapshot.note.as_deref(), Some(crate::model::NO_PLAN));
+        assert_eq!(
+            app.snapshot.note.as_deref(),
+            Some(crate::model::no_plan("migration").as_str())
+        );
         let big = |app: &App| app.speed.row(&SideKey::C, "big-text").unwrap().clone();
         assert!(
             big(&app).out_of_date.is_empty(),
@@ -7995,6 +8015,37 @@ mod tests {
         );
     }
 
+    /// One scanned file is said in the singular.
+    #[test]
+    fn one_file_scanned_is_said_in_the_singular() {
+        use crate::testutil::{file_list_tool, LZG_TOOL};
+        let dir = file_list_tool("view-one-file");
+        let read = crate::load::read_tool(&dir.0, Some(LZG_TOOL)).unwrap();
+        let mut app = App::new(
+            crate::app::Config {
+                target: dir.0.clone(),
+                tool: Some(LZG_TOOL.into()),
+                harness: Some(PathBuf::from(crate::app::tests::HARNESS)),
+                allow_unsandboxed: false,
+                layout: LayoutMode::Auto,
+                providers: vec!["external".into()],
+            },
+            read,
+        );
+        app.snapshot.facts_state = Some(crate::model::FactsState {
+            files: 1,
+            stale: 0,
+            stale_paths: Vec::new(),
+        });
+        let mut links = Vec::new();
+        let said: String = summary(&app, 120, &mut links)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(said.contains("1 file scanned"), "{said}");
+        assert!(!said.contains("1 files"), "{said}");
+    }
+
     /// In a project of tools the screen names the tool open, on the title
     /// row; a project file outside it has a mark of its own (not the
     /// Features legend's `◌`), listed in the help's States, its label
@@ -8030,15 +8081,35 @@ mod tests {
         assert!(HELP_LEGEND
             .iter()
             .any(|(g, w)| *g == glyph && w.starts_with("not part of this tool")));
-        // The selected row on a narrow pane: the name is cut, never the word.
+        // The selected row: the word whole when there is room for both.
         let row = Row {
             depth: 3,
             kind: RowKind::Node(outside),
             expandable: false,
             open: false,
         };
-        let line = tree_row(&app, &row, 40, true);
-        let shown: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(shown.ends_with("not part of this tool"), "{shown:?}");
+        let shown = |width| -> String {
+            let line = tree_row(&app, &row, width, true);
+            line.spans.iter().map(|s| s.content.as_ref()).collect()
+        };
+        assert!(shown(40).contains("decode.c"), "{:?}", shown(40));
+        assert!(
+            shown(40).ends_with("not part of this tool"),
+            "{:?}",
+            shown(40)
+        );
+        // On a narrow pane the name stays whole and the word gives way: the
+        // mark and the View's title say the rest.
+        for width in [24, 20] {
+            let s = shown(width);
+            assert!(s.contains("decode.c"), "{width}: {s:?}");
+            assert!(!s.contains("not part of this tool"), "{width}: {s:?}");
+        }
+        // Too narrow for any of the word: it is dropped, not left as "…".
+        assert!(
+            shown(20).trim_end().ends_with("decode.c"),
+            "{:?}",
+            shown(20)
+        );
     }
 }

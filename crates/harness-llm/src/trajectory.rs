@@ -1943,8 +1943,9 @@ pub(crate) fn read_sources(
         if !is_clean_relative_path(&path) {
             return Err(Error::Invariant(format!(
                 "unit `{}`: source path {path:?} is not a clean relative path — refusing to \
-                 read it (re-run `harness scan`)",
-                unit.id
+                 read it (re-run `{}`)",
+                unit.id,
+                harness_core::runtime_view::command_line("scan", target.tool.as_deref())
             )));
         }
         let joined = root.join(&path);
@@ -1961,8 +1962,9 @@ pub(crate) fn read_sources(
             return Err(Error::InvalidPlan(format!(
                 "unit `{}`: source path {path:?} lies under migration/, the harness's own \
                  folder — model-written files are never project C; refusing to send it to a \
-                 model provider (re-run `harness scan`)",
-                unit.id
+                 model provider (re-run `{}`)",
+                unit.id,
+                harness_core::runtime_view::command_line("scan", target.tool.as_deref())
             )));
         }
         // No folder-form scan reads a dot-folder (`.git`, `.env`, `.cache`):
@@ -1977,9 +1979,9 @@ pub(crate) fn read_sources(
         {
             return Err(Error::InvalidPlan(format!(
                 "unit `{}`: source path {path:?} lies in a folder whose name starts with a dot, \
-                 which no scan reads; refusing to send it to a model provider (re-run `harness \
-                 scan`)",
-                unit.id
+                 which no scan reads; refusing to send it to a model provider (re-run `{}`)",
+                unit.id,
+                harness_core::runtime_view::command_line("scan", target.tool.as_deref())
             )));
         }
         match &scope {
@@ -2000,8 +2002,9 @@ pub(crate) fn read_sources(
                 return Err(Error::InvalidPlan(format!(
                     "unit `{}`: source path {path:?} is not one of the target's listed files or \
                      the headers their includes reach today — prompt-bound reads are confined \
-                     to them; refusing to send it to a model provider (re-run `harness scan`)",
-                    unit.id
+                     to them; refusing to send it to a model provider (re-run `{}`)",
+                    unit.id,
+                    harness_core::runtime_view::command_line("scan", target.tool.as_deref())
                 )));
             }
             _ => {}

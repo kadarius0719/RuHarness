@@ -424,6 +424,9 @@ pub struct ObservationsInput<'a> {
     pub facts: &'a Facts,
     /// Per-unit risk, pre-sorted descending (from [`crate::risk`]).
     pub risk: &'a [crate::risk::UnitRisk],
+    /// The mapped tool whose ledger this is (`None` for a folder-form
+    /// target), so the commands the file names carry its `--tool`.
+    pub tool: Option<&'a str>,
 }
 
 /// Render observations.md (docs/SCHEMAS.md): deterministic, no timestamps.
@@ -528,7 +531,14 @@ pub fn render_observations(input: &ObservationsInput) -> Result<String, Error> {
             ));
         }
         if f.human_mandatory && state == FindingState::DismissedPendingReview {
-            md.push_str("- **HUMAN REVIEW REQUIRED** — dismissal of a human-mandatory category; run `harness review`\n");
+            let review = crate::runtime_view::command_in_project(
+                &format!("review {} --uphold-dismiss", f.id),
+                input.tool,
+            );
+            md.push_str(&format!(
+                "- **HUMAN REVIEW REQUIRED** — dismissal of a human-mandatory category; run \
+                 `{review}` to keep it dismissed, or the same with `--reinstate` to reopen it\n"
+            ));
         }
         md.push('\n');
     }
@@ -689,5 +699,64 @@ mod tests {
             finding_state(&f, &triage, &reviews),
             FindingState::Reinstated
         );
+    }
+
+    /// A dismissed human-mandatory finding names the review command whole:
+    /// the finding, the flag, and the tool on a mapped tool's ledger.
+    #[test]
+    fn the_human_review_line_names_the_command_to_run() {
+        let f = Finding {
+            id: "f-1".into(),
+            detector: "macros".into(),
+            category: "macro-statement-body".into(),
+            severity: "high".into(),
+            blocker: false,
+            human_mandatory: true,
+            file: "src/u.h".into(),
+            file_hash: "blake3:x".into(),
+            span: (1, 2),
+            occurrence: 0,
+            message: "m".into(),
+            evidence: "e".into(),
+        };
+        let findings = FindingsFile {
+            detector_suite: "s".into(),
+            facts_hash: "blake3:f".into(),
+            findings: vec![f],
+        };
+        let triage = TriageFile {
+            verdicts: vec![VerdictRecord {
+                finding: "f-1".into(),
+                content_hash: "blake3:h".into(),
+                verdict: TriageVerdict::Dismiss,
+                confidence: "high".into(),
+                rationale: "not real".into(),
+                evidence: vec![],
+            }],
+        };
+        let plan = Plan {
+            schema_version: 1,
+            target: "t".into(),
+            units: Vec::new(),
+        };
+        let facts = Facts::default();
+        let render = |tool| {
+            render_observations(&ObservationsInput {
+                findings: &findings,
+                annotations: &[],
+                triage: &triage,
+                reviews: &[],
+                plan: &plan,
+                facts: &facts,
+                risk: &[],
+                tool,
+            })
+            .unwrap()
+        };
+        assert!(render(Some("t-lzg")).contains(
+            "run `harness review f-1 --uphold-dismiss --tool t-lzg` to keep it dismissed, or the \
+             same with `--reinstate` to reopen it"
+        ));
+        assert!(render(None).contains("run `harness review f-1 --uphold-dismiss` to keep it"));
     }
 }

@@ -94,16 +94,20 @@ impl DraftKind {
 
     /// Whether `text` validates: else the reader's words and the line they
     /// name.
-    fn check(self, text: &str, file: &Path) -> Result<(), (String, Option<u32>)> {
+    fn check(self, text: &str, file: &Path, ledger_rel: &str) -> Result<(), (String, Option<u32>)> {
         match self {
-            DraftKind::Features => features::parse(text, file).map(|_| ()).map_err(|e| {
-                let message = match e {
-                    harness_core::Error::InvalidPlan(m) => m,
-                    other => other.to_string(),
-                };
-                let line = error_line(&message);
-                (message, line)
-            }),
+            DraftKind::Features => {
+                features::parse(text, file, ledger_rel)
+                    .map(|_| ())
+                    .map_err(|e| {
+                        let message = match e {
+                            harness_core::Error::InvalidPlan(m) => m,
+                            other => other.to_string(),
+                        };
+                        let line = error_line(&message);
+                        (message, line)
+                    })
+            }
             DraftKind::Workloads => match workloads::parse(text, file) {
                 Ok(_) => Ok(()),
                 Err(workloads::ParseError::Rule(e)) => Err((e.to_string(), Some(e.line as u32))),
@@ -533,7 +537,7 @@ impl App {
             self.notice = notice("No change.");
             return self.discard_quietly(kind);
         }
-        match kind.check(&text, &draft.file) {
+        match kind.check(&text, &draft.file, &self.snapshot.ledger_rel()) {
             Err((message, line)) => {
                 if let Some(d) = self.draft_slot(kind).as_mut() {
                     d.error_line = line;
@@ -613,7 +617,11 @@ impl App {
     /// The Save dialog's words, by what changed (§7.2 step 4).
     pub(super) fn save_features_words(&self, p: &Pending) -> (String, Vec<String>) {
         let text = p.stdin.clone().unwrap_or_default();
-        let Ok(new) = features::parse(&text, Path::new("features.toml")) else {
+        let Ok(new) = features::parse(
+            &text,
+            Path::new("features.toml"),
+            &self.snapshot.ledger_rel(),
+        ) else {
             return ("Save the features file?".into(), vec![]);
         };
         let config = self.config.target_config().ok();

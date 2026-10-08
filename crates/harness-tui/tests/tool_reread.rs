@@ -182,6 +182,42 @@ fn two_tools_and_no_tool_exit_1_as_the_command_line() {
     );
 }
 
+/// Away from a terminal, a ledger made elsewhere is refused in the
+/// cockpit's own words — start it in a terminal and answer its question —
+/// never the command line's "add `--adopt`", an argument the cockpit
+/// refuses.
+#[test]
+fn a_ledger_made_elsewhere_is_refused_in_the_cockpits_words_away_from_a_terminal() {
+    harness_core::adopt::testing::adoption_file();
+    let dir = project();
+    std::fs::write(
+        dir.0.join("migration/tools/t-a/plan.toml"),
+        "schema_version = 1\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_harness-tui"))
+        .args(["--target", dir.0.to_str().unwrap(), "--tool", "t-a"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        stderr.trim_end(),
+        format!(
+            "harness-tui: {}: this folder already holds migration results made elsewhere (0 \
+             units, 0 verified): to trust them here, start the cockpit in a terminal and answer \
+             its question",
+            dir.0.display()
+        )
+    );
+    assert!(!stderr.contains("--adopt"), "{stderr}");
+    assert!(
+        harness_core::adopt::check(&dir.0).is_err(),
+        "nothing adopted"
+    );
+}
+
 #[test]
 fn the_binarys_background_reread_opens_the_tool_it_was_started_on() {
     // Every child inherits the test process's own adoption file.

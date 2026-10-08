@@ -56,6 +56,37 @@ fn every_read_works_on_a_file_list_tool() {
     );
     let harness = harness_bin();
     let target = root.to_str().unwrap();
+    // Before the scan, and between the scan and the plan, the status note
+    // hands an agent the command spelled for the server's tool and folder,
+    // so it runs as printed (an agent copies commands literally).
+    let note = |want: &str| {
+        let mut c = Client::start(&[
+            "--target",
+            target,
+            "--tool",
+            "t-lzg",
+            "--harness",
+            harness.to_str().unwrap(),
+        ]);
+        c.initialize();
+        c.call(1, "harness_status", json!({}), None);
+        let (r, _) = c.response(&json!(1), 30);
+        assert!(!is_error(&r), "{r}");
+        assert_eq!(structured(&r)["note"]["text"], want, "{r}");
+        c.close_stdin();
+        assert!(c.wait_exit(30).success());
+    };
+    note(&format!(
+        "no facts — run `harness scan --tool t-lzg --target {target}`"
+    ));
+    let scan = Command::new(&harness)
+        .args(["scan", "--target", target, "--tool", "t-lzg"])
+        .output()
+        .unwrap();
+    assert!(scan.status.success());
+    note(&format!(
+        "no plan — run `harness plan --tool t-lzg --target {target}`"
+    ));
     // A hand-written tool holds no results: no adoption is asked.
     for cmd in ["scan", "plan"] {
         let args = [cmd, "--target", target, "--tool", "t-lzg"];

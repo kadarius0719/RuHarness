@@ -1504,9 +1504,10 @@ with a compiler found through root-owned paths, and every sandbox profile denies
 
 The only names the harness writes directly inside `migration/`. A `migration/` that holds
 `facts.jsonl`, `plan.toml`, `map/` or `tools/` and nothing outside this table is the
-harness's; any other is the project's own (its database migrations, say), and `--adopt` is
-refused for it: "this project has a migration/ folder of its own; move or rename it, or map a
-copy". Finder's `.DS_Store` is ignored wherever it appears.
+harness's; any other is the project's own (its database migrations, say), and every command,
+`--adopt` included, refuses it first: "<root>/migration is the project's own folder, and the
+harness needs that name for its ledger: rename the folder, or run the harness on a copy of the
+project with it renamed". Finder's `.DS_Store` is ignored wherever it appears.
 
 | Name | What |
 |---|---|
@@ -1522,58 +1523,89 @@ copy". Finder's `.DS_Store` is ignored wherever it appears.
 | `build/` | scratch (gitignored) |
 | `.lock` | the writer lock (gitignored) |
 | `.gitignore` | the ledger's own ignore rules |
-| `.ruharness-adopted` | the adoption token (gitignored; committed for RuHarness's fixtures) |
+| `.ruharness-adopted` | the adoption token (gitignored, never committed: each checkout writes its own) |
 
 ## Adoption of a ledger made elsewhere (docs/PROJECT-MAP-DESIGN.md §3.7)
 
-**The adoption file** — outside every target, per computer: `$RUHARNESS_ADOPTED` when set,
+Trust is decided once per checkout: each folder on this computer, by its canonical path, so a
+copy or a second worktree of the same project is asked again.
+
+**The adoption file** — outside every target, one per computer: `$RUHARNESS_ADOPTED` when set,
 else `~/Library/Application Support/ruharness/adopted.toml` (the same spelling on Linux).
 TOML, `schema_version = 1`, one `[[root]]` per trusted root: `path` (canonical), `token` (32
-lowercase hex digits), `scope` (`project`: the ledger at `<path>/migration/`; `suite`: every
-ledger under `<path>`, a benchmark suite), `how` (`created`: a command on this computer made
-its first ledger; `adopted`: the person's `--adopt` or the cockpit's dialog). Written
-atomically (a temp file renamed over it) under an exclusive lock on `<file>.lock`; each write
-drops the entries whose path no longer exists. A newer `schema_version` is refused.
+lowercase hex digits), `scope` (`project`: the ledger at `<path>/migration/` and each mapped
+tool's under `<path>/migration/tools/`; `suite`: every ledger under `<path>`, a benchmark
+suite), `how` (`created`: a command on this computer made its first ledger; `adopted`: the
+person's `--adopt` or the cockpit's dialog), and for an adopted root `adopted_ms` (when it was
+adopted, milliseconds since 1970 UTC; absent for a root made here and for an adoption recorded
+before the time was kept). Written atomically (a temp file renamed over it) under an exclusive
+lock on `<file>.lock`; each write drops the entries whose path no longer exists. A newer
+`schema_version` is refused.
 
 **The token** — `<root>/migration/.ruharness-adopted` for a project, `<suite>/.ruharness-adopted`
 for a suite: one line, the entry's token. A root is trusted only when it is listed (or lies
 under a listed suite) AND its token file holds the listed token: a different tree unpacked at
-the same path is refused again. Adopting a root whose token file already holds a well-formed
-token records that token and writes none.
+the same path is refused again. A project's token is always fresh: the person's `--adopt` and
+the first command that makes a ledger each write a new random one, replacing any token the
+folder came with (a downloaded token is never trusted). A benchmark suite keeps the token it
+holds (its trust is `corpus.lock`).
 
 **The check** — `harness_core::adopt::check`, called by `TargetContext::load` (every CLI command,
 the cockpit's read model before its preflight, harness-mcp before every read and act): a root
-with no `migration/` passes (nothing to trust); a root listed with its token passes; any other
-is refused, exit 1: "this folder already holds migration results made elsewhere (N units, M
-verified): to trust them here, add `--adopt` once" (N and M from its `plan.toml`; "1 unit").
-harness-mcp refuses with the same sentence, `error.kind = "not-adopted"`, and never adopts.
-The `bench` commands that read case ledgers (`init`, `status`, `score`, `check`, `boundary`)
-check the suite root up front.
+whose `migration/` holds no results passes (nothing to trust: no `migration/` at all, an empty
+one, or one holding only hand-written `tools/<id>/harness.toml` files, `map/config.toml`, the
+locks, `.gitignore` and the token); a `migration/` that is not the harness's is refused as the
+project's own first (above); a root listed with its token passes; any other is refused, exit 1,
+in its reader's words — the command line: "<root>: this folder already holds migration results
+made elsewhere (N units, M verified): to trust them here, add `--adopt` once" (N and M from the
+plans of the root's ledger and each tool's; "1 unit"); the cockpit away from a terminal: "…: to
+trust them here, start the cockpit in a terminal and answer its question"; harness-mcp, with
+`error.kind = "not-adopted"`: "…: ask the person to adopt it (`harness state status --adopt
+--target <root> --tool <id>`, or the cockpit's question); an agent never adopts" (`--tool` only
+when the server was started on one). harness-mcp never adopts. The `bench` commands that read
+case ledgers (`init`, `status`, `score`, `check`, `boundary`) check the suite root up front.
 
 **`--adopt`** — a global flag, accepted by every command that opens a ledger (for `bench`, the
 suite root is adopted as one root). On an unlisted root: refused for the project's own
-`migration/` (above); otherwise deletes only `migration/build/`, each unit crate's `target/`,
-each attempt's `candidate/target/` and every `units/<id>/.promote-*/` (a link there is deleted
-itself, never its target; a linked folder is never descended into), records the root and its
-token, and says the verdicts are claims made elsewhere until `verify` runs them here. On a
-root already listed with its token it deletes nothing. `--adopt` is never carried into a
-resume command. The cockpit asks the same question in a dialog before it takes the terminal
-(only a typed `y` adopts).
+`migration/` (above); otherwise deletes only the build folders that came with it — in the
+root's ledger and in each tool's under `migration/tools/`: `build/`, each unit crate's
+`target/`, each attempt's `candidate/target/` and every `units/<id>/.promote-*/` (a link there
+is deleted itself, never its target; a linked folder is never descended into) — and records
+the root, a fresh token and the time. It says, each only when it is true, "adopt: deleted N
+build folder(s) made elsewhere; the harness builds what it needs again here" and "adopt: M
+verified unit(s) came with it, marked "made elsewhere" until you run `harness verify <unit>`
+here (`harness state status` lists them)" (both commands spelled with `--tool` when one is
+given). On a root already listed with its token it deletes nothing. `--adopt` is never carried
+into a resume command. The cockpit asks the same question in a dialog before it takes the
+terminal (only a typed `y` adopts; declining names the way back: start the cockpit again).
 
-**Created here** — a command that finds no `migration/` when it starts trusts what it writes
-there for the rest of its run and, when it ends with a `migration/` (the first `scan`,
-`features init`, `bench init` for a suite), records the root (`how = "created"`) and writes its
-token.
+**Made elsewhere** — a verdict whose file was written before the adoption's time is a claim
+made elsewhere until `verify` writes it here: `state status` adds `made-elsewhere` to its unit
+line (and `"made_elsewhere": true` to the `unit` event and to harness-mcp's status), then one
+line naming those units and the `verify` command to run; the cockpit shows the unit as needing
+attention, "its verdict was made elsewhere, before you adopted this folder — Re-check it to
+make it here". A verdict records no time of its own (it binds content, never timestamps), so
+the verdict file's modification time stands in: a copy or a checkout gives it the time of the
+copy, before the adoption, as it should; a tool that sets file times, or a clock set back, can
+mislead it. A root made here, or adopted before the time was kept, marks nothing.
+
+**Created here** — a command that finds no results in `migration/` when it starts trusts what
+it writes there for the rest of its run and, when it ends with a `migration/` (the first `scan`,
+`features init`, `bench init` for a suite), records the root (`how = "created"`), writes a
+fresh token, and writes `migration/.gitignore` (the same file `project map` writes, never over
+one already there) so the token and the locks never show in `git status`.
 
 Cold resume is unaffected: the ledger alone still holds everything needed to resume; only the
-one-time trust question is per computer.
+one-time trust question is asked again in each checkout.
 
 ## Writer table additions
 
 | File | Writer |
 |---|---|
 | the adoption file (outside every target) and its `.lock` | any command given `--adopt`; the cockpit's adoption dialog; the first command that creates a ledger |
-| `migration/.ruharness-adopted`, `<suite>/.ruharness-adopted` (gitignored) | the same, when the root has no well-formed token yet |
+| `migration/.ruharness-adopted` (gitignored) | the same: a fresh token each time a project is adopted or its first ledger made |
+| `<suite>/.ruharness-adopted` (gitignored) | the same, when the suite has no well-formed token yet |
+| `migration/.gitignore` | `project map`, or the first command that creates a ledger — once, never over an existing one |
 
 ## `harness project map` (docs/PROJECT-MAP-DESIGN.md §3.3, §3.6, §3.8, §5 step b)
 

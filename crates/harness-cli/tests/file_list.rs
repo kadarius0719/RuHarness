@@ -193,7 +193,7 @@ fn a_file_list_tool_runs_every_reading_command_inside_its_ledger() {
     assert!(!plan.contains("decode"), "{plan}");
 
     // Every write lies under the tool's ledger: the root's migration/ holds
-    // the adoption token and tools/ only, and the shared AGENTS.md names
+    // the adoption token, its ignore rules and tools/ only, and the shared AGENTS.md names
     // the tool's ledger.
     let mut top: Vec<String> = std::fs::read_dir(root.join("migration"))
         .unwrap()
@@ -201,7 +201,11 @@ fn a_file_list_tool_runs_every_reading_command_inside_its_ledger() {
         .collect();
     top.sort();
     // (`map/` holds only the project lock `sync-runtime` takes.)
-    assert_eq!(top, [".ruharness-adopted", "map", "tools"], "{top:?}");
+    assert_eq!(
+        top,
+        [".gitignore", ".ruharness-adopted", "map", "tools"],
+        "{top:?}"
+    );
     let map: Vec<String> = std::fs::read_dir(root.join("migration/map"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

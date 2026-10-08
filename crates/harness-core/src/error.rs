@@ -140,7 +140,11 @@ pub enum Error {
     /// `--adopt` was refused: the root's `migration/` is not the harness's
     /// (it holds none of its files, or something outside the ledger's fixed
     /// names), so it is the project's own.
-    #[error("this project has a migration/ folder of its own; move or rename it, or map a copy")]
+    #[error(
+        "{}/migration is the project's own folder, and the harness needs that name for its \
+         ledger: rename the folder, or run the harness on a copy of the project with it renamed",
+        root.display()
+    )]
     ForeignMigration {
         /// The project root.
         root: PathBuf,
@@ -238,73 +242,9 @@ impl Error {
     }
 }
 
-/// A message about a ledger file, said for the ledger it is in: a mapped
-/// tool's files live under `migration/tools/<id>/`, not `migration/`, so a
-/// message the folder form words (`migration/features/…`) names the tool's
-/// path instead. `ledger_rel` is the ledger folder, root-relative.
-pub fn in_ledger(message: &str, ledger_rel: &str) -> String {
-    let folder = crate::ledger::MIGRATION_DIR;
-    if ledger_rel == folder {
-        return message.to_string();
-    }
-    let mut out = message.to_string();
-    for sub in ["features", "perf"] {
-        let from = format!("{folder}/{sub}");
-        let to = format!("{ledger_rel}/{sub}");
-        let mut next = String::with_capacity(out.len());
-        let mut tail = out.as_str();
-        while let Some(at) = tail.find(&from) {
-            let after = &tail[at + from.len()..];
-            // Only the folder itself, as a path of its own: `migration/
-            // features/…` or `migration/features ` at a word's start —
-            // never `migration/featuresX` or `x/migration/features`.
-            let whole = after
-                .chars()
-                .next()
-                .is_none_or(|c| matches!(c, '/' | ' ' | ':'));
-            let starts = tail[..at]
-                .chars()
-                .next_back()
-                .is_none_or(|c| matches!(c, ' ' | '`' | '(' | '"'));
-            next.push_str(&tail[..at]);
-            next.push_str(if whole && starts { &to } else { &from });
-            tail = after;
-        }
-        next.push_str(tail);
-        out = next;
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_tools_messages_name_its_ledger() {
-        let tool = "migration/tools/t-lzg";
-        assert_eq!(
-            in_ledger(
-                "migration/features/features.toml: migration/features must be a directory",
-                tool
-            ),
-            "migration/tools/t-lzg/features/features.toml: migration/tools/t-lzg/features must \
-             be a directory"
-        );
-        assert_eq!(
-            in_ledger(
-                "add a [[workload]] to `migration/perf/workloads.toml`",
-                tool
-            ),
-            "add a [[workload]] to `migration/tools/t-lzg/perf/workloads.toml`"
-        );
-        // Another word that only holds the name, and the folder form, are kept.
-        for kept in ["src/migration/features/x", "migration/featuresx"] {
-            assert_eq!(in_ledger(kept, tool), kept);
-        }
-        let folder = "migration/features/features.toml: x";
-        assert_eq!(in_ledger(folder, "migration"), folder);
-    }
 
     #[test]
     fn no_target_reads_one_way() {

@@ -112,7 +112,8 @@ impl App {
                         .promotion_interrupted
                         .as_deref()
                         .unwrap_or("legacy"),
-                    id
+                    id,
+                    harness_core::runtime_view::tool_of(&self.snapshot.ledger_rel())
                 )
             ),
             Some("replaces-changed") => {

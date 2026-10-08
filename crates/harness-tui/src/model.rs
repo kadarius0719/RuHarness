@@ -219,6 +219,13 @@ impl Snapshot {
         }
     }
 
+    /// `harness <cmd>` as a hint for this target spells it: with `--tool`
+    /// when a mapped tool is open (and `--target` when the cockpit was
+    /// started on another folder), so it runs as printed.
+    pub fn hint(&self, cmd: &str) -> String {
+        harness_core::runtime_view::command_line_for(cmd, &self.ledger_rel())
+    }
+
     /// Read the ledger of the target `--target <target> [--tool <tool>]`
     /// names, either form.
     pub fn open(target: &Path, tool: Option<&str>) -> Result<Snapshot, Error> {
@@ -259,7 +266,7 @@ impl Snapshot {
         let facts = match Facts::load(&ledger.facts_path()) {
             Ok(f) => f,
             Err(e) if e.is_not_found() => {
-                snapshot.note = Some("no facts — run `harness scan`".into());
+                snapshot.note = Some(format!("no facts — run `{}`", snapshot.hint("scan")));
                 return Ok(snapshot);
             }
             Err(e) => return Err(e),
@@ -292,7 +299,7 @@ impl Snapshot {
                     snapshot.perf.program_now =
                         Some(harness_core::features::program_digest_now(&ctx, &facts));
                 }
-                snapshot.note = Some(NO_PLAN.into());
+                snapshot.note = Some(no_plan(&snapshot.ledger_rel()));
                 snapshot.facts = Some(facts);
                 return Ok(snapshot);
             }
@@ -332,8 +339,14 @@ impl Snapshot {
     }
 }
 
-/// [`Snapshot::note`] when the plan file does not exist.
-pub const NO_PLAN: &str = "no plan — run `harness plan`";
+/// [`Snapshot::note`] when the plan file does not exist, for the ledger at
+/// `ledger_rel`: the command spelled for its tool.
+pub fn no_plan(ledger_rel: &str) -> String {
+    format!(
+        "no plan — run `{}`",
+        harness_core::runtime_view::command_line_for("plan", ledger_rel)
+    )
+}
 
 /// The binding of inputs that could not be read: no record carries it.
 const UNREADABLE: &str = "blake3:unreadable";

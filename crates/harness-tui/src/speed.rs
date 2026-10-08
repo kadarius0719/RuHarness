@@ -123,7 +123,7 @@ pub struct Advice {
 /// crate —; or, for code the cockpit did not record, commit, edit, verify.
 /// Each act named changes the crate perf measures (the unit's verified
 /// crate). Without a provider Modify is greyed, in the cockpit's own words.
-pub fn change_words(unit: &UnitView, has_provider: bool) -> String {
+pub fn change_words(unit: &UnitView, has_provider: bool, ledger_rel: &str) -> String {
     let id = &unit.unit.id;
     let model_made = match &unit.provenance {
         ProvenanceView::Pipeline(a) | ProvenanceView::Steered(a) | ProvenanceView::Chat(a) => {
@@ -165,8 +165,9 @@ pub fn change_words(unit: &UnitView, has_provider: bool) -> String {
     }
     format!(
         "Commit the unit's crate first (git) — replacing it deletes it; edit it in your editor, \
-         then run harness verify {id} in a terminal (the cockpit cannot Re-check code it did not \
-         record), then measure again"
+         then run {} in a terminal (the cockpit cannot Re-check code it did not record), then \
+         measure again",
+        harness_core::runtime_view::command_line_for(&format!("verify {id}"), ledger_rel)
     )
 }
 
@@ -327,7 +328,7 @@ impl SpeedModel {
             ));
         }
         if advice.next.is_some() {
-            advice.change = Some(change_words(unit, has_provider));
+            advice.change = Some(change_words(unit, has_provider, &self.ledger_rel));
         }
         advice
     }
@@ -390,7 +391,12 @@ impl SpeedModel {
                     "to find which unit, measure each alone: {}",
                     missing
                         .iter()
-                        .map(|id| format!("harness perf run --unit {id} --workload {}", r.workload))
+                        .map(|id| {
+                            harness_core::runtime_view::command_line_for(
+                                &format!("perf run --unit {id} --workload {}", r.workload),
+                                &self.ledger_rel,
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join("; ")
                 )
@@ -693,6 +699,8 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
     // skipped (`None`) — never "left out now" for every held unit — and the
     // header says they are not checked, with the C.
     let units_known = snapshot.facts_state.is_some();
+    let ledger_rel = snapshot.ledger_rel();
+    let tool = harness_core::runtime_view::tool_of(&ledger_rel).map(str::to_string);
     model.workloads = workloads
         .workloads
         .iter()
@@ -707,6 +715,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                     side,
                     workload: &row.workload,
                     input: input.as_deref(),
+                    tool: tool.as_deref(),
                 },
             );
             let today_workload = match perf.inputs.get(&row.workload) {
@@ -940,12 +949,14 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         if perf.program_now.is_none() {
             // The program as it stands' rows also lose the rules about the
             // units they hold (`units_known`): said in the same line.
+            let scan = snapshot.hint("scan");
             model.header.push(if model.program_rows.is_empty() {
-                "the C is not checked here: no facts — run harness scan".into()
+                format!("the C is not checked here: no facts — run {scan}")
             } else {
-                "the C and the units the program as it stands holds are not checked here: no \
-                 facts — run harness scan"
-                    .into()
+                format!(
+                    "the C and the units the program as it stands holds are not checked here: no \
+                     facts — run {scan}"
+                )
             });
         }
     }

@@ -52,7 +52,20 @@ fn harness_env(args: &[&str], stdin: Option<&[u8]>, env: &[(&str, &OsStr)]) -> R
     // Every child inherits the test process's own adoption file, never the
     // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
     harness_core::adopt::testing::adoption_file();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
+    // Run from inside the target, as a person in the project would: the
+    // hints then need no `--target` (tests/adopt.rs covers the hint run
+    // from elsewhere), and these tests pin perf's own words.
+    let inside = args
+        .iter()
+        .position(|a| *a == "--target")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir());
+    let mut command = Command::new(env!("CARGO_BIN_EXE_harness"));
+    if let Some(dir) = inside {
+        command.current_dir(dir);
+    }
+    let mut child = command
         .args(args)
         .envs(env.iter().copied())
         .stdin(if stdin.is_some() {
@@ -1055,8 +1068,10 @@ fn show_reads_only_and_refuses_linked_folders() {
     let target = t.to_str().unwrap();
     let r = harness(&["perf", "show", "--target", target, "--no-check"], None);
     assert_eq!(r.code, 0, "{}", r.stderr);
-    assert!(
-        r.stdout.contains("perf: nothing measured yet"),
+    // No workloads file: the line says to write one; no "run perf run"
+    // after it, which would refuse for the same reason.
+    assert_eq!(
+        r.stdout, "perf: write your workloads file first — harness perf init gives a starter\n",
         "{}",
         r.stdout
     );

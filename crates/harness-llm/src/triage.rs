@@ -97,10 +97,11 @@ pub(crate) fn is_clean_relative_path(p: &str) -> bool {
 /// `category` and `severity` match `^[a-z0-9-]+$`; `file` is a clean
 /// relative path (no `..`, not rooted, no control characters). Any
 /// violation refuses the run — regenerate with `harness detect`.
-fn validate_findings(findings: &[Finding]) -> Result<(), Error> {
+fn validate_findings(findings: &[Finding], tool: Option<&str>) -> Result<(), Error> {
     let refuse = |what: String| {
         Error::Invariant(format!(
-            "findings.jsonl is not well-formed: {what} — regenerate with `harness detect`"
+            "findings.jsonl is not well-formed: {what} — regenerate with `{}`",
+            harness_core::runtime_view::command_line("detect", tool)
         ))
     };
     let mut ids: BTreeSet<&str> = BTreeSet::new();
@@ -296,7 +297,7 @@ fn owning_unit(file: &str, plan: &Plan) -> String {
 
 /// Refuse when any finding's `file_hash` no longer matches the tree
 /// (defense in depth — the CLI pre-checks the same thing).
-fn check_freshness(root: &Path, findings: &[Finding]) -> Result<(), Error> {
+fn check_freshness(root: &Path, findings: &[Finding], tool: Option<&str>) -> Result<(), Error> {
     let mut cache: BTreeMap<&str, String> = BTreeMap::new();
     for f in findings {
         if !cache.contains_key(f.file.as_str()) {
@@ -306,8 +307,10 @@ fn check_freshness(root: &Path, findings: &[Finding]) -> Result<(), Error> {
         let current = &cache[f.file.as_str()];
         if *current != f.file_hash {
             return Err(Error::Invariant(format!(
-                "findings are stale: {} changed since detect (finding {}) — run `harness detect`",
-                f.file, f.id
+                "findings are stale: {} changed since detect (finding {}) — run `{}`",
+                f.file,
+                f.id,
+                harness_core::runtime_view::command_line("detect", tool)
             )));
         }
     }
@@ -612,8 +615,8 @@ pub fn run_triage(
             usage: Vec::new(),
         });
     }
-    validate_findings(&findings.findings)?;
-    check_freshness(&target.root, &findings.findings)?;
+    validate_findings(&findings.findings, target.tool.as_deref())?;
+    check_freshness(&target.root, &findings.findings, target.tool.as_deref())?;
 
     // Live providers get traces recorded and a validation retry;
     // replay/external are deterministic, no retry.
@@ -1463,12 +1466,12 @@ files = ["src/unit.c"]
     #[test]
     fn finding_shape_rules() {
         let (_, _, _, findings, _) = fixture("shape");
-        validate_findings(&findings.findings).unwrap();
+        validate_findings(&findings.findings, None).unwrap();
         let base = findings.findings[0].clone();
         let with = |mutate: fn(&mut Finding)| {
             let mut f = base.clone();
             mutate(&mut f);
-            validate_findings(std::slice::from_ref(&f))
+            validate_findings(std::slice::from_ref(&f), None)
                 .unwrap_err()
                 .to_string()
         };
@@ -1491,14 +1494,22 @@ files = ["src/unit.c"]
         let long = with(|f| f.category = "X".repeat(500));
         assert!(long.contains("…") && long.len() < 300, "{long}");
         // Duplicates within the file are refused.
-        let err = validate_findings(&[base.clone(), base.clone()])
+        let err = validate_findings(&[base.clone(), base.clone()], None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("duplicate finding id"), "{err}");
+        // On a mapped tool the command to run carries its `--tool`.
+        let err = validate_findings(&[base.clone(), base.clone()], Some("t-lzg"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.ends_with("regenerate with `harness detect --tool t-lzg`"),
+            "{err}"
+        );
         // Legit shapes pass: dotted file names, nested dirs, `.` components.
         let mut ok = base.clone();
         ok.file = "src/./sub-dir/file.name.c".into();
-        validate_findings(std::slice::from_ref(&ok)).unwrap();
+        validate_findings(std::slice::from_ref(&ok), None).unwrap();
     }
 
     /// The single batch + request + harness hashes for a fixture.

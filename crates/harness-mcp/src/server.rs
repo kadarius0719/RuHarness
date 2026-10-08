@@ -395,13 +395,26 @@ impl<W: Write> Server<W> {
     /// is not the person; docs/PROJECT-MAP-DESIGN.md §3.7) — then the size
     /// preflight.
     fn preflight(&self, target: &Path) -> Result<(), Refusal> {
-        harness_core::adopt::check(target).map_err(|e| Refusal {
-            kind: if matches!(e, harness_core::Error::NotAdopted { .. }) {
-                "not-adopted"
-            } else {
-                "unreadable"
+        harness_core::adopt::check(target).map_err(|e| match &e {
+            harness_core::Error::NotAdopted {
+                root,
+                units,
+                verified,
+            } => Refusal {
+                kind: "not-adopted",
+                // The server's own tool spelled in, so the person's command
+                // runs as printed in a project with several tools.
+                message: harness_core::adopt::agent_refusal(
+                    root,
+                    *units,
+                    *verified,
+                    self.cfg.tool_for(target),
+                ),
             },
-            message: e.words_for(harness_core::adopt::Way::Agent),
+            _ => Refusal {
+                kind: "unreadable",
+                message: e.words_for(harness_core::adopt::Way::Agent),
+            },
         })?;
         policy::preflight_tool(target, self.cfg.tool_for(target)).map_err(|message| Refusal {
             kind: "unreadable",
@@ -1341,6 +1354,22 @@ mod tests {
                 "{tool}: {r}"
             );
         }
+        // A server opened on a tool spells its `--tool` in the person's
+        // command, so it runs as printed in a project with several tools.
+        let mut cfg = config(PathBuf::from("/bin/sh"), &["external"]);
+        cfg.target = t.canonicalize().unwrap();
+        cfg.tool = Some("t-lzg".into());
+        let mut s = Server::new(cfg, Vec::new(), ChildSlot::default(), Gate::default());
+        let r = call(&mut s, 2, "harness_status", json!({}));
+        let text = structured(&r)["error"]["message"]["text"].to_string();
+        assert!(
+            text.contains(&format!(
+                "(`harness state status --adopt --target {} --tool t-lzg`, or the cockpit's \
+                 question)",
+                t.canonicalize().unwrap().display()
+            )),
+            "{r}"
+        );
         // Still refused: nothing was adopted, the foreign token kept.
         assert!(harness_core::adopt::check(&t).is_err());
         assert_eq!(

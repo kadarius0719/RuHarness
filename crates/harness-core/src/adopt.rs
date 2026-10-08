@@ -2,8 +2,10 @@
 //!
 //! A download can ship a ready-made `migration/` — green verdicts, a promoted
 //! crate with a build script, a `target/` folder. Nothing inside the project
-//! can prove who made it, so trust is a per-computer decision kept OUTSIDE
-//! the project, in the **adoption file**: `$RUHARNESS_ADOPTED` when set, else
+//! can prove who made it, so trust is decided once per checkout (each folder
+//! on this computer, by its canonical path: a second worktree of the same
+//! project is asked again) and kept OUTSIDE the project, in the **adoption
+//! file**: `$RUHARNESS_ADOPTED` when set, else
 //! `~/Library/Application Support/ruharness/adopted.toml` (the same spelling
 //! on Linux). It lists the canonical roots whose ledgers the harness created
 //! on this computer and the roots the person adopted, each with a random
@@ -19,9 +21,11 @@
 //! adoption, and one that is not the harness's at all is refused as the
 //! project's own first. [`adopt`] and [`adopt_suite`] are the person's
 //! `--adopt` (a project's adoption always writes a fresh token);
-//! [`record_created`] is the first command that makes a ledger. The ledger
-//! alone still holds everything needed to resume; only the trust question is
-//! per computer.
+//! [`record_created`] is the first command that makes a ledger. An adoption
+//! records its time; a verdict written before it is shown as made
+//! elsewhere until `harness verify` runs it here ([`made_before_adoption`]).
+//! The ledger alone still holds everything needed to resume; only the trust
+//! question is asked once per checkout.
 
 use crate::error::Error;
 use crate::ledger::{read_regular, write_atomic, MIGRATION_DIR};
@@ -105,6 +109,12 @@ struct Entry {
     /// states it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     shipped_config: Option<String>,
+    /// When the person adopted it, in milliseconds since 1970 (UTC): a
+    /// verdict written before this was made elsewhere ([`adopted_at`]).
+    /// Absent for a root made here, and for an adoption recorded before the
+    /// time was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adopted_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,8 +152,10 @@ pub struct Adoption {
 }
 
 impl Adoption {
-    /// The lines a command prints for it, in plain words.
-    pub fn describe(&self) -> Vec<String> {
+    /// The lines a command prints for it, in plain words; `tool` is the
+    /// mapped tool the command opens, so the commands it names run as
+    /// printed.
+    pub fn describe(&self, tool: Option<&str>) -> Vec<String> {
         let root = self.root.display();
         if !self.had_ledger {
             return vec![format!(
@@ -159,13 +171,23 @@ impl Adoption {
             "adopt: {root} is now trusted on this computer ({})",
             counted(self.units, self.verified)
         )];
-        // Only when something was deleted or counted: a folder of
-        // hand-written files has no verdicts to call claims.
-        if !self.deleted.is_empty() || self.units > 0 {
+        // Each half only when it is true: deletions when something was
+        // deleted, claims when something is verified.
+        if !self.deleted.is_empty() {
+            let n = self.deleted.len();
+            let s = if n == 1 { "" } else { "s" };
             lines.push(format!(
-                "adopt: deleted {} build folder(s) made elsewhere; the verdicts are claims made \
-                 elsewhere until `harness verify` runs them here",
-                self.deleted.len()
+                "adopt: deleted {n} build folder{s} made elsewhere; the harness builds what it \
+                 needs again here"
+            ));
+        }
+        if self.verified > 0 {
+            let (n, s) = (self.verified, if self.verified == 1 { "" } else { "s" });
+            lines.push(format!(
+                "adopt: {n} verified unit{s} came with it, marked \"made elsewhere\" until you run \
+                 `{}` here (`{}` lists them)",
+                crate::runtime_view::command_line("verify <unit>", tool),
+                crate::runtime_view::command_line("state status", tool),
             ));
         }
         lines
@@ -193,12 +215,25 @@ pub fn refusal(root: &Path, units: usize, verified: usize, way: Way) -> String {
         Way::Cockpit => format!(
             "{head}: to trust them here, start the cockpit in a terminal and answer its question"
         ),
-        Way::Agent => format!(
-            "{head}: ask the person to adopt it (`harness state status --adopt --target {}`, or \
-             the cockpit's question); an agent never adopts",
-            root.display()
-        ),
+        Way::Agent => agent_refusal(root, units, verified, None),
     }
+}
+
+/// The refusal an agent (harness-mcp) meets: ask the person, with the
+/// command spelled for the server's own `--tool` so it runs as printed.
+pub fn agent_refusal(root: &Path, units: usize, verified: usize, tool: Option<&str>) -> String {
+    let mut command = format!(
+        "harness state status --adopt --target {}",
+        crate::runtime_view::shell_quote(&root.display().to_string())
+    );
+    if let Some(id) = tool {
+        command.push_str(&format!(" --tool {id}"));
+    }
+    format!(
+        "{}: ask the person to adopt it (`{command}`, or the cockpit's question); an agent never \
+         adopts",
+        made_elsewhere(root, units, verified)
+    )
 }
 
 /// The refusal's first half: the folder and what its ledger claims.
@@ -662,6 +697,7 @@ fn upsert(file: &mut AdoptedFile, root: &Path, token: String, scope: Scope, how:
             (Scope::Project, How::Created) => map_config_hash(root),
             _ => None,
         },
+        adopted_ms: None,
     });
     file.roots.sort_by(|a, b| a.path.cmp(&b.path));
 }
@@ -712,6 +748,53 @@ pub fn shipped_config_hash(root: &Path) -> Option<String> {
         return None;
     }
     map_config_hash(&root)
+}
+
+/// Milliseconds since 1970 now (0 on a clock set before 1970).
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// When the person adopted the root that covers `root` (the project
+/// itself, or a benchmark suite above it), as recorded in the adoption
+/// file; `None` when it was made here, is not listed with the token it
+/// holds, or was adopted before the time was kept. A verdict written before
+/// this time was made elsewhere until `harness verify` runs it here.
+pub fn adopted_at(root: &Path) -> Option<std::time::SystemTime> {
+    let root = root.canonicalize().ok()?;
+    let file = read_adopted(&adoption_file().ok()?).ok()?;
+    let entry = root.ancestors().find_map(|a| {
+        let scope = if a == root {
+            Scope::Project
+        } else {
+            Scope::Suite
+        };
+        listed(&file, a, scope)
+            .then(|| file.roots.iter().find(|e| e.path == a && e.scope == scope))
+            .flatten()
+    })?;
+    let ms = entry.adopted_ms.filter(|_| entry.how == How::Adopted)?;
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms))
+}
+
+/// Was the verdict file at `verdict` written before the person adopted
+/// `root` ([`adopted_at`])? A verdict records no time of its own (it binds
+/// content, never timestamps: docs/SCHEMAS.md "Verdicts"), so its file's
+/// modification time stands in. That is the weakness: a tool that sets
+/// times (`touch`, an unpacker that restores none) can make a verdict made
+/// elsewhere look made here, and a clock set back can do the opposite; a
+/// copy or a checkout gives it the time of the copy, which comes before
+/// the adoption, as it should.
+pub fn made_before_adoption(root: &Path, verdict: &Path) -> bool {
+    let Some(adopted) = adopted_at(root) else {
+        return false;
+    };
+    std::fs::symlink_metadata(verdict)
+        .and_then(|m| m.modified())
+        .is_ok_and(|written| written < adopted)
 }
 
 /// Record that a command on this computer created `root`'s first ledger
@@ -817,6 +900,11 @@ fn adopt_inner(root: &Path, scope: Scope, delete: bool) -> Result<Adoption, Erro
         }
         let token = token_for(&root, scope)?;
         upsert(file, &root, token, scope, How::Adopted);
+        // The adoption's time: every verdict written before it is shown as
+        // made elsewhere until `verify` runs it here.
+        if let Some(entry) = file.roots.iter_mut().find(|e| e.path == root) {
+            entry.adopted_ms = Some(now_ms());
+        }
         adoption.newly = true;
         Ok(())
     })?;
@@ -1062,6 +1150,15 @@ mod tests {
             )),
             "{agent}"
         );
+        // The server's tool is spelled, so the command runs as printed in a
+        // project with several tools.
+        assert!(
+            agent_refusal(&root, units, verified, Some("t-lzg")).ends_with(&format!(
+                "(`harness state status --adopt --target {} --tool t-lzg`, or the cockpit's \
+             question); an agent never adopts",
+                root.display()
+            ))
+        );
         // A folder with no ledger has nothing to trust.
         assert!(check(&tmp("empty")).is_ok());
     }
@@ -1219,7 +1316,10 @@ mod tests {
         std::fs::write(copy.join("migration/map/config.toml"), "").unwrap();
         let done = adopt(&copy).unwrap();
         assert!(!done.newly && !done.had_ledger);
-        assert!(!done.describe().iter().any(|l| l.contains("claims")));
+        assert!(!done
+            .describe(None)
+            .iter()
+            .any(|l| l.contains("verified unit")));
         // An empty migration/ holds none either.
         let empty = tmp("empty-ledger");
         std::fs::create_dir_all(empty.join("migration")).unwrap();
@@ -1255,18 +1355,79 @@ mod tests {
         std::fs::create_dir_all(root.join("migration")).unwrap();
         std::fs::write(root.join("migration/001_init.sql"), "create table").unwrap();
         assert!(matches!(check(&root), Err(Error::ForeignMigration { .. })));
-        // A "claims" line only when something was deleted or counted.
+    }
+
+    /// The adoption line speaks of deletions only when something was
+    /// deleted, and of verified units only when some came with it; the
+    /// commands it names carry the tool.
+    #[test]
+    fn the_adoption_line_says_only_what_is_true() {
         let quiet = Adoption {
-            root: root.clone(),
+            root: PathBuf::from("/p"),
             newly: true,
             had_ledger: true,
             deleted: Vec::new(),
-            units: 0,
+            units: 4,
             verified: 0,
         };
-        assert_eq!(quiet.describe().len(), 1);
-        let counted = Adoption { units: 1, ..quiet };
-        assert_eq!(counted.describe().len(), 2);
+        assert_eq!(
+            quiet.describe(None),
+            ["adopt: /p is now trusted on this computer (4 units, 0 verified)"]
+        );
+        let deleted = Adoption {
+            deleted: vec![PathBuf::from("/p/migration/build")],
+            ..quiet.clone()
+        };
+        assert_eq!(
+            deleted.describe(None)[1],
+            "adopt: deleted 1 build folder made elsewhere; the harness builds what it needs \
+             again here"
+        );
+        assert_eq!(deleted.describe(None).len(), 2);
+        let verified = Adoption {
+            verified: 2,
+            ..quiet.clone()
+        };
+        assert_eq!(
+            verified.describe(Some("t-lzg")),
+            [
+                "adopt: /p is now trusted on this computer (4 units, 2 verified)".to_string(),
+                "adopt: 2 verified units came with it, marked \"made elsewhere\" until you run \
+                 `harness verify <unit> --tool t-lzg` here (`harness state status --tool t-lzg` \
+                 lists them)"
+                    .to_string(),
+            ]
+        );
+    }
+
+    /// An adoption records its time; a verdict file written before it is
+    /// made elsewhere, one written after it (by `verify` here) is not, and
+    /// a root made here has no adoption time at all.
+    #[test]
+    fn a_verdict_older_than_the_adoption_is_made_elsewhere() {
+        testing::adoption_file();
+        let root = tmp("made-elsewhere");
+        shipped(&root);
+        let verdict = root.join("migration/units/u1/oracle-latest.json");
+        std::fs::create_dir_all(verdict.parent().unwrap()).unwrap();
+        std::fs::write(&verdict, "{}").unwrap();
+        assert_eq!(adopted_at(&root), None, "not adopted yet");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        adopt(&root).unwrap();
+        assert!(adopted_at(&root).is_some());
+        assert!(made_before_adoption(&root, &verdict));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&verdict, "{}").unwrap();
+        assert!(!made_before_adoption(&root, &verdict), "verified here");
+        // A ledger made here: no time, nothing made elsewhere.
+        let here = tmp("made-here");
+        std::fs::create_dir_all(here.join("migration/units/u1")).unwrap();
+        let old = here.join("migration/units/u1/oracle-latest.json");
+        std::fs::write(&old, "{}").unwrap();
+        std::fs::write(here.join("migration/facts.jsonl"), "").unwrap();
+        record_created(&here, Scope::Project).unwrap();
+        assert_eq!(adopted_at(&here), None);
+        assert!(!made_before_adoption(&here, &old));
     }
 
     /// Adopting deletes each mapped tool's build folders too: its `build/`,
@@ -1330,7 +1491,12 @@ mod tests {
         let err = adopt(&root).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "this project has a migration/ folder of its own; move or rename it, or map a copy"
+            format!(
+                "{}/migration is the project's own folder, and the harness needs that name for \
+                 its ledger: rename the folder, or run the harness on a copy of the project with \
+                 it renamed",
+                root.display()
+            )
         );
         assert!(root.join("migration/build").exists(), "nothing deleted");
         // A folder with only fixed names but none of the harness's markers.

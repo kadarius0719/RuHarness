@@ -1736,8 +1736,9 @@ pub(crate) fn load_facts(target: &TargetContext) -> Result<Facts, Error> {
     let facts_path = Ledger::of(target).facts_path();
     if !facts_path.exists() {
         return Err(Error::Invariant(format!(
-            "facts file missing at {}; run `harness scan` first",
-            facts_path.display()
+            "facts file missing at {}; run `{}` first",
+            facts_path.display(),
+            harness_core::runtime_view::command_line("scan", target.tool.as_deref())
         )));
     }
     Facts::load(&facts_path)

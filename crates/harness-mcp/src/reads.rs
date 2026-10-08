@@ -173,6 +173,11 @@ fn report(r: &UnitReport) -> Value {
         };
         obj.insert("features".into(), value);
     }
+    // A verdict written before the person adopted the folder: made
+    // elsewhere until `verify` runs it here (absent otherwise).
+    if let (true, Some(obj)) = (r.made_elsewhere, out.as_object_mut()) {
+        obj.insert("made_elsewhere".into(), json!(true));
+    }
     out
 }
 
@@ -872,6 +877,7 @@ mod tests {
             promotion_interrupted: None,
             attempts: vec![],
             features: None,
+            made_elsewhere: false,
         };
         assert!(report(&r).get("features").is_none());
         r.features = Some(Coverage::Current);
@@ -886,6 +892,9 @@ mod tests {
             v["features"][1].get("untrusted").is_some(),
             "an unknown reason is fenced, never passed on: {v}"
         );
+        assert!(v.get("made_elsewhere").is_none());
+        r.made_elsewhere = true;
+        assert_eq!(report(&r)["made_elsewhere"], json!(true));
     }
 
     /// `harness_request`'s pages (docs/CHAT-PANE-DESIGN.md §4.4): each fits

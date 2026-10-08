@@ -960,6 +960,9 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Every hint the cockpit shows carries `--target` when the person
+    // started it on another folder.
+    harness_core::runtime_view::set_hint_target(&args.target);
     let target = match args.target.canonicalize() {
         Ok(t) => t,
         Err(e) => {
@@ -1003,9 +1006,8 @@ fn main() -> ExitCode {
         } = &e
         else {
             match e {
-                harness_core::Error::ForeignMigration { .. } => {
-                    eprintln!("harness-tui: {}: {e}", target.display())
-                }
+                // The sentence names the folder itself.
+                harness_core::Error::ForeignMigration { .. } => eprintln!("harness-tui: {e}"),
                 _ => eprintln!("harness-tui: {} is unreadable: {e}", target.display()),
             }
             return ExitCode::from(1);
@@ -1019,6 +1021,7 @@ fn main() -> ExitCode {
         }
         let asked = harness_tui::adoption::ask(
             &target,
+            tool.as_deref(),
             &harness_core::adopt::made_elsewhere(root, *units, *verified),
             &mut std::io::stdin().lock(),
             &mut std::io::stderr(),
@@ -1156,11 +1159,11 @@ fn main() -> ExitCode {
     finish_chats(&mut app);
     announce_kept_edits();
     if app.running && app.run.as_ref().is_some_and(|r| r.act == Act::HandEdit) {
-        say(
+        say(format!(
             "harness-tui: the hand-edit override is still running and may yet record the latest \
-             of these (`harness state status` shows it)"
-                .into(),
-        );
+             of these (`{}` shows it)",
+            app.snapshot.hint("state status")
+        ));
     }
     match result {
         Ok(()) => ExitCode::SUCCESS,

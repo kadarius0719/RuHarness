@@ -344,7 +344,7 @@ mod tests {
         let text = "schema_version = 1\n[[feature]]\nid = \"f\"\nname = \"F\"\n\
                     [[scenario]]\nfeature = \"f\"\nid = \"a\"\nargs = [\"x\"]\n\
                     [[scenario]]\nfeature = \"f\"\nid = \"b\"\nargs = [\"y\"]\n";
-        let parsed = features::parse(text, Path::new("features.toml")).unwrap();
+        let parsed = features::parse(text, Path::new("features.toml"), "migration").unwrap();
         let snapshot = FeatureSnapshot::Valid {
             digest: features::features_digest(&parsed, &target.config),
             features: parsed,

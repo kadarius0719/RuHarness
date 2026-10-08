@@ -56,6 +56,9 @@ pub struct Context<'a> {
     pub workload: &'a str,
     /// The workload's input as written, when it has one.
     pub input: Option<&'a str>,
+    /// The mapped tool open, so the commands the words name run as
+    /// printed (`None` for a folder-form target).
+    pub tool: Option<&'a str>,
 }
 
 /// Every value [`RowWords::answer`] takes — the MCP's closed set: the time
@@ -659,7 +662,11 @@ pub fn set_up_words(o: &str, setup: Option<&SetupFacts>, cx: &Context) -> String
             Some("rust-changed") => format!("{unit}'s Rust changed since verify — Re-check it"),
             Some("accept-interrupted") => format!(
                 "{}; Measure does not",
-                super::accept_interrupted_words(s.attempt.as_deref().unwrap_or("legacy"), &unit)
+                super::accept_interrupted_words(
+                    s.attempt.as_deref().unwrap_or("legacy"),
+                    &unit,
+                    cx.tool
+                )
             ),
             _ => format!("{unit} is not verified fresh today — Re-check it"),
         },
@@ -681,7 +688,8 @@ pub fn set_up_words(o: &str, setup: Option<&SetupFacts>, cx: &Context) -> String
                 ),
                 Some("lto") => format!(
                     "{first} is built with lto — it cannot be linked beside another Rust unit; \
-                     set lto = false in its Cargo.toml and run harness verify {first}"
+                     set lto = false in its Cargo.toml and run {}",
+                    crate::runtime_view::command_line(&format!("verify {first}"), cx.tool)
                 ),
                 Some("two-lto") => format!(
                     "two units are built with lto ({}) — set lto = false in their Cargo.toml \
@@ -713,8 +721,9 @@ pub fn set_up_words(o: &str, setup: Option<&SetupFacts>, cx: &Context) -> String
             let first = unwinding.first().copied().unwrap_or("the unwinding unit");
             format!(
                 "{} — the program as it stands would silently use one. Add [profile.release] \
-                 panic = \"abort\" to {first}'s Cargo.toml, then run harness verify {first}",
-                found.join("; ")
+                 panic = \"abort\" to {first}'s Cargo.toml, then run {}",
+                found.join("; "),
+                crate::runtime_view::command_line(&format!("verify {first}"), cx.tool)
             )
         }
         "input-unusable" => {
@@ -1495,6 +1504,7 @@ mod tests {
         side: Side::Unit("u001"),
         workload: "big-text",
         input: Some("bench/big.txt"),
+        tool: None,
     };
 
     fn run(cycles: f64) -> Run {
@@ -3020,6 +3030,25 @@ mod tests {
             })
         )
         .ends_with("set lto = false in its Cargo.toml and run harness verify u002"));
+        // On a mapped tool every command named carries its `--tool`.
+        let on_tool = Context {
+            tool: Some("t-lzg"),
+            ..UNIT
+        };
+        let lto = SetupFacts {
+            cause: Some("lto".into()),
+            units: Some(vec!["u002".into()]),
+            ..SetupFacts::default()
+        };
+        assert!(set_up_words("does-not-link", Some(&lto), &on_tool)
+            .ends_with("run harness verify u002 --tool t-lzg"));
+        let interrupted = SetupFacts {
+            reason: Some("accept-interrupted".into()),
+            attempt: Some("a-1".into()),
+            ..SetupFacts::default()
+        };
+        assert!(set_up_words("not-verified", Some(&interrupted), &on_tool)
+            .contains("(or run harness verify u001 --tool t-lzg)"));
         let mixed = words(
             "mixed-panic",
             s(SetupFacts {
@@ -3375,6 +3404,7 @@ mod tests {
             side: Side::C,
             workload: "big-text",
             input: None,
+            tool: None,
         };
         assert_eq!(
             words(&r, &cx).headline,

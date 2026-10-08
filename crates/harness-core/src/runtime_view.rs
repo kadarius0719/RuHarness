@@ -39,13 +39,71 @@ impl BlockTarget<'_> {
 }
 
 /// A `harness` command line as a next-step hint spells it: `harness <cmd>`,
-/// with `--tool <id>` after it when a mapped tool is open — the one
-/// spelling every hint and the generated block use, so a hint run as
-/// written opens the same tool (an agent copies commands literally).
+/// with `--tool <id>` after it when a mapped tool is open, and `--target
+/// <folder>` when the process that prints it was started on a folder other
+/// than the current one ([`set_hint_target`]) — the one spelling every hint
+/// uses, so a hint run as written, from where the person stands, opens the
+/// same target and the same tool (an agent copies commands literally).
 pub fn command_line(cmd: &str, tool: Option<&str>) -> String {
+    let mut line = command_in_project(cmd, tool);
+    if let Some(target) = hint_target() {
+        line.push_str(" --target ");
+        line.push_str(&target);
+    }
+    line
+}
+
+/// [`command_line`] for a hint whose ledger folder is `ledger_rel`
+/// (root-relative: `migration`, or `migration/tools/<id>` for a mapped
+/// tool): the tool is read from the path ([`tool_of`]).
+pub fn command_line_for(cmd: &str, ledger_rel: &str) -> String {
+    command_line(cmd, tool_of(ledger_rel))
+}
+
+/// A command as a file inside the project spells it (the generated block,
+/// `observations.md`): `harness <cmd>` with `--tool <id>`, never
+/// `--target`, since such a file is read from the project's own folder.
+pub fn command_in_project(cmd: &str, tool: Option<&str>) -> String {
     match tool {
         None => format!("harness {cmd}"),
         Some(id) => format!("harness {cmd} --tool {id}"),
+    }
+}
+
+/// The folder hints add as `--target` (already quoted for a shell), when
+/// the process was started on one other than the current folder.
+static HINT_TARGET: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Say which folder this process was started on, as the person gave it
+/// (`--target`): every later [`command_line`] adds `--target <it>` unless
+/// it is the current folder. Each binary calls it once at startup.
+pub fn set_hint_target(target: &std::path::Path) {
+    let here = std::env::current_dir()
+        .ok()
+        .and_then(|d| d.canonicalize().ok());
+    let same = target.as_os_str().is_empty()
+        || target == std::path::Path::new(".")
+        || (here.is_some() && target.canonicalize().ok() == here);
+    let given = (!same).then(|| shell_quote(&target.to_string_lossy()));
+    if let Ok(mut slot) = HINT_TARGET.write() {
+        *slot = given;
+    }
+}
+
+fn hint_target() -> Option<String> {
+    HINT_TARGET.read().ok().and_then(|t| t.clone())
+}
+
+/// `s` as one shell word: as it is when it holds only safe characters,
+/// else in single quotes.
+pub fn shell_quote(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
 
@@ -132,7 +190,7 @@ pub fn render_block_body(
         "state status",
         "review <finding>",
     ]
-    .map(|cmd| format!("`{}`", command_line(cmd, at.tool)))
+    .map(|cmd| format!("`{}`", command_in_project(cmd, at.tool)))
     .join(" · ");
     b.push_str(&format!("\nCommands: {commands} (all take `--target`).\n"));
     b.push_str(&format!("Read first: `{ledger}/plan.toml`, `{ledger}/observer/observations.md`, `{ledger}/DECISIONS.md`, `docs/SCHEMAS.md` (harness repo).\n"));

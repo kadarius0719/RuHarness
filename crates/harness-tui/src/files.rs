@@ -161,19 +161,28 @@ pub enum Cause {
     /// compare it with (deleted or unreadable): whose code it is cannot be
     /// told (review ENG-11).
     NoEvidence,
+    /// The verdict came with the folder: written before the person adopted
+    /// it, a claim made elsewhere until a Re-check runs it here
+    /// (docs/PROJECT-MAP-DESIGN.md §3.7).
+    MadeElsewhere {
+        /// The unit.
+        unit: String,
+    },
 }
 
 impl Cause {
-    /// The cause and its next step, in words.
-    pub fn words(&self) -> String {
+    /// The cause and its next step, in words; `ledger_rel` is the open
+    /// ledger (`migration`, or `migration/tools/<id>`), so the commands
+    /// named carry its tool.
+    pub fn words(&self, ledger_rel: &str) -> String {
+        let tool = harness_core::runtime_view::tool_of(ledger_rel);
         match self {
-            Cause::Contradiction => {
-                "its status and its verdict disagree — Re-check it (`harness state status` \
-                 explains)"
-                    .into()
-            }
+            Cause::Contradiction => format!(
+                "its status and its verdict disagree — Re-check it (`{}` explains)",
+                harness_core::runtime_view::command_line("state status", tool)
+            ),
             Cause::PromotionInterrupted { attempt, unit } => {
-                harness_core::perf::accept_interrupted_words(attempt, unit)
+                harness_core::perf::accept_interrupted_words(attempt, unit, tool)
             }
             Cause::SourceChanged => {
                 "its C changed since it was planned — scan, refresh the plan, then review its \
@@ -192,6 +201,11 @@ impl Cause {
                  (see Help)"
                     .into()
             }
+            Cause::MadeElsewhere { unit } => format!(
+                "its verdict was made elsewhere, before you adopted this folder — Re-check it \
+                 to make it here (or run {})",
+                harness_core::runtime_view::command_line(&format!("verify {unit}"), tool)
+            ),
         }
     }
 }
@@ -457,6 +471,13 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
     if !r.source_fresh {
         return UnitState::Attention(Cause::SourceChanged);
     }
+    // A verdict that came with an adopted folder is a claim until it is
+    // run here: said before anything it claims.
+    if present && r.made_elsewhere {
+        return UnitState::Attention(Cause::MadeElsewhere {
+            unit: unit.unit.id.clone(),
+        });
+    }
     if unit.crate_digest.is_some() && !known_code(unit) {
         return UnitState::Attention(if present {
             Cause::ChangedOutside
@@ -554,6 +575,18 @@ pub fn build(snapshot: &Snapshot, walk: &TreeWalk) -> Files {
                 FileState::NotInTool
             } else if stale.contains(path) {
                 FileState::Changed
+            } else if facts.is_none()
+                && path.ends_with(".h")
+                && snapshot
+                    .target
+                    .files()
+                    .is_some_and(|list| list.iter().all(|f| f.path != path))
+            {
+                // Before a file-list tool's first scan nothing says which
+                // headers its files reach: a header it does not list is
+                // shown neutrally, neither new nor outside, until the scan
+                // decides.
+                FileState::Header
             } else if !recorded.contains(path) {
                 FileState::New
             } else if let Some(u) = owner {
@@ -656,6 +689,35 @@ mod tests {
         assert_eq!(files.rollup("src/other").text(), "");
     }
 
+    /// Before a file-list tool's first scan nothing says which headers its
+    /// files reach: the headers it does not list are shown neutrally —
+    /// neither "not scanned yet" (counted as new) nor outside the tool —
+    /// and a `.c` it does not list is outside it already.
+    #[cfg(feature = "tui")]
+    #[test]
+    fn before_a_scan_a_tools_headers_are_shown_neutrally() {
+        use crate::testutil::{file_list_tool, LZG_TOOL};
+        let dir = file_list_tool("tree-unscanned");
+        let ledger = dir.0.join("migration/tools").join(LZG_TOOL);
+        std::fs::remove_file(ledger.join("facts.jsonl")).unwrap();
+        std::fs::remove_file(ledger.join("plan.toml")).unwrap();
+        let read = crate::load::read_tool(&dir.0, Some(LZG_TOOL)).expect("the tool reads");
+        assert!(read.snapshot.facts.is_none());
+        let files = build(&read.snapshot, &read.walk);
+        let state = |p: &str| files.file(p).unwrap_or_else(|| panic!("{p}")).state.clone();
+        for header in [
+            "src/include/lzg.h",
+            "src/include/unused.h",
+            "src/lib/internal.h",
+        ] {
+            assert_eq!(state(header), FileState::Header, "{header}");
+        }
+        assert_eq!(state("src/lib/encode.c"), FileState::New);
+        assert_eq!(state("src/other/decode.c"), FileState::NotInTool);
+        // Only the two listed files are new.
+        assert_eq!(files.rollup("").new, 2);
+    }
+
     /// The interrupted-Accept words are perf's, word for word
     /// (docs/PERF-DESIGN.md §3.2).
     #[test]
@@ -665,13 +727,24 @@ mod tests {
             unit: "u001".into(),
         };
         assert_eq!(
-            cause.words(),
+            cause.words("migration"),
             "an Accept of a-1234 was interrupted — Re-check u001 (or run harness verify u001) \
              to finish or undo it"
         );
         assert_eq!(
-            cause.words(),
-            harness_core::perf::accept_interrupted_words("a-1234", "u001")
+            cause.words("migration"),
+            harness_core::perf::accept_interrupted_words("a-1234", "u001", None)
+        );
+        // A mapped tool's commands carry its `--tool`.
+        assert_eq!(
+            cause.words("migration/tools/t-lzg"),
+            "an Accept of a-1234 was interrupted — Re-check u001 (or run harness verify u001 \
+             --tool t-lzg) to finish or undo it"
+        );
+        assert_eq!(
+            Cause::Contradiction.words("migration/tools/t-lzg"),
+            "its status and its verdict disagree — Re-check it (`harness state status --tool \
+             t-lzg` explains)"
         );
     }
 
@@ -779,6 +852,34 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// A verdict that came with an adopted folder is marked made elsewhere,
+    /// with the Re-check (and the command) that makes it here; once a
+    /// verdict is written here after the adoption, the mark is gone.
+    #[test]
+    fn an_adopted_verdict_is_made_elsewhere_until_it_is_run_here() {
+        let t = Copy::of(CASE, "made-elsewhere");
+        harness_core::adopt::testing::adoption_file();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        harness_core::adopt::adopt(&t.0).unwrap();
+        let (snap, files) = t.read();
+        let id = snap.units[0].unit.id.clone();
+        assert!(snap.units[0].report.made_elsewhere);
+        let cause = Cause::MadeElsewhere { unit: id.clone() };
+        assert_eq!(files.units[0].state, UnitState::Attention(cause.clone()));
+        assert_eq!(
+            cause.words("migration"),
+            format!(
+                "its verdict was made elsewhere, before you adopted this folder — Re-check it \
+                 to make it here (or run harness verify {id})"
+            )
+        );
+        // Written here, after the adoption: no longer a claim.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let verdict = Ledger::new(&t.0).verdict_latest_path(&id);
+        std::fs::write(&verdict, std::fs::read(&verdict).unwrap()).unwrap();
+        assert_eq!(t.unit(&id).state, UnitState::Migrated(Origin::Pipeline));
     }
 
     /// The tractor case: its unit is migrated by the pipeline; its file takes

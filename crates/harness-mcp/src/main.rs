@@ -83,6 +83,9 @@ fn main() {
             std::process::exit(e.code);
         }
     };
+    // Every command a note names carries `--target` when the server serves
+    // a folder other than the one it was started in.
+    harness_core::runtime_view::set_hint_target(&cfg.target);
     server::log(&format!(
         "serving {}{} (roots: {}; providers: {}; harness: {}{})",
         cfg.target.display(),
