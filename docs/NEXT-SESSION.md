@@ -44,7 +44,7 @@ change at the switch points below.
      zopfli and the tractor suite, SCHEMAS' fixed-names table and writer row);
    - `worktree-agent-ac521dd6b4231da16` — (a3) MERGED (14cdbe1): the `objsyms` extension (kinds, weakness, commons;
      the `$`-suffix and identifier helpers);
-   - `worktree-agent-ae9dd210f1e7a03c0` — (a4) the map sandbox profile renderer, the targetless
+   - `worktree-agent-ae9dd210f1e7a03c0` — (a4) MERGED (975b385; `build = false` NOT added to the harness manifest: it would move every recorded attempt's candidate digest and break replay — the file check before cargo covers it; decide later: re-record or a replay tolerance): the map sandbox profile renderer, the targetless
      runner extracted from harness-oracle bench.rs, the work folder and the children's `PATH` and
      `RUSTUP_TOOLCHAIN`/`RUSTUP_AUTO_INSTALL`, the unit-crate file check and `build = false` in the
      harness manifest (harness-oracle lib.rs/exec.rs/sandbox.rs, harness-llm migrate.rs).
