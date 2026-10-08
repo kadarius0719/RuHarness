@@ -2977,7 +2977,8 @@ would record otherwise"; what a prompt may read is confined the same way.
 reaches the verdict through the v2 program digest, so folder-form `inputs` stay untouched. The
 scanner's return value changed (`scan_reporting` gives `ScanNotes`), which no committed file
 records. Every folder-form target stayed byte-identical: the 101 committed facts, zopfli's findings,
-digests and verdict `inputs`.
+digests and verdict `inputs`. `bench check --suite targets/tractor --replay --jobs 6 --adopt` on 68649d2: 198
+reproduce (1 conformant, 197 drifted), 2 expected divergences, 0 problems, no regression.
 
 **Still to do in step (c)** (part 4, building): the CLI's remaining refusals lifted, the cockpit's
 read model, preflight and tree, harness-mcp's reads, the end-to-end test over a liblzg-shaped tool.

@@ -80,7 +80,7 @@ change at the switch points below.
    target (the tool's files under their real folders, the rest greyed "not part of this tool"),
    harness-mcp's reads, an end-to-end CLI test over the liblzg-shaped tool and a `verify` on the
    `t-pair` shape through the CLI. Merge when green, gates, then `bench check --suite targets/tractor
-   --replay --jobs 6 --adopt` (one replay on 68649d2 was started at the same time); then (b), (d),
+   --replay --jobs 6 --adopt` (the replay on 68649d2: 198 reproduce, 2 expected divergences, 0 problems, no regression); then (b), (d),
    (e), (f), (g); then the review of (a)+(c) together, fix passes, mutation checks.
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
