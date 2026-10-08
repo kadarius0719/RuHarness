@@ -485,3 +485,138 @@ Missed inside this lens:
 4. A symbol defined only in another program's file is reported "outside" (closure.py:67–69); §3.4 would guess a library for it. 0 hits here, but report it as its own gap.
 5. Two spike numbers do not reproduce: 29 of 33 (not 32); finding 5's better example is `tests/Makefile:36–37, :90–91, :130`.
 6. The thread configurations need no link flag on macOS: "a wrong configuration fails the link" never happens here (strengthens 3); guessing `-lpthread` is unnecessary on macOS, harmless.
+
+---
+
+# The triage (the main session, Fable at high effort, 2026-10-08)
+
+Rule: a finding is kept when its verifier confirmed it (or the confirmed part of a split one), with the
+verifier's corrections applied; the severity below is the verifier's. "Unwritten" findings (draft 0
+had not yet taken in the spike or the person's answers) are kept as design text. Where a suggested
+change overreached or contradicted a decision of the person (DECISIONS 2026-10-07), the decision
+wins and the mitigation the verifier named is used instead. Revision 1 of docs/PROJECT-MAP-DESIGN.md
+is the result; its §9 maps every change back to the findings by lens and number.
+
+## Kept, by lens
+
+**Facts (14 findings: 12 confirmed, 2 split).** 1 angle-bracket includes resolved among the candidate
+folders (the map's compile; the scanner's resolution for file-list targets, §3.7) — high. 2 a file
+gets only the folders its includes need, headers' own includes followed; an "ambiguous include" fact
+when two candidates hold the name; §6 narrowed. 3 the configuration (name, source, flags) on the
+map, `flags_from` with `stated:<name>` and `guessed`, every closure shaped by a guess marked, the
+full flag list; `defined_symbols`/`needed_symbols` — but NOT per-(file, flags) facts (contradicts
+the one-configuration decision). 4 definers of a duplicate are not added to the closure; sharing
+settled after the choice; the "alternative not kept" ending; collisions found over the finished
+closure; the `main`-file rule written (a need met only by another program's `main` file is its own
+fact). 5 entry kinds `main` | `fuzz` | `driver`. 6 symbols read with `objsyms`, not `nm` (security 5,
+integration 13); defined kinds named; weak + strong not a duplicate; commons merged; one `_` stripped
+on Mach-O; a weak undefined symbol is a need on Mach-O and optional on ELF (the verifier's
+correction). 7 the map compiles with the judge's own flags; outside symbols are facts of that
+compiler and configuration. 8 "reproducible from the files, the configuration and the recorded
+toolchain"; a toolchain field; the Linux line softened (and no sandbox → refused, security 3).
+9 one behaviour past a cap (file facts only, no closures, exit 1 by name); the caps stated; the
+confined walk with `.git` pruned and a `migration/` rule (security 2); the scanner keeps walk errors
+and non-UTF-8 files as facts. 10 `root_hash` defined; `inputs_hash`; sort keys; the byte-identical
+test. 11 a `.c` included by another file is a fact. 12 assembly and prebuilt files set aside with
+counts. 13 "the project links more than the closure" said, with the constructor exception. 14 the
+test list, minus the two the verifier struck. Missed items taken: the investigation's counts
+corrected (29 of 33; tests 11, examples 10, programs 1, ossfuzz 1; no benchmark case has a `main`);
+a file under two paths (an in-tree link) recorded once with its aliases; dot-folders listed as
+skipped; include facts come from every `#if` branch, symbol facts from one configuration — said;
+the `nm` letters; a file reached only through constructors or linker sections — named in §6;
+the facts schema is untouched by angle-bracket resolution for today's targets.
+
+**Security (11 findings, all confirmed; the ledger-inside-the-download decision KEPT with
+mitigations).** 1 one closed flag grammar for every source of flags, values never starting with `@`
+or `-`, absolute paths, `--` before the source, a deny list — high; the verifier's corrections
+(joined form is no defence; `-std`, `-pthread`, `-include` allowed in closed shapes). 2 cargo and
+rustup run from a harness-owned working folder outside the project with `--manifest-path`, the
+toolchain pinned (`RUSTUP_TOOLCHAIN`), a shipped `migration/` refused before the first map and
+adopted only by the person's explicit choice recorded in the ledger (not user-level state outside
+the project: cold resume), `accept` re-links, a promoted crate with a build script refused, §3.8
+rewritten — high. 3 no sandbox → the existing refusal. 4 closed reasons stored, the raw line shown
+once and scrubbed, the map's compile profile without the cargo and rustup homes. 5 `objsyms`,
+identifier-shaped names only, an entry point must be a function (the verifier's data-`main`
+finding). 6 ids derived from the entry path, lowercase, unique ignoring case; the model's name
+display-only; paths by exact membership. 7 newlines and tabs filtered in map lines; `--json`
+escapes every unsafe character (a pre-existing wrong claim in the CLI's comment and SCHEMAS — a
+code item of its own); events carry paths verbatim but never the model's names. 8 the export's rules
+(JSON with `<`-style escapes, `textContent`, a CSP, exclusive create) written into §3.11 as
+requirements for the export's own design. 9 a size cap per file, a total time budget, objects in a
+harness temp folder deleted when read; no `setrlimit` (every crate forbids unsafe) — said.
+10 objects named by index; the walk's link rule stated as it is; "included outside the root" per
+file. 11 a root that is or holds the home folder refused. Missed items taken: `rust-toolchain.toml`
+(high; the same cwd fix), a data symbol named `main`, non-UTF-8 files, the read surface named, the
+spike script's lack of a sandbox (a line in devtools/README.md), paths stored raw and filtered only
+when shown.
+
+**Integration (15: 13 confirmed, 2 split).** 1 the layout decided: the project root is the target
+root; the ledger sits at `<project>/migration/` for a project's first tool and at
+`<project>/migration/tools/<id>/` with `--tool` when there are several (shape (a) of the verifier,
+the only one that keeps the decision for several tools); `TargetContext` gains a ledger folder;
+`accept` writes `migration/.gitignore`; a project's own `migration/` is the security-2 refusal —
+high. 2 the configuration's flags reach every compile through `Base` (target-wide, one named
+configuration), each file's include folders through a per-file table every compile asks; the
+whole-program build adopts perf's compile-then-link; the benchmark scorer excluded — high.
+3 every `source_dir` reader listed by crate; the confinement rule restated (never under
+`migration/`); harness-detect's own walk replaced by the confined one. 4 a v2 digest for the
+file-list form, v1 untouched; staleness redefined; the map's `root_hash` in the target. 5 the
+scanned set of a file-list target. 6 unreached files grouped by link need form library bins (the
+100 benchmark cases have zero tools). 7 deterministic ids; `accept` refuses with an unresolved
+duplicate. 8 a map without a target: the harness-owned sandboxed runner bench.rs already has,
+`--provider`/`--model` flags (no new config file), traces under `migration/map/`, the awaiting
+event. 9 the CLI is the only way in for this design; the cockpit's project mode a design of its
+own; harness-mcp's map read deferred. 10 the order (a), (c) with the layout, (b), (d), (e), (f).
+11 the tests that protect existing targets. 12 `--target`; `harness project map|ask|accept` (not
+`map`, beside `features map`); the lock; exit codes; the writer table. 13 the three statements
+fixed; `nm` stays required for accepted targets. 14 the leaf sentence replaced. 15 the file-list
+form reads its version first (a `TargetConfig::load` change) and refuses both forms. Missed items
+taken: `[target] name` is the program's run name, part of the configuration; the scanner and
+detector must prune `migration/`.
+
+**The model step (15: 8 confirmed, 7 split, 0 refuted).** 1 (medium, not high) entry kinds — facts 5.
+2 `keep` | `undecided`; a closed reason list; a duplicate whose every choice links is held for the
+person with the model's pick as advice; one question per definer set; the choice's scope — high.
+3 what the link proves and does not, once per screen; the roadmap's sentence corrected. 4 the flags
+flow in order (map without flags → the person states the configuration → map again → `ask` refused
+while guessed); the configuration digest on the map and the target, not per closure. 5 the
+configuration stated per accepted tool (absorbs lz4's per-target flags); the revisit trigger named
+with the verifier's better example. 6 a build-flags question as a mode of `ask`, its own strict
+reply, the deterministic-nonce fence (not a random one), one allowlist — not a new subcommand.
+7 open questions only, harness indexes, one fenced block per item, batches of at most 10, the
+request-size cap. 8 ids — security 6. 9 Tier 2 by default; escalation is the person's re-ask;
+`--provider`/`--model`. 10 the reply bound to the map's and the configuration's digests; `accept`
+re-links; a shipped `migration/` refused with a way forward (security 2). 11 the accept screen's
+contents; the acceptance recorded in the written `harness.toml` (not a separate file). 12 the
+digest covers the configuration; §5 says to record a tool's features before its first unit moves
+and that nothing enforces it yet. 13 the harness computes every file's status from the walk and
+the choices; library groups dropped from the question until Part 2. 14 folder-name guesses first,
+labelled; what makes a question open. 15 the tests. Missed items taken: the closure is recomputed
+after a choice; every `main`-kind entry is link-checked whatever kind the model gave it (a
+mislabelled tool is caught); a symbol from another program's file is its own fact; the spike's
+numbers; on macOS no link flag is needed for pthreads (the link check proves even less there).
+
+## Dropped, and why
+
+- Facts 3's per-(file, flags) facts and the corresponding test: the person decided one named
+  configuration; the revisit trigger stands (now with the verifier's `-DLZ4_DEBUG` example).
+- Facts 6's "a weak undefined symbol is never outside": wrong on Mach-O (a definer is needed at
+  link time).
+- Facts 13's "extra linked files do not change what the program does": overclaims (constructors,
+  linker sections); said with the exception instead.
+- Security 2's user-level state outside the project: breaks cold resume on a second computer; the
+  in-ledger adoption record is used.
+- Security 7's indexes-only events: the events convention carries ledger values verbatim; only the
+  model's names are kept out.
+- Security 9's child-process memory limits: need a launcher or a new crate and are largely
+  unenforced on macOS; the cheap bounds are taken.
+- Integration 2's compile-per-file as the single build path for verify: unnecessary under one
+  configuration; per-file include folders through `Base` suffice, and perf's path is reused only
+  for the whole-program build.
+- Integration 8's new `migration/map.toml`: flags instead (fewer files).
+- Integration 15's `schema_version = 2` alone: today's loader cannot say "too new" (it parses the
+  struct first); the version-first read is the item.
+- The model lens 6's new `map suggest-build` subcommand and random delimiters; 11's separate
+  `accepted.json`; 12's "features starter" (the `not-yet` marker already says it).
+- The model lens 1's "bogus tool": the fuzz driver plus one fuzzer is a real program lz4 builds;
+  mislabelled, not bogus — the kinds fix it.
