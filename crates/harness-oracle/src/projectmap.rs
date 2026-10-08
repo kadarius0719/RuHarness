@@ -352,6 +352,10 @@ pub struct FolderMap {
     /// False when the count-only pass stopped at [`MAX_OTHER_FILES`] or
     /// [`MAX_DEPTH`]: the set-aside counts and build files are lower bounds.
     pub others_complete: bool,
+    /// What the parser read from each parsed file (the functions it defines
+    /// and the names it calls), by path: the closure analysis reads it for
+    /// a file whose object facts are empty.
+    pub parser: BTreeMap<String, ParserFacts>,
 }
 
 impl FolderMap {
@@ -522,10 +526,21 @@ pub(crate) fn map_in(
         .map(|rel| read_file(&root, rel, aliases.remove(rel).unwrap_or_default()))
         .collect();
     let mut scanned: BTreeMap<String, Vec<harness_scan::Include>> = BTreeMap::new();
+    let mut parser: BTreeMap<String, ParserFacts> = BTreeMap::new();
     for (facts, rel) in files.iter_mut().zip(&paths) {
-        let (count, includes) = scan(&root, facts);
-        facts.functions = count;
-        scanned.insert(rel.clone(), includes);
+        if let Some(read) = scan(&root, facts) {
+            facts.functions = read.functions.len();
+            parser.insert(
+                rel.clone(),
+                ParserFacts {
+                    defines: read.functions.into_iter().collect(),
+                    calls: read.calls,
+                },
+            );
+            scanned.insert(rel.clone(), read.includes);
+        } else {
+            scanned.insert(rel.clone(), Vec::new());
+        }
     }
 
     // The fresh folder and the runner (§3.9), the toolchain once.
@@ -623,6 +638,7 @@ pub(crate) fn map_in(
         evidence,
         set_aside: others.set_aside,
         others_complete: others.complete,
+        parser,
     })
 }
 
@@ -730,23 +746,17 @@ fn read_file(root: &Path, rel: &str, aliases: Vec<String>) -> FileFacts {
     }
 }
 
-/// Step 2 for one file: its function count and includes (none when too
-/// large or unreadable), marking it parsed and UTF-8 or not.
-fn scan(root: &Path, facts: &mut FileFacts) -> (usize, Vec<harness_scan::Include>) {
+/// Step 2 for one file: what the scanner reads from it (nothing when too
+/// large, unreadable or unparseable), marking it parsed and UTF-8 or not.
+fn scan(root: &Path, facts: &mut FileFacts) -> Option<harness_scan::FileFacts> {
     if facts.too_large {
-        return (0, Vec::new());
+        return None;
     }
-    let Ok(source) = std::fs::read(root.join(&facts.path)) else {
-        return (0, Vec::new());
-    };
+    let source = std::fs::read(root.join(&facts.path)).ok()?;
     facts.not_utf8 = std::str::from_utf8(&source).is_err();
-    match harness_scan::file_facts(&source) {
-        Ok(read) => {
-            facts.parsed = true;
-            (read.functions.len(), read.includes)
-        }
-        Err(_) => (0, Vec::new()),
-    }
+    let read = harness_scan::file_facts(&source).ok()?;
+    facts.parsed = true;
+    Some(read)
 }
 
 /// The clean parts of an include name: `None` when it is absolute or
@@ -1410,6 +1420,7 @@ fn classify(root: &Path, stderr: &str) -> (Compiled, Option<String>) {
 pub mod closure;
 pub mod ids;
 pub mod link;
+pub mod mapfile;
 pub use closure::{analyze, Analysis, Input, Linked, Linker, ParserFacts};
 pub use link::{analyze_linked, CcLinker};
 
