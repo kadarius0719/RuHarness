@@ -2919,3 +2919,34 @@ slices; `compile_commands.json`'s two-argument forms; verify's staticlib checks 
 **Decided: the compile's disk use stays unbounded for now** (a resource limit needs the launcher
 pattern; the first item to add before the map runs on untrusted downloads at scale), said in §6.
 A final reader checks 2.1; then the build in §5's order: (a), (c), (b), (d), (e), (f), (g).
+
+## 2026-10-08 — Project map, step (a) built: the walk, adoption, objsyms, the sandbox and work folder, the first `project map`
+
+**Built** from docs/PROJECT-MAP-DESIGN.md revision 2.2, §5 step (a), by five Opus builders in their
+own worktrees, merged at b8e19bb (1 378 tests green; `bench check --replay --adopt` 198 reproduce,
+2 expected divergences, 0 problems, no regression). In plain words: the walk prunes dot-folders by
+name and the ledger by canonical path, never follows links (a file reached under two paths is one
+file with aliases), records every issue instead of dropping it, and counts skipped folders; `--json`
+escapes every character the display filter hides (serde never did). A ledger made elsewhere is
+adopted once per computer before anything reads it: the file `$RUHARNESS_ADOPTED` or
+`~/Library/Application Support/ruharness/adopted.toml` pairs each root with a token also kept in the
+ledger; every command that opens a ledger checks it (the CLI with `--adopt`, the cockpit with a
+question, harness-mcp refusing and never adopting; `bench` adopts a suite as one root); adopting
+deletes only the harness's build folders; RuHarness's fixtures carry committed tokens and the tests
+use a temporary adoption file. `objsyms` reads external symbols with kinds, weakness and commons.
+Every compiler, cargo and rustc child starts in the harness's work folder with the toolchain pinned
+and auto-install off, a `PATH` of absolute entries outside the project, and a unit crate's files
+checked before cargo runs (a build script or a manifest that makes cargo run code refuses the unit);
+the map has its own sandbox profile. `harness project map --target DIR` maps one folder: per-file
+facts, include folders by whole path parts with the ambiguous-include fact and the header actually
+used, a sandboxed compile with the dependency list, the closed compile reasons, the caps — and writes
+nothing yet.
+
+**Decided: `build = false` is not added to the harness's crate manifest** — it would move every
+recorded attempt's candidate digest and break replay; the file check before cargo already refuses a
+build script. Revisit with a re-record or a replay tolerance. **Decided: the walk's additions apply
+to every caller** (the cockpit's tree and the features mirror stop descending folder links), since
+one walk is the rule; the committed facts, findings and digests stayed byte-identical.
+
+**Not yet (step b):** set-aside counts per folder, the project's-own-`migration/` sentence as its
+own refusal, the 30-minute budget and the 200 000-name cap, the configuration's flags in the compile.

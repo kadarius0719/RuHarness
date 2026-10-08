@@ -53,8 +53,8 @@ change at the switch points below.
    in its first form (per-file facts over one folder; writes nothing; module
    crates/harness-oracle/src/projectmap.rs, API `map_folder(root, folder)`). Not yet: set-aside
    counts per folder, the project's-own-`migration/` sentence, the 30-minute budget and the
-   200 000-name cap (step b). `bench check --replay --adopt` was running at the time of writing
-   (result in the next DECISIONS entry). **Step (c) is BEING BUILT**: part 1 (the layout, `harness.toml` v2 read version-first
+   200 000-name cap (step b). `bench check --replay --adopt` after it: 198 reproduce, 2 expected
+   divergences, 0 problems, no regression (DECISIONS 2026-10-08, step a). **Step (c) is BEING BUILT**: part 1 (the layout, `harness.toml` v2 read version-first
    with the flag grammar at load, `--tool` on every command, the lookup order, `sync-runtime` per
    tool) on branch `worktree-agent-a9a2d5f674619afb3`; parts 2 (harness-oracle: `Base`'s
    configuration and per-file folders in every compile, multi-source builds on perf's path, the
