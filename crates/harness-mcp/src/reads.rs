@@ -1527,8 +1527,12 @@ mod tests {
         let t = speed_target("speed-bounded", &["big"]);
         let snap = Snapshot::load(&t.0).unwrap();
         let fake = format!("blake3:{}", "f".repeat(64));
+        // The results reader refuses more than one row per workload the file can
+        // name (16, harness-core `MAX_WORKLOADS`), so 15 rows for gone workloads is
+        // the most a stored file can hold beside the real one; the lists a row
+        // holds (300 held units, 30 left out) are what the head must bound.
         let mut c_alone = vec![speed_row_of(&snap, "big", None, "macos-v6-cycles", false)];
-        for i in 0..400 {
+        for i in 0..15 {
             let mut r = c_alone[0].clone();
             r.workload = format!("gone-{i:04}");
             c_alone.push(r);
@@ -1566,7 +1570,7 @@ mod tests {
             "macos-v6-cycles",
             false,
         )];
-        for i in 0..100 {
+        for i in 0..15 {
             let mut r = unit_rows[0].clone();
             r.workload = format!("gone-{i:04}");
             unit_rows.push(r);
