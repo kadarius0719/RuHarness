@@ -652,6 +652,11 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         .map(|u| u.unit.id.clone())
         .collect();
     model.measurable = measurable.clone();
+    // Without facts the snapshot holds no unit at all: which units the
+    // program as it stands holds today is not known, so those rules are
+    // skipped (`None`) — never "left out now" for every held unit — and the
+    // header says they are not checked, with the C.
+    let units_known = snapshot.facts_state.is_some();
     model.workloads = workloads
         .workloads
         .iter()
@@ -685,7 +690,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 crate_digest: &crate_digest,
                 replaces: replaces.as_deref(),
                 program_name: &program_name,
-                measurable: Some(&measurable),
+                measurable: units_known.then_some(measurable.as_slice()),
                 computer: None,
                 compilers: None,
             };
@@ -878,9 +883,15 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
             "{on}{with} · as verify builds them{each} · compares what the program prints and how it ends"
         ));
         if perf.program_now.is_none() {
-            model
-                .header
-                .push("the C is not checked here: no facts — run harness scan".into());
+            // The program as it stands' rows also lose the rules about the
+            // units they hold (`units_known`): said in the same line.
+            model.header.push(if model.program_rows.is_empty() {
+                "the C is not checked here: no facts — run harness scan".into()
+            } else {
+                "the C and the units the program as it stands holds are not checked here: no \
+                 facts — run harness scan"
+                    .into()
+            });
         }
     }
     model
@@ -937,6 +948,105 @@ mod tests {
             links: 1,
         };
         assert_eq!(job.estimate(), estimate::Estimate::Seconds(131));
+    }
+
+    /// The program as it stands' rows without facts (§3.9): the snapshot
+    /// holds no unit then, so which units it holds today is not known — no
+    /// held unit is said to be left out, and the header says those units
+    /// are not checked, with the C. With facts the rule still holds: u001
+    /// set to pending is left out now.
+    #[test]
+    fn without_facts_the_held_units_are_not_checked_never_left_out() {
+        let target = crate::testutil::scratch_target("targets/zopfli", "speed-no-facts");
+        let perf = harness_core::perf::perf_dir(&target);
+        std::fs::create_dir_all(target.join("bench")).unwrap();
+        std::fs::write(target.join("bench/big.txt"), "big ".repeat(1000)).unwrap();
+        std::fs::create_dir_all(&perf).unwrap();
+        std::fs::write(
+            perf.join("workloads.toml"),
+            "schema_version = 1\n\
+             [[workload]]\nid = \"big-text\"\nargs = [\"-c\", \"{input}\"]\ninput = \"bench/big.txt\"\n",
+        )
+        .unwrap();
+        let fake = format!("blake3:{}", "f".repeat(64));
+        let runs = || {
+            (0..5)
+                .map(|_| serde_json::json!({"wall_us": 1_300_000, "end": "exit 0"}))
+                .collect::<Vec<_>>()
+        };
+        let row: Row = serde_json::from_value(serde_json::json!({
+            "workload": "big-text",
+            "outcome": "measured",
+            "inputs": {
+                "workload": fake, "program": fake, "program_name": "zopfli",
+                "units": [{"id": "u001-katajainen", "crate": fake}],
+                "recipe": harness_core::perf::PERF_RECIPE,
+                "launcher": harness_core::perf::PERF_LAUNCHER,
+                "computer": {"os": "15.6", "build": "b", "arch": "arm64", "cpu": "Apple M3",
+                             "two_kinds": true, "fast_cores": 8},
+                "compilers": {"cc": "cc", "rustc": "rustc 1.94.1"}
+            },
+            "runs": 5,
+            "short": false,
+            "platform_metrics": "macos-v6-cycles",
+            "c": runs(),
+            "other": runs()
+        }))
+        .expect("a row");
+        let program = results::ProgramResults {
+            as_it_stands: vec![row],
+            ..results::ProgramResults::default()
+        };
+        results::write_program(&results::program_path(&perf), &program).unwrap();
+        let plan = target.join("migration/plan.toml");
+        let text = std::fs::read_to_string(&plan).unwrap();
+        let held = "id = \"u001-katajainen\"\nstatus = \"verified\"";
+        assert!(text.contains(held), "the fixture's u001 is verified");
+        std::fs::write(
+            &plan,
+            text.replacen(held, "id = \"u001-katajainen\"\nstatus = \"pending\"", 1),
+        )
+        .unwrap();
+        let left_out = "u001-katajainen is left out now";
+        let read = |target: &std::path::Path| build(&Snapshot::load(target).expect("loads"));
+        // With facts: u001, pending, is left out now; the header is quiet.
+        let with = read(&target);
+        assert!(
+            with.program_rows[0]
+                .out_of_date
+                .iter()
+                .any(|w| w == left_out),
+            "{:?}",
+            with.program_rows[0].out_of_date
+        );
+        assert!(
+            !with.header.iter().any(|h| h.contains("not checked here:")),
+            "{:?}",
+            with.header
+        );
+        // Without facts: not judged, and said so in the one header line.
+        std::fs::remove_file(target.join("migration/facts.jsonl")).unwrap();
+        let without = read(&target);
+        assert!(
+            !without.program_rows[0]
+                .out_of_date
+                .iter()
+                .any(|w| w.contains("left out now")),
+            "{:?}",
+            without.program_rows[0].out_of_date
+        );
+        assert_eq!(
+            without
+                .header
+                .iter()
+                .filter(|h| h.contains("not checked here:"))
+                .collect::<Vec<_>>(),
+            [
+                "the C and the units the program as it stands holds are not checked here: no \
+              facts — run harness scan"
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&target);
     }
 
     #[test]

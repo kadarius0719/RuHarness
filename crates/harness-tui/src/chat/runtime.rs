@@ -1215,6 +1215,8 @@ mod tests {
             &procs,
         )
         .unwrap();
+        // Ended below; killed when the test ends however it ends.
+        let _stubborn = crate::testutil::KillOnDrop::new(stubborn.pid);
         let mut e = Ending::new(
             stubborn,
             t0,
@@ -1231,6 +1233,7 @@ mod tests {
             &procs,
         )
         .unwrap();
+        let _stopped = crate::testutil::KillOnDrop::new(stopped.pid);
         std::thread::sleep(Duration::from_millis(100));
         let mut e = Ending::new(
             stopped,

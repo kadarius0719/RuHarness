@@ -67,3 +67,43 @@ impl Drop for TmpDir {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// A test's child that never ends by itself (a `while :` loop, a stopped
+/// shell): SIGKILLed when the guard drops — when the test ends, passing or
+/// failing — unless it is gone, or its pid now names another program (its
+/// command name is checked first, so a reused pid is never killed).
+pub struct KillOnDrop {
+    pid: u32,
+    comm: String,
+}
+
+impl KillOnDrop {
+    /// Guard `pid`, read now as the program it is.
+    pub fn new(pid: u32) -> KillOnDrop {
+        KillOnDrop {
+            pid,
+            comm: comm_of(pid),
+        }
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if self.comm.is_empty() || comm_of(self.pid) != self.comm {
+            return;
+        }
+        let _ = std::process::Command::new("/bin/kill")
+            .args(["-KILL", &self.pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+/// `pid`'s command name (`ps -o comm=`), empty when it is gone.
+fn comm_of(pid: u32) -> String {
+    std::process::Command::new("/bin/ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}

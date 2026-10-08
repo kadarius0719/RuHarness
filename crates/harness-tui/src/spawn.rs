@@ -425,6 +425,9 @@ mod tests {
         assert_eq!(status.signal(), Some(2));
     }
 
+    /// Both children loop until signalled: each is killed when the test
+    /// ends, passing or failing (a failing run once left them looping for
+    /// days).
     #[test]
     fn the_signal_path_interrupts_and_waits_within_its_budget() {
         // A child that exits on INT: reaped within the budget.
@@ -434,6 +437,7 @@ mod tests {
             slot.clone(),
         )
         .unwrap();
+        let _first = crate::testutil::KillOnDrop::new(running.pid());
         std::thread::sleep(Duration::from_millis(200));
         let status = interrupt_and_wait(&slot, Duration::from_secs(2)).expect("ended in time");
         assert_eq!(status.code(), Some(42));
@@ -450,14 +454,13 @@ mod tests {
             slot.clone(),
         )
         .unwrap();
+        let second = crate::testutil::KillOnDrop::new(running.pid());
         std::thread::sleep(Duration::from_millis(200));
         let start = Instant::now();
         assert_eq!(interrupt_and_wait(&slot, Duration::from_millis(300)), None);
         let waited = start.elapsed();
         assert!(waited >= Duration::from_millis(300) && waited < Duration::from_secs(2));
-        let _ = Command::new("/bin/kill")
-            .args(["-KILL", &running.pid().to_string()])
-            .status();
+        drop(second);
         // No child at all.
         assert_eq!(
             interrupt_and_wait(&ChildSlot::default(), Duration::from_millis(50)),

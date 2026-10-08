@@ -765,6 +765,10 @@ pub struct App {
     /// keeps the terminal's mouse modes in step with it. `--no-mouse` starts
     /// with it off; Help turns it on and off.
     pub mouse: bool,
+    /// The `harness` every act runs is the cockpit's own build (the one
+    /// next to its binary): only then does a Measure dialog say for certain
+    /// whether perf's launcher cache is current (docs/PERF-DESIGN.md §3.11).
+    pub harness_own_build: bool,
     /// The tree keeps the selected row in view; the wheel lets it go until
     /// the next key in the tree or click on it.
     pub tree_follow: bool,
@@ -937,6 +941,7 @@ impl App {
         let holder = read.holder;
         let migrate_model = read.migrate_model;
         let migrate_turns = read.migrate_turns;
+        let harness_own_build = config.harness.as_deref().is_some_and(speed_acts::own_build);
         let mut app = App {
             config,
             snapshot: read.snapshot,
@@ -972,6 +977,7 @@ impl App {
             layout: Layout::default(),
             hits: Vec::new(),
             mouse: true,
+            harness_own_build,
             tree_follow: true,
             view_follow: true,
             kept_edits: Vec::new(),
@@ -2269,7 +2275,11 @@ impl App {
         let (title, mut body) = match p.act {
             Act::SaveFeatures => self.save_features_words(p),
             Act::SaveWorkloads => self.save_workloads_words(p),
-            Act::Measure | Act::MeasureProgram | Act::MeasureMore => self.measure_words(p),
+            Act::Measure | Act::MeasureProgram | Act::MeasureMore => self.measure_words(
+                p,
+                harness_oracle::perf_launcher_cache,
+                speed_acts::LAUNCHER_WAIT,
+            ),
             Act::Scan => {
                 (
                     "Scan the project?".to_string(),

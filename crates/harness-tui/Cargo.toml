@@ -38,9 +38,10 @@ tree-sitter-highlight = { workspace = true, optional = true }
 tree-sitter-c = { workspace = true, optional = true }
 signal-hook = { workspace = true, optional = true }
 serde_json.workspace = true
-# Workspace path dependency (no crates.io addition; its harness-scan and
-# tree-sitter-c are already here), for the front end only: the Measure
-# dialogs ask whether perf's launcher cache is current
-# (`perf_launcher_cached`, docs/PERF-DESIGN.md §3.11). The read model that
+# Workspace path dependency (no crates.io addition: it brings harness-scan,
+# another workspace crate new to the cockpit's tree, whose own tree-sitter
+# and tree-sitter-c are already here), for the front end only: the Measure
+# dialogs ask what the next run makes of perf's launcher cache
+# (`perf_launcher_cache`, docs/PERF-DESIGN.md §3.11). The read model that
 # harness-mcp reuses stays harness-core only.
 harness-oracle = { workspace = true, optional = true }
