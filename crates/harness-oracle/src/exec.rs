@@ -23,33 +23,160 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Variables copied from the parent (when set) into tool children.
-pub(crate) const TOOL_ENV: &[&str] = &[
-    "PATH",
-    "HOME",
-    "TMPDIR",
-    "CARGO_HOME",
-    "RUSTUP_HOME",
-    "RUSTUP_TOOLCHAIN",
-];
+/// Variables copied from the parent (when set) into tool children. `PATH`
+/// is filtered ([`child_path`]); `RUSTUP_TOOLCHAIN` is never copied as it
+/// is but pinned ([`pinned_toolchain`]).
+pub(crate) const TOOL_ENV: &[&str] = &["PATH", "HOME", "TMPDIR", "CARGO_HOME", "RUSTUP_HOME"];
 
 /// Variables every tool child gets with a fixed value: `SOURCE_DATE_EPOCH`
 /// pins `__DATE__`, `__TIME__` and `__TIMESTAMP__`, so two builds of the same
 /// C print the same whenever they ran (review M5: the all-C and the mixed
 /// whole programs, and the map's plain and probed copies, are separate
-/// compiles).
-pub(crate) const TOOL_FIXED_ENV: &[(&str, &str)] = &[("SOURCE_DATE_EPOCH", "0")];
+/// compiles); `RUSTUP_AUTO_INSTALL=0` makes rustup refuse a toolchain that
+/// is not installed instead of downloading it (the sandbox never needs the
+/// network, and the harness never installs anything).
+pub(crate) const TOOL_FIXED_ENV: &[(&str, &str)] =
+    &[("SOURCE_DATE_EPOCH", "0"), ("RUSTUP_AUTO_INSTALL", "0")];
 
-/// Variables copied from the parent (when set) into built binaries.
+/// Variables copied from the parent (when set) into built binaries (`PATH`
+/// filtered by [`child_path`]).
 pub(crate) const BUILT_ENV: &[&str] = &["PATH"];
 
-/// [`TOOL_FIXED_ENV`], then `extra` (which may override it).
-fn tool_env<'a>(extra: &[(&'a str, &'a std::ffi::OsStr)]) -> Vec<(&'a str, &'a std::ffi::OsStr)> {
+/// The toolchain every tool child is pinned to through `RUSTUP_TOOLCHAIN`
+/// (docs/PROJECT-MAP-DESIGN.md §3.7): the value rustup gave the harness when
+/// there is one, else `stable` (RuHarness's own `rust-toolchain.toml`'s
+/// channel). Set in the child's environment, it outranks every
+/// `rust-toolchain.toml`, so a project's own (which could name a `path` to
+/// its own `cargo`) is never read.
+pub(crate) fn pinned_toolchain() -> std::ffi::OsString {
+    std::env::var_os("RUSTUP_TOOLCHAIN")
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "stable".into())
+}
+
+/// [`TOOL_FIXED_ENV`] and `RUSTUP_TOOLCHAIN=pinned`, then `extra` (which may
+/// override them).
+fn tool_env<'a>(
+    pinned: &'a std::ffi::OsStr,
+    extra: &[(&'a str, &'a std::ffi::OsStr)],
+) -> Vec<(&'a str, &'a std::ffi::OsStr)> {
     TOOL_FIXED_ENV
         .iter()
         .map(|(k, v)| (*k, std::ffi::OsStr::new(*v)))
+        .chain(std::iter::once(("RUSTUP_TOOLCHAIN", pinned)))
         .chain(extra.iter().copied())
         .collect()
+}
+
+/// The `PATH` a child gets: the parent's `raw` with only absolute entries
+/// outside the project `root` (lexically and once resolved) kept — a
+/// relative or empty entry would find the project's own `cc` from a working
+/// folder, an entry under the root would find it anywhere. `None` when the
+/// parent has no `PATH`; `/usr/bin:/bin` when no entry is left (an empty
+/// `PATH` means the working folder to some `execvp`s).
+pub(crate) fn child_path(
+    raw: Option<std::ffi::OsString>,
+    root: &Path,
+) -> Option<std::ffi::OsString> {
+    let raw = raw?;
+    let kept: Vec<PathBuf> = std::env::split_paths(&raw)
+        .filter(|p| {
+            p.is_absolute()
+                && !p.starts_with(root)
+                && !p.canonicalize().is_ok_and(|c| c.starts_with(root))
+        })
+        .collect();
+    if kept.is_empty() {
+        return Some("/usr/bin:/bin".into());
+    }
+    // split_paths never yields an entry holding the separator.
+    std::env::join_paths(kept).ok()
+}
+
+/// The harness's work folder (docs/PROJECT-MAP-DESIGN.md §3.7), made now:
+/// [`sandbox::work_root`] of `$HOME`. Every cargo, rustc and compiler child
+/// starts there.
+pub(crate) fn work_dir() -> Result<PathBuf, Error> {
+    let home_raw = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            Error::Invariant("HOME is not set, so the harness has no work folder".into())
+        })?;
+    let home = home_raw
+        .canonicalize()
+        .map_err(|e| Error::io(&home_raw, e))?;
+    let tmpdir = std::env::var_os("TMPDIR")
+        .filter(|v| !v.is_empty())
+        .and_then(|v| PathBuf::from(v).canonicalize().ok());
+    work_dir_at(&sandbox::work_root(&home), &home, tmpdir.as_deref())
+}
+
+/// Make the work folder `dir` (absolute, built from canonical parts) and
+/// return it, refusing it when it, or a folder made for it, is a link, and
+/// when it lies in a temporary folder (`/tmp`, `/private/var/folders`, or
+/// `tmpdir` unless that holds `home`): anyone may make a folder there first.
+pub(crate) fn work_dir_at(
+    dir: &Path,
+    home: &Path,
+    tmpdir: Option<&Path>,
+) -> Result<PathBuf, Error> {
+    let temporary = [
+        "/tmp",
+        "/private/tmp",
+        "/var/folders",
+        "/private/var/folders",
+    ]
+    .iter()
+    .map(Path::new)
+    .any(|t| dir.starts_with(t))
+        || tmpdir.is_some_and(|t| dir.starts_with(t) && !home.starts_with(t));
+    if temporary {
+        return Err(Error::Invariant(format!(
+            "the harness's work folder {} lies in a temporary folder, where anyone may make it \
+             first; set HOME to your own home folder",
+            dir.display()
+        )));
+    }
+    make_work_dir(dir)
+}
+
+/// Make `dir` (absolute, from canonical parts) and return it, refusing it
+/// when it, or a folder above it that was made for it, is a link.
+fn make_work_dir(dir: &Path) -> Result<PathBuf, Error> {
+    std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| Error::io(dir, e))?;
+    let canonical = dir.canonicalize().map_err(|e| Error::io(dir, e))?;
+    if meta.file_type().is_symlink() || !meta.is_dir() || canonical != dir {
+        return Err(Error::Invariant(format!(
+            "the harness's work folder {} is a link or passes through one; remove it and the \
+             harness makes a real folder there again",
+            dir.display()
+        )));
+    }
+    Ok(canonical)
+}
+
+/// The one sentence a tool run gives when rustup has no such toolchain
+/// (`RUSTUP_AUTO_INSTALL=0` makes it say so instead of downloading one).
+pub(crate) fn missing_toolchain_sentence(toolchain: &str) -> String {
+    format!(
+        "the Rust toolchain `{toolchain}` the harness pins its builds to is not installed, and \
+         the harness never installs one: install it yourself with `rustup toolchain install \
+         {toolchain}`, or run the harness under a toolchain you have"
+    )
+}
+
+/// The toolchain rustup's `stderr` says is not installed, if it says so.
+fn missing_toolchain(stderr: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(stderr);
+    text.lines().find_map(|line| {
+        let rest = line.split("toolchain '").nth(1)?;
+        let (name, tail) = rest.split_once('\'')?;
+        tail.trim_start()
+            .starts_with("is not installed")
+            .then(|| name.to_string())
+    })
 }
 
 /// Default `[oracle] timeout_secs`.
@@ -247,8 +374,17 @@ impl std::fmt::Display for RunFailure {
 /// Spawns every oracle child with the guarantees in the module docs.
 #[derive(Debug, Clone)]
 pub(crate) struct Runner {
-    /// Working directory of every child (the target root).
+    /// Working directory of every built program (the target root, or the
+    /// folder its run asks for).
     pub cwd: PathBuf,
+    /// Working directory of every tool child (`cc`, `cargo`, `rustc`,
+    /// `nm`): the harness's work folder ([`work_dir`]), never the project,
+    /// so cargo never reads a project's `.cargo/config.toml`. Tools are
+    /// given absolute paths only.
+    pub work: PathBuf,
+    /// The project root: no `PATH` entry under it reaches a child
+    /// ([`child_path`]).
+    pub root: PathBuf,
     /// The core-owned `[oracle] allowlist` of tool names.
     pub allowlist: Vec<String>,
     /// Wall-clock limit per child.
@@ -264,6 +400,69 @@ pub(crate) struct Runner {
 }
 
 impl Runner {
+    /// A runner for the project at `root` (canonical): built programs start
+    /// in `root`, tools in the work folder (made now), `PATH` filtered
+    /// against `root`, the default output cap, no `TMPDIR` of its own.
+    pub(crate) fn new(
+        root: &Path,
+        allowlist: Vec<String>,
+        timeout: Duration,
+        tool_profile: Option<String>,
+    ) -> Result<Runner, Error> {
+        Ok(Runner {
+            cwd: root.to_path_buf(),
+            work: work_dir()?,
+            root: root.to_path_buf(),
+            allowlist,
+            timeout,
+            max_output: DEFAULT_MAX_OUTPUT,
+            tool_profile,
+            tool_tmpdir: None,
+        })
+    }
+
+    /// A runner outside any target — the benchmark scorer's builds, the
+    /// project map's compiles: one allowlist and one timeout, `read_root`
+    /// the sandbox's read root (and the root `PATH` is filtered against),
+    /// each call's profile given ([`Runner::tool_with_env`]) or `profile`.
+    pub(crate) fn targetless(
+        read_root: &Path,
+        allowlist: &[&str],
+        timeout: Duration,
+        profile: Option<String>,
+    ) -> Result<Runner, Error> {
+        Runner::new(
+            read_root,
+            allowlist.iter().map(|a| (*a).to_string()).collect(),
+            timeout,
+            profile,
+        )
+    }
+
+    /// The project map's runner (docs/PROJECT-MAP-DESIGN.md §3.9): a
+    /// [`Runner::targetless`] over `project_root` under the map profile
+    /// (when this computer has a sandbox), writing only into `fresh`, which
+    /// is also its tools' `TMPDIR`. Both paths canonical.
+    #[allow(dead_code)] // the map's compiles (§5 step a) are its first caller
+    pub(crate) fn map(
+        project_root: &Path,
+        fresh: &Path,
+        allowlist: &[&str],
+        timeout: Duration,
+    ) -> Result<Runner, Error> {
+        let profile = match sandbox::sandbox_mode() {
+            "sandbox-exec" => Some(sandbox::render_map_profile(&sandbox::MapSpec {
+                host: &sandbox::HostDirs::from_env()?,
+                project_root,
+                fresh,
+            })?),
+            _ => None,
+        };
+        let mut runner = Runner::targetless(project_root, allowlist, timeout, profile)?;
+        runner.tool_tmpdir = Some(fresh.to_path_buf());
+        Ok(runner)
+    }
+
     /// Run an allowlisted tool under the tool sandbox profile. Returns
     /// stdout; a non-zero exit, a timeout, or an overflow is an `Err`.
     pub(crate) fn tool(&self, argv: &[String]) -> Result<Vec<u8>, Error> {
@@ -298,13 +497,30 @@ impl Runner {
             )));
         }
         let shown = argv.join(" ");
-        let mut env = tool_env(extra_env);
+        let pinned = pinned_toolchain();
+        let mut env = tool_env(&pinned, extra_env);
         if let Some(tmp) = &self.tool_tmpdir {
             env.push(("TMPDIR", tmp.as_os_str()));
         }
-        let out = self.spawn(argv, profile, TOOL_ENV, &env, &shown, Wait::Tool)?;
+        let out = self.spawn_in(
+            argv,
+            profile,
+            TOOL_ENV,
+            &env,
+            &shown,
+            &self.work,
+            false,
+            Wait::Tool,
+        )?;
         match out.end {
             ChildEnd::Exited(status) if status.success() => Ok(out.stdout),
+            ChildEnd::Exited(_)
+                if matches!(exe.as_str(), "cargo" | "rustc")
+                    && missing_toolchain(&out.stderr).is_some() =>
+            {
+                let name = missing_toolchain(&out.stderr).unwrap_or_default();
+                Err(Error::Invariant(missing_toolchain_sentence(&name)))
+            }
             ChildEnd::Exited(status) => Err(Error::Invariant(format!(
                 "`{shown}` failed ({status}):\n{}",
                 stderr_excerpt(&out.stderr)
@@ -367,16 +583,19 @@ impl Runner {
             )));
         }
         let shown = argv.join(" ");
-        let mut env = tool_env(&[]);
+        let pinned = pinned_toolchain();
+        let mut env = tool_env(&pinned, &[]);
         if let Some(tmp) = &self.tool_tmpdir {
             env.push(("TMPDIR", tmp.as_os_str()));
         }
-        self.spawn(
+        self.spawn_in(
             argv,
             self.tool_profile.as_deref(),
             TOOL_ENV,
             &env,
             &shown,
+            &self.work,
+            false,
             Wait::Tool,
         )
     }
@@ -475,6 +694,7 @@ impl Runner {
         })
     }
 
+    /// Spawn a built program in [`Runner::cwd`].
     fn spawn(
         &self,
         argv: &[String],
@@ -509,6 +729,11 @@ impl Runner {
             None => argv.to_vec(),
         };
         let mut cmd = scrubbed_command(&full, env_keys, cwd)?;
+        if env_keys.contains(&"PATH") {
+            if let Some(path) = child_path(std::env::var_os("PATH"), &self.root) {
+                cmd.env("PATH", path);
+            }
+        }
         for (key, value) in extra_env {
             cmd.env(key, value);
         }
@@ -794,6 +1019,8 @@ mod tests {
     fn runner(timeout: Duration) -> Runner {
         Runner {
             cwd: std::env::temp_dir(),
+            work: work_dir().expect("work folder"),
+            root: std::env::temp_dir(),
             allowlist: vec!["env".into(), "sh".into(), "sleep".into()],
             timeout,
             max_output: DEFAULT_MAX_OUTPUT,
@@ -838,7 +1065,9 @@ mod tests {
         assert!(keys.iter().any(|k| k == "PATH"), "{keys:?}");
         for k in &keys {
             assert!(
-                TOOL_ENV.contains(&k.as_str()) || TOOL_FIXED_ENV.iter().any(|(f, _)| f == k),
+                TOOL_ENV.contains(&k.as_str())
+                    || TOOL_FIXED_ENV.iter().any(|(f, _)| f == k)
+                    || k == "RUSTUP_TOOLCHAIN",
                 "leaked variable {k}"
             );
         }
@@ -847,6 +1076,10 @@ mod tests {
             text.lines().any(|l| l == "SOURCE_DATE_EPOCH=0"),
             "builds are dated alike: {text}"
         );
+        // The toolchain is pinned, and never installed.
+        let pinned = format!("RUSTUP_TOOLCHAIN={}", pinned_toolchain().to_string_lossy());
+        assert!(text.lines().any(|l| l == pinned), "{text}");
+        assert!(text.lines().any(|l| l == "RUSTUP_AUTO_INSTALL=0"), "{text}");
         assert!(!keys.iter().any(|k| k == "CARGO_MANIFEST_DIR"));
     }
 
@@ -1188,6 +1421,297 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         false
+    }
+
+    /// The tool profile a test runs cargo under: the production one, when
+    /// this computer has the sandbox.
+    fn toolchain_profile(root: &Path) -> Option<String> {
+        if sandbox::sandbox_mode() != "sandbox-exec" {
+            return None;
+        }
+        let host = sandbox::HostDirs::from_env().expect("HOME set");
+        Some(
+            sandbox::render_profile(&sandbox::ProfileSpec {
+                host: &host,
+                target_root: root,
+                toolchain: true,
+                write_dirs: &[],
+                write_files: &[],
+            })
+            .expect("profile renders"),
+        )
+    }
+
+    /// docs/PROJECT-MAP-DESIGN.md §3.7 and §4: a project's
+    /// `.cargo/config.toml` (here a `target-dir` elsewhere and a
+    /// `rustc-wrapper` that leaves a mark) and its `rust-toolchain.toml` (a
+    /// `path` to nowhere) are never read: cargo starts in the work folder,
+    /// with the manifest given absolute and the toolchain pinned.
+    #[test]
+    fn cargo_never_reads_a_projects_config_or_toolchain_file() {
+        let tmp = crate::testutil::TempDir::new("project-config");
+        let root = tmp.path();
+        let put = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let elsewhere = root.join("elsewhere");
+        let marker = root.join("wrapper-ran");
+        put(
+            "Cargo.toml",
+            "[package]\nname = \"scratch\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        );
+        put("src/lib.rs", "\n");
+        put(
+            ".cargo/config.toml",
+            &format!(
+                "[build]\ntarget-dir = \"{}\"\nrustc-wrapper = \"{}\"\n",
+                elsewhere.display(),
+                root.join("wrap.sh").display()
+            ),
+        );
+        put(
+            "wrap.sh",
+            &format!("#!/bin/sh\ntouch '{}'\nexec \"$@\"\n", marker.display()),
+        );
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("wrap.sh"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        put(
+            "rust-toolchain.toml",
+            &format!(
+                "[toolchain]\npath = \"{}\"\n",
+                root.join("nowhere").display()
+            ),
+        );
+        let runner = Runner::new(
+            root,
+            vec!["cargo".into()],
+            Duration::from_secs(120),
+            toolchain_profile(root),
+        )
+        .expect("runner");
+        let manifest = root.join("Cargo.toml");
+        let out = runner
+            .tool(&sv(&[
+                "cargo",
+                "metadata",
+                "--offline",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--manifest-path",
+                manifest.to_str().unwrap(),
+            ]))
+            .expect("cargo metadata runs with the pinned toolchain");
+        let meta: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(
+            meta["target_directory"].as_str(),
+            Some(root.join("target").to_str().unwrap()),
+            "cargo's own target dir, not the project config's"
+        );
+        assert!(!marker.exists(), "the project's rustc-wrapper ran");
+        assert!(!elsewhere.exists());
+    }
+
+    /// `RUSTUP_AUTO_INSTALL=0` is in every tool child's environment (the
+    /// scrub test), so a toolchain that is not installed is refused in one
+    /// sentence, never installed. Simulated with a name no channel has.
+    #[test]
+    fn a_missing_toolchain_is_refused_in_one_sentence() {
+        let rustup = Command::new("rustup")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if !rustup.is_ok_and(|s| s.success()) {
+            return; // rustc is not rustup's here: there is nothing to pin.
+        }
+        let tmp = crate::testutil::TempDir::new("no-toolchain");
+        let runner = Runner::new(
+            tmp.path(),
+            vec!["rustc".into()],
+            Duration::from_secs(60),
+            toolchain_profile(tmp.path()),
+        )
+        .expect("runner");
+        let err = runner
+            .tool_with_env(
+                &sv(&["rustc", "-V"]),
+                runner.tool_profile.as_deref(),
+                &[(
+                    "RUSTUP_TOOLCHAIN",
+                    std::ffi::OsStr::new("ruharness-no-such-toolchain"),
+                )],
+            )
+            .expect_err("no such toolchain");
+        assert_eq!(
+            err.to_string(),
+            "the Rust toolchain `ruharness-no-such-toolchain` the harness pins its builds to is \
+             not installed, and the harness never installs one: install it yourself with \
+             `rustup toolchain install ruharness-no-such-toolchain`, or run the harness under a \
+             toolchain you have"
+        );
+    }
+
+    #[test]
+    fn a_childs_path_keeps_absolute_entries_outside_the_project_only() {
+        let tmp = crate::testutil::TempDir::new("child-path");
+        let root = tmp.path().join("project");
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let link = tmp.path().join("into-project");
+        std::os::unix::fs::symlink(root.join("bin"), &link).unwrap();
+        let raw = format!(
+            "rel/bin::/usr/bin:.:{}:{}:/bin",
+            root.join("bin").display(),
+            link.display()
+        );
+        assert_eq!(
+            child_path(Some(raw.into()), &root),
+            Some("/usr/bin:/bin".into())
+        );
+        assert_eq!(child_path(None, &root), None);
+        assert_eq!(
+            child_path(Some(root.join("bin").into_os_string()), &root),
+            Some("/usr/bin:/bin".into()),
+            "nothing left: the system's folders, never an empty PATH"
+        );
+    }
+
+    /// Live: a project `cc` on the harness's `PATH` (inside the root, and
+    /// reachable by an empty and a `.` entry) never runs; the system's does.
+    /// `PATH` is the process's, so the body runs in a child test process.
+    #[test]
+    fn project_cc_child_body() {
+        let Some(root) = std::env::var_os("RUHARNESS_PATH_TEST") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let runner =
+            Runner::new(&root, vec!["cc".into()], Duration::from_secs(60), None).expect("runner");
+        let out = runner
+            .tool(&sv(&["cc", "--version"]))
+            .expect("the system's cc runs");
+        println!(
+            "cc-said={}",
+            String::from_utf8_lossy(&out).lines().next().unwrap_or("")
+        );
+        let built = runner.built_with_env(Path::new("/usr/bin/env"), &[], None, &[]);
+        let env = built.expect("not interrupted").expect("env runs");
+        let text = String::from_utf8_lossy(&env.stdout).into_owned();
+        println!(
+            "built-path={}",
+            text.lines().find(|l| l.starts_with("PATH=")).unwrap_or("")
+        );
+        std::process::exit(0);
+    }
+
+    #[test]
+    fn a_project_cc_on_the_path_never_runs() {
+        let tmp = crate::testutil::TempDir::new("project-cc");
+        let root = tmp.path().to_path_buf();
+        let marker = root.join("project-cc-ran");
+        let fake = format!("#!/bin/sh\ntouch '{}'\necho fake-cc\n", marker.display());
+        for dir in [root.join("bin"), root.clone()] {
+            std::fs::create_dir_all(&dir).unwrap();
+            let cc = dir.join("cc");
+            std::fs::write(&cc, &fake).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = format!("{}::.:/usr/bin:/bin", root.join("bin").display());
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "exec::tests::project_cc_child_body",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .current_dir(&root)
+            .env("PATH", &path)
+            .env("RUHARNESS_PATH_TEST", &root)
+            .output()
+            .expect("re-exec the test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!marker.exists(), "the project's cc ran: {stdout}");
+        assert!(!stdout.contains("cc-said=fake-cc"), "{stdout}");
+        assert!(stdout.contains("cc-said="), "{stdout}");
+        assert!(stdout.contains("built-path=PATH=/usr/bin:/bin"), "{stdout}");
+    }
+
+    /// The work folder is made at each run and refused when it is a link
+    /// (or passes through one), or lies in a temporary folder.
+    #[test]
+    fn the_work_folder_is_refused_when_it_is_a_link() {
+        let tmp = crate::testutil::TempDir::new("work-link");
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("work");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let err = make_work_dir(&link).expect_err("a link").to_string();
+        assert!(err.contains("is a link or passes through one"), "{err}");
+        let through = tmp.path().join("cache-link");
+        std::os::unix::fs::symlink(&real, &through).unwrap();
+        let err = make_work_dir(&through.join("ruharness/work"))
+            .expect_err("through a link")
+            .to_string();
+        assert!(err.contains("is a link or passes through one"), "{err}");
+        // A real folder is made, and made again when it is gone.
+        let fresh = tmp.path().join("caches/ruharness/work");
+        assert_eq!(make_work_dir(&fresh).unwrap(), fresh);
+        std::fs::remove_dir(&fresh).unwrap();
+        assert_eq!(make_work_dir(&fresh).unwrap(), fresh);
+        // Never in a temporary folder.
+        let home = Path::new("/Users/u");
+        for dir in [
+            "/private/tmp/u/Library/Caches/ruharness/work",
+            "/private/var/folders/xy/T/ruharness/work",
+        ] {
+            let err = work_dir_at(Path::new(dir), home, None)
+                .expect_err(dir)
+                .to_string();
+            assert!(err.contains("lies in a temporary folder"), "{err}");
+        }
+        let err = work_dir_at(
+            Path::new("/Volumes/scratch/ruharness/work"),
+            home,
+            Some(Path::new("/Volumes/scratch")),
+        )
+        .expect_err("under TMPDIR")
+        .to_string();
+        assert!(err.contains("lies in a temporary folder"), "{err}");
+        // Production's: under the home folder, a real folder, every run.
+        let work = work_dir().expect("the work folder");
+        assert!(work.ends_with("ruharness/work"), "{}", work.display());
+        assert!(std::fs::symlink_metadata(&work).unwrap().is_dir());
+    }
+
+    /// Every tool child starts in the work folder; a built program keeps
+    /// the folder its run asks for (the runner's `cwd`).
+    #[test]
+    fn tools_start_in_the_work_folder_and_built_programs_where_asked() {
+        let tmp = crate::testutil::TempDir::new("cwds");
+        let r = Runner::new(tmp.path(), vec!["sh".into()], Duration::from_secs(20), None)
+            .expect("runner");
+        let out = r.tool(&sv(&["sh", "-c", "pwd -P"])).expect("sh runs");
+        assert_eq!(
+            String::from_utf8_lossy(&out).trim(),
+            r.work.to_str().unwrap()
+        );
+        assert_eq!(r.work, work_dir().unwrap());
+        let out = built(&r, "/bin/pwd", &["-P"]).expect("pwd runs");
+        assert_eq!(
+            String::from_utf8_lossy(&out).trim(),
+            tmp.path().to_str().unwrap()
+        );
     }
 
     #[test]

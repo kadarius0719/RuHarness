@@ -247,28 +247,23 @@ impl Scorer {
             })?),
             None => None,
         };
-        let builder = Runner {
-            cwd: snapshot_root.clone(),
-            allowlist: vec!["cargo".into(), "cc".into(), "rustc".into()],
-            timeout: BUILD_TIMEOUT,
-            max_output: crate::exec::DEFAULT_MAX_OUTPUT,
-            tool_profile: build_profile.clone(),
-            tool_tmpdir: None,
-        };
+        // cargo starts in the harness's work folder, never in the snapshot:
+        // the manifest and every path are given absolute.
+        let builder = Runner::targetless(
+            &suite_dir,
+            &["cargo", "cc", "rustc"],
+            BUILD_TIMEOUT,
+            build_profile.clone(),
+        )?;
         let vendor_str = crate::path_str(&vendor)?;
         builder.tool_with_env(
             &scorer_build_argv(&snapshot_root, &target_dir, vendor_str)?,
             build_profile.as_deref(),
             &[("CARGO_HOME", cargo_home.as_os_str())],
         )?;
-        let tools = Runner {
-            cwd: suite_dir.clone(),
-            allowlist: vec!["cc".into(), "rustc".into()],
-            timeout: Duration::from_secs(120),
-            max_output: crate::exec::DEFAULT_MAX_OUTPUT,
-            tool_profile: None, // rendered per case (its run root is the write dir)
-            tool_tmpdir: None,
-        };
+        // The profile is rendered per case (its run root is the write dir).
+        let tools =
+            Runner::targetless(&suite_dir, &["cc", "rustc"], Duration::from_secs(120), None)?;
         let mut environment = environment(&tools)?;
         let sanitized = match asan_runtime(&tools, &suite_dir, host.as_ref())? {
             None if !cfg!(target_os = "macos") => Sanitized::Skipped("unsupported-platform"),
@@ -588,11 +583,7 @@ impl Scorer {
         };
         let exec = Runner {
             cwd: tmp.path().to_path_buf(),
-            allowlist: Vec::new(),
-            timeout: VECTOR_TIMEOUT,
-            max_output: crate::exec::DEFAULT_MAX_OUTPUT,
-            tool_profile: None,
-            tool_tmpdir: None,
+            ..Runner::targetless(&self.suite_dir, &[], VECTOR_TIMEOUT, None)?
         };
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let mut env = vec![("TMPDIR", tmp.path().as_os_str())];

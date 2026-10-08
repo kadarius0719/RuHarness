@@ -106,6 +106,19 @@ fn script(path: &Path, body: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// A fresh folder for stand-in compilers of the target `t`: outside the
+/// target (no `PATH` entry under the project reaches a child) and outside
+/// the home folder (the tool profile reads the system's temp folders, so
+/// the sandboxed tool can still be started from there).
+fn stand_in_bin(t: &Path) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "ruharness-stand-in-{}",
+        t.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir.join("bin")
+}
+
 /// The test's PATH with `dir` first.
 fn path_with(dir: &Path) -> OsString {
     let mut dirs = vec![dir.to_path_buf()];
@@ -549,7 +562,7 @@ fn zopfli_measured_end_to_end() {
     assert!(!show.stdout.contains("compilers not checked"));
     assert!(!show.stdout.contains("out of date"), "{}", show.stdout);
     // Another `cc` first on the PATH is another compiler: every row says so.
-    let bin = t.join("stand-in/bin");
+    let bin = stand_in_bin(&t);
     script(&bin.join("cc"), "echo 'cc 1.0 (stand-in)'\n");
     let path = path_with(&bin);
     let show = harness_env(
@@ -602,8 +615,9 @@ fn in_a_temp_folder(path: &Path) -> bool {
 
 /// `perf show` checks the compilers as tool runs (§3.9): in the tool
 /// sandbox, with the tool environment, stopped at `[oracle] timeout_secs`.
-/// The target picks which compilers run (its `rust-toolchain.toml`, or the
-/// PATH as here), so they are target code. Without a launcher cache the
+/// The PATH picks which compilers run (here a folder of stand-ins outside
+/// the target: no entry under the target reaches a child), so they are
+/// treated as untrusted code. Without a launcher cache the
 /// computer is not checked, in those words; `--no-check` runs neither. A
 /// stored row gives them something to judge.
 #[test]
@@ -615,7 +629,7 @@ fn show_checks_the_compilers_in_the_sandbox() {
     let t = zopfli("compilers");
     let target = t.to_str().unwrap();
     store_a_baseline(&t);
-    let bin = t.join("stand-in/bin");
+    let bin = stand_in_bin(&t);
     let marker = t.join("written-by-rustc");
     script(&bin.join("cc"), "echo 'cc 1.0 (stand-in)'\n");
     script(
@@ -709,7 +723,7 @@ fn show_stops_at_the_first_compiler_that_fails() {
     let t = zopfli("first-compiler");
     let target = t.to_str().unwrap();
     store_a_baseline(&t);
-    let bin = t.join("stand-in/bin");
+    let bin = stand_in_bin(&t);
     let marks = std::env::temp_dir()
         .canonicalize()
         .unwrap()
@@ -1405,7 +1419,7 @@ fn run_reads_the_compilers_as_show_does() {
     let mut text = std::fs::read_to_string(&lib).unwrap();
     text.push_str("\n// an edit since verify\n");
     std::fs::write(&lib, text).unwrap();
-    let bin = t.join("stand-in/bin");
+    let bin = stand_in_bin(&t);
     let path = path_with(&bin);
     let stored_rustc = || {
         let r = harness_env(

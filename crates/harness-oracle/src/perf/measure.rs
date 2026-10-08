@@ -8,7 +8,7 @@ use super::archive::{archive_facts, ArchiveFacts, PanicRuntime};
 use super::build::{self, Hashed, Slot};
 use super::launcher::{self, End, Launcher, Seen, Status};
 use super::tools;
-use crate::exec::{self, Runner};
+use crate::exec::Runner;
 use crate::sandbox::{self, HostDirs, PerfSpec, ProfileSpec};
 use crate::{build_staticlib, extra_link_args, prepare_target_dir, program_c_files_in, Base};
 use harness_core::error::Error;
@@ -814,14 +814,7 @@ pub fn perf_run(
     let mut log = String::new();
 
     // Each build step in its own sandbox (§3.2 *Build* step 3).
-    let plain = Runner {
-        cwd: root.clone(),
-        allowlist: base.allowlist.clone(),
-        timeout: base.timeout,
-        max_output: exec::DEFAULT_MAX_OUTPUT,
-        tool_profile: None,
-        tool_tmpdir: None,
-    };
+    let plain = Runner::new(&root, base.allowlist.clone(), base.timeout, None)?;
     let steps = Steps {
         runner: &plain,
         host: &host,
@@ -902,17 +895,25 @@ pub fn perf_run(
             continue;
         }
         progress.message(&format!("{} — building its Rust…", c.id));
-        let target_dir = prepare_target_dir(&c.crate_dir)?;
-        let cargo = steps.writing(
-            std::slice::from_ref(&target_dir),
-            &[c.crate_dir.join("Cargo.lock")],
-        )?;
-        let built = build_staticlib(
-            &cargo,
-            cargo.tool_profile.as_deref(),
-            &c.crate_dir,
-            &target_dir,
-        );
+        // A crate folder the unit-crate check refuses (a build script, a
+        // `.cargo/`, a dependency) is never given to cargo: the unit is left
+        // out as a crate that does not build, the refusal in the log.
+        let built = match crate::unit_crate::check_unit_crate(&c.id, &c.crate_dir) {
+            Err(refused) => Err(refused),
+            Ok(()) => {
+                let target_dir = prepare_target_dir(&c.crate_dir)?;
+                let cargo = steps.writing(
+                    std::slice::from_ref(&target_dir),
+                    &[c.crate_dir.join("Cargo.lock")],
+                )?;
+                build_staticlib(
+                    &cargo,
+                    cargo.tool_profile.as_deref(),
+                    &c.crate_dir,
+                    &target_dir,
+                )
+            }
+        };
         if let Err(Error::Interrupted) = built {
             return Err(Error::Interrupted);
         }
@@ -4480,9 +4481,11 @@ mod tests {
         let root = dir.0.clone();
         let ids = ["ua", "ub", "uc", "ud", "ue"];
         mini_program(&root, &ids);
-        // ud's build script tries to write the C's objects and ua's
-        // staticlib folder, then fails; ue has no Cargo.lock yet, so its
-        // build writes one into the files verify hashed.
+        // ud carries a build script that would write the C's objects and
+        // ua's staticlib folder, then fail: the unit-crate check refuses it
+        // before cargo runs, so ud is left out as a crate that does not
+        // build; ue has no Cargo.lock yet, so its build writes one into the
+        // files verify hashed.
         let obj_probe = root.join("migration/build/.perf/obj/written-by-a-build-script");
         let lib_probe = root.join("migration/units/ua/ua_rs/target/written-by-a-build-script");
         let build_rs = format!(

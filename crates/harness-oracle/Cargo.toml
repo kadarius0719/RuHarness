@@ -9,12 +9,13 @@ description = "RuHarness oracle strategies (c-abi-differential)"
 [dependencies]
 # serde_json: parsing the benchmark scorer's report (already a workspace dep).
 serde_json.workspace = true
+# toml: reading a unit crate's manifest before cargo runs on it (the
+# unit-crate check, docs/PROJECT-MAP-DESIGN.md §3.7); already a workspace dep
+# (harness-core's config), so no crate is added to the tree.
+toml.workspace = true
 harness-core.workspace = true
 # Workspace path dependency (no crates.io addition): the oracle needs exactly
 # two pure functions of the C frontend — `mutants` (mutation sites for
 # driver validation, M4 R5) and `lint_driver` (the driver-shape source lint,
 # M4 R1) — so tree-sitter C parsing keeps a single owner.
 harness-scan.workspace = true
-
-[dev-dependencies]
-toml.workspace = true

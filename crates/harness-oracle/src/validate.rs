@@ -129,14 +129,7 @@ fn run(
         })?),
         None => None,
     };
-    let runner = Runner {
-        cwd: root.clone(),
-        allowlist: base.allowlist.clone(),
-        timeout: base.timeout,
-        max_output: crate::exec::DEFAULT_MAX_OUTPUT,
-        tool_profile,
-        tool_tmpdir: None,
-    };
+    let runner = Runner::new(&root, base.allowlist.clone(), base.timeout, tool_profile)?;
     let cc_version = crate::tool_first_line(&runner, &["cc", "--version"])?;
     let inputs = DriverValidationInputs {
         unit_source,

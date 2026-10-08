@@ -591,6 +591,7 @@ mod cache_state_tests {
             rustup_home: None,
             tmpdir: None,
             perf_cache: home.0.join("Caches/ruharness/perf"),
+            work: home.0.join("Caches/ruharness/work"),
         };
         if let Some(refused) = refuse_cache(&host.perf_cache, &host) {
             assert_eq!(words(cache_state(&host, compiler)), refused);
