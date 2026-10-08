@@ -2840,6 +2840,9 @@ test or added one that fails without the fix; the next review of this area is th
 **Decided: an unreadable facts file stays a whole-target refusal in the cockpit and harness-mcp**
 (a corrupt ledger is worth stopping on); `perf show` alone treats it as missing, and the docs say so.
 
+**`bench check --replay`** after all three passes: 198 reproduce (1 conformant, 197 drifted), 2
+expected divergences, 0 problems — OK, no regression (27 min 44 s).
+
 **Decided: harness-mcp copies the 999-unit words rather than calling the oracle** (its read model
 stays harness-core only, and the cockpit's gate must not select units on the UI thread): the cockpit's
 and harness-mcp's tests pin the same string as `check_plan_size`'s; a reword must change both.

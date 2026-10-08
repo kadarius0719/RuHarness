@@ -11,12 +11,10 @@ change at the switch points below.
   DECISIONS' last entry says what changed in plain words and what was decided (no check round after
   the small fix pass 5; unreadable facts stay a whole-target refusal in the cockpit and harness-mcp;
   harness-mcp copies the 999-unit words; the own-build rule stays by location).
-- **`bench check --replay` NOT run** for these merges: the permission classifier refuses the agent's
-  `cp -cR` of the gitignored `targets/tractor/.scorer-vendor` and `.bench` (vendored third-party
-  code). The person copies them from `.claude/worktrees/rust-migration-harness-7d1c42/targets/tractor/`
-  into the worktree, then the session runs it on a quiet machine (expect 198 reproduce, 2 expected
-  divergences, 0 problems, ~29 min). Fix passes 3–5 touched perf, the cockpit, harness-mcp and the
-  results reader; nothing verify, migrate or bench read — but run it anyway, as the rule says.
+- **`bench check --replay` RUN after the merges** (the person copied the gitignored fixtures;
+  the classifier refuses that `cp -cR` for the agent): 198 reproduce (1 conformant, 197 drifted),
+  2 expected divergences, 0 problems, `bench check: OK — no regression`, 27 min 44 s. The fixtures
+  now sit in this worktree (`targets/tractor/.scorer-vendor`, `.bench`).
 - **The project-map design review is DONE and verified**, not triaged:
   docs/reviews/2026-10-07-project-map-design-review.md (four lenses — facts, security, integration,
   the model step — each finding checked by its own Opus verifier, the spike rerun, `nm`/include/
@@ -37,14 +35,13 @@ change at the switch points below.
   work); the help's Speed section leaves out "Measure the program as it stands".
 
 **The work, in order:**
-1. `bench check --replay` once the person has copied the fixtures (above).
-2. **The map design triage and revision 1 — ASK FOR HIGH EFFORT FIRST** ("Please set my effort to
+1. **The map design triage and revision 1 — ASK FOR HIGH EFFORT FIRST** ("Please set my effort to
    high now: the map design review's findings are back and verified, and the triage and revision of
    the design start next"). Then: triage the eight files' findings (keep what the verifier confirmed;
    say what is dropped and why), write revision 1 of docs/PROJECT-MAP-DESIGN.md, and CHECK THE
    REVISION (Opus checkers at high effort) before any building. Ask for medium again once the check
    is launched.
-3. Then weigh the briefing's M5 against building the map.
+2. Then weigh the briefing's M5 against building the map.
 
 **Environment:** as the previous kickoff says (below). Test downloads only in
 `~/code/ruharness-test-downloads/`; nothing installed; the binaries from a worktree's
