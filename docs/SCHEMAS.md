@@ -1347,7 +1347,8 @@ plan-order | computer | compilers`, and the cockpit's own `measuring | too-large
   fewer than two measurable units is refused before anything is built, naming the units left out
   and why ("one measurable unit (u001) — u-tree left out: verify it first — the program as it
   stands needs two", or "no measurable unit — … — the program as it stands needs two"; "no accepted
-  unit to compare yet" when no unit is verified or merged at all); the left-out list ("u-x left out: why",
+  unit to compare yet" when no unit is verified or merged at all); the left-out list ("u-x left
+  out: why",
   joined by "; ") names at most 10 units, then "; and N more left out" — in the full run's
   progress lines too. When fewer than two units build, the refusal after the builds uses
   the same words, the units that did not build among those left out ("one measurable unit (ua) —
@@ -1395,13 +1396,16 @@ plan-order | computer | compilers`, and the cockpit's own `measuring | too-large
 `harness_status.speed`: `null` without a workloads file, else `{state: no-workload | file-error |
 not-yet-run | c-only | units, units_measured, units_measurable, measuring, program_checked,
 note, unreadable [{file, error}], unreadable_omitted?, c_alone [row], as_it_stands {units,
-units_omitted?, left_out [{id, reason}], left_out_omitted?, rows [row]}}` — `units_measured` the units with a row perf timed or ran (not
+units_omitted?, left_out [{id, reason}], left_out_omitted?, rows [row]}}` — `units_measured` the
+units with a row perf timed or ran (not
 only set-up rows), `units_measurable` those it would measure now (0 for a plan perf refuses, over
-999 units, with perf's words fenced in `note`, else `null`); the held and left-out units listed up to 20
+999 units, with perf's words fenced in `note`, else `null`); the held and left-out units listed up
+to 20
 each, with how many more; rows only of workloads still in the workloads file (one each, so at
 most 16 a side) — bounded whatever the plan holds. `program_checked: false` when there are no
 facts (none; an unreadable facts file is refused as a whole by harness-mcp and the cockpit, where
-`perf show` treats it as missing), as `perf show` says it: the C's digest and the units the program as
+`perf show` treats it as missing), as `perf show` says it: the C's digest and the units the program
+as
 it stands holds are then not judged, and the C-alone and as-it-stands rows' `current` is `null`
 (not known), not `true` — unless a reason was found anyway (the workload changed), then `false`
 with the reason; unit rows are still judged, except their `replaces` check, which needs the facts.

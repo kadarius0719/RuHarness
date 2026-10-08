@@ -800,7 +800,8 @@ c79]. Stale facts: `perf run` refuses ("scan first").
   `environment_checked: false` (computer and compilers); for the C alone: CPU time, memory and the
   outcome. Ranked by the worst order above; fenced as the features facts are. Without facts the
   speed head says `program_checked: false` and the C-alone and as-it-stands rows' `current` is
-  `null` (unless a reason was found anyway, then `false` with it); the results files that could not be read are listed (`unreadable`, at most 20); a plan
+  `null` (unless a reason was found anyway, then `false` with it); the results files that could
+  not be read are listed (`unreadable`, at most 20); a plan
   perf refuses for its size has `units_measurable` 0 and the words in `note` (SCHEMAS has the
   fields). The cockpit's read model counts the plan against the same cap with the same words, so
   the gate and harness-mcp need no oracle call; the cache answer also refuses a `.lock` that is a
