@@ -519,14 +519,20 @@ computer (any command that creates `migration/` — the first `scan`, `map`, `fe
 roots the person adopted, each paired with a random token the harness also writes to
 `<project>/migration/.ruharness-adopted` (one per project root; a benchmark suite's at
 `<suite>/.ruharness-adopted`; git-ignored), so a different tree unpacked at the same path is not
-trusted by its path alone; adopting a root whose token file already exists records that token and
-writes none. The check is one harness-core function, called by `TargetContext::load` (so every
+trusted by its path alone; `--adopt` always writes a fresh token over any the download shipped
+(so a later tree from the same source, unpacked at the same path, is asked again); only the test
+helper and a benchmark suite's adoption (trusted by `corpus.lock`) record a token already there
+(changed in the fix passes after step (c), 2026-10-08). The check is one harness-core function, called by `TargetContext::load` (so every
 command that opens a ledger — the CLI, the cockpit's read model, harness-mcp — goes through it) and
 by the three `project` commands, which run on a root with no `harness.toml`. It refuses a ledger
 whose root is not listed or whose token is missing or different, in one sentence: "this folder already holds migration results made
 elsewhere (N units, M verified): to trust them here, add `--adopt` once". The cockpit asks the same
-in a dialog; harness-mcp never adopts (an agent is not the person; the `sync-runtime` block tells
-agents never to pass `--adopt` unasked). A `migration/` is the harness's when it holds `facts.jsonl`,
+in a dialog; harness-mcp never adopts (an agent is not the person: its refusal says "ask the person
+to adopt it; an agent never adopts", and every `sync-runtime` block carries that line). A
+`migration/` that holds no results — only `tools/<id>/harness.toml` files, `map/config.toml`, the
+locks, the `.gitignore` and the token — needs no adoption and is recorded as created here; a
+`migration/` that is not the harness's at all gets the "of its own" refusal before any adoption
+question. A `migration/` is the harness's when it holds `facts.jsonl`,
 `plan.toml`, `map/` or `tools/` and nothing outside the ledger's fixed names (one table in SCHEMAS:
 `facts.jsonl`, `plan.toml`, `DECISIONS.md`, `observer/`, `units/`, `features/`, `perf/`, `map/`,
 `tools/`, `build/`, `.lock`, `.gitignore`, `.ruharness-adopted`; Finder's `.DS_Store` is ignored);
@@ -691,7 +697,7 @@ and now the ledger lives inside the download.
   home folder (so `/Users/Shared`, `/Volumes`, the temporary folders) and writes to all of
   `/private/tmp` and `/private/var/folders`. The map profile is its own renderer (today's always adds
   the temporary folders to the writable list): it denies reading `/Users` (the home folder and
-  `/Users/Shared`), `/Volumes` and `/private/tmp` except the project root and the map's fresh
+  `/Users/Shared`), `/Volumes`, `/private/tmp` and `/private/var/tmp` except the project root and the map's fresh
   folder — verified to compile and link so; `/private/var/folders` stays readable and §6 says so —
   denies the cargo and rustup homes wherever they are (a custom `CARGO_HOME` outside the home folder
   holds credentials; `cc` needs neither), and allows writes only to the map's fresh temporary
@@ -1091,6 +1097,16 @@ enforced.
 - Linux: the map once a Linux sandbox exists; the `objsyms` extension is written for ELF too.
 
 ## 9. What changed, and why
+
+**After the review of steps (a) and (c)** (2026-10-08, docs/reviews/2026-10-08-map-steps-a-c-review.md,
+its triage): one include rule in one place with the configuration's path flags in the compiler's
+order (`-iquote` for quoted includes only; each `-include` file the first include of every listed
+file), implemented once in harness-core's `sources::Resolver` and used by every reader and by the
+oracle; one include reader (the lexical one; tree-sitter's include facts dropped); a missing listed
+file refused at load; the harness's own C runtimes compiled without the configuration and the
+wrapper C89-clean; a file-list verdict carries a `configuration` toolchain entry; a fresh token on
+every `--adopt`; a results-free `migration/` made here; an agent never adopts; hints spell `--tool`;
+`/private/var/tmp` denied in the map profile.
 
 **Revision 2.1** (after the re-check of revision 2, three readers): the unit-crate rule now says what
 makes cargo run code and lets zopfli's hand-written crate and the harness's own `target/` through;

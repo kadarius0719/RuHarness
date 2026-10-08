@@ -99,8 +99,17 @@ change at the switch points below.
      Residual: the files an ambiguous include lands on are in the program digest but in no
      unit's include closure (a change moves the program digest, not that unit's `source_hash`).
      Rule corrected at the merge: `-iquote` folders apply to quoted includes only.
-   - `worktree-agent-ac1683b337dddd828` — fix pass B, the oracle (lib.rs, boundary_run, validate,
-     shape, objsyms, unit_crate, featuremap, sandbox, perf/build, status.rs's compare);
+   - `worktree-agent-ac1683b337dddd828` — fix pass B MERGED (c8d5f58 after one test fix): the
+     oracle on the shared resolver (`include_rule.rs`), the runtimes without the configuration,
+     the C89 wrapper (template v4, runtime digest golden moved), `status::configuration_entry`,
+     mutants' `-iquote`, objsyms' absolute symbols and caps, the unit-crate check's gaps, the
+     mirror through `read_regular`, `/private/var/tmp` denied. Left by it: the driver-validation
+     record (`validate.rs`) carries no configuration entry (the triage named the verdict only);
+     the committed B01 `read_scalefactors_lib` verdict holds the old boundary digest (status does
+     not compare it).
+   **All four merged.** At the time of writing the whole-workspace tests and the bench replay run
+   on c8d5f58; then push, fast-forward main, a check round over the fix passes (Opus checkers,
+   high), DECISIONS' bench line; then (d), (e), (f), (g).
    - `worktree-agent-ae7ea5096fdff60c7` — fix pass C MERGED (one conflict in main.rs: both
      sides' additions kept): a fresh token on every `--adopt` (the two token files untracked —
      **the person runs once per computer:** `harness state status --target targets/zopfli --adopt`

@@ -2990,3 +2990,46 @@ the read model unchanged; end-to-end tests over a liblzg-shaped tool (scan, plan
 init, state status, sync-runtime) and a `verify` green through the CLI with the configuration's
 flag reaching the build. **Step (c) is complete.** The planner needed no change: `source_hash`
 already hashes the include closure the facts record.
+
+## 2026-10-08 — The map's step (b) built; the review of steps (a) and (c) and its fix passes
+
+**Step (b)** (three builders, merged): the configuration file `migration/map/config.toml` and
+`--configuration`, `compile_commands.json` read as a proposal (POSIX word splitting, the
+two-argument options, paths against `directory`, flags-differ facts), the caps (200 000 names, a
+30-minute budget) and the set-aside counts per folder; programs, closures with pending
+alternatives recomputed after a choice, the linker's weak/common rules, collisions, incomplete
+closures with their reasons, shared files, between-program duplicates, libraries, ids and indexes;
+the link checks of §3.5 (choices linked with the closure recomputed, nested sets, held programs);
+the map file `migration/map/project-map.json` written only in full with `root_hash` and
+`inputs_hash`, the screen, the project lock `migration/map/.lock` (taken by `map` and by
+`sync-runtime` for the shared `AGENTS.md`), the first map's `migration/.gitignore`, and the
+"project changed" notice in `state status` and the cockpit's read model.
+
+**The review of (a)+(c)** (four Opus checkers at high: the oracle, the readers, security,
+usability and the tests; docs/reviews/2026-10-08-map-steps-a-c-review.md) found two real gaps
+that the design's words had hidden: every compile honoured the configuration's include flags
+while no reader did (so the scan recorded one header, the compile read another, and the digest
+never moved), and the scanner and the staleness check read includes differently (an X-macro
+project stayed stale forever). The triage decided nine points (listed in the design's §9) and
+three fix passes built them: A the readers (the shared resolver, one reader, staleness both ways,
+unreadable files as facts, the loader's refusals), B the oracle (the runtimes without the
+configuration, the configuration entry in file-list verdicts, mutants' `-iquote`, absolute
+symbols seen by the driver-shape check, object and name-byte caps, the unit-crate check's gaps,
+the mirror through `read_regular`, `/private/var/tmp` denied), C the person's side (a fresh token
+on every `--adopt` with the two committed tokens untracked, a results-free `migration/` made
+here, "an agent never adopts", hints with `--tool`, the tool's id on screen, one "no target here"
+sentence, the `⊖` mark, the tests the reverts showed uncovered).
+
+**Decided.** `-iquote` folders apply to quoted includes only (the triage's wording was loose; the
+compiler decides). The boundary wrapper's template moved to version 4 and the pinned runtime
+digest with it, so new verdicts' `boundary` toolchain entry differs from older ones; `status` does
+not compare that entry, so nothing reads stale. The facts an ambiguous include lands on are in the
+program digest but in no unit's include closure (recorded, not fixed: the configuration settles
+such includes, and `accept` refuses while one is unsettled). The tokens are no longer committed:
+once per computer the person runs `harness state status --target targets/zopfli --adopt` and
+`harness bench status --suite targets/tractor --adopt`. Dot-folders are no longer scanned in the
+folder form (none of the 101 committed roots has one).
+
+**Gates.** fmt, clippy, the whole workspace green after each merge (one test fixed at the merge of
+fix pass C: the cut-short-walk test now reads the facts from the map file, where the design puts
+them). The bench replay after the fix passes is recorded below when it finishes.
