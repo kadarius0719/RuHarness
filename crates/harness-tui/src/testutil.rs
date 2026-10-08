@@ -68,17 +68,18 @@ impl Drop for TmpDir {
     }
 }
 
-/// A test's child that never ends by itself (a `while :` loop, a stopped
-/// shell): SIGKILLed when the guard drops — when the test ends, passing or
-/// failing — unless it is gone, or its pid now names another program (its
-/// command name is checked first, so a reused pid is never killed).
+/// A test's child that does not end by itself while the test runs (a loop,
+/// a stopped shell): SIGKILLed when the guard drops — when the test ends,
+/// passing or failing — unless it is gone, or its pid now names another
+/// process (its command name and its parent, this test process, are
+/// checked first, so a reused pid is never killed).
 pub struct KillOnDrop {
     pid: u32,
     comm: String,
 }
 
 impl KillOnDrop {
-    /// Guard `pid`, read now as the program it is.
+    /// Guard `pid`, a child of this process, read now as the program it is.
     pub fn new(pid: u32) -> KillOnDrop {
         KillOnDrop {
             pid,
@@ -89,7 +90,10 @@ impl KillOnDrop {
 
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
-        if self.comm.is_empty() || comm_of(self.pid) != self.comm {
+        if self.comm.is_empty()
+            || comm_of(self.pid) != self.comm
+            || parent_of(self.pid) != Some(std::process::id())
+        {
             return;
         }
         let _ = std::process::Command::new("/bin/kill")
@@ -99,6 +103,15 @@ impl Drop for KillOnDrop {
     }
 }
 
+/// `pid`'s parent (`ps -o ppid=`), `None` when it is gone.
+fn parent_of(pid: u32) -> Option<u32> {
+    std::process::Command::new("/bin/ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+}
+
 /// `pid`'s command name (`ps -o comm=`), empty when it is gone.
 fn comm_of(pid: u32) -> String {
     std::process::Command::new("/bin/ps")
@@ -106,4 +119,40 @@ fn comm_of(pid: u32) -> String {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::BufRead;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// The guard kills its own child, and never a process this test did
+    /// not start — here a grandchild, whose parent is another process.
+    #[test]
+    fn the_guard_kills_only_a_child_of_this_process() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30 & echo $!; wait"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        let stdout = child.stdout.take().unwrap();
+        std::io::BufReader::new(stdout)
+            .read_line(&mut line)
+            .unwrap();
+        let grandchild: u32 = line.trim().parse().unwrap();
+        drop(KillOnDrop::new(grandchild));
+        // A killed one would be reaped by its shell's `wait` by now.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let spared = !comm_of(grandchild).is_empty();
+        drop(KillOnDrop::new(child.id()));
+        let status = child.wait().unwrap();
+        let _ = std::process::Command::new("/bin/kill")
+            .args(["-KILL", &grandchild.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status();
+        assert!(spared, "a grandchild was killed");
+        assert_eq!(status.signal(), Some(9), "its own child is killed");
+    }
 }

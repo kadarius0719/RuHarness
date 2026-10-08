@@ -186,8 +186,11 @@ fn two(v: f64) -> Value {
 /// workload, the metric, `short`, `runs`, the shift and its interval in
 /// percent (never on a can't-tell answer), `current` with closed reasons,
 /// and `environment_checked: false` — the computer and the compilers are
-/// not checked here. The C alone's adds its median CPU time and memory.
-pub fn speed_row(r: &SpeedRow, c_alone: bool) -> Value {
+/// not checked here. `judged` false (a C-alone or as-it-stands row without
+/// facts: the head's `program_checked`): `current` is `null` — not known —
+/// unless a reason was found all the same (then `false`, the reasons
+/// listed). The C alone's adds its median CPU time and memory.
+pub fn speed_row(r: &SpeedRow, c_alone: bool, judged: bool) -> Value {
     let row = &r.row;
     let mut v = json!({
         "workload": short("workload id", &r.workload),
@@ -198,7 +201,12 @@ pub fn speed_row(r: &SpeedRow, c_alone: bool) -> Value {
         }),
         "short": row.short,
         "runs": row.runs,
-        "current": r.out_of_date.is_empty(),
+        // Not judged and nothing found out of date: not known.
+        "current": if judged || !r.out_of_date.is_empty() {
+            json!(r.out_of_date.is_empty())
+        } else {
+            Value::Null
+        },
         // Each reason once: a token says what changed, never which unit, so
         // its repeats (one per unit accepted since) would only grow the row.
         "out_of_date": harness_core::perf::currency::REASONS.iter()
@@ -228,8 +236,9 @@ pub fn speed_row(r: &SpeedRow, c_alone: bool) -> Value {
 
 /// The rows of `rows` whose workload is in the workloads file — at most one
 /// per workload, so at most 16 a side (`MAX_WORKLOADS`): rows of a workload
-/// no longer in the file (perf drops them on its next write, and a forged
-/// file could hold any number) are left out of the fact.
+/// no longer in the file (perf drops them on its next write; a forged file
+/// can hold them too, up to the reader's 16 a list) are left out of the
+/// fact.
 fn known_rows<'r>(model: &SpeedModel, rows: &'r [SpeedRow]) -> Vec<&'r SpeedRow> {
     rows.iter()
         .filter(|r| model.workloads.iter().any(|(id, _)| *id == r.workload))
@@ -239,8 +248,16 @@ fn known_rows<'r>(model: &SpeedModel, rows: &'r [SpeedRow]) -> Vec<&'r SpeedRow>
 /// The speed's head for `harness_status`: the group's state, the C alone's
 /// rows, the program as it stands's (its held and left-out units, the
 /// first [`MAX_LISTED`] of each with how many more), and whether a perf run
-/// is measuring — `null` without a workloads file. Bounded whatever the
-/// plan's size, so the units' page always has room.
+/// is measuring — `null` without a workloads file. `program_checked`:
+/// false without facts, when the C alone's and the program as it stands's
+/// rows are not judged against the C and the units held today (their
+/// `current` is then `null` unless a reason was found). `unreadable`: the
+/// results files that could not be read (the first [`MAX_LISTED`], each
+/// its file name and the first line of why, fenced; `unreadable_omitted`
+/// how many more). `note`: why perf refuses the plan whatever is
+/// measurable (a plan over 999 units; `units_measurable` is then 0), else
+/// `null`. Bounded whatever the plan's size, so the units' page always has
+/// room.
 fn speed_head(model: &SpeedModel) -> Value {
     let (state, measured) = match &model.group {
         speed::Group::NoFile => return Value::Null,
@@ -256,7 +273,8 @@ fn speed_head(model: &SpeedModel) -> Value {
             "id": short("unit id", id),
             "reason": closed("left-out reason", reason, harness_core::perf::results::LEFT_OUT_REASONS),
         })).collect::<Vec<_>>(),
-        "rows": known_rows(model, &model.program_rows).into_iter().map(|r| speed_row(r, false)).collect::<Vec<_>>(),
+        "rows": known_rows(model, &model.program_rows).into_iter()
+            .map(|r| speed_row(r, false, model.program_checked)).collect::<Vec<_>>(),
     });
     if model.held.len() > MAX_LISTED {
         as_it_stands["units_omitted"] = json!(model.held.len() - MAX_LISTED);
@@ -264,14 +282,25 @@ fn speed_head(model: &SpeedModel) -> Value {
     if model.left_out.len() > MAX_LISTED {
         as_it_stands["left_out_omitted"] = json!(model.left_out.len() - MAX_LISTED);
     }
-    json!({
+    let mut head = json!({
         "state": state,
         "units_measured": measured,
         "units_measurable": model.measurable.len(),
+        "note": model.plan_refused.as_deref().map(|w| short("perf refusal", w)),
         "measuring": model.measuring,
-        "c_alone": known_rows(model, &model.c_rows).into_iter().map(|r| speed_row(r, true)).collect::<Vec<_>>(),
+        "program_checked": model.program_checked,
+        "c_alone": known_rows(model, &model.c_rows).into_iter()
+            .map(|r| speed_row(r, true, model.program_checked)).collect::<Vec<_>>(),
         "as_it_stands": as_it_stands,
-    })
+        "unreadable": model.unreadable.iter().take(MAX_LISTED).map(|(file, why)| json!({
+            "file": short("results file", file),
+            "error": short("results file error", why),
+        })).collect::<Vec<_>>(),
+    });
+    if model.unreadable.len() > MAX_LISTED {
+        head["unreadable_omitted"] = json!(model.unreadable.len() - MAX_LISTED);
+    }
+    head
 }
 
 /// A unit's Speed rows, worst first (out-of-date rows last).
@@ -281,7 +310,7 @@ fn unit_speed(model: &SpeedModel, id: &str) -> Vec<Value> {
         .map(|u| {
             known_rows(model, &u.rows)
                 .into_iter()
-                .map(|r| speed_row(r, false))
+                .map(|r| speed_row(r, false, true))
                 .collect()
         })
         .unwrap_or_default()
@@ -1641,6 +1670,185 @@ mod tests {
         assert_eq!(s["speed"]["state"], "units");
         assert_eq!(s["speed"]["units_measured"], 0);
         assert_eq!(s["speed"]["units_measurable"], 1);
+        assert_eq!(s["speed"]["note"], Value::Null);
+    }
+
+    /// Without facts the C alone's and the program as it stands's rows are
+    /// not judged against today's C and units (§3.9): the head says
+    /// `program_checked: false` and those rows' `current` is `null` — never
+    /// `true` unjudged; with facts, `true` and the rows judged (u001,
+    /// pending, is left out now).
+    #[test]
+    fn without_facts_the_program_rows_are_not_called_current() {
+        use harness_core::perf::results::{ProgramResults, UnitRef};
+        let t = speed_target("speed-no-facts", &["big"]);
+        let snap = Snapshot::load(&t.0).unwrap();
+        let mut ais = speed_row_of(
+            &snap,
+            "big",
+            Some(speed_runs(false)),
+            "macos-v6-cycles",
+            false,
+        );
+        ais.inputs.crates = None;
+        ais.inputs.replaces = None;
+        ais.inputs.units = Some(vec![UnitRef {
+            id: U001.into(),
+            crate_digest: harness_core::hash::unit_crate_file_set_hash(
+                &snap.root,
+                &snap
+                    .root
+                    .join("migration/units")
+                    .join(U001)
+                    .join("katajainen_rs"),
+            )
+            .unwrap(),
+        }]);
+        let c = speed_row_of(&snap, "big", None, "macos-v6-cycles", false);
+        write_speed(
+            &t,
+            ProgramResults {
+                c_alone: vec![c],
+                as_it_stands: vec![ais],
+                ..Default::default()
+            },
+            vec![],
+        );
+        let plan = t.0.join("migration/plan.toml");
+        let text = std::fs::read_to_string(&plan).unwrap();
+        let verified = "id = \"u001-katajainen\"\nstatus = \"verified\"";
+        assert!(text.contains(verified));
+        std::fs::write(
+            &plan,
+            text.replacen(
+                verified,
+                "id = \"u001-katajainen\"\nstatus = \"pending\"",
+                1,
+            ),
+        )
+        .unwrap();
+        let s = status(&Snapshot::load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap();
+        let sp = &s["speed"];
+        assert_eq!(sp["program_checked"], true, "{sp}");
+        assert_eq!(sp["c_alone"][0]["current"], true, "{sp}");
+        assert_eq!(sp["as_it_stands"]["rows"][0]["current"], false, "{sp}");
+        assert_eq!(
+            sp["as_it_stands"]["rows"][0]["out_of_date"],
+            json!(["left-out"])
+        );
+        std::fs::remove_file(t.0.join("migration/facts.jsonl")).unwrap();
+        let s = status(&Snapshot::load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap();
+        let sp = &s["speed"];
+        assert_eq!(sp["program_checked"], false, "{sp}");
+        assert_eq!(sp["c_alone"][0]["current"], Value::Null, "{sp}");
+        assert_eq!(
+            sp["as_it_stands"]["rows"][0]["current"],
+            Value::Null,
+            "{sp}"
+        );
+        assert_eq!(sp["as_it_stands"]["rows"][0]["out_of_date"], json!([]));
+        // A reason found all the same (the workload changed): false.
+        std::fs::write(t.0.join("bench/big.txt"), "changed").unwrap();
+        let s = status(&Snapshot::load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap();
+        assert_eq!(s["speed"]["c_alone"][0]["current"], false, "{}", s["speed"]);
+    }
+
+    /// Results files that cannot be read are named in the head, fenced and
+    /// capped (§3.11): a junk unit file, a junk program.json — with facts
+    /// or without; more than [`MAX_LISTED`] are counted.
+    #[test]
+    fn unreadable_results_files_are_named() {
+        use harness_core::perf::results as res;
+        let t = speed_target("speed-unreadable", &["big"]);
+        let snap = Snapshot::load(&t.0).unwrap();
+        write_speed(
+            &t,
+            res::ProgramResults {
+                c_alone: vec![speed_row_of(&snap, "big", None, "macos-v6-cycles", false)],
+                ..Default::default()
+            },
+            vec![speed_row_of(
+                &snap,
+                "big",
+                Some(speed_runs(false)),
+                "macos-v6-cycles",
+                false,
+            )],
+        );
+        let perf = harness_core::perf::perf_dir(&t.0);
+        let head = || {
+            status(&Snapshot::load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap()["speed"]
+                .clone()
+        };
+        let files = |sp: &Value| -> Vec<String> {
+            sp["unreadable"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|u| u["file"]["text"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(head()["unreadable"], json!([]));
+        std::fs::write(res::unit_path(&perf, U001), "junk").unwrap();
+        let sp = head();
+        assert_eq!(files(&sp), ["units/u001-katajainen.json"], "{sp}");
+        let u = &sp["unreadable"][0];
+        assert_eq!(u["file"]["untrusted"], "results file");
+        assert_eq!(u["error"]["untrusted"], "results file error");
+        assert!(!u["error"]["text"].as_str().unwrap().contains('\n'));
+        std::fs::write(res::program_path(&perf), "junk").unwrap();
+        assert_eq!(
+            files(&head()),
+            ["program.json", "units/u001-katajainen.json"]
+        );
+        std::fs::remove_file(t.0.join("migration/facts.jsonl")).unwrap();
+        let sp = head();
+        assert_eq!(
+            files(&sp),
+            ["program.json", "units/u001-katajainen.json"],
+            "{sp}"
+        );
+        assert_eq!(sp["program_checked"], false);
+        // More than the cap: the first listed, the rest counted.
+        let plan = t.0.join("migration/plan.toml");
+        let mut text = std::fs::read_to_string(&plan).unwrap();
+        for i in 0..30 {
+            text.push_str(&format!(
+                "\n[[unit]]\nid = \"u-junk-{i:02}\"\nstatus = \"pending\"\nfiles = []\n"
+            ));
+            std::fs::write(res::unit_path(&perf, &format!("u-junk-{i:02}")), "junk").unwrap();
+        }
+        std::fs::write(&plan, text).unwrap();
+        let s = status(&Snapshot::load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap();
+        assert_eq!(
+            s["speed"]["unreadable"].as_array().unwrap().len(),
+            MAX_LISTED
+        );
+        assert_eq!(s["speed"]["unreadable_omitted"], 32 - MAX_LISTED);
+        assert!(fence::size(&s) <= fence::RESULT_BUDGET);
+    }
+
+    /// A plan over perf's 999 slots: perf refuses it by name, so no unit is
+    /// measurable and the head's note says why, in perf's words.
+    #[test]
+    fn a_plan_over_999_units_measures_nothing() {
+        let t = speed_target("speed-1000-units", &["big"]);
+        let plan = t.0.join("migration/plan.toml");
+        let mut text = std::fs::read_to_string(&plan).unwrap();
+        let have = text.matches("[[unit]]").count();
+        for i in 0..(1000 - have) {
+            text.push_str(&format!(
+                "\n[[unit]]\nid = \"u-pad-{i:04}\"\nstatus = \"pending\"\nfiles = []\n"
+            ));
+        }
+        std::fs::write(&plan, text).unwrap();
+        let s = status(&Snapshot::load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap();
+        assert_eq!(s["speed"]["units_measurable"], 0, "{}", s["speed"]);
+        assert_eq!(
+            s["speed"]["note"]["text"],
+            "perf measures a plan of at most 999 units — this plan has 1000"
+        );
+        assert!(fence::size(&s) <= fence::RESULT_BUDGET);
     }
 
     #[test]

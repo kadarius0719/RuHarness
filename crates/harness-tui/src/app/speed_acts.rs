@@ -53,11 +53,6 @@ pub(super) fn same_build(harness: &Path, exe: &Path) -> bool {
     }
 }
 
-/// [`same_build`] for this process's own binary.
-pub(super) fn own_build(harness: &Path) -> bool {
-    std::env::current_exe().is_ok_and(|exe| same_build(harness, &exe))
-}
-
 /// What building perf's launcher adds to §6's estimate, in seconds: the
 /// difference it makes to a job that measures nothing (the build and the
 /// first execs of perfrun and perfgo).
@@ -78,8 +73,9 @@ fn launcher_seconds() -> u64 {
 
 impl App {
     /// Why perf cannot measure now, from the workloads file's state (and
-    /// the platform) in the words `perf run` refuses with (§3.1 *States*:
-    /// "Measure is greyed with the same words"); `None` when it can.
+    /// the platform), then the plan's size, in the words `perf run` refuses
+    /// with (§3.1 *States*: "Measure is greyed with the same words"; §3.2:
+    /// a plan over 999 units); `None` when it can.
     pub fn speed_gate(&self) -> Option<String> {
         if !cfg!(target_os = "macos") {
             return Some(
@@ -92,7 +88,7 @@ impl App {
                 .blocker
                 .clone()
                 .or_else(|| Some("the workloads file cannot be used".into())),
-            _ => None,
+            _ => self.speed.plan_refused.clone(),
         }
     }
 
@@ -146,7 +142,8 @@ impl App {
             }
         };
         // `--as-it-stands-only` with fewer than two measurable units: perf
-        // would build everything, then refuse (§3.10) — said here instead.
+        // refuses before it builds anything (§3.10) — said here, before
+        // the act is offered.
         let two_units = || -> Result<(), String> {
             if self.speed.measurable.len() < 2 {
                 return Err(
@@ -715,6 +712,44 @@ mod tests {
         crate::app::tests::app_of_path(&target)
     }
 
+    /// A plan over perf's 999 slots: Measure is greyed with perf's own
+    /// refusal, before any dialog — u001, measurable in a smaller plan,
+    /// included.
+    #[test]
+    fn a_plan_over_999_units_greys_measure_with_perfs_words() {
+        if !cfg!(target_os = "macos") {
+            // Greyed off macOS already, with the platform's words.
+            return;
+        }
+        let app = measurable_app("gate-1000-units");
+        assert_eq!(app.speed_gate(), None);
+        let target = app.config.target.clone();
+        let plan = target.join("migration/plan.toml");
+        let mut text = std::fs::read_to_string(&plan).unwrap();
+        let have = text.matches("[[unit]]").count();
+        for i in 0..(1000 - have) {
+            text.push_str(&format!(
+                "\n[[unit]]\nid = \"u-pad-{i:04}\"\nstatus = \"pending\"\nfiles = []\n"
+            ));
+        }
+        std::fs::write(&plan, text).unwrap();
+        let app = crate::app::tests::app_of_path(&target);
+        let _ = std::fs::remove_dir_all(&target);
+        let words = "perf measures a plan of at most 999 units — this plan has 1000";
+        assert_eq!(app.speed_gate().as_deref(), Some(words));
+        assert!(app.speed.measurable.is_empty());
+        for (act, unit) in [
+            (Act::Measure, None),
+            (Act::Measure, Some("u001-katajainen")),
+            (Act::MeasureProgram, None),
+        ] {
+            assert_eq!(
+                app.measure_argv(act, unit).map(|(_, label)| label),
+                Err(words.to_string())
+            );
+        }
+    }
+
     /// The seconds of a "Takes about N s, …" line.
     fn seconds(takes: &str) -> u64 {
         takes
@@ -971,6 +1006,41 @@ mod tests {
         std::os::unix::fs::symlink(&sibling, &link).unwrap();
         assert!(same_build(&link, &exe), "a link to it is it");
         assert!(same_build(&bin.join("../bin/harness"), &exe));
-        assert!(!own_build(Path::new(crate::app::tests::HARNESS)));
+        let this = std::env::current_exe().unwrap();
+        assert!(!same_build(Path::new(crate::app::tests::HARNESS), &this));
+    }
+
+    /// `App::new` records the run's `harness` as the cockpit's own build
+    /// when it is the one next to the cockpit's binary — and not otherwise
+    /// (the cockpit's path given, so no file is put beside the test binary).
+    #[test]
+    fn the_harness_next_to_the_cockpit_is_its_own_build() {
+        let dir = crate::testutil::TmpDir::new("own-build-app");
+        let exe = dir.0.join("harness-tui");
+        let sibling = dir.0.join("harness");
+        std::fs::write(&exe, "").unwrap();
+        std::fs::write(&sibling, "").unwrap();
+        let target = crate::testutil::scratch_target("targets/zopfli", "own-build-target");
+        let app = |harness: &Path, exe: Option<&Path>| {
+            let read = crate::load::read(&target).unwrap();
+            App::new_from(
+                crate::app::Config {
+                    target: target.clone(),
+                    harness: Some(harness.to_path_buf()),
+                    allow_unsandboxed: false,
+                    layout: crate::app::LayoutMode::Auto,
+                    providers: vec!["external".into()],
+                },
+                read,
+                exe,
+            )
+        };
+        let own = app(&sibling, Some(&exe)).harness_own_build;
+        let other = app(Path::new(crate::app::tests::HARNESS), Some(&exe)).harness_own_build;
+        let unknown = app(&sibling, None).harness_own_build;
+        let _ = std::fs::remove_dir_all(&target);
+        assert!(own, "the harness next to the cockpit is its own build");
+        assert!(!other, "another harness is not");
+        assert!(!unknown, "no cockpit path: not known");
     }
 }

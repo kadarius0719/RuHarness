@@ -111,7 +111,8 @@ fn a_bad_command_line_exits_2_and_writes_nothing_to_stdout() {
 }
 
 /// A fake `harness`: its act prints a turn-start (after its INT trap is
-/// set), then spins until interrupted, when it writes `$0.log`.
+/// set), then spins until interrupted, when it writes `$0.log` — or until
+/// its parent, the server, is gone, so it never outlives the test.
 fn spinner(tag: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("harness-mcp-sig-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -122,7 +123,7 @@ fn spinner(tag: &str) -> std::path::PathBuf {
         r#"#!/bin/sh
 trap 'echo interrupted > "$0.log"; exit 130' INT
 echo '{"k":"turn-start","unit":"u","attempt":"a-000000000001","index":1,"kind":"steer","request_key":"k"}'
-while :; do sleep 0.05; done
+while kill -0 $PPID 2>/dev/null; do sleep 0.05; done
 "#,
     )
     .unwrap();
@@ -131,7 +132,27 @@ while :; do sleep 0.05; done
     path
 }
 
-fn start_spinning(tag: &str) -> (Client, std::path::PathBuf) {
+/// Processes SIGKILLed when the guard drops — when the test ends, passing
+/// or failing — unless gone or their pid now names another program.
+struct Reaper(Vec<(u32, String)>);
+
+impl Drop for Reaper {
+    fn drop(&mut self) {
+        for (pid, comm) in &self.0 {
+            if comm.is_empty() || comm_of(*pid) != *comm {
+                continue;
+            }
+            let _ = std::process::Command::new("/bin/kill")
+                .args(["-KILL", &pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
+/// The server running the spinner's act, the spinner's path, and a
+/// [`Reaper`] over the server's children (the spinner).
+fn start_spinning(tag: &str) -> (Client, std::path::PathBuf, Reaper) {
     let fake = spinner(tag);
     let zopfli = repo().join("targets/zopfli");
     let mut c = Client::start(&[
@@ -153,7 +174,13 @@ fn start_spinning(tag: &str) -> (Client, std::path::PathBuf) {
         seen.iter().any(|m| m["method"] == "notifications/progress"),
         "{seen:?}"
     );
-    (c, fake)
+    let reaper = Reaper(
+        children_of(c.pid())
+            .into_iter()
+            .map(|pid| (pid, comm_of(pid)))
+            .collect(),
+    );
+    (c, fake, reaper)
 }
 
 /// §2 "Shutdown", §R2 TESTS-7: on SIGTERM, SIGINT or SIGHUP the server
@@ -162,7 +189,7 @@ fn start_spinning(tag: &str) -> (Client, std::path::PathBuf) {
 fn a_signal_interrupts_the_act_and_the_server_dies_by_it() {
     use std::os::unix::process::ExitStatusExt;
     for (sig, name) in [(15, "TERM"), (2, "INT"), (1, "HUP")] {
-        let (mut c, fake) = start_spinning(name);
+        let (mut c, fake, _reaper) = start_spinning(name);
         let server = c.pid();
         let children = children_of(server);
         assert_eq!(children.len(), 1, "{children:?}");
@@ -184,7 +211,7 @@ fn a_signal_interrupts_the_act_and_the_server_dies_by_it() {
 /// §2 "Shutdown": stdin EOF interrupts the running act and exits 0.
 #[test]
 fn eof_interrupts_the_act_and_exits_0() {
-    let (mut c, fake) = start_spinning("eof");
+    let (mut c, fake, _reaper) = start_spinning("eof");
     let children = children_of(c.pid());
     c.close_stdin();
     let status = c.wait_exit(10);

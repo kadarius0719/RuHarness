@@ -46,6 +46,9 @@ pub struct PerfRead {
     /// Each plan unit's results file, when it has one (or why it could not
     /// be read).
     pub units: BTreeMap<String, Result<UnitResults, String>>,
+    /// The plan's unit ids, in plan order (empty without a readable plan) —
+    /// known also without facts.
+    pub plan_units: Vec<String>,
     /// Results files of units no longer in the plan: the first
     /// [`MAX_ORPHANS_LISTED`] names, sorted.
     pub orphans: Vec<String>,
@@ -70,6 +73,7 @@ impl Default for PerfRead {
             workloads: Ok(WorkloadsState::NoFile),
             program: Ok(None),
             units: BTreeMap::new(),
+            plan_units: Vec::new(),
             orphans: Vec::new(),
             orphans_more: 0,
             errors: Vec::new(),
@@ -150,6 +154,7 @@ fn read_with_budget(
         holder_command.is_some_and(|c| c.starts_with(harness_core::perf::PERF_RUN_LOCK));
     let mut read = PerfRead {
         measuring,
+        plan_units: units.iter().map(|(id, _)| id.clone()).collect(),
         ..PerfRead::default()
     };
     read.workloads = wl::load(root).map_err(|e| e.to_string());

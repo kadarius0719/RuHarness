@@ -425,15 +425,16 @@ mod tests {
         assert_eq!(status.signal(), Some(2));
     }
 
-    /// Both children loop until signalled: each is killed when the test
-    /// ends, passing or failing (a failing run once left them looping for
-    /// days).
+    /// Both children loop until signalled — and never outlive the test
+    /// process (each loop ends once its parent is gone, even after a
+    /// SIGKILL of the test binary); each is also killed when the test ends,
+    /// passing or failing (a failing run once left them looping for days).
     #[test]
     fn the_signal_path_interrupts_and_waits_within_its_budget() {
         // A child that exits on INT: reaped within the budget.
         let slot = ChildSlot::default();
         let mut running = Running::spawn(
-            sh("trap 'exit 42' INT; while :; do sleep 0.05; done"),
+            sh("trap 'exit 42' INT; while kill -0 $PPID 2>/dev/null; do sleep 0.05; done"),
             slot.clone(),
         )
         .unwrap();
@@ -450,17 +451,20 @@ mod tests {
         // A child that ignores INT: the path gives up after the budget.
         let slot = ChildSlot::default();
         let running = Running::spawn(
-            sh("trap '' INT; while :; do sleep 0.05; done"),
+            sh("trap '' INT; while kill -0 $PPID 2>/dev/null; do sleep 0.05; done"),
             slot.clone(),
         )
         .unwrap();
-        let second = crate::testutil::KillOnDrop::new(running.pid());
+        let _second = crate::testutil::KillOnDrop::new(running.pid());
         std::thread::sleep(Duration::from_millis(200));
         let start = Instant::now();
         assert_eq!(interrupt_and_wait(&slot, Duration::from_millis(300)), None);
         let waited = start.elapsed();
         assert!(waited >= Duration::from_millis(300) && waited < Duration::from_secs(2));
-        drop(second);
+        // Ended here on the passing path (the guard is for a failing one).
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", &running.pid().to_string()])
+            .status();
         // No child at all.
         assert_eq!(
             interrupt_and_wait(&ChildSlot::default(), Duration::from_millis(50)),

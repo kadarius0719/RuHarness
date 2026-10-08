@@ -934,6 +934,14 @@ fn notice(text: impl Into<String>) -> Option<Notice> {
 impl App {
     /// A cockpit over what the first read found.
     pub fn new(config: Config, read: Read) -> App {
+        let exe = std::env::current_exe().ok();
+        App::new_from(config, read, exe.as_deref())
+    }
+
+    /// [`App::new`] for the cockpit binary at `exe` (`None`: not known):
+    /// the `harness` the acts run is its own build when it is the one next
+    /// to `exe` ([`speed_acts::same_build`]).
+    pub(crate) fn new_from(config: Config, read: Read, exe: Option<&Path>) -> App {
         let files = files::build(&read.snapshot, &read.walk);
         let features = featmap::build(&read.snapshot, &files, &read.map, read.map_now.as_ref());
         let speed = crate::speed::build(&read.snapshot);
@@ -941,7 +949,10 @@ impl App {
         let holder = read.holder;
         let migrate_model = read.migrate_model;
         let migrate_turns = read.migrate_turns;
-        let harness_own_build = config.harness.as_deref().is_some_and(speed_acts::own_build);
+        let harness_own_build = match (config.harness.as_deref(), exe) {
+            (Some(harness), Some(exe)) => speed_acts::same_build(harness, exe),
+            _ => false,
+        };
         let mut app = App {
             config,
             snapshot: read.snapshot,

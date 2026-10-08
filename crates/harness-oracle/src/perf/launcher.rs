@@ -426,7 +426,11 @@ pub(crate) enum CacheState {
 /// [`CacheState`] for `host`, the compiler found by `find`: [`launcher`]'s
 /// own checks in its order — the refused folders, the private-folder check
 /// on both cache folders (no link, 0700, yours: [`private_dir_check`]), the
-/// compiler — each refusal in its words, but nothing is made or built. A
+/// compiler, the cache's lock and the version folder's lock (each a regular
+/// file or missing, never a link) — each refusal in its words. Nothing is
+/// built and no folder is made; the one thing written is the version
+/// folder's empty `.lock` when it is missing and that folder exists (made
+/// as the run makes it, then held shared while the hashes are read). A
 /// cache folder that is missing is one the run makes and builds into.
 pub(crate) fn cache_state(host: &HostDirs, find: fn() -> Result<Compiler, Error>) -> CacheState {
     use CacheState::{CannotUse, WillBuild};
@@ -470,9 +474,21 @@ pub(crate) fn cache_state(host: &HostDirs, find: fn() -> Result<Compiler, Error>
         Ok(c) => c,
         Err(e) => return CannotUse(e.to_string()),
     };
+    // The run takes the cache's lock first, exclusive: a link there is
+    // refused whatever the version folder holds.
+    if let Err(e) = lock_is_a_file(&canonical.join(".lock")) {
+        return CannotUse(e.to_string());
+    }
     let dir = canonical.join(version_name(&compiler));
     if std::fs::symlink_metadata(&dir).is_err() {
         return WillBuild;
+    }
+    // Looked at before locking, so a link's target is never made.
+    if let Err(e) = lock_is_a_file(&dir.join(".lock")) {
+        return match load_built(&dir) {
+            Some(_) => CannotUse(e.to_string()),
+            None => WillBuild,
+        };
     }
     match lock_file(&dir.join(".lock"), false) {
         Ok(shared) => match load_built(&dir) {
@@ -489,6 +505,25 @@ pub(crate) fn cache_state(host: &HostDirs, find: fn() -> Result<Compiler, Error>
             Some(_) => CannotUse(e.to_string()),
             None => WillBuild,
         },
+    }
+}
+
+/// A lock [`lock_file`] would take, looked at without following a link and
+/// without making it: missing or a regular file is fine; a link is refused
+/// in the run's words, anything else as a lock the run could not hold.
+fn lock_is_a_file(path: &Path) -> Result<(), Error> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::io(path, e)),
+        Ok(m) if m.is_file() => Ok(()),
+        Ok(m) if m.file_type().is_symlink() => Err(Error::Invariant(format!(
+            "{}: perf's lock is a link — remove it",
+            path.display()
+        ))),
+        Ok(_) => Err(Error::Invariant(format!(
+            "{}: could not hold perf's lock",
+            path.display()
+        ))),
     }
 }
 
@@ -511,47 +546,69 @@ mod cache_state_tests {
         Err(Error::Invariant("no root-owned compiler".into()))
     }
 
+    /// A home folder of the test's own beside the test binary (so it
+    /// follows `CARGO_TARGET_DIR`), removed on drop.
+    struct Home(PathBuf);
+
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The home folder and the host it gives — `None` (said on stderr) when
+    /// the test binary lies in a temporary folder, which the run refuses
+    /// before anything else: then only that refusal is checked.
+    fn home(tag: &str) -> Option<(Home, HostDirs)> {
+        let exe = std::env::current_exe().unwrap();
+        let dir = exe.parent().unwrap().join(format!(
+            "oracle-cache-state-{tag}-{}-{}",
+            std::process::id(),
+            harness_core::hash::random_hex(4)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let home = Home(dir.canonicalize().unwrap());
+        let host = HostDirs {
+            home: home.0.clone(),
+            cargo_home: None,
+            rustup_home: None,
+            tmpdir: None,
+            perf_cache: home.0.join("Caches/ruharness/perf"),
+        };
+        if let Some(refused) = refuse_cache(&host.perf_cache, &host) {
+            assert_eq!(words(cache_state(&host, compiler)), refused);
+            eprintln!(
+                "skipped: the test binary lies in a temporary folder ({}), which perf \
+                 refuses — only that refusal was checked",
+                home.0.display()
+            );
+            return None;
+        }
+        Some((home, host))
+    }
+
+    fn words(s: CacheState) -> String {
+        match s {
+            CacheState::Current(_) => "current".to_string(),
+            CacheState::WillBuild => "will build".to_string(),
+            CacheState::CannotUse(w) => w,
+        }
+    }
+
     /// The three answers on a home folder of the test's own, whatever this
     /// machine's cache: missing → the run builds it (or, without a
     /// compiler, refuses); a link, a folder others can read or one with no
-    /// built version → the run's own words or a build; nothing is made.
+    /// built version → the run's own words or a build; a lock that is a
+    /// link → the run's refusal, its target never made; no folder is made.
     #[test]
     fn the_cache_reads_as_the_run_will_use_it() {
         if !cfg!(target_os = "macos") {
             return; // perf refuses off macOS: CannotUse, said by the run.
         }
-        // Not under the system's temp folder, which the run refuses: a
-        // folder in the workspace's target/, removed on drop.
-        struct Home(PathBuf);
-        impl Drop for Home {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let home = Home(Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../target/oracle-launcher-cache-state-{}",
-            std::process::id()
-        )));
-        let _ = std::fs::remove_dir_all(&home.0);
-        std::fs::create_dir_all(&home.0).unwrap();
-        let home_path = home.0.canonicalize().unwrap();
-        let host = HostDirs {
-            home: home_path.clone(),
-            cargo_home: None,
-            rustup_home: None,
-            tmpdir: None,
-            perf_cache: home_path.join("Caches/ruharness/perf"),
-        };
-        let words = |s: CacheState| match s {
-            CacheState::Current(_) => "current".to_string(),
-            CacheState::WillBuild => "will build".to_string(),
-            CacheState::CannotUse(w) => w,
-        };
-        if let Some(refused) = refuse_cache(&host.perf_cache, &host) {
-            // A workspace inside a temporary folder: the run refuses there.
-            assert_eq!(words(cache_state(&host, compiler)), refused);
+        let Some((home, host)) = home("reads") else {
             return;
-        }
+        };
+        let home_path = home.0.clone();
         // Missing: the run makes it and builds — nothing made here.
         assert_eq!(words(cache_state(&host, compiler)), "will build");
         assert!(!home_path.join("Caches").exists());
@@ -580,6 +637,34 @@ mod cache_state_tests {
         }
         std::fs::write(version.join(HASHES_FILE), hashes).unwrap();
         assert_eq!(words(cache_state(&host, compiler)), "current");
+        // The version folder's lock a link (to nothing): the run refuses
+        // it, and its target is never made.
+        let nowhere = home_path.join("nowhere");
+        std::fs::remove_file(version.join(".lock")).unwrap();
+        std::os::unix::fs::symlink(&nowhere, version.join(".lock")).unwrap();
+        let refused = words(cache_state(&host, compiler));
+        assert!(
+            refused.ends_with("perf's lock is a link — remove it"),
+            "{refused}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&nowhere).is_err(),
+            "the link's target was made"
+        );
+        std::fs::remove_file(version.join(".lock")).unwrap();
+        // The cache's own lock a link: the run's exclusive lock refuses it.
+        std::os::unix::fs::symlink(&nowhere, host.perf_cache.join(".lock")).unwrap();
+        let refused = words(cache_state(&host, compiler));
+        assert!(
+            refused.ends_with("perf's lock is a link — remove it"),
+            "{refused}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&nowhere).is_err(),
+            "the link's target was made"
+        );
+        std::fs::remove_file(host.perf_cache.join(".lock")).unwrap();
+        assert_eq!(words(cache_state(&host, compiler)), "current");
         // The same folder others can read: the run refuses, in its words —
         // never current.
         std::fs::set_permissions(&host.perf_cache, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -599,6 +684,36 @@ mod cache_state_tests {
         let refused = words(cache_state(&host, compiler));
         assert!(refused.ends_with("(no link)"), "{refused}");
         assert!(existing_launcher(&host).is_none());
+    }
+
+    /// The run's order: the refused folders, then the private-folder
+    /// check, then the compiler — each refusal in its own words even when
+    /// there is no compiler.
+    #[test]
+    fn refusals_come_in_the_runs_order() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let Some((_home, mut host)) = home("order") else {
+            return;
+        };
+        host.tmpdir = Some(host.home.clone());
+        let tmpdir_words = refuse_cache(&host.perf_cache, &host).unwrap();
+        assert!(tmpdir_words.contains("TMPDIR"), "{tmpdir_words}");
+        assert_eq!(words(cache_state(&host, no_compiler)), tmpdir_words);
+        assert_eq!(words(cache_state(&host, compiler)), tmpdir_words);
+        host.tmpdir = None;
+        std::fs::create_dir_all(&host.perf_cache).unwrap();
+        let parent = host.perf_cache.parent().unwrap();
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&host.perf_cache, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let w = words(cache_state(&host, no_compiler));
+        assert!(w.ends_with("(no link)"), "{w}");
+        std::fs::set_permissions(&host.perf_cache, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            words(cache_state(&host, no_compiler)),
+            "no root-owned compiler"
+        );
     }
 }
 
@@ -1028,7 +1143,8 @@ fn read_until(
 /// 2. outside the lock, read its `child <pid>` line;
 /// 3. cancelled() is checked first: cancelled → close the socket without
 ///    the go-ahead (the program never runs); else retake the lock (which
-///    refuses once cancelled), register the program's group (killed first)
+///    refuses, or waits until the process exits, once cancelled), register
+///    the program's group (killed first)
 ///    and write the go-ahead;
 /// 4. read the record to `end`, unregister the program's group, then write
 ///    the bye — the program is reaped only after it;
@@ -1629,6 +1745,13 @@ mod tests {
                 std::thread::spawn(move || run(&l, &sleeper, 60, false))
             };
             let (program, perfrun) = pid_and_parent_of(&sleeper);
+            // The reading is perfrun's own, not another process's ("" once
+            // perfrun is gone: a late reading, tried again below).
+            let parent = ps(perfrun, "ucomm");
+            assert!(
+                parent == "perfrun" || parent.is_empty(),
+                "the program's parent is {parent:?}, not perfrun"
+            );
             std::thread::sleep(Duration::from_millis(1500));
             let reading = cpu_time(perfrun).filter(|_| alive(program));
             let m = worker.join().expect("joins");
@@ -1784,6 +1907,29 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    /// [`dead_within`] waits out a process that dies a moment later (a
+    /// zombie counts as dead) and answers false, in time, for one that lives.
+    #[test]
+    fn dead_within_waits_for_a_late_death() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let mut late = Command::new("/bin/sleep")
+            .arg("0.5")
+            .spawn()
+            .expect("sleep");
+        assert!(dead_within(late.id(), Duration::from_secs(5)), "died late");
+        let _ = late.wait();
+        let mut lives = Command::new("/bin/sleep").arg("30").spawn().expect("sleep");
+        let t = Instant::now();
+        let dead = dead_within(lives.id(), Duration::from_millis(300));
+        let took = t.elapsed();
+        let _ = lives.kill();
+        let _ = lives.wait();
+        assert!(!dead, "a living process is not dead");
+        assert!(took >= Duration::from_millis(300), "waited {took:?}");
     }
 
     /// `ps -o <field>= -p <pid>`, trimmed: "" once the pid is gone.
