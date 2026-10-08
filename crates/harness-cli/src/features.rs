@@ -24,8 +24,9 @@ pub(crate) fn cmd_init(target: TargetArg) -> Result<u8> {
     }
     harness_core::ledger::write_atomic(&path, features::starter(&ctx.config).as_bytes())?;
     out(format!(
-        "features: wrote a starter to {} — add your features, then run `harness features map`",
-        display(&ctx.root, &path)
+        "features: wrote a starter to {} — add your features, then run `{}`",
+        display(&ctx.root, &path),
+        crate::hint(&ctx, "features map")
     ));
     Ok(0)
 }
@@ -83,7 +84,18 @@ pub(crate) fn cmd_save(target: TargetArg, expect: String, bytes: u64) -> Result<
             display(&ctx.root, &path)
         );
     }
-    features::parse(&text, &path)?;
+    // The refusal names the file by its own path (a tool's is under
+    // migration/tools/<id>/), in the reader's words.
+    features::parse(&text, &path).map_err(|e| {
+        let words = match e {
+            harness_core::Error::InvalidPlan(m) => m,
+            other => other.to_string(),
+        };
+        anyhow::anyhow!(
+            "{}",
+            harness_core::error::in_ledger(&words, &ctx.ledger_rel())
+        )
+    })?;
     harness_core::ledger::write_atomic(&path, text.as_bytes())?;
     out(format!("features: saved {}", display(&ctx.root, &path)));
     Ok(0)
@@ -97,17 +109,22 @@ pub(crate) fn cmd_map(target: TargetArg, allow_unsandboxed: bool) -> Result<u8> 
     let _lock = lock_ledger(&ledger, "features map")?;
     let (features, digest) = match FeatureSnapshot::load(&ctx) {
         FeatureSnapshot::None => bail!(
-            "there is no {}; write one first (`harness features init` gives a starter)",
-            display(&ctx.root, &features::features_path(&Ledger::of(&ctx)))
+            "there is no {}; write one first (`{}` gives a starter)",
+            display(&ctx.root, &features::features_path(&Ledger::of(&ctx))),
+            crate::hint(&ctx, "features init")
         ),
-        FeatureSnapshot::Invalid(why) => bail!("{why}"),
+        FeatureSnapshot::Invalid(why) => {
+            bail!(
+                "{}",
+                harness_core::error::in_ledger(&why, &ctx.ledger_rel())
+            )
+        }
         FeatureSnapshot::Valid { features, digest } => (features, digest),
     };
     if features.scenarios.is_empty() {
         bail!("your features file has no scenario to map");
     }
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
     let stale = crate::stale_fact_files(&ctx, &facts);
     if stale > 0 {
         bail!(

@@ -79,13 +79,17 @@ fn main() {
         Ok(Some(cfg)) => cfg,
         Ok(None) => std::process::exit(0),
         Err(e) => {
-            server::log(&e);
-            std::process::exit(2);
+            server::log(&e.message);
+            std::process::exit(e.code);
         }
     };
     server::log(&format!(
-        "serving {} (roots: {}; providers: {}; harness: {}{})",
+        "serving {}{} (roots: {}; providers: {}; harness: {}{})",
         cfg.target.display(),
+        cfg.tool
+            .as_deref()
+            .map(|id| format!(" · tool {id}"))
+            .unwrap_or_default(),
         cfg.target_roots.len(),
         cfg.providers.join(", "),
         // A binary is named whenever there is one — in cockpit mode that

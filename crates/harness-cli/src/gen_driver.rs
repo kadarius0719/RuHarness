@@ -108,13 +108,16 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         .execution_order()
         .context("plan.toml is structurally invalid; fix it first")?;
     let unit = plan_doc.unit(&unit_id)?;
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
     let closure = facts.include_closure(&unit.files);
     if hash::file_set_hash_on_disk(&ctx.root, &closure)? != unit.source_hash {
         return Err(harness_core::Error::Stale {
             subject: format!("unit `{unit_id}`"),
-            hint: "source changed since planning; run `harness scan`, then `harness plan`".into(),
+            hint: format!(
+                "source changed since planning; run `{}`, then `{}`",
+                crate::hint(&ctx, "scan"),
+                crate::hint(&ctx, "plan")
+            ),
         }
         .into());
     }

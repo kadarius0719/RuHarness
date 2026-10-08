@@ -40,8 +40,9 @@ pub(crate) fn cmd_init(target: TargetArg) -> Result<u8> {
     }
     harness_core::ledger::write_atomic(&path, wl::STARTER.as_bytes())?;
     out(format!(
-        "perf: wrote a starter to {} — add a [[workload]], then run `harness perf run`",
-        shown(&ctx.root, &path)
+        "perf: wrote a starter to {} — add a [[workload]], then run `{}`",
+        shown(&ctx.root, &path),
+        crate::hint(&ctx, "perf run")
     ));
     Ok(0)
 }
@@ -113,7 +114,7 @@ pub(crate) fn cmd_save(target: TargetArg, expect: String, bytes: u64) -> Result<
 fn workloads(ctx: &TargetContext) -> Result<Workloads> {
     match wl::load(&Ledger::of(ctx))? {
         WorkloadsState::Ready(w) => Ok(w),
-        state => bail!("{}", state.blocker().unwrap_or_default()),
+        state => bail!("{}", state.blocker(&ctx.ledger_rel()).unwrap_or_default()),
     }
 }
 
@@ -132,8 +133,7 @@ fn plan(ledger: &Ledger) -> Result<Plan> {
 }
 
 fn fresh_facts(ctx: &TargetContext, ledger: &Ledger) -> Result<Facts> {
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(ctx))?;
     if crate::stale_fact_files(ctx, &facts) > 0
         || harness_core::features::program_digest_now(ctx, &facts)
             == harness_core::features::STALE_PROGRAM
@@ -225,11 +225,12 @@ fn label(side: harness_oracle::RowSide<'_>) -> (String, Side<'_>, RowKind) {
 }
 
 /// The "measure again with 31 runs" command for a row's side (§3.8).
-fn more_runs_command(side: Side<'_>, workload: &str) -> String {
-    match side {
-        Side::Unit(id) => format!("harness perf run --unit {id} --workload {workload} --runs 31"),
-        _ => format!("harness perf run --as-it-stands-only --workload {workload} --runs 31"),
-    }
+fn more_runs_command(side: Side<'_>, workload: &str, tool: Option<&str>) -> String {
+    let run = match side {
+        Side::Unit(id) => format!("perf run --unit {id} --workload {workload} --runs 31"),
+        _ => format!("perf run --as-it-stands-only --workload {workload} --runs 31"),
+    };
+    harness_core::runtime_view::command_line(&run, tool)
 }
 
 /// About how long the "31 runs" command for a row's side takes (§6): its
@@ -256,7 +257,12 @@ fn seconds_a_row(row: &Row, side: Side<'_>) -> u64 {
 }
 
 /// The words of one row, with the 31-run offer when it applies.
-fn row_words(row: &Row, side: Side<'_>, input: Option<&str>) -> words::RowWords {
+fn row_words(
+    row: &Row,
+    side: Side<'_>,
+    input: Option<&str>,
+    tool: Option<&str>,
+) -> words::RowWords {
     let mut w = words::words(
         row,
         &words::Context {
@@ -270,7 +276,7 @@ fn row_words(row: &Row, side: Side<'_>, input: Option<&str>) -> words::RowWords 
             "{} {}",
             w.headline,
             words::more_runs_words(
-                &more_runs_command(side, &row.workload),
+                &more_runs_command(side, &row.workload, tool),
                 seconds_a_row(row, side)
             )
         );
@@ -297,7 +303,8 @@ impl harness_oracle::PerfProgress for Progress<'_> {
             .workloads
             .get(&row.workload)
             .and_then(|w| w.input.as_deref());
-        let mut w = row_words(row, words_side, input);
+        let tool = harness_core::runtime_view::tool_of(&self.ledger_rel);
+        let mut w = row_words(row, words_side, input, tool);
         if row.outcome == "behaves-differently"
             && row
                 .first_difference
@@ -474,7 +481,10 @@ pub(crate) fn cmd_show(target: TargetArg, no_check: bool, allow_unsandboxed: boo
     let workloads = match wl::load(&Ledger::of(&ctx))? {
         WorkloadsState::Ready(w) => Some(w),
         state => {
-            out(format!("perf: {}", state.blocker().unwrap_or_default()));
+            out(format!(
+                "perf: {}",
+                state.blocker(&ctx.ledger_rel()).unwrap_or_default()
+            ));
             None
         }
     };
@@ -526,7 +536,10 @@ pub(crate) fn cmd_show(target: TargetArg, no_check: bool, allow_unsandboxed: boo
         None
     };
     if check && computer.is_none() {
-        out("perf: computer not checked — run harness perf run once".into());
+        out(format!(
+            "perf: computer not checked — run {} once",
+            crate::hint(&ctx, "perf run")
+        ));
     }
     if check && compilers.is_none() {
         out("perf: compilers not checked".into());
@@ -535,12 +548,14 @@ pub(crate) fn cmd_show(target: TargetArg, no_check: bool, allow_unsandboxed: boo
     // stands holds cannot be checked either ("left out now", "accepted
     // since", the plan's order): a row of it would read current unjudged.
     if to_judge > 0 && program_digest.is_none() {
+        let scan = crate::hint(&ctx, "scan");
         out(if as_it_stands_stored {
-            "perf: the C and the units the program as it stands holds not checked: no facts \
-             — run harness scan"
-                .into()
+            format!(
+                "perf: the C and the units the program as it stands holds not checked: no \
+                 facts — run {scan}"
+            )
         } else {
-            "perf: the C not checked: no facts — run harness scan".into()
+            format!("perf: the C not checked: no facts — run {scan}")
         });
     } else if let (true, Some(e)) = (as_it_stands_stored, &measurable_error) {
         out(format!(
@@ -572,7 +587,7 @@ pub(crate) fn cmd_show(target: TargetArg, no_check: bool, allow_unsandboxed: boo
                 .as_ref()
                 .and_then(|w| w.get(&row.workload))
                 .and_then(|w| w.input.as_deref());
-            let mut w = row_words(row, side, input);
+            let mut w = row_words(row, side, input, ctx.tool.as_deref());
             let today_workload = workload_digest(&row.workload);
             // Without facts only the C's comparison is skipped (said once
             // above), as the cockpit does: the row is held to its own
@@ -631,7 +646,10 @@ pub(crate) fn cmd_show(target: TargetArg, no_check: bool, allow_unsandboxed: boo
         bail!("{first:#}\n{}", rest.join("\n"));
     }
     if printed == 0 {
-        out("perf: nothing measured yet — run harness perf run".into());
+        out(format!(
+            "perf: nothing measured yet — run {}",
+            crate::hint(&ctx, "perf run")
+        ));
     }
     Ok(0)
 }

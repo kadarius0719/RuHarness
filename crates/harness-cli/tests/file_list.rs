@@ -163,7 +163,7 @@ fn a_file_list_tool_runs_every_reading_command_inside_its_ledger() {
         }
         r
     };
-    let r = harness(&["--adopt", "scan", "--target", target, "--tool", "t-lzg"]);
+    let r = harness(&["scan", "--target", target, "--tool", "t-lzg"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     run(&["plan"]);
     run(&["detect"]);
@@ -359,6 +359,9 @@ fn a_file_list_tool_verifies_green_through_the_cli() {
         assert_eq!(r.code, code, "{args:?}: {}\n{}", r.stdout, r.stderr);
         r
     };
+    // The test wrote a unit's driver, crate and features into the tool's
+    // ledger — results, not just a hand-written harness.toml — so the first
+    // command adopts them.
     let r = harness(&["--adopt", "scan", "--target", target, "--tool", "t-pair"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     run(&["plan"], 0);

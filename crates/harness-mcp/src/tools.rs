@@ -119,7 +119,8 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
             name: "harness_status",
             title: "Migration ledger status",
             description: format!(
-                "The target's migration ledger: fact freshness; per unit its plan status, source \
+                "The target's migration ledger (`tool`: the mapped tool whose ledger it is, null \
+                 for a folder-form target): fact freshness; per unit its plan status, source \
                  freshness, verdict (state, colour, stale inputs), contradiction / write in \
                  flight / promotion interrupted, provenance of its crate (pipeline, ambiguous, \
                  steered, chat, human, none), and its attempts (outcome, provider, bound to the \
@@ -153,6 +154,7 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
             ],
             output: vec![
                 ("target", &["object"]),
+                ("tool", &["string", "null"]),
                 ("facts", &["object", "null"]),
                 ("note", &["object", "null"]),
                 ("routing", &["object"]),

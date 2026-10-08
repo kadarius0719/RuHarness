@@ -667,6 +667,36 @@ mod tests {
         }
     }
 
+    /// A server started with `--tool` carries it on every act on its own
+    /// target, attached right after the target; an act on another target
+    /// carries none (docs/PROJECT-MAP-DESIGN.md §3.7).
+    #[test]
+    fn every_act_on_the_servers_own_target_carries_its_tool() {
+        let mut tool = cfg();
+        tool.tool = Some("t-lzg".into());
+        let a = SteerArgs {
+            unit: "u1",
+            from: "a-000000000001",
+            steer: "- keep it",
+            provider: "external",
+            model: None,
+        };
+        let steered = record("external", Some(("a-000000000000", "- use iter()")));
+        let acts = [
+            steer_argv(&tool, Path::new("/t"), &a).unwrap(),
+            retry_argv(&tool, Path::new("/t"), "u1", &steered).unwrap(),
+            promote_argv(&tool, Path::new("/t"), "u1", "a-000000000001", false).unwrap(),
+        ];
+        for argv in &acts {
+            let argv = strs(argv);
+            let at = argv.iter().position(|a| a == "--target=/t").unwrap();
+            assert_eq!(argv[at + 1], "--tool=t-lzg", "{argv:?}");
+            assert_eq!(argv.iter().filter(|a| a.starts_with("--tool")).count(), 1);
+        }
+        let other = strs(&promote_argv(&tool, Path::new("/o"), "u1", "a-1", false).unwrap());
+        assert!(!other.iter().any(|a| a.starts_with("--tool")), "{other:?}");
+    }
+
     #[test]
     fn a_steer_attempt_is_attached_and_never_promotes() {
         let a = SteerArgs {

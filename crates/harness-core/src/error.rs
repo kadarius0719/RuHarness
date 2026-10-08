@@ -1,6 +1,6 @@
 //! Typed errors for the core crate (§10.2: thiserror at crate boundaries).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Errors produced by harness-core operations.
 #[derive(Debug, thiserror::Error)]
@@ -122,11 +122,12 @@ pub enum Error {
     /// The ledger at `root` was made elsewhere: its root is not listed in
     /// this computer's adoption file, or its token is missing or different
     /// (docs/PROJECT-MAP-DESIGN.md §3.7). Nothing was read beyond the plan's
-    /// unit count.
+    /// unit count. Its words are the command line's
+    /// ([`crate::adopt::Way::Command`]); the cockpit and harness-mcp say
+    /// their own ([`Error::words_for`]).
     #[error(
-        "this folder already holds migration results made elsewhere ({}): to trust them here, \
-         add `--adopt` once",
-        crate::adopt::counted(*.units, *.verified)
+        "{}",
+        crate::adopt::refusal(.root, *.units, *.verified, crate::adopt::Way::Command)
     )]
     NotAdopted {
         /// The canonical root refused.
@@ -179,5 +180,160 @@ impl Error {
             path: path.into(),
             message: message.into(),
         }
+    }
+
+    /// This error in the words `way`'s reader needs: a not-adopted refusal
+    /// tells each reader only its own way to adopt; any other error reads
+    /// as it is.
+    pub fn words_for(&self, way: crate::adopt::Way) -> String {
+        match self {
+            Error::NotAdopted {
+                root,
+                units,
+                verified,
+            } => crate::adopt::refusal(root, *units, *verified, way),
+            other => other.to_string(),
+        }
+    }
+
+    /// `--target <root>` names no target: the one sentence the command
+    /// line, the cockpit and harness-mcp all say.
+    pub fn no_target_here(root: &Path) -> Error {
+        Error::NoTarget {
+            why: format!(
+                "{} is not a harness target (no harness.toml, and no mapped tool under \
+                 migration/tools/); point --target at a folder that holds a harness.toml",
+                root.display()
+            ),
+        }
+    }
+
+    /// `--tool` on a project that has no mapped tools.
+    pub fn no_tools_to_pick(root: &Path) -> Error {
+        Error::NoTarget {
+            why: format!(
+                "{}: this project has no mapped tools; drop --tool (its harness.toml is the \
+                 target)",
+                root.display()
+            ),
+        }
+    }
+
+    /// An error from finding or opening `--target <root> [--tool <tool>]`
+    /// put in the one sentence every reader says for it: no target here,
+    /// or `--tool` on a project without tools. Any other error is kept.
+    pub fn opening(self, root: &Path, tool: Option<&str>) -> Error {
+        let no_tools = crate::config::mapped_tools(root).is_empty();
+        let has_config = std::fs::symlink_metadata(root.join(crate::config::CONFIG_FILE)).is_ok();
+        match (&self, tool) {
+            (Error::NoTarget { .. }, Some(_)) if no_tools && has_config => {
+                Error::no_tools_to_pick(root)
+            }
+            (Error::NoTarget { .. }, Some(_)) if no_tools => Error::no_target_here(root),
+            (_, None) if no_tools && !has_config && self.is_not_found() => {
+                Error::no_target_here(root)
+            }
+            _ => self,
+        }
+    }
+}
+
+/// A message about a ledger file, said for the ledger it is in: a mapped
+/// tool's files live under `migration/tools/<id>/`, not `migration/`, so a
+/// message the folder form words (`migration/features/…`) names the tool's
+/// path instead. `ledger_rel` is the ledger folder, root-relative.
+pub fn in_ledger(message: &str, ledger_rel: &str) -> String {
+    let folder = crate::ledger::MIGRATION_DIR;
+    if ledger_rel == folder {
+        return message.to_string();
+    }
+    let mut out = message.to_string();
+    for sub in ["features", "perf"] {
+        let from = format!("{folder}/{sub}");
+        let to = format!("{ledger_rel}/{sub}");
+        let mut next = String::with_capacity(out.len());
+        let mut tail = out.as_str();
+        while let Some(at) = tail.find(&from) {
+            let after = &tail[at + from.len()..];
+            // Only the folder itself, as a path of its own: `migration/
+            // features/…` or `migration/features ` at a word's start —
+            // never `migration/featuresX` or `x/migration/features`.
+            let whole = after
+                .chars()
+                .next()
+                .is_none_or(|c| matches!(c, '/' | ' ' | ':'));
+            let starts = tail[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| matches!(c, ' ' | '`' | '(' | '"'));
+            next.push_str(&tail[..at]);
+            next.push_str(if whole && starts { &to } else { &from });
+            tail = after;
+        }
+        next.push_str(tail);
+        out = next;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tools_messages_name_its_ledger() {
+        let tool = "migration/tools/t-lzg";
+        assert_eq!(
+            in_ledger(
+                "migration/features/features.toml: migration/features must be a directory",
+                tool
+            ),
+            "migration/tools/t-lzg/features/features.toml: migration/tools/t-lzg/features must \
+             be a directory"
+        );
+        assert_eq!(
+            in_ledger(
+                "add a [[workload]] to `migration/perf/workloads.toml`",
+                tool
+            ),
+            "add a [[workload]] to `migration/tools/t-lzg/perf/workloads.toml`"
+        );
+        // Another word that only holds the name, and the folder form, are kept.
+        for kept in ["src/migration/features/x", "migration/featuresx"] {
+            assert_eq!(in_ledger(kept, tool), kept);
+        }
+        let folder = "migration/features/features.toml: x";
+        assert_eq!(in_ledger(folder, "migration"), folder);
+    }
+
+    #[test]
+    fn no_target_reads_one_way() {
+        let root = std::env::temp_dir().join(format!(
+            "ruharness-error-no-target-{}-{}",
+            std::process::id(),
+            crate::hash::random_hex(4)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let missing = Error::io(
+            root.join("harness.toml"),
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        );
+        assert_eq!(
+            missing.opening(&root, None).to_string(),
+            Error::no_target_here(&root).to_string()
+        );
+        std::fs::write(root.join("harness.toml"), "").unwrap();
+        let no_tool = Error::NoTarget {
+            why: "has no mapped tool t-x (it has none)".into(),
+        };
+        assert_eq!(
+            no_tool.opening(&root, Some("t-x")).to_string(),
+            format!(
+                "{}: this project has no mapped tools; drop --tool (its harness.toml is the \
+                 target)",
+                root.display()
+            )
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

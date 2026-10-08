@@ -390,9 +390,10 @@ impl<W: Write> Server<W> {
             })
     }
 
-    /// Before any read or act: a ledger made elsewhere is refused with the
-    /// CLI's sentence — harness-mcp never adopts (an agent is not the
-    /// person; docs/PROJECT-MAP-DESIGN.md §3.7) — then the size preflight.
+    /// Before any read or act: a ledger made elsewhere is refused in an
+    /// agent's words — ask the person; harness-mcp never adopts (an agent
+    /// is not the person; docs/PROJECT-MAP-DESIGN.md §3.7) — then the size
+    /// preflight.
     fn preflight(&self, target: &Path) -> Result<(), Refusal> {
         harness_core::adopt::check(target).map_err(|e| Refusal {
             kind: if matches!(e, harness_core::Error::NotAdopted { .. }) {
@@ -400,7 +401,7 @@ impl<W: Write> Server<W> {
             } else {
                 "unreadable"
             },
-            message: e.to_string(),
+            message: e.words_for(harness_core::adopt::Way::Agent),
         })?;
         policy::preflight_tool(target, self.cfg.tool_for(target)).map_err(|message| Refusal {
             kind: "unreadable",
@@ -1326,10 +1327,17 @@ mod tests {
                 "not-adopted",
                 "{tool}: {r}"
             );
+            // An agent is told to ask the person, never to adopt.
+            let root = t.canonicalize().unwrap();
             assert_eq!(
                 structured(&r)["error"]["message"]["text"],
-                "this folder already holds migration results made elsewhere (11 units, 1 \
-                 verified): to trust them here, add `--adopt` once",
+                format!(
+                    "{}: this folder already holds migration results made elsewhere (11 units, \
+                     1 verified): ask the person to adopt it (`harness state status --adopt \
+                     --target {}`, or the cockpit's question); an agent never adopts",
+                    root.display(),
+                    root.display()
+                ),
                 "{tool}: {r}"
             );
         }

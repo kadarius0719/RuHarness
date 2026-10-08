@@ -14,4 +14,5 @@ Next units (execution order · risk 0-100):
 
 Commands: `harness scan` · `harness plan` · `harness detect` · `harness observe` · `harness verify <unit>` · `harness state status` · `harness review <finding>` (all take `--target`).
 Read first: `migration/plan.toml`, `migration/observer/observations.md`, `migration/DECISIONS.md`, `docs/SCHEMAS.md` (harness repo).
-<!-- END RUHARNESS GENERATED (content-hash: blake3:d60b5d0fbf4432a4) -->
+If a command says this folder holds migration results made elsewhere, ask the person to adopt it (`harness … --adopt`, or the cockpit's question); an agent never adopts.
+<!-- END RUHARNESS GENERATED (content-hash: blake3:32384e59a6867227) -->

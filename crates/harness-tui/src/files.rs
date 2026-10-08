@@ -281,7 +281,7 @@ pub enum FileState {
     NoExports,
     /// 6 `○ not in the plan`.
     NotInPlan,
-    /// `◌ not part of this tool`: a project file a file-list target neither
+    /// `⊖ not part of this tool`: a project file a file-list target neither
     /// lists nor reaches (greyed; no act takes it).
     NotInTool,
 }
@@ -589,6 +589,11 @@ pub fn build(snapshot: &Snapshot, walk: &TreeWalk) -> Files {
     Files { files, units }
 }
 
+/// The tree's mark for a project file the open tool does not list: a mark
+/// of its own (the Features legend's `◌` means "all its code is still C"),
+/// listed in the help's States.
+pub const NOT_IN_TOOL: &str = "⊖";
+
 /// A file state's glyph and word, given the tree's unit states.
 pub fn file_label(files: &Files, state: &FileState) -> (&'static str, String) {
     match state {
@@ -598,7 +603,7 @@ pub fn file_label(files: &Files, state: &FileState) -> (&'static str, String) {
         FileState::Header => ("·", "header".into()),
         FileState::NoExports => ("–", "no exported functions".into()),
         FileState::NotInPlan => ("○", "not in the plan".into()),
-        FileState::NotInTool => ("◌", "not part of this tool".into()),
+        FileState::NotInTool => (NOT_IN_TOOL, "not part of this tool".into()),
         FileState::Owned(u) => match files.units.get(*u) {
             Some(info) => (info.state.glyph(), info.state.word()),
             None => ("·", "owned".into()),
@@ -637,7 +642,7 @@ mod tests {
             assert_eq!(state(outside), FileState::NotInTool, "{outside}");
             assert_eq!(
                 file_label(&files, &state(outside)),
-                ("◌", "not part of this tool".to_string())
+                (NOT_IN_TOOL, "not part of this tool".to_string())
             );
         }
         assert!(

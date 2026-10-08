@@ -49,8 +49,10 @@ pub(crate) fn migrate_preconditions(
         return Err(Error::Stale {
             subject: format!("unit `{}`", unit.id),
             hint: format!(
-                "source changed since planning; run `harness scan`, then `harness plan`, review \
-                 the diff, then {what}"
+                "source changed since planning; run `{}`, then `{}`, review the diff, then \
+                 {what}",
+                crate::hint(ctx, "scan"),
+                crate::hint(ctx, "plan")
             ),
         }
         .into());
@@ -63,9 +65,9 @@ pub(crate) fn migrate_preconditions(
             return Err(Error::Stale {
                 subject: format!("unit `{}`", unit.id),
                 hint: format!(
-                    "its generated driver's validation is `{state}`; run `harness gen-driver {}` \
-                     (or re-validate) before {what}",
-                    unit.id
+                    "its generated driver's validation is `{state}`; run `{}` (or re-validate) \
+                     before {what}",
+                    crate::hint(ctx, &format!("gen-driver {}", unit.id))
                 ),
             }
             .into());
@@ -389,8 +391,7 @@ pub(crate) fn cmd_promote(
         .context("plan.toml is structurally invalid; fix it before promoting")?;
     let unit = plan_doc.unit(&unit_id)?;
     recover_promotion(&ctx, &ledger, unit)?;
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
 
     // 1–3: the record, by id, and what it claims.
     let record = attempts::load_pinned(&ledger, &unit_id, &attempt_id)?
@@ -428,8 +429,8 @@ pub(crate) fn cmd_promote(
             subject: format!("attempt {attempt_id}"),
             hint: format!(
                 "it is bound to superseded inputs (its {moved} is not the current one); re-run \
-                 `harness migrate {unit_id} --no-promote` to record an attempt against the \
-                 current tree"
+                 `{}` to record an attempt against the current tree",
+                crate::hint(&ctx, &format!("migrate {unit_id} --no-promote"))
             ),
         }
         .into());
