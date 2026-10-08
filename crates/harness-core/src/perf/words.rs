@@ -242,12 +242,7 @@ pub fn end(v: f64, boundaries: &[f64]) -> String {
 /// `b` still shows a step past it, never on it.
 fn away_from(v: f64, b: f64) -> f64 {
     if v > b {
-        let up = ((v * 100.0) - 1e-9).ceil() / 100.0;
-        if up <= b {
-            up + 0.01
-        } else {
-            up
-        }
+        up_past(v, b)
     } else {
         let down = ((v * 100.0) + 1e-9).floor() / 100.0;
         if down >= b {
@@ -258,15 +253,31 @@ fn away_from(v: f64, b: f64) -> f64 {
     }
 }
 
+/// `v` at two decimals, rounded up and at least one 0.01 step past `b`:
+/// the side of a value known to be past `b`, even when float noise has
+/// put `v` itself on `b`.
+fn up_past(v: f64, b: f64) -> f64 {
+    let up = ((v * 100.0) - 1e-9).ceil() / 100.0;
+    if up <= b {
+        up + 0.01
+    } else {
+        up
+    }
+}
+
 /// An end of the "3.7× as slow" form: the ratio `1 + p/100` at one
-/// decimal, unless that would put it on or under `line` (the 2 % line as a
-/// ratio) from above: then two decimals, rounded up (build note 13).
-fn ratio_end(p: f64, line: f64) -> String {
+/// decimal, unless the end is past the margin `m` (decided in percent, as
+/// `end()` decides it) and one decimal would put it on or under the line
+/// `1 + m/100`: then two decimals, rounded up past the line (build note
+/// 13). Deciding in percent matters: a low end a float hair past 2 % is
+/// the ratio 1.02 itself, and must still read 1.03×, not 1.0×.
+fn ratio_end(p: f64, m: f64) -> String {
     let r = 1.0 + p / 100.0;
+    let line = 1.0 + m / 100.0;
     let near = fmt_fixed(r, 1);
     let shown: f64 = near.parse().unwrap_or(r);
-    if r > line && shown <= line {
-        fmt_fixed(away_from(r, line), 2)
+    if p > m && shown <= line {
+        fmt_fixed(up_past(r, line), 2)
     } else {
         near
     }
@@ -958,13 +969,12 @@ fn time_headline(answer: Answer, shift: Option<&Shift>, share: Option<&str>) -> 
     // Both ends of slower, faster and a close call keep off ±M: the far
     // end too, so a narrow interval just past the line never reads
     // backwards, and a close call's far end never shows inside the line.
-    let line = 1.0 + m / 100.0;
     match answer {
         Answer::AboutAsFast => format!("about as fast as the C (within {} %)", margin(m)),
         Answer::Slower if x >= 99.95 => suffix(format!(
             "{}× as slow {}",
             fmt_fixed(1.0 + x / 100.0, 1),
-            interval(&ratio_end(lo, line), &ratio_end(hi, line), "×")
+            interval(&ratio_end(lo, m), &ratio_end(hi, m), "×")
         )),
         Answer::Slower => suffix(format!(
             "slower by {} % {}",
@@ -1866,6 +1876,15 @@ mod tests {
         let n = w(&near);
         assert_eq!(n.answer, "slower");
         assert_eq!(n.headline, "3.0× as slow (1.03–3.5×)");
+        // A low end of exactly +2 % in the pair that sets it comes out a
+        // float hair past the line (2.0000000000000053 %), which as a
+        // ratio is 1.02 itself: it is past the line, so it still reads one
+        // step past it — 1.03×, never "1.0×" or "1.02×".
+        let mut on = bimodal;
+        on[4] = 2.0;
+        let o = w(&on);
+        assert_eq!(o.answer, "slower");
+        assert_eq!(o.headline, "3.0× as slow (1.03–3.5×)");
     }
 
     #[test]

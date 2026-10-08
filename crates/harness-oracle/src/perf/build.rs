@@ -21,8 +21,21 @@ pub(crate) const PERF_OUT_DIR: &str = harness_core::perf::PERF_OUT_DIR;
 pub(crate) const PERF_LOGS_DIR: &str = "perf-logs";
 /// How many run logs are kept.
 pub(crate) const KEPT_LOGS: usize = 20;
-/// Most units a plan may hold for perf's slots.
-pub(crate) const MAX_SLOTS: usize = 999;
+/// Most units a plan may hold for perf's slots: the results files' own cap
+/// on a list of units, so the two cannot drift.
+pub(crate) const MAX_SLOTS: usize = harness_core::perf::results::MAX_UNITS;
+
+/// A plan of more than [`MAX_SLOTS`] units is refused by name, before
+/// anything is selected or built (§3.2): no slot, no results row and no
+/// left-out list can then outgrow the cap.
+pub(crate) fn check_plan_size(units: usize) -> Result<(), Error> {
+    if units > MAX_SLOTS {
+        return Err(Error::InvalidPlan(format!(
+            "perf measures a plan of at most {MAX_SLOTS} units — this plan has {units}"
+        )));
+    }
+    Ok(())
+}
 
 /// `migration/build/` resolved inside `root` (made when missing).
 fn build_root(root: &Path) -> Result<PathBuf, Error> {
