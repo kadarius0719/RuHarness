@@ -1,3 +1,20 @@
+# In progress — session ee312a (Fable, 2026-10-07), branch `claude/ruharness-resume-ee312a` (pushed)
+
+- **Fix pass 3** (docs/reviews/2026-10-07-perf-fix3-plan.md: the triage of the check round, 28 items in
+  five areas, 7 dropped with reasons): all five areas fixed by Opus fixers in their own worktrees and
+  merged (areas A–E; one re-export conflict resolved by hand; harness-mcp's bounded-head test now
+  forges 16 rows per list, the reader's new cap). At ec78455: 1 275 tests green, fmt and clippy clean.
+  Its **scoped check is RUNNING** (ten Opus checkers at high effort: holds + mutation checks and a
+  regression hunter per area A–D, a docs checker for E, one whole-pass hunter); their reports go to
+  docs/reviews/2026-10-07-perf-fix3-check.md next, then a fix pass 4 if needed, then the merge to
+  `main` with `bench check --replay`.
+- **The project-map design review** is DONE and saved: docs/reviews/2026-10-07-project-map-design-review.md
+  (four lenses — facts, security, integration, the model step — each verified finding by finding;
+  the spike's counts corrected: `lib/lz4.c` is in 29 of 33 closures; no benchmark case has a `main`).
+  **Next: the triage and revision 1 of docs/PROJECT-MAP-DESIGN.md at HIGH effort** (the switch
+  point: the session asked the person; not yet triaged).
+- Part 11 of the testing guide on liblzg: not started (needs a quiet machine).
+
 # Next session — kickoff (Fable, from 2026-10-07)
 
 Resume RuHarness on `main` (everything below is merged and pushed). The main session runs on
