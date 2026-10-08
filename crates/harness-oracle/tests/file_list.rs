@@ -233,12 +233,16 @@ fn the_configuration_reaches_the_features_maps_probed_build() {
 }
 
 /// The mirror reads each file as a regular file with a size cap: a
-/// configuration `-include` that names a FIFO is refused by name, never
-/// opened for a read that would wait forever for a writer.
+/// configuration `-include` that is a FIFO by the time the map runs (the
+/// load refuses one, so here it replaces the header after the load) is
+/// refused by name, never opened for a read that would wait forever for a
+/// writer.
 #[test]
 fn a_forced_include_that_is_a_fifo_is_refused_never_read() {
     let tmp = TempDir::new("fl-fifo");
+    write(&tmp.path().join("inc/fifo.h"), "/* a header for now */\n");
     let (target, _) = tool(tmp.path(), "\"-DPAIR_WIDE=4\", \"-includeinc/fifo.h\"");
+    std::fs::remove_file(tmp.path().join("inc/fifo.h")).expect("rm");
     let made = std::process::Command::new("mkfifo")
         .arg(tmp.path().join("inc/fifo.h"))
         .status()

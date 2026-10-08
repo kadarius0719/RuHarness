@@ -2,145 +2,54 @@
 //! (docs/PROJECT-MAP-DESIGN.md §3.7; the 2026-10-08 triage, decision 1):
 //! the compiler's own search order, which the oracle's argument order
 //! ([`crate::cc_argv`]: the judge's flags, the configuration's flags, then
-//! the file's `-I` folders) gives every compile.
-//!
-//! For an include written in a file reached while compiling the listed file
-//! L:
-//! - a quoted include searches the including file's own folder, then the
-//!   configuration's `-iquote` folders in order, its `-I` folders in order,
-//!   L's `include_dirs` in order, the configuration's `-isystem` folders,
-//!   then the system;
-//! - an angle-bracket include searches the same without the own folder and
-//!   without the `-iquote` folders (the compiler reads `-iquote` for quoted
-//!   includes only);
-//! - each configuration `-include` file is the first include of every
-//!   listed file, and its own includes are followed like any header's.
-//!
-//! [`search_order`] is the one function that computes the order; harness-core
-//! is to hold the shared resolver (fix pass A), and [`closure`] then calls it
-//! in place of this module's walk.
+//! the file's `-I` folders) gives every compile. The order itself is
+//! harness-core's shared resolver ([`Resolver::search_order`]): quoted —
+//! the own folder, the configuration's `-iquote`, `-I`, the listed file's
+//! `include_dirs`, `-isystem`; angle-bracket — the same without the own
+//! folder and the `-iquote` folders; each `-include` file first. This
+//! module walks it for the oracle's readers (`unit_headers`,
+//! `driver_folders`, `unit_header_names`, the features mirror).
 
-use harness_core::config::flags::{check_flag, Flag};
-use harness_core::config::{Form, TargetContext};
-use harness_core::sources::{include_names, Confine, MAX_SOURCE_BYTES};
+use harness_core::config::TargetContext;
+use harness_core::sources::{names_on_disk, Resolver};
 use harness_core::Facts;
 use std::collections::BTreeSet;
-
-/// The configuration's path flags, by kind, as written (project-relative,
-/// `.` the root), in argument order.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ConfigFolders {
-    /// `-iquote` folders.
-    pub iquote: Vec<String>,
-    /// `-I` folders.
-    pub angled: Vec<String>,
-    /// `-isystem` folders.
-    pub system: Vec<String>,
-    /// `-include` files.
-    pub forced: Vec<String>,
-}
-
-impl ConfigFolders {
-    /// The path flags of `flags` (the configuration's, each checked by the
-    /// flag grammar; a flag outside it is left out — loading refused it).
-    pub(crate) fn of(flags: &[String]) -> ConfigFolders {
-        let mut out = ConfigFolders::default();
-        for flag in flags {
-            let Ok(Flag::Path(rel)) = check_flag(flag) else {
-                continue;
-            };
-            let rel = rel.to_string();
-            match &flag[..flag.len() - rel.len()] {
-                "-iquote" => out.iquote.push(rel),
-                "-I" => out.angled.push(rel),
-                "-isystem" => out.system.push(rel),
-                "-include" => out.forced.push(rel),
-                _ => {}
-            }
-        }
-        out
-    }
-}
-
-/// The folders, in order, the compiler searches for an include written in
-/// `includer` (project-relative) while compiling a listed file whose own
-/// `include_dirs` are `file_dirs` — see the module docs. `""` is the root.
-pub(crate) fn search_order(
-    config: &ConfigFolders,
-    file_dirs: &[String],
-    includer: &str,
-    quoted: bool,
-) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    if quoted {
-        out.push(match includer.rsplit_once('/') {
-            Some((dir, _)) => dir.to_string(),
-            None => String::new(),
-        });
-        out.extend(config.iquote.iter().cloned());
-    }
-    out.extend(config.angled.iter().cloned());
-    out.extend(file_dirs.iter().cloned());
-    out.extend(config.system.iter().cloned());
-    out
-}
 
 /// The files the compile of `start` (project-relative, as a scan records
 /// them) reads from the project, starts included, under the rule: for the
 /// folder form the facts' include closure as ever; for a file list, the
-/// files the rule reaches from every listed `.c` of `start` (each under its
-/// own folders, the configuration's `-include` files first), joined with
-/// the facts' closure — a header the facts name stays in, so a forged or
-/// stale record is still checked by the callers' confinement. Each file
-/// is read lexically ([`include_names`]), at most [`MAX_SOURCE_BYTES`],
-/// as a regular file; one that cannot be read adds no includes.
+/// files the resolver reaches from every listed `.c` of `start` (each as
+/// its own compile, the configuration's `-include` files first), joined
+/// with the facts' closure — a header the facts name stays in, so a forged
+/// or stale record is still checked by the callers' confinement. Each file
+/// is read as a scan reads it ([`names_on_disk`]); one that cannot be read
+/// adds no includes.
 pub(crate) fn closure(target: &TargetContext, facts: &Facts, start: &[String]) -> Vec<String> {
     let mut out: BTreeSet<String> = facts.include_closure(start).into_iter().collect();
-    let Form::FileList(list) = &target.config.target.form else {
+    let Ok(Some(resolver)) = Resolver::of(target) else {
         return out.into_iter().collect();
     };
-    let Ok(confine) = Confine::new(target) else {
-        return out.into_iter().collect();
-    };
-    let Ok(Some(listed)) = confine.listed_files(target) else {
-        return out.into_iter().collect();
-    };
-    let config = ConfigFolders::of(&list.configuration.flags);
-    let forced: Vec<String> = config
-        .forced
-        .iter()
-        .filter_map(|rel| {
-            let real = confine.root().join(rel).canonicalize().ok()?;
-            confine.allows(&real).then(|| confine.rel(&real)).flatten()
-        })
-        .collect();
-    // Each listed `.c` of the start is a compile with its own folders; a
-    // header named in the start is read under each of them.
-    let mut compiles: Vec<&[String]> = start
+    // Each listed `.c` of the start is a compile of its own; a header named
+    // in the start is read under each of them.
+    let mut compiles: Vec<&str> = start
         .iter()
         .filter(|f| f.ends_with(".c"))
-        .filter_map(|c| listed.iter().find(|l| l.path == *c))
-        .map(|l| l.include_dirs.as_slice())
+        .filter(|c| resolver.listed().iter().any(|l| l.path == **c))
+        .map(String::as_str)
         .collect();
     if compiles.is_empty() {
-        compiles.push(&[]);
+        compiles.push("");
     }
-    for dirs in compiles {
+    for unit in compiles {
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut stack: Vec<String> = start.iter().rev().cloned().collect();
-        stack.extend(forced.iter().rev().cloned());
+        stack.extend(resolver.forced_includes().iter().rev().cloned());
         while let Some(file) = stack.pop() {
             if !seen.insert(file.clone()) {
                 continue;
             }
-            let Ok(bytes) =
-                harness_core::ledger::read_regular(&confine.root().join(&file), MAX_SOURCE_BYTES)
-            else {
-                continue;
-            };
-            for (name, quoted) in include_names(&bytes) {
-                let order = search_order(&config, dirs, &file, quoted);
-                if let Some(found) = confine.resolve_include(&file, &name, false, &order) {
+            for (name, quoted) in names_on_disk(resolver.root(), &file).unwrap_or_default() {
+                if let Some(found) = resolver.resolve(unit, &file, &name, quoted) {
                     stack.push(found);
                 }
             }
@@ -148,6 +57,25 @@ pub(crate) fn closure(target: &TargetContext, facts: &Facts, start: &[String]) -
         out.extend(seen);
     }
     out.into_iter().collect()
+}
+
+/// The folders the unit's own `.c` files search, in the rule's order and
+/// without repeats (each listed `.c`'s quoted order: its own folder, the
+/// configuration's `-iquote` and `-I`, its `include_dirs`, `-isystem`);
+/// empty for a folder target.
+pub(crate) fn unit_search_folders(target: &TargetContext, unit_files: &[String]) -> Vec<String> {
+    let Ok(Some(resolver)) = Resolver::of(target) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for c in unit_files.iter().filter(|f| f.ends_with(".c")) {
+        for dir in resolver.search_order(c, c, true) {
+            if !out.contains(&dir) {
+                out.push(dir);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

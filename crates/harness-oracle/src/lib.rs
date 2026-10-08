@@ -1749,19 +1749,12 @@ pub(crate) fn unit_header_names(target: &TargetContext, facts: &Facts, unit: &Un
             .chain(folder.include_dirs.iter().map(String::as_str))
             .map(clean)
             .collect(),
-        Form::FileList(list) => {
-            let config = include_rule::ConfigFolders::of(&list.configuration.flags);
-            config
-                .iquote
-                .iter()
-                .chain(&config.angled)
-                .chain(&config.system)
-                .cloned()
-                .chain(driver_folders(target, facts, unit))
-                .map(|d| clean(&d))
-                .filter(|d| !d.is_empty())
-                .collect()
-        }
+        Form::FileList(_) => include_rule::unit_search_folders(target, &unit.files)
+            .into_iter()
+            .chain(driver_folders(target, facts, unit))
+            .map(|d| clean(&d))
+            .filter(|d| !d.is_empty())
+            .collect(),
     };
     let mut names = std::collections::BTreeSet::new();
     for header in include_rule::closure(target, facts, &unit.files)
