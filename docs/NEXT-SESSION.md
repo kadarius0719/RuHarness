@@ -42,7 +42,7 @@ change at the switch points below.
      module + `TargetContext::load`, `--adopt` on every CLI command and `bench`, the cockpit's
      dialog, harness-mcp's refusal, the test helper and `$RUHARNESS_ADOPTED`, committed tokens for
      zopfli and the tractor suite, SCHEMAS' fixed-names table and writer row);
-   - `worktree-agent-ac521dd6b4231da16` — (a3) the `objsyms` extension (kinds, weakness, commons;
+   - `worktree-agent-ac521dd6b4231da16` — (a3) MERGED (14cdbe1): the `objsyms` extension (kinds, weakness, commons;
      the `$`-suffix and identifier helpers);
    - `worktree-agent-ae9dd210f1e7a03c0` — (a4) the map sandbox profile renderer, the targetless
      runner extracted from harness-oracle bench.rs, the work folder and the children's `PATH` and
