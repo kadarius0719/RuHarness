@@ -254,7 +254,9 @@ fn known_rows<'r>(model: &SpeedModel, rows: &'r [SpeedRow]) -> Vec<&'r SpeedRow>
 /// `current` is then `null` unless a reason was found). `unreadable`: the
 /// results files that could not be read (the first [`MAX_LISTED`], each
 /// its file name and the first line of why, fenced; `unreadable_omitted`
-/// how many more). `note`: why perf refuses the plan whatever is
+/// how many more). `orphans`: the ids of results files of units no longer
+/// in the plan (the first [`MAX_LISTED`], fenced; `orphans_omitted` how
+/// many more). `note`: why perf refuses the plan whatever is
 /// measurable (a plan over 999 units; `units_measurable` is then 0), else
 /// `null`. Bounded whatever the plan's size, so the units' page always has
 /// room.
@@ -299,6 +301,17 @@ fn speed_head(model: &SpeedModel) -> Value {
     });
     if model.unreadable.len() > MAX_LISTED {
         head["unreadable_omitted"] = json!(model.unreadable.len() - MAX_LISTED);
+    }
+    // Results files of units no longer in the plan: named, never read.
+    let orphans = model.orphans.len() + model.orphans_more;
+    head["orphans"] = json!(model
+        .orphans
+        .iter()
+        .take(MAX_LISTED)
+        .map(|id| short("unit id", id))
+        .collect::<Vec<_>>());
+    if orphans > MAX_LISTED {
+        head["orphans_omitted"] = json!(orphans - MAX_LISTED);
     }
     head
 }
@@ -364,8 +377,21 @@ fn unit_summary(snapshot: &Snapshot, model: &SpeedModel, u: &UnitView) -> Value 
     v
 }
 
+/// A unit of the units' page without facts: its id, its worst Speed row
+/// (`speed`, as with facts) and all its rows worst first (`speed_rows`:
+/// `harness_unit` needs the facts, so they are given here).
+fn speed_only_summary(model: &SpeedModel, id: &str) -> Value {
+    let rows = unit_speed(model, id);
+    json!({
+        "id": short("unit id", id),
+        "speed": rows.first().cloned().unwrap_or(Value::Null),
+        "speed_rows": rows,
+    })
+}
+
 /// `harness_status`: the ledger, outcome-first within the budget, one page
-/// of units in plan order — from the one after `after`, when given — up
+/// of units in plan order (without facts, only the units with Speed rows,
+/// each `{id, speed, speed_rows}`) — from the one after `after`, when given — up
 /// to the first that does not fit; `omitted.after` names where the next
 /// page starts. A unit too large for any page is skipped and named. The
 /// count of pending blind hand-offs is in the head: never cut. `in_flight`
@@ -381,18 +407,36 @@ pub fn status(
         .iter()
         .map(|u| blind_pending(snapshot, u))
         .sum();
+    let model = speed::build(snapshot);
+    // The units listed: the plan's, from the snapshot; without facts the
+    // snapshot holds none, so the plan units with Speed rows are listed,
+    // each with those rows alone (their rows are still judged, bar the
+    // `replaces` check) — the units `units_measured` counts.
+    let speed_only = snapshot.facts_state.is_none();
+    let ids: Vec<&str> = if speed_only {
+        snapshot
+            .perf
+            .plan_units
+            .iter()
+            .filter(|id| model.unit(id).is_some())
+            .map(String::as_str)
+            .collect()
+    } else {
+        snapshot.units.iter().map(|u| u.unit.id.as_str()).collect()
+    };
+    let summary = |i: usize| match snapshot.units.get(i).filter(|_| !speed_only) {
+        Some(u) => unit_summary(snapshot, &model, u),
+        None => speed_only_summary(&model, ids[i]),
+    };
     let start = match after {
         None => 0,
         Some(id) => {
-            snapshot
-                .units
-                .iter()
-                .position(|u| u.unit.id == id)
+            ids.iter()
+                .position(|u| *u == id)
                 .ok_or("no such unit in plan.toml to page after")?
                 + 1
         }
     };
-    let model = speed::build(snapshot);
     let mut out = json!({
         "target": fence::path("path", &snapshot.root.to_string_lossy()),
         "speed": speed_head(&model),
@@ -408,21 +452,22 @@ pub fn status(
     let widest = short("unit id", &"x".repeat(fence::SHORT_CAP + 1));
     out["omitted"] = json!({"units": usize::MAX, "after": widest.clone(),
                             "oversized": [widest.clone(), widest], "why": WHY});
-    let rest = &snapshot.units[start.min(snapshot.units.len())..];
+    let start = start.min(ids.len());
+    let rest = ids.len() - start;
     let (mut shown, mut oversized, mut last) = (0usize, Vec::new(), None);
-    for u in rest {
-        if fence::fill_at(&mut out, "/units", vec![unit_summary(snapshot, &model, u)]) == 0 {
+    for (i, id) in ids.iter().enumerate().skip(start) {
+        if fence::fill_at(&mut out, "/units", vec![summary(i)]) == 0 {
             shown += 1;
-            last = Some(&u.unit.id);
+            last = Some(*id);
         } else if shown == 0 && oversized.len() < 2 {
             // Too large even alone: skipped (and named), never a page stuck.
-            oversized.push(short("unit id", &u.unit.id));
-            last = Some(&u.unit.id);
+            oversized.push(short("unit id", id));
+            last = Some(*id);
         } else {
             break;
         }
     }
-    let left = rest.len() - shown - oversized.len();
+    let left = rest - shown - oversized.len();
     if left > 0 || !oversized.is_empty() {
         let mut note = json!({"units": left, "why": WHY});
         if let Some(id) = last.filter(|_| left > 0) {
@@ -1613,6 +1658,23 @@ mod tests {
             },
             unit_rows,
         );
+        // 25 unit files that do not read, and 25 results files of units no
+        // longer in the plan, all with long ids: listed up to the cap.
+        let perf = harness_core::perf::perf_dir(&t.0);
+        let plan = t.0.join("migration/plan.toml");
+        let mut text = std::fs::read_to_string(&plan).unwrap();
+        for i in 0..25 {
+            let id = format!("u-junk-{i:02}-{}", "j".repeat(195));
+            text.push_str(&format!(
+                "\n[[unit]]\nid = \"{id}\"\nstatus = \"pending\"\nfiles = []\n"
+            ));
+            let path = harness_core::perf::results::unit_path(&perf, &id);
+            std::fs::write(path, "junk").unwrap();
+            let gone = format!("u-gone-{i:02}-{}", "g".repeat(195));
+            let path = harness_core::perf::results::unit_path(&perf, &gone);
+            std::fs::write(path, "junk").unwrap();
+        }
+        std::fs::write(&plan, text).unwrap();
         let snap = Snapshot::load(&t.0).unwrap();
         let s = status(&snap, json!({}), Value::Null, None).unwrap();
         assert!(
@@ -1622,6 +1684,13 @@ mod tests {
         );
         assert!(!s["units"].as_array().unwrap().is_empty(), "{s}");
         assert!(s.pointer("/omitted/oversized").is_none(), "{s}");
+        assert_eq!(
+            s["speed"]["unreadable"].as_array().unwrap().len(),
+            MAX_LISTED
+        );
+        assert_eq!(s["speed"]["unreadable_omitted"], 25 - MAX_LISTED);
+        assert_eq!(s["speed"]["orphans"].as_array().unwrap().len(), MAX_LISTED);
+        assert_eq!(s["speed"]["orphans_omitted"], 25 - MAX_LISTED);
         let sp = &s["speed"];
         assert_eq!(sp["c_alone"].as_array().unwrap().len(), 1, "{sp}");
         let ais = &sp["as_it_stands"];
@@ -1849,6 +1918,119 @@ mod tests {
             "perf measures a plan of at most 999 units — this plan has 1000"
         );
         assert!(fence::size(&s) <= fence::RESULT_BUDGET);
+    }
+
+    /// Without facts the snapshot holds no unit: the units' page lists the
+    /// plan units with Speed rows, each with its rows (still judged), so
+    /// `units_measured` counts only units listed; with facts every plan
+    /// unit is listed as before.
+    #[test]
+    fn without_facts_the_units_with_rows_are_listed() {
+        use harness_core::perf::results::{ProgramResults, UnitRef};
+        let t = speed_target("speed-no-facts-units", &["big"]);
+        let snap = Snapshot::load(&t.0).unwrap();
+        let with_facts = snap.units.len();
+        assert!(with_facts > 1, "{with_facts}");
+        let mut ais = speed_row_of(
+            &snap,
+            "big",
+            Some(speed_runs(false)),
+            "macos-v6-cycles",
+            false,
+        );
+        ais.inputs.crates = None;
+        ais.inputs.replaces = None;
+        ais.inputs.units = Some(vec![UnitRef {
+            id: U001.into(),
+            crate_digest: format!("blake3:{}", "f".repeat(64)),
+        }]);
+        write_speed(
+            &t,
+            ProgramResults {
+                as_it_stands: vec![ais],
+                ..Default::default()
+            },
+            vec![speed_row_of(
+                &snap,
+                "big",
+                Some(speed_runs(false)),
+                "macos-v6-cycles",
+                false,
+            )],
+        );
+        let s = status(&Snapshot::load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap();
+        assert_eq!(s["units"].as_array().unwrap().len(), with_facts);
+        std::fs::remove_file(t.0.join("migration/facts.jsonl")).unwrap();
+        let snap = Snapshot::load(&t.0).unwrap();
+        let s = status(&snap, json!({}), Value::Null, None).unwrap();
+        assert_eq!(s["speed"]["units_measured"], 1, "{}", s["speed"]);
+        let units = s["units"].as_array().unwrap();
+        assert_eq!(units.len(), 1, "{s}");
+        assert_eq!(units[0]["id"]["text"], U001);
+        assert_eq!(units[0]["speed"]["workload"]["text"], "big");
+        assert_eq!(units[0]["speed"]["current"], true, "{}", units[0]);
+        assert_eq!(units[0]["speed_rows"].as_array().unwrap().len(), 1);
+        assert!(s.get("omitted").is_none(), "{s}");
+        // Paging after the one unit: nothing more.
+        let s = status(&snap, json!({}), Value::Null, Some(U001)).unwrap();
+        assert_eq!(s["units"], json!([]));
+        assert!(status(&snap, json!({}), Value::Null, Some("u-none")).is_err());
+    }
+
+    /// A unit file that does not read is named apart (`file`), so its
+    /// error is the reason alone — never the path's head — and a deep path
+    /// cannot crowd the reason out of the 256-byte fence.
+    #[test]
+    fn an_unreadable_files_reason_survives_a_deep_path() {
+        use harness_core::perf::results as res;
+        let t = speed_target("speed-deep-path", &["big"]);
+        let perf = harness_core::perf::perf_dir(&t.0);
+        let plan = t.0.join("migration/plan.toml");
+        let id = format!("u-deep-{}", "d".repeat(200));
+        let mut text = std::fs::read_to_string(&plan).unwrap();
+        text.push_str(&format!(
+            "\n[[unit]]\nid = \"{id}\"\nstatus = \"pending\"\nfiles = []\n"
+        ));
+        std::fs::write(&plan, text).unwrap();
+        std::fs::write(res::unit_path(&perf, &id), "junk").unwrap();
+        assert!(res::unit_path(&perf, &id).to_string_lossy().len() > fence::SHORT_CAP);
+        let s = status(&Snapshot::load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap();
+        let u = &s["speed"]["unreadable"][0];
+        assert_eq!(u["file"]["text"], format!("units/{id}.json"), "{u}");
+        let error = u["error"]["text"].as_str().unwrap();
+        assert!(error.starts_with("not a perf results file: "), "{error}");
+        assert!(u["error"].get("truncated").is_none(), "{u}");
+    }
+
+    /// Results files of units no longer in the plan are named, never read:
+    /// their ids fenced, the first [`MAX_LISTED`] in order, the rest counted.
+    #[test]
+    fn orphan_results_files_are_named() {
+        use harness_core::perf::results as res;
+        let t = speed_target("speed-orphans", &["big"]);
+        let perf = harness_core::perf::perf_dir(&t.0);
+        let head = || {
+            status(&Snapshot::load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap()["speed"]
+                .clone()
+        };
+        let sp = head();
+        assert_eq!(sp["orphans"], json!([]), "{sp}");
+        assert!(sp.get("orphans_omitted").is_none(), "{sp}");
+        std::fs::write(res::unit_path(&perf, "u-gone-a"), "junk").unwrap();
+        let sp = head();
+        assert_eq!(
+            sp["orphans"],
+            json!([{"untrusted": "unit id", "text": "u-gone-a"}])
+        );
+        assert_eq!(sp["unreadable"], json!([]), "never read: {sp}");
+        for i in 0..24 {
+            std::fs::write(res::unit_path(&perf, &format!("u-gone-{i:02}")), "{}").unwrap();
+        }
+        let sp = head();
+        let orphans = sp["orphans"].as_array().unwrap();
+        assert_eq!(orphans.len(), MAX_LISTED);
+        assert_eq!(orphans[0]["text"], "u-gone-00");
+        assert_eq!(sp["orphans_omitted"], 25 - MAX_LISTED);
     }
 
     #[test]

@@ -132,9 +132,11 @@ pub fn tools(providers: &[String]) -> Vec<Tool> {
                  answers and numbers, `current` with closed reasons; the computer and the \
                  compilers are not checked here; without facts `program_checked` is false and \
                  the C alone's and the program as it stands's rows read `current: null` — not \
-                 judged against today's C and units — unless a reason was found; `unreadable` \
-                 names results files that could not be read; `note` says why perf refuses the \
-                 plan, `units_measurable` then 0). Read-only. {untrusted}"
+                 judged against today's C and units — unless a reason was found, and `units` \
+                 lists only the units with Speed rows, each with all its rows in `speed_rows`; \
+                 `unreadable` names results files that could not be read; `orphans` names \
+                 results files of units no longer in the plan, not read; `note` says why perf \
+                 refuses the plan, `units_measurable` then 0). Read-only. {untrusted}"
             ),
             read_only: true,
             destructive: false,

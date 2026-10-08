@@ -605,6 +605,7 @@ pub fn left_out_today(u: &UnitView) -> Option<&'static str> {
 /// Build Speed from `snapshot`.
 pub fn build(snapshot: &Snapshot) -> SpeedModel {
     let perf = &snapshot.perf;
+    let perf_dir = harness_core::perf::perf_dir(&snapshot.root);
     let mut model = SpeedModel {
         group: Group::NoFile,
         c_rows: Vec::new(),
@@ -616,7 +617,10 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         unreadable: perf
             .errors
             .iter()
-            .map(|e| (results::UNITS_DIR.to_string(), first_line(e)))
+            .map(|e| {
+                let at = perf_dir.join(results::UNITS_DIR);
+                (results::UNITS_DIR.to_string(), reason_only(e, &at))
+            })
             .collect(),
         program_checked: snapshot.facts_state.is_some(),
         plan_refused: None,
@@ -809,9 +813,10 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 "program.json cannot be read: {}",
                 harness_core::text::safe_line(e)
             ));
-            model
-                .unreadable
-                .push((results::PROGRAM_FILE.to_string(), first_line(e)));
+            model.unreadable.push((
+                results::PROGRAM_FILE.to_string(),
+                reason_only(e, &results::program_path(&perf_dir)),
+            ));
         }
     }
     model.c_rows.sort_by_key(|r| order(&r.workload));
@@ -856,9 +861,10 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                     "{id}'s results cannot be read: {}",
                     harness_core::text::safe_line(e)
                 ));
-                model
-                    .unreadable
-                    .push((format!("{}/{id}.json", results::UNITS_DIR), first_line(e)));
+                model.unreadable.push((
+                    format!("{}/{id}.json", results::UNITS_DIR),
+                    reason_only(e, &results::unit_path(&perf_dir, id)),
+                ));
             }
         }
     }
@@ -945,6 +951,25 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
 /// The first line of an error's words.
 fn first_line(e: &str) -> String {
     e.lines().next().unwrap_or_default().to_string()
+}
+
+/// The first line of why the file at `path` could not be read, without
+/// the "results file: <path>: " head the reader puts first (nor a bare
+/// "<path>: ", nor the "<path> " before a too-new file's words): the file
+/// is named apart, so a deep path never crowds the reason out of a capped
+/// field.
+fn reason_only(e: &str, path: &std::path::Path) -> String {
+    let line = first_line(e);
+    let rest = line.strip_prefix("results file: ").unwrap_or(&line);
+    let at = path.display().to_string();
+    match rest.strip_prefix(at.as_str()) {
+        Some(why) => why
+            .strip_prefix(": ")
+            .or_else(|| why.strip_prefix(' '))
+            .unwrap_or(why)
+            .to_string(),
+        None => rest.to_string(),
+    }
 }
 
 /// Each workload `c_clock` lacks, from the first of `rows` on it whose C
@@ -1289,6 +1314,66 @@ mod tests {
             Some("perf measures a plan of at most 999 units — this plan has 1000")
         );
         assert!(m.measurable.is_empty());
+    }
+
+    /// A plan of exactly 999 units is perf's limit, not over it: nothing is
+    /// refused (the count is `>`, never `>=`).
+    #[test]
+    fn a_plan_of_999_units_is_not_refused() {
+        let t = probe_target("speed-999-units", true, false);
+        let plan = t.join("migration/plan.toml");
+        let mut text = std::fs::read_to_string(&plan).unwrap();
+        let have = text.matches("[[unit]]").count();
+        for i in 0..(999 - have) {
+            text.push_str(&format!(
+                "\n[[unit]]\nid = \"u-pad-{i:04}\"\nstatus = \"pending\"\nfiles = []\n"
+            ));
+        }
+        std::fs::write(&plan, text).unwrap();
+        std::fs::remove_file(t.join("migration/facts.jsonl")).unwrap();
+        let m = build(&Snapshot::load(&t).expect("loads"));
+        let _ = std::fs::remove_dir_all(&t);
+        assert_eq!(m.plan_refused, None);
+    }
+
+    /// The units folder a file: named `units` among the unreadable, its
+    /// error's first line; and the unit files that do not read are named in
+    /// plan order, not by name.
+    #[test]
+    fn the_units_folder_and_unit_files_are_named_in_plan_order() {
+        let t = probe_target("speed-unreadable-order", true, false);
+        let perf = harness_core::perf::perf_dir(&t);
+        let plan = t.join("migration/plan.toml");
+        let mut text = std::fs::read_to_string(&plan).unwrap();
+        std::fs::create_dir_all(perf.join(results::UNITS_DIR)).unwrap();
+        for id in ["u-junk-b", "u-junk-a"] {
+            text.push_str(&format!(
+                "\n[[unit]]\nid = \"{id}\"\nstatus = \"pending\"\nfiles = []\n"
+            ));
+            std::fs::write(results::unit_path(&perf, id), "junk").unwrap();
+        }
+        std::fs::write(&plan, text).unwrap();
+        let m = build(&Snapshot::load(&t).expect("loads"));
+        assert_eq!(
+            m.unreadable
+                .iter()
+                .map(|(f, _)| f.as_str())
+                .collect::<Vec<_>>(),
+            ["units/u-junk-b.json", "units/u-junk-a.json"]
+        );
+        std::fs::remove_dir_all(perf.join(results::UNITS_DIR)).unwrap();
+        std::fs::write(perf.join(results::UNITS_DIR), "a file").unwrap();
+        let m = build(&Snapshot::load(&t).expect("loads"));
+        let _ = std::fs::remove_dir_all(&t);
+        assert_eq!(m.unreadable.len(), 1, "{:?}", m.unreadable);
+        assert_eq!(m.unreadable[0].0, "units");
+        assert!(
+            m.unreadable[0]
+                .1
+                .ends_with("must be a directory (a link is refused)"),
+            "{:?}",
+            m.unreadable
+        );
     }
 
     #[test]
