@@ -149,6 +149,10 @@ A verdict is bound to what was tested — digests, not timestamps:
 
 ## harness.toml (committed, per-target root)
 
+The folder form (`schema_version = 1`). A mapped tool's `harness.toml` lives at
+`migration/tools/<id>/` and may use the file-list form (`schema_version = 2`): see "Mapped
+tools" at the end; the file is read version first.
+
 ```toml
 schema_version = 1
 
@@ -350,8 +354,9 @@ stage-2 done-criterion, enforced.
   in `external` provider mode with missing responses: writes request files, exit 1
   with "awaiting N response(s)").
 - `harness review <FINDING> (--uphold-dismiss|--reinstate) [--note S] [--target DIR]`.
-- `harness sync-runtime [--target DIR] [--check]` — managed AGENTS.md block (§14.3);
-  `--check` exits 1 when regeneration would change the block.
+- `harness sync-runtime [--target DIR] [--tool ID] [--check]` — managed AGENTS.md block
+  (§14.3), one per target ("Mapped tools" below); `--check` exits 1 when regeneration would
+  change the block.
 
 ## harness.toml [llm]
 
@@ -1591,3 +1596,157 @@ newlines and tabs shown as `?`.
 | `project-file` | `path`, `kind` (`c` \| `h`), `compiled` (true when an object was made and read), `reason` (when a `.c` did not compile: the closed set `missing-header` \| `syntax` \| `other`), `header` (`missing-header` only: the name as the include wrote it), `detail` (`other` only: `timeout` \| `output-overflow` \| `too-large-object` \| `unreadable-object`), `at` (`<path>:<line>` inside the project, when known), `too_large` (only when true: over 8 MiB, neither parsed nor compiled), `include_dirs`, `ambiguous: [{header, candidates: [path \| "system"], used?}]` (`used`: the candidate the compile read, from its `-MD` list), `defined`, `needed` (counts), `outside_includes`, `withheld` (only when non-zero: names counted, not kept, because the compile read outside the project and the toolchain's folders), `odd_names` (only when non-zero: names not shaped like a C identifier) |
 
 Paths and header names are carried raw, escaped as every event is.
+
+---
+
+# Mapped tools: the layout, `harness.toml` v2 and `--tool` (docs/PROJECT-MAP-DESIGN.md §3.7, §5 step c)
+
+## The ledger layout
+
+The **project root** is the target root of every target in a project: the base of every path in
+the facts and the plan, the folder every compiler input stays inside, the sandbox's read root.
+The **ledger folder** is where a target's state lives; every ledger path (`facts.jsonl`,
+`plan.toml`, `observer/`, `units/`, `features/`, `perf/`, `build/`, `.lock`) is relative to it.
+
+| Target | Its `harness.toml` | Its ledger folder |
+|---|---|---|
+| folder form (zopfli's layout; nothing moves) | `<root>/harness.toml` | `<root>/migration/` |
+| a mapped tool `<id>` | `<root>/migration/tools/<id>/harness.toml` | `<root>/migration/tools/<id>/` |
+
+Every name the earlier sections spell `migration/…` for a ledger file is the same name under a
+mapped tool's ledger folder. `migration/map/`, `migration/.gitignore` and
+`migration/.ruharness-adopted` are project-level. A tool is a real folder of
+`migration/tools/` (never a link) named by a tool id and holding a `harness.toml`; anything
+else there is no tool. The plan's `driver` paths stay root-relative.
+
+**Tool ids** are `^[tl]-[a-z0-9_-]{1,64}$` (`t-` a program, `l-` a library). `--tool` with any
+other value is a usage error (exit 2): "`<value>` is not a tool id: it is t- or l- followed by
+1 to 64 lowercase letters, digits, _ or -, as `harness project map` prints them".
+
+## Finding a target: `--target` and `--tool`
+
+Every subcommand that takes `--target` takes `--tool <ID>` (`scan`, `plan`, `verify`,
+`state status`, `detect`, `observe`, `review`, `migrate`, `override`, `promote`, `gen-driver`,
+`sync-runtime`, `features init|save|map`, `perf run|init|save|show`); so do the cockpit
+(`harness-tui --tool ID`) and harness-mcp (`--tool ID`, beside `--target`; its per-call
+arguments do not change, and a call's other target under a `--target-root` has no tool).
+`project map` maps the whole project and takes none; `bench` reads its suite's cases. The
+lookup order:
+
+1. `--tool <id>`: `migration/tools/<id>/harness.toml`, never the root's; a project without
+   that tool is refused: "<root> has no mapped tool <id> (its tools are t-a, t-b); pick one of
+   them with --tool, or run `harness project map` to see its programs".
+2. Without `--tool`: the root's `harness.toml` (folder form, ledger `migration/`).
+3. Else, when `migration/tools/` holds exactly one tool: that tool.
+4. Else, with several tools: refused (exit 1), the tools named: "<root> has N mapped tools and
+   no harness.toml of its own; pick one with --tool (t-a, t-b)". The cockpit, in a terminal,
+   lists them for the person to pick instead; away from one it refuses with the same words.
+   With no tool either, the root's missing `harness.toml` is the error, as before.
+
+A resume command (`awaiting`'s `resume`) carries `--tool=<id>` after `--target=`; the cockpit
+and harness-mcp pass `--tool=<id>` right after `--target=` in every argv they spawn.
+
+The adoption check runs once, on the project root, and covers its tools: `--adopt` deletes the
+build folders of the root's ledger and of each tool's, and the refusal counts the units of
+every plan in the project.
+
+## `harness.toml`, read version first
+
+`TargetConfig::load` parses the file to a TOML table and reads `schema_version` before any
+other key: a version newer than this harness reads (today 2) is refused, "<path> has
+schema_version N, but this harness supports up to 2; upgrade the harness" — never "missing
+field". `schema_version = 1` is the folder form, unchanged; `schema_version = 2` is the
+file-list form. `[target]` holding both `files` and `source_dir` is refused by name, in either
+version: "[target] holds both `files` and `source_dir`; a target is one folder (source_dir,
+schema_version = 1) or a list of files (files, schema_version = 2), so keep one". `files` under
+version 1, or `source_dir` under version 2, is refused naming the version to write.
+`[oracle]`, `[llm]` and `[driver]` are the same in both forms.
+
+### The file-list form (`schema_version = 2`)
+
+```toml
+schema_version = 2
+
+[target]
+name = "lz4"            # the run name: what features run the program as
+files = [
+  { path = "programs/lz4cli.c", include_dirs = ["programs", "lib"] },
+  { path = "lib/lz4.c", include_dirs = ["lib"] },
+]
+configuration = { name = "make", from = "make", flags = ["-DLZ4IO_MULTITHREAD", "-pthread"] }
+map = { root_hash = "blake3:…", inputs_hash = "blake3:…" }               # optional
+picks = [{ definers = ["a/x.c", "b/x.c"], keep = "a/x.c", by = "person" }]  # optional
+
+[oracle]
+allowlist = ["cc", "cargo", "rustc"]
+```
+
+- `name`, `files` (non-empty) and `configuration` are required; `map` and `picks` are
+  optional (a hand-written target has neither). Unknown keys inside `[target]`, a file entry,
+  `configuration`, `map` or a pick are refused (a typo must not pass silently).
+- Each `files[].path` is a clean path relative to the project root (`/`-separated parts that
+  start with a letter or digit; no `.`, `..` or empty part), never under `migration/`, listed
+  once. Each file's `include_dirs` are `.` (the root) or such paths, in search order; they
+  replace the folder form's rule that include folders lie inside `source_dir`.
+- `configuration`: `name` a word of letters, digits, `_`, `-`, `.` (at most 64); `from` one of
+  `make | meson | cmake | compile_commands | stated`; `flags` in order, each checked by the
+  grammar below at load.
+- `map`'s two digests are `blake3:<64 hex>` (or the 64 hex digits alone); a pick's `by` is
+  `person` or `links`, and its `keep` one of its `definers`.
+- At load, every path — each file, each include folder, each path a flag names — is resolved
+  against the project root with its links followed (the deepest part that exists), and must
+  lie inside the root and outside `migration/`; otherwise refused: "… leads outside the project
+  or into migration/ through a link; name a path inside the project".
+
+**The flag grammar** (one for every source; joined forms only — one flag is one argument):
+
+| Flag | Rule |
+|---|---|
+| `-D<name>`, `-D<name>=<value>` | `<name>` a C identifier `[A-Za-z_][A-Za-z0-9_]*` |
+| `-U<name>` | `<name>` a C identifier |
+| `-I<dir>`, `-iquote<dir>`, `-isystem<dir>`, `-include<file>` | the path `.` or clean and relative to the project root, not under `migration/`; inside the root after its links are followed |
+| `-std=<v>` | `<v>` one of `c89 c90 c99 c11 c17 c18 c23 c2x gnu89 gnu90 gnu99 gnu11 gnu17 gnu18 gnu23 gnu2x` |
+| `-pthread` | — |
+| `-f…` | exactly one of `-fno-strict-aliasing -fwrapv -fno-common -fcommon -fPIC -fpic -fsigned-char -funsigned-char -fno-builtin -fvisibility=hidden -fvisibility=default` |
+| `-O0` … `-O3` | recorded, never applied (every compile keeps its own level) |
+
+No value may start with `@` or `-` (a compiler reads `@file` as a file of options), nor hold a
+control character. Anything else — `-B`, `-fplugin`, `-fuse-ld`, `-Xclang`, `-o`, the `-M`
+family, `-Wl`, `-x`, `-l…`, a separate-argument form — is refused by name, one sentence each:
+"the flag `-fuse-ld=/x` is not one the harness passes to a compiler; remove it …", "the flag
+`-I@f` has a value starting with `@` or `-`, which a compiler reads as more options; remove
+it", "the flag `-DFOO BAR` does not define a C identifier; write -DNAME or -DNAME=VALUE as one
+argument", "the flag `-I../x` names a path outside the project or under migration/; name a
+folder inside the project, relative to its root".
+
+**Readers that do not read the file-list form yet** refuse it in one sentence, never a panic:
+"this target lists its files; <command> does not read that form yet" — today `scan`, `plan`,
+`verify`, `detect`, `observe`, `migrate`, `gen-driver`, `override`, `promote`, `features map`,
+`perf run`, the cockpit's read model and harness-mcp's reads. (`state status`, `review`,
+`sync-runtime`, `features init|save` and `perf init|save|show` read it.) The builds and the
+scanner learn the form in the next parts of step c.
+
+## `sync-runtime`, one block per tool
+
+`AGENTS.md` at the project root holds one generated block per target: a folder-form target's
+block keeps its markers byte for byte (`<!-- BEGIN RUHARNESS GENERATED v1 (source: migration/ —
+do not edit; run \`harness sync-runtime\`) -->`); a tool's BEGIN marker carries its id —
+`<!-- BEGIN RUHARNESS GENERATED v1 tool=<id> (source: migration/tools/<id>/ — do not edit; run
+\`harness sync-runtime --tool <id>\`) -->` — and its body names that tool's ledger paths and
+the `--tool <id>` its commands take. `sync-runtime --tool <id>` replaces only that tool's block
+(appending it when absent) and keeps every other block; `--check` compares only it. A block
+whose END marker is missing (before the next block begins), or two blocks for one target, is
+refused for repair by hand.
+
+## Writer table additions: the lock column
+
+Every writer of a ledger file takes **that ledger's** writer lock — `migration/.lock` for a
+folder-form target, `migration/tools/<id>/.lock` for a tool — so two tools of one project run
+their commands side by side. The project lock (`migration/map/.lock`) comes with `project
+map` (step b).
+
+| File | Writer | Lock |
+|---|---|---|
+| every file of a ledger folder (the tables above) | the command that writes it today | that ledger's `.lock` |
+| `migration/tools/<id>/harness.toml` | a person; later `project accept` | — (read-only to every other command) |
+| `AGENTS.md` (the tool's block), `CLAUDE.md` (`@AGENTS.md`) at the project root | `sync-runtime --tool <id>` | that tool's `.lock` (the project lock once step b makes it; two tools synced at the very same moment could race on the shared file until then) |
