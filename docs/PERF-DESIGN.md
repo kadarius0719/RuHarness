@@ -619,12 +619,12 @@ file one list of rows. A measurement replaces only the rows it measured, by §3.
 Unit ids from the plan alphabet are allowed wherever a row names units.
 
 **No words are stored**: they are computed by §3.8 on every read. Read strictly by outcome
-(`read_regular` with a 4 MiB cap; the shapes above; counts' rules; runs 5–31; ids once; a new key is
-a new `schema_version`) [c75, c79]. Written after every row with `write_atomic` into a folder the CLI
-resolves with `safe_ledger_dir` and passes in [c76]; links refused by the CLI and the cockpit on read
-and on write [c75]. Rows of removed workloads are dropped on the next write; a unit file of a unit no
-longer in the plan reads "no longer in the plan". The results files count in the cockpit's
-retained-read budget [c14].
+(`read_regular` with a 4 MiB cap; the shapes above; counts' rules; runs 5–31; ids once; at most 16
+rows a list, one per workload; a new key is a new `schema_version`) [c75, c79]. Written after every
+row with `write_atomic` into a folder the CLI resolves with `safe_ledger_dir` and passes in [c76];
+links refused by the CLI and the cockpit on read and on write [c75]. Rows of removed workloads are
+dropped on the next write; a unit file of a unit no longer in the plan reads "no longer in the
+plan". The results files count in the cockpit's retained-read budget [c14].
 
 **Kept outputs** of a behaves-differently row: `migration/build/.perf-out/program/` and
 `.perf-out/units/<id>/` [n7, n33], `<workload>.{c,other}.{stdout,stderr}`, each capped at 64 MiB,
@@ -639,16 +639,21 @@ unit's Rust, its replaced files, the program's name, the as-it-stands units per 
 the compilers, the kind of computer, the harness). `harness perf run` judges all. `harness perf
 show` judges the computer with `perfrun facts` when the launcher cache is current, and otherwise says
 "computer not checked — run harness perf run once" (it never builds the launcher); the compilers
-with `cc --version` and `rustc -V` as tool runs when the target's allowlist has them, else
-"compilers not checked"; `--no-check` skips both [n35, m24, p29]. With no row stored, `perf show`
-checks nothing (no check is worth its runs) and says only "nothing measured yet". Without facts
-the C is not judged, said once in one line ("perf: the C not checked: no facts — run harness
-scan"); when a program-as-it-stands row is stored, the same line says the units that program
-holds are not checked either ("perf: the C and the units the program as it stands holds not
-checked: no facts — run harness scan"; with facts but units that cannot be read, "perf: the units
-the program as it stands holds not checked: <error>"); the rest of each row is still judged. One unit's results
-file that cannot be read does not hide the other rows: `perf show` prints the rows that read, then
-the error naming the bad file, and exits 1, as the cockpit shows the other rows. The cockpit
+with `cc --version` and `rustc -V` as tool runs when the target's allowlist has them, one at a
+time, stopping at the first that fails (then `rustc -V` is never started), else "compilers not
+checked"; `--no-check` skips both [n35, m24, p29]. With no row stored, `perf show` checks nothing
+(no check is worth its runs) and its last line is "nothing measured yet". Without facts the C is
+not judged, said once in one line ("perf: the C not checked: no facts — run harness scan"); when
+a program-as-it-stands row is stored, the same line says the units that program holds are not
+checked either ("perf: the C and the units the program as it stands holds not checked: no facts
+— run harness scan": whether each unit is still held or left out, accepted or verified since, and
+the plan's order, are then not judged; a held unit whose Rust changed is still said); with facts
+but units that cannot be read, and such a row stored, "perf: the units the program as it stands
+holds not checked: <error>"; the rest of each row is still judged. A results file that cannot be
+read does not hide the other rows: `perf show` prints the rows that read, then every error (a
+`program.json` that does not read, a units folder that is a file, a link or unreadable, each unit
+file that does not read), and exits 1, as the cockpit shows the other rows; a results file of a
+unit no longer in the plan is named ("no longer in the plan"), not read, in both. The cockpit
 judges what it can without starting a process and says the rest is not checked (§3.11). A results
 file is evidence, not ledger truth; committing it keeps a history in git; it gates nothing [c78,
 c79]. Stale facts: `perf run` refuses ("scan first").
@@ -679,7 +684,8 @@ c79]. Stale facts: `perf run` refuses ("scan first").
 - A **Speed** group in the tree beside Features, labels of at most 19 columns [n30]: `Speed (no
   file)`, `Speed (none yet)`, `Speed (file error)`, `Speed (C only)`, `Speed (2 of 3)`; acts **Write
   your workloads file** / **Edit the workloads file** / **Continue my workloads draft**, **Measure
-  speed** (greyed, with the state's words, in the first three states), on a unit **Measure this
+  speed** (greyed, with the state's words, in the first three states, and with perf's own words
+  for a plan of more than 999 units, which perf refuses by name), on a unit **Measure this
   unit's speed** and **Measure again with 31 runs** (the workloads whose rows could not tell, are
   "probably" or a close call), and the same on the As-it-stands heading (`--as-it-stands-only`)
   [c16, c63, n22, m29, p14]. Each confirm dialog says what runs, how many times, the estimate (§6),
@@ -688,14 +694,19 @@ c79]. Stale facts: `perf run` refuses ("scan first").
   finished rows, and to keep the computer quiet; when it ends: "Measured 4 rows — see Speed" [c92].
   Whether the launcher cache is stale is asked of the oracle off the UI thread, waited for only
   briefly, and has three answers: **current** (with the same private-folder checks the run makes:
-  no link, mode 0700, owned by you) — no cache line, no launcher time; **will build** — the
-  estimate counts it, "about 25 s of it for perf's launcher (its build and first start)", and the
-  dialog names the cache it writes; **cannot use** — the plain estimate, and the dialog says perf
-  will refuse and why, in perf's own words. The answer is definite only when the `harness` the act
-  runs is the cockpit's own build (the binary beside the cockpit's own, compared canonically):
-  another build hashes other launcher sources into another cache folder. Otherwise, or when no
-  answer comes in time, the dialog keeps the plain estimate and the hedge "the first time, or after
-  an update, it builds perf's launcher into ~/Library/Caches/ruharness/perf".
+  no link, no access for anyone else, owned by the owner of your home folder) — no cache line, no
+  launcher time; **will build** — the estimate counts it, "about 25 s of it for perf's launcher
+  (its build and first start)", and the dialog names the cache it writes; **cannot use** — the
+  plain estimate, and the dialog says perf will refuse and why, in perf's own words. The answer is
+  definite only when the `harness` the act runs is the cockpit's own build (the binary beside the
+  cockpit's own, compared canonically): another build hashes other launcher sources into another
+  cache folder. Otherwise, or when no answer comes in time, the dialog keeps the plain estimate and
+  the hedge "the first time, or after an update, it builds perf's launcher into
+  ~/Library/Caches/ruharness/perf". The rule is by location, not by build: `cargo install` puts
+  `harness` and `harness-tui` side by side in `~/.cargo/bin`, so after reinstalling harness-cli
+  alone the older cockpit takes the new `harness` for its own build and its launcher line can be
+  wrong (it answers for the launcher sources it was built with). Reinstall harness-tui with
+  harness-cli. Comparing the builds themselves would need new CLI surface; not done.
 - **Inputs read by the cockpit** [c14, m21, disputed 2]: to judge "your workload changed" it hashes
   each input off the UI thread in `Snapshot::load` (shared with MCP), with the same confined, bounded
   read perf uses, each digest **cached by (device, inode, size, modification time)** in a
@@ -729,7 +740,12 @@ c79]. Stale facts: `perf run` refuses ("scan first").
   ```
   The header is built from the rows: the computer and compilers they record (rustc cut to its
   version), "not checked here", "n runs each" or the per-row n; rows from different computers or
-  compilers: "measured on 2 kinds of computer — see each row" [c78, n30]. Workloads in file order;
+  compilers: "measured on 2 kinds of computer — see each row" [c78, n30]. Without facts (none, or
+  unreadable) a second header line says what is not judged, in the cockpit's own wording of
+  `perf show`'s line: "the C is not checked here: no facts — run harness scan", or, when the
+  program as it stands has rows, "the C and the units the program as it stands holds are not
+  checked here: no facts — run harness scan"; the units' rows are still shown and the rest judged,
+  and a results file that cannot be read is listed among the errors. Workloads in file order;
   units sorted worst first by their worst row, the order: behaves differently (Rust crashed, exits
   differently, prints too much, prints differently), stopped by SIGKILL, run failed, slower (by the
   shift), too short with a CPU gap over 2× (by the gap), probably slower, close call (slower), could
@@ -781,7 +797,10 @@ c79]. Stale facts: `perf run` refuses ("scan first").
   outcomes), the workload id, `platform_metrics`, `short`, `runs`, the shift and interval **only when
   the answer is not a can't-tell kind**, `current` with reasons from a closed set, and
   `environment_checked: false` (computer and compilers); for the C alone: CPU time, memory and the
-  outcome. Ranked by the worst order above; fenced as the features facts are.
+  outcome. Ranked by the worst order above; fenced as the features facts are. Without facts the
+  speed head says `program_checked: false` and the C-alone and as-it-stands rows' `current` is
+  `null`; the results files that could not be read are listed (`unreadable`, at most 20); a plan
+  perf refuses for its size has `units_measurable` 0 (SCHEMAS has the fields).
 - Acts' argv: `with_sandbox_flag(harness_argv(["perf", "run", …, target_arg]))`.
 
 ### 3.12 Security (summary) [c93, c94, n2, p3]

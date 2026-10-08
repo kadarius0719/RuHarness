@@ -412,7 +412,8 @@ acts run (default: `harness` on your PATH, else the one next to the cockpit);
 `--allow-unsandboxed` is passed on to the acts that run code (the dialog says so); below 80
 columns one pane shows at a time; `--layout split|stacked` forces how the pairs sit. A
 closed terminal cancels a running command cleanly. A plain `cargo build` at the root skips
-the cockpit; build it with `cargo build -p harness-tui` (CI builds everything). After a
+the cockpit; build it with `cargo build -p harness-tui` (CI builds everything); installed
+with `cargo install`, reinstall it with harness-cli (see the MCP install below). After a
 change made elsewhere (the CLI, or an act from chat — next section) press `g`.
 
 ### The chat pane
@@ -499,6 +500,11 @@ Install both binaries, then add the server to the project's `.mcp.json`:
 ```bash
 cargo install --path crates/harness-cli && cargo install --path crates/harness-mcp
 ```
+
+If you also installed the cockpit (`cargo install --path crates/harness-tui`), reinstall it
+whenever you reinstall harness-cli: the cockpit takes the `harness` installed beside it for its
+own build, so with an older cockpit next to a newer `harness` its Measure dialog can be wrong
+about whether perf's launcher needs building.
 
 ```json
 {
