@@ -790,3 +790,149 @@ fn ground_truth_zopfli() {
         "detect must be deterministic"
     );
 }
+
+fn put(root: &Path, rel: &str, text: &str) {
+    let path = root.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+fn record(root: &Path, path: &str, includes: &[&str]) -> FileRecord {
+    FileRecord {
+        path: path.into(),
+        hash: file_hash(&root.join(path)).unwrap(),
+        includes: includes.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+/// The files the findings are in, sorted, each once.
+fn files_of(findings: &[Finding]) -> Vec<&str> {
+    findings
+        .iter()
+        .map(|f| f.file.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// docs/PROJECT-MAP-DESIGN.md §3.7: a file-list target is read through its
+/// listed files and the headers the facts record them reaching — a hazard
+/// in a reached header is found; a header nothing includes, and the
+/// ledger's model-written file, are never read.
+#[test]
+fn a_file_list_target_is_read_through_its_files_and_their_reached_headers() {
+    let root = temp_target("file-list");
+    put(
+        &root,
+        "src/lib/encode.c",
+        "#include \"internal.h\"\nint lzg_level = 3;\n",
+    );
+    put(
+        &root,
+        "src/lib/internal.h",
+        "#include \"../include/lzg.h\"\n",
+    );
+    put(
+        &root,
+        "src/include/lzg.h",
+        "#define LZG_MAX(a, b) ((a) > (b) ? (a) : (b))\n",
+    );
+    put(
+        &root,
+        "src/tools/lzg.c",
+        "#include <lzg.h>\nstatic void say(const char *fmt, ...) { (void)fmt; }\n",
+    );
+    put(
+        &root,
+        "src/include/unused.h",
+        "#define NEVER_READ(x) ((x) + 1)\nint unused_global;\n",
+    );
+    let root = root.canonicalize().unwrap();
+    let ledger = harness_core::config::tool_dir(&root, "t-lzg");
+    put(&ledger, "driver.c", "int model_global;\n");
+    put(
+        &ledger,
+        "harness.toml",
+        "schema_version = 2\n[target]\nname = \"lzg\"\nfiles = [\n\
+         { path = \"src/lib/encode.c\", include_dirs = [\"src/include\"] },\n\
+         { path = \"src/tools/lzg.c\", include_dirs = [\"src/include\"] },\n]\n\
+         configuration = { name = \"make\", from = \"stated\", flags = [] }\n",
+    );
+    let config =
+        harness_core::config::TargetConfig::load_file(&ledger.join("harness.toml"), &root).unwrap();
+    let ctx = TargetContext {
+        root: root.clone(),
+        ledger,
+        tool: Some("t-lzg".into()),
+        config,
+    };
+    // What the scanner records for it (harness-scan's own tests prove that).
+    let mut facts = Facts {
+        frontend: "c-tree-sitter".into(),
+        files: vec![
+            record(&root, "src/include/lzg.h", &[]),
+            record(&root, "src/lib/encode.c", &["src/lib/internal.h"]),
+            record(&root, "src/lib/internal.h", &["src/include/lzg.h"]),
+            record(&root, "src/tools/lzg.c", &["src/include/lzg.h"]),
+        ],
+        ..Facts::default()
+    };
+    facts.symbols.push(SymbolRecord {
+        name: "src/tools/lzg.c::say".into(),
+        kind: "function".into(),
+        file: "src/tools/lzg.c".into(),
+        visibility: "internal".into(),
+        signature: "static void say(const char *fmt, ...)".into(),
+        span: (2, 2),
+    });
+    let findings = CTreeSitterSuite.detect(&ctx, &facts).expect("detect");
+    assert_eq!(
+        files_of(&findings),
+        ["src/include/lzg.h", "src/lib/encode.c", "src/tools/lzg.c"],
+        "{findings:#?}"
+    );
+    for (file, group) in [
+        ("src/include/lzg.h", "macros"),
+        ("src/lib/encode.c", "global"),
+        ("src/tools/lzg.c", "variadic"),
+    ] {
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file == file && f.detector == group),
+            "{file} {group}: {findings:#?}"
+        );
+    }
+    // A record the facts hold beyond the list and its headers is not read.
+    facts.files.push(record(&root, "src/include/unused.h", &[]));
+    let again = CTreeSitterSuite.detect(&ctx, &facts).expect("detect");
+    assert_eq!(files_of(&again), files_of(&findings));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// With `source_dir = "."` the ledger lies inside the folder: the
+/// detectors prune it, as the scanner does.
+#[test]
+fn the_detectors_prune_the_ledger_when_source_dir_is_the_root() {
+    let root = temp_target("dot");
+    put(&root, "a.c", "int a(void) { return 0; }\n");
+    put(&root, "migration/driver.c", "int model_global;\n");
+    put(
+        &root,
+        "harness.toml",
+        "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \".\"\n",
+    );
+    let root = root.canonicalize().unwrap();
+    let ctx = TargetContext::folder_form(
+        root.clone(),
+        harness_core::config::TargetConfig::load(&root).unwrap(),
+    );
+    let facts = Facts {
+        frontend: "c-tree-sitter".into(),
+        files: vec![record(&root, "a.c", &[])],
+        ..Facts::default()
+    };
+    let findings = CTreeSitterSuite.detect(&ctx, &facts).expect("detect");
+    assert!(findings.is_empty(), "{findings:#?}");
+    let _ = std::fs::remove_dir_all(&root);
+}

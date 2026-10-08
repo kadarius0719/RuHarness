@@ -21,6 +21,12 @@
 //!
 //! Post-M4 (design B, docs/ORACLE-HARDENING.md §B.6): [`parse_interface`]
 //! reads a plan `interface` line into the boundary check's call-wrapper shape.
+//!
+//! The project map, step (c) (docs/PROJECT-MAP-DESIGN.md §3.7): a file-list
+//! target is read as its listed files plus every header their includes
+//! reach (both include forms, through each file's own include folders), and
+//! every scan prunes `migration/` and keeps walk errors, files over 8 MiB
+//! and non-UTF-8 files as notes ([`ScanNotes`]) instead of stopping.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -37,13 +43,14 @@ pub use lint::{lint_driver, DRIVER_SYSTEM_INCLUDES};
 pub use mutate::mutants;
 pub use probe::{probe_source, PlacedNote, ProbeOptions, Probed};
 
-use harness_core::config::TargetContext;
+use harness_core::config::{FolderForm, Form, TargetContext};
 use harness_core::error::Error;
 use harness_core::facts::{Facts, FileRecord, RefRecord, SymbolRecord};
 use harness_core::hash::file_hash;
+use harness_core::sources;
 use harness_core::traits::LanguageFrontend;
 use harness_core::walk;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// C language frontend backed by tree-sitter.
@@ -123,69 +130,259 @@ impl LanguageFrontend for CFrontend {
 /// The C frontend's source extensions.
 pub const C_EXTENSIONS: [&str; 2] = ["c", "h"];
 
+/// What a scan says beside its facts (docs/PROJECT-MAP-DESIGN.md §3.7 "The
+/// scanner"): a walk error or an odd file is a note of that path, never a
+/// stop. The facts themselves keep their schema.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScanNotes {
+    /// Entries left out, each with why in words: not a regular file (a FIFO
+    /// named `a.c` would block the scan forever), a folder or a file that
+    /// cannot be read, a link that leaves the scanned folder or points
+    /// nowhere.
+    pub skipped: Vec<(PathBuf, String)>,
+    /// Files over [`sources::MAX_SOURCE_BYTES`], root-relative: recorded
+    /// with their hash, never parsed.
+    pub too_large: Vec<String>,
+    /// Files that are not UTF-8, root-relative: parsed from their bytes like
+    /// any other (Latin-1 comments are common in older C).
+    pub not_utf8: Vec<String>,
+}
+
+/// One file the scan records.
+struct Scanned {
+    /// Root-relative path.
+    rel: String,
+    /// Its content hash.
+    hash: String,
+    /// The project files its includes reach, root-relative.
+    includes: BTreeSet<String>,
+    /// Its parse and bytes; `None` for a file too large to parse.
+    parse: Option<(tree_sitter::Tree, Vec<u8>)>,
+}
+
+/// One file's hash and parse, as both readers take it.
+struct Source {
+    hash: String,
+    parse: Option<(tree_sitter::Tree, Vec<u8>)>,
+}
+
+/// Read and parse `abs` (root-relative `rel`), its size checked before it
+/// is read; `None` when it cannot be read, noted.
+fn read_source(
+    abs: &Path,
+    rel: &str,
+    parser: &mut tree_sitter::Parser,
+    notes: &mut ScanNotes,
+) -> Option<Source> {
+    use std::io::Read as _;
+    let mut skip = |why: String| notes.skipped.push((abs.to_path_buf(), why));
+    let meta = match std::fs::metadata(abs) {
+        Ok(meta) if meta.is_file() => meta,
+        Ok(_) => {
+            skip("not a regular file".into());
+            return None;
+        }
+        Err(e) => {
+            skip(format!("cannot be read: {e}"));
+            return None;
+        }
+    };
+    let mut bytes = Vec::new();
+    if meta.len() <= sources::MAX_SOURCE_BYTES {
+        let read = std::fs::File::open(abs).and_then(|f| {
+            f.take(sources::MAX_SOURCE_BYTES + 1)
+                .read_to_end(&mut bytes)
+        });
+        if let Err(e) = read {
+            skip(format!("cannot be read: {e}"));
+            return None;
+        }
+    }
+    if meta.len() > sources::MAX_SOURCE_BYTES || bytes.len() as u64 > sources::MAX_SOURCE_BYTES {
+        // Hashed by streaming, never parsed.
+        return match file_hash(abs) {
+            Ok(hash) => {
+                notes.too_large.push(rel.to_string());
+                Some(Source { hash, parse: None })
+            }
+            Err(e) => {
+                skip(format!("cannot be read: {e}"));
+                None
+            }
+        };
+    }
+    let Some(tree) = parser.parse(&bytes, None) else {
+        skip("the parser could not read it".into());
+        return None;
+    };
+    if std::str::from_utf8(&bytes).is_err() {
+        notes.not_utf8.push(rel.to_string());
+    }
+    Some(Source {
+        hash: harness_core::hash::bytes_hash(&bytes),
+        parse: Some((tree, bytes)),
+    })
+}
+
+/// A folder target (`source_dir`): every `.c` and `.h` the confined walk
+/// finds under it, `migration/` and the ledger pruned; quoted includes
+/// resolved as since M4 (the file's own folder, then `include_dirs`, the
+/// first hit in the scanned set inside `source_dir`).
+fn read_folder(
+    target: &TargetContext,
+    folder: &FolderForm,
+    parser: &mut tree_sitter::Parser,
+    notes: &mut ScanNotes,
+) -> Result<Vec<Scanned>, Error> {
+    let src_dir = target.root.join(&folder.source_dir);
+    let walked = walk::confined_except(
+        &src_dir,
+        &C_EXTENSIONS,
+        walk::Limits::default(),
+        &sources::pruned(target),
+    );
+    for issue in &walked.issues {
+        if let (true, walk::Why::Unreadable(why)) = (issue.path == src_dir, &issue.why) {
+            // The folder itself: there is nothing to scan.
+            return Err(Error::io(&src_dir, std::io::Error::other(why.clone())));
+        }
+        notes.skipped.push((issue.path.clone(), issue.why.words()));
+    }
+    let source_rel = lexical_segments(&folder.source_dir).unwrap_or_default();
+    let include_dirs: Vec<Vec<String>> = folder
+        .include_dirs
+        .iter()
+        .filter_map(|d| lexical_segments(d))
+        .collect();
+
+    // (repo-relative path, absolute path), sorted by relative path.
+    let mut files: Vec<(String, PathBuf)> = Vec::with_capacity(walked.files.len());
+    for abs in walked.files {
+        files.push((repo_relative(&target.root, &abs)?, abs));
+    }
+    files.sort();
+    let mut read: Vec<(String, Source)> = Vec::with_capacity(files.len());
+    for (rel, abs) in &files {
+        if let Some(source) = read_source(abs, rel, parser, notes) {
+            read.push((rel.clone(), source));
+        }
+    }
+    let scanned: BTreeSet<String> = read.iter().map(|(rel, _)| rel.clone()).collect();
+    Ok(read
+        .into_iter()
+        .map(|(rel, source)| {
+            let mut includes = BTreeSet::new();
+            if let Some((tree, src)) = &source.parse {
+                let mut raw: BTreeSet<String> = BTreeSet::new();
+                collect_includes(tree.root_node(), src, &mut raw);
+                includes = raw
+                    .iter()
+                    .filter_map(|raw| {
+                        resolve_quoted_include(&rel, raw, &include_dirs, &source_rel, &scanned)
+                    })
+                    .collect();
+            }
+            Scanned {
+                rel,
+                hash: source.hash,
+                includes,
+                parse: source.parse,
+            }
+        })
+        .collect())
+}
+
+/// A file-list target: the listed files plus every file their includes
+/// reach — both include forms, through each listed file's own include
+/// folders (a header is searched with the folders of the listed file that
+/// reached it), followed to closure — inside the project root and never
+/// under `migration/` (docs/PROJECT-MAP-DESIGN.md §3.1 step 3, §3.7).
+fn read_file_list(
+    confine: &sources::Confine,
+    listed: &[sources::ListedFile],
+    parser: &mut tree_sitter::Parser,
+    notes: &mut ScanNotes,
+) -> Vec<Scanned> {
+    // Each file read once; `None` when it could not be.
+    let mut read: BTreeMap<String, Option<(Source, Vec<Include>)>> = BTreeMap::new();
+    let mut includes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut seen: BTreeSet<(String, Vec<String>)> = BTreeSet::new();
+    let mut queue: Vec<(String, Vec<String>)> = listed
+        .iter()
+        .rev()
+        .map(|f| (f.path.clone(), f.include_dirs.clone()))
+        .collect();
+    while let Some((rel, dirs)) = queue.pop() {
+        if !seen.insert((rel.clone(), dirs.clone())) {
+            continue;
+        }
+        let entry = read.entry(rel.clone()).or_insert_with(|| {
+            let abs = confine.root().join(&rel);
+            read_source(&abs, &rel, parser, notes).map(|source| {
+                let mut names = BTreeSet::new();
+                if let Some((tree, src)) = &source.parse {
+                    collect_include_names(tree.root_node(), src, &mut names);
+                }
+                (source, names.into_iter().collect())
+            })
+        });
+        let Some((_, names)) = entry else { continue };
+        let reached = includes.entry(rel.clone()).or_default();
+        for include in names.iter() {
+            if let Some(to) = confine.resolve_include(&rel, &include.name, include.quoted, &dirs) {
+                reached.insert(to.clone());
+                queue.push((to, dirs.clone()));
+            }
+        }
+    }
+    read.into_iter()
+        .filter_map(|(rel, entry)| {
+            let (source, _) = entry?;
+            Some(Scanned {
+                includes: includes.remove(&rel).unwrap_or_default(),
+                rel,
+                hash: source.hash,
+                parse: source.parse,
+            })
+        })
+        .collect()
+}
+
 impl CFrontend {
-    /// [`LanguageFrontend::scan`], also returning the matching entries the
-    /// walk left out because they are not regular files (a FIFO named `a.c`
-    /// would block the scan forever): the caller reports them. A folder the
-    /// walk cannot read stays fatal. A file reached through a link inside
-    /// `source_dir` is scanned once, under its path with no link in it; a
-    /// dot-folder is not scanned (harness-core's walk).
-    pub fn scan_reporting(&self, target: &TargetContext) -> Result<(Facts, Vec<PathBuf>), Error> {
-        let folder = target.config.target.folder("the scanner")?;
-        let src_dir = target.root.join(&folder.source_dir);
-        let walked = walk::confined(&src_dir, &C_EXTENSIONS, walk::Limits::default());
-        if let Some((path, why)) = walked.first_unreadable() {
-            return Err(Error::io(path, std::io::Error::other(why.to_string())));
-        }
-        let skipped: Vec<PathBuf> = walked.not_regular().map(Path::to_path_buf).collect();
-        let abs_files = walked.files;
-        let source_rel = lexical_segments(&folder.source_dir).unwrap_or_default();
-        let include_dirs: Vec<Vec<String>> = folder
-            .include_dirs
-            .iter()
-            .filter_map(|d| lexical_segments(d))
-            .collect();
-
-        // (repo-relative path, absolute path), sorted by relative path.
-        let mut files: Vec<(String, PathBuf)> = Vec::with_capacity(abs_files.len());
-        for abs in abs_files {
-            files.push((repo_relative(&target.root, &abs)?, abs));
-        }
-        files.sort();
-        let scanned: BTreeSet<String> = files.iter().map(|(rel, _)| rel.clone()).collect();
-
+    /// [`LanguageFrontend::scan`], also returning what the scan noted beside
+    /// the facts ([`ScanNotes`]): the caller reports them. A folder target
+    /// is walked with harness-core's confined walk (a file reached through
+    /// a link scanned once, under its path with no link in it; dot-folders,
+    /// `migration/` and the ledger not scanned); a file-list target is read
+    /// as its listed files plus the headers their includes reach
+    /// (docs/PROJECT-MAP-DESIGN.md §3.7), and a listed file or include
+    /// folder outside the project root or under `migration/` is refused in
+    /// one sentence. Only a `source_dir` that cannot be read stops the scan.
+    pub fn scan_reporting(&self, target: &TargetContext) -> Result<(Facts, ScanNotes), Error> {
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_c::LANGUAGE.into())
             .map_err(|e| Error::Invariant(format!("tree-sitter C grammar mismatch: {e}")))?;
+        let mut notes = ScanNotes::default();
+        let confine = sources::Confine::new(target)?;
+        let mut files = match (&target.config.target.form, confine.listed_files(target)?) {
+            (_, Some(listed)) => read_file_list(&confine, &listed, &mut parser, &mut notes),
+            (Form::Folder(folder), None) => read_folder(target, folder, &mut parser, &mut notes)?,
+            (Form::FileList(_), None) => Vec::new(),
+        };
+        files.sort_by(|a, b| a.rel.cmp(&b.rel));
 
         let mut defs: Vec<FnDef> = Vec::new();
         let mut file_records: Vec<FileRecord> = Vec::with_capacity(files.len());
-        for (rel, abs) in &files {
-            let source = std::fs::read_to_string(abs).map_err(|e| Error::io(abs, e))?;
-            let tree = parser
-                .parse(&source, None)
-                .ok_or_else(|| Error::parse(abs, "tree-sitter parse failed"))?;
-            let root = tree.root_node();
-            let src = source.as_bytes();
-
-            let mut raw_includes: BTreeSet<String> = BTreeSet::new();
-            collect_includes(root, src, &mut raw_includes);
-            let includes: Vec<String> = raw_includes
-                .iter()
-                .filter_map(|raw| {
-                    resolve_quoted_include(rel, raw, &include_dirs, &source_rel, &scanned)
-                })
-                .collect::<BTreeSet<String>>()
-                .into_iter()
-                .collect();
-
+        for file in files {
+            if let Some((tree, src)) = &file.parse {
+                collect_functions(tree.root_node(), src, &file.rel, &mut defs);
+            }
             file_records.push(FileRecord {
-                path: rel.clone(),
-                hash: file_hash(abs)?,
-                includes,
+                path: file.rel,
+                hash: file.hash,
+                includes: file.includes.into_iter().collect(),
             });
-            collect_functions(root, src, rel, &mut defs);
         }
 
         // Resolution maps: statics keyed by (file, name); publics by name.
@@ -244,7 +441,7 @@ impl CFrontend {
                 symbols,
                 refs,
             },
-            skipped,
+            notes,
         ))
     }
 }
@@ -2057,10 +2254,13 @@ mod tests {
             .expect("mkfifo")
             .success());
         let target = TargetContext::load(&t.0).expect("target loads");
-        let (facts, skipped) = CFrontend.scan_reporting(&target).expect("scan terminates");
+        let (facts, notes) = CFrontend.scan_reporting(&target).expect("scan terminates");
         let paths: Vec<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, vec!["src/a.c"]);
-        assert_eq!(skipped, vec![t.0.join("src/pipe.c")]);
+        assert_eq!(
+            notes.skipped,
+            vec![(t.0.join("src/pipe.c"), "not a regular file".to_string())]
+        );
         let walked = walk::confined(&t.0.join("src"), &C_EXTENSIONS, walk::Limits::default());
         assert_eq!(
             walked.issues,
@@ -2070,5 +2270,395 @@ mod tests {
             }]
         );
         assert_eq!(walked.aliases.len(), 1);
+    }
+
+    /// A liblzg-shaped project (docs/PROJECT-MAP-DESIGN.md §4): a library
+    /// folder whose header includes `"../include/lzg.h"`, a tool including
+    /// `<lzg.h>` from `src/include`, a header nothing includes, and a
+    /// model-written file in the tool's ledger. Removed on drop.
+    struct Lzg(PathBuf);
+
+    impl Drop for Lzg {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    const LZG_FILES: &[(&str, &str)] = &[
+        (
+            "src/lib/checksum.c",
+            "#include \"internal.h\"\n\
+             unsigned lzg_checksum(const unsigned char *p, unsigned n) {\n\
+             \x20   unsigned s = 0;\n\
+             \x20   while (n--) s += *p++;\n\
+             \x20   return s;\n}\n",
+        ),
+        (
+            "src/lib/encode.c",
+            "#include \"internal.h\"\nint lzg_level = 3;\n\
+             static int clamp(int x) { return lzg_min(x, 9); }\n\
+             unsigned lzg_encode(const unsigned char *p, unsigned n) {\n\
+             \x20   return lzg_checksum(p, n) + (unsigned)clamp(lzg_level);\n}\n",
+        ),
+        (
+            "src/lib/version.c",
+            "#include \"lzg.h\"\nint lzg_version(void) { return LZG_VERSION; }\n",
+        ),
+        (
+            "src/lib/internal.h",
+            "#include \"../include/lzg.h\"\n\
+             static inline int lzg_min(int a, int b) { return a < b ? a : b; }\n",
+        ),
+        (
+            "src/include/lzg.h",
+            "#define LZG_VERSION 0x010304\n#define LZG_MAX(a, b) ((a) > (b) ? (a) : (b))\n\
+             unsigned lzg_checksum(const unsigned char *p, unsigned n);\n\
+             unsigned lzg_encode(const unsigned char *p, unsigned n);\n\
+             int lzg_version(void);\n",
+        ),
+        (
+            "src/tools/lzg.c",
+            "#include <stdio.h>\n#include <lzg.h>\n\
+             static void say(const char *fmt, ...) { (void)fmt; }\n\
+             int main(void) {\n\
+             \x20   say(\"%d\", lzg_version());\n\
+             \x20   return (int)lzg_encode(0, 0);\n}\n",
+        ),
+    ];
+
+    const LZG_TOML: &str = "schema_version = 2\n[target]\nname = \"lzg\"\nfiles = [\n\
+        { path = \"src/lib/checksum.c\", include_dirs = [\"src/include\"] },\n\
+        { path = \"src/lib/encode.c\", include_dirs = [\"src/include\"] },\n\
+        { path = \"src/lib/version.c\", include_dirs = [\"src/include\"] },\n\
+        { path = \"src/tools/lzg.c\", include_dirs = [\"src/include\"] },\n]\n\
+        configuration = { name = \"make\", from = \"stated\", flags = [] }\n";
+
+    fn tmp_root(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ruharness-scan-lzg-{tag}-{}-{}",
+            std::process::id(),
+            harness_core::hash::random_hex(4)
+        ));
+        std::fs::create_dir_all(&dir).expect("tmp");
+        dir.canonicalize().expect("canonical")
+    }
+
+    fn put(root: &Path, rel: &str, text: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+        std::fs::write(path, text).expect("write");
+    }
+
+    /// The fixture as the mapped tool `t-lzg`, its context built by hand
+    /// (no adoption needed: nothing here opens a ledger made elsewhere).
+    fn lzg(tag: &str) -> (Lzg, TargetContext) {
+        let root = tmp_root(tag);
+        for (rel, text) in LZG_FILES {
+            put(&root, rel, text);
+        }
+        put(
+            &root,
+            "src/include/unused.h",
+            "static inline int never_read(void) { return 0; }\n",
+        );
+        let ledger = harness_core::config::tool_dir(&root, "t-lzg");
+        put(&ledger, "harness.toml", LZG_TOML);
+        put(
+            &ledger,
+            "driver.c",
+            "int model_written(void) { return 1; }\n",
+        );
+        let config =
+            harness_core::config::TargetConfig::load_file(&ledger.join("harness.toml"), &root)
+                .expect("the file list loads");
+        let ctx = TargetContext {
+            root: root.clone(),
+            ledger,
+            tool: Some("t-lzg".into()),
+            config,
+        };
+        (Lzg(root), ctx)
+    }
+
+    /// Facts with every path's folder dropped (`src/lib/encode.c::clamp` is
+    /// `encode.c::clamp`), for comparing two layouts of the same files.
+    fn flattened(facts: &Facts) -> BTreeSet<String> {
+        let flat = |s: &str| {
+            ["src/lib/", "src/tools/", "src/include/", "flat/"]
+                .iter()
+                .fold(s.to_string(), |s, dir| s.replace(dir, ""))
+        };
+        let mut out = BTreeSet::new();
+        for f in &facts.files {
+            out.insert(format!("file {} {}", flat(&f.path), f.hash.len()));
+            for to in &f.includes {
+                out.insert(format!("include {} -> {}", flat(&f.path), flat(to)));
+            }
+        }
+        for s in &facts.symbols {
+            out.insert(format!(
+                "symbol {} {} {} {:?}",
+                flat(&s.name),
+                flat(&s.file),
+                s.visibility,
+                s.span
+            ));
+        }
+        for r in &facts.refs {
+            out.insert(format!(
+                "ref {} {} {} {}",
+                flat(&r.from),
+                flat(&r.file),
+                flat(&r.to),
+                r.resolved
+            ));
+        }
+        out
+    }
+
+    /// docs/PROJECT-MAP-DESIGN.md §3.7 "The scanner": the listed files plus
+    /// every header reached through each file's own include folders, both
+    /// include forms, to closure — the same functions, calls and include
+    /// edges as the folder form over the same files copied into one flat
+    /// folder; the header nothing includes and the ledger's file never read.
+    #[test]
+    fn a_file_list_scans_like_the_folder_form_over_a_flat_copy() {
+        let (t, ctx) = lzg("same");
+        let (facts, notes) = CFrontend.scan_reporting(&ctx).expect("scan");
+        assert_eq!(notes, ScanNotes::default());
+        let paths: Vec<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "src/include/lzg.h",
+                "src/lib/checksum.c",
+                "src/lib/encode.c",
+                "src/lib/internal.h",
+                "src/lib/version.c",
+                "src/tools/lzg.c",
+            ],
+            "every header reached, nothing else"
+        );
+        let includes_of = |p: &str| {
+            facts
+                .files
+                .iter()
+                .find(|f| f.path == p)
+                .map(|f| f.includes.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            includes_of("src/tools/lzg.c"),
+            ["src/include/lzg.h"],
+            "<lzg.h>"
+        );
+        assert_eq!(includes_of("src/lib/internal.h"), ["src/include/lzg.h"]);
+        assert_eq!(includes_of("src/lib/version.c"), ["src/include/lzg.h"]);
+
+        // The same files in one flat folder, their includes named plainly.
+        let flat = tmp_root("flat");
+        let _flat_guard = Lzg(flat.clone());
+        for (rel, text) in LZG_FILES {
+            let name = rel.rsplit('/').next().expect("name");
+            let text = text
+                .replace("\"../include/lzg.h\"", "\"lzg.h\"")
+                .replace("<lzg.h>", "\"lzg.h\"");
+            put(&flat, &format!("flat/{name}"), &text);
+        }
+        put(
+            &flat,
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"lzg\"\nsource_dir = \"flat\"\n",
+        );
+        let folder = TargetContext::folder_form(
+            flat.clone(),
+            harness_core::config::TargetConfig::load(&flat).expect("folder config"),
+        );
+        let flat_facts = CFrontend.scan(&folder).expect("flat scan");
+        assert_eq!(flattened(&facts), flattened(&flat_facts));
+        assert!(facts
+            .symbols
+            .iter()
+            .any(|s| s.name == "src/lib/encode.c::clamp"));
+        drop(t);
+    }
+
+    /// A listed file or an include folder that leads under `migration/` or
+    /// out of the project is refused by name, in one sentence — checked by
+    /// the scanner itself, whatever the config's load saw.
+    #[cfg(unix)]
+    #[test]
+    fn a_listed_file_under_the_ledger_or_a_folder_outside_the_root_is_refused() {
+        use harness_core::config::{Form, TargetFile};
+        let (_t, ctx) = lzg("refuse");
+        let listing = |path: &str, dirs: &[&str]| {
+            let mut ctx = ctx.clone();
+            if let Form::FileList(list) = &mut ctx.config.target.form {
+                list.files.push(TargetFile {
+                    path: path.into(),
+                    include_dirs: dirs.iter().map(|d| d.to_string()).collect(),
+                });
+            }
+            CFrontend
+                .scan_reporting(&ctx)
+                .expect_err("refused")
+                .to_string()
+        };
+        let err = listing("migration/tools/t-lzg/driver.c", &[]);
+        assert!(
+            err.contains("`migration/tools/t-lzg/driver.c` lies under migration/"),
+            "{err}"
+        );
+        // Through a link inside the project.
+        std::os::unix::fs::symlink(
+            ctx.ledger.join("driver.c"),
+            ctx.root.join("src/lib/sneaky.c"),
+        )
+        .expect("link");
+        let err = listing("src/lib/sneaky.c", &[]);
+        assert!(
+            err.contains("`src/lib/sneaky.c` lies under migration/"),
+            "{err}"
+        );
+        // A folder that leads outside the root.
+        let outside = tmp_root("outside");
+        let _outside_guard = Lzg(outside.clone());
+        put(&outside, "secret.h", "int secret;\n");
+        std::os::unix::fs::symlink(&outside, ctx.root.join("src/out")).expect("link");
+        let err = listing("src/lib/version.c", &["src/out"]);
+        assert!(
+            err.contains("the include folder `src/out` of `src/lib/version.c` leads outside"),
+            "{err}"
+        );
+        assert!(!err.contains('\n'), "{err:?}");
+    }
+
+    /// A walk error and a file that is not UTF-8 are notes of their paths,
+    /// never a stop (docs/PROJECT-MAP-DESIGN.md §3.1 step 1).
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_file_and_an_unreadable_folder_are_noted_and_the_scan_goes_on() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = TempTarget::new("odd", "[]");
+        t.write("src/a.c", "int a(void) { return 0; }\n");
+        std::fs::write(
+            t.0.join("src/latin.c"),
+            b"/* caf\xe9 */\nint latin(void) { return a(); }\n",
+        )
+        .expect("latin-1");
+        t.write("src/locked/hidden.c", "int hidden(void) { return 2; }\n");
+        let locked = t.0.join("src/locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let readable = std::fs::read_dir(&locked).is_ok(); // root reads anything
+        let target = TargetContext::load(&t.0).expect("target loads");
+        let scanned = CFrontend.scan_reporting(&target);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let (facts, notes) = scanned.expect("the scan goes on");
+        assert!(facts.symbols.iter().any(|s| s.name == "latin"));
+        assert!(facts
+            .refs
+            .iter()
+            .any(|r| r.from == "latin" && r.to == "a" && r.resolved));
+        assert_eq!(notes.not_utf8, ["src/latin.c"]);
+        if !readable {
+            assert!(
+                notes
+                    .skipped
+                    .iter()
+                    .any(|(p, why)| p == &locked && why.starts_with("cannot be read")),
+                "{notes:?}"
+            );
+            assert!(!facts.files.iter().any(|f| f.path.contains("hidden")));
+        }
+    }
+
+    /// With `source_dir = "."` the ledger lies inside the scanned folder: it
+    /// is pruned, so the ledger's model-written `driver.c` is never scanned.
+    #[test]
+    fn the_ledger_is_pruned_when_source_dir_is_the_root() {
+        let root = tmp_root("dot");
+        let _guard = Lzg(root.clone());
+        put(&root, "a.c", "int a(void) { return 0; }\n");
+        put(
+            &root,
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \".\"\n",
+        );
+        put(
+            &root,
+            "migration/driver.c",
+            "int model_written(void) { return 1; }\n",
+        );
+        put(
+            &root,
+            "migration/tools/t-x/x.c",
+            "int other_ledger(void) { return 1; }\n",
+        );
+        let ctx = TargetContext::folder_form(
+            root.clone(),
+            harness_core::config::TargetConfig::load(&root).expect("config"),
+        );
+        let facts = CFrontend.scan(&ctx).expect("scan");
+        let paths: Vec<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["a.c"]);
+    }
+
+    /// docs/PROJECT-MAP-DESIGN.md §3.7 "The program digest and staleness":
+    /// stale only where a scan would record otherwise, so a scan clears it.
+    #[test]
+    fn a_file_list_program_is_stale_where_a_scan_would_record_otherwise() {
+        use harness_core::features::{program_digest_now, unrecorded_program_files, STALE_PROGRAM};
+        let (_t, ctx) = lzg("stale");
+        let facts = CFrontend.scan(&ctx).expect("scan");
+        let first = program_digest_now(&ctx, &facts);
+        assert!(first.starts_with("blake3:"), "{first}");
+        assert_eq!(
+            harness_core::features::program_paths(&ctx, &facts),
+            [
+                "src/include/lzg.h",
+                "src/lib/checksum.c",
+                "src/lib/encode.c",
+                "src/lib/internal.h",
+                "src/lib/version.c",
+                "src/tools/lzg.c",
+            ]
+        );
+
+        // Unrelated files: a README, a header beside the tool (its include
+        // is angle-bracketed: its own folder is never searched), a header in
+        // the include folder that no include names.
+        put(&ctx.root, "README.md", "lzg\n");
+        put(&ctx.root, "src/tools/notes.h", "int notes;\n");
+        put(&ctx.root, "src/include/extra.h", "int extra;\n");
+        assert_eq!(
+            program_digest_now(&ctx, &facts),
+            first,
+            "no sign of stale facts"
+        );
+
+        // An edited reached header stales; a scan clears it.
+        put(&ctx.root, "src/include/lzg.h", "int lzg_version(void);\n");
+        assert_eq!(program_digest_now(&ctx, &facts), STALE_PROGRAM);
+        let facts = CFrontend.scan(&ctx).expect("rescan");
+        let second = program_digest_now(&ctx, &facts);
+        assert!(second.starts_with("blake3:") && second != first, "{second}");
+
+        // A new header beside a listed file, under a name it includes in
+        // quotes, is found first: stale until a scan records it.
+        put(&ctx.root, "src/lib/lzg.h", "int lzg_version(void);\n");
+        assert_eq!(program_digest_now(&ctx, &facts), STALE_PROGRAM);
+        assert_eq!(unrecorded_program_files(&ctx, &facts), ["src/lib/lzg.h"]);
+        let facts = CFrontend.scan(&ctx).expect("rescan");
+        assert!(program_digest_now(&ctx, &facts).starts_with("blake3:"));
+        let version = facts
+            .files
+            .iter()
+            .find(|f| f.path == "src/lib/version.c")
+            .expect("version.c");
+        assert_eq!(version.includes, ["src/lib/lzg.h"]);
+
+        // A listed file that vanished stales.
+        std::fs::remove_file(ctx.root.join("src/lib/checksum.c")).expect("rm");
+        assert_eq!(program_digest_now(&ctx, &facts), STALE_PROGRAM);
     }
 }

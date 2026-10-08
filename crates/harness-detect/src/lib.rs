@@ -42,14 +42,18 @@ use harness_core::error::Error;
 use harness_core::facts::{Facts, SymbolRecord};
 use harness_core::hash::file_hash;
 use harness_core::observer::{finding_id, Finding};
+use harness_core::plan::is_clean_relative_path;
+use harness_core::sources;
 use harness_core::traits::Detector;
+use harness_core::walk;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The built-in C detector suite (`c-treesitter-v1`).
 ///
-/// Walks the target's `source_dir` for `*.c` / `*.h` files (the same walk as
-/// the scanner), parses each once, and emits findings for the eight category
+/// Reads the files the scanner reads (a folder target's `source_dir` by the
+/// confined walk, a file-list target's files and their reached headers),
+/// parses each once, and emits findings for the eight category
 /// groups: `macros`, `nonlocal`, `concurrency`, `variadic`, `layout`,
 /// `fn-pointer`, `global`, `alloc`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -113,10 +117,7 @@ impl Detector for CTreeSitterSuite {
     }
 
     fn detect(&self, target: &TargetContext, facts: &Facts) -> Result<Vec<Finding>, Error> {
-        let folder = target.config.target.folder("the detectors")?;
-        let src_dir = target.root.join(&folder.source_dir);
-        let mut abs_files: Vec<PathBuf> = Vec::new();
-        collect_source_files(&src_dir, &mut abs_files)?;
+        let abs_files = source_files(target, facts)?;
         let mut files: Vec<(String, PathBuf)> = Vec::with_capacity(abs_files.len());
         for abs in abs_files {
             files.push((repo_relative(&target.root, &abs)?, abs));
@@ -130,7 +131,10 @@ impl Detector for CTreeSitterSuite {
 
         let mut parsed: Vec<ParsedFile> = Vec::with_capacity(files.len());
         for (rel, abs) in &files {
-            let source = std::fs::read_to_string(abs).map_err(|e| Error::io(abs, e))?;
+            let Some(source) = read_source(abs)? else {
+                // Over the scanner's cap: it parses none of it either.
+                continue;
+            };
             let tree = parser
                 .parse(&source, None)
                 .ok_or_else(|| Error::parse(abs, "tree-sitter parse failed"))?;
@@ -1263,23 +1267,54 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// Recursively collect `*.c` and `*.h` files under `dir` (the same walk as
-/// the scanner; harness-detect deliberately does not depend on harness-scan).
-fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Error> {
-    let entries = std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| Error::io(dir, e))?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_source_files(&path, out)?;
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("c") | Some("h")
-        ) {
-            out.push(path);
+/// The files the suite reads, as the scanner reads them (it does not depend
+/// on harness-scan): a folder target's `.c` and `.h` files by harness-core's
+/// confined walk of `source_dir` (dot-folders, `migration/` and the ledger
+/// pruned; a link's file once, under its real path); a file-list target's
+/// listed files and the headers the facts record them reaching — nothing
+/// else (docs/PROJECT-MAP-DESIGN.md §3.7, "Confinement, restated").
+fn source_files(target: &TargetContext, facts: &Facts) -> Result<Vec<PathBuf>, Error> {
+    let confine = sources::Confine::new(target)?;
+    let Some(listed) = confine.listed_files(target)? else {
+        let dir = target
+            .root
+            .join(target.config.target.source_dir().unwrap_or("."));
+        let walked = walk::confined_except(
+            &dir,
+            &["c", "h"],
+            walk::Limits::default(),
+            &sources::pruned(target),
+        );
+        if let Some(issue) = walked.issues.iter().find(|i| i.path == dir) {
+            // The folder itself: there is nothing to read.
+            return Err(Error::io(&dir, std::io::Error::other(issue.why.words())));
         }
+        return Ok(walked.files);
+    };
+    let start: Vec<String> = listed.into_iter().map(|f| f.path).collect();
+    let recorded: BTreeSet<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
+    Ok(facts
+        .include_closure(&start)
+        .into_iter()
+        .filter(|rel| recorded.contains(rel.as_str()) && is_clean_relative_path(rel))
+        .map(|rel| target.root.join(rel))
+        .filter(|abs| abs.canonicalize().is_ok_and(|real| confine.allows(&real)))
+        .collect())
+}
+
+/// `abs`'s text, its size checked before it is read: `None` over the
+/// scanner's cap; a file that is not UTF-8 decoded lossily (the scanner
+/// parses its bytes; the detectors read text).
+fn read_source(abs: &Path) -> Result<Option<String>, Error> {
+    let len = std::fs::metadata(abs).map_err(|e| Error::io(abs, e))?.len();
+    if len > sources::MAX_SOURCE_BYTES {
+        return Ok(None);
     }
-    Ok(())
+    let bytes = std::fs::read(abs).map_err(|e| Error::io(abs, e))?;
+    Ok(Some(match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    }))
 }
 
 /// Render `path` relative to `root` with forward slashes.

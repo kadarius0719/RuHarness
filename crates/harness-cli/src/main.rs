@@ -743,7 +743,7 @@ fn run(cmd: Cmd) -> Result<u8> {
 }
 
 fn cmd_scan(target: TargetArg) -> Result<u8> {
-    let ctx = target.load_folder("harness scan")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "scan")?;
     let facts = scan_target(&ctx)?;
@@ -760,12 +760,31 @@ fn cmd_scan(target: TargetArg) -> Result<u8> {
 /// Scan `ctx` and write `facts.jsonl` (the body of `harness scan`).
 pub(crate) fn scan_target(ctx: &TargetContext) -> Result<Facts> {
     let ledger = Ledger::of(ctx);
-    let (facts, skipped) = harness_scan::CFrontend.scan_reporting(ctx)?;
-    for path in &skipped {
-        // Never read: a FIFO or a device would block the scan forever.
+    let (facts, notes) = harness_scan::CFrontend.scan_reporting(ctx)?;
+    for (path, why) in &notes.skipped {
+        // Never read (a FIFO or a device would block the scan forever), or
+        // could not be: a note of that path, never a stop.
         out(format!(
-            "scan: skipped {}: not a regular file",
-            path.strip_prefix(&ctx.root).unwrap_or(path).display()
+            "scan: skipped {}: {}",
+            harness_core::text::safe_line(
+                &path
+                    .strip_prefix(&ctx.root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+            ),
+            harness_core::text::safe_line(why)
+        ));
+    }
+    for path in &notes.too_large {
+        out(format!(
+            "scan: {} is over 8 MiB: recorded, not parsed",
+            harness_core::text::safe_line(path)
+        ));
+    }
+    for path in &notes.not_utf8 {
+        out(format!(
+            "scan: {} is not UTF-8: parsed from its bytes",
+            harness_core::text::safe_line(path)
         ));
     }
     std::fs::create_dir_all(ledger.dir()).context("creating migration dir")?;
@@ -781,7 +800,9 @@ fn facts_stale(stale: usize) -> Error {
     }
 }
 
-/// Count facts file records whose hash no longer matches the working tree.
+/// Count facts file records whose hash no longer matches the working tree,
+/// and — for a file-list target — the files a scan would record that the
+/// facts lack (a listed file, or a header an include would now find).
 pub(crate) fn stale_fact_files(ctx: &TargetContext, facts: &Facts) -> usize {
     facts
         .files
@@ -792,6 +813,7 @@ pub(crate) fn stale_fact_files(ctx: &TargetContext, facts: &Facts) -> usize {
                 .unwrap_or(true)
         })
         .count()
+        + harness_core::features::unrecorded_program_files(ctx, facts).len()
 }
 
 fn cmd_plan(target: TargetArg) -> Result<u8> {
@@ -1123,7 +1145,7 @@ fn facts_records_hash(facts: &Facts) -> String {
 fn cmd_detect(target: TargetArg) -> Result<u8> {
     use harness_core::observer::{FindingsFile, ObserverPaths};
     use harness_core::traits::Detector;
-    let ctx = target.load_folder("harness detect")?;
+    let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "detect")?;
     let facts =

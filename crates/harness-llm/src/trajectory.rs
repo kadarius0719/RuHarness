@@ -96,12 +96,14 @@ use crate::triage::{encode_slice, is_clean_relative_path};
 use harness_core::attempts::{
     schema_version_for, AttemptRecord, Turn, ATTEMPT_SCHEMA_NAME, EXTERNAL_KIND,
 };
+use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::facts::Facts;
 use harness_core::features::FeatureSnapshot;
 use harness_core::hash;
 use harness_core::ledger::Ledger;
 use harness_core::plan::{is_clean_segment, Unit};
+use harness_core::sources;
 use harness_core::traits::CompletionRequest;
 use std::path::{Path, PathBuf};
 
@@ -1893,14 +1895,18 @@ pub(crate) struct SourceFile {
 
 /// Read the unit's include closure. `facts.jsonl` and `plan.toml` are
 /// target-owned, and whatever is read here is SENT TO THE PROVIDER — so a
-/// path must be clean and relative, and must still be inside the target
-/// root AND inside `[target] source_dir` once symlinks are resolved
-/// (docs/M4-DESIGN.md R2: prompt-bound reads are confined to `source_dir`,
-/// so a hostile include cannot pull held-out material into a prompt).
-/// Anything else in the closure is a harness error ([`Error::InvalidPlan`]).
+/// path must be clean and relative, and once symlinks are resolved must lie
+/// inside the target root, never under `migration/` or the ledger, and
+/// inside what the target names as its sources: `[target] source_dir` for
+/// a folder target (docs/M4-DESIGN.md R2), the listed files and the headers
+/// the facts record them reaching for a file-list target
+/// (docs/PROJECT-MAP-DESIGN.md §3.7, "Confinement, restated") — so a
+/// hostile include cannot pull held-out or model-written material into a
+/// prompt. `root` is the target root, canonical. Anything else in the
+/// closure is a harness error ([`Error::InvalidPlan`]).
 pub(crate) fn read_sources(
     root: &Path,
-    source_dir: &str,
+    target: &TargetContext,
     facts: &Facts,
     unit: &Unit,
 ) -> Result<Vec<SourceFile>, Error> {
@@ -1911,8 +1917,25 @@ pub(crate) fn read_sources(
             unit.id
         )));
     }
-    let joined = root.join(source_dir);
-    let confined = joined.canonicalize().map_err(|e| Error::io(&joined, e))?;
+    let confine = sources::Confine::new(target)?;
+    // Where the target's sources may lie: a folder (canonical), or the
+    // file list's files and their reached headers (root-relative, as the
+    // scan records them).
+    let scope = match confine.listed_files(target)? {
+        None => {
+            let source_dir = target.config.target.source_dir().unwrap_or(".");
+            let joined = root.join(source_dir);
+            let confined = joined.canonicalize().map_err(|e| Error::io(&joined, e))?;
+            Err((confined, source_dir))
+        }
+        Some(listed) => {
+            let start: Vec<String> = listed.into_iter().map(|f| f.path).collect();
+            Ok(facts
+                .include_closure(&start)
+                .into_iter()
+                .collect::<std::collections::BTreeSet<String>>())
+        }
+    };
     let mut sources = Vec::with_capacity(closure.len());
     for path in closure {
         if !is_clean_relative_path(&path) {
@@ -1932,13 +1955,37 @@ pub(crate) fn read_sources(
                 resolved.display()
             )));
         }
-        if !resolved.starts_with(&confined) {
+        if !confine.allows(&resolved) {
             return Err(Error::InvalidPlan(format!(
-                "unit `{}`: source path {path:?} is outside the target's source_dir {:?} — \
-                 prompt-bound reads are confined to it; refusing to send it to a model provider",
-                unit.id,
-                printable(source_dir, 256)
+                "unit `{}`: source path {path:?} lies under migration/, the harness's own \
+                 folder — model-written files are never project C; refusing to send it to a \
+                 model provider (re-run `harness scan`)",
+                unit.id
             )));
+        }
+        match &scope {
+            Err((confined, source_dir)) if !resolved.starts_with(confined) => {
+                return Err(Error::InvalidPlan(format!(
+                    "unit `{}`: source path {path:?} is outside the target's source_dir {:?} — \
+                     prompt-bound reads are confined to it; refusing to send it to a model \
+                     provider",
+                    unit.id,
+                    printable(source_dir, 256)
+                )));
+            }
+            Ok(allowed)
+                if !confine
+                    .rel(&resolved)
+                    .is_some_and(|rel| allowed.contains(&rel)) =>
+            {
+                return Err(Error::InvalidPlan(format!(
+                    "unit `{}`: source path {path:?} is not one of the target's listed files or \
+                     the headers they include — prompt-bound reads are confined to them; \
+                     refusing to send it to a model provider",
+                    unit.id
+                )));
+            }
+            _ => {}
         }
         let bytes = std::fs::read(&resolved).map_err(|e| Error::io(&resolved, e))?;
         sources.push(SourceFile { path, bytes });
@@ -2266,4 +2313,135 @@ pub(crate) fn prepare_dir(
         }
     }
     Ok(dir)
+}
+
+#[cfg(test)]
+mod read_sources_tests {
+    use super::*;
+    use harness_core::config::TargetConfig;
+    use harness_core::facts::FileRecord;
+    use harness_core::plan::UnitStatus;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ruharness-read-sources-{tag}-{}-{}",
+            std::process::id(),
+            hash::random_hex(4)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    fn write(root: &Path, rel: &str, text: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn unit(files: &[&str]) -> Unit {
+        Unit {
+            id: "u-a".into(),
+            status: UnitStatus::Pending,
+            files: files.iter().map(|f| f.to_string()).collect(),
+            source_hash: String::new(),
+            symbols: Vec::new(),
+            interface: Vec::new(),
+            depends_on: Vec::new(),
+            test_strategy: String::new(),
+            done_criteria: String::new(),
+            oracle: None,
+        }
+    }
+
+    /// Facts where `a.c` (at `from`) includes `to`: what a hand-edited
+    /// facts.jsonl could claim.
+    fn facts(from: &str, to: &str) -> Facts {
+        let record = |path: &str, includes: Vec<String>| FileRecord {
+            path: path.into(),
+            hash: hash::bytes_hash(b""),
+            includes,
+        };
+        Facts {
+            files: vec![record(from, vec![to.into()]), record(to, Vec::new())],
+            ..Facts::default()
+        }
+    }
+
+    /// docs/PROJECT-MAP-DESIGN.md §3.7: with `source_dir = "."` the ledger
+    /// lies inside the folder, and still nothing under it reaches a prompt.
+    #[test]
+    fn a_path_under_the_ledger_is_refused_even_inside_source_dir() {
+        let root = tmp("ledger");
+        write(
+            &root,
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \".\"\n",
+        );
+        write(&root, "a.c", "#include \"migration/driver.c\"\n");
+        write(&root, "migration/driver.c", "int model_written(void);\n");
+        let ctx = TargetContext::folder_form(root.clone(), TargetConfig::load(&root).unwrap());
+        let err = read_sources(
+            &root,
+            &ctx,
+            &facts("a.c", "migration/driver.c"),
+            &unit(&["a.c"]),
+        )
+        .err()
+        .expect("refused");
+        assert!(err.to_string().contains("lies under migration/"), "{err}");
+        // A path inside the folder and outside the ledger is read.
+        write(&root, "b.h", "int b;\n");
+        let read = read_sources(&root, &ctx, &facts("a.c", "b.h"), &unit(&["a.c"])).unwrap();
+        assert_eq!(read.len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file-list target's prompts read only its listed files and the
+    /// headers they reach: another project file, even one the facts claim,
+    /// is refused.
+    #[test]
+    fn a_file_list_target_reads_only_its_files_and_their_headers() {
+        let root = tmp("list");
+        write(&root, "src/a.c", "#include \"a.h\"\n");
+        write(&root, "src/a.h", "int a(void);\n");
+        write(&root, "src/other.c", "int secret(void);\n");
+        let ledger = harness_core::config::tool_dir(&root, "t-a");
+        write(
+            &ledger,
+            "harness.toml",
+            "schema_version = 2\n[target]\nname = \"a\"\n\
+             files = [{ path = \"src/a.c\" }]\n\
+             configuration = { name = \"make\", from = \"stated\", flags = [] }\n",
+        );
+        let ctx = TargetContext {
+            root: root.clone(),
+            config: TargetConfig::load_file(&ledger.join("harness.toml"), &root).unwrap(),
+            ledger,
+            tool: Some("t-a".into()),
+        };
+        let read = read_sources(
+            &root,
+            &ctx,
+            &facts("src/a.c", "src/a.h"),
+            &unit(&["src/a.c"]),
+        )
+        .unwrap();
+        let paths: Vec<&str> = read.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, ["src/a.c", "src/a.h"]);
+        // A unit of a file the list does not hold.
+        let err = read_sources(
+            &root,
+            &ctx,
+            &facts("src/other.c", "src/a.h"),
+            &unit(&["src/other.c"]),
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            err.to_string()
+                .contains("not one of the target's listed files"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

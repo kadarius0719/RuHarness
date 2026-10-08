@@ -609,6 +609,14 @@ pub fn features_digest(features: &Features, config: &TargetConfig) -> String {
 /// `source_dir`), plus `[target] source_dir`, `include_dirs` and `[oracle]
 /// extra_link_args` as written. The one function the oracle and every
 /// reader use, so they agree on a missing file.
+///
+/// That is the **v1 record**, the folder form's, kept byte for byte
+/// (zopfli's committed digest must not move). A file-list target hashes a
+/// **v2 record** (docs/PROJECT-MAP-DESIGN.md §3.7): the same pairs, each
+/// listed file with its include folders as written, the configuration's
+/// name and flags in order, the link arguments and the run name — so two
+/// configurations of one project differ. The map stamp is not in it: a
+/// changed `root_hash` is a notice, never a new program.
 pub fn program_digest(config: &TargetConfig, files: &[(String, Option<String>)]) -> String {
     let mut pairs: Vec<(&str, &str)> = files
         .iter()
@@ -616,13 +624,30 @@ pub fn program_digest(config: &TargetConfig, files: &[(String, Option<String>)])
         .collect();
     pairs.sort();
     pairs.dedup();
-    let doc = serde_json::json!({
-        "v": 1,
-        "files": pairs,
-        "source_dir": config.target.source_dir(),
-        "include_dirs": config.target.include_dirs(),
-        "extra_link_args": config.oracle.get("extra_link_args").map(|v| v.to_string()),
-    });
+    let link_args = config.oracle.get("extra_link_args").map(|v| v.to_string());
+    let doc = match config.target.file_list() {
+        None => serde_json::json!({
+            "v": 1,
+            "files": pairs,
+            "source_dir": config.target.source_dir(),
+            "include_dirs": config.target.include_dirs(),
+            "extra_link_args": link_args,
+        }),
+        Some(list) => serde_json::json!({
+            "v": 2,
+            "files": pairs,
+            "listed": list.files.iter().map(|f| serde_json::json!({
+                "path": f.path,
+                "include_dirs": f.include_dirs,
+            })).collect::<Vec<_>>(),
+            "configuration": {
+                "name": list.configuration.name,
+                "flags": list.configuration.flags,
+            },
+            "extra_link_args": link_args,
+            "name": config.target.name,
+        }),
+    };
     hash::bytes_hash(doc.to_string().as_bytes())
 }
 
@@ -1317,11 +1342,24 @@ pub const MAX_PROGRAM_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// `source_dir` is named by its real path, as the scan records it (the
 /// walk's alias rule, docs/PROJECT-MAP-DESIGN.md §3.1 step 1), so its
 /// closure is the facts' and a scan clears its staleness.
+///
+/// A file-list target's program is its listed files (as the scan records
+/// them, links resolved) and the include closure the facts record for them
+/// — nothing else (docs/PROJECT-MAP-DESIGN.md §3.7): a header no include
+/// reaches is not part of it; one that appears where an include would now
+/// find it is staleness ([`unrecorded_program_files`]).
 pub fn program_paths(ctx: &crate::config::TargetContext, facts: &crate::Facts) -> Vec<String> {
-    // A file-list target's program is read by a later step; until then it
-    // lists nothing here (its commands refuse it first).
     let Some(source_dir) = ctx.config.target.source_dir() else {
-        return Vec::new();
+        let listed = crate::sources::Confine::new(ctx)
+            .and_then(|c| c.listed_files(ctx))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let start: Vec<String> = listed.into_iter().map(|f| f.path).collect();
+        let mut paths = facts.include_closure(&start);
+        paths.sort();
+        paths.dedup();
+        return paths;
     };
     let canon_root = ctx.root.canonicalize().ok();
     let canon_src = ctx.root.join(source_dir).canonicalize().ok();
@@ -1423,8 +1461,10 @@ pub const STALE_PROGRAM: &str = "facts-stale";
 
 /// Today's program digest ([`program_digest`] of [`program_files`]), or
 /// [`STALE_PROGRAM`] when a program file is unrecorded in the facts or its
-/// bytes differ from the facts' record of it. The one function the oracle,
-/// the map and every reader use.
+/// bytes differ from the facts' record of it — for a file-list target, also
+/// when a scan would record a file the facts lack
+/// ([`unrecorded_program_files`]). The one function the oracle, the map and
+/// every reader use.
 pub fn program_digest_now(ctx: &crate::config::TargetContext, facts: &crate::Facts) -> String {
     let files = program_files(ctx, facts);
     let recorded: std::collections::HashMap<&str, &str> = facts
@@ -1459,11 +1499,71 @@ pub fn program_digest_now(ctx: &crate::config::TargetContext, facts: &crate::Fac
                 .zip(scanned_dir.as_deref())
                 .is_some_and(|(file, dir)| file.starts_with(dir)),
         });
-    if stale {
+    if stale || !unrecorded_program_files(ctx, facts).is_empty() {
         STALE_PROGRAM.to_string()
     } else {
         program_digest(&ctx.config, &files)
     }
+}
+
+/// The files a scan of a file-list target would record that its facts do
+/// not, root-relative and sorted; empty for a folder target (its rule is the
+/// walk's, in [`program_digest_now`]). Stale only where a scan would record
+/// otherwise, so a scan clears it (docs/PROJECT-MAP-DESIGN.md §3.7): a
+/// listed file not recorded, or a header an include of the program would
+/// now find first — a `.h` that appeared in a file's include folders (or,
+/// for a quoted include, beside the including file) under a name the
+/// program includes. A file elsewhere under the root, or a header no
+/// include names, is no sign. A changed or vanished recorded file is the
+/// hash rule's, not this one's; its includes are not followed here.
+pub fn unrecorded_program_files(
+    ctx: &crate::config::TargetContext,
+    facts: &crate::Facts,
+) -> Vec<String> {
+    let Ok(confine) = crate::sources::Confine::new(ctx) else {
+        return Vec::new();
+    };
+    let Ok(Some(listed)) = confine.listed_files(ctx) else {
+        return Vec::new();
+    };
+    let recorded: std::collections::HashMap<&str, &str> = facts
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.hash.as_str()))
+        .collect();
+    let mut unrecorded = std::collections::BTreeSet::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut queue: Vec<(String, Vec<String>)> = listed
+        .into_iter()
+        .map(|f| (f.path, f.include_dirs))
+        .collect();
+    while let Some((rel, dirs)) = queue.pop() {
+        if !seen.insert((rel.clone(), dirs.clone())) {
+            continue;
+        }
+        let abs = confine.root().join(&rel);
+        let Some(hash) = recorded.get(rel.as_str()) else {
+            // Only a regular file: the scan records nothing else.
+            if abs.is_file() {
+                unrecorded.insert(rel);
+            }
+            continue;
+        };
+        // The scan's parse of it is the facts' while its bytes are the
+        // same; a file it would not parse names nothing.
+        let Ok(bytes) = crate::ledger::read_regular(&abs, crate::sources::MAX_SOURCE_BYTES) else {
+            continue;
+        };
+        if hash::bytes_hash(&bytes) != *hash {
+            continue;
+        }
+        for (name, quoted) in crate::sources::include_names(&bytes) {
+            if let Some(to) = confine.resolve_include(&rel, &name, quoted, &dirs) {
+                queue.push((to, dirs.clone()));
+            }
+        }
+    }
+    unrecorded.into_iter().collect()
 }
 
 /// Two program digests describe the same program: equal, and neither
@@ -1927,6 +2027,63 @@ args = ["-h"]
             features_digest(&f, &linked),
             "link args are the program's, not the features'"
         );
+    }
+
+    #[test]
+    fn the_v2_digest_covers_the_configuration_each_files_folders_and_the_run_name() {
+        // docs/PROJECT-MAP-DESIGN.md §3.7: two configurations of one project
+        // differ; the map stamp is a notice, never a new program.
+        let list = |name: &str, dirs: &str, conf: &str, flags: &str, map: &str| {
+            config_from(&format!(
+                "schema_version = 2\n[target]\nname = \"{name}\"\n\
+                 files = [{{ path = \"src/tools/lzg.c\", include_dirs = [{dirs}] }}]\n\
+                 configuration = {{ name = \"{conf}\", from = \"stated\", flags = [{flags}] }}\n\
+                 {map}[oracle]\nextra_link_args = [\"-lm\"]\n"
+            ))
+        };
+        let files = vec![("src/tools/lzg.c".to_string(), Some("blake3:a".to_string()))];
+        let base = program_digest(&list("lzg", "\"src/include\"", "make", "", ""), &files);
+        for (what, other) in [
+            (
+                "a flag",
+                list("lzg", "\"src/include\"", "make", "\"-DX\"", ""),
+            ),
+            (
+                "a file's folders",
+                list("lzg", "\"src/inc\"", "make", "", ""),
+            ),
+            ("no folders", list("lzg", "", "make", "", "")),
+            (
+                "the configuration's name",
+                list("lzg", "\"src/include\"", "meson", "", ""),
+            ),
+            (
+                "the run name",
+                list("lzgx", "\"src/include\"", "make", "", ""),
+            ),
+        ] {
+            assert_ne!(base, program_digest(&other, &files), "{what}");
+        }
+        let stamp = format!(
+            "map = {{ root_hash = \"blake3:{0}\", inputs_hash = \"blake3:{0}\" }}\n",
+            "a".repeat(64)
+        );
+        assert_eq!(
+            base,
+            program_digest(&list("lzg", "\"src/include\"", "make", "", &stamp), &files),
+            "a map stamp is not the program"
+        );
+        // Flags keep their order.
+        assert_ne!(
+            program_digest(&list("lzg", "", "make", "\"-DA\", \"-DB\"", ""), &files),
+            program_digest(&list("lzg", "", "make", "\"-DB\", \"-DA\"", ""), &files)
+        );
+        // The same files under the folder form are another record.
+        let folder = config_from(
+            "schema_version = 1\n[target]\nname = \"lzg\"\nsource_dir = \"src\"\n\
+             [oracle]\nextra_link_args = [\"-lm\"]\n",
+        );
+        assert_ne!(base, program_digest(&folder, &files));
     }
 
     #[test]

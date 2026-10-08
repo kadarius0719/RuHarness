@@ -523,3 +523,19 @@ fn a_fifo_named_like_a_c_file_is_no_sign_of_stale_facts() {
     assert!(harness_core::features::program_digest_now(&ctx, &facts).starts_with("blake3:"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// docs/PROJECT-MAP-DESIGN.md §3.7: the folder form keeps its v1 program
+/// record byte for byte — zopfli's committed digest (in its features map and
+/// its unit's last green verdict) does not move.
+#[test]
+fn zopfli_keeps_its_committed_v1_program_digest() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../targets/zopfli");
+    harness_core::adopt::testing::adopt(&root);
+    let ctx = harness_core::config::TargetContext::load(&root).unwrap();
+    let facts = Facts::load(&root.join("migration/facts.jsonl")).unwrap();
+    assert_eq!(
+        harness_core::features::program_digest_now(&ctx, &facts),
+        "blake3:d191be5c4b9a2380dc6a075da3c8dccc92216562d1103bc82c7dc6d8a9e75d64"
+    );
+    assert!(harness_core::features::unrecorded_program_files(&ctx, &facts).is_empty());
+}
