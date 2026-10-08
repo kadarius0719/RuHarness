@@ -933,14 +933,14 @@ fn a_drivers_needs_join_each_fuzzers_link() {
 
 #[test]
 fn duplicates_between_programs_come_from_their_closures_only() {
-    // `x` in a.c (t-p's closure) and in b.c (a library): no program meets
+    // `x` in p.c (t-p's own file) and in b.c (a library): no program meets
     // b.c, so nothing is listed.
     let run = Run::new(vec![
-        c("tools/p.c", &["main"], &["x"]),
-        c("lib/a.c", &["x"], &[]),
+        c("tools/p.c", &["main", "x"], &[]),
         c("other/b.c", &["x", "only_b"], &[]),
     ]);
     let a = run.bare();
+    assert_eq!(a.libraries.len(), 1);
     assert!(a.between_program_duplicates.is_empty(), "{a:?}");
     // Two programs each settling a set: the set's symbol is not listed
     // between them (they chose, it is no stray duplicate).
