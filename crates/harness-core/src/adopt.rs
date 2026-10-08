@@ -341,14 +341,23 @@ fn read_token(path: &Path) -> Option<String> {
     .then(|| token.to_string())
 }
 
-/// Units and verified units the ledger's plan claims (0, 0 when it has no
-/// readable plan).
+/// Units and verified units the project's ledgers claim: the root's
+/// `migration/` and each mapped tool's under `migration/tools/` (0, 0 for a
+/// ledger with no readable plan).
 fn count_units(root: &Path) -> (usize, usize) {
-    let path = root.join(MIGRATION_DIR).join("plan.toml");
-    let Ok(bytes) = read_regular(&path, MAX_PLAN_BYTES) else {
+    let migration = root.join(MIGRATION_DIR);
+    std::iter::once(migration.clone())
+        .chain(real_dirs(&migration.join(crate::config::TOOLS_DIR)))
+        .map(|ledger| count_plan(&ledger.join("plan.toml")))
+        .fold((0, 0), |(u, v), (cu, cv)| (u + cu, v + cv))
+}
+
+/// Units and verified units one plan claims.
+fn count_plan(path: &Path) -> (usize, usize) {
+    let Ok(bytes) = read_regular(path, MAX_PLAN_BYTES) else {
         return (0, 0);
     };
-    let Ok(plan) = Plan::parse(&path, &String::from_utf8_lossy(&bytes)) else {
+    let Ok(plan) = Plan::parse(path, &String::from_utf8_lossy(&bytes)) else {
         return (0, 0);
     };
     let verified = plan
@@ -581,10 +590,20 @@ fn adopt_inner(root: &Path, scope: Scope, delete: bool) -> Result<Adoption, Erro
 
 /// Delete the build folders a ledger made elsewhere may carry, and only
 /// those: `migration/build/`, each unit crate's `target/`, each attempt's
-/// `candidate/target/` and every `units/<id>/.promote-*/`. A link in any of
-/// those places is deleted itself, never its target; a linked folder is
+/// `candidate/target/` and every `units/<id>/.promote-*/`, in the root's
+/// ledger and in each mapped tool's under `migration/tools/`. A link in any
+/// of those places is deleted itself, never its target; a linked folder is
 /// never descended into. Returns what was deleted.
 pub fn delete_build_folders(migration: &Path) -> Result<Vec<PathBuf>, Error> {
+    let mut deleted = delete_ledger_builds(migration)?;
+    for tool in real_dirs(&migration.join(crate::config::TOOLS_DIR)) {
+        deleted.extend(delete_ledger_builds(&tool)?);
+    }
+    Ok(deleted)
+}
+
+/// [`delete_build_folders`] for one ledger folder.
+fn delete_ledger_builds(migration: &Path) -> Result<Vec<PathBuf>, Error> {
     let mut deleted = Vec::new();
     remove(&migration.join("build"), &mut deleted)?;
     for unit in real_dirs(&migration.join("units")) {

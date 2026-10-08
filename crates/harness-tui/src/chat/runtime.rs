@@ -332,12 +332,23 @@ pub fn argv(
     bins: &Binaries,
     dir: &Path,
     target: &Path,
+    tool: Option<&str>,
     brief: &str,
     model: Option<&str>,
 ) -> Vec<OsString> {
+    // harness-mcp is started on the cockpit's target, and its tool
+    // (docs/PROJECT-MAP-DESIGN.md §3.7).
+    let mut mcp_args = vec![
+        "--cockpit".to_string(),
+        "--target".to_string(),
+        target.to_string_lossy().into_owned(),
+    ];
+    if let Some(tool) = tool {
+        mcp_args.extend(["--tool".to_string(), tool.to_string()]);
+    }
     let config = serde_json::json!({"mcpServers": {"harness": {
         "command": bins.mcp.to_string_lossy(),
-        "args": ["--cockpit", "--target", target.to_string_lossy()],
+        "args": mcp_args,
     }}})
     .to_string();
     let mut argv: Vec<OsString> = vec![bins.claude.clone().into()];
@@ -987,6 +998,7 @@ mod tests {
             &bins,
             Path::new("/t/d"),
             Path::new("/repo/t"),
+            None,
             "BRIEF",
             Some("haiku"),
         );
@@ -1023,8 +1035,24 @@ mod tests {
             config["mcpServers"]["harness"]["args"],
             serde_json::json!(["--cockpit", "--target", "/repo/t"])
         );
-        let no_model = super::argv(&bins, Path::new("/d"), Path::new("/t"), "b", None);
+        let no_model = super::argv(&bins, Path::new("/d"), Path::new("/t"), None, "b", None);
         assert!(!no_model.contains(&OsString::from("--model")));
+        // A mapped tool's chat starts harness-mcp on that tool.
+        let tool = super::argv(
+            &bins,
+            Path::new("/d"),
+            Path::new("/t"),
+            Some("t-x"),
+            "b",
+            None,
+        );
+        let at = tool.iter().position(|a| a == "--mcp-config").unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&tool[at + 1].to_string_lossy()).unwrap();
+        assert_eq!(
+            config["mcpServers"]["harness"]["args"],
+            serde_json::json!(["--cockpit", "--target", "/t", "--tool", "t-x"])
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //! re-runnable, and [`recover_promotion`] resolves every marker it finds by
 //! EVIDENCE (digests), never by guesswork.
 
-use crate::{out, report, require_sandbox, EXIT_ORACLE_RED};
+use crate::{out, report, require_sandbox, TargetArg, EXIT_ORACLE_RED};
 use anyhow::{bail, Context, Result};
 use harness_core::attempts::{self, AttemptRecord};
 use harness_core::ledger::Ledger;
@@ -375,13 +375,13 @@ pub(crate) fn promote_attempt(
 pub(crate) fn cmd_promote(
     unit_id: String,
     attempt_id: String,
-    target: PathBuf,
+    target: TargetArg,
     replace: bool,
     allow_unsandboxed: bool,
 ) -> Result<u8> {
     require_sandbox(allow_unsandboxed, "harness promote")?;
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load_folder("harness promote")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = crate::lock_ledger(&ledger, &format!("promote {unit_id} {attempt_id}"))?;
     let plan_doc = Plan::load(&ledger.plan_path())?;
     plan_doc

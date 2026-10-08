@@ -206,7 +206,8 @@ fn stored_row_on(
     harness_core::adopt::testing::adopt(t);
     let ctx = harness_core::TargetContext::load(t).unwrap();
     let facts = harness_core::Facts::load(&t.join("migration/facts.jsonl")).unwrap();
-    let WorkloadsState::Ready(workloads) = wl::load(t).unwrap() else {
+    let WorkloadsState::Ready(workloads) = wl::load(&harness_core::ledger::Ledger::new(t)).unwrap()
+    else {
         panic!("{}: no workloads file", t.display());
     };
     let run = serde_json::json!({"cpu_us": 1_300_000, "wall_us": 1_300_000, "end": "exit 0"});

@@ -28,11 +28,15 @@ pub struct Config {
     /// holds every tool call as a permission request, runs the act itself;
     /// this server refuses every act that reaches it.
     pub cockpit: bool,
+    /// The default target's mapped tool (`--tool`, or the project's only
+    /// tool; docs/PROJECT-MAP-DESIGN.md §3.7); `None` for a folder-form
+    /// target. A call's other target (under a `--target-root`) has none.
+    pub tool: Option<String>,
 }
 
-const USAGE: &str = "usage: harness-mcp --target DIR [--target-root DIR]... [--harness PATH] \
-                     [--provider NAME]... [--allow-unsandboxed]\n       harness-mcp --cockpit \
-                     --target DIR";
+const USAGE: &str = "usage: harness-mcp --target DIR [--tool ID] [--target-root DIR]... \
+                     [--harness PATH] [--provider NAME]... [--allow-unsandboxed]\n       \
+                     harness-mcp --cockpit --target DIR [--tool ID]";
 
 /// The usage line.
 pub fn usage() -> &'static str {
@@ -43,6 +47,7 @@ pub fn usage() -> &'static str {
 /// `--help`/`--version` (already answered on stderr).
 pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
     let mut target = None;
+    let mut tool = None;
     let mut roots = Vec::new();
     let mut harness = None;
     let mut providers: Vec<String> = Vec::new();
@@ -66,6 +71,11 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
         };
         match flag {
             "--target" => target = Some(PathBuf::from(value()?)),
+            "--tool" => {
+                let id = value()?;
+                harness_core::config::check_tool_id(&id).map_err(|why| format!("--tool: {why}"))?;
+                tool = Some(id);
+            }
             "--target-root" => roots.push(PathBuf::from(value()?)),
             "--harness" => harness = Some(PathBuf::from(value()?)),
             "--provider" => providers.push(value()?),
@@ -105,12 +115,22 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
     }
     let target = target.ok_or_else(|| format!("--target is required\n{USAGE}"))?;
     let target = canonical_dir(&target, "--target")?;
-    if !target.join("harness.toml").is_file() {
-        return Err(format!(
-            "--target {}: no harness.toml there",
-            target.display()
-        ));
-    }
+    // The lookup order of the command line: `--tool`, else the root's
+    // harness.toml, else the project's only mapped tool.
+    let tool = match harness_core::config::find_target(&target, tool.as_deref())
+        .map_err(|e| format!("--target {}: {e}", target.display()))?
+    {
+        harness_core::config::Found::Tool(id) => Some(id),
+        harness_core::config::Found::Root => {
+            if !target.join("harness.toml").is_file() {
+                return Err(format!(
+                    "--target {}: no harness.toml there",
+                    target.display()
+                ));
+            }
+            None
+        }
+    };
     let target_roots = roots
         .iter()
         .map(|r| canonical_dir(r, "--target-root"))
@@ -148,6 +168,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
         allow_unsandboxed,
         home,
         cockpit,
+        tool,
     }))
 }
 
@@ -187,6 +208,24 @@ fn find_harness() -> Option<PathBuf> {
 }
 
 impl Config {
+    /// The tool of `target`: the server's own `--tool` for its own target,
+    /// none for any other.
+    pub fn tool_for(&self, target: &Path) -> Option<&str> {
+        (target == self.target)
+            .then_some(self.tool.as_deref())
+            .flatten()
+    }
+
+    /// The ledger of `target` (see [`Config::tool_for`]).
+    pub fn ledger_for(&self, target: &Path) -> harness_core::ledger::Ledger {
+        match self.tool_for(target) {
+            None => harness_core::ledger::Ledger::new(target),
+            Some(id) => {
+                harness_core::ledger::Ledger::at(target, harness_core::config::tool_dir(target, id))
+            }
+        }
+    }
+
     /// The target a call names (`None` = the default), canonical — or why
     /// it is refused. Nothing is read or spawned for a refused target.
     pub fn resolve_target(&self, requested: Option<&str>) -> Result<PathBuf, String> {
@@ -226,7 +265,7 @@ impl Config {
 }
 
 /// The read preflight: one implementation, in the read model's crate.
-pub use harness_tui::preflight::preflight;
+pub use harness_tui::preflight::preflight_tool;
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -248,6 +287,7 @@ pub(crate) mod tests {
     fn config(default: PathBuf, roots: Vec<PathBuf>, home: Option<PathBuf>) -> Config {
         Config {
             target: default,
+            tool: None,
             target_roots: roots,
             harness: None,
             providers: vec!["external".into()],
@@ -292,6 +332,46 @@ pub(crate) mod tests {
         assert!(cfg
             .resolve_target(Some(root.join("link").to_str().unwrap()))
             .is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `--tool` (docs/PROJECT-MAP-DESIGN.md §3.7): checked by the id rule,
+    /// found by the command line's lookup order, and carried only by the
+    /// server's own target.
+    #[test]
+    fn a_tool_is_found_as_the_command_line_finds_it() {
+        let base = tmp("tools");
+        let project = base.join("p");
+        for id in ["t-a", "t-b"] {
+            let dir = harness_core::config::tool_dir(&project, id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("harness.toml"), "schema_version = 1\n").unwrap();
+        }
+        let project = project.canonicalize().unwrap();
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let p = project.to_str().unwrap();
+        let err = parse_args(&args(&["--target", p])).unwrap_err();
+        assert!(
+            err.contains("2 mapped tools") && err.contains("t-a, t-b"),
+            "{err}"
+        );
+        let err = parse_args(&args(&["--target", p, "--tool", "T-A"])).unwrap_err();
+        assert!(err.contains("is not a tool id"), "{err}");
+        let cfg = parse_args(&args(&["--cockpit", "--target", p, "--tool=t-b"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(cfg.tool.as_deref(), Some("t-b"));
+        assert_eq!(cfg.tool_for(&project), Some("t-b"));
+        assert_eq!(cfg.tool_for(&base), None);
+        assert_eq!(
+            cfg.ledger_for(&project).dir(),
+            project.join("migration/tools/t-b")
+        );
+        assert_eq!(cfg.ledger_for(&base).dir(), base.join("migration"));
+        // One tool left: found without --tool.
+        std::fs::remove_dir_all(harness_core::config::tool_dir(&project, "t-b")).unwrap();
+        let cfg = parse_args(&args(&["--target", p])).unwrap().unwrap();
+        assert_eq!(cfg.tool.as_deref(), Some("t-a"));
         let _ = std::fs::remove_dir_all(&base);
     }
 

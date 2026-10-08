@@ -33,6 +33,8 @@ pub mod app;
 #[cfg(feature = "tui")]
 pub mod chat;
 #[cfg(feature = "tui")]
+pub mod chooser;
+#[cfg(feature = "tui")]
 pub mod dialog;
 #[cfg(feature = "tui")]
 pub mod handedit;

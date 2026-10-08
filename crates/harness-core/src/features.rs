@@ -49,14 +49,15 @@ pub const CHECK_PREFIX: &str = "feature:";
 /// The digest recorded when the features file does not validate.
 pub const INVALID_DIGEST: &str = "invalid";
 
-/// `migration/features/` under `root`.
-pub fn features_dir(root: &Path) -> PathBuf {
-    root.join(crate::ledger::MIGRATION_DIR).join(FEATURES_DIR)
+/// `features/` in the ledger (`migration/features/` for a folder-form
+/// target).
+pub fn features_dir(ledger: &crate::ledger::Ledger) -> PathBuf {
+    ledger.dir().join(FEATURES_DIR)
 }
 
-/// `migration/features/features.toml` under `root`.
-pub fn features_path(root: &Path) -> PathBuf {
-    features_dir(root).join(FEATURES_FILE)
+/// `features/features.toml` in the ledger.
+pub fn features_path(ledger: &crate::ledger::Ledger) -> PathBuf {
+    features_dir(ledger).join(FEATURES_FILE)
 }
 
 /// One of the harness's deterministic samples (the whole-program check's).
@@ -253,8 +254,8 @@ fn invalid(message: String) -> Error {
 /// docs/FEATURES-DESIGN.md §2.1 is checked; a violation is an
 /// [`Error::InvalidPlan`] naming the key and the rule, a newer
 /// `schema_version` an [`Error::SchemaTooNew`].
-pub fn load(root: &Path) -> Result<Option<Features>, Error> {
-    let dir = features_dir(root);
+pub fn load(ledger: &crate::ledger::Ledger) -> Result<Option<Features>, Error> {
+    let dir = features_dir(ledger);
     match std::fs::symlink_metadata(&dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(Error::io(&dir, e)),
@@ -265,7 +266,7 @@ pub fn load(root: &Path) -> Result<Option<Features>, Error> {
         }
         Ok(_) => {}
     }
-    let path = features_path(root);
+    let path = features_path(ledger);
     match std::fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(Error::io(&path, e)),
@@ -618,8 +619,8 @@ pub fn program_digest(config: &TargetConfig, files: &[(String, Option<String>)])
     let doc = serde_json::json!({
         "v": 1,
         "files": pairs,
-        "source_dir": config.target.source_dir,
-        "include_dirs": config.target.include_dirs,
+        "source_dir": config.target.source_dir(),
+        "include_dirs": config.target.include_dirs(),
         "extra_link_args": config.oracle.get("extra_link_args").map(|v| v.to_string()),
     });
     hash::bytes_hash(doc.to_string().as_bytes())
@@ -647,7 +648,7 @@ pub enum FeatureSnapshot {
 impl FeatureSnapshot {
     /// Load the features of `ctx`'s target (see [`load`]).
     pub fn load(ctx: &crate::config::TargetContext) -> FeatureSnapshot {
-        match load(&ctx.root) {
+        match load(&crate::ledger::Ledger::of(ctx)) {
             Ok(None) => FeatureSnapshot::None,
             Ok(Some(features)) => FeatureSnapshot::Valid {
                 digest: features_digest(&features, &ctx.config),
@@ -691,9 +692,9 @@ pub const MAX_MAP_BYTES: u64 = 16 * 1024 * 1024;
 /// Longest `stderr_head`, in bytes.
 pub const STDERR_HEAD_BYTES: usize = 100;
 
-/// `migration/features/map.json` under `root`.
-pub fn map_path(root: &Path) -> PathBuf {
-    features_dir(root).join(MAP_FILE)
+/// `features/map.json` in the ledger.
+pub fn map_path(ledger: &crate::ledger::Ledger) -> PathBuf {
+    features_dir(ledger).join(MAP_FILE)
 }
 
 /// The probe a map is made by (docs/FEATURES-PROBE-REDESIGN.md §3.7).
@@ -925,8 +926,8 @@ fn is_end(end: &str) -> bool {
 /// Read `migration/features/map.json` strictly (it is committed, so
 /// hostile): its shape, the id alphabet, `end`'s and `noted`'s closed sets,
 /// the size; pairs today's `facts` do not know are dropped and counted.
-pub fn load_map(root: &Path, facts: &crate::Facts) -> MapState {
-    let path = map_path(root);
+pub fn load_map(ledger: &crate::ledger::Ledger, facts: &crate::Facts) -> MapState {
+    let path = map_path(ledger);
     match std::fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return MapState::None,
         Err(e) => return MapState::Unreadable(one_line(&e.to_string())),
@@ -1317,7 +1318,11 @@ pub const MAX_PROGRAM_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// walk's alias rule, docs/PROJECT-MAP-DESIGN.md §3.1 step 1), so its
 /// closure is the facts' and a scan clears its staleness.
 pub fn program_paths(ctx: &crate::config::TargetContext, facts: &crate::Facts) -> Vec<String> {
-    let source_dir = &ctx.config.target.source_dir;
+    // A file-list target's program is read by a later step; until then it
+    // lists nothing here (its commands refuse it first).
+    let Some(source_dir) = ctx.config.target.source_dir() else {
+        return Vec::new();
+    };
     let canon_root = ctx.root.canonicalize().ok();
     let canon_src = ctx.root.join(source_dir).canonicalize().ok();
     // `path` (a link) as the scan records its file: its real path, when that
@@ -1350,7 +1355,8 @@ pub fn program_paths(ctx: &crate::config::TargetContext, facts: &crate::Facts) -
     paths.extend(top);
     // `migration/` by path; `.git` and every dot-folder by name (the walk).
     let prune = [ctx.root.join("migration")];
-    for dir in std::iter::once(source_dir).chain(&ctx.config.target.include_dirs) {
+    let include_dirs = ctx.config.target.include_dirs().iter().map(String::as_str);
+    for dir in std::iter::once(source_dir).chain(include_dirs) {
         let walked = crate::walk::confined_except(
             &ctx.root.join(dir),
             &["h"],
@@ -1433,10 +1439,10 @@ pub fn program_digest_now(ctx: &crate::config::TargetContext, facts: &crate::Fac
     // outside `source_dir`, is no sign of stale facts.
     let root = ctx.root.canonicalize().ok();
     let scanned_dir = ctx
-        .root
-        .join(&ctx.config.target.source_dir)
-        .canonicalize()
-        .ok();
+        .config
+        .target
+        .source_dir()
+        .and_then(|dir| ctx.root.join(dir).canonicalize().ok());
     let stale = files
         .iter()
         .any(|(path, hash)| match recorded.get(path.as_str()) {
@@ -1751,24 +1757,52 @@ args = ["-h"]
     fn the_file_is_found_read_regularly_and_optional() {
         let dir = std::env::temp_dir().join(format!("rh-features-{}", hash::random_hex(6)));
         std::fs::create_dir_all(dir.join("migration")).expect("mkdir");
-        assert_eq!(load(&dir).expect("no dir"), None);
-        std::fs::create_dir_all(features_dir(&dir)).expect("mkdir");
-        assert_eq!(load(&dir).expect("no file"), None);
-        std::fs::write(features_path(&dir), GOOD).expect("write");
-        assert_eq!(load(&dir).expect("ok").expect("some").features.len(), 2);
-        std::fs::remove_file(features_path(&dir)).expect("rm");
-        std::os::unix::fs::symlink("/etc/hosts", features_path(&dir)).expect("link");
-        assert!(load(&dir).is_err(), "a symlinked file is refused");
-        std::fs::remove_file(features_path(&dir)).expect("rm");
-        std::fs::write(features_path(&dir), "x".repeat(64 * 1024 + 1)).expect("write");
-        assert!(load(&dir)
+        assert_eq!(
+            load(&crate::ledger::Ledger::new(&dir)).expect("no dir"),
+            None
+        );
+        std::fs::create_dir_all(features_dir(&crate::ledger::Ledger::new(&dir))).expect("mkdir");
+        assert_eq!(
+            load(&crate::ledger::Ledger::new(&dir)).expect("no file"),
+            None
+        );
+        std::fs::write(features_path(&crate::ledger::Ledger::new(&dir)), GOOD).expect("write");
+        assert_eq!(
+            load(&crate::ledger::Ledger::new(&dir))
+                .expect("ok")
+                .expect("some")
+                .features
+                .len(),
+            2
+        );
+        std::fs::remove_file(features_path(&crate::ledger::Ledger::new(&dir))).expect("rm");
+        std::os::unix::fs::symlink(
+            "/etc/hosts",
+            features_path(&crate::ledger::Ledger::new(&dir)),
+        )
+        .expect("link");
+        assert!(
+            load(&crate::ledger::Ledger::new(&dir)).is_err(),
+            "a symlinked file is refused"
+        );
+        std::fs::remove_file(features_path(&crate::ledger::Ledger::new(&dir))).expect("rm");
+        std::fs::write(
+            features_path(&crate::ledger::Ledger::new(&dir)),
+            "x".repeat(64 * 1024 + 1),
+        )
+        .expect("write");
+        assert!(load(&crate::ledger::Ledger::new(&dir))
             .expect_err("too big")
             .to_string()
             .contains("longer than"));
-        std::fs::remove_dir_all(features_dir(&dir)).expect("rm");
+        std::fs::remove_dir_all(features_dir(&crate::ledger::Ledger::new(&dir))).expect("rm");
         std::fs::create_dir_all(dir.join("elsewhere")).expect("mkdir");
-        std::os::unix::fs::symlink(dir.join("elsewhere"), features_dir(&dir)).expect("link");
-        assert!(load(&dir)
+        std::os::unix::fs::symlink(
+            dir.join("elsewhere"),
+            features_dir(&crate::ledger::Ledger::new(&dir)),
+        )
+        .expect("link");
+        assert!(load(&crate::ledger::Ledger::new(&dir))
             .expect_err("dir link")
             .to_string()
             .contains("symlink is refused"));
@@ -1935,33 +1969,48 @@ args = ["-h"]
     #[test]
     fn a_snapshot_is_a_value_whatever_the_file_holds() {
         let dir = std::env::temp_dir().join(format!("rh-snap-{}", hash::random_hex(6)));
-        std::fs::create_dir_all(features_dir(&dir)).expect("mkdir");
+        std::fs::create_dir_all(features_dir(&crate::ledger::Ledger::new(&dir))).expect("mkdir");
         let ctx = crate::config::TargetContext {
+            ledger: (dir.clone()).join("migration"),
+            tool: None,
             root: dir.clone(),
             config: config(),
         };
         assert_eq!(FeatureSnapshot::load(&ctx), FeatureSnapshot::None);
         assert_eq!(FeatureSnapshot::None.digest(), "");
-        std::fs::write(features_path(&dir), GOOD).expect("write");
+        std::fs::write(features_path(&crate::ledger::Ledger::new(&dir)), GOOD).expect("write");
         match FeatureSnapshot::load(&ctx) {
             FeatureSnapshot::Valid { features, digest } => {
                 assert_eq!(digest, features_digest(&features, &ctx.config));
             }
             other => panic!("{other:?}"),
         }
-        std::fs::write(features_path(&dir), "schema_version = 1\nx = 1\n").expect("write");
+        std::fs::write(
+            features_path(&crate::ledger::Ledger::new(&dir)),
+            "schema_version = 1\nx = 1\n",
+        )
+        .expect("write");
         let invalid = FeatureSnapshot::load(&ctx);
         assert!(matches!(&invalid, FeatureSnapshot::Invalid(m) if m.contains("unknown key \"x\"")));
         assert_eq!(invalid.digest(), INVALID_DIGEST);
-        std::fs::write(features_path(&dir), "schema_version = 7\n").expect("write");
+        std::fs::write(
+            features_path(&crate::ledger::Ledger::new(&dir)),
+            "schema_version = 7\n",
+        )
+        .expect("write");
         assert!(matches!(FeatureSnapshot::load(&ctx),
             FeatureSnapshot::Invalid(m) if m.contains("newer harness") && m.contains("schema_version 7")));
-        std::fs::write(features_path(&dir), [0xff, 0xfe]).expect("write");
+        std::fs::write(
+            features_path(&crate::ledger::Ledger::new(&dir)),
+            [0xff, 0xfe],
+        )
+        .expect("write");
         assert!(
             matches!(FeatureSnapshot::load(&ctx), FeatureSnapshot::Invalid(m) if m.contains("not UTF-8"))
         );
-        std::fs::remove_file(features_path(&dir)).expect("rm");
-        std::fs::create_dir(features_path(&dir)).expect("a directory where the file goes");
+        std::fs::remove_file(features_path(&crate::ledger::Ledger::new(&dir))).expect("rm");
+        std::fs::create_dir(features_path(&crate::ledger::Ledger::new(&dir)))
+            .expect("a directory where the file goes");
         assert!(
             matches!(FeatureSnapshot::load(&ctx), FeatureSnapshot::Invalid(m) if m.contains("cannot be read"))
         );
@@ -2020,6 +2069,8 @@ args = ["-h"]
     #[test]
     fn nothing_is_hashed_without_a_features_file() {
         let ctx = crate::config::TargetContext {
+            ledger: (std::env::temp_dir().join("rh-no-such-target")).join("migration"),
+            tool: None,
             root: std::env::temp_dir().join("rh-no-such-target"),
             config: config(),
         };
@@ -2049,6 +2100,8 @@ args = ["-h"]
         std::os::unix::fs::symlink(dir.join("elsewhere.c"), dir.join("src/linked.c")).expect("ln");
         std::os::unix::fs::symlink("/etc/hosts", dir.join("src/escape.c")).expect("ln");
         let ctx = crate::config::TargetContext {
+            ledger: (dir.clone()).join("migration"),
+            tool: None,
             root: dir.clone(),
             config: config(),
         };
@@ -2118,6 +2171,8 @@ args = ["-h"]
         std::fs::write(dir.join("lib/shared.c"), "int s;").unwrap();
         std::os::unix::fs::symlink(dir.join("lib/shared.c"), dir.join("src/shared.c")).unwrap();
         let ctx = |source_dir: &str| crate::config::TargetContext {
+            ledger: (dir.clone()).join("migration"),
+            tool: None,
             root: dir.clone(),
             config: config_from(&format!(
                 "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"{source_dir}\"\n\
@@ -2198,6 +2253,8 @@ args = ["-h"]
         std::fs::write(dir.join("p/src/include/x.h"), "int x;").unwrap();
         std::os::unix::fs::symlink("src/include", dir.join("p/include")).unwrap();
         let ctx = crate::config::TargetContext {
+            ledger: (dir.clone()).join("migration"),
+            tool: None,
             root: dir.clone(),
             config: config_from(
                 "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"p\"\n\
@@ -2350,13 +2407,20 @@ args = ["-h"]
     #[test]
     fn the_map_loads_strictly_and_drops_what_the_facts_do_not_know() {
         let dir = std::env::temp_dir().join(format!("rh-map-{}", hash::random_hex(6)));
-        std::fs::create_dir_all(features_dir(&dir)).expect("mkdir");
-        assert_eq!(load_map(&dir, &map_facts()), MapState::None);
+        std::fs::create_dir_all(features_dir(&crate::ledger::Ledger::new(&dir))).expect("mkdir");
+        assert_eq!(
+            load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
+            MapState::None
+        );
         let write = |m: &FeatureMap| {
-            std::fs::write(map_path(&dir), m.to_bytes().expect("bytes")).expect("write")
+            std::fs::write(
+                map_path(&crate::ledger::Ledger::new(&dir)),
+                m.to_bytes().expect("bytes"),
+            )
+            .expect("write")
         };
         write(&a_map());
-        match load_map(&dir, &map_facts()) {
+        match load_map(&crate::ledger::Ledger::new(&dir), &map_facts()) {
             MapState::Loaded { map, unknown } => {
                 assert_eq!(unknown, 1, "src/b.c::gone is not in the facts");
                 assert_eq!(
@@ -2369,7 +2433,10 @@ args = ["-h"]
         }
         let unreadable = |m: FeatureMap| {
             write(&m);
-            matches!(load_map(&dir, &map_facts()), MapState::Unreadable(_))
+            matches!(
+                load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
+                MapState::Unreadable(_)
+            )
         };
         let mut m = a_map();
         m.scenarios[0].feature = "Gzip".into();
@@ -2397,7 +2464,10 @@ args = ["-h"]
         m.unwatched_reasons = vec![reason("compile", &"é".repeat(80), "src/a.c::odd")];
         write(&m);
         assert!(
-            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            matches!(
+                load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
+                MapState::Loaded { .. }
+            ),
             "a detail of 160 bytes"
         );
         for (bad, why) in [
@@ -2451,7 +2521,10 @@ args = ["-h"]
             .collect();
         write(&m);
         assert!(
-            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            matches!(
+                load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
+                MapState::Loaded { .. }
+            ),
             "every kind, maximal"
         );
         // Fix pass 2's check: a map of another probe version holding a
@@ -2465,7 +2538,7 @@ args = ["-h"]
             "src/a.c::odd",
         )];
         write(&m);
-        match load_map(&dir, &map_facts()) {
+        match load_map(&crate::ledger::Ledger::new(&dir), &map_facts()) {
             MapState::Loaded { map, .. } => {
                 let detail = &map.unwatched_reasons[0].detail;
                 assert!(detail.starts_with("a?b"), "{detail}");
@@ -2474,7 +2547,10 @@ args = ["-h"]
             other => panic!("another version's map: {other:?}"),
         }
         assert!(
-            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            matches!(
+                load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
+                MapState::Loaded { .. }
+            ),
             "another version, loaded"
         );
         // Fix pass 3's check: a newer probe's unknown kind, and a detail on a
@@ -2484,7 +2560,10 @@ args = ["-h"]
         m.unwatched_reasons = vec![reason("a-new-kind", "x", "src/a.c::odd")];
         write(&m);
         assert!(
-            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            matches!(
+                load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
+                MapState::Loaded { .. }
+            ),
             "a newer probe's kind"
         );
         let mut m = a_map();
@@ -2492,7 +2571,10 @@ args = ["-h"]
         m.unwatched_reasons = vec![reason("skipped-branch", "words", "src/a.c::odd")];
         write(&m);
         assert!(
-            matches!(load_map(&dir, &map_facts()), MapState::Loaded { .. }),
+            matches!(
+                load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
+                MapState::Loaded { .. }
+            ),
             "a detail on a detail-less kind"
         );
         // Review: one reason per pair.
@@ -2508,21 +2590,25 @@ args = ["-h"]
         m.scenarios[0].functions.clear();
         write(&m);
         assert!(matches!(
-            load_map(&dir, &map_facts()),
+            load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
             MapState::Loaded { .. }
         ));
         let mut m = a_map();
         m.schema = "other".into();
         assert!(unreadable(m));
-        std::fs::write(map_path(&dir), "{").expect("write");
+        std::fs::write(map_path(&crate::ledger::Ledger::new(&dir)), "{").expect("write");
         assert!(matches!(
-            load_map(&dir, &map_facts()),
+            load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
             MapState::Unreadable(_)
         ));
-        std::fs::remove_file(map_path(&dir)).expect("rm");
-        std::os::unix::fs::symlink("/etc/hosts", map_path(&dir)).expect("ln");
+        std::fs::remove_file(map_path(&crate::ledger::Ledger::new(&dir))).expect("rm");
+        std::os::unix::fs::symlink("/etc/hosts", map_path(&crate::ledger::Ledger::new(&dir)))
+            .expect("ln");
         assert!(
-            matches!(load_map(&dir, &map_facts()), MapState::Unreadable(_)),
+            matches!(
+                load_map(&crate::ledger::Ledger::new(&dir), &map_facts()),
+                MapState::Unreadable(_)
+            ),
             "a symlink"
         );
         std::fs::remove_dir_all(&dir).expect("cleanup");

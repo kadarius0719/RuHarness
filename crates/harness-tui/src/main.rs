@@ -49,7 +49,7 @@ use std::time::{Duration, Instant};
 static GUARD: TermGuard = TermGuard::new();
 
 const USAGE: &str = "\
-usage: harness-tui [--target DIR] [--harness PATH] [--provider NAME]... [--allow-unsandboxed]
+usage: harness-tui [--target DIR] [--tool ID] [--harness PATH] [--provider NAME]... [--allow-unsandboxed]
                    [--layout split|stacked] [--no-mouse]
                    [--no-chat] [--chat-runtime PATH] [--harness-mcp PATH] [--chat-model NAME]
 
@@ -57,6 +57,9 @@ The review cockpit over a target's migration ledger. Every write is a spawned
 `harness --json …` command whose exact argv is shown and confirmed first.
 
   --target DIR          the target repository root (default: .)
+  --tool ID             the project's mapped tool to open (migration/tools/ID/);
+                        without it: the root's harness.toml, else the only tool,
+                        else the tools are listed to pick from
   --harness PATH        the harness binary acts spawn (default: `harness` on PATH,
                         else the one next to this binary)
   --provider NAME       a provider profile model acts may use (repeatable;
@@ -80,6 +83,7 @@ The review cockpit over a target's migration ledger. Every write is a spawned
 
 struct Args {
     target: PathBuf,
+    tool: Option<String>,
     harness: Option<PathBuf>,
     allow_unsandboxed: bool,
     layout: LayoutMode,
@@ -94,6 +98,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         target: PathBuf::from("."),
+        tool: None,
         harness: None,
         allow_unsandboxed: false,
         layout: LayoutMode::Auto,
@@ -120,6 +125,11 @@ fn parse_args() -> Result<Args, String> {
         match flag.as_str() {
             "-h" | "--help" => return Err(String::new()),
             "--target" => args.target = PathBuf::from(value("--target")?),
+            "--tool" => {
+                let id = value("--tool")?.to_string_lossy().into_owned();
+                harness_core::config::check_tool_id(&id).map_err(|why| format!("--tool: {why}"))?;
+                args.tool = Some(id);
+            }
             "--harness" => args.harness = Some(PathBuf::from(value("--harness")?)),
             "--allow-unsandboxed" => args.allow_unsandboxed = true,
             "--no-mouse" => args.mouse = false,
@@ -957,14 +967,27 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if !target.join("harness.toml").is_file() {
-        eprintln!(
-            "harness-tui: {} is not a harness target (no harness.toml); start with `--target \
-             <target dir>`",
-            target.display()
-        );
-        return ExitCode::from(2);
-    }
+    // The target: `--tool`, else the root's harness.toml, else the
+    // project's only mapped tool; several are listed for the person to pick
+    // in a terminal (docs/PROJECT-MAP-DESIGN.md §3.7).
+    let tool = {
+        use std::io::IsTerminal;
+        let mut stdin = std::io::stdin().lock();
+        let mut stderr = std::io::stderr();
+        let ask: Option<(&mut dyn std::io::BufRead, &mut dyn std::io::Write)> =
+            if std::io::stdin().is_terminal() {
+                Some((&mut stdin, &mut stderr))
+            } else {
+                None
+            };
+        match harness_tui::chooser::choose(&target, args.tool.as_deref(), ask) {
+            Ok(tool) => tool,
+            Err(why) => {
+                eprintln!("harness-tui: {why}");
+                return ExitCode::from(2);
+            }
+        }
+    };
     // A ledger made elsewhere is asked about first, before the terminal is
     // taken (docs/PROJECT-MAP-DESIGN.md §3.7): the same question as the
     // CLI's `--adopt`; away from a terminal it is refused in words.
@@ -999,14 +1022,15 @@ fn main() -> ExitCode {
     }
     // The first read runs here, before the terminal is taken: a target the
     // preflight refuses is refused in words.
-    let snapshot = match load::read(&target) {
+    let snapshot = match load::read_tool(&target, tool.as_deref()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("harness-tui: {} is unreadable: {e}", target.display());
             return ExitCode::from(1);
         }
     };
-    let mut loader = match Loader::spawn(load::read) {
+    let read_tool = tool.clone();
+    let mut loader = match Loader::spawn(move |t: &Path| load::read_tool(t, read_tool.as_deref())) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("harness-tui: the loader thread: {e}");
@@ -1032,6 +1056,7 @@ fn main() -> ExitCode {
             allow_unsandboxed: args.allow_unsandboxed,
             layout: args.layout,
             providers: args.providers,
+            tool,
         },
         snapshot,
     );
@@ -1055,6 +1080,7 @@ fn main() -> ExitCode {
             app.config.target.clone(),
             chats(),
         );
+        app.chat.tool = app.config.tool.clone();
     }
     // Under the guard: a signal during the setup restores after it.
     let Some(terminal) = GUARD.enable(|| {
@@ -1185,6 +1211,7 @@ mod tests {
         let mut app = App::new(
             Config {
                 target: case.clone(),
+                tool: None,
                 harness: None,
                 allow_unsandboxed: false,
                 layout: LayoutMode::Auto,
@@ -1234,6 +1261,7 @@ mod tests {
         let mut app = App::new(
             Config {
                 target: case.clone(),
+                tool: None,
                 harness: None,
                 allow_unsandboxed: false,
                 layout: LayoutMode::Auto,

@@ -836,7 +836,11 @@ mod tests {
                     .collect(),
             };
             tweak(&mut map);
-            std::fs::write(features::map_path(&self.root), map.to_bytes().unwrap()).unwrap();
+            std::fs::write(
+                features::map_path(&harness_core::ledger::Ledger::new(&self.root)),
+                map.to_bytes().unwrap(),
+            )
+            .unwrap();
         }
 
         /// u001's verdict, rewritten as if run under today's features with
@@ -1036,7 +1040,10 @@ mod tests {
             Some("1 scenario cannot run")
         );
         // Failing needs no map: the same with the map out of date.
-        std::fs::remove_file(features::map_path(&fx.root)).unwrap();
+        std::fs::remove_file(features::map_path(&harness_core::ledger::Ledger::new(
+            &fx.root,
+        )))
+        .unwrap();
         assert_eq!(state(&fx.model(), "help"), FeatureState::Failing);
     }
 

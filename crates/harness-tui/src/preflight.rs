@@ -60,13 +60,36 @@ pub const MAX_PROGRAM_FILES: usize = 50_000;
 /// writer is outside the threat model. `Err` names the first file that
 /// fails.
 pub fn preflight(target: &Path) -> Result<(), String> {
+    preflight_tool(target, None)
+}
+
+/// [`preflight`] of the target `--target <target> [--tool <tool>]` names
+/// (the lookup order of docs/PROJECT-MAP-DESIGN.md §3.7): a mapped tool's
+/// ledger is `migration/tools/<id>/`, its config the `harness.toml` there.
+pub fn preflight_tool(target: &Path, tool: Option<&str>) -> Result<(), String> {
+    use harness_core::config::{self, Found};
     let mut retained = 0u64;
     let mut hashed = 0u64;
-    let migration = target.join("migration");
-    let units = migration.join("units");
+    let found = config::find_target(target, tool).map_err(|e| e.to_string())?;
+    let migration = target.join(harness_core::ledger::MIGRATION_DIR);
     real_dir(&migration)?;
+    let migration = match &found {
+        Found::Root => migration,
+        Found::Tool(id) => {
+            real_dir(&config::tools_dir(target))?;
+            let dir = config::tool_dir(target, id);
+            real_dir(&dir)?;
+            dir
+        }
+    };
+    let ledger_paths = harness_core::ledger::Ledger::at(target, &migration);
+    let config_file = match &found {
+        Found::Root => target.join(config::CONFIG_FILE),
+        Found::Tool(_) => migration.join(config::CONFIG_FILE),
+    };
+    let units = migration.join("units");
     real_dir(&units)?;
-    retained += ledger(&target.join("harness.toml"), MAX_LEDGER_FILE_BYTES)?;
+    retained += ledger(&config_file, MAX_LEDGER_FILE_BYTES)?;
     let facts_path = migration.join("facts.jsonl");
     let plan_path = migration.join("plan.toml");
     retained += ledger(&facts_path, MAX_PROJECT_FILE_BYTES)?;
@@ -103,7 +126,7 @@ pub fn preflight(target: &Path) -> Result<(), String> {
     let features_file = features_dir.join(harness_core::features::FEATURES_FILE);
     let has_features = std::fs::symlink_metadata(&features_file).is_ok();
     retained += regular_len(&features_file).min(harness_core::features::MAX_FEATURES_BYTES);
-    retained += regular_len(&harness_core::features::map_path(target))
+    retained += regular_len(&harness_core::features::map_path(&ledger_paths))
         .min(harness_core::features::MAX_MAP_BYTES);
     // perf's files (docs/PERF-DESIGN.md §3.9: the results files count in
     // this budget): the workloads file, program.json and every
@@ -111,7 +134,7 @@ pub fn preflight(target: &Path) -> Result<(), String> {
     // refused here (a bad file is a value). A linked perf or units folder
     // is not followed: its readers refuse it.
     let perf = migration.join(harness_core::perf::PERF_DIR);
-    let workloads_file = harness_core::perf::workloads::workloads_path(target);
+    let workloads_file = harness_core::perf::workloads::workloads_path(&ledger_paths);
     let perf_meta = std::fs::symlink_metadata(&perf).ok();
     // The program digest is hashed with a workloads file, or when the
     // perf folder cannot be read (a value the read model still judges).
@@ -173,7 +196,7 @@ pub fn preflight(target: &Path) -> Result<(), String> {
         // (review T1): each file once, however many paths reach it, as the
         // digest reads it.
         if has_features || has_workloads {
-            if let Ok(ctx) = harness_core::TargetContext::load(target) {
+            if let Ok(ctx) = harness_core::TargetContext::open(target, tool) {
                 let paths = harness_core::features::program_paths(&ctx, &facts);
                 if paths.len() > MAX_PROGRAM_FILES {
                     return Err(too_much(&format!(
@@ -537,7 +560,8 @@ mod tests {
         preflight(&t).unwrap();
         // A workloads file hashes it too (perf's currency, PERF-DESIGN
         // §3.11): the same budget.
-        let workloads = harness_core::perf::workloads::workloads_path(&t);
+        let workloads =
+            harness_core::perf::workloads::workloads_path(&harness_core::ledger::Ledger::new(&t));
         std::fs::create_dir_all(workloads.parent().unwrap()).unwrap();
         std::fs::write(&workloads, harness_core::perf::workloads::STARTER).unwrap();
         let err = preflight(&t).unwrap_err();

@@ -167,6 +167,9 @@ impl UnitView {
 pub struct Snapshot {
     /// The target root.
     pub root: PathBuf,
+    /// The target's ledger folder (`migration/`, or a mapped tool's
+    /// `migration/tools/<id>/`).
+    pub ledger_dir: PathBuf,
     /// The fact model, when `harness scan` has run.
     pub facts: Option<Facts>,
     /// Its freshness.
@@ -191,17 +194,36 @@ pub struct Snapshot {
 impl Snapshot {
     /// Read the ledger of the target at `target`.
     pub fn load(target: &Path) -> Result<Snapshot, Error> {
-        let ctx = TargetContext::load(target)?;
-        let ledger = Ledger::new(&ctx.root);
+        Snapshot::open(target, None)
+    }
+
+    /// The target's ledger.
+    pub fn ledger(&self) -> Ledger {
+        Ledger::at(&self.root, &self.ledger_dir)
+    }
+
+    /// Read the ledger of the target `--target <target> [--tool <tool>]`
+    /// names. A target that lists its files is refused in one sentence
+    /// until the read model reads that form.
+    pub fn open(target: &Path, tool: Option<&str>) -> Result<Snapshot, Error> {
+        let ctx = TargetContext::open(target, tool)?;
+        let source_dir = ctx
+            .config
+            .target
+            .folder("the read model")?
+            .source_dir
+            .clone();
+        let ledger = Ledger::of(&ctx);
         let mut snapshot = Snapshot {
             root: ctx.root.clone(),
+            ledger_dir: ctx.ledger.clone(),
             facts: None,
             facts_state: None,
             units: Vec::new(),
             note: None,
             features: FeatureSnapshot::load(&ctx),
             features_now: None,
-            source_dir: ctx.config.target.source_dir.clone(),
+            source_dir,
             program_name: harness_core::features::program_name(&ctx.config),
             perf: crate::perfread::PerfRead::default(),
         };
@@ -222,7 +244,7 @@ impl Snapshot {
                     .collect()
             })
             .unwrap_or_default();
-        snapshot.perf = crate::perfread::read(&ctx.root, &perf_units, holder_command.as_deref());
+        snapshot.perf = crate::perfread::read(&ledger, &perf_units, holder_command.as_deref());
         let facts = match Facts::load(&ledger.facts_path()) {
             Ok(f) => f,
             Err(e) if e.is_not_found() => {

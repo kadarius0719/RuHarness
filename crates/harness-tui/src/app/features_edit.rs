@@ -36,25 +36,27 @@ impl DraftKind {
         }
     }
 
-    /// The file, target-relative, as the dialogs name it.
-    pub fn rel_path(self) -> &'static str {
+    /// The file, target-relative, as the dialogs name it
+    /// (`migration/features/features.toml`, or under a tool's ledger).
+    pub fn rel_path(self, config: &crate::app::Config) -> String {
+        let path = self.path(config);
+        path.strip_prefix(&config.target)
+            .unwrap_or(&path)
+            .display()
+            .to_string()
+    }
+
+    fn dir(self, config: &crate::app::Config) -> PathBuf {
         match self {
-            DraftKind::Features => "migration/features/features.toml",
-            DraftKind::Workloads => "migration/perf/workloads.toml",
+            DraftKind::Features => features::features_dir(&config.ledger()),
+            DraftKind::Workloads => harness_core::perf::perf_dir(&config.ledger()),
         }
     }
 
-    fn dir(self, root: &Path) -> PathBuf {
+    fn path(self, config: &crate::app::Config) -> PathBuf {
         match self {
-            DraftKind::Features => features::features_dir(root),
-            DraftKind::Workloads => harness_core::perf::perf_dir(root),
-        }
-    }
-
-    fn path(self, root: &Path) -> PathBuf {
-        match self {
-            DraftKind::Features => features::features_path(root),
-            DraftKind::Workloads => workloads::workloads_path(root),
+            DraftKind::Features => features::features_path(&config.ledger()),
+            DraftKind::Workloads => workloads::workloads_path(&config.ledger()),
         }
     }
 
@@ -80,9 +82,10 @@ impl DraftKind {
         }
     }
 
-    fn starter(self, root: &Path) -> String {
+    fn starter(self, config: &crate::app::Config) -> String {
         match self {
-            DraftKind::Features => harness_core::TargetConfig::load(root)
+            DraftKind::Features => config
+                .target_config()
                 .map(|c| features::starter(&c))
                 .unwrap_or_default(),
             DraftKind::Workloads => workloads::STARTER.to_string(),
@@ -276,8 +279,8 @@ impl App {
             return Command::None;
         }
         let root = self.config.target.clone();
-        let dir = kind.dir(&root);
-        let path = kind.path(&root);
+        let dir = kind.dir(&self.config);
+        let path = kind.path(&self.config);
         for p in [&dir, &path] {
             if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
                 self.notice = notice(format!(
@@ -293,7 +296,7 @@ impl App {
                     String::from_utf8_lossy(&bytes).into_owned(),
                     harness_core::hash::bytes_hash(&bytes),
                 ),
-                Err(e) if e.is_not_found() => (kind.starter(&root), "none".to_string()),
+                Err(e) if e.is_not_found() => (kind.starter(&self.config), "none".to_string()),
                 Err(e) => {
                     self.notice = notice(format!("the {noun} file cannot be read: {e}"));
                     return Command::None;
@@ -335,7 +338,7 @@ impl App {
         let body = vec![
             format!(
                 "The cockpit steps aside and {name} opens a private copy of {}.",
-                kind.rel_path()
+                kind.rel_path(&self.config)
             ),
             editor_instructions(&name),
             "When you come back, the cockpit checks it and asks before saving it.".into(),
@@ -613,7 +616,7 @@ impl App {
         let Ok(new) = features::parse(&text, Path::new("features.toml")) else {
             return ("Save the features file?".into(), vec![]);
         };
-        let config = harness_core::TargetConfig::load(&self.config.target).ok();
+        let config = self.config.target_config().ok();
         let new_digest = config.as_ref().map(|c| features::features_digest(&new, c));
         let old_digest = match &self.snapshot.features {
             features::FeatureSnapshot::Valid { digest, .. } => Some(digest.clone()),
@@ -729,7 +732,7 @@ impl App {
     /// The blake3 of the `kind` file's bytes now, `none` when there is none,
     /// `None` when it cannot be read.
     fn file_digest(&self, kind: DraftKind) -> Option<String> {
-        let path = kind.path(&self.config.target);
+        let path = kind.path(&self.config);
         match harness_core::ledger::read_regular(&path, kind.max_bytes() + 1) {
             Ok(bytes) => Some(harness_core::hash::bytes_hash(&bytes)),
             Err(e) if e.is_not_found() => Some("none".into()),
@@ -841,7 +844,12 @@ mod tests {
             c.body
         );
         // The target's file is untouched until the CLI saves it.
-        assert!(!harness_core::features::features_path(&app.config.target).exists());
+        assert!(
+            !harness_core::features::features_path(&harness_core::ledger::Ledger::new(
+                &app.config.target
+            ))
+            .exists()
+        );
         // Saved: the draft goes.
         let tmp = app.features_draft.as_ref().unwrap().tmp.clone();
         assert_eq!(
@@ -982,7 +990,9 @@ mod tests {
         app.features_edited(ok());
         close(&mut app, Choice::Run);
         // Meanwhile, someone else wrote the file.
-        let path = harness_core::features::features_path(&app.config.target);
+        let path = harness_core::features::features_path(&harness_core::ledger::Ledger::new(
+            &app.config.target,
+        ));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let theirs = GOOD.replace("Show the help", "Their help");
         std::fs::write(&path, &theirs).unwrap();
@@ -1105,7 +1115,9 @@ mod tests {
         std::fs::write(&file, GOOD).unwrap();
         app.features_edited(ok());
         close(&mut app, Choice::Run);
-        let path = harness_core::features::features_path(&app.config.target);
+        let path = harness_core::features::features_path(&harness_core::ledger::Ledger::new(
+            &app.config.target,
+        ));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, GOOD.replace("Show the help", "Theirs")).unwrap();
         app.features_save_ended(DraftKind::Features, false, GOOD);

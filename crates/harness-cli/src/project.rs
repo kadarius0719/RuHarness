@@ -36,7 +36,9 @@ pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
     projectmap::refuse_root(&root)?;
     require_sandbox(allow_unsandboxed, "project map")?;
     let folder = if root.join("harness.toml").is_file() {
-        TargetConfig::load(&root)?.target.source_dir
+        // A file-list target at the root: the whole root is its folder.
+        let config = TargetConfig::load(&root)?;
+        config.target.source_dir().unwrap_or(".").to_string()
     } else {
         ".".to_string()
     };

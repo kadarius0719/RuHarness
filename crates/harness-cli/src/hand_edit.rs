@@ -3,7 +3,7 @@
 //! judged by the migrate stage's one judge and recorded as a labelled
 //! `human` attempt that the benchmark never counts as the pipeline's.
 
-use crate::{lock_ledger, out, promote, report, require_sandbox, EXIT_ORACLE_RED};
+use crate::{lock_ledger, out, promote, report, require_sandbox, TargetArg, EXIT_ORACLE_RED};
 use anyhow::{bail, Context, Result};
 use harness_core::attempts;
 use harness_core::ledger::Ledger;
@@ -18,12 +18,12 @@ pub(crate) fn cmd_override(
     unit_id: String,
     dir: PathBuf,
     note: Option<String>,
-    target: PathBuf,
+    target: TargetArg,
     allow_unsandboxed: bool,
 ) -> Result<u8> {
     require_sandbox(allow_unsandboxed, "harness override")?;
-    let ctx = TargetContext::load(&target)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ctx = target.load_folder("harness override")?;
+    let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("override {unit_id}"))?;
     let plan_doc = Plan::load(&ledger.plan_path())?;
     plan_doc
@@ -121,7 +121,7 @@ fn read_hand_edit(ctx: &TargetContext, unit: &Unit, dir: &Path) -> Result<(Strin
     let dir = dir
         .canonicalize()
         .with_context(|| format!("reading {}", dir.display()))?;
-    let ledger_dir = Ledger::new(&ctx.root).dir();
+    let ledger_dir = Ledger::of(ctx).dir();
     if let Ok(ledger_dir) = ledger_dir.canonicalize() {
         if dir.starts_with(&ledger_dir) {
             bail!(

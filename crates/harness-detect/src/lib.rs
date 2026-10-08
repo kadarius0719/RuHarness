@@ -113,7 +113,8 @@ impl Detector for CTreeSitterSuite {
     }
 
     fn detect(&self, target: &TargetContext, facts: &Facts) -> Result<Vec<Finding>, Error> {
-        let src_dir = target.root.join(&target.config.target.source_dir);
+        let folder = target.config.target.folder("the detectors")?;
+        let src_dir = target.root.join(&folder.source_dir);
         let mut abs_files: Vec<PathBuf> = Vec::new();
         collect_source_files(&src_dir, &mut abs_files)?;
         let mut files: Vec<(String, PathBuf)> = Vec::with_capacity(abs_files.len());

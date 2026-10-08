@@ -14,7 +14,6 @@ use crate::reads;
 use crate::rpc::{self, Frame, Incoming};
 use crate::tools::{self, Tool, ANSWERING_RULE, UNTRUSTED_RULE};
 use harness_core::attempts;
-use harness_core::ledger::Ledger;
 use harness_core::TargetContext;
 use harness_tui::events::Event;
 use harness_tui::model::Snapshot;
@@ -394,7 +393,7 @@ impl<W: Write> Server<W> {
     /// Before any read or act: a ledger made elsewhere is refused with the
     /// CLI's sentence — harness-mcp never adopts (an agent is not the
     /// person; docs/PROJECT-MAP-DESIGN.md §3.7) — then the size preflight.
-    fn preflight(target: &Path) -> Result<(), Refusal> {
+    fn preflight(&self, target: &Path) -> Result<(), Refusal> {
         harness_core::adopt::check(target).map_err(|e| Refusal {
             kind: if matches!(e, harness_core::Error::NotAdopted { .. }) {
                 "not-adopted"
@@ -403,7 +402,7 @@ impl<W: Write> Server<W> {
             },
             message: e.to_string(),
         })?;
-        policy::preflight(target).map_err(|message| Refusal {
+        policy::preflight_tool(target, self.cfg.tool_for(target)).map_err(|message| Refusal {
             kind: "unreadable",
             message,
         })
@@ -411,13 +410,14 @@ impl<W: Write> Server<W> {
 
     fn read(&self, tool: &str, args: &Map<String, Value>) -> Result<Value, Refusal> {
         let target = self.target(args)?;
-        Self::preflight(&target)?;
-        let snapshot = Snapshot::load(&target).map_err(|e| Refusal {
-            kind: "unreadable",
-            message: e.to_string(),
-        })?;
+        self.preflight(&target)?;
+        let snapshot =
+            Snapshot::open(&target, self.cfg.tool_for(&target)).map_err(|e| Refusal {
+                kind: "unreadable",
+                message: e.to_string(),
+            })?;
         if tool == "harness_status" {
-            let mut routing = match TargetContext::load(&target) {
+            let mut routing = match TargetContext::open(&target, self.cfg.tool_for(&target)) {
                 Ok(ctx) => reads::routing(&ctx.config, &self.cfg.providers),
                 Err(e) => json!({"error": short("config", &e.to_string())}),
             };
@@ -447,7 +447,7 @@ impl<W: Write> Server<W> {
                 .and_then(Value::as_u64)
                 .map_or(1, |n| n.max(1));
             reads::request(
-                &target,
+                &self.cfg.ledger_for(&target),
                 arg(args, "unit").unwrap_or_default(),
                 arg(args, "attempt").unwrap_or_default(),
                 arg(args, "request_key").unwrap_or_default(),
@@ -517,7 +517,7 @@ impl<W: Write> Server<W> {
                     ));
                 }
                 let target = self.target(args)?;
-                Self::preflight(&target)?;
+                self.preflight(&target)?;
                 let steer = SteerArgs {
                     unit,
                     from: arg(args, "from").unwrap_or_default(),
@@ -536,13 +536,11 @@ impl<W: Write> Server<W> {
                 {
                     return Err(Refusal::refused("unit and attempt must be clean ids").into());
                 }
-                Self::preflight(&target)?;
-                let records =
-                    attempts::load_unit_attempts(&Ledger::new(&target), unit).map_err(|e| {
-                        Refusal {
-                            kind: "unreadable",
-                            message: e.to_string(),
-                        }
+                self.preflight(&target)?;
+                let records = attempts::load_unit_attempts(&self.cfg.ledger_for(&target), unit)
+                    .map_err(|e| Refusal {
+                        kind: "unreadable",
+                        message: e.to_string(),
                     })?;
                 let record = records
                     .iter()
@@ -626,7 +624,7 @@ impl<W: Write> Server<W> {
                     ))
                     .into());
                 }
-                Self::preflight(&h.posed.target)?;
+                self.preflight(&h.posed.target)?;
                 // Filed by the CLI (`--answer=-`, the reply on its stdin):
                 // harness-mcp writes nothing in the ledger, nor any file
                 // (docs/CHAT-PANE-DESIGN.md §4.4).
@@ -650,7 +648,7 @@ impl<W: Write> Server<W> {
             }
             _ => {
                 let target = self.target(args)?;
-                Self::preflight(&target)?;
+                self.preflight(&target)?;
                 let replace = args.get("replace").and_then(Value::as_bool) == Some(true);
                 let attempt = arg(args, "attempt").unwrap_or_default();
                 let argv = acts::promote_argv(&self.cfg, &target, unit, attempt, replace)?;
@@ -864,6 +862,7 @@ mod tests {
         harness_core::adopt::testing::adoption_file();
         Config {
             target: repo().join("targets/zopfli"),
+            tool: None,
             target_roots: vec![repo().join("targets/tractor/cases")],
             harness: Some(harness),
             providers: providers.iter().map(|p| p.to_string()).collect(),

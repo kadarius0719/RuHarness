@@ -34,8 +34,8 @@ pub const DEFAULT_RUNS: u32 = 15;
 pub const INPUT_ARG: &str = "{input}";
 
 /// `migration/perf/workloads.toml` under `root`.
-pub fn workloads_path(root: &Path) -> PathBuf {
-    super::perf_dir(root).join(WORKLOADS_FILE)
+pub fn workloads_path(ledger: &crate::ledger::Ledger) -> PathBuf {
+    super::perf_dir(ledger).join(WORKLOADS_FILE)
 }
 
 /// One workload: a command line and at most one input file.
@@ -126,8 +126,8 @@ impl WorkloadsState {
 /// Load and validate `migration/perf/workloads.toml` under `root`. An I/O
 /// failure, a link in place of the folder or the file, or a file over the
 /// cap is an error; a newer `schema_version` an [`Error::SchemaTooNew`].
-pub fn load(root: &Path) -> Result<WorkloadsState, Error> {
-    let dir = super::perf_dir(root);
+pub fn load(ledger: &crate::ledger::Ledger) -> Result<WorkloadsState, Error> {
+    let dir = super::perf_dir(ledger);
     match std::fs::symlink_metadata(&dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(WorkloadsState::NoFile),
         Err(e) => return Err(Error::io(&dir, e)),
@@ -139,7 +139,7 @@ pub fn load(root: &Path) -> Result<WorkloadsState, Error> {
         }
         Ok(_) => {}
     }
-    let path = workloads_path(root);
+    let path = workloads_path(ledger);
     match std::fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(WorkloadsState::NoFile),
         Err(e) => return Err(Error::io(&path, e)),
@@ -848,25 +848,29 @@ mod tests {
     fn the_states_and_their_words() {
         let dir = std::env::temp_dir().join(format!("perf-w-{}", crate::hash::random_hex(6)));
         std::fs::create_dir_all(&dir).expect("dir");
-        assert_eq!(load(&dir).expect("load"), WorkloadsState::NoFile);
+        assert_eq!(
+            load(&crate::ledger::Ledger::new(&dir)).expect("load"),
+            WorkloadsState::NoFile
+        );
         assert!(WorkloadsState::NoFile
             .blocker()
             .expect("words")
             .contains("harness perf init"));
-        std::fs::create_dir_all(super::super::perf_dir(&dir)).expect("perf dir");
-        std::fs::write(workloads_path(&dir), STARTER).expect("write");
-        let state = load(&dir).expect("load");
+        std::fs::create_dir_all(super::super::perf_dir(&crate::ledger::Ledger::new(&dir)))
+            .expect("perf dir");
+        std::fs::write(workloads_path(&crate::ledger::Ledger::new(&dir)), STARTER).expect("write");
+        let state = load(&crate::ledger::Ledger::new(&dir)).expect("load");
         assert_eq!(state, WorkloadsState::NoWorkload);
         assert!(state
             .blocker()
             .expect("words")
             .contains("add a [[workload]]"));
         std::fs::write(
-            workloads_path(&dir),
+            workloads_path(&crate::ledger::Ledger::new(&dir)),
             "schema_version = 1\n[[workload]]\nid = \"A\"\n",
         )
         .expect("write");
-        let state = load(&dir).expect("load");
+        let state = load(&crate::ledger::Ledger::new(&dir)).expect("load");
         let words = state.blocker().expect("words");
         assert!(
             words.starts_with("migration/perf/workloads.toml line 3, column 6:")
@@ -875,18 +879,22 @@ mod tests {
         );
         // A newer file with a key of its own: upgrade the harness, not "fix
         // it".
-        std::fs::write(workloads_path(&dir), "schema_version = 2\nprofile = 1\n").expect("write");
+        std::fs::write(
+            workloads_path(&crate::ledger::Ledger::new(&dir)),
+            "schema_version = 2\nprofile = 1\n",
+        )
+        .expect("write");
         assert!(matches!(
-            load(&dir),
+            load(&crate::ledger::Ledger::new(&dir)),
             Err(Error::SchemaTooNew { found: 2, .. })
         ));
         std::fs::write(
-            workloads_path(&dir),
+            workloads_path(&crate::ledger::Ledger::new(&dir)),
             "schema_version = 1\n[[workload]]\nid = \"a\"\n",
         )
         .expect("write");
         assert!(matches!(
-            load(&dir).expect("load"),
+            load(&crate::ledger::Ledger::new(&dir)).expect("load"),
             WorkloadsState::Ready(_)
         ));
         std::fs::remove_dir_all(&dir).ok();

@@ -79,7 +79,16 @@ fn harness_argv(cfg: &Config, rest: Vec<OsString>) -> Result<Vec<OsString>, Refu
         message: "no `harness` binary (PATH, next to harness-mcp, or --harness): read-only".into(),
     })?;
     let mut argv = vec![harness.clone().into_os_string(), os("--json")];
-    argv.extend(rest);
+    // The server's own target carries its tool, attached right after it
+    // (docs/PROJECT-MAP-DESIGN.md §3.7); a call's other target has none.
+    let own = attached("--target", &cfg.target);
+    for arg in rest {
+        let is_own = arg == own;
+        argv.push(arg);
+        if let (true, Some(tool)) = (is_own, &cfg.tool) {
+            argv.push(attached("--tool", tool));
+        }
+    }
     if cfg.allow_unsandboxed {
         argv.push(os("--allow-unsandboxed"));
     }
@@ -615,6 +624,7 @@ mod tests {
     fn cfg() -> Config {
         Config {
             target: PathBuf::from("/t"),
+            tool: None,
             target_roots: Vec::new(),
             harness: Some(PathBuf::from("/bin/harness")),
             providers: vec!["external".into()],

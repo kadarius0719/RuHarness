@@ -605,7 +605,7 @@ pub fn left_out_today(u: &UnitView) -> Option<&'static str> {
 /// Build Speed from `snapshot`.
 pub fn build(snapshot: &Snapshot) -> SpeedModel {
     let perf = &snapshot.perf;
-    let perf_dir = harness_core::perf::perf_dir(&snapshot.root);
+    let perf_dir = harness_core::perf::perf_dir(&snapshot.ledger());
     let mut model = SpeedModel {
         group: Group::NoFile,
         c_rows: Vec::new(),
@@ -1033,7 +1033,7 @@ mod tests {
     #[test]
     fn without_facts_the_held_units_are_not_checked_never_left_out() {
         let target = crate::testutil::scratch_target("targets/zopfli", "speed-no-facts");
-        let perf = harness_core::perf::perf_dir(&target);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&target));
         std::fs::create_dir_all(target.join("bench")).unwrap();
         std::fs::write(target.join("bench/big.txt"), "big ".repeat(1000)).unwrap();
         std::fs::create_dir_all(&perf).unwrap();
@@ -1166,7 +1166,7 @@ mod tests {
     /// a C-alone row, an as-it-stands row holding u001.
     fn probe_target(tag: &str, c_alone: bool, as_it_stands: bool) -> std::path::PathBuf {
         let target = crate::testutil::scratch_target("targets/zopfli", tag);
-        let perf = harness_core::perf::perf_dir(&target);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&target));
         std::fs::create_dir_all(target.join("bench")).unwrap();
         std::fs::write(target.join("bench/big.txt"), "big ".repeat(1000)).unwrap();
         std::fs::create_dir_all(&perf).unwrap();
@@ -1223,7 +1223,7 @@ mod tests {
     #[test]
     fn without_facts_the_units_rows_and_unreadable_files_are_shown() {
         let t = probe_target("speed-units-no-facts", true, false);
-        let perf = harness_core::perf::perf_dir(&t);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&t));
         let mut file = results::UnitResults::new("u001-katajainen");
         file.rows = vec![unit_row()];
         results::write_unit(&results::unit_path(&perf, "u001-katajainen"), &file).unwrap();
@@ -1342,7 +1342,7 @@ mod tests {
     #[test]
     fn the_units_folder_and_unit_files_are_named_in_plan_order() {
         let t = probe_target("speed-unreadable-order", true, false);
-        let perf = harness_core::perf::perf_dir(&t);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&t));
         let plan = t.join("migration/plan.toml");
         let mut text = std::fs::read_to_string(&plan).unwrap();
         std::fs::create_dir_all(perf.join(results::UNITS_DIR)).unwrap();

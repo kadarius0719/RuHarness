@@ -80,7 +80,8 @@ fn map_inner(
     // The facts name files by the configured `source_dir`, the mirror by the
     // path under the canonical one: a `source_dir` reached through a link or
     // spelled in another case would probe nothing (fix check 4 F5).
-    let configured = Path::new(&target.config.target.source_dir);
+    let source_dir = &target.config.target.folder("the features map")?.source_dir;
+    let configured = Path::new(source_dir);
     let configured = configured
         .strip_prefix(&target.root)
         .or_else(|_| configured.strip_prefix(&root))
@@ -98,12 +99,12 @@ fn map_inner(
             "source_dir = {:?} resolves to {} (through a link, or in another case): the \
              features map finds functions by the path the scan recorded — set source_dir to \
              {:?}",
-            target.config.target.source_dir,
+            source_dir,
             canonical.display(),
             canonical.display().to_string()
         )));
     }
-    let build = scratch_dir(&root)?;
+    let build = scratch_dir(&Ledger::of_under(target, &root))?;
     // Everything made after the mirror goes to a fresh folder outside the
     // target, out of reach of the copy's -I folders; removed on every way out
     // (docs/FEATURES-PROBE-REDESIGN.md §3.4 "Order").
@@ -794,9 +795,10 @@ pub(crate) fn path_text(p: &Path) -> Result<String, Error> {
     path_string(p)
 }
 
-/// `migration/build/.features/`, recreated, canonical and contained.
-fn scratch_dir(root: &Path) -> Result<PathBuf, Error> {
-    let build_root_raw = Ledger::new(root.to_path_buf()).build_dir();
+/// The ledger's `build/.features/`, recreated, canonical and contained.
+fn scratch_dir(ledger: &Ledger) -> Result<PathBuf, Error> {
+    let root = ledger.target_root();
+    let build_root_raw = ledger.build_dir();
     std::fs::create_dir_all(&build_root_raw).map_err(|e| Error::io(&build_root_raw, e))?;
     let build_root = inside(
         FEATURES_BUILD_DIR,

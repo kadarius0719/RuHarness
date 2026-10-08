@@ -37,17 +37,18 @@ pub(crate) fn check_plan_size(units: usize) -> Result<(), Error> {
     Ok(())
 }
 
-/// `migration/build/` resolved inside `root` (made when missing).
-fn build_root(root: &Path) -> Result<PathBuf, Error> {
-    let raw = Ledger::new(root.to_path_buf()).build_dir();
+/// The ledger's `build/` resolved inside the target root (made when
+/// missing).
+fn build_root(ledger: &Ledger) -> Result<PathBuf, Error> {
+    let raw = ledger.build_dir();
     std::fs::create_dir_all(&raw).map_err(|e| Error::io(&raw, e))?;
-    inside("perf", "ledger build dir", &raw, root)
+    inside("perf", "ledger build dir", &raw, ledger.target_root())
 }
 
 /// A folder in `migration/build/`: a link or a non-folder in its place is
 /// removed; `fresh` empties it too. Canonical and contained.
-fn build_folder(root: &Path, name: &str, fresh: bool) -> Result<PathBuf, Error> {
-    let build_root = build_root(root)?;
+fn build_folder(ledger: &Ledger, name: &str, fresh: bool) -> Result<PathBuf, Error> {
+    let build_root = build_root(ledger)?;
     let raw = build_root.join(name);
     match std::fs::symlink_metadata(&raw) {
         Ok(m) if m.file_type().is_symlink() || !m.is_dir() => {
@@ -64,19 +65,19 @@ fn build_folder(root: &Path, name: &str, fresh: bool) -> Result<PathBuf, Error> 
 }
 
 /// `migration/build/.perf/`, made fresh.
-pub(crate) fn perf_scratch(root: &Path) -> Result<PathBuf, Error> {
-    build_folder(root, PERF_BUILD_DIR, true)
+pub(crate) fn perf_scratch(ledger: &Ledger) -> Result<PathBuf, Error> {
+    build_folder(ledger, PERF_BUILD_DIR, true)
 }
 
 /// `migration/build/.perf-out/`, kept between runs.
-pub(crate) fn perf_out(root: &Path) -> Result<PathBuf, Error> {
-    build_folder(root, PERF_OUT_DIR, false)
+pub(crate) fn perf_out(ledger: &Ledger) -> Result<PathBuf, Error> {
+    build_folder(ledger, PERF_OUT_DIR, false)
 }
 
 /// `migration/build/perf-logs/`, kept between runs; the oldest logs past
 /// [`KEPT_LOGS`] are removed.
-pub(crate) fn perf_logs(root: &Path) -> Result<PathBuf, Error> {
-    let dir = build_folder(root, PERF_LOGS_DIR, false)?;
+pub(crate) fn perf_logs(ledger: &Ledger) -> Result<PathBuf, Error> {
+    let dir = build_folder(ledger, PERF_LOGS_DIR, false)?;
     let mut logs: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&dir)
         .map_err(|e| Error::io(&dir, e))?
         .filter_map(|e| e.ok())
@@ -317,7 +318,7 @@ mod tests {
         harness_core::adopt::testing::adopt(&root);
         let target = harness_core::TargetContext::load(&root).expect("target");
         let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
-        let scratch = perf_scratch(&root).expect("scratch");
+        let scratch = perf_scratch(&harness_core::ledger::Ledger::new(&root)).expect("scratch");
         let obj = sub_folder(&scratch, "obj").expect("obj");
         let c_files = crate::program_c_files_in(&base, "perf").expect("c files");
         let objects = compile_objects(&base, bench.runner(), &c_files, &obj)
@@ -450,7 +451,7 @@ mod tests {
         harness_core::adopt::testing::adopt(&root);
         let target = harness_core::TargetContext::load(&root).expect("target");
         let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
-        let scratch = perf_scratch(&root).expect("scratch");
+        let scratch = perf_scratch(&harness_core::ledger::Ledger::new(&root)).expect("scratch");
         let obj = sub_folder(&scratch, "obj").expect("obj");
         let c_files = crate::program_c_files_in(&base, "perf").expect("c files");
         assert_eq!(c_files.len(), 2, "{c_files:?}");
@@ -525,26 +526,29 @@ mod tests {
         // A link in .perf's place is removed, never followed.
         std::os::unix::fs::symlink(base.join("elsewhere"), root.join("migration/build/.perf"))
             .expect("link");
-        let scratch = perf_scratch(&root).expect("scratch");
+        let scratch = perf_scratch(&harness_core::ledger::Ledger::new(&root)).expect("scratch");
         assert!(scratch.starts_with(&root));
         assert!(!std::fs::symlink_metadata(&scratch)
             .expect("meta")
             .file_type()
             .is_symlink());
         std::fs::write(scratch.join("old"), b"x").expect("write");
-        let again = perf_scratch(&root).expect("scratch");
+        let again = perf_scratch(&harness_core::ledger::Ledger::new(&root)).expect("scratch");
         assert!(!again.join("old").exists(), "made fresh");
         // .perf-out is kept.
-        let out = perf_out(&root).expect("out");
+        let out = perf_out(&harness_core::ledger::Ledger::new(&root)).expect("out");
         std::fs::write(out.join("keep"), b"x").expect("write");
-        assert!(perf_out(&root).expect("out").join("keep").exists());
+        assert!(perf_out(&harness_core::ledger::Ledger::new(&root))
+            .expect("out")
+            .join("keep")
+            .exists());
         // Logs: the oldest past 20 go.
-        let logs = perf_logs(&root).expect("logs");
+        let logs = perf_logs(&harness_core::ledger::Ledger::new(&root)).expect("logs");
         for i in 0..25 {
             std::fs::write(logs.join(format!("{i:02}.log")), b"x").expect("write");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let logs = perf_logs(&root).expect("logs");
+        let logs = perf_logs(&harness_core::ledger::Ledger::new(&root)).expect("logs");
         let left = std::fs::read_dir(&logs).expect("read").count();
         assert_eq!(left, KEPT_LOGS - 1, "room for this run's log");
         assert!(!logs.join("00.log").exists() && logs.join("24.log").exists());

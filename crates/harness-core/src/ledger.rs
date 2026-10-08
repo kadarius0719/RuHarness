@@ -105,23 +105,58 @@ pub const MIGRATION_DIR: &str = "migration";
 /// File name of the writer lock inside the ledger dir (gitignored).
 pub const LOCK_FILE: &str = ".lock";
 
-/// Path helpers over a target root. Pure path arithmetic, no I/O.
+/// Path helpers over a ledger folder. Pure path arithmetic, no I/O.
 #[derive(Debug, Clone)]
 pub struct Ledger {
     root: PathBuf,
+    dir: PathBuf,
 }
 
 impl Ledger {
-    /// A ledger rooted at the given target repository root.
+    /// The ledger of a folder-form target: `<target_root>/migration/`.
+    /// A target that was loaded uses [`Ledger::of`], which is right for a
+    /// mapped tool too.
     pub fn new(target_root: impl Into<PathBuf>) -> Ledger {
+        let root = target_root.into();
         Ledger {
-            root: target_root.into(),
+            dir: root.join(MIGRATION_DIR),
+            root,
         }
     }
 
-    /// `<root>/migration/`.
+    /// The ledger of a loaded target: its ledger folder
+    /// (`migration/` or `migration/tools/<id>/`, docs/SCHEMAS.md "Ledger
+    /// layout").
+    pub fn of(ctx: &crate::config::TargetContext) -> Ledger {
+        Ledger {
+            root: ctx.root.clone(),
+            dir: ctx.ledger.clone(),
+        }
+    }
+
+    /// The ledger folder `dir` of the target at `root`.
+    pub fn at(root: impl Into<PathBuf>, dir: impl Into<PathBuf>) -> Ledger {
+        Ledger {
+            root: root.into(),
+            dir: dir.into(),
+        }
+    }
+
+    /// The ledger of a loaded target over another spelling of its root (the
+    /// canonical one a caller resolved): the same ledger folder, under
+    /// `root`.
+    pub fn of_under(ctx: &crate::config::TargetContext, root: impl Into<PathBuf>) -> Ledger {
+        let root = root.into();
+        Ledger {
+            dir: root.join(ctx.ledger_rel()),
+            root,
+        }
+    }
+
+    /// The ledger folder: `<root>/migration/` or
+    /// `<root>/migration/tools/<id>/`.
     pub fn dir(&self) -> PathBuf {
-        self.root.join(MIGRATION_DIR)
+        self.dir.clone()
     }
 
     /// The canonical committed fact file.

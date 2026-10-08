@@ -191,7 +191,7 @@ fn cmd_boundary(suite_dir: &Path, only: &[String]) -> Result<u8> {
         }
         let root = root_raw.canonicalize()?;
         let ctx = TargetContext::load(&root)?;
-        let ledger = Ledger::new(&ctx.root);
+        let ledger = Ledger::of(&ctx);
         let _lock = lock_ledger(&ledger, "bench boundary")?;
         let plan = Plan::load(&ledger.plan_path())?;
         let Some(unit) = plan.units.iter().find(|u| u.symbols.contains(&case.symbol)) else {
@@ -399,10 +399,10 @@ fn cmd_init(suite_dir: &Path, check: bool) -> Result<u8> {
 /// Scan + plan one case target and give each unit its default oracle table.
 fn init_case(root: &Path, case: &SuiteCase) -> Result<()> {
     let ctx = TargetContext::load(root)?;
-    let _lock = lock_ledger(&Ledger::new(&ctx.root), "bench init")?;
+    let _lock = lock_ledger(&Ledger::of(&ctx), "bench init")?;
     crate::scan_target(&ctx)?;
     crate::plan_target(&ctx)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ledger = Ledger::of(&ctx);
     let plan = Plan::load(&ledger.plan_path())?;
     // R3: the runner's symbol must be one the plan migrates.
     if !plan.units.iter().any(|u| u.symbols.contains(&case.symbol)) {
@@ -417,7 +417,11 @@ fn init_case(root: &Path, case: &SuiteCase) -> Result<()> {
         plan_mod::set_oracle_table_if_absent(
             &ledger.plan_path(),
             &unit.id,
-            &crate::gen_driver::default_oracle_entries(&unit.id, &unit.files),
+            &crate::gen_driver::default_oracle_entries(
+                harness_core::ledger::MIGRATION_DIR,
+                &unit.id,
+                &unit.files,
+            ),
         )?;
     }
     Ok(())
@@ -430,7 +434,7 @@ pub fn driver_state(
     facts: &Facts,
     unit: &harness_core::Unit,
 ) -> Result<String> {
-    let ledger = Ledger::new(&ctx.root);
+    let ledger = Ledger::of(ctx);
     let path = ledger.driver_validation_path(&unit.id);
     if !path.exists() {
         return Ok("missing".into());
@@ -488,7 +492,7 @@ fn case_status(root: &Path) -> Result<String> {
         return Ok("uninitialized".into());
     }
     let ctx = TargetContext::load(root)?;
-    let ledger = Ledger::new(&ctx.root);
+    let ledger = Ledger::of(&ctx);
     if !ledger.plan_path().exists() || !ledger.facts_path().exists() {
         return Ok("unplanned".into());
     }
@@ -579,7 +583,7 @@ fn score_one(scorer: &Scorer, suite_dir: &Path, case: &SuiteCase, recheck: bool)
     let mut candidate_lib: Option<PathBuf> = None;
     if root.join("harness.toml").exists() && Ledger::new(&root).plan_path().exists() {
         let ctx = TargetContext::load(&root)?;
-        let ledger = Ledger::new(&ctx.root);
+        let ledger = Ledger::of(&ctx);
         let plan = Plan::load(&ledger.plan_path())?;
         let facts = Facts::load(&ledger.facts_path())?;
         if let Some(unit) = plan.units.iter().find(|u| u.symbols.contains(&case.symbol)) {
@@ -1311,7 +1315,7 @@ fn replay_all(suite_dir: &Path) -> Result<Vec<String>> {
             continue;
         }
         let ctx = TargetContext::load(&root)?;
-        let ledger = Ledger::new(&ctx.root);
+        let ledger = Ledger::of(&ctx);
         let plan = Plan::load(&ledger.plan_path())?;
         let facts = Facts::load(&ledger.facts_path())?;
         for unit in &plan.units {

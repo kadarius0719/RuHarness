@@ -338,7 +338,7 @@ fn blind_pending(snapshot: &Snapshot, u: &UnitView) -> usize {
         .iter()
         .filter(|a| blind_hand_off_pending(a))
         .count();
-    let ledger = harness_core::ledger::Ledger::new(&snapshot.root);
+    let ledger = snapshot.ledger();
     let drivers = harness_core::attempts::load_unit_driver_attempts(&ledger, &u.unit.id)
         .map(|records| {
             records
@@ -770,18 +770,17 @@ fn request_pages(parts: [&str; 2], budget: usize) -> Vec<[Option<(usize, usize)>
 /// (1-based) of its system prompt, then its user message; every text
 /// fenced.
 pub fn request(
-    target: &std::path::Path,
+    ledger: &harness_core::ledger::Ledger,
     unit: &str,
     attempt: &str,
     key: &str,
     page: u64,
 ) -> Result<Value, String> {
     use harness_core::attempts;
-    let ledger = harness_core::ledger::Ledger::new(target);
     if !harness_core::plan::is_clean_segment(unit) {
         return Err("`unit` must be a clean id".into());
     }
-    let record = attempts::load_pinned(&ledger, unit, attempt)
+    let record = attempts::load_pinned(ledger, unit, attempt)
         .map_err(|e| e.to_string())?
         .ok_or("no such attempt of this unit")?;
     if record.requester.as_deref() != Some(attempts::REQUESTER_CHAT) {
@@ -1001,7 +1000,9 @@ mod tests {
                 .unwrap()
         };
         store(&rec);
-        let read = |key: &str, page: u64| request(&t, "u1", &id, key, page);
+        let read = |key: &str, page: u64| {
+            request(&harness_core::ledger::Ledger::new(&t), "u1", &id, key, page)
+        };
         let schema = crate::tools::tools(&["external".to_string()])
             .into_iter()
             .find(|t| t.name == "harness_request")
@@ -1074,7 +1075,16 @@ mod tests {
         big_rec.id =
             attempts::attempt_id_with("u1", "s", "d", "external", "m-1", &big_key, Some("chat"));
         store(&big_rec);
-        let page = |n: u64| request(&t, "u1", &big_rec.id, &big_key, n).unwrap();
+        let page = |n: u64| {
+            request(
+                &harness_core::ledger::Ledger::new(&t),
+                "u1",
+                &big_rec.id,
+                &big_key,
+                n,
+            )
+            .unwrap()
+        };
         let p1 = page(1);
         assert!(p1["user"].is_null(), "{}", p1["pages"]);
         crate::tools::conforms(&schema, &p1).unwrap();
@@ -1190,7 +1200,7 @@ mod tests {
         let snap = adopted_load(&root).unwrap();
         let s = status(&snap, json!({}), Value::Null, None).unwrap();
         assert_eq!(s["speed"], Value::Null, "no workloads file");
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         std::fs::create_dir_all(perf.join(res::UNITS_DIR)).unwrap();
         std::fs::write(
             perf.join("workloads.toml"),
@@ -1332,7 +1342,7 @@ mod tests {
         copy_dir(&repo().join("targets/zopfli"), &root);
         let root = root.canonicalize().unwrap();
         let _ = std::fs::remove_dir_all(root.join("migration/perf"));
-        let perf = harness_core::perf::perf_dir(&root);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         std::fs::create_dir_all(perf.join(harness_core::perf::results::UNITS_DIR)).unwrap();
         std::fs::create_dir_all(root.join("bench")).unwrap();
         let mut toml = String::from("schema_version = 1\n");
@@ -1461,7 +1471,7 @@ mod tests {
         unit_rows: Vec<harness_core::perf::results::Row>,
     ) {
         use harness_core::perf::results as res;
-        let perf = harness_core::perf::perf_dir(&t.0);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&t.0));
         res::write_program(&res::program_path(&perf), &program).unwrap();
         let mut file = res::UnitResults::new(U001);
         file.rows = unit_rows;
@@ -1667,7 +1677,7 @@ mod tests {
         );
         // 25 unit files that do not read, and 25 results files of units no
         // longer in the plan, all with long ids: listed up to the cap.
-        let perf = harness_core::perf::perf_dir(&t.0);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&t.0));
         let plan = t.0.join("migration/plan.toml");
         let mut text = std::fs::read_to_string(&plan).unwrap();
         for i in 0..25 {
@@ -1851,7 +1861,7 @@ mod tests {
                 false,
             )],
         );
-        let perf = harness_core::perf::perf_dir(&t.0);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&t.0));
         let head = || {
             status(&adopted_load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap()["speed"]
                 .clone()
@@ -1991,7 +2001,7 @@ mod tests {
     fn an_unreadable_files_reason_survives_a_deep_path() {
         use harness_core::perf::results as res;
         let t = speed_target("speed-deep-path", &["big"]);
-        let perf = harness_core::perf::perf_dir(&t.0);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&t.0));
         let plan = t.0.join("migration/plan.toml");
         let id = format!("u-deep-{}", "d".repeat(200));
         let mut text = std::fs::read_to_string(&plan).unwrap();
@@ -2015,7 +2025,7 @@ mod tests {
     fn orphan_results_files_are_named() {
         use harness_core::perf::results as res;
         let t = speed_target("speed-orphans", &["big"]);
-        let perf = harness_core::perf::perf_dir(&t.0);
+        let perf = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&t.0));
         let head = || {
             status(&adopted_load(&t.0).unwrap(), json!({}), Value::Null, None).unwrap()["speed"]
                 .clone()

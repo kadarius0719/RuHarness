@@ -133,23 +133,24 @@ fn file_key(root: &Path, rel: &str, w: &wl::Workload) -> Option<CacheKey> {
     ))
 }
 
-/// Read perf's files under `root` for the `units` of the plan (ids) — the
+/// Read perf's files in `ledger` for the `units` of the plan (ids) — the
 /// caller read the plan; `holder_command` is the live lock holder's.
 pub fn read(
-    root: &Path,
+    ledger: &Ledger,
     units: &[(String, Option<String>)],
     holder_command: Option<&str>,
 ) -> PerfRead {
-    read_with_budget(root, units, holder_command, MAX_INPUT_HASH_BYTES)
+    read_with_budget(ledger, units, holder_command, MAX_INPUT_HASH_BYTES)
 }
 
 /// [`read`], hashing at most `budget` bytes of inputs.
 fn read_with_budget(
-    root: &Path,
+    ledger: &Ledger,
     units: &[(String, Option<String>)],
     holder_command: Option<&str>,
     budget: u64,
 ) -> PerfRead {
+    let root = ledger.target_root();
     let measuring =
         holder_command.is_some_and(|c| c.starts_with(harness_core::perf::PERF_RUN_LOCK));
     let mut read = PerfRead {
@@ -157,8 +158,8 @@ fn read_with_budget(
         plan_units: units.iter().map(|(id, _)| id.clone()).collect(),
         ..PerfRead::default()
     };
-    read.workloads = wl::load(root).map_err(|e| e.to_string());
-    let dir = harness_core::perf::perf_dir(root);
+    read.workloads = wl::load(ledger).map_err(|e| e.to_string());
+    let dir = harness_core::perf::perf_dir(ledger);
     let dir_ok = std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir());
     if dir_ok {
         read.program = res::read_program(&res::program_path(&dir)).map_err(|e| e.to_string());
@@ -214,7 +215,6 @@ fn read_with_budget(
     // The crates' digests, for the units perf measured — and those an
     // as-it-stands row left out with their crate's digest, which currency
     // compares (build note 24).
-    let ledger = Ledger::new(root);
     for (id, krate) in units {
         if !read.units.contains_key(id) && !program_names(&read.program, id) {
             continue;
@@ -303,7 +303,7 @@ mod tests {
              [[workload]]\nid = \"gone\"\nargs = [\"{input}\"]\ninput = \"bench/gone.txt\"\n",
         )
         .expect("write");
-        let r = read(&root, &[], None);
+        let r = read(&harness_core::ledger::Ledger::new(&root), &[], None);
         let d = match r.inputs.get("w") {
             Some(InputNow::Digest(d)) => d.clone(),
             other => panic!("{other:?}"),
@@ -313,15 +313,27 @@ mod tests {
             Some(&InputNow::Unusable(InputUnusable::Missing))
         );
         // While a perf run holds the lock: the cached digest, never a read.
-        let r = read(&root, &[], Some("perf run --target ."));
+        let r = read(
+            &harness_core::ledger::Ledger::new(&root),
+            &[],
+            Some("perf run --target ."),
+        );
         assert!(r.measuring);
         assert_eq!(r.inputs.get("w"), Some(&InputNow::Digest(d)));
         // A changed input then cannot be checked.
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(root.join("bench/in.txt"), b"hello, again").expect("write");
-        let r = read(&root, &[], Some("perf run"));
+        let r = read(
+            &harness_core::ledger::Ledger::new(&root),
+            &[],
+            Some("perf run"),
+        );
         assert_eq!(r.inputs.get("w"), Some(&InputNow::WhileMeasuring));
-        let r = read(&root, &[], Some("verify u001"));
+        let r = read(
+            &harness_core::ledger::Ledger::new(&root),
+            &[],
+            Some("verify u001"),
+        );
         assert!(
             matches!(r.inputs.get("w"), Some(InputNow::Digest(_))),
             "another writer is no perf run"
@@ -364,46 +376,48 @@ mod tests {
         let input = root.join("bench/in.txt");
         std::fs::write(&input, b"hello").unwrap();
         let w = |r: &PerfRead| r.inputs.get("w").cloned();
-        let Some(InputNow::Digest(d)) = w(&read(&root, &[], None)) else {
+        let Some(InputNow::Digest(d)) =
+            w(&read(&harness_core::ledger::Ledger::new(&root), &[], None))
+        else {
             panic!("a digest")
         };
         // The file moved out of the project (the same inode) and linked back.
         std::fs::rename(&input, outside.join("in.txt")).unwrap();
         symlink(outside.join("in.txt"), &input).unwrap();
         assert_eq!(
-            w(&read(&root, &[], None)),
+            w(&read(&harness_core::ledger::Ledger::new(&root), &[], None)),
             Some(InputNow::Unusable(InputUnusable::Link))
         );
         std::fs::remove_file(&input).unwrap();
         std::fs::rename(outside.join("in.txt"), &input).unwrap();
         assert_eq!(
-            w(&read(&root, &[], None)),
+            w(&read(&harness_core::ledger::Ledger::new(&root), &[], None)),
             Some(InputNow::Digest(d.clone()))
         );
         // Its folder moved out and linked back.
         std::fs::rename(root.join("bench"), outside.join("bench")).unwrap();
         symlink(outside.join("bench"), root.join("bench")).unwrap();
         assert_eq!(
-            w(&read(&root, &[], None)),
+            w(&read(&harness_core::ledger::Ledger::new(&root), &[], None)),
             Some(InputNow::Unusable(InputUnusable::Outside))
         );
         std::fs::remove_file(root.join("bench")).unwrap();
         std::fs::rename(outside.join("bench"), root.join("bench")).unwrap();
         assert_eq!(
-            w(&read(&root, &[], None)),
+            w(&read(&harness_core::ledger::Ledger::new(&root), &[], None)),
             Some(InputNow::Digest(d.clone()))
         );
         // Its permissions refuse the read (unless the tests run as root).
         std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o000)).unwrap();
         if std::fs::read(&input).is_err() {
             assert_eq!(
-                w(&read(&root, &[], None)),
+                w(&read(&harness_core::ledger::Ledger::new(&root), &[], None)),
                 Some(InputNow::Unusable(InputUnusable::PermissionDenied))
             );
         }
         std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(
-            w(&read(&root, &[], None)),
+            w(&read(&harness_core::ledger::Ledger::new(&root), &[], None)),
             Some(InputNow::Digest(d.clone()))
         );
         // Another file of the same size renamed over it, the old
@@ -418,13 +432,15 @@ mod tests {
             .set_modified(mtime)
             .unwrap();
         std::fs::rename(&other, &input).unwrap();
-        let Some(InputNow::Digest(swapped)) = w(&read(&root, &[], None)) else {
+        let Some(InputNow::Digest(swapped)) =
+            w(&read(&harness_core::ledger::Ledger::new(&root), &[], None))
+        else {
             panic!("a digest")
         };
         assert_ne!(swapped, d, "another file: hashed again");
         std::fs::write(&input, b"hello").unwrap();
         assert_eq!(
-            w(&read(&root, &[], None)),
+            w(&read(&harness_core::ledger::Ledger::new(&root), &[], None)),
             Some(InputNow::Digest(d.clone()))
         );
         // Other bytes of the same size, the old modification time put back.
@@ -436,7 +452,9 @@ mod tests {
             .unwrap()
             .set_modified(mtime)
             .unwrap();
-        let Some(InputNow::Digest(again)) = w(&read(&root, &[], None)) else {
+        let Some(InputNow::Digest(again)) =
+            w(&read(&harness_core::ledger::Ledger::new(&root), &[], None))
+        else {
             panic!("a digest")
         };
         assert_ne!(again, d, "the change time moved: hashed again");
@@ -471,7 +489,7 @@ mod tests {
                 format!("schema_version = 1\n[[workload]]\n{workloads}"),
             )
             .unwrap();
-            let r = read(&root, &[], None);
+            let r = read(&harness_core::ledger::Ledger::new(&root), &[], None);
             let Ok(WorkloadsState::Ready(file)) = &r.workloads else {
                 panic!("{:?}", r.workloads)
             };
@@ -513,7 +531,7 @@ mod tests {
             .unwrap()
             .set_len(wl::MAX_INPUT_BYTES + 1)
             .unwrap();
-        let r = read_with_budget(&root, &[], None, 10);
+        let r = read_with_budget(&harness_core::ledger::Ledger::new(&root), &[], None, 10);
         assert!(matches!(r.inputs["a"], InputNow::Digest(_)));
         assert!(matches!(r.inputs["b"], InputNow::Digest(_)));
         assert_eq!(r.inputs["c"], InputNow::TooLarge);
@@ -526,7 +544,7 @@ mod tests {
             InputNow::Unusable(InputUnusable::NotAFile)
         );
         // Cached inputs cost the next load nothing: c is hashed then.
-        let r = read_with_budget(&root, &[], None, 10);
+        let r = read_with_budget(&harness_core::ledger::Ledger::new(&root), &[], None, 10);
         assert!(matches!(r.inputs["c"], InputNow::Digest(_)));
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -539,7 +557,11 @@ mod tests {
         let outside = tmp.join("outside");
         std::fs::write(outside.join("u001.json"), "{\"secret\": 1}").unwrap();
         std::os::unix::fs::symlink(&outside, root.join("migration/perf/units")).unwrap();
-        let r = read(&root, &[("u001".into(), None)], None);
+        let r = read(
+            &harness_core::ledger::Ledger::new(&root),
+            &[("u001".into(), None)],
+            None,
+        );
         assert!(r.units.is_empty(), "{:?}", r.units);
         assert!(r.orphans.is_empty());
         assert_eq!(r.errors.len(), 1);
@@ -557,7 +579,7 @@ mod tests {
             )
             .unwrap();
         }
-        let r = read(&root, &[], None);
+        let r = read(&harness_core::ledger::Ledger::new(&root), &[], None);
         assert_eq!(r.orphans.len(), MAX_ORPHANS_LISTED);
         assert_eq!(r.orphans[0], "u000");
         assert_eq!(r.orphans_more, 5);
@@ -576,7 +598,11 @@ mod tests {
         std::fs::write(outside.join("program.json"), "{\"secret\": 1}").unwrap();
         std::fs::remove_dir_all(root.join("migration/perf")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("migration/perf")).unwrap();
-        let r = read(&root, &[("u001".into(), None)], None);
+        let r = read(
+            &harness_core::ledger::Ledger::new(&root),
+            &[("u001".into(), None)],
+            None,
+        );
         assert!(r.units.is_empty(), "{:?}", r.units);
         assert!(matches!(r.program, Ok(None)), "{:?}", r.program);
         assert!(

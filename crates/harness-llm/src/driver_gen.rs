@@ -234,8 +234,13 @@ pub fn run_driver_generation(
         .root
         .canonicalize()
         .map_err(|e| Error::io(&target.root, e))?;
-    let ledger = Ledger::new(root.clone());
-    let sources = read_sources(&root, &target.config.target.source_dir, facts, unit)?;
+    let ledger = Ledger::of_under(target, root.clone());
+    let source_dir = &target
+        .config
+        .target
+        .folder("harness gen-driver")?
+        .source_dir;
+    let sources = read_sources(&root, source_dir, facts, unit)?;
     let unit_source = unit_source_hash(&sources);
     let pinned = pinned_sections(unit, &unit_source, &sources)?;
 
