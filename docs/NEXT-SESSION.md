@@ -48,9 +48,13 @@ change at the switch points below.
      runner extracted from harness-oracle bench.rs, the work folder and the children's `PATH` and
      `RUSTUP_TOOLCHAIN`/`RUSTUP_AUTO_INSTALL`, the unit-crate file check and `build = false` in the
      harness manifest (harness-oracle lib.rs/exec.rs/sandbox.rs, harness-llm migrate.rs).
-   Still to build in (a) after these: the per-file facts and include folders over one folder and
-   the `project map` command's first form (printing per-file facts; closures come in (b)). Then
-   the usual review of (a)+(c) together, fix passes, mutation checks.
+   All four MERGED and green (1 353 tests at ee5d5f3, on main). The last piece of (a) — the per-file
+   facts and include folders over one folder and `project map`'s first form (printing per-file
+   facts; closures come in (b)) — is being built on branch `worktree-agent-a38c23ee52a5436eb`;
+   merge it when its report is green, run the full gates, then `bench check --suite targets/tractor
+   --replay --adopt` on a quiet machine (the work-folder change could move a recorded `rustc -V`
+   line only on a machine whose `stable` differs from the old file's choice). Then the usual review
+   of (a)+(c) together, fix passes, mutation checks.
 2. The briefing's M5 after the map's first accepted tool (DECISIONS 2026-10-08).
 
 **Environment:** as the previous kickoff says (below). Test downloads only in
