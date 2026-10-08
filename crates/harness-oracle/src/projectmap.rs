@@ -3,10 +3,23 @@
 //! include folders, and one compile per `.c` under the map's sandbox profile
 //! whose object gives the symbols the file defines and needs.
 //!
-//! Step (a) maps one folder (a target's `source_dir`, as `harness scan`
-//! reads it) with no configuration: the compile takes the judge's base
-//! flags and the file's include folders only. Programs, closures,
-//! duplicates, libraries, the configuration and the map file are step (b).
+//! Step (a) mapped one folder (a target's `source_dir`, as `harness scan`
+//! reads it); step (b) adds the configuration ([`config`], §3.2), the build
+//! evidence ([`evidence`], §3.1 step 4), the set-aside counts per folder and
+//! the caps of §3.10 ([`Limits`]). [`map_root`] maps the whole root,
+//! [`map_folder`] one folder of it.
+//!
+//! **The compile helper** for the closure and link modules is
+//! [`compile_object`]`(ctx: &CompileCtx, facts: &FileFacts, flags: &[String],
+//! out_dir: &Path) -> Result<Built, Error>`: it compiles one `.c` with the
+//! judge's base flags, then `flags` (the grammar's form, paths relative to
+//! the root; `-O` levels dropped — recorded, never applied), then the
+//! file's include folders (`-idirafter` for a folder holding one of the
+//! configuration's `system_headers`), into `out_dir/<stem>.o`, and returns
+//! [`Built::Object`] (the object path, kept for the caller to read, link and
+//! delete, and the `-MD` list's text, its file already deleted) or
+//! [`Built::Failed`]. Each file's flags under the map's configuration are
+//! [`FileFacts::flags`].
 //!
 //! What a compile read is known from the compiler's own dependency list
 //! (`-MD -MF`): a file inside the root the walk did not record is an
@@ -27,7 +40,13 @@ use harness_core::error::Error;
 use harness_core::walk;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+pub mod config;
+pub mod evidence;
+
+pub use config::{ConfigSource, MapConfiguration};
+pub use evidence::BuildEvidence;
 
 /// Most `.c`/`.h` files walked (§3.10).
 pub const MAX_FILES: usize = 20_000;
@@ -42,6 +61,71 @@ pub const MAX_OBJECT_BYTES: u64 = 64 << 20;
 pub const COMPILE_TIMEOUT_SECS: u64 = 120;
 /// The judge's own base flags, first on every map compile (§3.1 step 5).
 pub const MAP_CFLAGS: [&str; 2] = ["-O2", crate::FP_CONTRACT_OFF];
+/// Most distinct symbol names a map keeps (§3.10).
+pub const MAX_SYMBOL_NAMES: usize = 200_000;
+/// The total time budget of one map (§3.10).
+pub const MAP_BUDGET: Duration = Duration::from_secs(30 * 60);
+/// Most files the count-only pass over everything else looks at (the
+/// set-aside counts and the build files).
+pub const MAX_OTHER_FILES: usize = 200_000;
+
+/// The caps of §3.10 a test can lower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// Most distinct symbol names ([`MAX_SYMBOL_NAMES`]).
+    pub max_symbol_names: usize,
+    /// The total time budget ([`MAP_BUDGET`]), checked before each compile.
+    pub budget: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits {
+            max_symbol_names: MAX_SYMBOL_NAMES,
+            budget: MAP_BUDGET,
+        }
+    }
+}
+
+/// How to map.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MapOptions {
+    /// `--configuration NAME`: the `config.toml` entry to map under.
+    pub configuration: Option<String>,
+    /// The caps.
+    pub limits: Limits,
+}
+
+/// The non-C sources, assembly and prebuilt files of one folder, by
+/// language: counted, never read (§3.1 step 1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetAside {
+    /// The folder, relative to the root (`.` for the root).
+    pub folder: String,
+    /// `c++`, `objective-c`, `go`, `rust`, `python`, `javascript`, `lua`,
+    /// `pascal`, `assembly` or `prebuilt`.
+    pub lang: &'static str,
+    /// Its files.
+    pub count: usize,
+}
+
+/// The set-aside language of an extension (case counts: `.S` and `.s` are
+/// both assembly).
+pub fn set_aside_lang(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "cc" | "cpp" | "cxx" => "c++",
+        "m" => "objective-c",
+        "go" => "go",
+        "rs" => "rust",
+        "py" => "python",
+        "js" => "javascript",
+        "lua" => "lua",
+        "pas" => "pascal",
+        "s" | "S" | "asm" => "assembly",
+        "a" | "o" | "so" | "dylib" => "prebuilt",
+        _ => return None,
+    })
+}
 
 /// A walked file's kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,8 +253,15 @@ pub struct FileFacts {
     pub include_dirs: Vec<String>,
     /// Its ambiguous includes and its headers', sorted by name.
     pub ambiguous: Vec<Ambiguous>,
-    /// A `.c`'s compile; `None` for a `.h` or a `.c` too large to read.
+    /// A `.c`'s compile; `None` for a `.h`, a `.c` too large to read, or a
+    /// `.c` not reached because a cap was hit first ([`FolderMap::limits_hit`]).
     pub compiled: Option<Compiled>,
+    /// The flags its compile takes under the map's configuration, in the
+    /// grammar's form (paths relative to the root, `-O` levels recorded):
+    /// under a guess or `from = "compile_commands"`, its own
+    /// `compile_commands.json` entry's then the configuration's; otherwise
+    /// the configuration's. Empty for a `.h`.
+    pub flags: Vec<String>,
     /// The compile read something outside the root and the toolchain's
     /// folders: its symbol names are withheld.
     pub outside_includes: bool,
@@ -228,13 +319,13 @@ pub struct SkippedFolder {
 /// A cap the run reached (§3.10): what follows it was not visited.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LimitHit {
-    /// `files` or `depth`.
+    /// `files`, `depth`, `symbols` (distinct names) or `budget` (time).
     pub limit: &'static str,
     /// The cap, in words.
     pub at: String,
 }
 
-/// What mapping one folder found.
+/// What mapping the root, or one folder of it, found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderMap {
     /// The canonical project root.
@@ -249,8 +340,27 @@ pub struct FolderMap {
     pub walk_issues: Vec<WalkIssue>,
     /// The folders it skipped.
     pub skipped_folders: Vec<SkippedFolder>,
-    /// The caps reached.
+    /// The caps reached. While any is, no closure may be computed
+    /// ([`FolderMap::closures_possible`]).
     pub limits_hit: Vec<LimitHit>,
+    /// The configuration the compiles ran under.
+    pub configuration: MapConfiguration,
+    /// The build evidence.
+    pub evidence: BuildEvidence,
+    /// Set-aside counts per folder and language, sorted.
+    pub set_aside: Vec<SetAside>,
+    /// False when the count-only pass stopped at [`MAX_OTHER_FILES`] or
+    /// [`MAX_DEPTH`]: the set-aside counts and build files are lower bounds.
+    pub others_complete: bool,
+}
+
+impl FolderMap {
+    /// No cap was hit: closures may be computed. A cut-short map must never
+    /// produce closures, because definers never reached would read as
+    /// outside symbols (§3.10).
+    pub fn closures_possible(&self) -> bool {
+        self.limits_hit.is_empty()
+    }
 }
 
 /// Refuse a root that is the home folder, holds it, or holds the cargo or
@@ -288,16 +398,38 @@ pub fn refuse_root(root: &Path) -> Result<(), Error> {
 /// see the module docs. Refuses a root [`refuse_root`] refuses and a folder
 /// outside the root; a file that does not compile, cannot be read or is too
 /// large is a fact of that file, never a stop.
-pub fn map_folder(root: &Path, folder: &Path) -> Result<FolderMap, Error> {
-    map_folder_in(root, folder, &std::env::temp_dir())
+///
+/// The configuration comes from `migration/map/config.toml` and
+/// `options.configuration` ([`config::choose`]); a refused configuration or
+/// flag stops the map before anything compiles.
+pub fn map_folder(root: &Path, folder: &Path, options: &MapOptions) -> Result<FolderMap, Error> {
+    map_in(root, folder, options, &std::env::temp_dir())
 }
 
-/// [`map_folder`] with the fresh folder made under `fresh_parent`.
+/// Map the whole root: [`map_folder`] of `.`.
+pub fn map_root(root: &Path, options: &MapOptions) -> Result<FolderMap, Error> {
+    map_folder(root, Path::new("."), options)
+}
+
+/// [`map_folder`] with default options and the fresh folder made under
+/// `fresh_parent`.
+#[cfg(test)]
 pub(crate) fn map_folder_in(
     root: &Path,
     folder: &Path,
     fresh_parent: &Path,
 ) -> Result<FolderMap, Error> {
+    map_in(root, folder, &MapOptions::default(), fresh_parent)
+}
+
+/// [`map_folder`] with the fresh folder made under `fresh_parent`.
+pub(crate) fn map_in(
+    root: &Path,
+    folder: &Path,
+    options: &MapOptions,
+    fresh_parent: &Path,
+) -> Result<FolderMap, Error> {
+    let started = Instant::now();
     let root = root.canonicalize().map_err(|e| Error::io(root, e))?;
     refuse_root(&root)?;
     let walked_dir = root.join(folder);
@@ -312,6 +444,18 @@ pub(crate) fn map_folder_in(
         )));
     }
     let folder_rel = rel_of(&root, &inside).unwrap_or_else(|| ".".into());
+    // The person's configurations, checked before anything is walked.
+    let entries = config::read_entries(&root)?;
+    if let Some(want) = &options.configuration {
+        // A name that matches nothing is refused now, not after the walk.
+        if !entries.iter().any(|e| &e.name == want) {
+            config::choose(&entries, Some(want), false, false)
+                .map_err(|m| Error::parse(root.join(config::CONFIG_FILE), m))?;
+        }
+    } else if entries.len() > 1 {
+        config::choose(&entries, None, false, false)
+            .map_err(|m| Error::parse(root.join(config::CONFIG_FILE), m))?;
+    }
 
     // Step 1: the walk.
     // Walked under its canonical path, so every file is a plain path under
@@ -370,6 +514,7 @@ pub(crate) fn map_folder_in(
         .filter_map(|f| rel_of(&root, f))
         .collect();
     paths.sort();
+    let others = other_files(&root, &inside);
 
     // Step 2: the scanner's facts.
     let mut files: Vec<FileFacts> = paths
@@ -407,8 +552,31 @@ pub(crate) fn map_folder_in(
         facts.ambiguous = ambiguous;
     }
 
-    // Step 5: the compiles.
+    // Step 4: the build evidence, then the configuration.
     let walked_set: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    let evidence = evidence::gather(&root, &walked_set, others.build_files);
+    let configuration = config::choose(
+        &entries,
+        options.configuration.as_deref(),
+        evidence.has_compile_commands(),
+        !evidence.flags_differ.is_empty(),
+    )
+    .map_err(|m| Error::parse(root.join(config::CONFIG_FILE), m))?;
+    for facts in files.iter_mut().filter(|f| f.kind == FileKind::C) {
+        facts.flags = if configuration.uses_entry_flags() {
+            let mut own = evidence
+                .file_flags
+                .get(&facts.path)
+                .cloned()
+                .unwrap_or_default();
+            own.extend(configuration.flags.iter().cloned());
+            own
+        } else {
+            configuration.flags.clone()
+        };
+    }
+
+    // Step 5: the compiles, within the caps.
     let scrubber = Scrubber::from_env(&root);
     let ctx = CompileCtx {
         root: &root,
@@ -417,10 +585,29 @@ pub(crate) fn map_folder_in(
         sys_dirs: &sys_dirs,
         walked: &walked_set,
         scrubber: &scrubber,
+        system_headers: &configuration.system_headers,
     };
-    for (index, facts) in files.iter_mut().enumerate() {
-        if facts.kind == FileKind::C && !facts.too_large {
-            compile(&ctx, index, facts)?;
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for facts in files.iter_mut() {
+        if facts.kind != FileKind::C || facts.too_large {
+            continue;
+        }
+        if started.elapsed() >= options.limits.budget {
+            limits_hit.push(LimitHit {
+                limit: "budget",
+                at: format!("a time budget of {} s", options.limits.budget.as_secs_f64()),
+            });
+            break;
+        }
+        compile(&ctx, facts)?;
+        names.extend(facts.defined.iter().map(|d| d.name.clone()));
+        names.extend(facts.needed.iter().map(|n| n.name.clone()));
+        if names.len() > options.limits.max_symbol_names {
+            limits_hit.push(LimitHit {
+                limit: "symbols",
+                at: format!("{} distinct symbol names", options.limits.max_symbol_names),
+            });
+            break;
         }
     }
     drop(fresh);
@@ -432,7 +619,67 @@ pub(crate) fn map_folder_in(
         walk_issues,
         skipped_folders,
         limits_hit,
+        configuration,
+        evidence,
+        set_aside: others.set_aside,
+        others_complete: others.complete,
     })
+}
+
+/// What the count-only pass over every other file found.
+struct Others {
+    set_aside: Vec<SetAside>,
+    build_files: Vec<String>,
+    complete: bool,
+}
+
+/// The count-only pass over every file of the mapped folder (same pruning,
+/// same depth): set-aside counts per folder and the build files by name.
+/// Nothing is read.
+fn other_files(root: &Path, inside: &Path) -> Others {
+    let walked = walk::confined_except(
+        inside,
+        walk::ALL_FILES,
+        walk::Limits {
+            max_files: Some(MAX_OTHER_FILES),
+            max_depth: Some(MAX_DEPTH),
+        },
+        &[root.join(harness_core::ledger::MIGRATION_DIR)],
+    );
+    let mut counts: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
+    let mut build_files = Vec::new();
+    for file in &walked.files {
+        let Some(rel) = rel_of(root, file) else {
+            continue;
+        };
+        let (folder, name) = match rel.rsplit_once('/') {
+            Some((f, n)) => (f.to_string(), n),
+            None => (".".to_string(), rel.as_str()),
+        };
+        if evidence::is_build_file(name) {
+            build_files.push(rel.clone());
+        }
+        let lang = Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(set_aside_lang);
+        if let Some(lang) = lang {
+            *counts.entry((folder, lang)).or_default() += 1;
+        }
+    }
+    build_files.sort();
+    Others {
+        set_aside: counts
+            .into_iter()
+            .map(|((folder, lang), count)| SetAside {
+                folder,
+                lang,
+                count,
+            })
+            .collect(),
+        build_files,
+        complete: !walked.truncated,
+    }
 }
 
 /// `path` relative to `root`, `/`-separated; `.` for the root itself;
@@ -472,6 +719,7 @@ fn read_file(root: &Path, rel: &str, aliases: Vec<String>) -> FileFacts {
         include_dirs: Vec::new(),
         ambiguous: Vec::new(),
         compiled: None,
+        flags: Vec::new(),
         outside_includes: false,
         included_other: Vec::new(),
         defined: Vec::new(),
@@ -761,37 +1009,120 @@ fn system_include_dirs(verbose: &str) -> Vec<PathBuf> {
 }
 
 /// What every compile shares.
-struct CompileCtx<'a> {
-    root: &'a Path,
-    fresh: &'a Path,
-    runner: &'a Runner,
-    sys_dirs: &'a [PathBuf],
-    walked: &'a BTreeSet<&'a str>,
-    scrubber: &'a Scrubber,
+pub(crate) struct CompileCtx<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) fresh: &'a Path,
+    pub(crate) runner: &'a Runner,
+    pub(crate) sys_dirs: &'a [PathBuf],
+    pub(crate) walked: &'a BTreeSet<&'a str>,
+    pub(crate) scrubber: &'a Scrubber,
+    /// The configuration's `system_headers`: a folder holding one is passed
+    /// with `-idirafter`.
+    pub(crate) system_headers: &'a [String],
 }
 
 fn path_arg(p: &Path) -> Result<String, Error> {
     crate::path_str(p).map(str::to_string)
 }
 
-/// Step 5 for one `.c`: compile, read the dependency list and the object,
-/// delete both.
-fn compile(ctx: &CompileCtx<'_>, index: usize, facts: &mut FileFacts) -> Result<(), Error> {
-    let object = ctx.fresh.join(format!("{index}.o"));
-    let deps = ctx.fresh.join(format!("{index}.d"));
+/// How [`compile_object`] ended.
+#[derive(Debug)]
+pub(crate) enum Built {
+    /// An object was made: the caller reads, links and deletes it.
+    Object {
+        /// The object, in the caller's `out_dir`.
+        object: PathBuf,
+        /// The compiler's `-MD` list, its file already deleted.
+        deps: Option<String>,
+    },
+    /// No object: the closed reason and the first error line (raw; scrub it
+    /// before showing it).
+    Failed(Compiled, Option<String>),
+}
+
+/// The argv of one map compile (§3.1 step 5): `cc -c -w`, the judge's base
+/// flags, then `flags` in order (paths made absolute, `-O` levels dropped),
+/// then the file's include folders (`-idirafter` for a folder where `walked`
+/// holds one of `system_headers`, else `-I`), the file, the object and the
+/// `-MD` list.
+pub(crate) fn compile_argv(
+    root: &Path,
+    walked: &BTreeSet<&str>,
+    system_headers: &[String],
+    facts: &FileFacts,
+    flags: &[String],
+    object: &Path,
+    deps: &Path,
+) -> Result<Vec<String>, Error> {
     let mut argv: Vec<String> = vec!["cc".into(), "-c".into(), "-w".into()];
     argv.extend(MAP_CFLAGS.iter().map(|f| (*f).to_string()));
-    for dir in &facts.include_dirs {
-        argv.push(format!("-I{}", path_arg(&ctx.root.join(dir))?));
+    for flag in flags {
+        match harness_core::config::flags::check_flag(flag).map_err(Error::Invariant)? {
+            harness_core::config::flags::Flag::Optimization => {}
+            harness_core::config::flags::Flag::Path(_) => {
+                let (prefix, rel) = evidence::PATH_PREFIXES
+                    .iter()
+                    .find_map(|p| flag.strip_prefix(p).map(|rest| (*p, rest)))
+                    .ok_or_else(|| Error::Invariant(format!("unknown path flag {flag}")))?;
+                let abs = path_arg(&root.join(rel))?;
+                if prefix == "-I" {
+                    argv.push(format!("-I{abs}"));
+                } else {
+                    argv.extend([prefix.to_string(), abs]);
+                }
+            }
+            _ => argv.push(flag.clone()),
+        }
     }
-    argv.push(path_arg(&ctx.root.join(&facts.path))?);
+    for dir in &facts.include_dirs {
+        let holds_system = system_headers.iter().any(|name| {
+            let held = if dir == "." {
+                name.clone()
+            } else {
+                format!("{dir}/{name}")
+            };
+            walked.contains(held.as_str())
+        });
+        let abs = path_arg(&root.join(dir))?;
+        if holds_system {
+            argv.extend(["-idirafter".to_string(), abs]);
+        } else {
+            argv.push(format!("-I{abs}"));
+        }
+    }
+    argv.push(path_arg(&root.join(&facts.path))?);
     argv.extend([
         "-o".into(),
-        path_arg(&object)?,
+        path_arg(object)?,
         "-MD".into(),
         "-MF".into(),
-        path_arg(&deps)?,
+        path_arg(deps)?,
     ]);
+    Ok(argv)
+}
+
+/// The compile helper for every map compile (see the module docs): compile
+/// `facts`' `.c` with `flags` into `out_dir/<stem>.o`, `<stem>` the first 16
+/// hex digits of the blake3 of its relative path.
+pub(crate) fn compile_object(
+    ctx: &CompileCtx<'_>,
+    facts: &FileFacts,
+    flags: &[String],
+    out_dir: &Path,
+) -> Result<Built, Error> {
+    let hash = harness_core::hash::bytes_hash(facts.path.as_bytes());
+    let stem = &hash[harness_core::hash::HASH_PREFIX.len()..][..16];
+    let object = out_dir.join(format!("{stem}.o"));
+    let deps = out_dir.join(format!("{stem}.d"));
+    let argv = compile_argv(
+        ctx.root,
+        ctx.walked,
+        ctx.system_headers,
+        facts,
+        flags,
+        &object,
+        &deps,
+    )?;
     let run = ctx.runner.tool_run(&argv);
     let listed = std::fs::read(&deps).ok();
     let _ = std::fs::remove_file(&deps);
@@ -808,29 +1139,44 @@ fn compile(ctx: &CompileCtx<'_>, index: usize, facts: &mut FileFacts) -> Result<
         detail: Some(detail),
         at: None,
     };
-    match out.end {
-        ChildEnd::Exited(status) if status.success() => {}
+    let failed = match out.end {
+        ChildEnd::Exited(status) if status.success() => None,
         ChildEnd::Exited(_) => {
-            let text = String::from_utf8_lossy(&out.stderr);
-            let (compiled, line) = classify(ctx.root, &text);
+            let (compiled, line) = classify(ctx.root, &String::from_utf8_lossy(&out.stderr));
+            Some(Built::Failed(compiled, line))
+        }
+        ChildEnd::TimedOut => Some(Built::Failed(other("timeout"), None)),
+        ChildEnd::OutputOverflow => Some(Built::Failed(other("output-overflow"), None)),
+    };
+    if let Some(failed) = failed {
+        let _ = std::fs::remove_file(&object);
+        return Ok(failed);
+    }
+    Ok(Built::Object {
+        object,
+        deps: listed.map(|l| String::from_utf8_lossy(&l).into_owned()),
+    })
+}
+
+/// Step 5 for one `.c`: compile under its [`FileFacts::flags`], read the
+/// dependency list and the object, delete both.
+fn compile(ctx: &CompileCtx<'_>, facts: &mut FileFacts) -> Result<(), Error> {
+    let other = |detail: &'static str| Compiled::Failed {
+        reason: Reason::Other,
+        header: None,
+        detail: Some(detail),
+        at: None,
+    };
+    let (object, listed) = match compile_object(ctx, facts, &facts.flags, ctx.fresh)? {
+        Built::Failed(compiled, line) => {
             facts.compiled = Some(compiled);
             facts.message = line.map(|l| ctx.scrubber.apply(&l));
-            let _ = std::fs::remove_file(&object);
             return Ok(());
         }
-        ChildEnd::TimedOut => {
-            facts.compiled = Some(other("timeout"));
-            let _ = std::fs::remove_file(&object);
-            return Ok(());
-        }
-        ChildEnd::OutputOverflow => {
-            facts.compiled = Some(other("output-overflow"));
-            let _ = std::fs::remove_file(&object);
-            return Ok(());
-        }
-    }
+        Built::Object { object, deps } => (object, deps),
+    };
     if let Some(listed) = listed {
-        read_dependencies(ctx, facts, &String::from_utf8_lossy(&listed));
+        read_dependencies(ctx, facts, &listed);
     }
     let size = std::fs::metadata(&object).map(|m| m.len()).unwrap_or(0);
     let read = if size > MAX_OBJECT_BYTES {
@@ -1063,3 +1409,6 @@ fn classify(root: &Path, stderr: &str) -> (Compiled, Option<String>) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod build_tests;
