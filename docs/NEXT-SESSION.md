@@ -101,9 +101,20 @@ change at the switch points below.
      Rule corrected at the merge: `-iquote` folders apply to quoted includes only.
    - `worktree-agent-ac1683b337dddd828` — fix pass B, the oracle (lib.rs, boundary_run, validate,
      shape, objsyms, unit_crate, featuremap, sandbox, perf/build, status.rs's compare);
-   - `worktree-agent-ae7ea5096fdff60c7` — fix pass C, the person's side (adopt.rs, runtime_view,
-     the CLI's hints and words, the cockpit's title/dialog/mark, harness-mcp, the uncovered tests,
-     the two token files untracked);
+   - `worktree-agent-ae7ea5096fdff60c7` — fix pass C MERGED (one conflict in main.rs: both
+     sides' additions kept): a fresh token on every `--adopt` (the two token files untracked —
+     **the person runs once per computer:** `harness state status --target targets/zopfli --adopt`
+     and `harness bench status --suite targets/tractor --adopt`), a results-free `migration/`
+     made here, "an agent never adopts" in harness-mcp's refusal and every `sync-runtime` block,
+     `runtime_view::command_line` behind every hint, the tool's id on the cockpit's title and in
+     harness-mcp's status, one "no target here" sentence, the `⊖` mark, the uncovered tests
+     (`tool_reread.rs` pty test, `project_map_refusals.rs`, …). Left by it: SCHEMAS' quoted
+     refusal sentences (near lines 1508 and 1547) and the design's §3.7 "records that token and
+     writes none" are out of date (step f); the cockpit's own "run harness scan" and perf-run hints
+     (speed.rs, model.rs, app.rs) do not carry `--tool` yet; `features::invalid()` should take the
+     ledger path (C fixed the path at the edges with `error::in_ledger`).
+     The session then added scan's ambiguous-include lines and detect's skipped-file lines in
+     main.rs (fix pass A's leftovers).
    - `worktree-agent-ad6c3511dbeadf601` — step (b) part 3 MERGED (gates running at the time of
      writing): `projectmap/mapfile.rs` (`analyze`, `render`, `write_gitignore`), the screen in
      project.rs (maps the whole root even with a root `harness.toml`), `WriterLock::acquire_project`,
