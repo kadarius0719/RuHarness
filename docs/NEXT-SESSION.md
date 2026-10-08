@@ -91,9 +91,14 @@ change at the switch points below.
    with the committed tokens untracked, a results-free `migration/` needing no adoption, an agent
    never adopts, hints spell `--tool`).
    **RUNNING NOW (launched 2026-10-08 from 0d8e250, four Opus builders at medium in worktrees):**
-   - `worktree-agent-ad0e5b3fa6894e17b` — fix pass A, the readers (harness-core sources/config/
-     features/planner/walk, harness-scan, harness-detect, harness-llm read_sources): the shared
-     include resolver and the rest of the triage's pass A;
+   - `worktree-agent-ad0e5b3fa6894e17b` — fix pass A MERGED (cab4f8a): the shared include resolver
+     (`harness_core::sources::Resolver`, taking the listed file and the including file), one
+     include reader, staleness both ways, unreadable files as facts, the loader's refusals.
+     Left for the session after fix pass C merges (main.rs is C's): `scan_target` prints
+     `notes.ambiguous_lines()`, `cmd_detect` calls `detect_reporting` so skipped files print.
+     Residual: the files an ambiguous include lands on are in the program digest but in no
+     unit's include closure (a change moves the program digest, not that unit's `source_hash`).
+     Rule corrected at the merge: `-iquote` folders apply to quoted includes only.
    - `worktree-agent-ac1683b337dddd828` — fix pass B, the oracle (lib.rs, boundary_run, validate,
      shape, objsyms, unit_crate, featuremap, sandbox, perf/build, status.rs's compare);
    - `worktree-agent-ae7ea5096fdff60c7` — fix pass C, the person's side (adopt.rs, runtime_view,
