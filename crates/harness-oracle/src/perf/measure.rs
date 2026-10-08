@@ -2518,6 +2518,7 @@ mod tests {
         put("bench/in.txt", "hello\n");
         put("bench/tiny.txt", "hi\n");
         std::fs::create_dir_all(root.join("migration/perf")).expect("perf dir");
+        harness_core::adopt::testing::adopt(&root);
         let target = TargetContext::load(&root).expect("target");
         let workloads = wl::parse(
             "schema_version = 1\n\
@@ -2903,6 +2904,7 @@ mod tests {
         put("src/main.c", "#include <stdio.h>\nint a(void); int b(void);\nint main(void) { printf(\"%d\\n\", a() + b()); return 0; }\n");
         put("src/a.c", "int a(void) { return 1; }\n");
         put("src/b.c", "int b(void) { return 2; }\n");
+        harness_core::adopt::testing::adopt(&root);
         let target = harness_core::TargetContext::load(&root).expect("target");
         let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
         let scratch = build::perf_scratch(&root).expect("scratch");
@@ -3422,6 +3424,7 @@ mod tests {
         std::fs::create_dir_all(root.join("migration/units/s3/.s3_rs.prev")).expect("legacy");
         put(&root, "src/s5.c", "int s5(void) { return 50; }\n");
         let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+        harness_core::adopt::testing::adopt(&root);
         let target = TargetContext::load(&root).expect("target");
         let ledger = Ledger::new(root.clone());
         let got: Vec<(String, String)> = select(&target, &ledger, &facts, &plan)
@@ -3746,6 +3749,7 @@ mod tests {
             std::fs::remove_file(&units).expect("rm");
             symlink(&outside, &units).expect("link");
             mini_program(&root, &["ua"]);
+            harness_core::adopt::testing::adopt(&root);
             let target = TargetContext::load(&root).expect("target");
             let plan = Plan {
                 schema_version: 1,
@@ -3779,6 +3783,7 @@ mod tests {
         mini_program(&root, &["ua"]);
         let perf_dir = root.join("migration/perf");
         std::fs::create_dir_all(&perf_dir).expect("perf dir");
+        harness_core::adopt::testing::adopt(&root);
         let target = TargetContext::load(&root).expect("target");
         let workloads = wl::parse(
             "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = []\n",
@@ -4137,6 +4142,7 @@ mod tests {
         put(&root, "src/main.c", "#include <stdio.h>\nint a(void); int b(void);\nint main(void) { printf(\"%d\\n\", a() + b()); return 0; }\n");
         put(&root, "src/a.c", "int a(void) { return 1; }\n");
         put(&root, "src/b.c", "int b(void) { return 2; }\n");
+        harness_core::adopt::testing::adopt(&root);
         let target = harness_core::TargetContext::load(&root).expect("target");
         let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
         let scratch = build::perf_scratch(&root).expect("scratch");
@@ -4306,6 +4312,7 @@ mod tests {
         }
         put(&root, "migration/plan.toml", &plan);
         let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+        harness_core::adopt::testing::adopt(&root);
         let target = TargetContext::load(&root).expect("target");
         let perf_dir = root.join("migration/perf");
         std::fs::create_dir_all(&perf_dir).expect("perf dir");
@@ -4365,6 +4372,7 @@ mod tests {
             }
             put(&root, "migration/plan.toml", &plan);
             let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+            harness_core::adopt::testing::adopt(&root);
             let target = TargetContext::load(&root).expect("target");
             let perf_dir = root.join("migration/perf");
             std::fs::create_dir_all(&perf_dir).expect("perf dir");
@@ -4426,6 +4434,7 @@ mod tests {
             }
             put(&root, "migration/plan.toml", &plan);
             let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+            harness_core::adopt::testing::adopt(&root);
             let target = TargetContext::load(&root).expect("target");
             let perf_dir = root.join("migration/perf");
             std::fs::create_dir_all(&perf_dir).expect("perf dir");
@@ -4505,6 +4514,7 @@ mod tests {
         plan += "\n[[unit]]\nid = \"up\"\nstatus = \"pending\"\n";
         put(&root, "migration/plan.toml", &plan);
         let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+        harness_core::adopt::testing::adopt(&root);
         let target = TargetContext::load(&root).expect("target");
         let perf_dir = root.join("migration/perf");
         std::fs::create_dir_all(&perf_dir).expect("perf dir");
@@ -4846,6 +4856,7 @@ mod tests {
         }
         put(&root, "migration/plan.toml", &plan);
         let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+        harness_core::adopt::testing::adopt(&root);
         let target = TargetContext::load(&root).expect("target");
         let perf_dir = root.join("migration/perf");
         std::fs::create_dir_all(&perf_dir).expect("perf dir");

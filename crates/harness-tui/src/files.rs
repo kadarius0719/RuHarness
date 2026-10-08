@@ -620,6 +620,7 @@ mod tests {
         }
 
         fn read(&self) -> (Snapshot, Files) {
+            harness_core::adopt::testing::adopt(&self.0);
             let read = crate::load::read(&self.0).unwrap_or_else(|e| panic!("{e}"));
             let files = build(&read.snapshot, &read.walk);
             (read.snapshot, files)
@@ -1021,6 +1022,7 @@ mod tests {
         for i in 0..20_001 {
             std::fs::File::create(gen.join(format!("f{i:05}.c"))).unwrap();
         }
+        harness_core::adopt::testing::adopt(&t.0);
         let read = crate::load::read(&t.0).unwrap();
         assert!(read.walk.truncated);
         assert_eq!(read.walk.listed.len(), 20_000);

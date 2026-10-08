@@ -18,6 +18,9 @@ pub fn repo() -> PathBuf {
 }
 
 pub fn server_bin() -> PathBuf {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     PathBuf::from(env!("CARGO_BIN_EXE_harness-mcp"))
 }
 
@@ -26,6 +29,9 @@ pub fn server_bin() -> PathBuf {
 /// harness-cli, so `cargo test -p harness-mcp` alone would drive a stale
 /// binary without this check (§R2 TESTS-8).
 pub fn harness_bin() -> PathBuf {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     let path = server_bin().with_file_name("harness");
     let built = std::fs::metadata(&path)
         .and_then(|m| m.modified())
@@ -89,6 +95,9 @@ impl Drop for TempDir {
 }
 
 pub fn copy_dir(src: &Path, dst: &Path) {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {
         let entry = entry.unwrap();
@@ -102,6 +111,11 @@ pub fn copy_dir(src: &Path, dst: &Path) {
         } else {
             std::fs::copy(&from, &to).unwrap();
         }
+    }
+    // A copied ledger is adopted for this test process, as the person's
+    // `--adopt` would (docs/PROJECT-MAP-DESIGN.md §3.7).
+    if dst.join("migration").is_dir() {
+        harness_core::adopt::testing::adopt(dst);
     }
 }
 

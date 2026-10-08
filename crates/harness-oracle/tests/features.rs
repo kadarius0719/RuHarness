@@ -190,6 +190,7 @@ fn program(
          replaces = [\"src/tool/unit.c\"]\n",
     )
     .expect("unit parses");
+    harness_core::adopt::testing::adopt(root);
     (TargetContext::load(root).expect("target loads"), unit)
 }
 

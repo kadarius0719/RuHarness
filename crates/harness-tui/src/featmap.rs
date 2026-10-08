@@ -794,6 +794,7 @@ mod tests {
         }
 
         fn read(&self) -> crate::load::Read {
+            harness_core::adopt::testing::adopt(&self.root);
             crate::load::read(&self.root).expect("reads")
         }
 

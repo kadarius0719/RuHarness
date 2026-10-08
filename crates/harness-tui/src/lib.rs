@@ -27,6 +27,8 @@ pub mod spawn;
 pub mod speed;
 
 #[cfg(feature = "tui")]
+pub mod adoption;
+#[cfg(feature = "tui")]
 pub mod app;
 #[cfg(feature = "tui")]
 pub mod chat;

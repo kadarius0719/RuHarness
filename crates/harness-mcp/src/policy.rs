@@ -449,6 +449,7 @@ pub(crate) mod tests {
         }
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         copy(&repo.join("targets/zopfli"), dst);
+        harness_core::adopt::testing::adopt(dst);
         dst.canonicalize().unwrap()
     }
 }

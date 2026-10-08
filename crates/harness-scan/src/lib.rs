@@ -1739,6 +1739,7 @@ mod tests {
 
     #[test]
     fn scans_real_zopfli_target() {
+        harness_core::adopt::testing::adopt(zopfli_root());
         let target = TargetContext::load(zopfli_root()).expect("load target context");
         let facts = CFrontend.scan(&target).expect("scan");
 
@@ -1935,6 +1936,7 @@ mod tests {
         roots(&repo.join("targets"), &mut found);
         assert_eq!(found.len(), 101, "{found:?}");
         for root in found {
+            harness_core::adopt::testing::adopt(&root);
             let target = TargetContext::load(&root).expect("target loads");
             let facts = CFrontend.scan(&target).expect("scan");
             let committed =

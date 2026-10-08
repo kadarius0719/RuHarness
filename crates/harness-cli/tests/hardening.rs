@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn copy_dir(src: &Path, dst: &Path) {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {
         let entry = entry.unwrap();
@@ -24,6 +27,11 @@ fn copy_dir(src: &Path, dst: &Path) {
             std::fs::copy(&from, &to).unwrap();
         }
     }
+    // A copied ledger is adopted for this test process, as the person's
+    // `--adopt` would (docs/PROJECT-MAP-DESIGN.md §3.7).
+    if dst.join("migration").is_dir() {
+        harness_core::adopt::testing::adopt(dst);
+    }
 }
 
 struct Run {
@@ -33,6 +41,9 @@ struct Run {
 }
 
 fn harness(args: &[&str]) -> Run {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     let out = Command::new(env!("CARGO_BIN_EXE_harness"))
         .args(args)
         .output()
@@ -828,6 +839,7 @@ fn a_probed_compile_that_hangs_is_refused_by_name() {
     )
     .unwrap();
     let t = target.to_str().unwrap();
+    harness_core::adopt::testing::adopt(&target);
     let r = harness(&["scan", "--target", t]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     // Which compile hangs: a probed compile (the only ones with clang's
@@ -950,6 +962,7 @@ fn a_maps_compilers_keep_their_temporaries_in_its_folder() {
         .output();
     std::fs::remove_file(&log).unwrap();
     let t = target.to_str().unwrap();
+    harness_core::adopt::testing::adopt(&target);
     let r = harness(&["scan", "--target", t]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     let out = Command::new(env!("CARGO_BIN_EXE_harness"))

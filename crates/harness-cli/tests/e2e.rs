@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn copy_dir(src: &Path, dst: &Path) {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {
         let entry = entry.unwrap();
@@ -23,6 +26,11 @@ fn copy_dir(src: &Path, dst: &Path) {
             std::fs::copy(&from, &to).unwrap();
         }
     }
+    // A copied ledger is adopted for this test process, as the person's
+    // `--adopt` would (docs/PROJECT-MAP-DESIGN.md §3.7).
+    if dst.join("migration").is_dir() {
+        harness_core::adopt::testing::adopt(dst);
+    }
 }
 
 struct Run {
@@ -32,6 +40,9 @@ struct Run {
 }
 
 fn harness(args: &[&str]) -> Run {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     let out = Command::new(env!("CARGO_BIN_EXE_harness"))
         .args(args)
         .output()

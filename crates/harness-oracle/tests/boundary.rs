@@ -299,6 +299,7 @@ fn layout(root: &Path, header: &str, opt_in: bool, lib_rs: &str) -> (TargetConte
          replaces = [\"src/unit.c\", \"src/print.c\"]\n"
     ))
     .expect("unit parses");
+    harness_core::adopt::testing::adopt(root);
     (TargetContext::load(root).expect("target loads"), unit)
 }
 

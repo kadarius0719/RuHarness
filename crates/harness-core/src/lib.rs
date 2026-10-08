@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod adopt;
 pub mod attempts;
 pub mod bench;
 pub mod config;

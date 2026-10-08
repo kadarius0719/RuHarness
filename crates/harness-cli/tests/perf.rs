@@ -11,6 +11,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn copy_dir(src: &Path, dst: &Path) {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {
         let entry = entry.unwrap();
@@ -27,6 +30,11 @@ fn copy_dir(src: &Path, dst: &Path) {
             std::fs::copy(&from, &to).unwrap();
         }
     }
+    // A copied ledger is adopted for this test process, as the person's
+    // `--adopt` would (docs/PROJECT-MAP-DESIGN.md §3.7).
+    if dst.join("migration").is_dir() {
+        harness_core::adopt::testing::adopt(dst);
+    }
 }
 
 struct Run {
@@ -41,6 +49,9 @@ fn harness(args: &[&str], stdin: Option<&[u8]>) -> Run {
 
 /// [`harness`] with these variables set over the test's own.
 fn harness_env(args: &[&str], stdin: Option<&[u8]>, env: &[(&str, &OsStr)]) -> Run {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
         .args(args)
         .envs(env.iter().copied())
@@ -192,6 +203,7 @@ fn stored_row_on(
     inputs: serde_json::Value,
 ) -> serde_json::Value {
     use harness_core::perf::workloads::{self as wl, WorkloadsState};
+    harness_core::adopt::testing::adopt(t);
     let ctx = harness_core::TargetContext::load(t).unwrap();
     let facts = harness_core::Facts::load(&t.join("migration/facts.jsonl")).unwrap();
     let WorkloadsState::Ready(workloads) = wl::load(t).unwrap() else {

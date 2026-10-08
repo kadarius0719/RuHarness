@@ -38,7 +38,7 @@ change at the switch points below.
    report says it is green, resolve conflicts by file ownership, run the full gates, then step (c):
    - `worktree-agent-ab93152a9e0742945` — (a1) MERGED: the walk's four additions (harness-core walk.rs,
      the callers) and the `--json` escape fix (harness-cli report.rs, SCHEMAS);
-   - `worktree-agent-a367e9fa49de8404a` — (a2) adoption of a ledger made elsewhere (harness-core
+   - `worktree-agent-a367e9fa49de8404a` — (a2) MERGED (one conflict in the scanner's byte-identity test resolved: all 101 roots adopted in the loop): adoption of a ledger made elsewhere (harness-core
      module + `TargetContext::load`, `--adopt` on every CLI command and `bench`, the cockpit's
      dialog, harness-mcp's refusal, the test helper and `$RUHARNESS_ADOPTED`, committed tokens for
      zopfli and the tractor suite, SCHEMAS' fixed-names table and writer row);

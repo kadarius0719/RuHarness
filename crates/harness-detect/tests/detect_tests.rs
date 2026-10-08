@@ -656,6 +656,7 @@ fn macro_spans_are_end_inclusive_everywhere() {
 
 #[test]
 fn ground_truth_zopfli() {
+    harness_core::adopt::testing::adopt(zopfli_root());
     let target = TargetContext::load(zopfli_root()).expect("load zopfli target");
     let facts =
         Facts::load(&zopfli_root().join("migration/facts.jsonl")).expect("load committed facts");

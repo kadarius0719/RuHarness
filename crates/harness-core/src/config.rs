@@ -278,10 +278,14 @@ pub struct TargetContext {
 }
 
 impl TargetContext {
-    /// Build a context by loading `harness.toml` under `root`.
+    /// Build a context by loading `harness.toml` under `root`. A ledger made
+    /// elsewhere is refused first ([`crate::adopt::check`]): every command
+    /// that opens a ledger — the CLI, the cockpit's read model, harness-mcp —
+    /// goes through here.
     pub fn load(root: impl Into<PathBuf>) -> Result<TargetContext, Error> {
         let root = root.into();
         let root = root.canonicalize().map_err(|e| Error::io(&root, e))?;
+        crate::adopt::check(&root)?;
         let config = TargetConfig::load(&root)?;
         Ok(TargetContext { root, config })
     }
