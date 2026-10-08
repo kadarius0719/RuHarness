@@ -40,7 +40,6 @@
 use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::facts::{Facts, SymbolRecord};
-use harness_core::hash::file_hash;
 use harness_core::observer::{finding_id, Finding};
 use harness_core::plan::is_clean_relative_path;
 use harness_core::sources;
@@ -58,6 +57,9 @@ use std::path::{Path, PathBuf};
 /// `fn-pointer`, `global`, `alloc`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CTreeSitterSuite;
+
+/// The files detect skipped, each with why in words.
+pub type Skipped = Vec<(PathBuf, String)>;
 
 const SEV_HIGH: &str = "high";
 const SEV_MEDIUM: &str = "medium";
@@ -117,7 +119,22 @@ impl Detector for CTreeSitterSuite {
     }
 
     fn detect(&self, target: &TargetContext, facts: &Facts) -> Result<Vec<Finding>, Error> {
-        let abs_files = source_files(target, facts)?;
+        self.detect_reporting(target, facts)
+            .map(|(findings, _)| findings)
+    }
+}
+
+impl CTreeSitterSuite {
+    /// [`Detector::detect`], also returning the files it skipped, each with
+    /// why in words — a file that cannot be read is skipped with the same
+    /// note the scan gives it ("cannot be read: …"), never a stop (the
+    /// readers review, finding 4). The caller reports them.
+    pub fn detect_reporting(
+        &self,
+        target: &TargetContext,
+        facts: &Facts,
+    ) -> Result<(Vec<Finding>, Skipped), Error> {
+        let abs_files = source_files(target)?;
         let mut files: Vec<(String, PathBuf)> = Vec::with_capacity(abs_files.len());
         for abs in abs_files {
             files.push((repo_relative(&target.root, &abs)?, abs));
@@ -129,11 +146,17 @@ impl Detector for CTreeSitterSuite {
             .set_language(&tree_sitter_c::LANGUAGE.into())
             .map_err(|e| Error::Invariant(format!("tree-sitter C grammar mismatch: {e}")))?;
 
+        let mut skipped = Vec::new();
         let mut parsed: Vec<ParsedFile> = Vec::with_capacity(files.len());
         for (rel, abs) in &files {
-            let Some(source) = read_source(abs)? else {
+            let (source, hash) = match read_source(abs) {
+                Ok(Some(read)) => read,
                 // Over the scanner's cap: it parses none of it either.
-                continue;
+                Ok(None) => continue,
+                Err(why) => {
+                    skipped.push((abs.clone(), why));
+                    continue;
+                }
             };
             let tree = parser
                 .parse(&source, None)
@@ -142,7 +165,7 @@ impl Detector for CTreeSitterSuite {
                 rel: rel.clone(),
                 source,
                 tree,
-                hash: file_hash(abs)?,
+                hash,
                 is_c: rel.ends_with(".c"),
             });
         }
@@ -358,10 +381,11 @@ impl Detector for CTreeSitterSuite {
         // order), then id computation and final canonical-ish ordering.
         let mut out: Vec<Finding> = Vec::new();
         for (rel, mut raws) in raw_by_file {
-            let file_hash = hash_by_file
-                .get(rel.as_str())
-                .ok_or_else(|| Error::Invariant(format!("no hash recorded for {rel}")))?
-                .to_string();
+            // A file skipped above (over the cap, or unreadable) was never
+            // read: the scan records no symbol of it, so it has nothing here.
+            let Some(file_hash) = hash_by_file.get(rel.as_str()).map(|h| h.to_string()) else {
+                continue;
+            };
             raws.sort_by(|a, b| {
                 a.order
                     .cmp(&b.order)
@@ -393,7 +417,7 @@ impl Detector for CTreeSitterSuite {
             }
         }
         out.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.id.cmp(&b.id)));
-        Ok(out)
+        Ok((out, skipped))
     }
 }
 
@@ -1271,11 +1295,13 @@ fn is_word_byte(b: u8) -> bool {
 /// on harness-scan): a folder target's `.c` and `.h` files by harness-core's
 /// confined walk of `source_dir` (dot-folders, `migration/` and the ledger
 /// pruned; a link's file once, under its real path); a file-list target's
-/// listed files and the headers the facts record them reaching — nothing
-/// else (docs/PROJECT-MAP-DESIGN.md §3.7, "Confinement, restated").
-fn source_files(target: &TargetContext, facts: &Facts) -> Result<Vec<PathBuf>, Error> {
-    let confine = sources::Confine::new(target)?;
-    let Some(listed) = confine.listed_files(target)? else {
+/// files by the include rule over today's bytes
+/// ([`sources::Resolver::walk`]) — never by `facts.jsonl`'s edges, which
+/// the target owns: a forged edge to `notes/secret.h` reaches nothing here
+/// (docs/PROJECT-MAP-DESIGN.md §3.7, "Confinement, restated"). A path
+/// through a dot-folder is never read.
+fn source_files(target: &TargetContext) -> Result<Vec<PathBuf>, Error> {
+    let Some(resolver) = sources::Resolver::of(target)? else {
         let dir = target
             .root
             .join(target.config.target.source_dir().unwrap_or("."));
@@ -1291,30 +1317,51 @@ fn source_files(target: &TargetContext, facts: &Facts) -> Result<Vec<PathBuf>, E
         }
         return Ok(walked.files);
     };
-    let start: Vec<String> = listed.into_iter().map(|f| f.path).collect();
-    let recorded: BTreeSet<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
-    Ok(facts
-        .include_closure(&start)
-        .into_iter()
-        .filter(|rel| recorded.contains(rel.as_str()) && is_clean_relative_path(rel))
+    let root = resolver.root().to_path_buf();
+    let program = resolver.walk(|rel| sources::names_on_disk(&root, rel));
+    Ok(program
+        .files
+        .into_keys()
+        .filter(|rel| is_clean_relative_path(rel) && !sources::in_dot_folder(rel))
         .map(|rel| target.root.join(rel))
-        .filter(|abs| abs.canonicalize().is_ok_and(|real| confine.allows(&real)))
+        .filter(|abs| {
+            abs.canonicalize()
+                .is_ok_and(|real| resolver.confine().allows(&real))
+        })
         .collect())
 }
 
-/// `abs`'s text, its size checked before it is read: `None` over the
-/// scanner's cap; a file that is not UTF-8 decoded lossily (the scanner
+/// `abs`'s text and its hash, read through `read_regular` with the
+/// scanner's cap (never a link, a FIFO, or more than the cap even when the
+/// file grows while it is read): `Ok(None)` over the cap (the scanner
+/// parses none of it either); `Err` is why it cannot be read, in the
+/// scan's words. A file that is not UTF-8 is decoded lossily (the scanner
 /// parses its bytes; the detectors read text).
-fn read_source(abs: &Path) -> Result<Option<String>, Error> {
-    let len = std::fs::metadata(abs).map_err(|e| Error::io(abs, e))?.len();
+fn read_source(abs: &Path) -> Result<Option<(String, String)>, String> {
+    let len = std::fs::metadata(abs)
+        .map_err(|e| format!("cannot be read: {e}"))?
+        .len();
     if len > sources::MAX_SOURCE_BYTES {
         return Ok(None);
     }
-    let bytes = std::fs::read(abs).map_err(|e| Error::io(abs, e))?;
-    Ok(Some(match String::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
-    }))
+    let real = abs
+        .canonicalize()
+        .map_err(|e| format!("cannot be read: {e}"))?;
+    let bytes =
+        harness_core::ledger::read_regular(&real, sources::MAX_SOURCE_BYTES).map_err(|e| {
+            format!(
+                "cannot be read: {}",
+                harness_core::text::safe_line(&e.to_string())
+            )
+        })?;
+    let hash = harness_core::hash::bytes_hash(&bytes);
+    Ok(Some((
+        match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        },
+        hash,
+    )))
 }
 
 /// Render `path` relative to `root` with forward slashes.

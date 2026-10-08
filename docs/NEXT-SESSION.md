@@ -78,14 +78,40 @@ change at the switch points below.
    the cockpit (tree, preflight, read model, dialogs) and harness-mcp open a file-list target;
    `TargetSection::is_program_file` is the one "program's own files" rule; end-to-end tests in
    crates/harness-cli/tests/file_list.rs and crates/harness-mcp/tests/file_list.rs.
-   **Step (b) is BEING BUILT** and **the review of (a)+(c) is RUNNING** (launched 2026-10-08):
-   (b1) the build evidence and the configuration (`config.toml`, `--configuration`,
-   `compile_commands.json` as a proposal, `system_headers`, the caps and budget, set-aside counts);
-   (b2) programs, closures, duplicates, collisions, libraries, ids and indexes, the link checks of
-   §3.5 (new modules under crates/harness-oracle/src/projectmap/); then (b3) the map file, the
-   screen, the project lock, `.gitignore`, the "project changed" notice. The review's reports go to
-   docs/reviews/2026-10-08-map-steps-a-c-review.md with a triage; fix passes follow (b).
-   Then (d), (e), (f), (g).
+   **Step (b) parts 1 and 2 are MERGED** (0d8e250, pushed; the oracle's gates green): part 1 the
+   configuration file and `--configuration`, `compile_commands.json` as a proposal, the caps and
+   budget, set-aside counts (`projectmap::{config, evidence}`, `map_root(root, &MapOptions)`,
+   `FileFacts::flags`, `compile_object`); part 2 programs, closures, libraries, ids, indexes and
+   the link checks (`projectmap::{closure, ids, link}`, `closure::analyze(&Input, linker)`,
+   `link::analyze_linked`). **The review of (a)+(c) is DONE and TRIAGED**:
+   docs/reviews/2026-10-08-map-steps-a-c-review.md (four lenses; the triage at its end decides
+   nine design points — the one include rule with the configuration's path flags, one include
+   reader, a missing listed file refused at load, the harness's C runtimes without the
+   configuration, the configuration entry in file-list verdicts, a fresh token on every `--adopt`
+   with the committed tokens untracked, a results-free `migration/` needing no adoption, an agent
+   never adopts, hints spell `--tool`).
+   **RUNNING NOW (launched 2026-10-08 from 0d8e250, four Opus builders at medium in worktrees):**
+   - `worktree-agent-ad0e5b3fa6894e17b` — fix pass A MERGED (cab4f8a): the shared include resolver
+     (`harness_core::sources::Resolver`, taking the listed file and the including file), one
+     include reader, staleness both ways, unreadable files as facts, the loader's refusals.
+     Left for the session after fix pass C merges (main.rs is C's): `scan_target` prints
+     `notes.ambiguous_lines()`, `cmd_detect` calls `detect_reporting` so skipped files print.
+     Residual: the files an ambiguous include lands on are in the program digest but in no
+     unit's include closure (a change moves the program digest, not that unit's `source_hash`).
+     Rule corrected at the merge: `-iquote` folders apply to quoted includes only.
+   - `worktree-agent-ac1683b337dddd828` — fix pass B, the oracle (lib.rs, boundary_run, validate,
+     shape, objsyms, unit_crate, featuremap, sandbox, perf/build, status.rs's compare);
+   - `worktree-agent-ae7ea5096fdff60c7` — fix pass C, the person's side (adopt.rs, runtime_view,
+     the CLI's hints and words, the cockpit's title/dialog/mark, harness-mcp, the uncovered tests,
+     the two token files untracked);
+   - `worktree-agent-ad6c3511dbeadf601` — step (b) part 3: the map file `migration/map/
+     project-map.json`, the screen, the project lock, `.gitignore`, the "project changed" notice.
+   Merge each when its report is green, by file ownership (A's resolver replaces B's local
+   search-order function in `unit_headers`/`driver_folders`/`unit_header_names` at the merge),
+   run the full gates and `bench check --suite targets/tractor --replay --jobs 6 --adopt`; a check
+   round over the fix passes (Opus checkers, high); DECISIONS; then (d), (e), (f), (g).
+   After fix pass C merges the person runs each target's first command once with `--adopt`
+   (targets/zopfli; `bench` adopts its suite by itself).
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
    toolchain line — folder-form `inputs` stay untouched.

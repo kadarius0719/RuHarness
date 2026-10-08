@@ -321,7 +321,7 @@ fn visit(dir: &Path, canon_dir: &Path, ctx: &Ctx<'_>, depth: usize, st: &mut Sta
             }
         };
         if file_type.is_symlink() {
-            link(path, &name, ctx, st);
+            link(path, ctx, st);
             continue;
         }
         let canon = canon_dir.join(&name);
@@ -356,7 +356,7 @@ fn visit(dir: &Path, canon_dir: &Path, ctx: &Ctx<'_>, depth: usize, st: &mut Sta
 
 /// A link the walk met: an issue, or kept to become an alias once the walk
 /// is done.
-fn link(path: PathBuf, name: &OsStr, ctx: &Ctx<'_>, st: &mut State) {
+fn link(path: PathBuf, ctx: &Ctx<'_>, st: &mut State) {
     // Followed, as the canonical path is.
     let meta = match std::fs::metadata(&path) {
         Ok(meta) => meta,
@@ -387,11 +387,11 @@ fn link(path: PathBuf, name: &OsStr, ctx: &Ctx<'_>, st: &mut State) {
         }
         return;
     }
-    if is_dir && dotted(name) {
-        // A dotted folder name, through a link: pruned by name all the same.
-        skip_folder(path, ctx, st);
-        return;
-    }
+    // A dotted name on a link counts nothing through it: the target decides
+    // (a link into a pruned folder is an issue, one to a walked folder an
+    // alias), so `.alias -> src` never lists `src`'s files as skipped and
+    // `.alias -> .` never counts the whole root. Only real dot-folders are
+    // counted.
     if ctx.pruned(&target, is_dir) {
         if counts {
             issue(&mut st.walk, path, Why::IntoPruned);
@@ -591,6 +591,46 @@ mod tests {
             ]
         );
         assert_eq!(walk.aliases, []);
+    }
+
+    /// The readers review, finding 8: a dot-named link counts nothing
+    /// through the link. To a walked folder it is an alias (never "skipped
+    /// files" that are walked); to the root itself, no count of the whole
+    /// root; to a real dot-folder, a link into a pruned folder. Only a real
+    /// dot-folder is counted.
+    #[test]
+    fn a_dot_named_link_is_judged_by_its_target_and_counts_nothing() {
+        let t = Tmp::new("dotlink");
+        t.file("src/x.c");
+        t.file(".cache/c.c");
+        let root = t.0.clone();
+        symlink(root.join("src"), root.join(".alias")).unwrap();
+        symlink(&root, root.join(".self")).unwrap();
+        symlink(root.join(".cache"), root.join(".tocache")).unwrap();
+        let walk = confined(&root, &["c"], Limits::default());
+        assert_eq!(rel(&walk, &root), ["src/x.c"]);
+        assert_eq!(
+            walk.skipped_folders,
+            [SkippedFolder {
+                path: root.join(".cache"),
+                files: 1,
+                complete: true,
+            }],
+            "only the real dot-folder is counted"
+        );
+        assert_eq!(
+            issues(&walk, &root),
+            [(".tocache".to_string(), Why::IntoPruned)]
+        );
+        let aliases = aliases(&walk, &root);
+        assert!(
+            aliases.contains(&(".alias/x.c".to_string(), "src/x.c".to_string())),
+            "{aliases:?}"
+        );
+        assert!(
+            aliases.contains(&(".self/src/x.c".to_string(), "src/x.c".to_string())),
+            "{aliases:?}"
+        );
     }
 
     /// A link to a folder inside the root is not descended: the real folder
