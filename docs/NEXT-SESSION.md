@@ -104,8 +104,17 @@ change at the switch points below.
    - `worktree-agent-ae7ea5096fdff60c7` — fix pass C, the person's side (adopt.rs, runtime_view,
      the CLI's hints and words, the cockpit's title/dialog/mark, harness-mcp, the uncovered tests,
      the two token files untracked);
-   - `worktree-agent-ad6c3511dbeadf601` — step (b) part 3: the map file `migration/map/
-     project-map.json`, the screen, the project lock, `.gitignore`, the "project changed" notice.
+   - `worktree-agent-ad6c3511dbeadf601` — step (b) part 3 MERGED (gates running at the time of
+     writing): `projectmap/mapfile.rs` (`analyze`, `render`, `write_gitignore`), the screen in
+     project.rs (maps the whole root even with a root `harness.toml`), `WriterLock::acquire_project`,
+     `ledger::project_changed_notice`, SCHEMAS' map section. Left by it, for the check round's fix
+     pass: `link.rs` compiles every file with the configuration's flags only (per-file
+     `compile_commands.json` flags never reach the link check) and takes path flags as written
+     (`mapfile::link_flags` makes them absolute for it; link.rs should); a refused map with no C
+     files leaves an empty `migration/map/.lock` (the lock is taken before the walk); the
+     cockpit's read model carries the notice but nothing displays it (step e); the accepted-id
+     rule is not wired (`analyze` gets an empty accepted list; step e); the closing line names
+     `project ask`/`accept` before steps (d)/(e) exist.
    Merge each when its report is green, by file ownership (A's resolver replaces B's local
    search-order function in `unit_headers`/`driver_folders`/`unit_header_names` at the merge),
    run the full gates and `bench check --suite targets/tractor --replay --jobs 6 --adopt`; a check
