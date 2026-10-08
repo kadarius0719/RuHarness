@@ -1575,27 +1575,151 @@ one-time trust question is per computer.
 | the adoption file (outside every target) and its `.lock` | any command given `--adopt`; the cockpit's adoption dialog; the first command that creates a ledger |
 | `migration/.ruharness-adopted`, `<suite>/.ruharness-adopted` (gitignored) | the same, when the root has no well-formed token yet |
 
-## `harness project map` — first form (docs/PROJECT-MAP-DESIGN.md §3.8, §5 step a)
+## `harness project map` (docs/PROJECT-MAP-DESIGN.md §3.3, §3.6, §3.8, §5 step b)
 
-`harness project map --target DIR [--json] [--adopt] [--allow-unsandboxed]` maps one folder:
-`DIR`'s `[target] source_dir` when `DIR/harness.toml` exists, else `DIR` itself. Writes
-nothing (the map file comes with step b). For each walked `.c` and `.h`, sorted by path: its
-compile, its include folders (relative to `DIR`, `.` for `DIR` itself, in the order first
-needed), its ambiguous includes, and its counts of defined and needed external symbols; then
-the walk's issues and skipped folders. Exit 0 when every file was visited; 1 refused: no `.c`
-or `.h` found, a cap reached (20 000 files, depth 32 — the files seen are still printed), no
-sandbox unless `--allow-unsandboxed`, a `DIR` that is or holds the home folder or the cargo or
-rustup home, a ledger made elsewhere not adopted (the adoption check runs even when `DIR` has
-no `harness.toml`); 2 usage. Every printed project string has its control characters,
-newlines and tabs shown as `?`.
+`harness project map --target DIR [--configuration NAME] [--json] [--adopt]
+[--allow-unsandboxed]` maps the whole project at `DIR` (every folder; `migration/` and
+dot-folders pruned), under the configuration of `migration/map/config.toml` (or a guess),
+runs the link checks, writes `migration/map/project-map.json` and shows it. It takes the
+**project lock** `migration/map/.lock` (the ledger's lock type, so another holder is the
+usual "ledger is locked by another harness command" sentence), and on a folder-form project
+(a root `harness.toml`) that target's ledger lock too, in that order. The first map writes
+`migration/.gitignore` (below), never over an existing one. Exit 0 when the map was written
+in full (its closures may still be incomplete: that is a fact in it); 1 refused or cut short:
+no `.c` or `.h` found (nothing printed but the refusal), a cap reached (20 000 files, depth
+32, 200 000 distinct symbol names, 30 minutes — the map file is written with the file facts
+and no programs, and the refusal names the limit), no sandbox unless `--allow-unsandboxed`, a
+`DIR` that is or holds the home folder or the cargo or rustup home, a ledger made elsewhere not
+adopted, the lock held; 2 usage.
 
-`--json` adds one event per file to the events stream:
+**The screen** shows: the toolchain with the harness's own flags labelled as the harness's; the
+configuration's name, source and flags (a guess said to be one); what a
+`compile_commands.json` gave and the build files; then per program (in path order) its index
+and id, path, kind and the kind guessed from its folder, the closure's files by folder, the
+outside symbols and the guessed libraries, the link check, "incomplete" and why, each duplicate
+set — settled by linking (the kept definer) or held with its definers, their indexes and the
+`accept --keep` to use — needs met by another program, collisions, ambiguous includes the
+configuration does not settle, flags that differ between its files, and that the project's
+build may link more than the closure; a driver's fuzzers with each one's link result; once
+per screen, what the link check proves and does not; then shared files, libraries, duplicates
+between programs, programs that did not compile, unreached `.c` files, files that did not
+compile with their closed reason in words (an `#error` named as such), ambiguous includes,
+set-aside counts and skipped folders (`migration` as "the harness's own files"); last, one
+sentence saying what was written and the next step (`harness project ask`, or `harness project
+accept <id>`). Every printed project string has its control characters, newlines and tabs
+shown as `?`.
+
+`--json` carries these events (and a `message` for each human line it still prints):
 
 | `k` | fields |
 |---|---|
-| `project-file` | `path`, `kind` (`c` \| `h`), `compiled` (true when an object was made and read), `reason` (when a `.c` did not compile: the closed set `missing-header` \| `syntax` \| `other`), `header` (`missing-header` only: the name as the include wrote it), `detail` (`other` only: `timeout` \| `output-overflow` \| `too-large-object` \| `unreadable-object`), `at` (`<path>:<line>` inside the project, when known), `too_large` (only when true: over 8 MiB, neither parsed nor compiled), `include_dirs`, `ambiguous: [{header, candidates: [path \| "system"], used?}]` (`used`: the candidate the compile read, from its `-MD` list), `defined`, `needed` (counts), `outside_includes`, `withheld` (only when non-zero: names counted, not kept, because the compile read outside the project and the toolchain's folders), `odd_names` (only when non-zero: names not shaped like a C identifier) |
+| `project-file` | `path`, `kind` (`c` \| `h`), `compiled` (true when an object was made and read), `reason` (when a `.c` did not compile: the closed set `missing-header` \| `syntax` \| `other`), `header` (`missing-header` only, and only when the name is a clean relative path), `detail` (`other` only: `timeout` \| `output-overflow` \| `too-large-object` \| `unreadable-object`), `at` (`<path>:<line>` inside the project, when known), `too_large` (only when true: over 8 MiB, neither parsed nor compiled), `include_dirs`, `ambiguous: [{header, candidates: [path \| "system"], used?}]` (`used`: the candidate the compile read, from its `-MD` list), `defined`, `needed` (counts), `outside_includes`, `withheld` (only when non-zero: names counted, not kept, because the compile read outside the project and the toolchain's folders), `odd_names` (only when non-zero: names not shaped like a C identifier) |
+| `project-build` | `configuration`, `from`, `source`, `flags`, `system_headers`, `digest`, `compile_commands` (its path or null), `ignored_entries`, `unfound_entries`, `build_files`, `flags_differ` (paths listed twice with other flags), `ignored_flags: [[flag, why, count]]`, `ignored_flag_count`, `set_aside: [[folder, lang, count]]`, `limits_hit` |
+| `project-program` | `id`, `path`, `kind`, `kind_guess`, `files` (its closure; empty for a driver), `outside`, `incomplete`, `held` (the indexes of its held duplicate sets) |
+| `project-link` | `id` and either `ok: true` or `missing: [sym]` with `doubled: [sym]` — from the symbol facts and the linker's exit status, never its text |
 
-Paths and header names are carried raw, escaped as every event is.
+Paths, header and symbol names are carried raw, escaped as every event is. Under a cap only
+`project-file` and `project-build` are sent before the refusal.
+
+## The project map file: `migration/map/project-map.json` (`ruharness-project-map` v1)
+
+Written **only by `project map`**, only in full (atomically), under the project lock; read by
+the "project changed" notice and, later, `ask` and `accept`. Facts and summaries only — **no
+source text**. Every string from the project (a path, a header name, a symbol name) is stored
+raw. Pretty JSON (two-space indent) with a final newline; fields in the order below; **flags
+and include folders keep their order, every other list is sorted by its first field's bytes**,
+so the same project, configuration and toolchain give byte-identical files. Optional fields
+(`?`) are left out when false, empty, zero or absent.
+
+```
+{ schema: "ruharness-project-map", schema_version: 1, root_hash, inputs_hash,
+  toolchain: {cc, target, cflags: [flag], system_include_dirs: [path]},
+  configuration: {name, from: make | meson | cmake | compile_commands | stated,
+                  source: compile_commands | stated | guessed, flags: [flag],
+                  system_headers?: [name], digest},
+  files: [{path, aliases: [path], kind: c | h, bytes, blake3, parsed, too_large?, not_utf8?,
+           compiled?: "ok" | {reason: missing-header | syntax | other, header?, detail?, at?},
+           outside_includes?, functions, includes: [path], include_dirs: [path],
+           ambiguous_includes: [{header, candidates: [path | "system"], used?}],
+           included_by: [path], included_other: [path],
+           defined_symbols: [{name, kind, weak?}], needed_symbols: [{name, weak?}],
+           odd_names, withheld_names?}],
+  programs: [{id, index?: "p1", path, kind: main | fuzz | driver,
+              kind_guess: tool | test | example | benchmark, serves?: [path]}],
+  programs_not_compiled: [path],
+  closures: [{program, files: [path], flags?: [flag], flags_differ?: [{path, flags}],
+              incomplete, incomplete_why: [{why: pending | may-be-defined-in | unread |
+              unreadable-folder, path?, symbols?}], outside: [sym],
+              needs_from: [{sym, program}],
+              duplicates: [{set: "d1", symbols, definers: [{index: "d1.1", path}],
+                            links: [index], choice?: {keep: index, by: "links"}, under?}],
+              collisions: [{sym, definers: [path]}],
+              ambiguous_unsettled: [{header, candidates, used?}],
+              linked?: "ok" | {missing: [sym], doubled: [sym]}, questions: [index]}],
+  between_program_duplicates: [{sym, definers: [path]}],
+  shared: [{file, programs: [id]}],
+  libraries: [{id, files: [path], needs_from_outside: [path]}],
+  set_aside: [{folder, lang, count}], skipped_folders: [{path, count, at_least?}],
+  walk_issues: [{path, why}],
+  build_evidence: {compile_commands: present | absent | unreadable, compile_commands_path?,
+                   ignored_entries, unfound_entries: [path], build_files: [path],
+                   flags_differ?: [{path, flags: [[flag]]}]},
+  limits_hit: [{limit: files | depth | symbols | budget, at}] }
+```
+
+- **`root_hash`** is the file-set hash (Global rules, "Hashes") of every walked `.c`/`.h`,
+  every `included_other` file, and `compile_commands.json` when one was read. A README or a
+  build file outside these does not move it; a header does.
+- **`configuration.digest`** is blake3 of the canonical JSON (keys sorted, no blanks) of
+  `{flags, from, name}`, flag order counting.
+- **`toolchain`**: `cc` the first line of `cc --version`, `target` `cc -dumpmachine`, `cflags`
+  the judge's base flags every map compile takes first, `system_include_dirs` the compiler's
+  own `#include <...>` folders in order.
+- **`inputs_hash`** is blake3 of the canonical JSON (keys sorted, no blanks) of
+  `{"configuration": <configuration.digest>, "toolchain": {"cc", "cflags",
+  "system_include_dirs", "target"}}`: a map made under another configuration or compiler is
+  visibly another map.
+- **`compiled.header`** is kept only when it is a clean relative path (no leading `/`, no `..`
+  or empty part, no control character): an absolute name can be a machine path.
+- **A closure's flags**: `flags` when every `.c` of it compiles with the same list (the
+  configuration's, or under `from = "compile_commands"` and a guess each file's entry's then the
+  configuration's); otherwise `flags_differ` lists each `.c` with its own and
+  `configuration.source` is written `guessed`.
+- **`ambiguous_unsettled`**: the closure's files' ambiguous includes that the configuration
+  neither names in `system_headers` nor reaches through one of its `-I`, `-iquote` or
+  `-isystem` folders.
+- **`included_by`**: the files whose own includes reach this one directly.
+- **Past a cap** (`limits_hit` not empty) the file holds the file facts and no programs,
+  closures, shared files or libraries, and `project map` exits 1 naming the limit. A map whose
+  closures are merely incomplete is a full map.
+- The ids, indexes and kinds follow docs/PROJECT-MAP-DESIGN.md §3.3 and §3.1; the link check
+  and the duplicate sets §3.5.
+
+### `migration/.gitignore`
+
+Written by the first `project map` when there is none, never overwritten (the person may edit
+it): a two-line comment, then one name per line — `build/`, `.lock`, `traces/`,
+`.promote-*/`, `.*.prev/`, `.replay-*/`, `target/`, `.ruharness-adopted`, `map/.lock`,
+`map/project-map.reply.json`.
+
+### The "project changed" notice
+
+For a mapped tool whose `harness.toml` carries `map = {root_hash, inputs_hash}`, `state status`
+(a line `status: …` and a `project-notice {says}` event) and the cockpit's read model
+(`Snapshot::project_notice`) compare the two digests with the map file's (a `blake3:` prefix
+on either side ignored); nothing is hashed. Digests that differ: "the project changed since
+this tool was accepted: run `harness project map`, then `accept` again". No map file: "no map
+written yet: run `harness project map` to see whether the project changed since this tool was
+accepted". A notice, never staleness: no command refuses because of it. A folder-form target
+and a hand-written tool with no `map` get none.
+
+### Writer table additions
+
+| File | Writer | Lock |
+|---|---|---|
+| `migration/map/project-map.json` | `project map` (in full, atomically) | the project lock `migration/map/.lock`, then a folder-form target's `migration/.lock` |
+| `migration/.gitignore` | the first `project map` (never overwritten) | the same |
+| `migration/map/.lock` | `project map`, `sync-runtime` (later `accept`) | — (it is the lock) |
 
 ---
 
@@ -1742,11 +1866,11 @@ refused for repair by hand.
 
 Every writer of a ledger file takes **that ledger's** writer lock — `migration/.lock` for a
 folder-form target, `migration/tools/<id>/.lock` for a tool — so two tools of one project run
-their commands side by side. The project lock (`migration/map/.lock`) comes with `project
-map` (step b).
+their commands side by side. The project lock (`migration/map/.lock`, "The project map
+file" above) is taken by `project map` and by `sync-runtime`, always before a ledger's lock.
 
 | File | Writer | Lock |
 |---|---|---|
 | every file of a ledger folder (the tables above) | the command that writes it today | that ledger's `.lock` |
 | `migration/tools/<id>/harness.toml` | a person; later `project accept` | — (read-only to every other command) |
-| `AGENTS.md` (the tool's block), `CLAUDE.md` (`@AGENTS.md`) at the project root | `sync-runtime --tool <id>` | that tool's `.lock` (the project lock once step b makes it; two tools synced at the very same moment could race on the shared file until then) |
+| `AGENTS.md` (the target's block), `CLAUDE.md` (`@AGENTS.md`) at the project root | `sync-runtime [--tool <id>]` | the project lock `migration/map/.lock`, then that target's `.lock` (`--check` writes nothing and takes neither) |

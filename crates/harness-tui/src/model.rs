@@ -190,6 +190,9 @@ pub struct Snapshot {
     pub program_name: String,
     /// perf's files and today's inputs (docs/PERF-DESIGN.md §3.11).
     pub perf: crate::perfread::PerfRead,
+    /// A mapped tool's "project changed" notice, in words
+    /// (docs/PROJECT-MAP-DESIGN.md §3.7): a notice, never staleness.
+    pub project_notice: Option<String>,
 }
 
 impl Snapshot {
@@ -233,6 +236,7 @@ impl Snapshot {
             target: ctx.config.target.clone(),
             program_name: harness_core::features::program_name(&ctx.config),
             perf: crate::perfread::PerfRead::default(),
+            project_notice: harness_core::ledger::project_changed_notice(&ctx),
         };
         // perf's files: the live lock holder read here (as `unit_report`
         // does) — while a perf run holds it no input is hashed.
@@ -612,5 +616,70 @@ mod tests {
         assert_eq!(sample_key("a-1"), ("a-1", 1));
         assert_eq!(sample_key("a-1.r2"), ("a-1", 2));
         assert_eq!(sample_key("a-1.rx"), ("a-1.rx", 1));
+    }
+
+    /// A mapped tool's "project changed" notice (docs/PROJECT-MAP-DESIGN.md
+    /// §3.7): computed from the map file's digests, absent on a
+    /// hand-written tool with no `map`.
+    #[test]
+    fn the_read_model_carries_the_project_changed_notice() {
+        let tmp = std::env::temp_dir().join(format!(
+            "harness-tui-notice-{}-{}",
+            std::process::id(),
+            harness_core::hash::random_hex(4)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = tmp.canonicalize().unwrap();
+        std::fs::write(tmp.join("a.c"), "int a(void) { return 1; }\n").unwrap();
+        let tool = |id: &str, map: &str| {
+            let dir = harness_core::config::tool_dir(&tmp, id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("harness.toml"),
+                format!(
+                    "schema_version = 2\n[target]\nname = \"a\"\nfiles = [{{ path = \"a.c\" }}]\n\
+                     configuration = {{ name = \"plain\", from = \"stated\", flags = [] }}\n{map}"
+                ),
+            )
+            .unwrap();
+        };
+        let digest = |c: char| format!("blake3:{}", c.to_string().repeat(64));
+        tool(
+            "t-a",
+            &format!(
+                "map = {{ root_hash = \"{}\", inputs_hash = \"{}\" }}\n",
+                digest('a'),
+                digest('b')
+            ),
+        );
+        tool("t-hand", "");
+        harness_core::adopt::testing::adopt(&tmp);
+        let notice = |id: &str| Snapshot::open(&tmp, Some(id)).unwrap().project_notice;
+        assert!(notice("t-a").unwrap().starts_with("no map written yet"));
+        assert_eq!(notice("t-hand"), None);
+        let map = |root: char| {
+            std::fs::create_dir_all(tmp.join("migration/map")).unwrap();
+            std::fs::write(
+                tmp.join(harness_core::ledger::PROJECT_MAP_FILE),
+                format!(
+                    "{{\"root_hash\": \"{}\", \"inputs_hash\": \"{}\"}}\n",
+                    digest(root),
+                    digest('b')
+                ),
+            )
+            .unwrap();
+        };
+        map('a');
+        assert_eq!(notice("t-a"), None);
+        map('c');
+        assert_eq!(
+            notice("t-a").as_deref(),
+            Some(
+                "the project changed since this tool was accepted: run `harness project map`, \
+                 then `accept` again"
+            )
+        );
+        assert_eq!(notice("t-hand"), None);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

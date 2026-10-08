@@ -200,7 +200,13 @@ fn a_file_list_tool_runs_every_reading_command_inside_its_ledger() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     top.sort();
-    assert_eq!(top, [".ruharness-adopted", "tools"], "{top:?}");
+    // (`map/` holds only the project lock `sync-runtime` takes.)
+    assert_eq!(top, [".ruharness-adopted", "map", "tools"], "{top:?}");
+    let map: Vec<String> = std::fs::read_dir(root.join("migration/map"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(map, [".lock"], "{map:?}");
     let written = files_under(&tool);
     for f in [
         "facts.jsonl",

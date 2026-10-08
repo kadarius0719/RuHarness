@@ -333,6 +333,92 @@ impl Drop for WriterLock {
     }
 }
 
+// ---------- the project lock and the map's notice (docs/PROJECT-MAP-DESIGN.md §3.7) ----------
+
+/// The project-level folder of the map, relative to the project root.
+pub const MAP_DIR: &str = "migration/map";
+/// The project map file, relative to the project root.
+pub const PROJECT_MAP_FILE: &str = "migration/map/project-map.json";
+/// The largest map file the notice reads.
+const MAX_MAP_BYTES: u64 = 256 << 20;
+
+impl WriterLock {
+    /// The project lock, `migration/map/.lock`: the same lock as a ledger's,
+    /// taken by `project map` (and later `accept`) and by `sync-runtime` for
+    /// the shared root `AGENTS.md`/`CLAUDE.md`. `migration/` and
+    /// `migration/map/` are made when absent; a link in place of either is
+    /// refused. Another holder is [`Error::Locked`].
+    pub fn acquire_project(root: &Path, command: &str) -> Result<WriterLock, Error> {
+        let migration = root.join(MIGRATION_DIR);
+        match std::fs::symlink_metadata(&migration) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(Error::Invariant(format!(
+                    "{} is not a directory (symlinks are refused); refusing to lock the project",
+                    migration.display()
+                )))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&migration).map_err(|e| Error::io(&migration, e))?;
+            }
+            Err(e) => return Err(Error::io(&migration, e)),
+        }
+        WriterLock::acquire(&Ledger::at(root, root.join(MAP_DIR)), command)
+    }
+}
+
+/// The "project changed" notice of a mapped tool (docs/PROJECT-MAP-DESIGN.md
+/// §3.7): for a tool whose `harness.toml` carries `map = {root_hash,
+/// inputs_hash}`, whether the project map's digests still match. Cheap: the
+/// map file is compared, nothing is hashed. `None` for a folder-form target,
+/// a hand-written tool with no `map`, or digests that match. A notice, never
+/// staleness.
+pub fn project_changed_notice(ctx: &crate::config::TargetContext) -> Option<String> {
+    let stamp = ctx.config.target.file_list()?.map.as_ref()?;
+    let path = ctx.root.join(PROJECT_MAP_FILE);
+    #[derive(Deserialize)]
+    struct Digests {
+        root_hash: String,
+        inputs_hash: String,
+    }
+    // `None`: no map file; `Some(None)`: one that cannot be read.
+    let read = || -> Option<Option<Digests>> {
+        let meta = std::fs::symlink_metadata(&path).ok()?;
+        if !meta.file_type().is_file() || meta.len() > MAX_MAP_BYTES {
+            return Some(None);
+        }
+        let bytes = std::fs::read(&path).ok()?;
+        Some(serde_json::from_slice::<Digests>(&bytes).ok())
+    };
+    let bare = |h: &str| {
+        h.strip_prefix(crate::hash::HASH_PREFIX)
+            .unwrap_or(h)
+            .to_string()
+    };
+    match read() {
+        None => Some(
+            "no map written yet: run `harness project map` to see whether the project changed \
+             since this tool was accepted"
+                .into(),
+        ),
+        Some(None) => Some(format!(
+            "the project map ({PROJECT_MAP_FILE}) could not be read: run `harness project map` \
+             again"
+        )),
+        Some(Some(d))
+            if bare(&d.root_hash) == bare(&stamp.root_hash)
+                && bare(&d.inputs_hash) == bare(&stamp.inputs_hash) =>
+        {
+            None
+        }
+        Some(Some(_)) => Some(
+            "the project changed since this tool was accepted: run `harness project map`, then \
+             `accept` again"
+                .into(),
+        ),
+    }
+}
+
 /// Open the lock file without ever following a link: a missing file is
 /// created with `O_EXCL`; an existing one must be a regular, un-hard-linked
 /// file both before (lstat) and after (fstat, same device and inode) the
@@ -540,6 +626,33 @@ mod tests {
         assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
         assert_eq!(rfc3339_utc(951_782_400), "2000-02-29T00:00:00Z");
         assert_eq!(rfc3339_utc(1_790_000_000), "2026-09-21T14:13:20Z");
+    }
+
+    /// The project lock is `migration/map/.lock`, made with its folders,
+    /// apart from the ledger's own lock; a link in place of `migration/` is
+    /// refused.
+    #[test]
+    fn the_project_lock_lives_in_the_map_folder_and_refuses_a_link() {
+        let root = scratch("project");
+        let lock = WriterLock::acquire_project(&root, "project map").unwrap();
+        assert_eq!(lock.path(), root.join("migration/map/.lock"));
+        assert!(matches!(
+            WriterLock::acquire_project(&root, "sync-runtime"),
+            Err(Error::Locked { holder: Some(_) })
+        ));
+        // The ledger's own lock is another lock.
+        let ledger = WriterLock::acquire(&Ledger::new(&root), "scan").unwrap();
+        drop((lock, ledger));
+        WriterLock::acquire_project(&root, "project map").unwrap();
+
+        let linked = scratch("project-link");
+        std::fs::create_dir_all(linked.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(linked.join("elsewhere"), linked.join("migration")).unwrap();
+        let err = WriterLock::acquire_project(&linked, "project map").unwrap_err();
+        assert!(err.to_string().contains("symlinks are refused"), "{err}");
+        assert!(!linked.join("elsewhere/map").exists());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&linked);
     }
 
     #[test]

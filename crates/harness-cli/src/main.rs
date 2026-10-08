@@ -391,11 +391,10 @@ enum FeaturesCmd {
 
 #[derive(Subcommand)]
 enum ProjectCmd {
-    /// Map the C files of one folder: each file's include folders, its
-    /// compile and the symbols it defines and needs (writes nothing yet)
+    /// Map the whole project: its programs, the files each needs, what
+    /// they share and what links (writes migration/map/project-map.json)
     Map {
-        /// The project folder (its harness.toml's source_dir is mapped when
-        /// it has one, else the folder itself)
+        /// The project folder (all of it is mapped)
         #[arg(long, default_value = ".")]
         target: PathBuf,
         /// Compile the project's code even though no sandbox is available
@@ -1055,6 +1054,19 @@ pub(crate) fn announce_skips(verdict: &harness_core::Verdict) {
 fn cmd_status(target: TargetArg) -> Result<u8> {
     let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
+    // A mapped tool's "project changed" notice: a notice, not staleness.
+    if let Some(says) = harness_core::ledger::project_changed_notice(&ctx) {
+        out(format!("status: {says}"));
+        #[derive(serde::Serialize)]
+        struct NoticeEvent<'a> {
+            k: &'static str,
+            says: &'a str,
+        }
+        report::event(&NoticeEvent {
+            k: "project-notice",
+            says: &says,
+        });
+    }
 
     let facts = match Facts::load(&ledger.facts_path()) {
         Ok(f) => f,
@@ -1347,10 +1359,15 @@ fn cmd_sync_runtime(target: TargetArg, check: bool) -> Result<u8> {
     use harness_core::observer::{self, ObserverPaths};
     let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
-    let _lock = if check {
+    // The project lock first (the root AGENTS.md and CLAUDE.md are shared
+    // by every tool of the project), then the target's own.
+    let _locks = if check {
         None
     } else {
-        Some(lock_ledger(&ledger, "sync-runtime")?)
+        Some((
+            WriterLock::acquire_project(&ctx.root, "sync-runtime")?,
+            lock_ledger(&ledger, "sync-runtime")?,
+        ))
     };
     let facts =
         Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
@@ -1372,9 +1389,8 @@ fn cmd_sync_runtime(target: TargetArg, check: bool) -> Result<u8> {
     let risk = harness_core::risk::score_units(&facts, &plan_doc, &all_findings, &triage, &reviews);
 
     // One block per target: a folder-form target's, and each mapped tool's
-    // marked with its id; the other tools' blocks are kept as they are.
-    // (Two tools synced at the same moment could race on the shared
-    // AGENTS.md: the project lock of step (b) will cover it.)
+    // marked with its id; the other tools' blocks are kept as they are
+    // (under the project lock, so two tools never race on the shared file).
     let ledger_rel = ctx.ledger_rel();
     let at = harness_core::runtime_view::BlockTarget {
         tool: ctx.tool.as_deref(),
