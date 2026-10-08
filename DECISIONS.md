@@ -2980,5 +2980,13 @@ records. Every folder-form target stayed byte-identical: the 101 committed facts
 digests and verdict `inputs`. `bench check --suite targets/tractor --replay --jobs 6 --adopt` on 68649d2: 198
 reproduce (1 conformant, 197 drifted), 2 expected divergences, 0 problems, no regression.
 
-**Still to do in step (c)** (part 4, building): the CLI's remaining refusals lifted, the cockpit's
-read model, preflight and tree, harness-mcp's reads, the end-to-end test over a liblzg-shaped tool.
+**Part 4, merged** (fmt, clippy, 1 424 tests green): every command opens a file-list target
+(`load_folder` and `TargetSection::folder` gone; `is_program_file` is the one rule for "the
+program's own files": directly in `source_dir`, or listed); the cockpit's tree walks the whole
+project confined with the ledger pruned and greys files that are neither listed nor reached as
+"not part of this tool"; its snapshot carries the form (`target: TargetSection`) instead of a
+`source_dir` string; every dialog names the target's own ledger; harness-mcp reads a tool through
+the read model unchanged; end-to-end tests over a liblzg-shaped tool (scan, plan, detect, features
+init, state status, sync-runtime) and a `verify` green through the CLI with the configuration's
+flag reaching the build. **Step (c) is complete.** The planner needed no change: `source_hash`
+already hashes the include closure the facts record.

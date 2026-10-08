@@ -74,14 +74,18 @@ change at the switch points below.
    confined walk; harness-core `sources.rs` shared by the readers; the v2 program digest and
    `unrecorded_program_files` staleness, v1 untouched; `read_sources(ctx)` confined). Folder-form
    targets byte-identical (facts, findings, digests, verdict `inputs`).
-   **Part 4 is BEING BUILT** (launched 2026-10-08 from 68649d2, one Opus builder, medium): the CLI's
-   remaining `load_folder` refusals lifted (plan, verify, observe, migrate, gen-driver, override,
-   promote, perf run, features map), the cockpit's read model, preflight and tree on a file-list
-   target (the tool's files under their real folders, the rest greyed "not part of this tool"),
-   harness-mcp's reads, an end-to-end CLI test over the liblzg-shaped tool and a `verify` on the
-   `t-pair` shape through the CLI. Merge when green, gates, then `bench check --suite targets/tractor
-   --replay --jobs 6 --adopt` (the replay on 68649d2: 198 reproduce, 2 expected divergences, 0 problems, no regression); then (b), (d),
-   (e), (f), (g); then the review of (a)+(c) together, fix passes, mutation checks.
+   **Part 4 is MERGED: step (c) is COMPLETE on main** (fmt, clippy, 1 424 tests): every command,
+   the cockpit (tree, preflight, read model, dialogs) and harness-mcp open a file-list target;
+   `TargetSection::is_program_file` is the one "program's own files" rule; end-to-end tests in
+   crates/harness-cli/tests/file_list.rs and crates/harness-mcp/tests/file_list.rs.
+   **Step (b) is BEING BUILT** and **the review of (a)+(c) is RUNNING** (launched 2026-10-08):
+   (b1) the build evidence and the configuration (`config.toml`, `--configuration`,
+   `compile_commands.json` as a proposal, `system_headers`, the caps and budget, set-aside counts);
+   (b2) programs, closures, duplicates, collisions, libraries, ids and indexes, the link checks of
+   §3.5 (new modules under crates/harness-oracle/src/projectmap/); then (b3) the map file, the
+   screen, the project lock, `.gitignore`, the "project changed" notice. The review's reports go to
+   docs/reviews/2026-10-08-map-steps-a-c-review.md with a triage; fix passes follow (b).
+   Then (d), (e), (f), (g).
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
    toolchain line — folder-form `inputs` stay untouched.
