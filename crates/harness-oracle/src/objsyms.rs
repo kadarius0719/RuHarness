@@ -28,13 +28,11 @@ pub(crate) fn undefined(object: &[u8]) -> Result<Vec<String>, String> {
     symbols(object).map(|read| read.undefined)
 }
 
-// The project map's read below (kinds, weakness, commons) is wired in by the
-// map's step b (docs/PROJECT-MAP-DESIGN.md §5); until then only the tests
-// call it, hence the `dead_code` allowances outside tests.
+// The project map's read below (kinds, weakness, commons): its caller is
+// `crate::projectmap`.
 
 /// What an external symbol an object defines holds (the project map's read,
 /// docs/PROJECT-MAP-DESIGN.md §3.1 step 5).
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
     /// Code: an ELF function, a symbol in a Mach-O section of instructions.
@@ -53,7 +51,6 @@ pub(crate) enum Kind {
     Common,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl Kind {
     /// The kind's name as the map stores it.
     pub(crate) fn as_str(self) -> &'static str {
@@ -71,7 +68,6 @@ impl Kind {
 /// `_` dropped, otherwise raw — check it with [`identifier_shaped`]), its
 /// kind, and whether the definition is weak (Mach-O `N_WEAK_DEF`, ELF
 /// `STB_WEAK`).
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Definition {
     pub name: String,
@@ -81,7 +77,6 @@ pub(crate) struct Definition {
 
 /// One external symbol an object needs: its name (as [`Definition`]'s) and
 /// whether the reference is weak (Mach-O `N_WEAK_REF`, ELF `STB_WEAK`).
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Need {
     pub name: String,
@@ -91,7 +86,6 @@ pub(crate) struct Need {
 /// The external symbols of one object: those it defines (commons included)
 /// and those it needs (a common symbol is never a need). Local symbols are
 /// never read.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct External {
     pub defines: Vec<Definition>,
@@ -103,7 +97,6 @@ pub(crate) struct External {
 /// [`defined`], it reports common symbols, as definitions. An ELF absolute
 /// symbol (`SHN_ABS`) is not reported, as [`defined`] skips it. `Err` names
 /// what could not be read.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn external(object: &[u8]) -> Result<External, String> {
     symbols(object).map(|read| read.external)
 }
@@ -112,7 +105,6 @@ pub(crate) fn external(object: &[u8]) -> Result<External, String> {
 /// and `_` (Apple's libc variants: `realpath$DARWIN_EXTSN`,
 /// `opendir$INODE64`), gives its base name (`realpath`); any other name gives
 /// `None`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn dollar_base(name: &str) -> Option<&str> {
     let (base, suffix) = name.split_once('$')?;
     let plain =
@@ -123,7 +115,6 @@ pub(crate) fn dollar_base(name: &str) -> Option<&str> {
 /// Whether `name` is shaped like a C identifier (`[A-Za-z_][A-Za-z0-9_]*`),
 /// after the `$`-suffix rule of [`dollar_base`]: an `asm` label can name a
 /// symbol with any text, and such a name is counted, never stored.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn identifier_shaped(name: &str) -> bool {
     let name = dollar_base(name).unwrap_or(name);
     let mut bytes = name.bytes();

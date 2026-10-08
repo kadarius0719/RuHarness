@@ -10,6 +10,7 @@ mod features;
 mod gen_driver;
 mod hand_edit;
 mod perf;
+mod project;
 mod promote;
 mod report;
 
@@ -75,6 +76,9 @@ impl Cmd {
                 | FeaturesCmd::Save { target, .. }
                 | FeaturesCmd::Map { target, .. } => project(target),
             },
+            Cmd::Project {
+                cmd: ProjectCmd::Map { target, .. },
+            } => project(target),
             Cmd::Perf { cmd } => match cmd {
                 PerfCmd::Run { target, .. }
                 | PerfCmd::Init { target }
@@ -152,6 +156,12 @@ enum Cmd {
     Features {
         #[command(subcommand)]
         cmd: FeaturesCmd,
+    },
+    /// A whole C project: which files make up its programs
+    /// (docs/PROJECT-MAP-DESIGN.md)
+    Project {
+        #[command(subcommand)]
+        cmd: ProjectCmd,
     },
     /// The C against the Rust in use, on the person's workloads: CPU time,
     /// instructions, memory (docs/PERF-DESIGN.md) — information only
@@ -350,6 +360,21 @@ enum FeaturesCmd {
         #[arg(long, default_value = ".")]
         target: PathBuf,
         /// Run target code even though no sandbox is available
+        #[arg(long)]
+        allow_unsandboxed: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCmd {
+    /// Map the C files of one folder: each file's include folders, its
+    /// compile and the symbols it defines and needs (writes nothing yet)
+    Map {
+        /// The project folder (its harness.toml's source_dir is mapped when
+        /// it has one, else the folder itself)
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Compile the project's code even though no sandbox is available
         #[arg(long)]
         allow_unsandboxed: bool,
     },
@@ -581,6 +606,13 @@ fn run(cmd: Cmd) -> Result<u8> {
                 allow_unsandboxed,
             } => features::cmd_map(target, allow_unsandboxed),
         },
+        Cmd::Project {
+            cmd:
+                ProjectCmd::Map {
+                    target,
+                    allow_unsandboxed,
+                },
+        } => project::cmd_map(target, allow_unsandboxed),
         Cmd::Perf { cmd } => match cmd {
             PerfCmd::Run {
                 target,

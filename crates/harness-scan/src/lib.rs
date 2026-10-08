@@ -329,23 +329,90 @@ fn resolve_quoted_include(
 
 /// Recursively collect the raw paths of quoted `#include "x"` directives.
 fn collect_includes(node: tree_sitter::Node, src: &[u8], out: &mut BTreeSet<String>) {
+    let mut both = BTreeSet::new();
+    collect_include_names(node, src, &mut both);
+    // `<...>` system includes are deliberately skipped by the scan.
+    out.extend(both.into_iter().filter(|i| i.quoted).map(|i| i.name));
+}
+
+/// Recursively collect every `#include` directive's name, quoted (a
+/// `string_literal`) or angle-bracketed (a `system_lib_string`), from every
+/// `#if` branch alike. An include built by a macro names no file here.
+fn collect_include_names(node: tree_sitter::Node, src: &[u8], out: &mut BTreeSet<Include>) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "preproc_include" {
             if let Some(path) = child.child_by_field_name("path") {
-                // Quoted includes are string_literals; `<...>` system includes
-                // are system_lib_strings and deliberately skipped.
-                if path.kind() == "string_literal" {
-                    let raw = text(path, src).trim_matches('"').to_string();
-                    if !raw.is_empty() {
-                        out.insert(raw);
-                    }
+                let raw = text(path, src);
+                let (name, quoted) = match path.kind() {
+                    "string_literal" => (raw.trim_matches('"'), true),
+                    "system_lib_string" => (
+                        raw.strip_prefix('<')
+                            .and_then(|r| r.strip_suffix('>'))
+                            .unwrap_or(""),
+                        false,
+                    ),
+                    _ => ("", false),
+                };
+                if !name.is_empty() {
+                    out.insert(Include {
+                        name: name.to_string(),
+                        quoted,
+                    });
                 }
             }
         } else {
-            collect_includes(child, src, out);
+            collect_include_names(child, src, out);
         }
     }
+}
+
+/// One `#include` directive's name, as written between its quotes or its
+/// angle brackets.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Include {
+    /// The name (`util.h`, `proj/api.h`), raw.
+    pub name: String,
+    /// `#include "name"` (true) or `#include <name>` (false).
+    pub quoted: bool,
+}
+
+/// What the scanner reads from one file, for the project map
+/// (docs/PROJECT-MAP-DESIGN.md §3.1 step 2): the functions it defines, the
+/// names they call and every include, from every `#if` branch (the parser
+/// evaluates none).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileFacts {
+    /// The names of the functions defined, `static` ones included, in
+    /// source order.
+    pub functions: Vec<String>,
+    /// The names called directly from those functions.
+    pub calls: BTreeSet<String>,
+    /// Every include directive, sorted.
+    pub includes: Vec<Include>,
+}
+
+/// Parse one C file's bytes — UTF-8 or not: Latin-1 comments parse like any
+/// others — into its [`FileFacts`], with the parser and rules `harness scan`
+/// uses.
+pub fn file_facts(source: &[u8]) -> Result<FileFacts, Error> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_c::LANGUAGE.into())
+        .map_err(|e| Error::Invariant(format!("tree-sitter C grammar mismatch: {e}")))?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| Error::Invariant("tree-sitter parse failed".into()))?;
+    let root = tree.root_node();
+    let mut includes = BTreeSet::new();
+    collect_include_names(root, source, &mut includes);
+    let mut defs = Vec::new();
+    collect_functions(root, source, "", &mut defs);
+    Ok(FileFacts {
+        calls: defs.iter().flat_map(|d| d.calls.iter().cloned()).collect(),
+        functions: defs.into_iter().map(|d| d.name).collect(),
+        includes: includes.into_iter().collect(),
+    })
 }
 
 /// Recursively collect function definitions with their storage class,
@@ -1731,6 +1798,32 @@ fn text<'a>(node: tree_sitter::Node, src: &'a [u8]) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_facts_reads_both_include_forms_from_every_branch_and_any_bytes() {
+        // A Latin-1 comment (0xE9) is not UTF-8; the parse takes bytes.
+        let src: &[u8] = b"/* caf\xe9 */\n#include \"util.h\"\n#ifdef X\n#include <proj/api.h>\n\
+            #else\n#include <stdio.h>\n#endif\n#include NAME\n\
+            static int helper(void) { return 1; }\nint run(void) { return helper() + go(); }\n";
+        let facts = file_facts(src).expect("parses");
+        assert_eq!(facts.functions, ["helper", "run"]);
+        assert_eq!(
+            facts.calls.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["go", "helper"]
+        );
+        let inc = |name: &str, quoted| Include {
+            name: name.into(),
+            quoted,
+        };
+        assert_eq!(
+            facts.includes,
+            [
+                inc("proj/api.h", false),
+                inc("stdio.h", false),
+                inc("util.h", true)
+            ]
+        );
+    }
 
     /// The real zopfli target vendored in this repository.
     fn zopfli_root() -> PathBuf {

@@ -13,10 +13,15 @@ pub fn bytes_hash(bytes: &[u8]) -> String {
     format!("{HASH_PREFIX}{}", blake3::hash(bytes).to_hex())
 }
 
-/// Hash a file's contents, rendered as `blake3:<64-hex>`.
+/// Hash a file's contents, rendered as `blake3:<64-hex>`. Read by
+/// streaming, so a file of any size is hashed in bounded memory (the
+/// project map hashes files over its read cap, docs/PROJECT-MAP-DESIGN.md
+/// §3.1 step 1).
 pub fn file_hash(path: &Path) -> Result<String, Error> {
-    let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
-    Ok(bytes_hash(&bytes))
+    let mut file = std::fs::File::open(path).map_err(|e| Error::io(path, e))?;
+    let mut hasher = blake3::Hasher::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| Error::io(path, e))?;
+    Ok(format!("{HASH_PREFIX}{}", hasher.finalize().to_hex()))
 }
 
 /// File-set hash: for the given (repo-relative path, per-file rendered hash)

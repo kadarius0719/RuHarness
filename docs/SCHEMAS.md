@@ -1569,3 +1569,25 @@ one-time trust question is per computer.
 |---|---|
 | the adoption file (outside every target) and its `.lock` | any command given `--adopt`; the cockpit's adoption dialog; the first command that creates a ledger |
 | `migration/.ruharness-adopted`, `<suite>/.ruharness-adopted` (gitignored) | the same, when the root has no well-formed token yet |
+
+## `harness project map` — first form (docs/PROJECT-MAP-DESIGN.md §3.8, §5 step a)
+
+`harness project map --target DIR [--json] [--adopt] [--allow-unsandboxed]` maps one folder:
+`DIR`'s `[target] source_dir` when `DIR/harness.toml` exists, else `DIR` itself. Writes
+nothing (the map file comes with step b). For each walked `.c` and `.h`, sorted by path: its
+compile, its include folders (relative to `DIR`, `.` for `DIR` itself, in the order first
+needed), its ambiguous includes, and its counts of defined and needed external symbols; then
+the walk's issues and skipped folders. Exit 0 when every file was visited; 1 refused: no `.c`
+or `.h` found, a cap reached (20 000 files, depth 32 — the files seen are still printed), no
+sandbox unless `--allow-unsandboxed`, a `DIR` that is or holds the home folder or the cargo or
+rustup home, a ledger made elsewhere not adopted (the adoption check runs even when `DIR` has
+no `harness.toml`); 2 usage. Every printed project string has its control characters,
+newlines and tabs shown as `?`.
+
+`--json` adds one event per file to the events stream:
+
+| `k` | fields |
+|---|---|
+| `project-file` | `path`, `kind` (`c` \| `h`), `compiled` (true when an object was made and read), `reason` (when a `.c` did not compile: the closed set `missing-header` \| `syntax` \| `other`), `header` (`missing-header` only: the name as the include wrote it), `detail` (`other` only: `timeout` \| `output-overflow` \| `too-large-object` \| `unreadable-object`), `at` (`<path>:<line>` inside the project, when known), `too_large` (only when true: over 8 MiB, neither parsed nor compiled), `include_dirs`, `ambiguous: [{header, candidates: [path \| "system"], used?}]` (`used`: the candidate the compile read, from its `-MD` list), `defined`, `needed` (counts), `outside_includes`, `withheld` (only when non-zero: names counted, not kept, because the compile read outside the project and the toolchain's folders), `odd_names` (only when non-zero: names not shaped like a C identifier) |
+
+Paths and header names are carried raw, escaped as every event is.
