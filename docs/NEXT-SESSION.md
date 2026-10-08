@@ -54,8 +54,13 @@ change at the switch points below.
    crates/harness-oracle/src/projectmap.rs, API `map_folder(root, folder)`). Not yet: set-aside
    counts per folder, the project's-own-`migration/` sentence, the 30-minute budget and the
    200 000-name cap (step b). `bench check --replay --adopt` was running at the time of writing
-   (result in the next DECISIONS entry). **Next: step (c)** of the design's §5 — the layout and the
-   file-list target — then (b), (d), (e), (f), (g); then the review of (a)+(c) together, fix passes,
+   (result in the next DECISIONS entry). **Step (c) is BEING BUILT**: part 1 (the layout, `harness.toml` v2 read version-first
+   with the flag grammar at load, `--tool` on every command, the lookup order, `sync-runtime` per
+   tool) on branch `worktree-agent-a9a2d5f674619afb3`; parts 2 (harness-oracle: `Base`'s
+   configuration and per-file folders in every compile, multi-source builds on perf's path, the
+   driver's folders, verify's driver-shape check to objsyms, the features mirror) and 3 (the
+   scanner's file-list read, detect's walk, the v2 digest and staleness, confinement in every reader)
+   follow once part 1's types are merged; then (b), (d), (e), (f), (g); then the review of (a)+(c) together, fix passes,
    mutation checks.
 2. The briefing's M5 after the map's first accepted tool (DECISIONS 2026-10-08).
 
