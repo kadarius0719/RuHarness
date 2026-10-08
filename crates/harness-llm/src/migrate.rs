@@ -414,8 +414,7 @@ pub fn run_migration(
 
     // Identity inputs first: the digests bind the attempt to exactly the
     // bytes that are put in front of the model.
-    let source_dir = &target.config.target.folder("harness migrate")?.source_dir;
-    let sources = read_sources(&root, source_dir, facts, unit)?;
+    let sources = read_sources(&root, target, facts, unit)?;
     let unit_source = unit_source_hash(&sources);
     let driver = hash::file_hash(&root.join(driver_rel))?;
     let stdio = stdio_output_calls(facts, &sources);
@@ -649,8 +648,7 @@ pub fn record_human_attempt(
         .canonicalize()
         .map_err(|e| Error::io(&target.root, e))?;
     let ledger = Ledger::of_under(target, root.clone());
-    let source_dir = &target.config.target.folder("harness migrate")?.source_dir;
-    let sources = read_sources(&root, source_dir, facts, unit)?;
+    let sources = read_sources(&root, target, facts, unit)?;
     let unit_source = unit_source_hash(&sources);
     let driver = hash::file_hash(&root.join(driver_rel))?;
     let stdio = stdio_output_calls(facts, &sources);
@@ -5144,13 +5142,7 @@ int add(int a, int b) { return a + b; }\n";
         let plan = Plan::load(&ledger.plan_path()).unwrap();
         let unit = plan.unit("u001-katajainen").unwrap();
         let target = TargetContext::load(&real).unwrap();
-        let sources = read_sources(
-            &real,
-            target.config.target.source_dir().unwrap(),
-            &facts,
-            unit,
-        )
-        .unwrap();
+        let sources = read_sources(&real, &target, &facts, unit).unwrap();
         let unit_source = unit_source_hash(&sources);
         let driver = hash::file_hash(&real.join(unit.oracle_param_str("driver").unwrap())).unwrap();
         let recorded = attempts::load_unit_attempts(&ledger, &unit.id).unwrap();

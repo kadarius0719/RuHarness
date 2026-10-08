@@ -1,8 +1,8 @@
 //! Mapped tools through the binary (docs/PROJECT-MAP-DESIGN.md §3.7): the
 //! lookup order of `--target` and `--tool`, every ledger path of a tool
 //! under `migration/tools/<id>/`, one `sync-runtime` block per tool, and a
-//! file-list target refused in one sentence by the commands that do not
-//! read that form yet.
+//! file-list target scanned and detected, and refused in one sentence by the
+//! commands that do not read that form yet.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -213,7 +213,7 @@ fn sync_runtime_keeps_one_block_per_tool() {
 }
 
 #[test]
-fn a_file_list_target_is_refused_in_one_sentence_never_a_panic() {
+fn a_file_list_target_is_scanned_and_refused_elsewhere_in_one_sentence() {
     let root = tmp("file-list");
     for dir in ["src/lib", "src/include"] {
         std::fs::create_dir_all(root.join(dir)).unwrap();
@@ -229,21 +229,19 @@ fn a_file_list_target_is_refused_in_one_sentence_never_a_panic() {
     )
     .unwrap();
     let target = root.to_str().unwrap();
+    // The scanner and the detectors read the file list.
     let r = harness(&["--adopt", "scan", "--target", target]);
-    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
-    assert!(
-        r.stderr
-            .contains("this target lists its files; harness scan does not read that form yet"),
-        "{}",
-        r.stderr
-    );
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let facts = std::fs::read_to_string(tool.join("facts.jsonl")).unwrap();
+    assert!(facts.contains("src/lib/lzg.c"), "{facts}");
+    let r = harness(&["detect", "--target", target]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     for (args, command) in [
         (vec!["plan"], "harness plan"),
         (
             vec!["verify", "u-x", "--allow-unsandboxed"],
             "harness verify",
         ),
-        (vec!["detect"], "harness detect"),
         (vec!["observe"], "harness observe"),
     ] {
         let mut argv = args.clone();
@@ -267,6 +265,6 @@ fn a_file_list_target_is_refused_in_one_sentence_never_a_panic() {
         "{}",
         r.stderr
     );
-    // Nothing was written in the tool's ledger.
-    assert!(!Path::new(&tool).join("facts.jsonl").exists());
+    // No plan was written in the tool's ledger.
+    assert!(!Path::new(&tool).join("plan.toml").exists());
 }
