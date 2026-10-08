@@ -1065,6 +1065,16 @@ pub fn perf_run(
             left.push(format!("{id} left out: {}", left_out_words(why)));
         }
     }
+    // In plan order, as the selection names them: a unit left out before
+    // the builds and one whose crate did not build read in the plan's order.
+    // `left` holds one line per left-out unit, each starting "<id> left out".
+    let position = |line: &String| {
+        selected
+            .iter()
+            .position(|s| line.starts_with(&format!("{} left out", s.id())))
+            .unwrap_or(usize::MAX)
+    };
+    left.sort_by_key(position);
     let program = if built.len() < 2 || (!req.units.is_empty() && !req.as_it_stands_only) {
         Program::None
     } else {
@@ -1099,7 +1109,8 @@ pub fn perf_run(
             format!(" — {}", left_out_list(&left))
         };
         progress.message(&match held.len() {
-            0 => format!("no accepted unit to compare yet{tail}"),
+            0 if left.is_empty() => "no accepted unit to compare yet".to_string(),
+            0 => format!("no measurable unit{tail} — the program as it stands needs two"),
             _ => format!(
                 "one unit measured ({}){tail} — the program as it stands needs two",
                 held.iter()
@@ -1456,7 +1467,7 @@ fn left_out_words(reason: &str) -> &'static str {
     }
 }
 
-/// How many left-out units a line names before "and N more": a plan of
+/// How many left-out units a line names before "; and N more left out": a plan of
 /// hundreds of unverified units still gets a line one can read.
 const LEFT_OUT_NAMED: usize = 10;
 
@@ -1467,7 +1478,7 @@ fn left_out_list(left: &[String]) -> String {
     let list = left[..named].join("; ");
     match left.len() - named {
         0 => list,
-        more => format!("{list} and {more} more"),
+        more => format!("{list}; and {more} more left out"),
     }
 }
 
@@ -1531,6 +1542,11 @@ pub fn perf_selection(
     facts: &Facts,
 ) -> Result<PerfSelection, Error> {
     build::check_plan_size(plan.units.len())?;
+    selection(target, plan, facts)
+}
+
+/// The selection itself, whatever the plan's size.
+fn selection(target: &TargetContext, plan: &Plan, facts: &Facts) -> Result<PerfSelection, Error> {
     let ledger = Ledger::new(target.root.clone());
     let mut out = PerfSelection::default();
     for s in select(target, &ledger, facts, plan)? {
@@ -1552,6 +1568,19 @@ pub fn perf_measurable(
     facts: &Facts,
 ) -> Result<Vec<String>, Error> {
     Ok(perf_selection(target, plan, facts)?.measurable)
+}
+
+/// The units the program as it stands would hold today, in plan order, for
+/// judging a stored row's currency (`perf show`): as [`perf_measurable`],
+/// but a plan over perf's size is not refused — the cap is about what perf
+/// can run, not about whether a stored row is current (the cockpit and
+/// harness-mcp judge it the same way).
+pub fn perf_measurable_for_currency(
+    target: &TargetContext,
+    plan: &Plan,
+    facts: &Facts,
+) -> Result<Vec<String>, Error> {
+    Ok(selection(target, plan, facts)?.measurable)
 }
 
 /// The computer's facts when perf's launcher cache is current (never
@@ -3964,7 +3993,7 @@ mod tests {
         assert_eq!(
             needs_two_words(&["ua"], &left),
             format!(
-                "one measurable unit (ua) — {} and 2 more — the program as it stands needs two",
+                "one measurable unit (ua) — {}; and 2 more left out — the program as it stands needs two",
                 named.join("; ")
             )
         );
@@ -4300,6 +4329,136 @@ mod tests {
             words,
             "one measurable unit (ua) — ud left out: its crate does not build — the program as \
              it stands needs two"
+        );
+    }
+
+    /// Checker's addition: the full run's progress lines name ten left-out
+    /// units, then count the rest — the program as it stands's line and the
+    /// "needs two" line alike.
+    #[test]
+    fn the_run_progress_lines_name_ten_left_out_units_then_count_the_rest() {
+        if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let lefts: Vec<String> = (1..=11).map(|i| format!("u{i:02}")).collect();
+        let named: Vec<String> = lefts[..10]
+            .iter()
+            .map(|id| format!("{id} left out: verify it first"))
+            .collect();
+        let named = named.join("; ");
+        let run_on = |tag: &str, ub_fails: bool, as_it_stands_only: bool| -> Vec<String> {
+            let dir = Beside::new(tag);
+            let root = dir.0.clone();
+            let mut ids: Vec<&str> = vec!["ua", "ub"];
+            ids.extend(lefts.iter().map(String::as_str));
+            mini_program(&root, &ids);
+            let build_rs = "fn main() {\n    panic!(\"this crate does not build\");\n}\n";
+            for (i, id) in ids.iter().enumerate() {
+                let script = (ub_fails && *id == "ub").then_some(build_rs);
+                unit_crate(&root, id, i + 1, script, true);
+            }
+            let facts = facts_of(&root);
+            let mut plan = "schema_version = 1\ntarget = \"tool\"\n".to_string();
+            for id in &ids {
+                plan += &plan_unit(&root, &facts, id, "verified", id.len() == 2, None);
+            }
+            put(&root, "migration/plan.toml", &plan);
+            let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+            let target = TargetContext::load(&root).expect("target");
+            let perf_dir = root.join("migration/perf");
+            std::fs::create_dir_all(&perf_dir).expect("perf dir");
+            let workloads = wl::parse(
+                "schema_version = 1\n[[workload]]\nid = \"tiny\"\nargs = []\nruns = 5\n",
+                Path::new("w.toml"),
+            )
+            .unwrap_or_else(|e| panic!("{e:?}"));
+            let mut s = seen();
+            let req = PerfRequest {
+                as_it_stands_only,
+                ..PerfRequest::default()
+            };
+            let _ = perf_run(&target, &plan, &facts, &workloads, &perf_dir, &req, &mut s);
+            s.messages
+        };
+        let program = run_on("e2e-ten-a", false, true);
+        let want = format!("the program as it stands — ua, ub ({named}; and 1 more left out)");
+        assert!(program.contains(&want), "{program:#?}");
+        let tail = run_on("e2e-ten-b", true, false);
+        // In plan order: ub (its crate does not build) first, then u01–u09.
+        let mut in_order = vec!["ub left out: its crate does not build".to_string()];
+        in_order.extend(
+            lefts[..9]
+                .iter()
+                .map(|id| format!("{id} left out: verify it first")),
+        );
+        let want = format!(
+            "one unit measured (ua) — {}; and 2 more left out — the program as it stands needs two",
+            in_order.join("; ")
+        );
+        assert!(tail.contains(&want), "{tail:#?}");
+    }
+
+    /// After the builds the left-out units are named in plan order, whether
+    /// left out before the builds or after (ua builds; ub and ud do not; uc
+    /// is not verified); and when every accepted unit fails to build, the
+    /// full run's progress line says "no measurable unit" with why, in the
+    /// refusal's words — never "no accepted unit to compare yet".
+    #[test]
+    fn left_out_units_are_named_in_plan_order_after_the_builds() {
+        if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
+            return;
+        }
+        let run_on = |tag: &str, fails: &[&str], as_it_stands_only: bool| {
+            let dir = Beside::new(tag);
+            let root = dir.0.clone();
+            let ids = ["ua", "ub", "uc", "ud"];
+            mini_program(&root, &ids);
+            let build_rs = "fn main() {\n    panic!(\"this crate does not build\");\n}\n";
+            for (i, id) in ids.iter().enumerate() {
+                let script = fails.contains(id).then_some(build_rs);
+                unit_crate(&root, id, i + 1, script, true);
+            }
+            let facts = facts_of(&root);
+            let mut plan = "schema_version = 1\ntarget = \"tool\"\n".to_string();
+            for id in ids {
+                plan += &plan_unit(&root, &facts, id, "verified", id != "uc", None);
+            }
+            put(&root, "migration/plan.toml", &plan);
+            let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan");
+            let target = TargetContext::load(&root).expect("target");
+            let perf_dir = root.join("migration/perf");
+            std::fs::create_dir_all(&perf_dir).expect("perf dir");
+            let workloads = wl::parse(
+                "schema_version = 1\n[[workload]]\nid = \"tiny\"\nargs = []\nruns = 5\n",
+                Path::new("w.toml"),
+            )
+            .unwrap_or_else(|e| panic!("{e:?}"));
+            let mut s = seen();
+            let req = PerfRequest {
+                as_it_stands_only,
+                ..PerfRequest::default()
+            };
+            let got = perf_run(&target, &plan, &facts, &workloads, &perf_dir, &req, &mut s);
+            (got.map(|_| ()), s.messages)
+        };
+        let (got, _) = run_on("e2e-order", &["ub", "ud"], true);
+        let Err(Error::Invariant(words)) = &got else {
+            panic!("{got:?}")
+        };
+        assert_eq!(
+            words,
+            "one measurable unit (ua) — ub left out: its crate does not build; uc left out: \
+             verify it first; ud left out: its crate does not build — the program as it stands \
+             needs two"
+        );
+        let (_, lines) = run_on("e2e-none", &["ua", "ub", "ud"], false);
+        let want = "no measurable unit — ua left out: its crate does not build; ub left out: its \
+                    crate does not build; uc left out: verify it first; ud left out: its crate \
+                    does not build — the program as it stands needs two";
+        assert!(lines.iter().any(|l| l == want), "{lines:#?}");
+        assert!(
+            !lines.iter().any(|l| l.contains("no accepted unit")),
+            "{lines:#?}"
         );
     }
 

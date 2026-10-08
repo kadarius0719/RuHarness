@@ -91,8 +91,9 @@ pub use boundary::{BoundaryReport, ParamFigures};
 pub use exec::{cancelled, kill_live_process_groups};
 pub use featuremap::{map_features, remove_live_scratch_dirs, MapProgress, FEATURES_BUILD_DIR};
 pub use perf::measure::{
-    perf_computer_if_cached, perf_launcher_cache, perf_measurable, perf_run, perf_selection,
-    LauncherCache, PerfProgress, PerfRequest, PerfSelection, PerfSummary, RowSide,
+    perf_computer_if_cached, perf_launcher_cache, perf_measurable, perf_measurable_for_currency,
+    perf_run, perf_selection, LauncherCache, PerfProgress, PerfRequest, PerfSelection, PerfSummary,
+    RowSide,
 };
 pub use perf::tools::perf_compilers;
 #[doc(hidden)]

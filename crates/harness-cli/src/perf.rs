@@ -511,7 +511,7 @@ pub(crate) fn cmd_show(target: PathBuf, no_check: bool, allow_unsandboxed: bool)
     // program as it stands holds today is not judged — said below.
     let measurable = facts
         .as_ref()
-        .map(|f| harness_oracle::perf_measurable(&ctx, &plan, f));
+        .map(|f| harness_oracle::perf_measurable_for_currency(&ctx, &plan, f));
     let (measurable, measurable_error) = match measurable {
         Some(Ok(ids)) => (Some(ids), None),
         Some(Err(e)) => (None, Some(e)),

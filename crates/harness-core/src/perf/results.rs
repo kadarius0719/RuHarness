@@ -599,16 +599,21 @@ struct VersionOnly {
 }
 
 fn parse_json<T: for<'de> Deserialize<'de>>(path: &Path, bytes: &[u8]) -> Result<T, Error> {
-    // The version first: a newer file is its own error, whatever its shape.
-    // Only from an object: serde takes a struct written as an array too, so
-    // `[2]` would otherwise read "too new".
+    // A results file is a JSON object: serde takes a struct written as an
+    // array too (`["ruharness-perf",1,[],[]]` would read as an empty
+    // program.json, `[2]` as "too new"), so anything else is refused first.
     let object = bytes
         .iter()
         .find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
         == Some(&b'{');
-    let version = object
-        .then(|| serde_json::from_slice::<VersionOnly>(bytes).ok())
-        .flatten();
+    if !object {
+        return Err(bad(
+            path,
+            "not a perf results file: not a JSON object".into(),
+        ));
+    }
+    // The version next: a newer file is its own error, whatever its shape.
+    let version = serde_json::from_slice::<VersionOnly>(bytes).ok();
     if let Some(VersionOnly {
         schema_version: Some(found),
     }) = version
@@ -2081,10 +2086,34 @@ mod tests {
         std::fs::write(&p, " \n\t[2]").expect("write");
         let err = read_program(&p).expect_err("array").to_string();
         assert!(err.contains("not a perf results file"), "{err}");
-        // An object after whitespace still has its version read first.
+        // The array form of a whole results file is no results file either.
+        std::fs::write(&p, "[\"ruharness-perf\",1,[],[]]").expect("write");
+        let err = read_program(&p).expect_err("array form").to_string();
+        assert_eq!(
+            err,
+            format!(
+                "results file: {}: not a perf results file: not a JSON object",
+                p.display()
+            )
+        );
+        std::fs::write(&p, "[\"ruharness-perf\",2,[],[]]").expect("write");
+        let err = read_program(&p).expect_err("array form, newer").to_string();
+        assert!(
+            err.ends_with("not a perf results file: not a JSON object"),
+            "{err}"
+        );
+        std::fs::write(&p, "").expect("write");
+        let err = read_program(&p).expect_err("empty").to_string();
+        assert!(
+            err.ends_with("not a perf results file: not a JSON object"),
+            "{err}"
+        );
+        // An object after whitespace still has its version read first, in
+        // its own words (no "results file:" head).
         std::fs::write(&p, " \r\n\t{\"schema_version\":2}").expect("write");
-        let err = read_program(&p).expect_err("newer");
+        let err = read_program(&p).expect_err("newer, after whitespace");
         assert!(matches!(err, Error::SchemaTooNew { found: 2, .. }), "{err}");
+        assert!(!err.to_string().starts_with("results file:"), "{err}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2129,6 +2158,27 @@ mod tests {
         let under = p.join("program.json");
         let words = read_program(&under).expect_err("not a folder").to_string();
         assert!(words.starts_with(&at(&under)), "{words}");
+        assert!(!words.contains("io error at"), "{words}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_results_file_that_cannot_be_opened_is_called_a_results_file() {
+        // Checker's addition: the open's own I/O error (the file is there,
+        // but not readable) is named as a results file too.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("perf-o-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let p = program_path(&dir);
+        write_program(&p, &ProgramResults::default()).expect("write");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let got = read_program(&p);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        let words = got.expect_err("unreadable").to_string();
+        assert!(
+            words.starts_with(&format!("results file: {}: ", p.display())),
+            "{words}"
+        );
         assert!(!words.contains("io error at"), "{words}");
         std::fs::remove_dir_all(&dir).ok();
     }
