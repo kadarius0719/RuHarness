@@ -1392,18 +1392,21 @@ plan-order | computer | compilers`, and the cockpit's own `measuring | too-large
 ## harness-mcp
 
 `harness_status.speed`: `null` without a workloads file, else `{state: no-workload | file-error |
-not-yet-run | c-only | units, units_measured, units_measurable, measuring, program_checked?,
-unreadable?, c_alone [row], as_it_stands {units, units_omitted?, left_out [{id, reason}],
-left_out_omitted?, rows [row]}}` — `units_measured` the units with a row perf timed or ran (not
+not-yet-run | c-only | units, units_measured, units_measurable, measuring, program_checked,
+note, unreadable [{file, error}], unreadable_omitted?, c_alone [row], as_it_stands {units,
+units_omitted?, left_out [{id, reason}], left_out_omitted?, rows [row]}}` — `units_measured` the units with a row perf timed or ran (not
 only set-up rows), `units_measurable` those it would measure now (0 for a plan perf refuses, over
-999 units, with perf's words in the status's note); the held and left-out units listed up to 20
+999 units, with perf's words fenced in `note`, else `null`); the held and left-out units listed up to 20
 each, with how many more; rows only of workloads still in the workloads file (one each, so at
 most 16 a side) — bounded whatever the plan holds. `program_checked: false` when there are no
 facts (none, or unreadable), as `perf show` says it: the C's digest and the units the program as
 it stands holds are then not judged, and the C-alone and as-it-stands rows' `current` is `null`
-(not known), not `true`; unit rows are still judged. `unreadable` lists the results files that
-could not be read, each by its file name and its error's first line, fenced, at most 20; the rows
-of the files that read are still given. Each unit's `speed` is its worst row; `harness_unit.speed`
+(not known), not `true` — unless a reason was found anyway (the workload changed), then `false`
+with the reason; unit rows are still judged, except their `replaces` check, which needs the facts.
+`unreadable` lists the results files that could not be read, each by its file name
+(`program.json`, `units/<id>.json`, or `units` for the folder) and its error's first line, both
+fenced, at most 20 and `unreadable_omitted` for the rest; the rows of the files that read are
+still given. Each unit's `speed` is its worst row; `harness_unit.speed`
 all of the unit's rows, worst first. A row: `workload`, `answer` (closed:
 `about-as-fast | slower | faster | probably-slower | probably-faster | close-call-slower |
 close-call-faster | no-clear-difference | cant-tell-estimate | cant-tell-short-run |

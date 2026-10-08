@@ -800,7 +800,10 @@ c79]. Stale facts: `perf run` refuses ("scan first").
   outcome. Ranked by the worst order above; fenced as the features facts are. Without facts the
   speed head says `program_checked: false` and the C-alone and as-it-stands rows' `current` is
   `null`; the results files that could not be read are listed (`unreadable`, at most 20); a plan
-  perf refuses for its size has `units_measurable` 0 (SCHEMAS has the fields).
+  perf refuses for its size has `units_measurable` 0 and the words in `note` (SCHEMAS has the
+  fields). The cockpit's read model counts the plan against the same cap with the same words, so
+  the gate and harness-mcp need no oracle call; the cache answer also refuses a `.lock` that is a
+  link ("perf's lock is a link — remove it"), as the run does.
 - Acts' argv: `with_sandbox_flag(harness_argv(["perf", "run", …, target_arg]))`.
 
 ### 3.12 Security (summary) [c93, c94, n2, p3]
