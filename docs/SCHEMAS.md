@@ -1586,37 +1586,46 @@ usual "ledger is locked by another harness command" sentence), and on a folder-f
 (a root `harness.toml`) that target's ledger lock too, in that order. The first map writes
 `migration/.gitignore` (below), never over an existing one. Exit 0 when the map was written
 in full (its closures may still be incomplete: that is a fact in it); 1 refused or cut short:
-no `.c` or `.h` found (nothing printed but the refusal), a cap reached (20 000 files, depth
-32, 200 000 distinct symbol names, 30 minutes — the map file is written with the file facts
-and no programs, and the refusal names the limit), no sandbox unless `--allow-unsandboxed`, a
+no `.c` or `.h` found (asked before the lock is taken: nothing printed but the refusal, nothing
+written; any refusal of a first map removes the `migration/` it made), a cap reached (20 000
+files, depth 32, 200 000 distinct symbol names or 64 MiB of them, 30 minutes, a 64 MiB map — the
+map file is written with the file facts and no programs, and the refusal names the limit), no sandbox unless `--allow-unsandboxed`, a
 `DIR` that is or holds the home folder or the cargo or rustup home, a ledger made elsewhere not
 adopted, the lock held; 2 usage.
 
 **The screen** shows: the toolchain with the harness's own flags labelled as the harness's; the
-configuration's name, source and flags (a guess said to be one); what a
-`compile_commands.json` gave and the build files; then per program (in path order) its index
-and id, path, kind and the kind guessed from its folder, the closure's files by folder, the
-outside symbols and the guessed libraries, the link check, "incomplete" and why, each duplicate
-set — settled by linking (the kept definer) or held with its definers, their indexes and the
-`accept --keep` to use — needs met by another program, collisions, ambiguous includes the
+configuration's name, what it stands for (`from`), whose it is and its flags ("a guess (no
+migration/map/config.toml)" for a guess; "it came with the project, so it is proposed" for a
+shipped one); what a `compile_commands.json` gave (other ones found, not read; the flags not
+used by the map on one capped line; the files it does not list) and the build files; then
+`programs: N (F fuzzers, D drivers)` and per program (in path order) its index and id, path,
+kind and the kind guessed from its folder, the closure's files by folder, a `.c` in it another
+file includes as text, the outside symbols (the compiler's and runtime's `__` names folded into
+a count) and the guessed libraries, the link check (what was missing, defined twice, not
+checked, or did not compile for the link), "incomplete" and why, each duplicate set — settled
+by linking (the kept definer), held with its definers and their indexes (the choice is the
+person's; no definer is suggested), or "neither choice links" — strong definitions that
+override weak ones, needs met by another program, collisions, ambiguous includes the
 configuration does not settle, flags that differ between its files, and that the project's
 build may link more than the closure; a driver's fuzzers with each one's link result; once
-per screen, what the link check proves and does not; then shared files, libraries, duplicates
-between programs, programs that did not compile, unreached `.c` files, files that did not
-compile with their closed reason in words (an `#error` named as such), ambiguous includes,
-set-aside counts and skipped folders (`migration` as "the harness's own files"); last, one
-sentence saying what was written and the next step (`harness project ask`, or `harness project
-accept <id>`). Every printed project string has its control characters, newlines and tabs
-shown as `?`.
+per screen, what the link check proves and does not; then shared files, libraries (with a
+warning for a `.c` included as text), duplicates between programs, programs that did not
+compile, unreached `.c` files, files that did not compile with their closed reason in words
+(an `#error` named as such), ambiguous includes, set-aside counts and skipped folders
+(`migration` as "the harness's own files"); last, one sentence saying what was written and the
+next step that exists: a tool is written by hand under `migration/tools/<id>/harness.toml`
+until `accept` lands, and `harness project ask` is named only when a set is held. Lists on one
+line name at most 24 items, then "… and N more". Every printed project string has its control
+characters, newlines and tabs shown as `?`.
 
 `--json` carries these events (and a `message` for each human line it still prints):
 
 | `k` | fields |
 |---|---|
 | `project-file` | `path`, `kind` (`c` \| `h`), `compiled` (true when an object was made and read), `reason` (when a `.c` did not compile: the closed set `missing-header` \| `syntax` \| `other`), `header` (`missing-header` only, and only when the name is a clean relative path), `detail` (`other` only: `timeout` \| `output-overflow` \| `too-large-object` \| `unreadable-object`), `at` (`<path>:<line>` inside the project, when known), `too_large` (only when true: over 8 MiB, neither parsed nor compiled), `include_dirs`, `ambiguous: [{header, candidates: [path \| "system"], used?}]` (`used`: the candidate the compile read, from its `-MD` list), `defined`, `needed` (counts), `outside_includes`, `withheld` (only when non-zero: names counted, not kept, because the compile read outside the project and the toolchain's folders), `odd_names` (only when non-zero: names not shaped like a C identifier) |
-| `project-build` | `configuration`, `from`, `source`, `flags`, `system_headers`, `digest`, `compile_commands` (its path or null), `ignored_entries`, `unfound_entries`, `build_files`, `flags_differ` (paths listed twice with other flags), `ignored_flags: [[flag, why, count]]`, `ignored_flag_count`, `set_aside: [[folder, lang, count]]`, `limits_hit` |
+| `project-build` | `configuration`, `from`, `source`, `proposed` (only when true), `flags`, `system_headers`, `digest`, `compile_commands` (its path or null), `also_found` and `not_in_compile_commands` (only when not empty), `ignored_entries`, `unfound_entries`, `build_files`, `flags_differ` (paths listed twice with other flags), `ignored_flags: [[flag, why, count]]`, `ignored_flag_count`, `set_aside: [[folder, lang, count]]`, `limits_hit` |
 | `project-program` | `id`, `path`, `kind`, `kind_guess`, `files` (its closure; empty for a driver), `outside`, `incomplete`, `held` (the indexes of its held duplicate sets) |
-| `project-link` | `id` and either `ok: true` or `missing: [sym]` with `doubled: [sym]` — from the symbol facts and the linker's exit status, never its text |
+| `project-link` | `id` and either `ok: true` or `missing: [sym]` with `doubled: [sym]`, and `not_checked: [sym]` and `not_compiled: [path]` when not empty — from the symbol facts and the linker's exit status, never its text |
 
 Paths, header and symbol names are carried raw, escaped as every event is. Under a cap only
 `project-file` and `project-build` are sent before the refusal.
@@ -1636,7 +1645,7 @@ so the same project, configuration and toolchain give byte-identical files. Opti
   toolchain: {cc, target, cflags: [flag], system_include_dirs: [path]},
   configuration: {name, from: make | meson | cmake | compile_commands | stated,
                   source: compile_commands | stated | guessed, flags: [flag],
-                  system_headers?: [name], digest},
+                  system_headers?: [name], digest, proposed?},
   files: [{path, aliases: [path], kind: c | h, bytes, blake3, parsed, too_large?, not_utf8?,
            compiled?: "ok" | {reason: missing-header | syntax | other, header?, detail?, at?},
            outside_includes?, functions, includes: [path], include_dirs: [path],
@@ -1652,10 +1661,15 @@ so the same project, configuration and toolchain give byte-identical files. Opti
               unreadable-folder, path?, symbols?}], outside: [sym],
               needs_from: [{sym, program}],
               duplicates: [{set: "d1", symbols, definers: [{index: "d1.1", path}],
-                            links: [index], choice?: {keep: index, by: "links"}, under?}],
+                            links: [index], choice?: {keep: index, by: "links"},
+                            under?: [index]}],
               collisions: [{sym, definers: [path]}],
+              strong_over_weak?: [{sym, weak: [path], strong: [path]}],
+              included_as_text?: [{file, by: [path]}],
               ambiguous_unsettled: [{header, candidates, used?}],
-              linked?: "ok" | {missing: [sym], doubled: [sym]}, questions: [index]}],
+              linked?: "ok" | {missing: [sym], doubled: [sym], not_checked?: [sym],
+                               not_compiled?: [path]},
+              questions: [index]}],
   between_program_duplicates: [{sym, definers: [path]}],
   shared: [{file, programs: [id]}],
   libraries: [{id, files: [path], needs_from_outside: [path]}],
@@ -1663,15 +1677,42 @@ so the same project, configuration and toolchain give byte-identical files. Opti
   walk_issues: [{path, why}],
   build_evidence: {compile_commands: present | absent | unreadable, compile_commands_path?,
                    ignored_entries, unfound_entries: [path], build_files: [path],
-                   flags_differ?: [{path, flags: [[flag]]}]},
-  limits_hit: [{limit: files | depth | symbols | budget, at}] }
+                   flags_differ?: [{path, flags: [[flag]]}],
+                   not_in_compile_commands?: [path], also_found?: [path]},
+  limits_hit: [{limit: files | depth | symbols | budget | size, at}] }
 ```
 
 - **`root_hash`** is the file-set hash (Global rules, "Hashes") of every walked `.c`/`.h`,
   every `included_other` file, and `compile_commands.json` when one was read. A README or a
-  build file outside these does not move it; a header does.
+  build file outside these does not move it; a header does. A file over 8 MiB is hashed over
+  its size and head: its `blake3` is blake3 of the size in decimal, a newline, then its first
+  8 MiB (`files[].blake3` too).
 - **`configuration.digest`** is blake3 of the canonical JSON (keys sorted, no blanks) of
-  `{flags, from, name}`, flag order counting.
+  `{flags, from, name, system_headers}`, flag order counting; `system_headers` is left out when
+  empty (so a configuration without it keeps its digest).
+- **`configuration.proposed`**: the `config.toml` came with the project — it still has the hash
+  it had when this computer first recorded the root (the adoption file's `shipped_config` on that
+  root's entry, written by the first command that makes the ledger) — so it is shown as proposed
+  and `source` is `guessed`. `--adopt` drops the recorded hash (it states the file); the person's
+  own edit gives another hash. A root not recorded yet counts its `config.toml` as shipped.
+- **`linked`**, when it failed: `missing` holds only names the probes proved the system does not
+  provide; a name the probe budget (64 links) or the time budget left undecided is in
+  `not_checked`, never `missing`; `not_compiled` lists the files that did not compile for the
+  link (each is compiled exactly as the map compiled it: its own `flags`, `-idirafter` for a
+  folder holding a `system_headers` name; an object over 64 MiB counts as not compiled). On
+  Apple every link passes `-Wl,-ignore_auto_link`, so an object cannot pick its own library.
+- **`duplicates[].under`**: every choice the set is reached under, when not every choice
+  reaches it (empty, so left out, when it is reached whatever is kept); once settled, the kept
+  one. **`strong_over_weak`**: a symbol the closure defines weakly (or as common) and strongly —
+  a need met only weakly pulls in its single strong definer. **`included_as_text`**: the
+  closure's `.c` files another file includes; such files are left out of
+  `between_program_duplicates`, which is drawn from the programs' closures only. A fuzzer's
+  closure holds its driver's needs too (not the driver file), and it is linked with the driver.
+- **Definers and sets** are sorted by their numbers (`d1.2` before `d1.10`, `d2` before `d10`).
+- **`not_in_compile_commands`**: walked `.c` files no entry lists; under `from =
+  "compile_commands"` a closure holding one keeps `source` `guessed`. An entry's `-o`, `-MF`,
+  `-MT`, `-MQ`, `-MD` and `-MMD` are dropped silently, as `-c` is. `also_found`: other
+  `compile_commands.json` files one level down, not read.
 - **`toolchain`**: `cc` the first line of `cc --version`, `target` `cc -dumpmachine`, `cflags`
   the judge's base flags every map compile takes first, `system_include_dirs` the compiler's
   own `#include <...>` folders in order.
@@ -1680,7 +1721,10 @@ so the same project, configuration and toolchain give byte-identical files. Opti
   "system_include_dirs", "target"}}`: a map made under another configuration or compiler is
   visibly another map.
 - **`compiled.header`** is kept only when it is a clean relative path (no leading `/`, no `..`
-  or empty part, no control character): an absolute name can be a machine path.
+  or empty part, no control character): an absolute name can be a machine path. A failed
+  compile's `-MD` list is read too, and when it read outside the root and the toolchain's
+  folders (`outside_includes`), neither `header` nor `at` is kept. `detail` may also be
+  `not-started` (the compile could not start).
 - **A closure's flags**: `flags` when every `.c` of it compiles with the same list (the
   configuration's, or under `from = "compile_commands"` and a guess each file's entry's then the
   configuration's); otherwise `flags_differ` lists each `.c` with its own and
@@ -1691,7 +1735,14 @@ so the same project, configuration and toolchain give byte-identical files. Opti
 - **`included_by`**: the files whose own includes reach this one directly.
 - **Past a cap** (`limits_hit` not empty) the file holds the file facts and no programs,
   closures, shared files or libraries, and `project map` exits 1 naming the limit. A map whose
-  closures are merely incomplete is a full map.
+  closures are merely incomplete is a full map. The caps (design §3.10): `files`, `depth`,
+  `symbols` (200 000 distinct names, or 64 MiB of kept name bytes; a name over 4 KiB is an odd
+  name), `budget` (30 minutes, one deadline through hashing, parsing, the evidence reader, the
+  compiles and every link and probe; files past it are left out), `size` (a map file over
+  64 MiB: the file facts alone are written; when even they are over it, nothing is written and
+  the command refuses). `compile_commands.json` is read at most 50 000 entries, 64 flags and
+  16 KiB of flags an entry; the rest is counted as ignored. `parser` names are kept only for a
+  `.c` that did not compile.
 - The ids, indexes and kinds follow docs/PROJECT-MAP-DESIGN.md §3.3 and §3.1; the link check
   and the duplicate sets §3.5.
 
@@ -1711,7 +1762,10 @@ on either side ignored); nothing is hashed. Digests that differ: "the project ch
 this tool was accepted: run `harness project map`, then `accept` again". No map file: "no map
 written yet: run `harness project map` to see whether the project changed since this tool was
 accepted". A notice, never staleness: no command refuses because of it. A folder-form target
-and a hand-written tool with no `map` get none.
+and a hand-written tool with no `map` get none. The notice **compares, it does not
+authenticate**: two files inside the project agreeing proves neither that anyone accepted the
+tool nor against which tree (a download can ship both, and `root_hash` can be computed from its
+own files), so its silence means only "the digests match".
 
 ### Writer table additions
 

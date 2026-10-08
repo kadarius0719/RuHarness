@@ -98,6 +98,13 @@ struct Entry {
     token: String,
     scope: Scope,
     how: How,
+    /// The hash of the `migration/map/config.toml` the project held when a
+    /// command first recorded it (`how = created`): a configuration that
+    /// came with the project, which the map shows as proposed while the
+    /// file keeps that hash. Never set by the person's `--adopt`, which
+    /// states it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shipped_config: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -650,8 +657,61 @@ fn upsert(file: &mut AdoptedFile, root: &Path, token: String, scope: Scope, how:
         token,
         scope,
         how,
+        // At first sight, a project's `config.toml` came with it.
+        shipped_config: match (scope, how) {
+            (Scope::Project, How::Created) => map_config_hash(root),
+            _ => None,
+        },
     });
     file.roots.sort_by(|a, b| a.path.cmp(&b.path));
+}
+
+// ---------- the map's configuration that came with the project ----------
+
+/// The map's configuration file, relative to the project root.
+const MAP_CONFIG: &str = "map/config.toml";
+
+/// The hash (`blake3:<hex>` of its bytes) of `root`'s
+/// `migration/map/config.toml` when it is a regular file of at most 1 MiB.
+fn map_config_hash(root: &Path) -> Option<String> {
+    let path = root.join(MIGRATION_DIR).join(MAP_CONFIG);
+    read_regular(&path, 1 << 20)
+        .ok()
+        .map(|b| crate::hash::bytes_hash(&b))
+}
+
+/// The person stated the project's `config.toml` (`--adopt`): the hash
+/// recorded at first sight is dropped.
+fn state_config(file: &mut AdoptedFile, root: &Path) {
+    for e in file.roots.iter_mut().filter(|e| e.path == root) {
+        e.shipped_config = None;
+    }
+}
+
+/// The hash of the `migration/map/config.toml` that came with the project
+/// at `root` (docs/PROJECT-MAP-DESIGN.md §3.2): for a root this computer
+/// has recorded with its token, the file's hash when it was first recorded
+/// (`None` when it held none then, or the person's `--adopt` stated it);
+/// for a root not recorded yet, the file's hash now — it is being seen for
+/// the first time. While the file still has this hash, the map shows its
+/// configuration as proposed by the project, never as the person's.
+pub fn shipped_config_hash(root: &Path) -> Option<String> {
+    let root = canonical(root);
+    let Ok(file) = adoption_file().and_then(|p| read_adopted(&p)) else {
+        return map_config_hash(&root);
+    };
+    if listed(&file, &root, Scope::Project) {
+        return file
+            .roots
+            .iter()
+            .find(|e| e.scope == Scope::Project && e.path == root)
+            .and_then(|e| e.shipped_config.clone());
+    }
+    if trusted(&file, &root) {
+        // Under an adopted suite: the person's.
+        return None;
+    }
+    map_config_hash(&root)
 }
 
 /// Record that a command on this computer created `root`'s first ledger
@@ -719,11 +779,26 @@ fn adopt_inner(root: &Path, scope: Scope, delete: bool) -> Result<Adoption, Erro
         units,
         verified,
     };
+    // The person's `--adopt` also states a `config.toml` that came with the
+    // project (§3.2), even in a folder that holds no results yet.
+    let states_config = scope == Scope::Project && map_config_hash(&root).is_some();
     if ledgers.is_empty() {
+        if states_config {
+            update(|file| {
+                if listed(file, &root, scope) {
+                    state_config(file, &root);
+                } else {
+                    let token = token_for(&root, scope)?;
+                    upsert(file, &root, token, scope, How::Adopted);
+                }
+                Ok(())
+            })?;
+        }
         return Ok(adoption);
     }
     update(|file| {
         if listed(file, &root, scope) {
+            state_config(file, &root);
             return Ok(());
         }
         for ledger_root in &ledgers {
@@ -1089,6 +1164,39 @@ mod tests {
         assert_ne!(read_token(&m.join(TOKEN_FILE)).unwrap(), shipped_token);
     }
 
+    /// The map's `config.toml` that came with the project: its hash is
+    /// recorded when the root is first recorded, stays "shipped" while the
+    /// file keeps it, and the person's `--adopt` states it.
+    #[test]
+    fn a_config_toml_that_came_with_the_project_is_remembered_until_adopted() {
+        testing::adoption_file();
+        let root = tmp("shipped-config");
+        let config = root.join("migration/map/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, "[[configuration]]\nname = \"x\"\n").unwrap();
+        let first = crate::hash::bytes_hash(&std::fs::read(&config).unwrap());
+        // Not recorded yet: seen for the first time, it came with the project.
+        assert_eq!(shipped_config_hash(&root), Some(first.clone()));
+        // The first command that makes the ledger records that hash.
+        record_created(&root, Scope::Project).unwrap();
+        assert_eq!(shipped_config_hash(&root), Some(first.clone()));
+        // The person's edit gives another hash: the map compares and finds
+        // it is theirs (the recorded hash stays as it was).
+        std::fs::write(&config, "[[configuration]]\nname = \"y\"\n").unwrap();
+        assert_eq!(shipped_config_hash(&root), Some(first));
+        // `--adopt` states it, even in a folder that holds no results.
+        adopt(&root).unwrap();
+        assert_eq!(shipped_config_hash(&root), None);
+
+        // A root first recorded with no config.toml has none shipped.
+        let plain = tmp("no-shipped-config");
+        std::fs::create_dir_all(plain.join("migration")).unwrap();
+        record_created(&plain, Scope::Project).unwrap();
+        std::fs::create_dir_all(plain.join("migration/map")).unwrap();
+        std::fs::write(plain.join("migration/map/config.toml"), "mine\n").unwrap();
+        assert_eq!(shipped_config_hash(&plain), None);
+    }
+
     /// A `migration/` holding only hand-written tool files and the map's
     /// configuration holds no results: no adoption question, nothing to
     /// adopt, and no "claims" line. Anything more is asked about.
@@ -1104,7 +1212,12 @@ mod tests {
         std::fs::write(m.join(".DS_Store"), "x").unwrap();
         assert!(holds_no_results(&m) && !holds_results(&root));
         check(&root).unwrap();
-        let done = adopt(&root).unwrap();
+        // Adopting such a folder (a copy: adopting states its config.toml,
+        // which records the root) has nothing to adopt.
+        let copy = tmp("hand-written-adopted");
+        std::fs::create_dir_all(copy.join("migration/map")).unwrap();
+        std::fs::write(copy.join("migration/map/config.toml"), "").unwrap();
+        let done = adopt(&copy).unwrap();
         assert!(!done.newly && !done.had_ledger);
         assert!(!done.describe().iter().any(|l| l.contains("claims")));
         // An empty migration/ holds none either.

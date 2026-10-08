@@ -93,7 +93,12 @@ impl Linker for Fake {
         Ok(if missing.is_empty() && doubled.is_empty() {
             Linked::Ok
         } else {
-            Linked::Failed { missing, doubled }
+            Linked::Failed {
+                missing,
+                doubled,
+                not_checked: vec![],
+                not_compiled: vec![],
+            }
         })
     }
 }
@@ -277,7 +282,9 @@ fn two_definers_pulled_in_for_other_symbols_collide() {
         cl.linked,
         Some(Linked::Failed {
             missing: vec![],
-            doubled: vec!["s".into()]
+            doubled: vec!["s".into()],
+            not_checked: vec![],
+            not_compiled: vec![]
         })
     );
 }
@@ -477,7 +484,12 @@ fn a_choice_recomputes_the_closure_from_scratch() {
             .map(|&f| project.files[f].path.clone())
             .collect()
     };
-    let with = |keep: &str| project.closure(start, &BTreeMap::from([(key.clone(), at(keep))]));
+    let with = |keep: &str| {
+        project.closure(
+            &BTreeSet::from([start]),
+            &BTreeMap::from([(key.clone(), at(keep))]),
+        )
+    };
     assert_eq!(
         paths(&with("lib/decode.c")),
         ["lib/checksum.c", "lib/decode.c", "tools/unlzg.c"]
@@ -529,7 +541,9 @@ fn a_program_file_is_never_pulled_into_another_closure() {
         cl.linked,
         Some(Linked::Failed {
             missing: vec!["helper".into()],
-            doubled: vec![]
+            doubled: vec![],
+            not_checked: vec![],
+            not_compiled: vec![]
         })
     );
 }
@@ -710,14 +724,14 @@ fn indexes_once_per_project_with_nested_sets_under_their_choice() {
     ]);
     let (a, _) = run.linked();
     let p = closure(&a, "t-p");
-    let sets: Vec<(&str, Option<&str>)> = p
+    let sets: Vec<(&str, Vec<&str>)> = p
         .duplicates
         .iter()
-        .map(|d| (d.set.as_str(), d.under.as_deref()))
+        .map(|d| (d.set.as_str(), d.under.iter().map(String::as_str).collect()))
         .collect();
     // {a1,a2} and {c1,c2} are reached directly: d1 and d2. {b1,b2} only
     // under a1's choice: numbered after them, under d1.1.
-    assert_eq!(sets, [("d1", None), ("d3", Some("d1.1"))]);
+    assert_eq!(sets, [("d1", vec![]), ("d3", vec!["d1.1"])]);
     assert_eq!(closure(&a, "t-q").duplicates[0].set, "d2");
     assert_eq!(p.questions, ["d1", "d3"]);
     assert_eq!(p.duplicates[1].links, ["d3.1", "d3.2"]);
@@ -738,7 +752,9 @@ fn linking_settles_exactly_one_holds_several_and_reports_none() {
         cl.linked,
         Some(Linked::Failed {
             missing: vec!["m3".into()],
-            doubled: vec![]
+            doubled: vec![],
+            not_checked: vec![],
+            not_compiled: vec![]
         })
     );
     assert!(cl.questions.is_empty());
@@ -777,6 +793,250 @@ fn over_the_limit_is_held_without_linking() {
     }
     let (_, calls) = Run::new(files).linked();
     assert_eq!(calls, 16);
+}
+
+/// The boundary itself: 16 combinations are linked (16 links), the 17th
+/// holds the program without a link.
+#[test]
+fn seventeen_choices_are_held_without_linking() {
+    // `x`'s first definer raises nothing more; its second needs four sets
+    // of two: 1 + 16 = 17 combinations.
+    let mut files = vec![
+        c("main.c", &["main"], &["x"]),
+        c("x_1.c", &["x"], &[]),
+        c("x_2.c", &["x"], &["s1", "s2", "s3", "s4"]),
+    ];
+    for s in 1..=4 {
+        for d in 1..=2 {
+            files.push(c(&format!("s{s}_{d}.c"), &[&format!("s{s}")], &[]));
+        }
+    }
+    let (a, calls) = Run::new(files).linked();
+    assert_eq!(calls, 0, "over the limit: nothing is linked");
+    let cl = closure(&a, "t-main");
+    assert!(!cl.questions.is_empty());
+    assert_eq!(cl.linked, None);
+}
+
+/// §3.1's rule, the strong one defines it: a need met only weakly still
+/// pulls in the single strong definer, and the pair is a fact.
+#[test]
+fn a_need_met_only_weakly_pulls_in_the_strong_definer() {
+    // `a.c` defines `y` and a weak default `x` it calls itself (so no file
+    // needs `x`); `b.c` defines the strong `x`.
+    let run = Run::new(vec![
+        c("main.c", &["main"], &["y"]),
+        c("a.c", &["y", "x:weak"], &[]),
+        c("b.c", &["x"], &[]),
+    ]);
+    let (a, _) = run.linked();
+    let cl = closure(&a, "t-main");
+    assert_eq!(cl.files, ["a.c", "b.c", "main.c"]);
+    assert_eq!(
+        cl.strong_over_weak,
+        [StrongOverWeak {
+            sym: "x".into(),
+            weak: vec!["a.c".into()],
+            strong: vec!["b.c".into()],
+        }]
+    );
+    assert!(cl.collisions.is_empty());
+    assert!(a.libraries.is_empty(), "{:?}", a.libraries);
+    // A common definition beside the strong one: the same.
+    let run = Run::new(vec![
+        c("main.c", &["main"], &["y"]),
+        c("a.c", &["y", "x:common"], &[]),
+        c("b.c", &["x"], &[]),
+    ]);
+    assert_eq!(
+        closure(&run.bare(), "t-main").files,
+        ["a.c", "b.c", "main.c"]
+    );
+}
+
+/// The `under` label: every choice that reaches a set; none when every
+/// choice does; once settled, the kept one.
+#[test]
+fn a_set_reached_under_several_choices_is_labelled_with_each_then_the_kept_one() {
+    // `x` has three definers; a.c and b.c need `w` (two definers), c.c does
+    // not. Only b.c with f.c links.
+    let files = vec![
+        c("main.c", &["main"], &["x"]),
+        c("a.c", &["x"], &["w", "nope_a"]),
+        c("b.c", &["x"], &["w"]),
+        c("c.c", &["x"], &["nope_c"]),
+        c("e.c", &["w"], &["nope_e"]),
+        c("f.c", &["w"], &[]),
+    ];
+    // Without a linker: d2 is reached under d1.1 and d1.2, not d1.3.
+    let bare = Run::new(files.clone()).bare();
+    let d2 = &closure(&bare, "t-main").duplicates[1];
+    assert_eq!(d2.set, "d2");
+    assert_eq!(d2.under, ["d1.1", "d1.2"]);
+    // Settled: the kept choice only.
+    let (a, _) = Run::new(files).linked();
+    let cl = closure(&a, "t-main");
+    let d1 = &cl.duplicates[0];
+    let d2 = &cl.duplicates[1];
+    assert_eq!(d1.choice.as_ref().map(|c| c.keep.as_str()), Some("d1.2"));
+    assert_eq!(d2.choice.as_ref().map(|c| c.keep.as_str()), Some("d2.2"));
+    assert_eq!(d2.under, ["d1.2"]);
+
+    // Every choice of d1 reaches d2: no label at all.
+    let files = vec![
+        c("main.c", &["main"], &["x"]),
+        c("a.c", &["x"], &["w", "nope_a"]),
+        c("b.c", &["x"], &["w"]),
+        c("e.c", &["w"], &["nope_e"]),
+        c("f.c", &["w"], &[]),
+    ];
+    let bare = Run::new(files.clone()).bare();
+    assert!(closure(&bare, "t-main").duplicates[1].under.is_empty());
+    let (a, _) = Run::new(files).linked();
+    let cl = closure(&a, "t-main");
+    assert_eq!(cl.duplicates[1].set, "d2");
+    assert!(cl.duplicates[1].under.is_empty(), "{:?}", cl.duplicates);
+}
+
+/// The driver's own needs join each fuzzer's closure and link; a fuzzer
+/// beside a data `main` is a fuzzer; duplicates between programs come from
+/// their closures only.
+#[test]
+fn a_drivers_needs_join_each_fuzzers_link() {
+    let run = Run::new(vec![
+        c("fuzz/driver.c", &["main"], &[FUZZ_ENTRY, "helper"]),
+        c("fuzz/helper.c", &["helper"], &[]),
+        c("fuzz/f1.c", &[FUZZ_ENTRY], &[]),
+        c("fuzz/f2.c", &[FUZZ_ENTRY, "main:data"], &[]),
+    ]);
+    let (a, _) = run.linked();
+    assert_eq!(program(&a, "t-f2").kind, ProgramKind::Fuzz);
+    assert_eq!(program(&a, "t-driver").serves, ["fuzz/f1.c", "fuzz/f2.c"]);
+    for id in ["t-f1", "t-f2"] {
+        let cl = closure(&a, id);
+        assert!(cl.files.contains(&"fuzz/helper.c".to_string()), "{id}");
+        assert!(!cl.files.contains(&"fuzz/driver.c".to_string()), "{id}");
+    }
+    assert_eq!(closure(&a, "t-f1").linked, Some(Linked::Ok));
+    // f2's data `main` meets the driver's `main`: defined twice.
+    assert!(
+        matches!(&closure(&a, "t-f2").linked, Some(Linked::Failed { doubled, .. }) if doubled == &["main"]),
+        "{:?}",
+        closure(&a, "t-f2").linked
+    );
+    assert!(
+        a.libraries.is_empty(),
+        "helper.c is the driver's: {:?}",
+        a.libraries
+    );
+}
+
+#[test]
+fn duplicates_between_programs_come_from_their_closures_only() {
+    // `x` in a.c (t-p's closure) and in b.c (a library): no program meets
+    // b.c, so nothing is listed.
+    let run = Run::new(vec![
+        c("tools/p.c", &["main"], &["x"]),
+        c("lib/a.c", &["x"], &[]),
+        c("other/b.c", &["x", "only_b"], &[]),
+    ]);
+    let a = run.bare();
+    assert!(a.between_program_duplicates.is_empty(), "{a:?}");
+    // Two programs each settling a set: the set's symbol is not listed
+    // between them (they chose, it is no stray duplicate).
+    let run = Run::new(vec![
+        c("tools/p.c", &["main", "only_p"], &["x"]),
+        c("tools/q.c", &["main", "only_q"], &["x"]),
+        c("lib/x1.c", &["x"], &["only_p"]),
+        c("lib/x2.c", &["x"], &["only_q"]),
+    ]);
+    let (a, _) = run.linked();
+    assert_eq!(
+        closure(&a, "t-p").duplicates[0]
+            .choice
+            .as_ref()
+            .map(|c| c.keep.as_str()),
+        Some("d1.1")
+    );
+    assert_eq!(
+        closure(&a, "t-q").duplicates[0]
+            .choice
+            .as_ref()
+            .map(|c| c.keep.as_str()),
+        Some("d1.2")
+    );
+    assert!(
+        a.between_program_duplicates.is_empty(),
+        "{:?}",
+        a.between_program_duplicates
+    );
+}
+
+/// A `.c` another file includes as text is left out of the duplicates
+/// between programs: its includer defines its names.
+#[test]
+fn a_c_file_included_as_text_is_no_duplicate_between_programs() {
+    // main.c compiles impl.c's text (through all.h); tool.c needs `impl`,
+    // which only impl.c (no program) defines, so impl.c is in its closure.
+    let mut main = c("main.c", &["main", "impl"], &[]);
+    main.includes = vec!["all.h".into()];
+    let mut all = c("all.h", &[], &[]);
+    all.kind = FileKind::H;
+    all.compiled = None;
+    all.includes = vec!["impl.c".into()];
+    let files = vec![
+        main,
+        all,
+        c("impl.c", &["impl"], &[]),
+        c("tool.c", &["main"], &["impl"]),
+    ];
+    let a = Run::new(files).bare();
+    assert_eq!(closure(&a, "t-tool").files, ["impl.c", "tool.c"]);
+    assert!(
+        a.between_program_duplicates.is_empty(),
+        "{:?}",
+        a.between_program_duplicates
+    );
+    assert_eq!(a.included_by[0].file, "impl.c");
+}
+
+/// The linker is told when no closure still to be linked needs a file, so
+/// its object can go; each file is released once.
+#[test]
+fn each_file_is_released_after_its_last_link() {
+    #[derive(Default)]
+    struct Counting {
+        linked: Vec<Vec<String>>,
+        released: Vec<String>,
+    }
+    impl Linker for Counting {
+        fn link(&mut self, files: &[&FileFacts], _: &[String]) -> Result<Linked, Error> {
+            for f in files {
+                assert!(
+                    !self.released.contains(&f.path),
+                    "{} linked after its release",
+                    f.path
+                );
+            }
+            self.linked
+                .push(files.iter().map(|f| f.path.clone()).collect());
+            Ok(Linked::Ok)
+        }
+        fn release(&mut self, path: &str) {
+            assert!(!self.released.contains(&path.to_string()), "{path} twice");
+            self.released.push(path.to_string());
+        }
+    }
+    let files = three_mains();
+    let run = Run::new(files);
+    let mut linker = Counting::default();
+    analyze(&run.input(), Some(&mut linker)).expect("analysis");
+    let mut linked: Vec<String> = linker.linked.concat();
+    linked.sort();
+    linked.dedup();
+    let mut released = linker.released.clone();
+    released.sort();
+    assert_eq!(released, linked, "every linked file released, once");
 }
 
 #[test]

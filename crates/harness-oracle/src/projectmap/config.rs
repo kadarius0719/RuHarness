@@ -51,8 +51,9 @@ pub enum ConfigSource {
     CompileCommands,
     /// `config.toml` states it.
     Stated,
-    /// Nothing states it: no `config.toml` entry, or a `compile_commands.json`
-    /// whose flags differ.
+    /// Nothing states it: no `config.toml` entry, a `compile_commands.json`
+    /// whose flags differ, or a `config.toml` that came with the project
+    /// and is only proposed ([`MapConfiguration::proposed`]).
     Guessed,
 }
 
@@ -83,32 +84,64 @@ pub struct MapConfiguration {
     pub flags: Vec<String>,
     /// Header names the project means the system's.
     pub system_headers: Vec<String>,
-    /// blake3 of the canonical JSON of `{flags, from, name}`.
+    /// blake3 of the canonical JSON of `{flags, from, name, system_headers}`
+    /// (`system_headers` only when not empty).
     pub digest: String,
+    /// The `config.toml` entry came with the project (the file still has
+    /// the hash it had when this computer first recorded the root): shown
+    /// as proposed, its source kept `guessed` until the person states it
+    /// (`--adopt` once, or an edit of their own).
+    pub proposed: bool,
 }
 
 impl MapConfiguration {
     /// Each file's compile takes its own `compile_commands.json` entry's
-    /// flags (a guess, or `from = "compile_commands"`); otherwise the
-    /// configuration's flags.
+    /// flags (a guess with no `config.toml` entry, or `from =
+    /// "compile_commands"`); otherwise the configuration's flags.
     pub fn uses_entry_flags(&self) -> bool {
-        self.source == ConfigSource::Guessed || self.from == ConfigurationFrom::CompileCommands
+        (self.source == ConfigSource::Guessed && !self.proposed)
+            || self.from == ConfigurationFrom::CompileCommands
     }
 }
 
 /// blake3 of the canonical JSON (keys sorted, no blanks) of
-/// `{flags, from, name}`: flag order counts.
-pub fn digest(name: &str, from: ConfigurationFrom, flags: &[String]) -> String {
+/// `{flags, from, name, system_headers}`: flag order counts, and
+/// `system_headers` is left out when empty (so a configuration without it
+/// keeps the digest it always had).
+pub fn digest(
+    name: &str,
+    from: ConfigurationFrom,
+    flags: &[String],
+    system_headers: &[String],
+) -> String {
     // Fields in key order: serde writes them as declared.
     #[derive(serde::Serialize)]
     struct Canonical<'a> {
         flags: &'a [String],
         from: ConfigurationFrom,
         name: &'a str,
+        #[serde(skip_serializing_if = "<[String]>::is_empty")]
+        system_headers: &'a [String],
     }
-    let json = serde_json::to_vec(&Canonical { flags, from, name })
-        .unwrap_or_else(|_| unreachable!("strings and a unit enum always serialise"));
+    let json = serde_json::to_vec(&Canonical {
+        flags,
+        from,
+        name,
+        system_headers,
+    })
+    .unwrap_or_else(|_| unreachable!("strings and a unit enum always serialise"));
     harness_core::hash::bytes_hash(&json)
+}
+
+/// `config.toml`'s entries and the hash of its bytes (`blake3:<hex>`), which
+/// is compared with the hash recorded when this computer first saw the root
+/// (a file that came with the project is proposed, §3.2).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigFile {
+    /// The entries, checked.
+    pub entries: Vec<ConfigEntry>,
+    /// The file's hash; `None` when there is no file.
+    pub hash: Option<String>,
 }
 
 /// Read `config.toml`'s entries (none when the file is absent), each checked:
@@ -116,11 +149,11 @@ pub fn digest(name: &str, from: ConfigurationFrom, flags: &[String]) -> String {
 /// `system_headers`. A file reached through a link out of the root, too
 /// large, unparseable, two entries of one name, or a bad entry is refused in
 /// one sentence.
-pub fn read_entries(root: &Path) -> Result<Vec<ConfigEntry>, Error> {
+pub fn read_entries(root: &Path) -> Result<ConfigFile, Error> {
     let path = root.join(CONFIG_FILE);
     let meta = match std::fs::metadata(&path) {
         Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ConfigFile::default()),
         Err(e) => return Err(Error::io(&path, e)),
     };
     let real = path.canonicalize().map_err(|e| Error::io(&path, e))?;
@@ -140,9 +173,29 @@ pub fn read_entries(root: &Path) -> Result<Vec<ConfigEntry>, Error> {
             ),
         ));
     }
-    let text = std::fs::read_to_string(&real).map_err(|e| Error::io(&path, e))?;
-    let shape: ConfigFileShape =
-        toml::from_str(&text).map_err(|e| Error::parse(&path, e.message().to_string()))?;
+    let bytes = std::fs::read(&real).map_err(|e| Error::io(&path, e))?;
+    let hash = harness_core::hash::bytes_hash(&bytes);
+    let text = String::from_utf8(bytes)
+        .map_err(|_| Error::parse(&path, "the configuration file is not UTF-8; fix it"))?;
+    // toml's message can quote a key holding a newline: one line, with the
+    // line it stopped at.
+    let shape: ConfigFileShape = toml::from_str(&text).map_err(|e| {
+        let line = e.span().map(|s| {
+            text.as_bytes()[..s.start.min(text.len())]
+                .iter()
+                .filter(|b| **b == b'\n')
+                .count()
+                + 1
+        });
+        Error::parse(
+            &path,
+            format!(
+                "{}{}; fix the file",
+                line.map(|l| format!("line {l}: ")).unwrap_or_default(),
+                safe_line(e.message())
+            ),
+        )
+    })?;
     let mut seen = std::collections::BTreeSet::new();
     for entry in &shape.configuration {
         check_entry(root, entry).map_err(|m| Error::parse(&path, m))?;
@@ -156,7 +209,10 @@ pub fn read_entries(root: &Path) -> Result<Vec<ConfigEntry>, Error> {
             ));
         }
     }
-    Ok(shape.configuration)
+    Ok(ConfigFile {
+        entries: shape.configuration,
+        hash: Some(hash),
+    })
 }
 
 /// One entry's checks.
@@ -227,13 +283,16 @@ pub(crate) fn resolves_inside(root: &Path, rel: &str) -> bool {
 
 /// Pick the configuration: `wanted` by name, else the only entry; several
 /// entries and no name are refused naming them; no entry is a guess.
-/// `compile_commands` says a `compile_commands.json` was read and
-/// `flags_differ` that it lists a file twice with other flags.
+/// `compile_commands` says a `compile_commands.json` was read,
+/// `flags_differ` that it lists a file twice with other flags, and
+/// `shipped` that `config.toml` came with the project (its entry is then
+/// proposed, the source `guessed`).
 pub fn choose(
     entries: &[ConfigEntry],
     wanted: Option<&str>,
     compile_commands: bool,
     flags_differ: bool,
+    shipped: bool,
 ) -> Result<MapConfiguration, String> {
     let names = || {
         entries
@@ -282,10 +341,15 @@ pub fn choose(
             MapConfiguration {
                 name: e.name.clone(),
                 from: e.from,
-                source,
+                source: if shipped {
+                    ConfigSource::Guessed
+                } else {
+                    source
+                },
                 flags: e.flags.clone(),
                 system_headers: e.system_headers.clone(),
-                digest: digest(&e.name, e.from, &e.flags),
+                digest: digest(&e.name, e.from, &e.flags, &e.system_headers),
+                proposed: shipped,
             }
         }
         None => {
@@ -300,7 +364,8 @@ pub fn choose(
                 source: ConfigSource::Guessed,
                 flags: Vec::new(),
                 system_headers: Vec::new(),
-                digest: digest(GUESSED_NAME, from, &[]),
+                digest: digest(GUESSED_NAME, from, &[], &[]),
+                proposed: false,
             }
         }
     })

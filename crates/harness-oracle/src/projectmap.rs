@@ -53,8 +53,15 @@ pub const MAX_FILES: usize = 20_000;
 /// Deepest folder walked below the mapped folder (§3.10).
 pub const MAX_DEPTH: usize = 32;
 /// A source file larger than this is recorded `too_large`: neither parsed
-/// nor compiled, still hashed (§3.1 step 1).
+/// nor compiled, and hashed over its size and its first 8 MiB
+/// ([`head_hash`], §3.1 step 1).
 pub const MAX_SOURCE_BYTES: u64 = 8 << 20;
+/// A symbol name longer than this counts as an odd name: counted, never
+/// kept (§3.10).
+pub const MAX_NAME_BYTES: usize = 4 << 10;
+/// The most bytes of symbol names a map keeps, over every file's kept
+/// names (§3.10).
+pub const MAX_TOTAL_NAME_BYTES: usize = 64 << 20;
 /// An object larger than this is not read (§3.1 step 5).
 pub const MAX_OBJECT_BYTES: u64 = 64 << 20;
 /// The wall-clock limit of one compile (§3.10).
@@ -74,7 +81,11 @@ pub const MAX_OTHER_FILES: usize = 200_000;
 pub struct Limits {
     /// Most distinct symbol names ([`MAX_SYMBOL_NAMES`]).
     pub max_symbol_names: usize,
-    /// The total time budget ([`MAP_BUDGET`]), checked before each compile.
+    /// Most bytes of kept symbol names ([`MAX_TOTAL_NAME_BYTES`]).
+    pub max_name_bytes: usize,
+    /// The total time budget ([`MAP_BUDGET`]), checked through every phase:
+    /// the hash and parse loops, the evidence reader, each compile, and each
+    /// link and probe of the link checks.
     pub budget: Duration,
 }
 
@@ -82,6 +93,7 @@ impl Default for Limits {
     fn default() -> Limits {
         Limits {
             max_symbol_names: MAX_SYMBOL_NAMES,
+            max_name_bytes: MAX_TOTAL_NAME_BYTES,
             budget: MAP_BUDGET,
         }
     }
@@ -181,9 +193,11 @@ pub enum Compiled {
         /// ([`Reason::MissingHeader`] only).
         header: Option<String>,
         /// A fixed word for [`Reason::Other`]: `timeout`, `output-overflow`,
-        /// `too-large-object`, `unreadable-object`.
+        /// `too-large-object`, `unreadable-object`, `not-started`.
         detail: Option<&'static str>,
         /// Where in the project the compiler stopped: `<relative path>:<line>`.
+        /// Left out (with `header`) when the compile read outside the root
+        /// and the toolchain's folders.
         at: Option<String>,
     },
 }
@@ -352,10 +366,15 @@ pub struct FolderMap {
     /// False when the count-only pass stopped at [`MAX_OTHER_FILES`] or
     /// [`MAX_DEPTH`]: the set-aside counts and build files are lower bounds.
     pub others_complete: bool,
-    /// What the parser read from each parsed file (the functions it defines
-    /// and the names it calls), by path: the closure analysis reads it for
-    /// a file whose object facts are empty.
+    /// What the parser read from each parsed `.c` that did not compile (the
+    /// functions it defines and the names it calls), by path: the closure
+    /// analysis reads it for a file whose object facts are empty. Read again
+    /// after the compiles, so no other file's parser names are held.
     pub parser: BTreeMap<String, ParserFacts>,
+    /// When the time budget runs out: the link checks stop there too.
+    pub deadline: Instant,
+    /// The time budget the deadline was set from.
+    pub budget: Duration,
 }
 
 impl FolderMap {
@@ -396,6 +415,22 @@ pub fn refuse_root(root: &Path) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// Whether the root holds any `.c` or `.h` the map would walk (the same
+/// pruning and depth): asked before anything is written, so a folder with
+/// no C is refused untouched.
+pub fn holds_c(root: &Path) -> bool {
+    let walked = walk::confined_except(
+        root,
+        &harness_scan::C_EXTENSIONS,
+        walk::Limits {
+            max_files: Some(1),
+            max_depth: Some(MAX_DEPTH),
+        },
+        &[root.join(harness_core::ledger::MIGRATION_DIR)],
+    );
+    !walked.files.is_empty()
 }
 
 /// Map `folder` (relative to `root`, inside it; `.` for the root itself):
@@ -448,16 +483,28 @@ pub(crate) fn map_in(
         )));
     }
     let folder_rel = rel_of(&root, &inside).unwrap_or_else(|| ".".into());
+    let deadline = started + options.limits.budget;
+    let budget_hit = || LimitHit {
+        limit: "budget",
+        at: format!("a time budget of {} s", options.limits.budget.as_secs_f64()),
+    };
     // The person's configurations, checked before anything is walked.
-    let entries = config::read_entries(&root)?;
+    let config_file = config::read_entries(&root)?;
+    let entries = &config_file.entries;
+    // A `config.toml` that still has the hash it had when this computer
+    // first recorded the root came with the project: proposed, not stated.
+    let shipped = config_file
+        .hash
+        .as_ref()
+        .is_some_and(|h| harness_core::adopt::shipped_config_hash(&root).as_ref() == Some(h));
     if let Some(want) = &options.configuration {
         // A name that matches nothing is refused now, not after the walk.
         if !entries.iter().any(|e| &e.name == want) {
-            config::choose(&entries, Some(want), false, false)
+            config::choose(entries, Some(want), false, false, shipped)
                 .map_err(|m| Error::parse(root.join(config::CONFIG_FILE), m))?;
         }
     } else if entries.len() > 1 {
-        config::choose(&entries, None, false, false)
+        config::choose(entries, None, false, false, shipped)
             .map_err(|m| Error::parse(root.join(config::CONFIG_FILE), m))?;
     }
 
@@ -520,23 +567,36 @@ pub(crate) fn map_in(
     paths.sort();
     let others = other_files(&root, &inside);
 
-    // Step 2: the scanner's facts.
-    let mut files: Vec<FileFacts> = paths
-        .iter()
-        .map(|rel| read_file(&root, rel, aliases.remove(rel).unwrap_or_default()))
-        .collect();
+    // Step 1's hashes, within the budget: past it the files not hashed are
+    // left out, as a cut-short walk leaves them.
+    let mut out_of_time = false;
+    let mut files: Vec<FileFacts> = Vec::with_capacity(paths.len());
+    for rel in &paths {
+        if Instant::now() >= deadline {
+            out_of_time = true;
+            break;
+        }
+        files.push(read_file(
+            &root,
+            rel,
+            aliases.remove(rel).unwrap_or_default(),
+        ));
+    }
+    paths.truncate(files.len());
+
+    // Step 2: the scanner's facts (its includes and its count of functions;
+    // the parser's names are read again only for a `.c` that does not
+    // compile, after the compiles).
     let mut scanned: BTreeMap<String, Vec<harness_scan::Include>> = BTreeMap::new();
-    let mut parser: BTreeMap<String, ParserFacts> = BTreeMap::new();
     for (facts, rel) in files.iter_mut().zip(&paths) {
-        if let Some(read) = scan(&root, facts) {
+        out_of_time = out_of_time || Instant::now() >= deadline;
+        let read = if out_of_time {
+            None
+        } else {
+            scan(&root, facts)
+        };
+        if let Some(read) = read {
             facts.functions = read.functions.len();
-            parser.insert(
-                rel.clone(),
-                ParserFacts {
-                    defines: read.functions.into_iter().collect(),
-                    calls: read.calls,
-                },
-            );
             scanned.insert(rel.clone(), read.includes);
         } else {
             scanned.insert(rel.clone(), Vec::new());
@@ -569,12 +629,25 @@ pub(crate) fn map_in(
 
     // Step 4: the build evidence, then the configuration.
     let walked_set: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
-    let evidence = evidence::gather(&root, &walked_set, others.build_files);
+    let (mut evidence, in_time) = if out_of_time {
+        (evidence::BuildEvidence::none(others.build_files), false)
+    } else {
+        evidence::gather(&root, &walked_set, others.build_files, deadline)
+    };
+    out_of_time = !in_time;
+    if evidence.has_compile_commands() {
+        evidence.not_in_compile_commands = files
+            .iter()
+            .filter(|f| f.kind == FileKind::C && !evidence.file_flags.contains_key(&f.path))
+            .map(|f| f.path.clone())
+            .collect();
+    }
     let configuration = config::choose(
-        &entries,
+        entries,
         options.configuration.as_deref(),
         evidence.has_compile_commands(),
         !evidence.flags_differ.is_empty(),
+        shipped,
     )
     .map_err(|m| Error::parse(root.join(config::CONFIG_FILE), m))?;
     for facts in files.iter_mut().filter(|f| f.kind == FileKind::C) {
@@ -603,29 +676,85 @@ pub(crate) fn map_in(
         system_headers: &configuration.system_headers,
     };
     let mut names: BTreeSet<String> = BTreeSet::new();
+    // Every kept name's bytes, repeats counted: each file holds its own.
+    let mut name_bytes = 0usize;
+    let mut stopped = out_of_time;
     for facts in files.iter_mut() {
-        if facts.kind != FileKind::C || facts.too_large {
+        if stopped || facts.kind != FileKind::C || facts.too_large {
             continue;
         }
-        if started.elapsed() >= options.limits.budget {
-            limits_hit.push(LimitHit {
-                limit: "budget",
-                at: format!("a time budget of {} s", options.limits.budget.as_secs_f64()),
-            });
+        if Instant::now() >= deadline {
+            out_of_time = true;
             break;
         }
         compile(&ctx, facts)?;
         names.extend(facts.defined.iter().map(|d| d.name.clone()));
         names.extend(facts.needed.iter().map(|n| n.name.clone()));
+        name_bytes += facts.defined.iter().map(|d| d.name.len()).sum::<usize>()
+            + facts.needed.iter().map(|n| n.name.len()).sum::<usize>();
         if names.len() > options.limits.max_symbol_names {
             limits_hit.push(LimitHit {
                 limit: "symbols",
                 at: format!("{} distinct symbol names", options.limits.max_symbol_names),
             });
-            break;
+            stopped = true;
+        } else if name_bytes > options.limits.max_name_bytes {
+            limits_hit.push(LimitHit {
+                limit: "symbols",
+                at: format!(
+                    "{} MiB of symbol names",
+                    options.limits.max_name_bytes as f64 / f64::from(1 << 20)
+                ),
+            });
+            stopped = true;
         }
     }
     drop(fresh);
+
+    // The parser's names of each parsed `.c` that did not compile, read
+    // again now: the only files the closure analysis asks them of.
+    let mut parser: BTreeMap<String, ParserFacts> = BTreeMap::new();
+    for facts in &files {
+        let failed = matches!(facts.compiled, Some(Compiled::Failed { .. }));
+        if !failed || !facts.parsed || stopped || out_of_time {
+            continue;
+        }
+        if Instant::now() >= deadline {
+            out_of_time = true;
+            break;
+        }
+        let Some(read) = std::fs::read(root.join(&facts.path))
+            .ok()
+            .and_then(|source| harness_scan::file_facts(&source).ok())
+        else {
+            continue;
+        };
+        let keep = |n: &String| objsyms::identifier_shaped(n) && n.len() <= MAX_NAME_BYTES;
+        let read = ParserFacts {
+            defines: read.functions.into_iter().filter(keep).collect(),
+            calls: read.calls.into_iter().filter(keep).collect(),
+        };
+        name_bytes += read
+            .defines
+            .iter()
+            .chain(&read.calls)
+            .map(String::len)
+            .sum::<usize>();
+        if name_bytes > options.limits.max_name_bytes {
+            limits_hit.push(LimitHit {
+                limit: "symbols",
+                at: format!(
+                    "{} MiB of symbol names",
+                    options.limits.max_name_bytes as f64 / f64::from(1 << 20)
+                ),
+            });
+            break;
+        }
+        parser.insert(facts.path.clone(), read);
+    }
+    if out_of_time {
+        limits_hit.push(budget_hit());
+    }
     Ok(FolderMap {
         root,
         folder: folder_rel,
@@ -639,6 +768,8 @@ pub(crate) fn map_in(
         set_aside: others.set_aside,
         others_complete: others.complete,
         parser,
+        deadline,
+        budget: options.limits.budget,
     })
 }
 
@@ -726,7 +857,7 @@ fn read_file(root: &Path, rel: &str, aliases: Vec<String>) -> FileFacts {
             FileKind::H
         },
         bytes,
-        blake3: harness_core::hash::file_hash(&abs).unwrap_or_default(),
+        blake3: map_hash(&abs, bytes).unwrap_or_default(),
         parsed: false,
         too_large: bytes > MAX_SOURCE_BYTES,
         not_utf8: false,
@@ -744,6 +875,32 @@ fn read_file(root: &Path, rel: &str, aliases: Vec<String>) -> FileFacts {
         withheld_names: 0,
         message: None,
     }
+}
+
+/// The hash the map records for a file of `bytes` bytes at `path`: blake3
+/// of its bytes, read by streaming, for a file of at most
+/// [`MAX_SOURCE_BYTES`]; for a larger one [`head_hash`], so no file's size
+/// sets how long hashing takes (a sparse file can claim a terabyte).
+pub(crate) fn map_hash(path: &Path, bytes: u64) -> Result<String, Error> {
+    if bytes > MAX_SOURCE_BYTES {
+        head_hash(path, bytes)
+    } else {
+        harness_core::hash::file_hash(path)
+    }
+}
+
+/// A file over [`MAX_SOURCE_BYTES`] hashed over its size and its head
+/// (§3.1 step 1): blake3 (`blake3:<hex>`) of the size in decimal, a newline,
+/// then its first [`MAX_SOURCE_BYTES`] bytes. A change past the head that
+/// keeps the size is not seen: the file is neither parsed nor compiled.
+pub(crate) fn head_hash(path: &Path, bytes: u64) -> Result<String, Error> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| Error::io(path, e))?;
+    let mut head = format!("{bytes}\n").into_bytes();
+    file.take(MAX_SOURCE_BYTES)
+        .read_to_end(&mut head)
+        .map_err(|e| Error::io(path, e))?;
+    Ok(harness_core::hash::bytes_hash(&head))
 }
 
 /// Step 2 for one file: what the scanner reads from it (nothing when too
@@ -1045,9 +1202,10 @@ pub(crate) enum Built {
         /// The compiler's `-MD` list, its file already deleted.
         deps: Option<String>,
     },
-    /// No object: the closed reason and the first error line (raw; scrub it
-    /// before showing it).
-    Failed(Compiled, Option<String>),
+    /// No object: the closed reason, the first error line (raw; scrub it
+    /// before showing it) and the `-MD` list when the compiler wrote one
+    /// (clang writes it on a failure too).
+    Failed(Compiled, Option<String>, Option<String>),
 }
 
 /// The argv of one map compile (§3.1 step 5): `cc -c -w`, the judge's base
@@ -1134,29 +1292,40 @@ pub(crate) fn compile_object(
         &deps,
     )?;
     let run = ctx.runner.tool_run(&argv);
-    let listed = std::fs::read(&deps).ok();
+    // The list is a few kilobytes of paths; one that is not is not read.
+    let listed = std::fs::metadata(&deps)
+        .is_ok_and(|m| m.len() <= MAX_SOURCE_BYTES)
+        .then(|| std::fs::read(&deps).ok())
+        .flatten()
+        .map(|l| String::from_utf8_lossy(&l).into_owned());
     let _ = std::fs::remove_file(&deps);
-    let out = match run {
-        Ok(out) => out,
-        Err(e) => {
-            let _ = std::fs::remove_file(&object);
-            return Err(e);
-        }
-    };
     let other = |detail: &'static str| Compiled::Failed {
         reason: Reason::Other,
         header: None,
         detail: Some(detail),
         at: None,
     };
+    let out = match run {
+        Ok(out) => out,
+        Err(_) => {
+            // A compile that could not start (its argv never shown: it can
+            // be long and holds the project's flags) is this file's fact.
+            let _ = std::fs::remove_file(&object);
+            return Ok(Built::Failed(other("not-started"), None, None));
+        }
+    };
     let failed = match out.end {
         ChildEnd::Exited(status) if status.success() => None,
         ChildEnd::Exited(_) => {
             let (compiled, line) = classify(ctx.root, &String::from_utf8_lossy(&out.stderr));
-            Some(Built::Failed(compiled, line))
+            Some(Built::Failed(compiled, line, listed.clone()))
         }
-        ChildEnd::TimedOut => Some(Built::Failed(other("timeout"), None)),
-        ChildEnd::OutputOverflow => Some(Built::Failed(other("output-overflow"), None)),
+        ChildEnd::TimedOut => Some(Built::Failed(other("timeout"), None, listed.clone())),
+        ChildEnd::OutputOverflow => Some(Built::Failed(
+            other("output-overflow"),
+            None,
+            listed.clone(),
+        )),
     };
     if let Some(failed) = failed {
         let _ = std::fs::remove_file(&object);
@@ -1164,7 +1333,7 @@ pub(crate) fn compile_object(
     }
     Ok(Built::Object {
         object,
-        deps: listed.map(|l| String::from_utf8_lossy(&l).into_owned()),
+        deps: listed,
     })
 }
 
@@ -1178,8 +1347,24 @@ fn compile(ctx: &CompileCtx<'_>, facts: &mut FileFacts) -> Result<(), Error> {
         at: None,
     };
     let (object, listed) = match compile_object(ctx, facts, &facts.flags, ctx.fresh)? {
-        Built::Failed(compiled, line) => {
-            facts.compiled = Some(compiled);
+        Built::Failed(compiled, line, listed) => {
+            // A failed compile's list is read too: what it read outside
+            // the root is known, and then where it stopped and the header
+            // it missed are not kept (either can tell what exists outside).
+            if let Some(listed) = listed {
+                read_dependencies(ctx, facts, &listed);
+            }
+            facts.compiled = Some(match compiled {
+                Compiled::Failed { reason, detail, .. } if facts.outside_includes => {
+                    Compiled::Failed {
+                        reason,
+                        header: None,
+                        detail,
+                        at: None,
+                    }
+                }
+                other => other,
+            });
             facts.message = line.map(|l| ctx.scrubber.apply(&l));
             return Ok(());
         }
@@ -1217,7 +1402,7 @@ fn compile(ctx: &CompileCtx<'_>, facts: &mut FileFacts) -> Result<(), Error> {
 /// compile read outside the root and the toolchain.
 fn keep_symbols(facts: &mut FileFacts, symbols: objsyms::External) {
     let mut keep = |name: &str| -> Option<String> {
-        if !objsyms::identifier_shaped(name) {
+        if !objsyms::identifier_shaped(name) || name.len() > MAX_NAME_BYTES {
             facts.odd_names += 1;
             return None;
         }

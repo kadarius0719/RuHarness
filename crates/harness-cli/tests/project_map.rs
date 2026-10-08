@@ -291,6 +291,34 @@ fn a_folder_without_c_is_refused() {
         "{}",
         run.stderr
     );
+    // Refused untouched: no migration/, no lock, no token, no record.
+    assert!(!tmp.0.join("migration").exists());
+    let adopted =
+        std::fs::read_to_string(harness_core::adopt::testing::adoption_file()).unwrap_or_default();
+    assert!(!adopted.contains(tmp.arg()), "{adopted}");
+}
+
+/// A refusal after the project lock (here `--configuration` naming none)
+/// on a folder that had no `migration/` removes what the run made.
+#[test]
+fn a_refused_first_map_leaves_no_migration_folder() {
+    let tmp = Tmp::new("refused-first");
+    tmp.write("a.c", "int a(void) { return 1; }\n");
+    let run = harness(&[
+        "project",
+        "map",
+        "--target",
+        tmp.arg(),
+        "--configuration",
+        "meson",
+    ]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr.contains("names no configuration"),
+        "{}",
+        run.stderr
+    );
+    assert!(!tmp.0.join("migration").exists(), "{}", run.stderr);
 }
 
 #[test]
@@ -351,7 +379,7 @@ fn several_configurations_need_a_name_and_the_one_named_is_shown() {
     ]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     for says in [
-        "configuration: make (stated), flags -DHAVE_CONFIG_H",
+        "configuration: make, from make (stated in config.toml), flags -DHAVE_CONFIG_H",
         "library l-a: ./ a.c",
         "build files: Makefile",
         "set aside in tools: 1 c++ file(s), not read",
@@ -478,15 +506,24 @@ fn three_mains_are_mapped_written_and_shown() {
         "  p2 t-test_shared — tests/test_shared.c (main; kind guess from its folder: test)",
         "      link check: not linked while d1 is open",
         "      duplicate set d1 (pick): held, linking cannot tell d1.1 lib/fast.c from d1.2 \
-         lib/slow.c apart; pick one with `harness project accept t-beta --keep d1=d1.1`",
+         lib/slow.c apart, so the choice is yours",
         "what the link check proves:",
         "shared file: lib/shared.c (in t-alpha, t-beta, t-test_shared)",
         "project map: wrote migration/map/project-map.json and migration/.gitignore (3 \
-         program(s), 0 libraries;",
-        "`harness project accept <id> --target",
+         program(s), 0 libraries; the project's own files were not changed); next, make a \
+         program or library a tool by writing migration/tools/<id>/harness.toml by hand",
+        "the held choices (d1) are yours to make",
     ] {
         assert!(run.stdout.contains(says), "{says}\n{}", run.stdout);
     }
+    // The person's choice is never suggested, and only what exists is
+    // named as a command.
+    assert!(!run.stdout.contains("--keep d1=d1.1"), "{}", run.stdout);
+    assert!(
+        !run.stdout.contains("`harness project accept <id>"),
+        "{}",
+        run.stdout
+    );
     assert_eq!(run.stdout.matches("what the link check proves").count(), 1);
     // The alternatives are not "unreached".
     assert!(!run.stdout.contains("unreached"), "{}", run.stdout);
@@ -823,7 +860,8 @@ fn per_file_flags_that_differ_inside_a_program_keep_the_configuration_a_guess() 
         run.stdout
     );
     assert!(
-        run.stdout.contains("configuration: cc (guessed)"),
+        run.stdout
+            .contains("configuration: cc, from compile_commands (still a guess:"),
         "{}",
         run.stdout
     );
@@ -883,4 +921,137 @@ fn a_compile_stopped_by_an_error_directive_or_a_missing_header_is_named() {
     let text = String::from_utf8(map_bytes(&tmp.0)).unwrap();
     assert!(!text.contains("nonexistent-ruharness"));
     assert!(!text.contains("PAIR_WIDE is needed"));
+}
+
+/// A `config.toml` the download shipped is proposed, not the person's: the
+/// screen says it came with the project and the source stays a guess,
+/// run after run, until `--adopt` states it.
+#[test]
+fn a_shipped_config_toml_is_proposed_until_the_person_states_it() {
+    let tmp = Tmp::new("shipped-config");
+    tmp.write("a.c", "int a(void) { return 1; }\n");
+    tmp.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"make\"\nfrom = \"make\"\n\
+         flags = [\"-DSHIPPED_BY_THE_DOWNLOAD\"]\n",
+    );
+    for _ in 0..2 {
+        let run = harness(&["project", "map", "--target", tmp.arg()]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        assert!(
+            run.stdout.contains(
+                "configuration: make, from make, flags -DSHIPPED_BY_THE_DOWNLOAD; it came with \
+                 the project, so it is proposed, not yours yet: run once with --adopt to state it"
+            ),
+            "{}",
+            run.stdout
+        );
+        let map = map_json(&tmp.0);
+        assert_eq!(map["configuration"]["source"], "guessed");
+        assert_eq!(map["configuration"]["proposed"], true);
+    }
+    let run = harness(&["project", "map", "--target", tmp.arg(), "--adopt"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("configuration: make, from make (stated in config.toml)"),
+        "{}",
+        run.stdout
+    );
+    let map = map_json(&tmp.0);
+    assert_eq!(map["configuration"]["source"], "stated");
+    assert!(map["configuration"].get("proposed").is_none());
+
+    // The person's own edit states it too.
+    let other = Tmp::new("shipped-config-edit");
+    other.write("a.c", "int a(void) { return 1; }\n");
+    other.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"make\"\nfrom = \"make\"\nflags = []\n",
+    );
+    let run = harness(&["project", "map", "--target", other.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(map_json(&other.0)["configuration"]["source"], "guessed");
+    other.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"make\"\nfrom = \"make\"\nflags = [\"-DMINE\"]\n",
+    );
+    let run = harness(&["project", "map", "--target", other.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(map_json(&other.0)["configuration"]["source"], "stated");
+}
+
+/// A `.c` a header pulls in as text is shown as such, warned about before
+/// it is offered as a library, and never a duplicate between programs.
+#[test]
+fn a_c_file_a_header_includes_is_warned_about_on_the_screen() {
+    let tmp = Tmp::new("text-include");
+    tmp.write("impl.c", "int impl(void) { return 1; }\n");
+    tmp.write("all.h", "#include \"impl.c\"\n");
+    tmp.write(
+        "main.c",
+        "#include \"all.h\"\nint main(void) { return impl(); }\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains(
+            "warning: impl.c is included as text by all.h: moving it to Rust leaves them \
+             compiling its C text, so it is no library of its own"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        !run.stdout
+            .contains("defined in two programs' files that never meet"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// The program count names the fuzzers and drivers among the programs.
+#[test]
+fn the_program_count_names_fuzzers_and_drivers() {
+    let tmp = Tmp::new("fuzz-count");
+    let fuzzer = "#include <stddef.h>\n#include <stdint.h>\n\
+                  int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n) { (void)d; return (int)n; }\n";
+    tmp.write("fuzz/f1.c", fuzzer);
+    tmp.write("fuzz/f2.c", fuzzer);
+    tmp.write(
+        "fuzz/driver.c",
+        "#include <stddef.h>\n#include <stdint.h>\n\
+         int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n);\n\
+         int main(void) { return LLVMFuzzerTestOneInput(0, 0); }\n",
+    );
+    tmp.write("tool.c", "int main(void) { return 0; }\n");
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("programs: 4 (2 fuzzers, 1 driver)"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// The compiler's and runtime's own names (`__stderrp` on Apple) are
+/// folded into a count after the project's outside symbols.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn runtime_names_are_folded_into_a_count() {
+    let tmp = Tmp::new("runtime-names");
+    tmp.write(
+        "main.c",
+        "#include <stdio.h>\nint main(void) { fprintf(stderr, \"x\\n\"); return 0; }\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            // At -O2 the compiler turns this fprintf into fwrite.
+            .contains("outside symbols: fwrite, and 1 compiler or runtime name;"),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("__stderrp"), "{}", run.stdout);
 }

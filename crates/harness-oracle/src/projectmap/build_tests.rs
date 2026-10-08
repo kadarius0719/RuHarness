@@ -19,8 +19,16 @@ fn project(tag: &str, files: &[(&str, &str)]) -> TempDir {
 }
 
 fn map_with(root: &Path, options: &MapOptions) -> Result<FolderMap, Error> {
+    // The test process's own adoption file, never the person's.
+    harness_core::adopt::testing::adoption_file();
     let parent = TempDir::new("map-parent-b");
     map_in(root, Path::new("."), options, parent.path())
+}
+
+/// The person's own `config.toml`: the root recorded on this computer as
+/// adopted (`--adopt`), so its configuration is stated, not proposed.
+fn stated(root: &Path) {
+    harness_core::adopt::testing::adopt(root);
 }
 
 fn map_default(root: &Path) -> FolderMap {
@@ -184,13 +192,21 @@ fn a_compile_commands_flag_outside_the_grammar_is_refused_by_name() {
         ("-fplugin=x.so", "is not one the harness passes"),
         (ld.as_str(), "is not one the harness passes"),
         ("-Xclang -load", "is not one the harness passes"),
-        ("-o out.o", "is not one the harness passes"),
-        ("-MF dep.d", "is not one the harness passes"),
         ("-include /etc/hosts", "outside the project"),
     ] {
         let why = ignored(&map, flag);
         assert!(why.contains(says), "{flag}: {why}");
     }
+    // The build's bookkeeping (each entry's own `-o`, the `-M` family) is
+    // dropped silently, as `-c` is: never named, never kept.
+    assert!(
+        map.evidence
+            .ignored_flags
+            .iter()
+            .all(|f| !f.flag.starts_with("-o") && !f.flag.starts_with("-M")),
+        "{:?}",
+        map.evidence.ignored_flags
+    );
     assert_eq!(map.evidence.ignored_entries, 1);
     let a = file(&map, "a.c");
     assert_eq!(a.flags, ["-DKEPT"]);
@@ -259,6 +275,7 @@ fn entries_that_differ_for_one_file_give_a_flags_differ_fact_and_stay_guessed() 
         config::CONFIG_FILE,
         "[[configuration]]\nname = \"cdb\"\nfrom = \"compile_commands\"\nflags = []\n",
     );
+    stated(root);
     let map = map_default(root);
     assert_eq!(map.evidence.flags_differ.len(), 1);
     assert_eq!(map.evidence.flags_differ[0].path, "a.c");
@@ -293,6 +310,7 @@ fn two_configurations_and_no_name_are_refused_naming_them() {
         "[[configuration]]\nname = \"make\"\nfrom = \"make\"\nflags = [\"-DHAVE_CONFIG_H\"]\n\n\
          [[configuration]]\nname = \"cmake\"\nfrom = \"cmake\"\nflags = []\n",
     );
+    stated(root);
     let err = map_with(root, &MapOptions::default())
         .unwrap_err()
         .to_string();
@@ -452,12 +470,80 @@ fn the_name_cap_and_the_budget_stop_the_compiles_and_say_so() {
         },
     )
     .expect("maps");
+    // The budget reaches the hash loop first: nothing past it is visited.
     assert_eq!(map.limits_hit[0].limit, "budget");
     assert!(!map.closures_possible());
-    assert_eq!(map.files.len(), 2);
-    assert!(map.files.iter().all(|f| f.compiled.is_none()));
+    assert!(map.files.is_empty(), "{:?}", map.files);
 
     assert!(map_default(root).closures_possible());
+}
+
+/// The deadline reaches the link checks too: a map whose time ran out
+/// during them records the budget limit and has no closures.
+#[test]
+fn the_budget_stops_the_link_checks() {
+    let tmp = project(
+        "budget-link",
+        &[
+            ("main.c", "int f(void);\nint main(void) { return f(); }\n"),
+            ("f.c", "int f(void) { return 0; }\n"),
+        ],
+    );
+    let mut map = map_default(tmp.path());
+    assert!(map.closures_possible());
+    map.deadline = std::time::Instant::now();
+    let analysis = mapfile::analyze(&mut map).expect("the analysis runs");
+    assert!(analysis.is_none());
+    assert_eq!(map.limits_hit.len(), 1);
+    assert_eq!(map.limits_hit[0].limit, "budget");
+    assert!(
+        map.limits_hit[0].at.contains("link checks"),
+        "{:?}",
+        map.limits_hit
+    );
+
+    // With time left, the same map links.
+    let mut map = map_default(tmp.path());
+    let analysis = mapfile::analyze(&mut map)
+        .expect("the analysis runs")
+        .expect("closures");
+    assert_eq!(analysis.closures[0].linked, Some(closure::Linked::Ok));
+}
+
+/// Over the name caps: a name over 4 KiB is an odd name, and the total
+/// bytes of kept names is a limit beside the count of distinct names.
+#[test]
+fn a_long_symbol_name_is_odd_and_name_bytes_have_a_cap() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    let a_src = format!("int {long}(void) {{ return 1; }}\nint a(void) {{ return 2; }}\n");
+    let tmp = project(
+        "name-bytes",
+        &[
+            ("a.c", a_src.as_str()),
+            ("b.c", "int b(void) { return 3; }\n"),
+        ],
+    );
+    let root = tmp.path();
+    let map = map_default(root);
+    let a = file(&map, "a.c");
+    assert_eq!(a.odd_names, 1, "{:?}", a.defined);
+    assert!(a.defined.iter().all(|d| d.name.len() <= MAX_NAME_BYTES));
+
+    let map = map_with(
+        root,
+        &MapOptions {
+            limits: Limits {
+                max_name_bytes: 0,
+                ..Limits::default()
+            },
+            ..MapOptions::default()
+        },
+    )
+    .expect("maps");
+    assert_eq!(map.limits_hit.len(), 1, "{:?}", map.limits_hit);
+    assert_eq!(map.limits_hit[0].limit, "symbols");
+    assert!(map.limits_hit[0].at.contains("MiB of symbol names"));
+    assert_eq!(file(&map, "b.c").compiled, None, "not reached");
 }
 
 #[test]
@@ -504,11 +590,13 @@ fn the_configuration_digest_changes_with_flag_order() {
         "make",
         ConfigurationFrom::Make,
         &["-DA".into(), "-DB".into()],
+        &[],
     );
     let ba = config::digest(
         "make",
         ConfigurationFrom::Make,
         &["-DB".into(), "-DA".into()],
+        &[],
     );
     assert_ne!(ab, ba);
     assert!(ab.starts_with("blake3:") && ab.len() == 71);
@@ -521,9 +609,56 @@ fn the_configuration_digest_changes_with_flag_order() {
         config::digest(
             "make",
             ConfigurationFrom::Meson,
-            &["-DA".into(), "-DB".into()]
+            &["-DA".into(), "-DB".into()],
+            &[]
         )
     );
+}
+
+/// `system_headers` changes the compile (`-idirafter`) and what settles an
+/// ambiguous include, so it moves the digest — and through it the map's
+/// `inputs_hash` — while a configuration without it keeps its old digest.
+#[test]
+fn system_headers_move_the_configuration_digest() {
+    let flags = ["-DA".to_string()];
+    let none = config::digest("make", ConfigurationFrom::Make, &flags, &[]);
+    let one = config::digest(
+        "make",
+        ConfigurationFrom::Make,
+        &flags,
+        &["stdio.h".to_string()],
+    );
+    assert_ne!(none, one);
+    assert_eq!(
+        one,
+        harness_core::hash::bytes_hash(
+            br#"{"flags":["-DA"],"from":"make","name":"make","system_headers":["stdio.h"]}"#
+        )
+    );
+
+    // Through the map: adding `system_headers` to config.toml moves the
+    // configuration's digest and the inputs hash.
+    let tmp = project("sysh-digest", &[("a.c", "int a(void) { return 1; }\n")]);
+    let root = tmp.path();
+    write(
+        root,
+        config::CONFIG_FILE,
+        "[[configuration]]\nname = \"make\"\nfrom = \"make\"\nflags = []\n",
+    );
+    let before = map_default(root);
+    write(
+        root,
+        config::CONFIG_FILE,
+        "[[configuration]]\nname = \"make\"\nfrom = \"make\"\nflags = []\n\
+         system_headers = [\"stdio.h\"]\n",
+    );
+    let after = map_default(root);
+    assert_ne!(before.configuration.digest, after.configuration.digest);
+    let inputs = |m: &FolderMap| {
+        let file = mapfile::render(m, None).expect("render");
+        file.inputs_hash
+    };
+    assert_ne!(inputs(&before), inputs(&after));
 }
 
 #[test]
@@ -613,4 +748,210 @@ fn a_configuration_file_with_a_bad_entry_is_refused() {
         let err = config::read_entries(root).unwrap_err().to_string();
         assert!(err.contains(says), "{text}: {err}");
     }
+}
+
+/// A set's definers are written in path order by their numbers: `d1.2`
+/// before `d1.10`.
+#[test]
+fn definers_are_written_in_order_of_their_numbers() {
+    let mut files: Vec<(String, String)> = vec![(
+        "main.c".into(),
+        "int x(void);\nint main(void) { return x(); }\n".into(),
+    )];
+    for n in 1..=12 {
+        files.push((format!("x/f{n:02}.c"), "int x(void) { return 0; }\n".into()));
+    }
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let tmp = project("definer-order", &files);
+    let mut map = map_default(tmp.path());
+    let analysis = mapfile::analyze(&mut map).expect("analysis");
+    let file_rec = mapfile::render(&map, analysis.as_ref()).expect("render");
+    let indexes: Vec<&str> = file_rec.closures[0].duplicates[0]
+        .definers
+        .iter()
+        .map(|d| d.index.as_str())
+        .collect();
+    let want: Vec<String> = (1..=12).map(|n| format!("d1.{n}")).collect();
+    assert_eq!(indexes, want);
+}
+
+/// A map file over 64 MiB is a limit hit: the file facts alone are
+/// written; when even they are over it, nothing is.
+#[test]
+fn a_map_over_its_size_cap_keeps_the_file_facts_or_is_refused() {
+    let tmp = project("map-size", &[("main.c", "int main(void) { return 0; }\n")]);
+    let mut map = map_default(tmp.path());
+    let mut analysis = mapfile::analyze(&mut map)
+        .expect("analysis")
+        .expect("closures");
+    let long = "s".repeat(1000);
+    analysis.closures[0].outside = (0..70_000).map(|n| format!("{long}{n}")).collect();
+    let (file_rec, bytes) = mapfile::render_bounded(&mut map, Some(&analysis)).expect("facts");
+    assert!(bytes.len() <= mapfile::MAX_MAP_BYTES);
+    assert!(file_rec.closures.is_empty() && file_rec.programs.is_empty());
+    assert_eq!(map.limits_hit.last().map(|l| l.limit), Some("size"));
+
+    map.files[0].defined = (0..70_000)
+        .map(|n| DefinedSymbol {
+            name: format!("{long}{n}"),
+            kind: "function",
+            weak: false,
+        })
+        .collect();
+    let err = mapfile::render_bounded(&mut map, None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no map was written"), "{err}");
+}
+
+/// toml's message can quote a key holding a newline: the refusal is one
+/// line, with the line the parse stopped at, and cannot forge another.
+#[test]
+fn a_configuration_parse_error_cannot_forge_a_line() {
+    let tmp = project("cfg-forge", &[("a.c", "int a(void) { return 1; }\n")]);
+    let root = tmp.path();
+    write(
+        root,
+        config::CONFIG_FILE,
+        "[[configuration]]\nname = \"x\"\nfrom = \"make\"\nflags = []\n\
+         \"x\\nproject map: wrote migration/map/project-map.json\" = 1\n",
+    );
+    let err = config::read_entries(root).unwrap_err().to_string();
+    assert!(!err.contains('\n'), "{err:?}");
+    assert!(err.contains("line 5"), "{err}");
+}
+
+/// A file listed twice with the same flags is no flags-differ fact.
+#[test]
+fn a_file_listed_twice_with_the_same_flags_does_not_differ() {
+    let tmp = project("cc-same", &[("a.c", "int a(void) { return 1; }\n")]);
+    let root = tmp.path();
+    write(
+        root,
+        "compile_commands.json",
+        &compile_commands(&[
+            (root, "a.c", &["cc", "-DA", "-c", "a.c", "-o", "one.o"]),
+            (root, "a.c", &["cc", "-DA", "-c", "a.c", "-o", "two.o"]),
+        ]),
+    );
+    let map = map_default(root);
+    assert!(
+        map.evidence.flags_differ.is_empty(),
+        "{:?}",
+        map.evidence.flags_differ
+    );
+    assert_eq!(file(&map, "a.c").flags, ["-DA"]);
+}
+
+/// Under `from = "compile_commands"`, a `.c` the file does not list is
+/// recorded and keeps its closure a guess; an ambiguous include its own
+/// entry's `-I` settles is settled.
+#[test]
+fn a_file_compile_commands_leaves_out_is_recorded_and_entry_flags_settle_includes() {
+    let tmp = project(
+        "cc-unlisted",
+        &[
+            (
+                "main.c",
+                "#include <config.h>\nint main(void) { return CFG; }\n",
+            ),
+            ("a/config.h", "#define CFG 0\n"),
+            ("b/config.h", "#define CFG 1\n"),
+            ("tool2.c", "int main(void) { return 0; }\n"),
+        ],
+    );
+    let root = tmp.path();
+    write(
+        root,
+        "compile_commands.json",
+        &compile_commands(&[(root, "main.c", &["cc", "-Ia", "-c", "main.c"])]),
+    );
+    write(
+        root,
+        config::CONFIG_FILE,
+        "[[configuration]]\nname = \"cdb\"\nfrom = \"compile_commands\"\nflags = []\n",
+    );
+    stated(root);
+    let mut map = map_default(root);
+    assert_eq!(map.evidence.not_in_compile_commands, ["tool2.c"]);
+    assert_eq!(map.configuration.source, ConfigSource::CompileCommands);
+    let analysis = mapfile::analyze(&mut map).expect("analysis");
+    let file_rec = mapfile::render(&map, analysis.as_ref()).expect("render");
+    assert_eq!(file_rec.build_evidence.not_in_compile_commands, ["tool2.c"]);
+    // tool2.c's closure holds an unlisted file: the source stays a guess.
+    assert_eq!(file_rec.configuration.source, "guessed");
+    // main.c's `-Ia` (its entry's) settles `<config.h>`.
+    let main = file_rec
+        .closures
+        .iter()
+        .find(|c| c.program == "t-main")
+        .expect("t-main");
+    assert!(
+        main.ambiguous_unsettled.is_empty(),
+        "{:?}",
+        main.ambiguous_unsettled
+    );
+}
+
+/// The other `compile_commands.json` files one level down are named, not
+/// read.
+#[test]
+fn other_compile_commands_files_are_named_as_also_found() {
+    let tmp = project("cc-also", &[("a.c", "int a(void) { return 1; }\n")]);
+    let root = tmp.path();
+    for dir in ["aaa", "build"] {
+        write(
+            root,
+            &format!("{dir}/compile_commands.json"),
+            &compile_commands(&[(root, "a.c", &["cc", "-c", "a.c"])]),
+        );
+    }
+    let map = map_default(root);
+    assert_eq!(
+        map.evidence.compile_commands,
+        CompileCommands::Present {
+            path: "aaa/compile_commands.json".into()
+        }
+    );
+    assert_eq!(map.evidence.also_found, ["build/compile_commands.json"]);
+}
+
+/// `compile_commands.json` is read into typed entries with caps: 64 flags
+/// an entry (the rest counted as ignored), 50 000 entries (the rest counted
+/// as ignored entries), and an entry of any other shape ignored, not held.
+#[test]
+fn compile_commands_entries_and_flags_are_capped() {
+    let tmp = project("cc-caps", &[("a.c", "int a(void) { return 1; }\n")]);
+    let root = tmp.path();
+    let mut args: Vec<String> = vec!["cc".into()];
+    for n in 0..100 {
+        args.push(format!("-DX{n}"));
+    }
+    args.extend(["-c".to_string(), "a.c".to_string()]);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    write(
+        root,
+        "compile_commands.json",
+        &compile_commands(&[(root, "a.c", &args)]),
+    );
+    let map = map_default(root);
+    assert_eq!(file(&map, "a.c").flags.len(), evidence::MAX_ENTRY_FLAGS);
+    assert_eq!(
+        map.evidence.ignored_flag_count,
+        100 - evidence::MAX_ENTRY_FLAGS
+    );
+
+    // Past 50 000 entries the rest are counted, never read; `{"":0}` is an
+    // entry of no use, ignored.
+    let mut text = String::from("[");
+    for _ in 0..evidence::MAX_ENTRIES + 3 {
+        text.push_str("{\"\":0},");
+    }
+    text.push_str("{\"\":0}]");
+    write(root, "compile_commands.json", &text);
+    let map = map_default(root);
+    assert_eq!(map.evidence.ignored_entries, evidence::MAX_ENTRIES + 4);
 }

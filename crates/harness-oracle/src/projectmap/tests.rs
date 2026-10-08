@@ -20,6 +20,8 @@ fn project(tag: &str, files: &[(&str, &[u8])]) -> TempDir {
 /// Map the whole of `root`, the fresh folder made under a temporary parent
 /// of its own.
 fn map(root: &Path) -> FolderMap {
+    // The test process's own adoption file, never the person's.
+    harness_core::adopt::testing::adoption_file();
     let parent = TempDir::new("map-parent");
     map_folder_in(root, Path::new("."), parent.path()).expect("the map runs")
 }
@@ -257,8 +259,41 @@ fn a_c_file_over_the_cap_is_too_large_and_not_compiled() {
     assert_eq!(f.compiled, None);
     assert!(f.defined.is_empty());
     assert_eq!(f.bytes, big.len() as u64);
-    assert_eq!(f.blake3, harness_core::hash::bytes_hash(&big));
+    // Over the cap: hashed over its size and its first 8 MiB, never read
+    // whole.
+    let mut head = format!("{}\n", big.len()).into_bytes();
+    head.extend_from_slice(&big[..MAX_SOURCE_BYTES as usize]);
+    assert_eq!(f.blake3, harness_core::hash::bytes_hash(&head));
+    assert_ne!(f.blake3, harness_core::hash::bytes_hash(&big));
     assert_eq!(file(&map, "small.c").compiled, Some(Compiled::Ok));
+    // A file under the cap keeps the plain hash of its bytes.
+    assert_eq!(
+        file(&map, "small.c").blake3,
+        harness_core::hash::bytes_hash(b"int small(void) { return 1; }\n")
+    );
+}
+
+/// A sparse header claiming 16 GiB (no blocks on disk) is hashed by its
+/// size and head in well under a second, not streamed whole (12 s in the
+/// security check; a terabyte would take minutes).
+#[test]
+fn a_sparse_giant_header_is_hashed_by_its_head() {
+    let tmp = project("sparse", &[("a.c", b"int a(void) { return 1; }\n")]);
+    let big = tmp.path().join("big.h");
+    let f = std::fs::File::create(&big).expect("create");
+    f.set_len(16 << 30).expect("a sparse file");
+    drop(f);
+    let started = std::time::Instant::now();
+    let hash = map_hash(&big, 16 << 30).expect("hashed");
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(4), "{took:?}");
+    let mut head = format!("{}\n", 16u64 << 30).into_bytes();
+    head.resize(head.len() + MAX_SOURCE_BYTES as usize, 0);
+    assert_eq!(hash, harness_core::hash::bytes_hash(&head));
+    let map = map(tmp.path());
+    let h = file(&map, "big.h");
+    assert!(h.too_large);
+    assert_eq!(h.blake3, hash);
 }
 
 #[test]
@@ -292,6 +327,62 @@ fn names_from_a_file_outside_the_root_are_withheld_and_counted() {
     assert!(a.outside_includes);
     assert!(a.defined.is_empty() && a.needed.is_empty(), "{a:?}");
     assert_eq!(a.withheld_names, 2, "leaked_name and kept, counted");
+}
+
+/// A failed compile's `-MD` list is read too: one that read outside the
+/// root keeps neither where it stopped nor the header it missed (either
+/// can tell what exists outside); only the one bit stays.
+#[test]
+fn a_failed_compile_that_read_outside_keeps_no_place_or_header() {
+    let outside = TempDir::new("outside-failed");
+    let name = outside.path().join("probe.h");
+    std::fs::write(&name, "int probed = 1;\n").expect("outside file");
+    // (A compile stopped by a missing header writes no list — clang's fatal
+    // error — so that case cannot be told; design §6 says so.)
+    let a = format!("#include \"{}\"\n#error stop\n", name.display());
+    let tmp = project(
+        "outside-failed",
+        &[("a.c", a.as_bytes()), ("c.c", b"\n#error stop\n")],
+    );
+    let map = map(tmp.path());
+    let f = file(&map, "a.c");
+    assert!(f.outside_includes);
+    match &f.compiled {
+        Some(Compiled::Failed { at, header, .. }) => {
+            assert_eq!(at, &None);
+            assert_eq!(header, &None);
+        }
+        other => panic!("{other:?}"),
+    }
+    // A failed compile that read nothing outside keeps its place.
+    let c = file(&map, "c.c");
+    assert!(!c.outside_includes);
+    assert!(
+        matches!(&c.compiled, Some(Compiled::Failed { at: Some(at), .. }) if at == "c.c:2"),
+        "{:?}",
+        c.compiled
+    );
+}
+
+/// The parser's names are kept only for a `.c` that did not compile: the
+/// one file the closure analysis asks them of.
+#[test]
+fn parser_facts_are_kept_only_for_a_c_file_that_did_not_compile() {
+    let tmp = project(
+        "parser-kept",
+        &[
+            ("ok.c", b"int ok(void) { return 1; }\n"),
+            (
+                "bad.c",
+                b"int helper(void);\nint main(void) { return helper(); }\n#error x\n",
+            ),
+            ("h.h", b"int in_header(void);\n"),
+        ],
+    );
+    let map = map(tmp.path());
+    assert_eq!(map.parser.keys().collect::<Vec<_>>(), ["bad.c"]);
+    let bad = &map.parser["bad.c"];
+    assert!(bad.defines.contains("main") && bad.calls.contains("helper"));
 }
 
 #[test]

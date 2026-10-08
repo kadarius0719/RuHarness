@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The longest part after `t-`/`l-` before a `-2`, `-3`… suffix.
 pub const ID_BODY_MAX: usize = 60;
+/// The longest part after `t-`/`l-`, suffix included (the tool-id
+/// pattern's `{1,64}`): a body is cut to `64 -` the suffix's length.
+pub const ID_MAX: usize = 64;
 
 /// `text` with every character outside `[a-z0-9_-]` turned into `-`, ASCII
 /// letters lowercased, and `/` turned into `-` like any other.
@@ -99,7 +102,13 @@ pub fn assign(
         let mut id = base.clone();
         let mut n = 2;
         while taken.contains(&id) {
-            id = format!("{base}-{n}");
+            // The body is cut to make room for the suffix, so the id stays
+            // within the tool-id pattern's 64 characters after the prefix
+            // however many collide.
+            let suffix = format!("-{n}");
+            let mut body = base[prefix.len()..].to_string();
+            body.truncate(ID_MAX - suffix.len());
+            id = format!("{prefix}{body}{suffix}");
             n += 1;
         }
         debug_assert!(is_tool_id(&id), "{id} is a tool id");
@@ -156,6 +165,21 @@ mod tests {
                 pair("a/b-c/x.c", "t-a-b-c-x-2")
             ]
         );
+    }
+
+    /// Past 999 collisions the suffix grows to five characters: the body is
+    /// cut to make room, so every id stays a tool id (64 after the prefix).
+    #[test]
+    fn a_thousand_collisions_stay_within_the_tool_id_pattern() {
+        let a = "a".repeat(60);
+        let paths: Vec<String> = (0..1100).map(|n| format!("{a}{n}.c")).collect();
+        let got = assign("t-", &paths, &[]);
+        let ids: BTreeSet<&String> = got.values().collect();
+        assert_eq!(ids.len(), paths.len(), "unique");
+        for id in got.values() {
+            assert!(is_tool_id(id), "{id} ({} long)", id.len());
+        }
+        assert!(got.values().any(|id| id.ends_with("-1000")));
     }
 
     #[test]

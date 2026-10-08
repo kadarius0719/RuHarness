@@ -14,9 +14,12 @@
 //! The linker's rules (§3.1 step 7): a definition is *strong* unless it is
 //! weak or common. Of a symbol's definers among non-program files, two or
 //! more strong ones are a duplicate; one strong one defines it whatever weak
-//! or common ones stand beside it; with no strong one the first in path
-//! order defines it. Over a finished closure, a symbol two or more of its
-//! files define strongly is a collision.
+//! or common ones stand beside it — so a symbol the closure defines only
+//! weakly (or as common) pulls in its single strong definer, recorded as
+//! `strong_over_weak`; with no strong one the first in path order defines
+//! it. Over a finished closure, a symbol two or more of its files define
+//! strongly is a collision. A fuzzer's closure starts from it and its
+//! driver (the driver file itself is not listed).
 
 use super::ids;
 use super::{Compiled, DefinedSymbol, FileFacts, FileKind, WalkIssue};
@@ -213,8 +216,23 @@ pub struct Duplicate {
     pub links: Vec<String>,
     /// The choice linking made, when exactly one linked.
     pub choice: Option<Choice>,
-    /// The choice (a definer index) this set is reached only under.
-    pub under: Option<String>,
+    /// The choices (definer indexes) this set is reached under, when not
+    /// every choice reaches it (empty when it is reached whatever is kept);
+    /// once settled, only the kept one.
+    pub under: Vec<String>,
+}
+
+/// A symbol a closure file defines only weakly (or as common) while another
+/// file of the closure defines it strongly: the strong one defines it, so a
+/// need met only weakly pulls in its single strong definer (§3.1 step 7).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct StrongOverWeak {
+    /// The symbol.
+    pub sym: String,
+    /// The files defining it weakly or as common, sorted.
+    pub weak: Vec<String>,
+    /// The files defining it strongly, sorted.
+    pub strong: Vec<String>,
 }
 
 /// A symbol two or more of a closure's files define strongly.
@@ -238,6 +256,11 @@ pub enum Linked {
         missing: Vec<String>,
         /// Symbols two linked files define strongly, sorted.
         doubled: Vec<String>,
+        /// Unresolved symbols the probe budget left undecided, sorted:
+        /// neither proven missing nor provided.
+        not_checked: Vec<String>,
+        /// Files that did not compile for the link, sorted.
+        not_compiled: Vec<String>,
     },
 }
 
@@ -269,6 +292,8 @@ pub struct Closure {
     pub duplicates: Vec<Duplicate>,
     /// Its collisions, sorted.
     pub collisions: Vec<Collision>,
+    /// Symbols its files define weakly and strongly, by symbol.
+    pub strong_over_weak: Vec<StrongOverWeak>,
     /// The link check (none when not checked).
     pub linked: Option<Linked>,
     /// Sets linking could not settle (held): questions for the person.
@@ -340,6 +365,15 @@ pub trait Linker {
     /// symbols they need that none of them defines: the outside symbols
     /// and any need of another program.
     fn link(&mut self, files: &[&FileFacts], unresolved: &[String]) -> Result<Linked, Error>;
+
+    /// No closure still to be linked needs `path`: its object may go.
+    fn release(&mut self, _path: &str) {}
+
+    /// The linker stopped (the map's deadline passed): its results are not
+    /// to be trusted, and the analysis stops.
+    fn stopped(&self) -> bool {
+        false
+    }
 }
 
 /// A definition counts as strong unless it is weak or common.
@@ -407,11 +441,17 @@ struct Core {
     needs_from: BTreeSet<(String, usize)>,
 }
 
+/// A choice: a set and the definer kept for it.
+type Pick = (SetKey, usize);
+
 /// A set seen while exploring a program's choices.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct Seen {
     symbols: BTreeSet<String>,
-    under: Option<(SetKey, usize)>,
+    /// Raised by a closure made with no choice at all.
+    direct: bool,
+    /// The last choice made before each closure that raised it.
+    reached: BTreeSet<Pick>,
 }
 
 /// What exploring a program's choices found.
@@ -421,6 +461,45 @@ struct Explored {
     over: bool,
 }
 
+impl Explored {
+    /// The choices `key` is reached under, when not every choice reaches
+    /// it: empty for a set reached with no choice, or reached by every
+    /// definer of the set whose choice raised it (then that set's own
+    /// choices count, in turn).
+    fn under(&self, key: &SetKey) -> Vec<Pick> {
+        self.under_at(key, 0)
+    }
+
+    fn under_at(&self, key: &SetKey, depth: usize) -> Vec<Pick> {
+        let Some(seen) = self.sets.get(key) else {
+            return Vec::new();
+        };
+        // The nesting is at most as deep as the sets are many.
+        if seen.direct || depth > self.sets.len() {
+            return Vec::new();
+        }
+        let mut by_parent: BTreeMap<&SetKey, BTreeSet<usize>> = BTreeMap::new();
+        for (parent, d) in &seen.reached {
+            by_parent.entry(parent).or_default().insert(*d);
+        }
+        let mut out = BTreeSet::new();
+        for (parent, ds) in by_parent {
+            if parent.iter().all(|d| ds.contains(d)) {
+                // Every choice of the parent reaches it: as reached as the
+                // parent is.
+                let above = self.under_at(parent, depth + 1);
+                if above.is_empty() {
+                    return Vec::new();
+                }
+                out.extend(above);
+            } else {
+                out.extend(ds.into_iter().map(|d| (parent.clone(), d)));
+            }
+        }
+        out.into_iter().collect()
+    }
+}
+
 /// A duplicate set in one program's result, before numbering.
 #[derive(Debug, Clone)]
 struct Dup {
@@ -428,7 +507,7 @@ struct Dup {
     symbols: BTreeSet<String>,
     links: BTreeSet<usize>,
     keep: Option<usize>,
-    under: Option<(SetKey, usize)>,
+    under: Vec<Pick>,
 }
 
 /// One program's result, before numbering.
@@ -497,13 +576,28 @@ impl<'a> Project<'a> {
         }
     }
 
-    /// The closure from `start` with `choices` (§3.1 step 7), from scratch:
-    /// each round adds every single definer of a need the set does not yet
-    /// meet, until a round adds nothing.
-    fn closure(&self, start: usize, choices: &Choices) -> Core {
-        let mut files: BTreeSet<usize> = BTreeSet::from([start]);
+    /// The single strong definer (among non-program files) of `sym`, when
+    /// there is exactly one.
+    fn single_strong(&self, sym: &str) -> Option<usize> {
+        let defs = self.definers.get(sym)?;
+        let mut strong = defs.iter().filter(|d| d.1);
+        match (strong.next(), strong.next()) {
+            (Some(&(d, _)), None) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// The closure from `starts` with `choices` (§3.1 step 7), from
+    /// scratch: each round adds every single definer of a need the set does
+    /// not yet meet, and the single strong definer of a symbol the set
+    /// defines only weakly (the strong one defines it), until a round adds
+    /// nothing. A need met only by a program file other than the starts is
+    /// recorded, never pulled in.
+    fn closure(&self, starts: &BTreeSet<usize>, choices: &Choices) -> Core {
+        let mut files: BTreeSet<usize> = starts.clone();
         loop {
             let defined = self.defined_in(&files);
+            let strongly = self.strongly_defined_in(&files);
             let mut add = BTreeSet::new();
             for &f in &files {
                 for n in &self.files[f].needed {
@@ -521,6 +615,12 @@ impl<'a> Project<'a> {
                         }
                         Res::Programs(_) | Res::Outside => {}
                     }
+                }
+            }
+            // Met only weakly: the single strong definer joins.
+            for sym in defined.difference(&strongly) {
+                if let Some(d) = self.single_strong(sym) {
+                    add.insert(d);
                 }
             }
             let before = files.len();
@@ -544,7 +644,7 @@ impl<'a> Project<'a> {
                         core.pending.entry(key).or_default().insert(n.name.clone());
                     }
                     Res::Programs(ps) => {
-                        for p in ps.into_iter().filter(|&p| p != start) {
+                        for p in ps.into_iter().filter(|p| !starts.contains(p)) {
                             core.needs_from.insert((n.name.clone(), p));
                         }
                     }
@@ -566,6 +666,42 @@ impl<'a> Project<'a> {
             .collect()
     }
 
+    fn strongly_defined_in(&self, files: &BTreeSet<usize>) -> BTreeSet<&'a str> {
+        files
+            .iter()
+            .flat_map(|&f| {
+                self.files[f]
+                    .defined
+                    .iter()
+                    .filter(|d| strong(d))
+                    .map(|d| d.name.as_str())
+            })
+            .collect()
+    }
+
+    /// Symbols `files` define weakly (or as common) and strongly.
+    fn strong_over_weak(&self, files: &BTreeSet<usize>) -> Vec<StrongOverWeak> {
+        let mut by: BTreeMap<&str, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
+        for &f in files {
+            for d in &self.files[f].defined {
+                let at = by.entry(&d.name).or_default();
+                if strong(d) {
+                    at.1.insert(self.files[f].path.clone());
+                } else {
+                    at.0.insert(self.files[f].path.clone());
+                }
+            }
+        }
+        by.into_iter()
+            .filter(|(_, (weak, strong))| !weak.is_empty() && !strong.is_empty())
+            .map(|(sym, (weak, strong))| StrongOverWeak {
+                sym: sym.to_string(),
+                weak: weak.into_iter().collect(),
+                strong: strong.into_iter().collect(),
+            })
+            .collect()
+    }
+
     /// Every combination of choices for `start`'s pending sets, a set
     /// raised under a choice expanded in turn (§3.5 step 2); `over` when a
     /// set has more than [`MAX_DEFINERS`] or the combinations pass
@@ -580,26 +716,20 @@ impl<'a> Project<'a> {
         out
     }
 
-    fn explore_from(
-        &self,
-        start: usize,
-        choices: Choices,
-        under: Option<(SetKey, usize)>,
-        out: &mut Explored,
-    ) {
+    fn explore_from(&self, start: usize, choices: Choices, last: Option<Pick>, out: &mut Explored) {
         if out.over {
             return;
         }
-        let core = self.closure(start, &choices);
+        let core = self.closure(&BTreeSet::from([start]), &choices);
         for (key, symbols) in &core.pending {
-            out.sets
-                .entry(key.clone())
-                .or_insert_with(|| Seen {
-                    symbols: BTreeSet::new(),
-                    under: under.clone(),
-                })
-                .symbols
-                .extend(symbols.iter().cloned());
+            let seen = out.sets.entry(key.clone()).or_default();
+            seen.symbols.extend(symbols.iter().cloned());
+            match &last {
+                None => seen.direct = true,
+                Some(pick) => {
+                    seen.reached.insert(pick.clone());
+                }
+            }
         }
         let Some(key) = core.pending.keys().next().cloned() else {
             if out.leaves.len() == MAX_CHOICES {
@@ -629,6 +759,21 @@ impl<'a> Project<'a> {
         linker.link(&refs, &unresolved(&refs))
     }
 
+    /// Every file a `main` program's link checks may compile: its closure
+    /// under each choice.
+    fn may_link(&self, start: usize) -> BTreeSet<usize> {
+        let base = self.closure(&BTreeSet::from([start]), &Choices::new());
+        if base.pending.is_empty() {
+            return base.files;
+        }
+        let explored = self.explore(start);
+        let mut all = base.files;
+        for (_, core) in &explored.leaves {
+            all.extend(core.files.iter().copied());
+        }
+        all
+    }
+
     /// A `main` program: its closure, its duplicates settled by linking
     /// when a linker is given (§3.5).
     fn settle<'l>(
@@ -636,7 +781,7 @@ impl<'a> Project<'a> {
         start: usize,
         linker: Option<&mut (dyn Linker + 'l)>,
     ) -> Result<Outcome, Error> {
-        let base = self.closure(start, &Choices::new());
+        let base = self.closure(&BTreeSet::from([start]), &Choices::new());
         if base.pending.is_empty() {
             let linked = match linker {
                 Some(l) => Some(self.link(l, &base.files)?),
@@ -659,7 +804,7 @@ impl<'a> Project<'a> {
                     symbols: s.symbols.clone(),
                     links: links.get(key).cloned().unwrap_or_default(),
                     keep: None,
-                    under: s.under.clone(),
+                    under: explored.under(key),
                 })
                 .collect()
         };
@@ -678,6 +823,9 @@ impl<'a> Project<'a> {
         let mut results = Vec::new();
         for (_, core) in &explored.leaves {
             results.push(self.link(linker, &core.files)?);
+            if linker.stopped() {
+                return Ok(pending(seen(&BTreeMap::new()), None, false));
+            }
         }
         let ok: Vec<usize> = (0..results.len())
             .filter(|&i| results[i] == Linked::Ok)
@@ -692,7 +840,13 @@ impl<'a> Project<'a> {
                         symbols: explored.sets[key].symbols.clone(),
                         links: BTreeSet::from([keep]),
                         keep: Some(keep),
-                        under: explored.sets[key].under.clone(),
+                        // Once settled, only the kept choice it was reached
+                        // under.
+                        under: explored
+                            .under(key)
+                            .into_iter()
+                            .filter(|(k, d)| choices.get(k) == Some(d))
+                            .collect(),
                     })
                     .collect();
                 Ok(Outcome {
@@ -734,7 +888,8 @@ fn find_programs(project_files: &[&FileFacts]) -> BTreeMap<usize, (ProgramKind, 
             .any(|d| d.name == "main" && d.kind == "function")
         {
             mains.push(i);
-        } else if has(f, FUZZ_ENTRY) && !has(f, "main") {
+        } else if has(f, FUZZ_ENTRY) {
+            // A data `main` beside the entry point is no program's `main`.
             fuzz.insert(i);
         }
     }
@@ -811,6 +966,34 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
 
     // Closures: `main` programs settled by linking, fuzzers linked with the
     // project's driver.
+    // A fuzzer's closure starts from it and its driver (the driver's own
+    // needs join the fuzzer's link); the driver file itself is not listed.
+    let driver_of = |i: usize| {
+        kinds
+            .iter()
+            .find(|(_, (k, serves))| *k == ProgramKind::Driver && serves.contains(&i))
+            .map(|(&d, _)| d)
+    };
+    let fuzz_starts = |i: usize| {
+        let mut starts = BTreeSet::from([i]);
+        starts.extend(driver_of(i));
+        starts
+    };
+    // Each file's last program to link it, so its object goes once no
+    // closure still to be linked needs it.
+    let mut last_use: BTreeMap<usize, usize> = BTreeMap::new();
+    if linker.is_some() {
+        for (&i, (kind, _)) in &kinds {
+            let may = match kind {
+                ProgramKind::Main => project.may_link(i),
+                ProgramKind::Fuzz => project.closure(&fuzz_starts(i), &Choices::new()).files,
+                ProgramKind::Driver => BTreeSet::new(),
+            };
+            for f in may {
+                last_use.insert(f, i);
+            }
+        }
+    }
     let mut outcomes: BTreeMap<usize, Outcome> = BTreeMap::new();
     for (&i, (kind, _)) in &kinds {
         match kind {
@@ -819,19 +1002,17 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
                 outcomes.insert(i, out);
             }
             ProgramKind::Fuzz => {
-                let core = project.closure(i, &Choices::new());
-                let driver = kinds
-                    .iter()
-                    .find(|(_, (k, serves))| *k == ProgramKind::Driver && serves.contains(&i))
-                    .map(|(&d, _)| d);
+                let driver = driver_of(i);
+                let mut core = project.closure(&fuzz_starts(i), &Choices::new());
                 let linked = match (driver, linker.as_deref_mut()) {
-                    (Some(d), Some(l)) if core.pending.is_empty() => {
-                        let mut with = core.files.clone();
-                        with.insert(d);
-                        Some(project.link(l, &with)?)
+                    (Some(_), Some(l)) if core.pending.is_empty() => {
+                        Some(project.link(l, &core.files)?)
                     }
                     _ => None,
                 };
+                if let Some(d) = driver {
+                    core.files.remove(&d);
+                }
                 let dups = core
                     .pending
                     .iter()
@@ -840,7 +1021,7 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
                         symbols: symbols.clone(),
                         links: BTreeSet::new(),
                         keep: None,
-                        under: None,
+                        under: Vec::new(),
                     })
                     .collect();
                 outcomes.insert(
@@ -855,6 +1036,14 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
             }
             ProgramKind::Driver => {}
         }
+        if let Some(l) = linker.as_deref_mut() {
+            if l.stopped() {
+                break;
+            }
+            for (&f, _) in last_use.iter().filter(|(_, &p)| p == i) {
+                l.release(&files[f].path);
+            }
+        }
     }
 
     // Set indexes, once per project (§3.3): sets reached directly first,
@@ -865,7 +1054,7 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
     for out in outcomes.values() {
         for d in &out.dups {
             all.insert(d.key.clone());
-            if d.under.is_none() {
+            if d.under.is_empty() {
                 direct.insert(d.key.clone());
             }
         }
@@ -939,7 +1128,18 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
                     keep: definer_index(&d.key, k),
                     by: "links",
                 }),
-                under: d.under.as_ref().map(|(k, f)| definer_index(k, *f)),
+                under: {
+                    let mut under: Vec<(usize, usize, String)> = d
+                        .under
+                        .iter()
+                        .map(|(k, f)| {
+                            let at = k.iter().position(|x| x == f).unwrap_or(0);
+                            (set_no[k], at, definer_index(k, *f))
+                        })
+                        .collect();
+                    under.sort();
+                    under.into_iter().map(|u| u.2).collect()
+                },
             });
         }
         for (f, p) in &failed_parsed {
@@ -1003,6 +1203,7 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
             needs_from,
             duplicates,
             collisions,
+            strong_over_weak: project.strong_over_weak(&core.files),
             linked: out.linked.clone(),
             questions,
         });
@@ -1040,10 +1241,28 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
         .collect();
     let libraries = libraries(&project, &unreached, input.accepted);
 
-    // Duplicates between programs that never meet.
+    // Textual dependencies.
+    let mut includers: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for f in files.iter() {
+        for inc in &f.includes {
+            if let Some(&t) = project.by_path.get(inc.as_str()) {
+                if files[t].kind == FileKind::C {
+                    includers
+                        .entry(files[t].path.as_str())
+                        .or_default()
+                        .insert(f.path.clone());
+                }
+            }
+        }
+    }
+
+    // Duplicates between programs that never meet: definers in the
+    // programs' closures only (a library's file is no program's), a `.c`
+    // another file includes as text left out (its includer defines it).
     let mut strong_by: BTreeMap<&str, BTreeSet<usize>> = BTreeMap::new();
-    for (i, f) in files.iter().enumerate() {
-        if f.kind != FileKind::C || !compiled_ok(f) {
+    for &i in &in_closure {
+        let f = files[i];
+        if f.kind != FileKind::C || !compiled_ok(f) || includers.contains_key(f.path.as_str()) {
             continue;
         }
         for d in f.defined.iter().filter(|d| strong(d)) {
@@ -1065,20 +1284,6 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
         })
         .collect();
 
-    // Textual dependencies.
-    let mut includers: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
-    for f in files.iter() {
-        for inc in &f.includes {
-            if let Some(&t) = project.by_path.get(inc.as_str()) {
-                if files[t].kind == FileKind::C {
-                    includers
-                        .entry(files[t].path.as_str())
-                        .or_default()
-                        .insert(f.path.clone());
-                }
-            }
-        }
-    }
     let included_by = includers
         .into_iter()
         .map(|(file, by)| IncludedBy {

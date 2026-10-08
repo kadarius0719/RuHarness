@@ -3,9 +3,14 @@
 //! executed**, and the build files found by their fixed names. Nothing the
 //! project ships is run.
 //!
-//! An entry's `command` is split by POSIX shell word rules with no expansion
-//! (or its `arguments` taken as they are); its compiler (the first word) and
-//! its `output` are never used — `cc` from the allowlist always compiles. A
+//! The file is read into typed entries (only `directory`, `file`,
+//! `arguments`, `command`), at most [`MAX_ENTRIES`] of them, at most
+//! [`MAX_ENTRY_FLAGS`] flags and [`MAX_ENTRY_BYTES`] of flags kept an entry;
+//! the rest is counted as ignored. An entry's `command` is split by POSIX
+//! shell word rules with no expansion (or its `arguments` taken as they
+//! are); its compiler (the first word), its `output` and its bookkeeping
+//! (`-c`, `-o`, the `-M` family) are never used — `cc` from the allowlist
+//! always compiles. A
 //! separate-form option takes its next argument and is checked joined, so a
 //! refused option drops its value with it; a path is resolved against the
 //! entry's `directory` and must land inside the project root. What passes
@@ -18,6 +23,7 @@ use harness_core::config::flags::check_flag;
 use harness_core::text::safe_line;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
 /// The file's fixed name.
 pub const COMPILE_COMMANDS: &str = "compile_commands.json";
@@ -25,6 +31,13 @@ pub const COMPILE_COMMANDS: &str = "compile_commands.json";
 pub const MAX_COMPILE_COMMANDS_BYTES: u64 = 64 << 20;
 /// Most distinct ignored flags named; past it they are only counted.
 pub const MAX_NAMED_IGNORED: usize = 200;
+/// Most entries read (§3.10); the rest are counted as ignored entries.
+pub const MAX_ENTRIES: usize = 50_000;
+/// Most flags kept from one entry (§3.10); the rest are counted as ignored.
+pub const MAX_ENTRY_FLAGS: usize = 64;
+/// Most bytes of flags kept from one entry (§3.10); the rest are counted as
+/// ignored.
+pub const MAX_ENTRY_BYTES: usize = 16 << 10;
 
 /// Options whose value is the next argument (and checked joined to it).
 pub const SEPARATE_FORM: &[&str] = &[
@@ -128,6 +141,10 @@ pub struct BuildEvidence {
     pub ignored_flag_count: usize,
     /// The kept flags of each walked file's first entry, root-relative.
     pub file_flags: BTreeMap<String, Vec<String>>,
+    /// Walked `.c` files no entry lists (when a `compile_commands.json` was
+    /// read), sorted: compiled with the configuration's flags alone, and a
+    /// closure holding one keeps its configuration a guess.
+    pub not_in_compile_commands: Vec<String>,
 }
 
 impl BuildEvidence {
@@ -143,6 +160,7 @@ impl BuildEvidence {
             ignored_flags: Vec::new(),
             ignored_flag_count: 0,
             file_flags: BTreeMap::new(),
+            not_in_compile_commands: Vec::new(),
         }
     }
 
@@ -159,16 +177,18 @@ pub fn is_build_file(name: &str) -> bool {
 
 /// Gather the evidence: find and read the `compile_commands.json` (entries
 /// for files in `walked`, relative to `root`), with `build_files` from the
-/// walk.
+/// walk. `false` beside it when `deadline` passed before every entry was
+/// read (the map then stops at its time budget).
 pub(crate) fn gather(
     root: &Path,
     walked: &BTreeSet<&str>,
     build_files: Vec<String>,
-) -> BuildEvidence {
+    deadline: Instant,
+) -> (BuildEvidence, bool) {
     let mut ev = BuildEvidence::none(build_files);
     let mut found = find(root);
     if found.is_empty() {
-        return ev;
+        return (ev, true);
     }
     let (path, rel) = found.remove(0);
     ev.also_found = found.into_iter().map(|(_, r)| r).collect();
@@ -179,28 +199,34 @@ pub(crate) fn gather(
     let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     if size > MAX_COMPILE_COMMANDS_BYTES {
         ev.compile_commands = unreadable(format!("over {} MiB", MAX_COMPILE_COMMANDS_BYTES >> 20));
-        return ev;
+        return (ev, true);
     }
-    let entries: Vec<serde_json::Value> = match std::fs::read(&path)
+    let entries: Entries = match std::fs::read(&path)
         .map_err(|e| e.to_string())
         .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
     {
         Ok(v) => v,
         Err(why) => {
             ev.compile_commands = unreadable(format!("not a list of entries: {why}"));
-            return ev;
+            return (ev, true);
         }
     };
     ev.compile_commands = CompileCommands::Present { path: rel };
+    ev.ignored_entries = entries.past_cap;
     let base = path.parent().unwrap_or(root).to_path_buf();
     let mut lists: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
+    let mut seen: BTreeMap<String, BTreeSet<Vec<String>>> = BTreeMap::new();
     let mut unfound = BTreeSet::new();
     let mut ignored: BTreeMap<(String, String), usize> = BTreeMap::new();
-    for entry in &entries {
+    for entry in &entries.kept {
+        if Instant::now() >= deadline {
+            return (ev, false);
+        }
         let Some(read) = read_entry(root, &base, entry) else {
             ev.ignored_entries += 1;
             continue;
         };
+        ev.ignored_flag_count += read.past_cap;
         for (flag, why) in read.refused {
             ev.ignored_flag_count += 1;
             let key = (flag, why);
@@ -212,9 +238,14 @@ pub(crate) fn gather(
         }
         match read.file {
             Some(rel) if walked.contains(rel.as_str()) => {
-                let at = lists.entry(rel).or_default();
-                if !at.contains(&read.kept) {
-                    at.push(read.kept);
+                // A set beside the list: a file listed thousands of times
+                // is checked in log time, not by a scan of the list.
+                if seen
+                    .entry(rel.clone())
+                    .or_default()
+                    .insert(read.kept.clone())
+                {
+                    lists.entry(rel).or_default().push(read.kept);
                 }
             }
             Some(rel) => {
@@ -239,7 +270,261 @@ pub(crate) fn gather(
         }
         ev.file_flags.insert(path, flags.swap_remove(0));
     }
-    ev
+    (ev, true)
+}
+
+/// The entries of a `compile_commands.json`, read typed: the first
+/// [`MAX_ENTRIES`] kept, the rest counted (never held in memory).
+struct Entries {
+    kept: Vec<RawEntry>,
+    past_cap: usize,
+}
+
+/// One entry as written: only the fields the map reads, each `None` when
+/// absent or not of its type (the entry is then ignored and counted).
+#[derive(Default)]
+struct RawEntry {
+    directory: Option<String>,
+    file: Option<String>,
+    /// `None` when absent or not a list of strings.
+    arguments: Option<Vec<String>>,
+    /// Arguments past [`MAX_RAW_ARGS`], counted.
+    arguments_past_cap: usize,
+    /// The `arguments` field was present (even when not a list of strings).
+    has_arguments: bool,
+    command: Option<String>,
+}
+
+/// Most arguments of one entry held in memory before the flag caps.
+const MAX_RAW_ARGS: usize = 4 * MAX_ENTRY_FLAGS + 16;
+
+impl<'de> serde::Deserialize<'de> for Entries {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Entries, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Entries;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a list of entries")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Entries, A::Error> {
+                let mut out = Entries {
+                    kept: Vec::new(),
+                    past_cap: 0,
+                };
+                while out.kept.len() < MAX_ENTRIES {
+                    match seq.next_element::<RawEntry>()? {
+                        Some(e) => out.kept.push(e),
+                        None => return Ok(out),
+                    }
+                }
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                    out.past_cap += 1;
+                }
+                Ok(out)
+            }
+        }
+        d.deserialize_seq(V)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RawEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<RawEntry, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = RawEntry;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an entry")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<RawEntry, A::Error> {
+                let mut e = RawEntry::default();
+                while let Some(key) = map.next_key::<Lenient>()? {
+                    match key.0.as_deref() {
+                        Some("directory") => e.directory = map.next_value::<Lenient>()?.0,
+                        Some("file") => e.file = map.next_value::<Lenient>()?.0,
+                        Some("command") => e.command = map.next_value::<Lenient>()?.0,
+                        Some("arguments") => {
+                            let args = map.next_value::<Args>()?;
+                            e.has_arguments = true;
+                            e.arguments = args.kept;
+                            e.arguments_past_cap = args.past_cap;
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(e)
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<RawEntry, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(RawEntry::default())
+            }
+            fn visit_str<E>(self, _: &str) -> Result<RawEntry, E> {
+                Ok(RawEntry::default())
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<RawEntry, E> {
+                Ok(RawEntry::default())
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<RawEntry, E> {
+                Ok(RawEntry::default())
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<RawEntry, E> {
+                Ok(RawEntry::default())
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<RawEntry, E> {
+                Ok(RawEntry::default())
+            }
+            fn visit_unit<E>(self) -> Result<RawEntry, E> {
+                Ok(RawEntry::default())
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// A string, or `None` for a value of any other type (skipped unread).
+struct Lenient(Option<String>);
+
+impl<'de> serde::Deserialize<'de> for Lenient {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Lenient, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Lenient;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("any value")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Lenient, E> {
+                Ok(Lenient(Some(v.to_string())))
+            }
+            fn visit_string<E>(self, v: String) -> Result<Lenient, E> {
+                Ok(Lenient(Some(v)))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Lenient, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(Lenient(None))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Lenient, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(Lenient(None))
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<Lenient, E> {
+                Ok(Lenient(None))
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<Lenient, E> {
+                Ok(Lenient(None))
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<Lenient, E> {
+                Ok(Lenient(None))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<Lenient, E> {
+                Ok(Lenient(None))
+            }
+            fn visit_unit<E>(self) -> Result<Lenient, E> {
+                Ok(Lenient(None))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// An `arguments` list: the first [`MAX_RAW_ARGS`] strings kept, the rest
+/// counted; `kept: None` when it is not a list of strings.
+struct Args {
+    kept: Option<Vec<String>>,
+    past_cap: usize,
+}
+
+impl<'de> serde::Deserialize<'de> for Args {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Args, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Args;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a list of arguments")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Args, A::Error> {
+                let mut kept = Vec::new();
+                let mut past_cap = 0;
+                let mut all_strings = true;
+                while let Some(arg) = seq.next_element::<Lenient>()? {
+                    match arg.0 {
+                        None => all_strings = false,
+                        Some(_) if kept.len() >= MAX_RAW_ARGS => past_cap += 1,
+                        Some(a) => kept.push(a),
+                    }
+                }
+                Ok(Args {
+                    kept: all_strings.then_some(kept),
+                    past_cap,
+                })
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Args, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(Args {
+                    kept: None,
+                    past_cap: 0,
+                })
+            }
+            fn visit_str<E>(self, _: &str) -> Result<Args, E> {
+                Ok(Args {
+                    kept: None,
+                    past_cap: 0,
+                })
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<Args, E> {
+                Ok(Args {
+                    kept: None,
+                    past_cap: 0,
+                })
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<Args, E> {
+                Ok(Args {
+                    kept: None,
+                    past_cap: 0,
+                })
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<Args, E> {
+                Ok(Args {
+                    kept: None,
+                    past_cap: 0,
+                })
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<Args, E> {
+                Ok(Args {
+                    kept: None,
+                    past_cap: 0,
+                })
+            }
+            fn visit_unit<E>(self) -> Result<Args, E> {
+                Ok(Args {
+                    kept: None,
+                    past_cap: 0,
+                })
+            }
+        }
+        d.deserialize_any(V)
+    }
 }
 
 /// `compile_commands.json` at the root, then in each folder one level down
@@ -284,19 +569,23 @@ struct Entry {
     kept: Vec<String>,
     /// The flags refused: as written, and why.
     refused: Vec<(String, String)>,
+    /// Arguments past the entry's caps, counted as ignored.
+    past_cap: usize,
 }
 
 /// Read one entry; `None` when it is ignored (counted by the caller).
-fn read_entry(root: &Path, base: &Path, entry: &serde_json::Value) -> Option<Entry> {
-    let directory = entry.get("directory")?.as_str()?;
-    let written = entry.get("file")?.as_str()?.to_string();
-    let args: Vec<String> = match (entry.get("arguments"), entry.get("command")) {
-        (Some(a), _) => a
-            .as_array()?
-            .iter()
-            .map(|v| v.as_str().map(str::to_string))
-            .collect::<Option<_>>()?,
-        (None, Some(c)) => split_command(c.as_str()?).ok()?,
+fn read_entry(root: &Path, base: &Path, entry: &RawEntry) -> Option<Entry> {
+    let directory = entry.directory.as_deref()?;
+    let written = entry.file.clone()?;
+    let (args, mut past_cap): (Vec<String>, usize) = match (&entry.arguments, &entry.command) {
+        (Some(a), _) => (a.clone(), entry.arguments_past_cap),
+        (None, _) if entry.has_arguments => return None,
+        (None, Some(c)) => {
+            let mut words = split_command(c).ok()?;
+            let past = words.len().saturating_sub(MAX_RAW_ARGS);
+            words.truncate(MAX_RAW_ARGS);
+            (words, past)
+        }
         (None, None) => return None,
     };
     let dir = resolve(base, directory)?;
@@ -305,12 +594,14 @@ fn read_entry(root: &Path, base: &Path, entry: &serde_json::Value) -> Option<Ent
     }
     let file_abs = resolve(&dir, &written);
     let file = file_abs.as_deref().and_then(|p| rel_of(root, p));
-    let (kept, refused) = entry_flags(root, &dir, &args, file_abs.as_deref());
+    let (kept, refused, over) = entry_flags(root, &dir, &args, file_abs.as_deref());
+    past_cap += over;
     Some(Entry {
         file,
         written,
         kept,
         refused,
+        past_cap,
     })
 }
 
@@ -344,22 +635,40 @@ fn resolve(base: &Path, path: &str) -> Option<PathBuf> {
     }
 }
 
-/// An entry's arguments, its compiler dropped: `(kept, refused)`. `-c` and
-/// the entry's own file are expected and dropped silently.
+/// The build's own bookkeeping options, dropped silently with their values
+/// like `-c`: the object's name and the dependency-list options every
+/// CMake and Meson entry carries (each entry's `-o` differs, so naming them
+/// would flood the screen).
+const BOOKKEEPING: &[&str] = &["-o", "-MF", "-MT", "-MQ", "-MD", "-MMD"];
+
+/// An entry's arguments, its compiler dropped: `(kept, refused, past the
+/// caps)`. `-c`, the build's bookkeeping ([`BOOKKEEPING`]) and the entry's
+/// own file are expected and dropped silently. Past [`MAX_ENTRY_FLAGS`]
+/// kept flags or [`MAX_ENTRY_BYTES`] of them, every further argument is
+/// counted as ignored.
 fn entry_flags(
     root: &Path,
     dir: &Path,
     args: &[String],
     file_abs: Option<&Path>,
-) -> (Vec<String>, Vec<(String, String)>) {
-    let mut kept = Vec::new();
+) -> (Vec<String>, Vec<(String, String)>, usize) {
+    let mut kept: Vec<String> = Vec::new();
+    let mut kept_bytes = 0;
     let mut refused = Vec::new();
+    let mut past_cap = 0;
     let mut it = args.iter().skip(1);
     while let Some(arg) = it.next() {
-        if arg == "-c" {
+        if arg == "-c" || arg == "-MD" || arg == "-MMD" {
             continue;
         }
-        let (joined, shown) = if SEPARATE_FORM.contains(&arg.as_str()) {
+        let separate = SEPARATE_FORM.contains(&arg.as_str());
+        if BOOKKEEPING.contains(&arg.as_str()) {
+            if separate {
+                it.next();
+            }
+            continue;
+        }
+        let (joined, shown) = if separate {
             match it.next() {
                 Some(value) => (format!("{arg}{value}"), format!("{arg} {value}")),
                 None => (arg.clone(), arg.clone()),
@@ -367,18 +676,32 @@ fn entry_flags(
         } else {
             (arg.clone(), arg.clone())
         };
+        // The joined spellings: `-ofoo.o`, `-MFdeps.d`, `-MTx`, `-MQx`.
+        if ["-o", "-MF", "-MT", "-MQ"]
+            .iter()
+            .any(|b| joined.starts_with(b))
+        {
+            continue;
+        }
         if !joined.starts_with(['-', '@'])
             && file_abs.is_some()
             && resolve(dir, &joined).as_deref() == file_abs
         {
             continue;
         }
+        if kept.len() >= MAX_ENTRY_FLAGS || kept_bytes >= MAX_ENTRY_BYTES {
+            past_cap += 1;
+            continue;
+        }
         match entry_flag(root, dir, &joined) {
-            Ok(flag) => kept.push(flag),
+            Ok(flag) => {
+                kept_bytes += flag.len();
+                kept.push(flag);
+            }
             Err(why) => refused.push((shown, why)),
         }
     }
-    (kept, refused)
+    (kept, refused, past_cap)
 }
 
 /// One joined flag of an entry through the grammar; a path flag's path

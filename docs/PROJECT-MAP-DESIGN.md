@@ -77,8 +77,11 @@ and the recorded toolchain (§3.3).
    recorded as an alias of each file; a link to a file inside the root makes that file's second path
    an alias, the file recorded **once** under the path with no link in it; a link that leaves the
    root or points nowhere, a FIFO or a device, and a folder the walk cannot read are listed in
-   `walk_issues: [{path, why}]`. Record every `.c` and `.h`: path, size, blake3 (hashed by streaming, so a
-   file over the size cap is still hashed). Non-C sources (`.cc`, `.cpp`, `.cxx`, `.m`, `.go`,
+   `walk_issues: [{path, why}]`. Record every `.c` and `.h`: path, size, blake3 (hashed by streaming;
+   a file over the 8 MiB cap is hashed over its size and its first 8 MiB — blake3 of the size in
+   decimal, a newline, then the head — so a sparse file claiming a terabyte costs no more than any
+   other, and a change past its head that keeps the size is not seen: it is neither parsed nor
+   compiled anyway). Non-C sources (`.cc`, `.cpp`, `.cxx`, `.m`, `.go`,
    `.rs`, `.py`, `.js`, `.lua`, `.pas`), assembly (`.s`, `.S`, `.asm`) and prebuilt files (`.a`,
    `.o`, `.so`, `.dylib`) appear only as **counts per folder** in `set_aside`, never as entries and
    never read. Caps (§3.10): 20 000 walked `.c`/`.h` files, depth 32, a file over 8 MiB is recorded
@@ -241,7 +244,10 @@ configuration per accepted tool**, and a map's closures carry the configuration 
   `config.toml` entry with `from = "compile_commands"` takes each program's shared flags from the
   file. The person writes `config.toml` — or asks the model (`project ask --build`, §3.4, allowed at
   any time, since it only proposes) and copies what they accept — and runs `map` again; the
-  closures are now `stated`. Questions about duplicates and programs (`project ask` without
+  closures are now `stated`. A `config.toml` that came with the project — present when this
+  computer first recorded the root, its hash kept in the adoption record outside the project — is
+  shown as proposed and keeps the source `guessed` while it has that hash; `--adopt` once, or the
+  person's own edit, states it (2026-10-08). Questions about duplicates and programs (`project ask` without
   `--build`) are refused while the configuration is a guess unless `--allow-guessed` is given,
   because a wrong flag changes the closures and the questions; `accept` never takes a guessed
   configuration.
@@ -318,7 +324,9 @@ shown; it is fenced as untrusted when handed on: in a prompt with triage's deter
 
 - `root_hash` is SCHEMAS' file-set hash (blake3 over the sorted paths and contents) of every walked
   `.c`/`.h`, every `included_other` file, plus `compile_commands.json` when present. `configuration.digest` is blake3 of the
-  canonical JSON of `{name, from, flags (in order)}`. `toolchain` is `{cc: the first line of cc
+  canonical JSON of `{name, from, flags (in order), system_headers}` — `system_headers` changes the
+  compile (`-idirafter`) and what settles an ambiguous include, so it moves the digest; it is left
+  out when empty, so a configuration without it keeps the digest it had. `toolchain` is `{cc: the first line of cc
   --version, target: cc -dumpmachine, cflags: the judge's base flags, system_include_dirs}`.
   `inputs_hash` is blake3 of the canonical JSON of `{configuration.digest, toolchain}` (a stale
   picture is visibly stale after a compiler change). No commit hash is recorded: reading one means
@@ -743,8 +751,16 @@ and now the ledger lives inside the download.
 
 20 000 walked `.c`/`.h` files (the count-only pass counts set-aside and skipped files separately),
 depth 32, 200 000 distinct symbol names, a file over 8 MiB not read, an object over 64 MiB not read,
-120 s per compile and link, a total budget of 30 minutes for `project map`. Past any cap: the file
-facts are written, no closures are computed, exit 1 names the limit. A cut-short walk, like an
+120 s per compile and link, a total budget of 30 minutes for `project map`. The budget is one
+deadline through every phase — the hash and parse loops, the `compile_commands.json` reader, each
+compile, and each link and probe of the link checks; the link checks compile each file with the
+map's own argv and free each object once no closure still to be linked needs it. Memory and size
+(2026-10-08): a symbol name over 4 KiB is an odd name; 64 MiB of kept name bytes (every file's
+names, repeats counted) is a limit beside the 200 000 names; the parser's names are kept only for a
+`.c` that did not compile; `compile_commands.json` is read into typed entries, at most 50 000 of
+them, 64 flags and 16 KiB of flags an entry (the rest counted as ignored); a map file over 64 MiB is
+a limit hit (`size`: the file facts alone are written, or nothing when even they are over it).
+Past any cap: the file facts are written, no closures are computed, exit 1 names the limit. A cut-short walk, like an
 unreadable folder, must never produce complete closures, because definers never reached would read
 as outside symbols. The 64 MiB object cap bounds what the harness reads, not what the compiler
 writes: see §6.
@@ -1057,6 +1073,13 @@ unit moves (the cockpit shows "Features (none yet)" until then).
 - **The map profile still lets a compile read `/private/var/folders`** (the person's own temporary
   files and other apps' caches): what a compile reads there reaches nothing stored, since symbol
   names from such a compile are withheld, but the read itself happens.
+- **Whether a file exists outside the home folder can reach the map** (2026-10-08): the profile
+  allows reading outside `/Users`, `/Volumes` and the temporary folders, so `__has_include("/Applications/…")`
+  steering an `#error` or a missing include tells, through the line a compile stopped at or the
+  header it missed, whether that file exists. A compile whose `-MD` list shows it read outside the
+  root keeps neither `at` nor `header`, and one bit per file (`outside_includes`) stays; but
+  `__has_include` reads nothing, and a compile stopped by a missing header writes no list, so the
+  channel stays open until the map profile's reads become an allow-list (§8).
 - **A root holding many projects** (`~/code`) is not refused; the map warns when the walk finds
   more than one `.git` folder.
 
@@ -1095,6 +1118,8 @@ enforced.
 - The advice: the migration order first, or the seam.
 - A project with its own `migration/` folder, if it turns out common.
 - Linux: the map once a Linux sandbox exists; the `objsyms` extension is written for ELF too.
+- The map profile's reads as an allow-list (the root, the fresh and work folders, the toolchain,
+  `/usr`, `/System`, `/dev`), which closes the file-existence channel of §6.
 
 ## 9. What changed, and why
 

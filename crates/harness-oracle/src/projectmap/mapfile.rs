@@ -18,9 +18,9 @@
 //! toolchain: {cc, cflags, system_include_dirs, target}}`.
 
 use super::closure::{self, Analysis, Input, Linked};
-use super::evidence::{CompileCommands, PATH_PREFIXES};
+use super::evidence::CompileCommands;
+use super::link::LinkSetup;
 use super::{Compiled, FileKind, FolderMap, Toolchain};
-use harness_core::config::flags::{check_flag, Flag};
 use harness_core::error::Error;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -119,8 +119,13 @@ pub struct ConfigurationRec {
     /// Header names meant as the system's, in order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub system_headers: Vec<String>,
-    /// blake3 of the canonical JSON of `{flags, from, name}`.
+    /// blake3 of the canonical JSON of `{flags, from, name, system_headers}`
+    /// (`system_headers` only when not empty).
     pub digest: String,
+    /// The `config.toml` entry came with the project and is only proposed
+    /// (its source is then `guessed`).
+    #[serde(skip_serializing_if = "is_false")]
+    pub proposed: bool,
 }
 
 /// One walked file.
@@ -273,6 +278,13 @@ pub struct ClosureRec {
     pub duplicates: Vec<DuplicateRec>,
     /// Symbols two of its files define strongly.
     pub collisions: Vec<SymDefiners>,
+    /// Symbols its files define weakly (or as common) and strongly: the
+    /// strong one defines it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub strong_over_weak: Vec<StrongOverWeakRec>,
+    /// Its `.c` files another file includes as text.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub included_as_text: Vec<IncludedRec>,
     /// Its files' ambiguous includes the configuration does not settle.
     pub ambiguous_unsettled: Vec<AmbiguousRec>,
     /// The link check: `"ok"` or what failed.
@@ -327,9 +339,30 @@ pub struct DuplicateRec {
     /// Settled by linking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub choice: Option<ChoiceRec>,
-    /// The choice it is reached only under.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub under: Option<String>,
+    /// The choices it is reached under, when not every choice reaches it;
+    /// once settled, the kept one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub under: Vec<String>,
+}
+
+/// A symbol defined weakly and strongly in one closure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StrongOverWeakRec {
+    /// The symbol.
+    pub sym: String,
+    /// The files defining it weakly or as common.
+    pub weak: Vec<String>,
+    /// The files defining it strongly.
+    pub strong: Vec<String>,
+}
+
+/// A `.c` another file includes as text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IncludedRec {
+    /// The `.c`.
+    pub file: String,
+    /// The files including it.
+    pub by: Vec<String>,
 }
 
 /// A definer.
@@ -371,6 +404,12 @@ pub enum LinkedRec {
         missing: Vec<String>,
         /// Symbols two linked files define strongly.
         doubled: Vec<String>,
+        /// Unresolved symbols the probe budget left undecided.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        not_checked: Vec<String>,
+        /// Files that did not compile for the link.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        not_compiled: Vec<String>,
     },
 }
 
@@ -443,6 +482,12 @@ pub struct EvidenceRec {
     /// Files listed twice with different flags.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub flags_differ: Vec<ListedTwice>,
+    /// Walked `.c` files no entry lists.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_in_compile_commands: Vec<String>,
+    /// Other `compile_commands.json` files one level down, not read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub also_found: Vec<String>,
 }
 
 /// A file a `compile_commands.json` lists with different flags.
@@ -482,36 +527,11 @@ pub fn clean_header(name: &str) -> Option<&str> {
     clean.then_some(name)
 }
 
-/// The configuration's flags as the link checks pass them to `cc`: a path
-/// made absolute under `root` (`-I` joined, the others as two arguments, as
-/// every map compile writes them), `-O` levels dropped (recorded, never
-/// applied).
-pub fn link_flags(root: &Path, flags: &[String]) -> Result<Vec<String>, Error> {
-    let mut out = Vec::new();
-    for flag in flags {
-        match check_flag(flag).map_err(Error::Invariant)? {
-            Flag::Optimization => {}
-            Flag::Path(_) => {
-                let (prefix, rel) = PATH_PREFIXES
-                    .iter()
-                    .find_map(|p| flag.strip_prefix(p).map(|rest| (*p, rest)))
-                    .ok_or_else(|| Error::Invariant(format!("unknown path flag {flag}")))?;
-                let abs = crate::path_str(&root.join(rel))?.to_string();
-                if prefix == "-I" {
-                    out.push(format!("-I{abs}"));
-                } else {
-                    out.extend([prefix.to_string(), abs]);
-                }
-            }
-            _ => out.push(flag.clone()),
-        }
-    }
-    Ok(out)
-}
-
 /// The analysis of a map, with its link checks (§3.5): `None` past a cap,
-/// when no closure may be computed (§3.10).
-pub fn analyze(map: &FolderMap) -> Result<Option<Analysis>, Error> {
+/// when no closure may be computed (§3.10). When the time budget runs out
+/// during the link checks, the `budget` limit is added to `map` and `None`
+/// returned.
+pub fn analyze(map: &mut FolderMap) -> Result<Option<Analysis>, Error> {
     if !map.closures_possible() {
         return Ok(None);
     }
@@ -523,8 +543,53 @@ pub fn analyze(map: &FolderMap) -> Result<Option<Analysis>, Error> {
         // (step e); none are read yet.
         accepted: &[],
     };
-    let flags = link_flags(&map.root, &map.configuration.flags)?;
-    super::link::analyze_linked(&map.root, &input, &flags).map(Some)
+    let setup = LinkSetup {
+        walked: map.files.iter().map(|f| f.path.as_str()).collect(),
+        system_headers: &map.configuration.system_headers,
+        deadline: map.deadline,
+    };
+    let analysis = super::link::analyze_linked(&map.root, &input, setup)?;
+    if analysis.is_none() {
+        map.limits_hit.push(super::LimitHit {
+            limit: "budget",
+            at: format!(
+                "a time budget of {} s, during the link checks",
+                map.budget.as_secs_f64()
+            ),
+        });
+    }
+    Ok(analysis)
+}
+
+/// The largest map file written (§3.10): past it the map is a limit hit.
+pub const MAX_MAP_BYTES: usize = 64 << 20;
+
+/// [`render`] within [`MAX_MAP_BYTES`]: when the full map is larger, the
+/// `size` limit is added to `map` and the file facts alone are rendered;
+/// when even those are larger, a refusal in one sentence (nothing is
+/// written). The file and its bytes.
+pub fn render_bounded(
+    map: &mut FolderMap,
+    analysis: Option<&Analysis>,
+) -> Result<(MapFile, Vec<u8>), Error> {
+    let file = render(map, analysis)?;
+    let bytes = to_bytes(&file);
+    if bytes.len() <= MAX_MAP_BYTES {
+        return Ok((file, bytes));
+    }
+    map.limits_hit.push(super::LimitHit {
+        limit: "size",
+        at: format!("a map file of {} MiB", MAX_MAP_BYTES >> 20),
+    });
+    let file = render(map, None)?;
+    let bytes = to_bytes(&file);
+    if bytes.len() <= MAX_MAP_BYTES {
+        return Ok((file, bytes));
+    }
+    Err(Error::Invariant(format!(
+        "the map's file facts alone are over {} MiB, so no map was written: map a smaller folder",
+        MAX_MAP_BYTES >> 20
+    )))
 }
 
 /// `root_hash`: see the module docs.
@@ -542,8 +607,12 @@ pub fn root_hash(map: &FolderMap) -> Result<String, Error> {
     }
     for rel in others {
         if !pairs.contains_key(rel) {
-            let hash = harness_core::hash::file_hash(&map.root.join(rel))?;
-            pairs.insert(rel.to_string(), hash);
+            // Over 8 MiB, by its size and head, as a walked file is.
+            let abs = map.root.join(rel);
+            let bytes = std::fs::metadata(&abs)
+                .map_err(|e| Error::io(&abs, e))?
+                .len();
+            pairs.insert(rel.to_string(), super::map_hash(&abs, bytes)?);
         }
     }
     let pairs: Vec<(String, String)> = pairs.into_iter().collect();
@@ -614,15 +683,33 @@ fn sorted(mut v: Vec<String>) -> Vec<String> {
     v
 }
 
+/// The numbers of an index (`d10.2` → `[10, 2]`, `d3` → `[3]`), so `d2`
+/// sorts before `d10` and `d1.2` before `d1.10`.
+pub fn index_numbers(index: &str) -> Vec<u64> {
+    index
+        .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+        .split('.')
+        .map(|n| n.parse().unwrap_or(u64::MAX))
+        .collect()
+}
+
+/// Indexes sorted by their numbers, each once.
+fn by_number(mut v: Vec<String>) -> Vec<String> {
+    v.sort_by_key(|i| index_numbers(i));
+    v.dedup();
+    v
+}
+
 /// An ambiguous include is settled when the configuration names the header
-/// as the system's, or one of its `-I`, `-iquote` or `-isystem` folders
-/// holds the candidate.
-fn settled(map: &FolderMap, a: &super::Ambiguous) -> bool {
+/// as the system's, or one of the `-I`, `-iquote` or `-isystem` folders the
+/// file compiles with (`flags`: its own, which under `compile_commands`
+/// are its entry's then the configuration's) holds the candidate.
+fn settled(map: &FolderMap, flags: &[String], a: &super::Ambiguous) -> bool {
     let c = &map.configuration;
     if c.system_headers.contains(&a.header) {
         return true;
     }
-    c.flags.iter().any(|flag| {
+    flags.iter().any(|flag| {
         ["-isystem", "-iquote", "-I"].iter().any(|p| {
             flag.strip_prefix(p).is_some_and(|dir| {
                 let held = if dir == "." {
@@ -736,9 +823,20 @@ pub fn render(map: &FolderMap, analysis: Option<&Analysis>) -> Result<MapFile, E
             .collect();
         programs.sort_by(|a: &ProgramRec, b| a.id.cmp(&b.id));
         programs_not_compiled = sorted(a.programs_not_compiled.clone());
+        let not_listed: BTreeSet<&str> = map
+            .evidence
+            .not_in_compile_commands
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let from_cc =
+            map.configuration.from == harness_core::config::ConfigurationFrom::CompileCommands;
         for c in &a.closures {
-            let rec = closure_rec(map, &by_path, c);
-            if !rec.flags_differ.is_empty() {
+            let rec = closure_rec(map, &by_path, a, c);
+            // Flags that differ, or under `from = "compile_commands"` a
+            // file no entry lists, keep the configuration a guess.
+            let unlisted = from_cc && rec.files.iter().any(|f| not_listed.contains(f.as_str()));
+            if !rec.flags_differ.is_empty() || unlisted {
                 source = super::ConfigSource::Guessed.as_str();
             }
             closures.push(rec);
@@ -842,6 +940,7 @@ pub fn render(map: &FolderMap, analysis: Option<&Analysis>) -> Result<MapFile, E
             flags: c.flags.clone(),
             system_headers: c.system_headers.clone(),
             digest: c.digest.clone(),
+            proposed: c.proposed,
         },
         files,
         programs,
@@ -860,6 +959,8 @@ pub fn render(map: &FolderMap, analysis: Option<&Analysis>) -> Result<MapFile, E
             unfound_entries: sorted(ev.unfound_entries.clone()),
             build_files: sorted(ev.build_files.clone()),
             flags_differ,
+            not_in_compile_commands: sorted(ev.not_in_compile_commands.clone()),
+            also_found: sorted(ev.also_found.clone()),
         },
         limits_hit,
     })
@@ -868,8 +969,27 @@ pub fn render(map: &FolderMap, analysis: Option<&Analysis>) -> Result<MapFile, E
 fn closure_rec(
     map: &FolderMap,
     by_path: &BTreeMap<&str, &super::FileFacts>,
+    analysis: &Analysis,
     c: &closure::Closure,
 ) -> ClosureRec {
+    let included_as_text: Vec<IncludedRec> = analysis
+        .included_by
+        .iter()
+        .filter(|i| c.files.contains(&i.file))
+        .map(|i| IncludedRec {
+            file: i.file.clone(),
+            by: sorted(i.by.clone()),
+        })
+        .collect();
+    let strong_over_weak: Vec<StrongOverWeakRec> = c
+        .strong_over_weak
+        .iter()
+        .map(|s| StrongOverWeakRec {
+            sym: s.sym.clone(),
+            weak: sorted(s.weak.clone()),
+            strong: sorted(s.strong.clone()),
+        })
+        .collect();
     // The flags each `.c` compiles with: one list when they agree, else
     // each file's (a flags-differ fact that keeps the source guessed).
     let mut per_file: Vec<PathFlags> = c
@@ -900,7 +1020,12 @@ fn closure_rec(
     let mut unsettled: BTreeSet<AmbiguousRec> = BTreeSet::new();
     for p in &c.files {
         if let Some(f) = by_path.get(p.as_str()) {
-            for a in f.ambiguous.iter().filter(|a| !settled(map, a)) {
+            let flags = if f.kind == FileKind::C {
+                &f.flags
+            } else {
+                &map.configuration.flags
+            };
+            for a in f.ambiguous.iter().filter(|a| !settled(map, flags, a)) {
                 unsettled.insert(AmbiguousRec {
                     header: a.header.clone(),
                     candidates: a.candidates.clone(),
@@ -940,21 +1065,21 @@ fn closure_rec(
                     path: x.path.clone(),
                 })
                 .collect();
-            definers.sort_by(|a, b| a.index.cmp(&b.index));
+            definers.sort_by_key(|a| index_numbers(&a.index));
             DuplicateRec {
                 set: d.set.clone(),
                 symbols: sorted(d.symbols.clone()),
                 definers,
-                links: sorted(d.links.clone()),
+                links: by_number(d.links.clone()),
                 choice: d.choice.as_ref().map(|ch| ChoiceRec {
                     keep: ch.keep.clone(),
                     by: ch.by,
                 }),
-                under: d.under.clone(),
+                under: by_number(d.under.clone()),
             }
         })
         .collect();
-    duplicates.sort_by(|a, b| a.set.cmp(&b.set));
+    duplicates.sort_by_key(|a| index_numbers(&a.set));
     let mut collisions: Vec<SymDefiners> = c
         .collisions
         .iter()
@@ -975,15 +1100,24 @@ fn closure_rec(
         needs_from,
         duplicates,
         collisions,
+        strong_over_weak,
+        included_as_text,
         ambiguous_unsettled: unsettled.into_iter().collect(),
         linked: c.linked.as_ref().map(|l| match l {
             Linked::Ok => LinkedRec::Ok("ok"),
-            Linked::Failed { missing, doubled } => LinkedRec::Failed {
+            Linked::Failed {
+                missing,
+                doubled,
+                not_checked,
+                not_compiled,
+            } => LinkedRec::Failed {
                 missing: sorted(missing.clone()),
                 doubled: sorted(doubled.clone()),
+                not_checked: sorted(not_checked.clone()),
+                not_compiled: sorted(not_compiled.clone()),
             },
         }),
-        questions: sorted(c.questions.clone()),
+        questions: by_number(c.questions.clone()),
     }
 }
 
@@ -997,8 +1131,14 @@ pub fn to_bytes(file: &MapFile) -> Vec<u8> {
 
 /// Write the map file under `root` in full (atomically): its path.
 pub fn write(root: &Path, file: &MapFile) -> Result<PathBuf, Error> {
+    write_bytes(root, &to_bytes(file))
+}
+
+/// Write the map file's `bytes` ([`to_bytes`]) under `root` in full
+/// (atomically): its path.
+pub fn write_bytes(root: &Path, bytes: &[u8]) -> Result<PathBuf, Error> {
     let path = root.join(MAP_FILE);
-    harness_core::ledger::write_atomic(&path, &to_bytes(file))?;
+    harness_core::ledger::write_atomic(&path, bytes)?;
     Ok(path)
 }
 
@@ -1077,17 +1217,27 @@ mod tests {
         assert_ne!(base, inputs_hash("blake3:aa", &other));
     }
 
+    /// Indexes sort by their numbers: `d2` before `d10`, `d1.2` before
+    /// `d1.10` (the file's "definers in path order").
     #[test]
-    fn link_flags_make_paths_absolute_and_drop_optimisation_levels() {
-        let root = Path::new("/p");
-        let flags: Vec<String> = ["-DX=1", "-O2", "-Iinc", "-isystemsys", "-pthread"]
+    fn indexes_sort_by_their_numbers() {
+        let v: Vec<String> = ["d10", "d1.10", "d2", "d1.2", "d1.1"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        assert_eq!(
-            link_flags(root, &flags).unwrap(),
-            ["-DX=1", "-I/p/inc", "-isystem", "/p/sys", "-pthread"]
-        );
+        assert_eq!(by_number(v), ["d1.1", "d1.2", "d1.10", "d2", "d10"]);
+        let mut defs = [
+            DefinerRec {
+                index: "d1.10".into(),
+                path: "z.c".into(),
+            },
+            DefinerRec {
+                index: "d1.9".into(),
+                path: "y.c".into(),
+            },
+        ];
+        defs.sort_by_key(|d| index_numbers(&d.index));
+        assert_eq!(defs[0].index, "d1.9");
     }
 
     #[test]
