@@ -701,24 +701,25 @@ fn by_number(mut v: Vec<String>) -> Vec<String> {
 }
 
 /// An ambiguous include is settled when the configuration names the header
-/// as the system's, or one of the `-I`, `-iquote` or `-isystem` folders the
-/// file compiles with (`flags`: its own, which under `compile_commands`
-/// are its entry's then the configuration's) holds the candidate.
+/// as the system's, or one of the `-I`, `-iquote`, `-isystem` or
+/// `-idirafter` folders the file compiles with (`flags`: its own, which
+/// under `compile_commands` are its entry's then the configuration's) holds
+/// the candidate (`-include` names a file, never a folder).
 fn settled(map: &FolderMap, flags: &[String], a: &super::Ambiguous) -> bool {
     let c = &map.configuration;
     if c.system_headers.contains(&a.header) {
         return true;
     }
     flags.iter().any(|flag| {
-        ["-isystem", "-iquote", "-I"].iter().any(|p| {
-            flag.strip_prefix(p).is_some_and(|dir| {
+        harness_core::config::flags::split_path_flag(flag).is_some_and(|(prefix, dir)| {
+            prefix != "-include" && {
                 let held = if dir == "." {
                     a.header.clone()
                 } else {
                     format!("{}/{}", dir.trim_end_matches('/'), a.header)
                 };
                 a.candidates.contains(&held)
-            })
+            }
         })
     })
 }

@@ -395,6 +395,66 @@ fn system_headers_pass_the_project_folder_after_the_system() {
     assert!(file(&map, "a.c").compiled != Some(Compiled::Ok));
 }
 
+/// A configuration's `-idirafter<dir>` is in the grammar (fix pass F): the
+/// map compiles with it as a two-argument option after the system's folders,
+/// and that folder settles the ambiguous include it holds.
+#[test]
+fn an_idirafter_flag_compiles_after_the_system_and_settles_its_include() {
+    let tmp = project(
+        "idirafter",
+        &[
+            (
+                "a.c",
+                "#include <other.h>\n#include <unistd.h>\nint main(void) { return OTHER + (int)getpid(); }\n",
+            ),
+            ("compat/other.h", "#define OTHER 1\n"),
+            ("compat/unistd.h", "#error the project's unistd.h\n"),
+        ],
+    );
+    let root = tmp.path();
+    write(
+        root,
+        config::CONFIG_FILE,
+        "[[configuration]]\nname = \"mine\"\nfrom = \"stated\"\nflags = [\"-idiraftercompat\"]\n",
+    );
+    let map = map_default(root);
+    let a = file(&map, "a.c");
+    assert_eq!(a.compiled, Some(Compiled::Ok), "{:?}", a.message);
+    assert_eq!(a.ambiguous.len(), 1);
+    assert_eq!(a.ambiguous[0].used.as_deref(), Some("system"));
+    let walked: BTreeSet<&str> = map.files.iter().map(|f| f.path.as_str()).collect();
+    let argv = compile_argv(
+        &map.root,
+        &walked,
+        &map.configuration.system_headers,
+        a,
+        &a.flags,
+        Path::new("/o"),
+        Path::new("/d"),
+    )
+    .expect("argv: the grammar's path flags are the map's");
+    let compat = map.root.join("compat").display().to_string();
+    let at = argv
+        .iter()
+        .position(|x| x == "-idirafter")
+        .expect("-idirafter as two arguments");
+    assert_eq!(argv[at + 1], compat);
+    // The folder the person named settles the ambiguous include.
+    let mut map = map;
+    let analysis = super::mapfile::analyze(&mut map).expect("analysis");
+    let rendered = super::mapfile::render(&map, analysis.as_ref()).expect("render");
+    let closure = rendered
+        .closures
+        .iter()
+        .find(|c| c.program == "t-a")
+        .expect("one program, t-a");
+    assert!(
+        closure.ambiguous_unsettled.is_empty(),
+        "the -idirafter folder settles the include: {:?}",
+        closure.ambiguous_unsettled
+    );
+}
+
 #[test]
 fn an_optimisation_level_is_recorded_and_never_applied() {
     let tmp = project(

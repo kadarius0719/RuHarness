@@ -65,7 +65,7 @@ pub const SEPARATE_FORM: &[&str] = &[
 ];
 
 /// The grammar's path flags, longest first (as [`check_flag`] reads them).
-pub(crate) const PATH_PREFIXES: &[&str] = &["-isystem", "-include", "-iquote", "-I"];
+pub(crate) const PATH_PREFIXES: &[&str] = harness_core::config::flags::PATH_FLAGS;
 
 /// Build files by their fixed names (`*.mk` by its extension).
 pub const BUILD_FILE_NAMES: &[&str] = &[

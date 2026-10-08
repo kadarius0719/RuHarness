@@ -1228,9 +1228,7 @@ pub(crate) fn compile_argv(
         match harness_core::config::flags::check_flag(flag).map_err(Error::Invariant)? {
             harness_core::config::flags::Flag::Optimization => {}
             harness_core::config::flags::Flag::Path(_) => {
-                let (prefix, rel) = evidence::PATH_PREFIXES
-                    .iter()
-                    .find_map(|p| flag.strip_prefix(p).map(|rest| (*p, rest)))
+                let (prefix, rel) = harness_core::config::flags::split_path_flag(flag)
                     .ok_or_else(|| Error::Invariant(format!("unknown path flag {flag}")))?;
                 let abs = path_arg(&root.join(rel))?;
                 if prefix == "-I" {
