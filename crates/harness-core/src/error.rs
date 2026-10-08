@@ -35,6 +35,11 @@ pub enum Error {
     /// The plan violates a structural invariant (missing unit, cycle, …).
     #[error("invalid plan: {0}")]
     InvalidPlan(String),
+    /// A perf results file (`migration/perf/program.json` or a unit's file
+    /// under `migration/perf/units/`) could not be read or broke a rule:
+    /// the message starts with the file's path.
+    #[error("results file: {0}")]
+    ResultsFile(String),
     /// A referenced unit does not exist in the plan.
     #[error("unknown unit `{0}`")]
     UnknownUnit(String),
