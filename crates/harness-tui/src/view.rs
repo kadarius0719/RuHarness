@@ -7395,8 +7395,8 @@ mod tests {
     }
 
     /// Day one (§3.6): the C alone measured before a plan is judged as any
-    /// row is; without facts only the C goes unchecked, and the header says
-    /// so.
+    /// row is; without facts only the C (and the units the program as it
+    /// stands holds) go unchecked, and the header says so.
     #[test]
     fn the_c_alone_is_judged_before_a_plan() {
         use crate::speed::SideKey;
@@ -7423,7 +7423,11 @@ mod tests {
             app.speed
                 .header
                 .iter()
-                .any(|h| h == "the C is not checked here: no facts — run harness scan"),
+                // The program as it stands is stored too: its held units
+                // are not checked either, said in the same line.
+                .any(|h| h
+                    == "the C and the units the program as it stands holds are not checked \
+                        here: no facts — run harness scan"),
             "{:?}",
             app.speed.header
         );

@@ -404,22 +404,202 @@ pub(crate) fn launcher_in(
 }
 
 /// The launcher when its cache is current — never built here (`perf show`,
-/// §3.9): `None` when there is none, or it would need building.
+/// §3.9): `None` when there is none, it would need building, or the run
+/// would refuse it ([`cache_state`]).
 pub(crate) fn existing_launcher(host: &HostDirs) -> Option<Launcher> {
-    if !cfg!(target_os = "macos") {
-        return None;
+    match cache_state(host, find_compiler) {
+        CacheState::Current(launcher) => Some(launcher),
+        CacheState::WillBuild | CacheState::CannotUse(_) => None,
     }
-    let root = host.perf_cache.canonicalize().ok()?;
-    refuse_cache(&root, host).is_none().then_some(())?;
-    let compiler = find_compiler().ok()?;
-    let dir = root.join(version_name(&compiler));
-    let shared = lock_file(&dir.join(".lock"), false).ok()?;
-    let (perfrun, perfgo) = load_built(&dir)?;
-    Some(Launcher {
-        perfrun,
-        perfgo,
-        _shared: shared,
-    })
+}
+
+/// What the next run makes of the launcher cache (§3.2 step 1).
+pub(crate) enum CacheState {
+    /// Current: the run uses it as it is (held with its shared lock).
+    Current(Launcher),
+    /// Missing or out of date: the run builds it first.
+    WillBuild,
+    /// The run refuses before building anything, in its own words.
+    CannotUse(String),
+}
+
+/// [`CacheState`] for `host`, the compiler found by `find`: [`launcher`]'s
+/// own checks in its order — the refused folders, the private-folder check
+/// on both cache folders (no link, 0700, yours: [`private_dir_check`]), the
+/// compiler — each refusal in its words, but nothing is made or built. A
+/// cache folder that is missing is one the run makes and builds into.
+pub(crate) fn cache_state(host: &HostDirs, find: fn() -> Result<Compiler, Error>) -> CacheState {
+    use CacheState::{CannotUse, WillBuild};
+    if !cfg!(target_os = "macos") {
+        return CannotUse(
+            "perf runs on macOS only for now — the Linux launcher is not built yet".into(),
+        );
+    }
+    let owner = match std::fs::metadata(&host.home) {
+        Ok(m) => m.uid(),
+        Err(e) => return CannotUse(Error::io(&host.home, e).to_string()),
+    };
+    let root = &host.perf_cache;
+    if let Some(words) = refuse_cache(root, host) {
+        return CannotUse(words);
+    }
+    // Missing, the run makes it — then still needs its compiler.
+    let missing = || match find() {
+        Ok(_) => WillBuild,
+        Err(e) => CannotUse(e.to_string()),
+    };
+    for dir in [root.parent().unwrap_or(root), root.as_path()] {
+        match std::fs::symlink_metadata(dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return missing(),
+            Err(e) => return CannotUse(Error::io(dir, e).to_string()),
+            Ok(_) => {
+                if let Err(e) = private_dir_check(dir, owner) {
+                    return CannotUse(e.to_string());
+                }
+            }
+        }
+    }
+    let canonical = match root.canonicalize() {
+        Ok(c) => c,
+        Err(e) => return CannotUse(Error::io(root, e).to_string()),
+    };
+    if let Some(words) = refuse_cache(&canonical, host) {
+        return CannotUse(words);
+    }
+    let compiler = match find() {
+        Ok(c) => c,
+        Err(e) => return CannotUse(e.to_string()),
+    };
+    let dir = canonical.join(version_name(&compiler));
+    if std::fs::symlink_metadata(&dir).is_err() {
+        return WillBuild;
+    }
+    match lock_file(&dir.join(".lock"), false) {
+        Ok(shared) => match load_built(&dir) {
+            Some((perfrun, perfgo)) => CacheState::Current(Launcher {
+                perfrun,
+                perfgo,
+                _shared: shared,
+            }),
+            None => WillBuild,
+        },
+        // The run takes this lock only on a current folder; another one it
+        // removes and builds again.
+        Err(e) => match load_built(&dir) {
+            Some(_) => CannotUse(e.to_string()),
+            None => WillBuild,
+        },
+    }
+}
+
+#[cfg(test)]
+mod cache_state_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn compiler() -> Result<Compiler, Error> {
+        Ok(Compiler {
+            clang: PathBuf::from("/usr/bin/clang"),
+            ld: PathBuf::from("/usr/bin/ld"),
+            sdk: PathBuf::from("/sdk"),
+            version: "Apple clang version 17.0.0".into(),
+            note: None,
+        })
+    }
+
+    fn no_compiler() -> Result<Compiler, Error> {
+        Err(Error::Invariant("no root-owned compiler".into()))
+    }
+
+    /// The three answers on a home folder of the test's own, whatever this
+    /// machine's cache: missing → the run builds it (or, without a
+    /// compiler, refuses); a link, a folder others can read or one with no
+    /// built version → the run's own words or a build; nothing is made.
+    #[test]
+    fn the_cache_reads_as_the_run_will_use_it() {
+        if !cfg!(target_os = "macos") {
+            return; // perf refuses off macOS: CannotUse, said by the run.
+        }
+        // Not under the system's temp folder, which the run refuses: a
+        // folder in the workspace's target/, removed on drop.
+        struct Home(PathBuf);
+        impl Drop for Home {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let home = Home(Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/oracle-launcher-cache-state-{}",
+            std::process::id()
+        )));
+        let _ = std::fs::remove_dir_all(&home.0);
+        std::fs::create_dir_all(&home.0).unwrap();
+        let home_path = home.0.canonicalize().unwrap();
+        let host = HostDirs {
+            home: home_path.clone(),
+            cargo_home: None,
+            rustup_home: None,
+            tmpdir: None,
+            perf_cache: home_path.join("Caches/ruharness/perf"),
+        };
+        let words = |s: CacheState| match s {
+            CacheState::Current(_) => "current".to_string(),
+            CacheState::WillBuild => "will build".to_string(),
+            CacheState::CannotUse(w) => w,
+        };
+        if let Some(refused) = refuse_cache(&host.perf_cache, &host) {
+            // A workspace inside a temporary folder: the run refuses there.
+            assert_eq!(words(cache_state(&host, compiler)), refused);
+            return;
+        }
+        // Missing: the run makes it and builds — nothing made here.
+        assert_eq!(words(cache_state(&host, compiler)), "will build");
+        assert!(!home_path.join("Caches").exists());
+        assert_eq!(
+            words(cache_state(&host, no_compiler)),
+            "no root-owned compiler"
+        );
+        // Present and private, no version built: a build.
+        let parent = host.perf_cache.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&host.perf_cache).unwrap();
+        for d in [&parent, &host.perf_cache] {
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert_eq!(words(cache_state(&host, compiler)), "will build");
+        // A version built for this compiler, its hashes matching: current.
+        let version = host.perf_cache.join(version_name(&compiler().unwrap()));
+        std::fs::create_dir(&version).unwrap();
+        let mut hashes = String::new();
+        for name in ["perfrun", "perfgo"] {
+            let bin = version.join(name);
+            std::fs::write(&bin, name).unwrap();
+            hashes.push_str(&format!(
+                "{name} {}\n",
+                harness_core::hash::file_hash(&bin).unwrap()
+            ));
+        }
+        std::fs::write(version.join(HASHES_FILE), hashes).unwrap();
+        assert_eq!(words(cache_state(&host, compiler)), "current");
+        // The same folder others can read: the run refuses, in its words —
+        // never current.
+        std::fs::set_permissions(&host.perf_cache, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let refused = words(cache_state(&host, compiler));
+        assert!(
+            refused.ends_with("perf's launcher folder must be a private folder of yours (no link)"),
+            "{refused}"
+        );
+        std::fs::set_permissions(&host.perf_cache, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir_all(&version).unwrap();
+        // A link to a private folder: refused too.
+        std::fs::remove_dir(&host.perf_cache).unwrap();
+        let elsewhere = home_path.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &host.perf_cache).unwrap();
+        let refused = words(cache_state(&host, compiler));
+        assert!(refused.ends_with("(no link)"), "{refused}");
+        assert!(existing_launcher(&host).is_none());
+    }
 }
 
 /// The built binaries when the folder holds both and their hashes match.

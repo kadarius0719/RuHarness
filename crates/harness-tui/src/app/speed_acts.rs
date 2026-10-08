@@ -8,7 +8,9 @@
 use super::{os, Act, App, Mode, Pending};
 use crate::speed::{Group, SideKey};
 use harness_core::perf::estimate::{self, Estimate, Job};
+use harness_oracle::LauncherCache;
 use std::ffi::OsString;
+use std::path::Path;
 use std::time::Duration;
 
 /// How long a Measure dialog waits, at most, to learn whether perf's
@@ -16,12 +18,12 @@ use std::time::Duration;
 /// finding the compiler runs `clang --version`, which a loaded Mac can make
 /// slow on a new compiler's first exec (§6: 0.25–14 s). Past this wait the
 /// dialog opens without the answer.
-const LAUNCHER_WAIT: Duration = Duration::from_millis(250);
+pub(super) const LAUNCHER_WAIT: Duration = Duration::from_millis(250);
 
 /// `probe`'s answer, asked on a thread of its own and waited for at most
 /// `wait`: `None` when it did not come in time (the thread runs on and its
 /// answer is dropped) or the thread could not start.
-fn ask_within(probe: fn() -> bool, wait: Duration) -> Option<bool> {
+fn ask_within<T: Send + 'static>(probe: fn() -> T, wait: Duration) -> Option<T> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("harness-tui-launcher".into())
@@ -32,6 +34,28 @@ fn ask_within(probe: fn() -> bool, wait: Duration) -> Option<bool> {
         })
         .ok()?;
     rx.recv_timeout(wait).ok()
+}
+
+/// Whether `harness` is this cockpit's own build: the `harness` next to
+/// `exe` (the cockpit's binary), the two compared canonically. Only then
+/// does the cockpit's own answer about perf's launcher cache hold for the
+/// run: the cache's version folder is named from the launcher sources
+/// built into each binary, and the `harness` on PATH may be another build
+/// (§3.11). A copy installed apart beside the cockpit still counts as its
+/// own — the rule is where it lies, not how it was built.
+pub(super) fn same_build(harness: &Path, exe: &Path) -> bool {
+    let Some(sibling) = exe.parent().map(|dir| dir.join("harness")) else {
+        return false;
+    };
+    match (harness.canonicalize(), sibling.canonicalize()) {
+        (Ok(h), Ok(s)) => h == s,
+        _ => false,
+    }
+}
+
+/// [`same_build`] for this process's own binary.
+pub(super) fn own_build(harness: &Path) -> bool {
+    std::env::current_exe().is_ok_and(|exe| same_build(harness, &exe))
 }
 
 /// What building perf's launcher adds to §6's estimate, in seconds: the
@@ -178,20 +202,39 @@ impl App {
         Ok((self.with_sandbox_flag(self.harness_argv(&rest)?), label))
     }
 
-    /// The Measure dialogs' words (§3.11), with whether perf's launcher
-    /// cache is current asked off the UI thread (at most [`LAUNCHER_WAIT`]).
-    pub(super) fn measure_words(&self, p: &Pending) -> (String, Vec<String>) {
-        let launcher = ask_within(harness_oracle::perf_launcher_cached, LAUNCHER_WAIT);
+    /// The Measure dialogs' words (§3.11), with what the run makes of
+    /// perf's launcher cache asked of `probe` (the dialog passes
+    /// [`harness_oracle::perf_launcher_cache`]) off the UI thread, waited
+    /// for at most `wait` (the dialog's [`LAUNCHER_WAIT`]). Asked only when
+    /// the `harness` the act runs is the cockpit's own build
+    /// ([`App::harness_own_build`]): another build may name another version
+    /// folder, so its answer is not known here.
+    pub(super) fn measure_words(
+        &self,
+        p: &Pending,
+        probe: fn() -> LauncherCache,
+        wait: Duration,
+    ) -> (String, Vec<String>) {
+        let launcher = if self.harness_own_build {
+            ask_within(probe, wait)
+        } else {
+            None
+        };
         self.measure_words_with(p, launcher)
     }
 
-    /// [`Self::measure_words`] given whether perf's launcher cache is
-    /// current (`None`: not known in time). Not current: the estimate counts
-    /// the launcher's build and says so, and the dialog names the cache it
-    /// builds; current: neither (§3.11 "and — when stale — the launcher
-    /// cache"); not known: today's estimate and the hedge "the first time,
-    /// or after an update".
-    fn measure_words_with(&self, p: &Pending, launcher: Option<bool>) -> (String, Vec<String>) {
+    /// [`Self::measure_words`] given what the run makes of perf's launcher
+    /// cache (`None`: not known — late, or another build's). Will build: the
+    /// estimate counts the launcher's build and first start and says so,
+    /// and the dialog names the cache it builds; current: neither (§3.11
+    /// "and — when stale — the launcher cache"); cannot use: the plain
+    /// estimate, and that perf will refuse and why; not known: the plain
+    /// estimate and the hedge "the first time, or after an update".
+    fn measure_words_with(
+        &self,
+        p: &Pending,
+        launcher: Option<LauncherCache>,
+    ) -> (String, Vec<String>) {
         let m = &self.speed;
         let units = &m.measurable;
         let program = units.len() >= 2;
@@ -318,13 +361,15 @@ impl App {
             )
         };
         let (estimate, building) = match launcher {
-            Some(false) => (job.estimate_building_launcher(), Some(launcher_seconds())),
+            Some(LauncherCache::WillBuild) => {
+                (job.estimate_building_launcher(), Some(launcher_seconds()))
+            }
             _ => (job.estimate(), None),
         };
         body.push(match estimate {
             e @ Estimate::Seconds(_) => {
                 let launcher_words = building.map_or(String::new(), |s| {
-                    format!(" — about {s} s of it builds perf's launcher first")
+                    format!(" — about {s} s of it for perf's launcher (its build and first start)")
                 });
                 format!(
                     "Takes {}, builds included{launcher_words}{cold_words}.",
@@ -333,7 +378,7 @@ impl App {
             }
             e => {
                 let launcher_words = building.map_or(String::new(), |s| {
-                    format!(", plus about {s} s building perf's launcher first")
+                    format!(", plus about {s} s for perf's launcher (its build and first start)")
                 });
                 let w = e.words();
                 let mut c = w.chars();
@@ -345,9 +390,9 @@ impl App {
                 )
             }
         });
-        let cache_words = match launcher {
-            Some(true) => "",
-            Some(false) => {
+        let cache_words = match &launcher {
+            Some(LauncherCache::Current) | Some(LauncherCache::CannotUse(_)) => "",
+            Some(LauncherCache::WillBuild) => {
                 "; first it builds perf's launcher into ~/Library/Caches/ruharness/perf (its \
                  cache is missing or out of date)"
             }
@@ -361,6 +406,17 @@ impl App {
              folders under migration/build/ (.perf, .perf-out with the kept outputs, \
              perf-logs){cache_words}."
         ));
+        if let Some(LauncherCache::CannotUse(why)) = &launcher {
+            body.push(format!(
+                "perf will refuse before it measures: {}{}",
+                why.trim_end(),
+                if why.trim_end().ends_with(['.', '!', '?']) {
+                    ""
+                } else {
+                    "."
+                }
+            ));
+        }
         body.push(
             "No verdict changes: perf only measures. It holds the ledger's lock while it runs; \
              Cancel keeps the rows already finished."
@@ -669,9 +725,10 @@ mod tests {
     }
 
     /// §3.11, §6: perf's launcher's build is in the Measure dialogs' figure,
-    /// and its cache named, only when the cache is not current — the
-    /// answer injected, never the machine's own cache; not known in time,
-    /// the figure leaves it out and the words keep the hedge.
+    /// and its cache named, only when the run will build it — the answer
+    /// injected, never the machine's own cache; not known in time, the
+    /// figure leaves it out and the words keep the hedge; a cache perf
+    /// cannot use, the plain figure and perf's refusal in its own words.
     #[test]
     fn the_measure_dialog_counts_the_launcher_build_only_when_it_is_not_built() {
         if !cfg!(target_os = "macos") {
@@ -686,6 +743,9 @@ mod tests {
             estimate::LAUNCHER_BUILD_SECONDS + 2.0 * estimate::FIRST_EXEC_SECONDS
         );
         let says_launcher = |body: &[String]| body.iter().any(|l| l.contains("launcher"));
+        let refusal = "your TMPDIR holds perf's launcher folder, which every build tool may \
+                       write — set TMPDIR elsewhere";
+        let cannot_use = || Some(LauncherCache::CannotUse(refusal.into()));
         // u001's crate may be cold in the copy: its build is said apart.
         let cold = ", plus building u001-katajainen's Rust, which may take minutes";
         for (act, unit) in [
@@ -697,15 +757,16 @@ mod tests {
                 .into_iter()
                 .collect();
             let p = app.act_argv(act, unit, None, None).expect("offered");
-            let (_, built) = app.measure_words_with(&p, Some(true));
-            let (_, not_built) = app.measure_words_with(&p, Some(false));
+            let (_, built) = app.measure_words_with(&p, Some(LauncherCache::Current));
+            let (_, not_built) = app.measure_words_with(&p, Some(LauncherCache::WillBuild));
             let (_, unknown) = app.measure_words_with(&p, None);
+            let (_, cannot) = app.measure_words_with(&p, cannot_use());
             assert!(!says_launcher(&built), "built: {built:?}");
             assert_eq!(
                 not_built[1].replace(cold, ""),
                 format!(
-                    "Takes about {} s, builds included — about {launcher} s of it builds perf's \
-                     launcher first.",
+                    "Takes about {} s, builds included — about {launcher} s of it for perf's \
+                     launcher (its build and first start).",
                     seconds(&built[1]) + launcher
                 ),
                 "{not_built:?}"
@@ -726,11 +787,24 @@ mod tests {
                 ),
                 "{unknown:?}"
             );
+            // Cannot use: the plain figure, no cache written, and perf's
+            // refusal said — the rest as when it is current.
+            assert_eq!(cannot[1], built[1], "cannot use: no build counted");
+            assert_eq!(cannot[2], built[2], "cannot use: no cache written");
+            assert_eq!(
+                cannot
+                    .iter()
+                    .filter(|l| !built.contains(l))
+                    .collect::<Vec<_>>(),
+                [&format!("perf will refuse before it measures: {refusal}.")],
+                "{cannot:?}"
+            );
             // The C's time not known: no figure, the launcher's build still
             // said with its seconds.
             app.speed.c_clock.clear();
-            let (_, built) = app.measure_words_with(&p, Some(true));
-            let (_, not_built) = app.measure_words_with(&p, Some(false));
+            let (_, built) = app.measure_words_with(&p, Some(LauncherCache::Current));
+            let (_, not_built) = app.measure_words_with(&p, Some(LauncherCache::WillBuild));
+            let (_, cannot) = app.measure_words_with(&p, cannot_use());
             assert!(
                 built[1].starts_with("The C's time is not known yet"),
                 "{built:?}"
@@ -739,22 +813,29 @@ mod tests {
             assert_eq!(
                 not_built[1].replace(cold, ""),
                 format!(
-                    "{}, plus about {launcher} s building perf's launcher first.",
+                    "{}, plus about {launcher} s for perf's launcher (its build and first \
+                     start).",
                     built[1].replace(cold, "").trim_end_matches('.')
                 ),
                 "{not_built:?}"
             );
+            assert_eq!(cannot[1], built[1], "cannot use: no build counted");
         }
     }
 
     /// The launcher check never holds a dialog: a slow answer is waited
     /// for at most the dialog's own wait, then the dialog goes on without
-    /// it.
+    /// it — through the dialog's own words, so a check made on the UI
+    /// thread fails here.
     #[test]
     fn a_slow_launcher_check_never_holds_the_dialog() {
         fn slow() -> bool {
             std::thread::sleep(Duration::from_secs(5));
             true
+        }
+        fn slow_cache() -> LauncherCache {
+            std::thread::sleep(Duration::from_secs(5));
+            LauncherCache::Current
         }
         let started = std::time::Instant::now();
         assert_eq!(ask_within(slow, LAUNCHER_WAIT), None);
@@ -765,31 +846,57 @@ mod tests {
         );
         assert_eq!(ask_within(|| false, Duration::from_secs(30)), Some(false));
         assert_eq!(ask_within(|| true, Duration::from_secs(30)), Some(true));
+        if !cfg!(target_os = "macos") {
+            // Measure is greyed off macOS: no dialog opens.
+            return;
+        }
+        let mut app = measurable_app("speed-launcher-slow");
+        app.harness_own_build = true;
+        let p = app
+            .act_argv(Act::Measure, None, None, None)
+            .expect("offered");
+        let started = std::time::Instant::now();
+        let (_, words) = app.measure_words(&p, slow_cache, LAUNCHER_WAIT);
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "the dialog waited {:?}",
+            started.elapsed()
+        );
+        assert_eq!(words, app.measure_words_with(&p, None).1, "the hedge");
     }
 
     /// The Measure dialog asks the machine's own launcher cache and reads
     /// its answer the right way round: its words are those for the answer
-    /// `perf_launcher_cached` gives (or, not known in time, the hedge) —
-    /// never those for the other answer.
+    /// `perf_launcher_cache` gives (or, not known in time, the hedge) —
+    /// never those for another answer.
     #[test]
     fn the_measure_dialog_reads_the_machines_launcher_cache() {
         if !cfg!(target_os = "macos") {
             // Measure is greyed off macOS: no dialog opens.
             return;
         }
-        let app = measurable_app("speed-launcher-own");
+        let mut app = measurable_app("speed-launcher-own");
+        // The harness the act runs is the cockpit's own build.
+        app.harness_own_build = true;
         let p = app
             .act_argv(Act::Measure, None, None, None)
             .expect("offered");
         // Asked first, so the dialog's own ask finds the compiler warm.
-        let cached = harness_oracle::perf_launcher_cached();
+        let cached = harness_oracle::perf_launcher_cache();
+        let other = match cached {
+            LauncherCache::Current => LauncherCache::WillBuild,
+            _ => LauncherCache::Current,
+        };
         let (_, right) = app.measure_words_with(&p, Some(cached));
-        let (_, wrong) = app.measure_words_with(&p, Some(!cached));
+        let (_, wrong) = app.measure_words_with(&p, Some(other));
         let (_, late) = app.measure_words_with(&p, None);
         assert_ne!(right, wrong);
         // A loaded machine may answer late: the dialog is asked again.
         let words = (0..5)
-            .map(|_| app.measure_words(&p).1)
+            .map(|_| {
+                app.measure_words(&p, harness_oracle::perf_launcher_cache, LAUNCHER_WAIT)
+                    .1
+            })
             .find(|w| *w != late)
             .unwrap_or(late.clone());
         assert_ne!(words, wrong, "the answer read the wrong way round");
@@ -803,14 +910,67 @@ mod tests {
     #[test]
     fn the_cockpit_reads_the_launcher_cache_as_perf_show_does() {
         let computer = harness_oracle::perf_computer_if_cached();
-        let cached = ask_within(
-            harness_oracle::perf_launcher_cached,
-            Duration::from_secs(60),
-        );
+        let cached = ask_within(harness_oracle::perf_launcher_cache, Duration::from_secs(60));
         if computer.is_some() {
-            assert_eq!(cached, Some(true), "{computer:?}");
+            assert_eq!(cached, Some(LauncherCache::Current), "{computer:?}");
         } else {
             assert!(cached.is_some(), "the check answers");
         }
+    }
+
+    /// The run's `harness` another build (§3.11): the cockpit's own answer
+    /// about the launcher cache does not hold for it, so the dialog keeps
+    /// the hedge whatever the answer — and gives the answer for its own.
+    #[test]
+    fn another_harness_build_gets_the_hedge() {
+        if !cfg!(target_os = "macos") {
+            // Measure is greyed off macOS: no dialog opens.
+            return;
+        }
+        fn current() -> LauncherCache {
+            LauncherCache::Current
+        }
+        // The test app's harness is /opt/ruharness/bin/harness, never the
+        // one next to the test binary.
+        let mut app = measurable_app("speed-launcher-other");
+        assert!(!app.harness_own_build);
+        let p = app
+            .act_argv(Act::Measure, None, None, None)
+            .expect("offered");
+        let hedge = app.measure_words_with(&p, None).1;
+        let current_words = app.measure_words_with(&p, Some(LauncherCache::Current)).1;
+        assert_ne!(hedge, current_words);
+        let words = app.measure_words(&p, current, Duration::from_secs(30)).1;
+        assert_eq!(words, hedge, "another build: not known");
+        app.harness_own_build = true;
+        let words = app.measure_words(&p, current, Duration::from_secs(30)).1;
+        assert_eq!(words, current_words, "its own build: the answer");
+    }
+
+    /// Own build: the `harness` next to the cockpit's binary, compared
+    /// canonically (a link to it counts); any other path, or none there,
+    /// does not.
+    #[test]
+    fn own_build_is_the_harness_next_to_the_cockpit() {
+        let dir = crate::testutil::TmpDir::new("own-build");
+        let bin = dir.0.join("bin");
+        let elsewhere = dir.0.join("elsewhere");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let exe = bin.join("harness-tui");
+        std::fs::write(&exe, "").unwrap();
+        let other = elsewhere.join("harness");
+        std::fs::write(&other, "").unwrap();
+        // No harness next to it yet.
+        assert!(!same_build(&other, &exe));
+        let sibling = bin.join("harness");
+        std::fs::write(&sibling, "").unwrap();
+        assert!(same_build(&sibling, &exe));
+        assert!(!same_build(&other, &exe));
+        let link = elsewhere.join("harness-link");
+        std::os::unix::fs::symlink(&sibling, &link).unwrap();
+        assert!(same_build(&link, &exe), "a link to it is it");
+        assert!(same_build(&bin.join("../bin/harness"), &exe));
+        assert!(!own_build(Path::new(crate::app::tests::HARNESS)));
     }
 }

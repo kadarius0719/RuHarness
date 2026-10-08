@@ -1493,23 +1493,42 @@ pub fn perf_computer_if_cached() -> Option<res::Computer> {
     })
 }
 
-/// Whether perf's launcher cache is current — the next run would not build
-/// the launcher first — for the cockpit's Measure estimate (§3.11, §6).
-/// Cheap, and it never builds: it finds the compiler (one `clang
-/// --version`), holds the version folder's lock SHARED for a moment and
-/// hashes the two built binaries. A running perf run holds that lock shared
-/// too, so this never waits on one: only a rebuild's check that no run
-/// holds it, and the removal of a folder that is no longer current, take it
-/// exclusive, each for an instant (§3.2 step 1); the long exclusive lock of
-/// a build is the cache root's, which this never takes. The launcher and
-/// its lock are let go before it returns. `false` also when perf could not
-/// use the cache at all (no system compiler, a refused folder): the run
-/// then says why.
-pub fn perf_launcher_cached() -> bool {
-    HostDirs::from_env()
-        .ok()
-        .and_then(|host| launcher::existing_launcher(&host))
-        .is_some()
+/// What the next perf run makes of its launcher cache
+/// ([`perf_launcher_cache`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LauncherCache {
+    /// Current: the run would not build the launcher first.
+    Current,
+    /// Missing or out of date: the run builds it first.
+    WillBuild,
+    /// The run refuses before building anything, for this reason (perf's
+    /// own words).
+    CannotUse(String),
+}
+
+/// What the next perf run makes of its launcher cache, for the cockpit's
+/// Measure estimate (§3.11, §6): current, will build, or cannot use — the
+/// run's own checks (a refused folder, the private-folder check on both
+/// cache folders, the compiler), never building or making anything.
+/// Cheap: it finds the compiler (one `clang --version`), holds the version
+/// folder's lock SHARED for a moment and hashes the two built binaries. A
+/// running perf run holds that lock shared too, so this never waits on one:
+/// only a rebuild's check that no run holds it, and the removal of a folder
+/// that is no longer current, take it exclusive, each for an instant (§3.2
+/// step 1); the long exclusive lock of a build is the cache root's, which
+/// this never takes. The launcher and its lock are let go before it
+/// returns. The answer is for this binary's own launcher sources: another
+/// build of `harness` may name another version folder.
+pub fn perf_launcher_cache() -> LauncherCache {
+    let host = match HostDirs::from_env() {
+        Ok(host) => host,
+        Err(e) => return LauncherCache::CannotUse(e.to_string()),
+    };
+    match launcher::cache_state(&host, launcher::find_compiler) {
+        launcher::CacheState::Current(_) => LauncherCache::Current,
+        launcher::CacheState::WillBuild => LauncherCache::WillBuild,
+        launcher::CacheState::CannotUse(words) => LauncherCache::CannotUse(words),
+    }
 }
 
 fn first_lines(words: &str, n: usize) -> String {
