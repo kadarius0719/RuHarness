@@ -1113,7 +1113,7 @@ pub fn perf_run(
         let why = match built.len() {
             0 => "no accepted unit to compare yet".to_string(),
             _ => format!(
-                "one unit measured ({}) — the program as it stands needs two",
+                "one measurable unit ({}) — the program as it stands needs two",
                 held.iter()
                     .map(|u| u.id.as_str())
                     .collect::<Vec<_>>()
@@ -1475,6 +1475,25 @@ pub fn perf_measurable(
         .filter_map(|s| match s {
             Selected::Ready(c) => Some(c.id),
             Selected::NotVerified { .. } => None,
+        })
+        .collect())
+}
+
+/// The verified or merged units perf could not measure today, in plan
+/// order, each with why in the progress lines' words ("verify it first") —
+/// for `perf run --as-it-stands-only`'s early refusal, which names them as
+/// the run does (§3.10: "says why"). Read-only, as [`perf_measurable`].
+pub fn perf_left_out(
+    target: &TargetContext,
+    plan: &Plan,
+    facts: &Facts,
+) -> Result<Vec<(String, &'static str)>, Error> {
+    let ledger = Ledger::new(target.root.clone());
+    Ok(select(target, &ledger, facts, plan)?
+        .into_iter()
+        .filter_map(|s| match s {
+            Selected::Ready(_) => None,
+            Selected::NotVerified { id, reason, .. } => Some((id, left_out_words(reason))),
         })
         .collect())
 }
@@ -3356,6 +3375,22 @@ mod tests {
         assert_eq!(
             perf_measurable(&target, &plan, &facts).expect("reads"),
             vec!["s1".to_string()]
+        );
+        // The rest, each with why in the run's words (the early
+        // `--as-it-stands-only` refusal names them).
+        let interrupted = "its Accept was interrupted — Re-check it to finish or undo it";
+        assert_eq!(
+            perf_left_out(&target, &plan, &facts).expect("reads"),
+            vec![
+                ("s2".to_string(), interrupted),
+                ("s3".to_string(), interrupted),
+                ("s4".to_string(), "verify it first"),
+                ("s5".to_string(), "verify it first"),
+                (
+                    "s6".to_string(),
+                    "its replaced files changed since verify — Re-check it"
+                ),
+            ]
         );
     }
 

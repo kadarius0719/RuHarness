@@ -31,9 +31,11 @@ pub(crate) fn first_line(runner: &Runner, argv: &[&str]) -> Option<String> {
     (!line.is_empty()).then_some(line)
 }
 
-/// `cc --version` and `rustc -V`'s first lines on `runner` — the one read
-/// `perf run` stores and `perf show` checks (§3.9), so unchanged compilers
-/// compare equal by construction. Each `None` as [`first_line`] says.
+/// `cc --version` and `rustc -V`'s first lines on `runner`, both read
+/// whatever the first gave — what `perf run` stores; `perf show` checks
+/// with the same [`first_line`] on the same runs (§3.9), stopping at the
+/// first failure, so unchanged compilers compare equal by construction.
+/// Each `None` as [`first_line`] says.
 pub(crate) fn compiler_lines(runner: &Runner) -> (Option<String>, Option<String>) {
     (
         first_line(runner, &["cc", "--version"]),
@@ -77,8 +79,14 @@ pub fn perf_compilers(target: &TargetContext, allow_unsandboxed: bool) -> Option
         tool_profile,
         tool_tmpdir: None,
     };
-    let (cc, rustc) = compiler_lines(&runner);
-    Some((cc?, rustc?))
+    // One at a time, stopping at the first failure: when `cc` fails the
+    // answer is already "not checked", so `rustc` is never started (a hung
+    // one would cost a whole timeout more). `perf run` needs both lines
+    // whatever happens, so it reads them with [`compiler_lines`]; each read
+    // here is the same [`first_line`] on the same runs.
+    let cc = first_line(&runner, &["cc", "--version"])?;
+    let rustc = first_line(&runner, &["rustc", "-V"])?;
+    Some((cc, rustc))
 }
 
 #[cfg(test)]
