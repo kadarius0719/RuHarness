@@ -170,3 +170,63 @@ fn a_usage_error_exits_2() {
     let run = harness(&["project", "map", "--no-such-flag"]);
     assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
 }
+
+#[test]
+fn several_configurations_need_a_name_and_the_one_named_is_shown() {
+    let tmp = Tmp::new("configs");
+    tmp.write(
+        "a.c",
+        "#ifndef HAVE_CONFIG_H\n#error no config\n#endif\nint a(void) { return 1; }\n",
+    );
+    tmp.write("tools/png.cpp", "int x;\n");
+    tmp.write("Makefile", "all:\n");
+    tmp.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"make\"\nfrom = \"make\"\nflags = [\"-DHAVE_CONFIG_H\"]\n\n\
+         [[configuration]]\nname = \"cmake\"\nfrom = \"cmake\"\nflags = []\n",
+    );
+    // A `migration/` folder holding only the person's config.toml still
+    // asks for adoption once on this computer.
+    harness_core::adopt::testing::adopt(&tmp.0);
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr.contains(
+            "holds several configurations (make, cmake); pick one with --configuration NAME"
+        ),
+        "{}",
+        run.stderr
+    );
+    let run = harness(&[
+        "project",
+        "map",
+        "--target",
+        tmp.arg(),
+        "--configuration",
+        "make",
+    ]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for says in [
+        "configuration: make (stated), flags -DHAVE_CONFIG_H",
+        "a.c — compiled",
+        "build files: Makefile",
+        "set aside in tools: 1 c++ file(s), not read",
+    ] {
+        assert!(run.stdout.contains(says), "{says}: {}", run.stdout);
+    }
+    let run = harness(&[
+        "project",
+        "map",
+        "--target",
+        tmp.arg(),
+        "--configuration",
+        "meson",
+    ]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr
+            .contains("--configuration meson names no configuration"),
+        "{}",
+        run.stderr
+    );
+}

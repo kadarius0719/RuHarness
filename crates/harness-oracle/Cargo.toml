@@ -13,6 +13,10 @@ serde_json.workspace = true
 # unit-crate check, docs/PROJECT-MAP-DESIGN.md §3.7); already a workspace dep
 # (harness-core's config), so no crate is added to the tree.
 toml.workspace = true
+# serde (derive): reading the project map's `config.toml` entries and writing
+# the configuration's canonical JSON for its digest; already a workspace dep
+# (harness-core), so no crate is added to the tree.
+serde.workspace = true
 harness-core.workspace = true
 # Workspace path dependency (no crates.io addition): the oracle needs exactly
 # two pure functions of the C frontend — `mutants` (mutation sites for

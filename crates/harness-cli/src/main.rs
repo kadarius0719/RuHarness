@@ -401,6 +401,10 @@ enum ProjectCmd {
         /// Compile the project's code even though no sandbox is available
         #[arg(long)]
         allow_unsandboxed: bool,
+        /// Map under this configuration of migration/map/config.toml
+        /// (needed when it holds several)
+        #[arg(long, value_name = "NAME")]
+        configuration: Option<String>,
     },
 }
 
@@ -630,8 +634,9 @@ fn run(cmd: Cmd) -> Result<u8> {
                 ProjectCmd::Map {
                     target,
                     allow_unsandboxed,
+                    configuration,
                 },
-        } => project::cmd_map(target, allow_unsandboxed),
+        } => project::cmd_map(target, allow_unsandboxed, configuration),
         Cmd::Perf { cmd } => match cmd {
             PerfCmd::Run {
                 target,

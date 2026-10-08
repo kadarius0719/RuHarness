@@ -352,7 +352,7 @@ fn an_inc_file_the_compile_read_is_included_other() {
 fn a_root_that_is_or_holds_the_home_folder_is_refused() {
     let host = HostDirs::from_env().expect("HOME");
     for root in [host.home.as_path(), Path::new("/")] {
-        let err = map_folder(root, Path::new(".")).expect_err("refused");
+        let err = map_folder(root, Path::new("."), &MapOptions::default()).expect_err("refused");
         assert!(err.to_string().contains("home folder"), "{err}");
     }
 }
@@ -409,7 +409,12 @@ fn repo() -> PathBuf {
 fn zopfli_maps_to_its_committed_target() {
     let root = repo().join("targets/zopfli");
     let config = harness_core::config::TargetConfig::load(&root).expect("harness.toml");
-    let map = map_folder(&root, Path::new(&config.target.source_dir().unwrap())).expect("maps");
+    let map = map_folder(
+        &root,
+        Path::new(&config.target.source_dir().unwrap()),
+        &MapOptions::default(),
+    )
+    .expect("maps");
     assert_eq!(map.folder, "src/zopfli");
     let c: Vec<&FileFacts> = map.files.iter().filter(|f| f.kind == FileKind::C).collect();
     assert_eq!(c.len(), 13);
@@ -445,7 +450,12 @@ fn a_benchmark_case_maps_to_the_include_folder_bench_init_writes() {
     let root = repo().join("targets/tractor/cases/Hidden-Tests/B01_organic/ima_decode_lib");
     let config = harness_core::config::TargetConfig::load(&root).expect("harness.toml");
     assert_eq!(config.target.include_dirs(), ["test_case/include"]);
-    let map = map_folder(&root, Path::new(&config.target.source_dir().unwrap())).expect("maps");
+    let map = map_folder(
+        &root,
+        Path::new(&config.target.source_dir().unwrap()),
+        &MapOptions::default(),
+    )
+    .expect("maps");
     let lib = file(&map, "test_case/src/lib.c");
     assert_eq!(lib.include_dirs, config.target.include_dirs());
     assert!(lib.ambiguous.is_empty());

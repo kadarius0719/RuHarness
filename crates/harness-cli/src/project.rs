@@ -1,7 +1,10 @@
 //! `harness project map` (docs/PROJECT-MAP-DESIGN.md §3.8), its first form
 //! (§5 step a): one folder's per-file facts — each file's compile, include
 //! folders, ambiguous includes and symbol counts, and the walk's issues and
-//! skipped folders. Nothing is written yet; the map file comes with step b.
+//! skipped folders — and, from step b, the configuration it ran under
+//! (`--configuration NAME`, from `migration/map/config.toml`, or a guess),
+//! what a `compile_commands.json` and the build files say, and the files set
+//! aside per folder. Nothing is written yet; the map file comes with step b.
 //!
 //! Every string from the project is printed through
 //! [`harness_core::text::safe_line`] (newlines and tabs too: a file name can
@@ -13,7 +16,8 @@ use anyhow::{bail, Result};
 use harness_core::adopt;
 use harness_core::config::TargetConfig;
 use harness_core::text::safe_line;
-use harness_oracle::projectmap::{self, Compiled, FileFacts, FileKind, FolderMap};
+use harness_oracle::projectmap::evidence::CompileCommands;
+use harness_oracle::projectmap::{self, Compiled, FileFacts, FileKind, FolderMap, MapOptions};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -22,7 +26,11 @@ use std::path::{Path, PathBuf};
 /// visited; 1 refused (no C found, a cap hit, no sandbox unless allowed, a
 /// root that is or holds the home folder or the cargo or rustup home, a
 /// ledger made elsewhere not adopted).
-pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
+pub(crate) fn cmd_map(
+    target: PathBuf,
+    allow_unsandboxed: bool,
+    configuration: Option<String>,
+) -> Result<u8> {
     if !target.is_dir() {
         bail!(
             "{} is not a folder: point --target at a C project's folder",
@@ -42,7 +50,11 @@ pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
     } else {
         ".".to_string()
     };
-    let map = projectmap::map_folder(&root, Path::new(&folder))?;
+    let options = MapOptions {
+        configuration,
+        ..MapOptions::default()
+    };
+    let map = projectmap::map_folder(&root, Path::new(&folder), &options)?;
     show(&map);
     if map.files.is_empty() {
         bail!(
@@ -53,8 +65,9 @@ pub(crate) fn cmd_map(target: PathBuf, allow_unsandboxed: bool) -> Result<u8> {
     }
     if let Some(hit) = map.limits_hit.first() {
         bail!(
-            "the map stopped at its limit of {}: the files past it were not visited; map a \
-             smaller folder",
+            "the map stopped at its {} limit of {}: the files past it were not visited or \
+             compiled, so no program's files can be worked out; map a smaller folder",
+            hit.limit,
             hit.at
         );
     }
@@ -199,6 +212,124 @@ fn list(items: &[String]) -> String {
     }
 }
 
+/// The configuration, the build evidence, as `--json` carries them.
+#[derive(Serialize)]
+struct BuildEvent<'a> {
+    k: &'static str,
+    configuration: &'a str,
+    from: harness_core::config::ConfigurationFrom,
+    source: &'static str,
+    flags: &'a [String],
+    system_headers: &'a [String],
+    digest: &'a str,
+    compile_commands: Option<&'a str>,
+    ignored_entries: usize,
+    unfound_entries: &'a [String],
+    build_files: &'a [String],
+    flags_differ: Vec<&'a str>,
+    ignored_flags: Vec<(&'a str, &'a str, usize)>,
+    ignored_flag_count: usize,
+    set_aside: Vec<(&'a str, &'static str, usize)>,
+    limits_hit: Vec<&'static str>,
+}
+
+/// The configuration, what the build says and what was set aside.
+fn show_build(map: &FolderMap, json: bool) {
+    let c = &map.configuration;
+    let ev = &map.evidence;
+    let cc_path = match &ev.compile_commands {
+        CompileCommands::Present { path } => Some(path.as_str()),
+        _ => None,
+    };
+    if json {
+        report::event(&BuildEvent {
+            k: "project-build",
+            configuration: &c.name,
+            from: c.from,
+            source: c.source.as_str(),
+            flags: &c.flags,
+            system_headers: &c.system_headers,
+            digest: &c.digest,
+            compile_commands: cc_path,
+            ignored_entries: ev.ignored_entries,
+            unfound_entries: &ev.unfound_entries,
+            build_files: &ev.build_files,
+            flags_differ: ev.flags_differ.iter().map(|f| f.path.as_str()).collect(),
+            ignored_flags: ev
+                .ignored_flags
+                .iter()
+                .map(|f| (f.flag.as_str(), f.why.as_str(), f.count))
+                .collect(),
+            ignored_flag_count: ev.ignored_flag_count,
+            set_aside: map
+                .set_aside
+                .iter()
+                .map(|s| (s.folder.as_str(), s.lang, s.count))
+                .collect(),
+            limits_hit: map.limits_hit.iter().map(|h| h.limit).collect(),
+        });
+        return;
+    }
+    out(format!(
+        "  configuration: {} ({}), flags {}{}",
+        safe_line(&c.name),
+        c.source.as_str(),
+        if c.flags.is_empty() {
+            "none".into()
+        } else {
+            list(&c.flags)
+        },
+        if c.source == projectmap::ConfigSource::Guessed {
+            "; a guess: failed compiles are expected until migration/map/config.toml states \
+             the build"
+        } else {
+            ""
+        }
+    ));
+    match &ev.compile_commands {
+        CompileCommands::Absent => {}
+        CompileCommands::Present { path } => out(format!(
+            "  compile_commands.json read from {}: {} entries ignored, {} flags ignored, {} \
+             files it names not found",
+            safe_line(path),
+            ev.ignored_entries,
+            ev.ignored_flag_count,
+            ev.unfound_entries.len()
+        )),
+        CompileCommands::Unreadable { path, why } => out(format!(
+            "  compile_commands.json at {} not read: {}",
+            safe_line(path),
+            safe_line(why)
+        )),
+    }
+    for f in &ev.ignored_flags {
+        out(format!(
+            "      ignored flag {} ({}×): {}",
+            safe_line(&f.flag),
+            f.count,
+            safe_line(&f.why)
+        ));
+    }
+    for f in &ev.flags_differ {
+        out(format!(
+            "      flags differ: {} is listed {} times with different flags",
+            safe_line(&f.path),
+            f.flags.len()
+        ));
+    }
+    if !ev.build_files.is_empty() {
+        out(format!("  build files: {}", list(&ev.build_files)));
+    }
+    for s in &map.set_aside {
+        out(format!(
+            "  set aside in {}: {} {} file(s), not read",
+            safe_line(&s.folder),
+            s.count,
+            s.lang
+        ));
+    }
+}
+
 /// Print the map: events under `--json`, lines otherwise.
 fn show(map: &FolderMap) {
     let json = report::mode() == report::Mode::Json;
@@ -274,6 +405,7 @@ fn show(map: &FolderMap) {
             s.files
         ));
     }
+    show_build(map, json);
     let c = map.files.iter().filter(|f| f.kind == FileKind::C).count();
     let ok = map
         .files
