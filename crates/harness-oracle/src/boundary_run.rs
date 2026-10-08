@@ -25,7 +25,7 @@ use crate::boundary::{
 };
 use crate::confine::{Collected, Confinement, Extras};
 use crate::exec::{RunFailure, RunOutput, Runner};
-use crate::{cc_outcome, CcInvocation};
+use crate::{cc_outcome, Base, CcInvocation, FileArgs};
 use harness_core::error::Error;
 use harness_core::verdict::Check;
 use harness_core::Unit;
@@ -57,8 +57,11 @@ pub(crate) struct BoundaryCtx<'a> {
     pub runner: &'a Runner,
     /// Runs built binaries.
     pub confined: &'a Confinement<'a>,
-    /// `-I` dirs in search order (the source dir, then the include dirs).
-    pub includes: &'a [PathBuf],
+    /// The target: each unit `.c` is compiled with its own arguments.
+    pub base: &'a Base,
+    /// The arguments of the harness-written files (the driver, the wrapper,
+    /// the probes, the guard runtime): the unit's ([`Base::unit_args`]).
+    pub unit_args: &'a FileArgs,
     /// The unit's headers (its include closure), for the wrapper's includes.
     pub headers: &'a [PathBuf],
     /// The unit's `.c` files.
@@ -170,8 +173,8 @@ fn run_inner(ctx: &BoundaryCtx<'_>, report: &mut Option<BoundaryReport>) -> Resu
     write(boundary::GUARD_INTERNAL_H_NAME, boundary::GUARD_INTERNAL_H)?;
     let guard_c = write(boundary::GUARD_C_NAME, boundary::GUARD_C)?;
     let probe_c = write(boundary::PROBE_C_NAME, boundary::PROBE_C)?;
-    let mut includes: Vec<PathBuf> = vec![bd.clone()];
-    includes.extend(ctx.includes.iter().cloned());
+    // `bd/` first (the guard's own header), then the unit's arguments.
+    let harness_args = ctx.unit_args.with_first(bd.clone());
     let mut header_includes: Vec<String> = Vec::new();
     for h in ctx.headers {
         let text = h.display().to_string();
@@ -183,21 +186,28 @@ fn run_inner(ctx: &BoundaryCtx<'_>, report: &mut Option<BoundaryReport>) -> Resu
         header_includes.push(format!("\"{text}\""));
     }
 
-    let cc =
-        |out: &Path, inputs: &[PathBuf], cflags: &[&str]| -> Result<Result<(), String>, Error> {
-            let cflags: Vec<String> = cflags.iter().map(|s| (*s).to_string()).collect();
-            cc_outcome(
-                ctx.runner,
-                &CcInvocation {
-                    includes: &includes,
-                    cflags: &cflags,
-                    quiet: true,
-                    out,
-                    inputs,
-                    libs: &[],
-                },
-            )
-        };
+    let cc_with = |args: &FileArgs,
+                   out: &Path,
+                   inputs: &[PathBuf],
+                   cflags: &[&str]|
+     -> Result<Result<(), String>, Error> {
+        let cflags: Vec<String> = cflags.iter().map(|s| (*s).to_string()).collect();
+        cc_outcome(
+            ctx.runner,
+            &CcInvocation {
+                args,
+                cflags: &cflags,
+                quiet: true,
+                out,
+                inputs,
+                libs: &[],
+            },
+        )
+    };
+    // The harness's own files and every link.
+    let cc = |out: &Path, inputs: &[PathBuf], cflags: &[&str]| {
+        cc_with(&harness_args, out, inputs, cflags)
+    };
 
     // 3. Classification: the symbol's prototype must compile on its own
     //    (else the unit's headers do not declare its types: not applicable);
@@ -294,9 +304,12 @@ fn run_inner(ctx: &BoundaryCtx<'_>, report: &mut Option<BoundaryReport>) -> Resu
 
     // 4. Builds (every failure is the C side's).
     macro_rules! build {
-        ($what:expr, $out:expr, $inputs:expr, $flags:expr) => {{
+        ($what:expr, $out:expr, $inputs:expr, $flags:expr) => {
+            build!(cc; $what, $out, $inputs, $flags)
+        };
+        ($cc:expr; $what:expr, $out:expr, $inputs:expr, $flags:expr) => {{
             let out: PathBuf = $out;
-            match cc(&out, $inputs, $flags)? {
+            match $cc(&out, $inputs, $flags)? {
                 Ok(()) => out,
                 Err(stderr) => {
                     return Ok(c_side(format!(
@@ -355,19 +368,26 @@ fn run_inner(ctx: &BoundaryCtx<'_>, report: &mut Option<BoundaryReport>) -> Resu
     let mut unit_plain = Vec::new();
     for (i, c) in ctx.unit_c.iter().enumerate() {
         let one = std::slice::from_ref(c);
+        // The unit's own C: its own arguments, `bd/` first as ever.
+        let own = ctx.base.file_args(c)?.with_first(bd.clone());
+        let unit_cc =
+            |out: &Path, inputs: &[PathBuf], cflags: &[&str]| cc_with(&own, out, inputs, cflags);
         unit_o1.push(build!(
+            unit_cc;
             "the unit's C (instrumented, -O1)",
             bd.join(format!("unit_cov_o1_{i}.o")),
             one,
             &["-O1", "-c", boundary::COVERAGE_FLAG]
         ));
         unit_o0.push(build!(
+            unit_cc;
             "the unit's C (instrumented, -O0)",
             bd.join(format!("unit_cov_o0_{i}.o")),
             one,
             &["-O0", "-c", boundary::COVERAGE_FLAG]
         ));
         unit_plain.push(build!(
+            unit_cc;
             "the unit's C",
             bd.join(format!("unit_{i}.o")),
             one,
