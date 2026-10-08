@@ -374,9 +374,12 @@ run_dir, input, collect)`:
    allowance). Ctrl-C is never held up by this read [p2].
 3. Check `cancelled()` first: cancelled → close the socket without the go-ahead (perfrun kills the
    child and exits; a dead perfrun ends perfgo; the program never runs). Otherwise retake the lock
-   — which refuses the same way once cancelled, so a cancel between the check and the lock never
-   starts the program either — register the child's group (killed first) and write the
-   **go-ahead**; drop the lock. A cancel after that finds the child's group registered.
+   — a cancel between the check and the lock never starts the program either: when the cancel
+   has marked the harness cancelled but not yet taken the lock, the lock refuses the same way;
+   when the cancel already holds the lock (it keeps it until the process is gone), taking it
+   waits until the process exits instead of refusing — register the child's group (killed first)
+   and write the **go-ahead**; drop the lock. A cancel after that finds the child's group
+   registered.
 4. Read the record (to `end`), then **unregister the child's group, then write *bye*** — the child is
    reaped only after that, so a cancel never signals a free pid [m2]. Then reap perfrun.
 5. **perfrun ends without a complete record** (a signal it could not handle, a crash, a cut record)
@@ -425,7 +428,8 @@ rule at the end of verify's tool, run and scenario profiles, which shared the ga
    - **both sides under both** → **too-short**, quoting both sides' step-1 CPU times and the fix:
      "too short to time: the C ran 40 ms of CPU and the Rust 360 ms on small-text — use an input at
      least about 7× bigger (13× for half a second)": the first factor is the floor over the smaller
-     side's instructions, the second half a second over the C's CPU time, each rounded up to one
+     side's instructions, the second half a second over the smaller side's CPU time (the C's on the
+     C-alone row; the smaller side is the one the input must grow for), each rounded up to one
      decimal below 2 (1.1×) and to a whole number above; "check the workload's options first" when
      the C wrote nothing or exited non-zero [c98];
    - **either side under both** (and not too-short) → measured, marked **short run**: never "about
@@ -636,10 +640,17 @@ the compilers, the kind of computer, the harness). `harness perf run` judges all
 show` judges the computer with `perfrun facts` when the launcher cache is current, and otherwise says
 "computer not checked — run harness perf run once" (it never builds the launcher); the compilers
 with `cc --version` and `rustc -V` as tool runs when the target's allowlist has them, else
-"compilers not checked"; `--no-check` skips both [n35, m24, p29]. The cockpit judges what it can
-without starting a process and says the rest is not checked (§3.11). A results file is evidence,
-not ledger truth; committing it keeps a history in git; it gates nothing [c78, c79]. Stale facts:
-`perf run` refuses ("scan first").
+"compilers not checked"; `--no-check` skips both [n35, m24, p29]. With no row stored, `perf show`
+checks nothing (no check is worth its runs) and says only "nothing measured yet". Without facts
+the C is not judged, said once in one line ("perf: the C not checked: no facts — run harness
+scan"); when a program-as-it-stands row is stored, the same line says the units that program
+holds are not checked either ("perf: the C and the units the program as it stands holds not
+checked: no facts — run harness scan"); the rest of each row is still judged. One unit's results
+file that cannot be read does not hide the other rows: `perf show` prints the rows that read, then
+the error naming the bad file, and exits 1, as the cockpit shows the other rows. The cockpit
+judges what it can without starting a process and says the rest is not checked (§3.11). A results
+file is evidence, not ledger truth; committing it keeps a history in git; it gates nothing [c78,
+c79]. Stale facts: `perf run` refuses ("scan first").
 
 ### 3.10 The CLI [c80–c84]
 
@@ -674,6 +685,16 @@ not ledger truth; committing it keeps a history in git; it gates nothing [c78, c
   what it writes (`migration/perf/`, scratch folders under `migration/build/`, and — when stale —
   the launcher cache in the home folder), no verdict, all under the ledger's lock, that Cancel keeps
   finished rows, and to keep the computer quiet; when it ends: "Measured 4 rows — see Speed" [c92].
+  Whether the launcher cache is stale is asked of the oracle off the UI thread, waited for only
+  briefly, and has three answers: **current** (with the same private-folder checks the run makes:
+  no link, mode 0700, owned by you) — no cache line, no launcher time; **will build** — the
+  estimate counts it, "about 25 s of it for perf's launcher (its build and first start)", and the
+  dialog names the cache it writes; **cannot use** — the plain estimate, and the dialog says perf
+  will refuse and why, in perf's own words. The answer is definite only when the `harness` the act
+  runs is the cockpit's own build (the binary beside the cockpit's own, compared canonically):
+  another build hashes other launcher sources into another cache folder. Otherwise, or when no
+  answer comes in time, the dialog keeps the plain estimate and the hedge "the first time, or after
+  an update, it builds perf's launcher into ~/Library/Caches/ruharness/perf".
 - **Inputs read by the cockpit** [c14, m21, disputed 2]: to judge "your workload changed" it hashes
   each input off the UI thread in `Snapshot::load` (shared with MCP), with the same confined, bounded
   read perf uses, each digest **cached by (device, inode, size, modification time)** in a
