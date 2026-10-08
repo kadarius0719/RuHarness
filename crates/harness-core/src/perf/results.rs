@@ -541,7 +541,7 @@ pub enum RowKind {
 }
 
 fn bad(path: &Path, why: String) -> Error {
-    Error::InvalidPlan(format!("{}: {why}", path.display()))
+    Error::ResultsFile(format!("{}: {why}", path.display()))
 }
 
 /// Read and check `program.json`; `Ok(None)` when absent. A link, a file
@@ -578,8 +578,15 @@ pub fn read_unit(path: &Path, unit: &str) -> Result<Option<UnitResults>, Error> 
 fn read(path: &Path) -> Result<Option<Vec<u8>>, Error> {
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(Error::io(path, e)),
-        Ok(_) => crate::ledger::read_regular(path, MAX_RESULTS_BYTES).map(Some),
+        Err(e) => Err(bad(path, e.to_string())),
+        Ok(_) => crate::ledger::read_regular(path, MAX_RESULTS_BYTES)
+            .map(Some)
+            .map_err(|e| match e {
+                Error::Io { source, .. } => bad(path, source.to_string()),
+                // `read_regular`'s refusals already start with the path.
+                Error::Invariant(why) => Error::ResultsFile(why),
+                other => other,
+            }),
     }
 }
 
@@ -593,9 +600,18 @@ struct VersionOnly {
 
 fn parse_json<T: for<'de> Deserialize<'de>>(path: &Path, bytes: &[u8]) -> Result<T, Error> {
     // The version first: a newer file is its own error, whatever its shape.
-    if let Ok(VersionOnly {
+    // Only from an object: serde takes a struct written as an array too, so
+    // `[2]` would otherwise read "too new".
+    let object = bytes
+        .iter()
+        .find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+        == Some(&b'{');
+    let version = object
+        .then(|| serde_json::from_slice::<VersionOnly>(bytes).ok())
+        .flatten();
+    if let Some(VersionOnly {
         schema_version: Some(found),
-    }) = serde_json::from_slice(bytes)
+    }) = version
     {
         if found > RESULTS_SCHEMA_VERSION {
             return Err(Error::SchemaTooNew {
@@ -1959,6 +1975,45 @@ mod tests {
     }
 
     #[test]
+    fn a_newer_file_is_too_new_even_with_a_value_no_tree_could_hold() {
+        // The version is read by skipping every other key, never by
+        // building the file as a tree: a number past f64's range elsewhere
+        // (which a tree refuses to build) leaves the newer file its own error.
+        let dir = std::env::temp_dir().join(format!("perf-v-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let p = program_path(&dir);
+        std::fs::write(&p, r#"{"schema_version":2,"later":1e400}"#).expect("write");
+        let err = read_program(&p).expect_err("newer");
+        assert!(matches!(err, Error::SchemaTooNew { found: 2, .. }), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_rows_own_units_keep_their_words_and_are_never_also_left_out() {
+        let unit = |id: &str| UnitRef {
+            id: id.into(),
+            crate_digest: digest('c'),
+        };
+        let s = RowKind::AsItStands;
+        let mut r = measured(s);
+        r.inputs.units = Some(vec![unit("../u001")]);
+        assert_eq!(
+            check_row(&r, s).expect_err("odd id"),
+            "units are unit ids, once each, with crate digests"
+        );
+        r.inputs.units = Some(vec![unit("u001"), unit("u002")]);
+        r.inputs.left_out = Some(vec![LeftOut {
+            id: "u001".into(),
+            crate_digest: String::new(),
+            reason: "not-fresh".into(),
+        }]);
+        assert_eq!(
+            check_row(&r, s).expect_err("held and left out"),
+            "left_out holds unit ids, once each, with closed reasons"
+        );
+    }
+
+    #[test]
     fn a_forged_file_full_of_an_unknown_field_is_refused_by_its_name() {
         // About 1.4 million empty arrays under a key the schema does not
         // have, inside the 4 MiB cap: the version is read without building
@@ -2011,6 +2066,70 @@ mod tests {
         std::fs::remove_file(&p).expect("rm");
         std::os::unix::fs::symlink(&u, &p).expect("link");
         assert!(read_program(&p).is_err(), "a link is refused");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_version_is_read_only_from_an_object() {
+        let dir = std::env::temp_dir().join(format!("perf-a-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let p = program_path(&dir);
+        // An array is no results file, whatever number it holds.
+        std::fs::write(&p, "[2]").expect("write");
+        let err = read_program(&p).expect_err("array").to_string();
+        assert!(err.contains("not a perf results file"), "{err}");
+        std::fs::write(&p, " \n\t[2]").expect("write");
+        let err = read_program(&p).expect_err("array").to_string();
+        assert!(err.contains("not a perf results file"), "{err}");
+        // An object after whitespace still has its version read first.
+        std::fs::write(&p, " \r\n\t{\"schema_version\":2}").expect("write");
+        let err = read_program(&p).expect_err("newer");
+        assert!(matches!(err, Error::SchemaTooNew { found: 2, .. }), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_bad_results_file_is_called_a_results_file() {
+        let dir = std::env::temp_dir().join(format!("perf-e-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(dir.join(UNITS_DIR)).expect("dir");
+        let p = program_path(&dir);
+        let at = |path: &Path| format!("results file: {}: ", path.display());
+        // A wrong shape.
+        std::fs::write(&p, "{\"junk\": 1}").expect("write");
+        let err = read_program(&p).expect_err("junk");
+        assert!(matches!(err, Error::ResultsFile(_)), "{err:?}");
+        let words = err.to_string();
+        assert!(
+            words.starts_with(&format!("{}not a perf results file: ", at(&p))),
+            "{words}"
+        );
+        // Another unit's file.
+        let u = unit_path(&dir, "u001");
+        let mut unit = UnitResults::new("u002");
+        unit.rows.push(measured(RowKind::Unit));
+        write_unit(&u, &unit).expect("write");
+        let words = read_unit(&u, "u001").expect_err("other").to_string();
+        assert!(words.starts_with(&at(&u)), "{words}");
+        // A link, a folder, a file too long: the reader's own refusals.
+        std::fs::remove_file(&p).expect("rm");
+        std::os::unix::fs::symlink(&u, &p).expect("link");
+        let words = read_program(&p).expect_err("link").to_string();
+        assert!(words.starts_with(&at(&p)), "{words}");
+        assert!(words.contains("symlinks are refused"), "{words}");
+        std::fs::remove_file(&p).expect("rm");
+        std::fs::create_dir(&p).expect("folder");
+        let words = read_program(&p).expect_err("folder").to_string();
+        assert!(words.starts_with(&at(&p)), "{words}");
+        std::fs::remove_dir(&p).expect("rm");
+        let long = vec![b' '; MAX_RESULTS_BYTES as usize + 1];
+        std::fs::write(&p, long).expect("write");
+        let words = read_program(&p).expect_err("long").to_string();
+        assert!(words.starts_with(&at(&p)), "{words}");
+        // A path the reader cannot look at: the I/O error, named.
+        let under = p.join("program.json");
+        let words = read_program(&under).expect_err("not a folder").to_string();
+        assert!(words.starts_with(&at(&under)), "{words}");
+        assert!(!words.contains("io error at"), "{words}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

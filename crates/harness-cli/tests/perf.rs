@@ -1013,6 +1013,8 @@ fn show_prints_the_rows_that_read_before_a_bad_unit_file() {
         r.stdout
     );
     assert!(r.stderr.contains("units/u000-junk.json"), "{}", r.stderr);
+    assert!(r.stderr.contains("results file: "), "{}", r.stderr);
+    assert!(!r.stderr.contains("invalid plan"), "{}", r.stderr);
     assert!(!r.stderr.contains("u001-katajainen.json"), "{}", r.stderr);
 }
 
