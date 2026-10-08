@@ -107,45 +107,26 @@ change at the switch points below.
      record (`validate.rs`) carries no configuration entry (the triage named the verdict only);
      the committed B01 `read_scalefactors_lib` verdict holds the old boundary digest (status does
      not compare it).
-   **All four merged; main at 1cded59 (1 529 tests green, pushed).** The bench replay on it: 198
-   reproduce, 2 expected divergences, 0 problems, no regression. **The check round is RUNNING**
-   (launched 2026-10-08 from 1cded59, four Opus checkers at high, reports to the session's
-   scratchpad `check2/reports/{fix-ab, fix-c-flow, step-b, step-b-security}.md`): two verify fix
-   passes A+B and C (re-running the review's experiments and reverts), two review step (b) itself
-   (correctness clause by clause; security). Next: bundle the reports into
-   docs/reviews/2026-10-08-map-step-b-and-fix-check.md with a triage, fix pass(es) by ownership,
-   gates, bench replay, DECISIONS; then (d), (e), (f), (g).
-   - `worktree-agent-ae7ea5096fdff60c7` — fix pass C MERGED (one conflict in main.rs: both
-     sides' additions kept): a fresh token on every `--adopt` (the two token files untracked —
-     **the person runs once per computer:** `harness state status --target targets/zopfli --adopt`
-     and `harness bench status --suite targets/tractor --adopt`), a results-free `migration/`
-     made here, "an agent never adopts" in harness-mcp's refusal and every `sync-runtime` block,
-     `runtime_view::command_line` behind every hint, the tool's id on the cockpit's title and in
-     harness-mcp's status, one "no target here" sentence, the `⊖` mark, the uncovered tests
-     (`tool_reread.rs` pty test, `project_map_refusals.rs`, …). Left by it: SCHEMAS' quoted
-     refusal sentences (near lines 1508 and 1547) and the design's §3.7 "records that token and
-     writes none" are out of date (step f); the cockpit's own "run harness scan" and perf-run hints
-     (speed.rs, model.rs, app.rs) do not carry `--tool` yet; `features::invalid()` should take the
-     ledger path (C fixed the path at the edges with `error::in_ledger`).
-     The session then added scan's ambiguous-include lines and detect's skipped-file lines in
-     main.rs (fix pass A's leftovers).
-   - `worktree-agent-ad6c3511dbeadf601` — step (b) part 3 MERGED (gates running at the time of
-     writing): `projectmap/mapfile.rs` (`analyze`, `render`, `write_gitignore`), the screen in
-     project.rs (maps the whole root even with a root `harness.toml`), `WriterLock::acquire_project`,
-     `ledger::project_changed_notice`, SCHEMAS' map section. Left by it, for the check round's fix
-     pass: `link.rs` compiles every file with the configuration's flags only (per-file
-     `compile_commands.json` flags never reach the link check) and takes path flags as written
-     (`mapfile::link_flags` makes them absolute for it; link.rs should); a refused map with no C
-     files leaves an empty `migration/map/.lock` (the lock is taken before the walk); the
-     cockpit's read model carries the notice but nothing displays it (step e); the accepted-id
-     rule is not wired (`analyze` gets an empty accepted list; step e); the closing line names
-     `project ask`/`accept` before steps (d)/(e) exist.
-   Merge each when its report is green, by file ownership (A's resolver replaces B's local
-   search-order function in `unit_headers`/`driver_folders`/`unit_header_names` at the merge),
-   run the full gates and `bench check --suite targets/tractor --replay --jobs 6 --adopt`; a check
-   round over the fix passes (Opus checkers, high); DECISIONS; then (d), (e), (f), (g).
-   After fix pass C merges the person runs each target's first command once with `--adopt`
-   (targets/zopfli; `bench` adopts its suite by itself).
+   **The check round is DONE and TRIAGED** (docs/reviews/2026-10-08-map-step-b-and-fix-check.md:
+   four reports and the triage's thirteen decisions — the link check compiles exactly as the map
+   did; undecided probe names are "not checked"; a weak-only need still pulls a strong definer;
+   `system_headers` in the configuration digest; one deadline through every phase; memory and
+   size bounds; failed compiles read their `-MD` list and drop outside names; a shipped
+   `config.toml` is proposed until `--adopt` or the person's edit; the closing line names what
+   exists; verdicts made elsewhere marked by adoption time; each unit's hashed closure is the
+   resolver's with `-idirafter` in the grammar; the mirror's 64 MiB cap, `[project]` refused, the
+   reader's quadratic `<` rule fixed, the five preprocessor forms; "once per checkout").
+   **RUNNING NOW (launched 2026-10-08 from 0552d67, three Opus builders at medium):** fix pass D
+   the map (harness-oracle projectmap/*, project.rs, the lock, the design/SCHEMAS sentences), fix
+   pass E the person's side round two (adopt.rs, features `invalid`, perf words, observer,
+   runtime_view, status's mark, harness-cli except project.rs, harness-tui, harness-mcp, the hint
+   strings in harness-llm/oracle, cockpit-drive, SCHEMAS' adoption paragraphs), fix pass F the
+   residuals (sources.rs's resolver closure, the grammar's `-idirafter`, planner/status hashes,
+   harness-scan, harness-detect, trajectory's scope, include_rule.rs, the mirror's cap,
+   unit_crate.rs). Merge each when green by ownership (D's two adopt.rs lines vs E's adopt.rs;
+   E's hint strings vs F's logic in trajectory.rs/lib.rs), full gates, `bench check --suite
+   targets/tractor --replay --jobs 6 --adopt`, DECISIONS; a short check of the three passes if
+   usage allows; then (d), (e), (f), (g).
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
    toolchain line — folder-form `inputs` stay untouched.
