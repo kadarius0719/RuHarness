@@ -317,8 +317,11 @@ mod tests {
                 "#[no_mangle] pub extern \"C\" fn add1(x: i32) -> i32 { let v: Vec<i32> = vec![x]; v[0] + 1 }\n"
             };
             std::fs::write(c.join("src/lib.rs"), lib).expect("lib");
+            // Its own target folder, named: a CARGO_TARGET_DIR set for the
+            // outer test run would send the build elsewhere.
             let status = std::process::Command::new("cargo")
-                .args(["build", "--release", "--offline", "-q"])
+                .args(["build", "--release", "--offline", "-q", "--target-dir"])
+                .arg(c.join("target"))
                 .current_dir(&c)
                 .status()
                 .expect("cargo");

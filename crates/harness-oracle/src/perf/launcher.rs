@@ -846,9 +846,10 @@ fn read_until(
 /// Run `spec.program` once through perfrun (§3.3 *The harness side*):
 /// 1. spawn perfrun under the registry's lock and register its group;
 /// 2. outside the lock, read its `child <pid>` line;
-/// 3. under the lock again: cancelled → close the socket without the
-///    go-ahead (the program never runs); else register the program's group
-///    (killed first) and write the go-ahead;
+/// 3. cancelled() is checked first: cancelled → close the socket without
+///    the go-ahead (the program never runs); else retake the lock (which
+///    refuses once cancelled), register the program's group (killed first)
+///    and write the go-ahead;
 /// 4. read the record to `end`, unregister the program's group, then write
 ///    the bye — the program is reaped only after it;
 /// 5. perfrun ends without a complete record → kill the program's group at
@@ -1447,8 +1448,7 @@ mod tests {
                 let sleeper = sleeper.clone();
                 std::thread::spawn(move || run(&l, &sleeper, 60, false))
             };
-            let program = pid_of(&sleeper);
-            let perfrun = parent_of(program);
+            let (program, perfrun) = pid_and_parent_of(&sleeper);
             std::thread::sleep(Duration::from_millis(1500));
             let reading = cpu_time(perfrun).filter(|_| alive(program));
             let m = worker.join().expect("joins");
@@ -1533,6 +1533,13 @@ mod tests {
     /// own: another copy of these tests running at once on the machine (a
     /// second worktree) runs programs of the very same names.
     fn pid_of(bin: &Path) -> u32 {
+        pid_and_parent_of(bin).0
+    }
+
+    /// [`pid_of`] and that process's parent, both from the one `ps`
+    /// snapshot that found it: a second `ps` for the parent could come back
+    /// empty if the process ended in between.
+    fn pid_and_parent_of(bin: &Path) -> (u32, u32) {
         // The executable's own name (`ucomm`): perfrun's command line holds
         // the program's path too, and argv[0] is "tool".
         let name = bin
@@ -1553,7 +1560,8 @@ mod tests {
                 .filter_map(|(w, _)| w[0].parse::<u32>().ok())
                 .find(|&pid| descends_from_this_process(pid, &parents))
             {
-                return pid;
+                // The walk above found `pid`'s parent in this map.
+                return (pid, parents[&pid]);
             }
             std::thread::sleep(Duration::from_millis(25));
         }
@@ -1581,6 +1589,21 @@ mod tests {
     fn alive(pid: u32) -> bool {
         let stat = ps(pid, "stat");
         !stat.is_empty() && !stat.starts_with('Z')
+    }
+
+    /// Whether `pid` is gone or a zombie within `within`, polled: a killed
+    /// process can take a moment to die on a busy Mac.
+    fn dead_within(pid: u32, within: Duration) -> bool {
+        let until = Instant::now() + within;
+        loop {
+            if !alive(pid) {
+                return true;
+            }
+            if Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     /// `ps -o <field>= -p <pid>`, trimmed: "" once the pid is gone.
@@ -1628,8 +1651,11 @@ mod tests {
 
     /// [`pid_of`] takes only a process this test process started: a copy of
     /// the same executable that another run of these tests runs elsewhere
-    /// on the machine — here a decoy launchd adopted — is never taken for
-    /// it, even while the decoy is the only one running.
+    /// on the machine is never taken for it, even while the decoy is the
+    /// only one running. Like another worktree's program under its own
+    /// perfrun, the decoy has a living parent that is not this process (a
+    /// subshell launchd adopted), so rejecting only launchd's children is
+    /// not enough to pass.
     #[test]
     fn pid_of_never_takes_another_run_s_program() {
         if !cfg!(target_os = "macos") {
@@ -1646,23 +1672,32 @@ mod tests {
         );
         let decoy = theirs.join("lookalike");
         std::fs::copy(&bin, &decoy).expect("the decoy");
-        // A shell that exits at once starts the decoy: launchd adopts it.
-        let out = Command::new("/bin/sh")
+        // A subshell starts the decoy, says its pid and waits for it; the
+        // outer shell exits, so launchd adopts the subshell, which stays
+        // alive as the decoy's parent. Only the first line is read: the
+        // subshell and the decoy keep the pipe open.
+        let mut outer = Command::new("/bin/sh")
             .arg("-c")
-            .arg("\"$0\" </dev/null >/dev/null 2>&1 & echo $!")
+            .arg("( \"$0\" & echo $!; wait ) </dev/null 2>/dev/null & sleep 0.5")
             .arg(&decoy)
-            .output()
+            .stdout(Stdio::piped())
+            .spawn()
             .expect("sh");
-        let decoy_pid: u32 = String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse()
-            .expect("the decoy's pid");
+        let mut first = String::new();
+        std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(outer.stdout.take().expect("stdout")),
+            &mut first,
+        )
+        .expect("the decoy's pid");
+        let decoy_pid: u32 = first.trim().parse().expect("the decoy's pid");
+        // Until the outer shell is gone, the decoy still descends from us.
+        outer.wait().expect("the outer shell ends");
         let until = Instant::now() + Duration::from_secs(30);
         while ps(decoy_pid, "ucomm") != "lookalike" {
             assert!(Instant::now() < until, "the decoy never ran");
             std::thread::sleep(Duration::from_millis(25));
         }
-        let adopted = parent_of(decoy_pid);
+        let decoy_parent = parent_of(decoy_pid);
         // Ours starts a moment later, while pid_of already looks.
         let starter = {
             let bin = bin.clone();
@@ -1678,7 +1713,10 @@ mod tests {
         let _ = Command::new("/bin/kill")
             .args(["-KILL", &decoy_pid.to_string()])
             .status();
-        assert_eq!(adopted, 1, "launchd adopted the decoy");
+        assert!(
+            decoy_parent > 1 && decoy_parent != std::process::id(),
+            "the decoy's parent ({decoy_parent}) lives and is not this process"
+        );
         assert_eq!(
             found,
             started.id(),
@@ -1705,15 +1743,7 @@ mod tests {
             let spin = spin.clone();
             std::thread::spawn(move || run(&l, &spin, 60, false))
         };
-        let pid = pid_of(&spin);
-        let parent = Command::new("ps")
-            .args(["-o", "ppid=", "-p", &pid.to_string()])
-            .output()
-            .expect("ps");
-        let perfrun: u32 = String::from_utf8_lossy(&parent.stdout)
-            .trim()
-            .parse()
-            .expect("ppid");
+        let (pid, perfrun) = pid_and_parent_of(&spin);
         assert!(Command::new("/bin/kill")
             .args(["-KILL", &perfrun.to_string()])
             .status()
@@ -1723,8 +1753,10 @@ mod tests {
         let m = worker.join().expect("joins");
         assert!(matches!(m.seen, Seen::NoRecord(_)), "{:?}", m.seen);
         assert!(t.elapsed() < Duration::from_secs(5), "answered at once");
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(!alive(pid), "the program died with its launcher");
+        assert!(
+            dead_within(pid, Duration::from_secs(5)),
+            "the program died with its launcher"
+        );
     }
 
     #[test]
@@ -2108,8 +2140,10 @@ mod tests {
         exec::kill_live_process_groups();
         let result = worker.join().expect("joins");
         assert!(matches!(result, Err(Error::Interrupted)), "{result:?}");
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(!alive(pid), "the program is dead");
+        assert!(
+            dead_within(pid, Duration::from_secs(5)),
+            "the program is dead"
+        );
         println!("cancel-ok");
         std::process::exit(0);
     }
@@ -2397,6 +2431,9 @@ mod tests {
             (&Status::Stopped, true, Some(End::Signal(9))),
             "{r:?}"
         );
+        // The record says the child ended, so it is a zombie already: the
+        // pause gives a perfrun that reaps too early the time to do it (a
+        // busy Mac can only hide that, never fail a right perfrun).
         std::thread::sleep(Duration::from_millis(100));
         assert!(
             ps(h.child, "stat").starts_with('Z'),
@@ -2454,6 +2491,8 @@ mod tests {
             "{r:?}"
         );
         assert!(cwd.join("ran").exists(), "the program ran");
+        // A zombie already, as above: the pause is a wrong perfrun's chance
+        // to reap it, not a wait for the child to die.
         std::thread::sleep(Duration::from_millis(300));
         assert!(
             ps(h.child, "stat").starts_with('Z'),
@@ -2481,8 +2520,10 @@ mod tests {
         assert_eq!(pid_of(&spin), child);
         drop(ours);
         assert_eq!(exits_within(&mut perfrun, Duration::from_secs(5)), Some(0));
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(!alive(child), "the program died with the harness");
+        assert!(
+            dead_within(child, Duration::from_secs(5)),
+            "the program died with the harness"
+        );
     }
 
     /// Run by [`a_cancel_before_the_go_ahead_never_starts_the_program`] in
