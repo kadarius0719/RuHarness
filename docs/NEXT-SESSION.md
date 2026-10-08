@@ -36,7 +36,7 @@ change at the switch points below.
 1. **Step (a) of the map's §5 is BEING BUILT** (launched 2026-10-08 from commit 3f54389, revision
    2.2): four Opus builders at medium effort in their own worktrees — merge each branch when its
    report says it is green, resolve conflicts by file ownership, run the full gates, then step (c):
-   - `worktree-agent-ab93152a9e0742945` — (a1) the walk's four additions (harness-core walk.rs,
+   - `worktree-agent-ab93152a9e0742945` — (a1) MERGED: the walk's four additions (harness-core walk.rs,
      the callers) and the `--json` escape fix (harness-cli report.rs, SCHEMAS);
    - `worktree-agent-a367e9fa49de8404a` — (a2) adoption of a ledger made elsewhere (harness-core
      module + `TargetContext::load`, `--adopt` on every CLI command and `bench`, the cockpit's
