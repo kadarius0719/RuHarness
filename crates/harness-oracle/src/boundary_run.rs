@@ -59,8 +59,12 @@ pub(crate) struct BoundaryCtx<'a> {
     pub confined: &'a Confinement<'a>,
     /// The target: each unit `.c` is compiled with its own arguments.
     pub base: &'a Base,
-    /// The arguments of the harness-written files (the driver, the wrapper,
-    /// the probes, the guard runtime): the unit's ([`Base::unit_args`]).
+    /// The arguments of the harness-written files that include the unit's
+    /// headers (the driver, the wrapper, the prototype probes) and of every
+    /// link: the unit's ([`Base::unit_args`]). The guard and tracing-probe
+    /// runtimes never get them: they include nothing of the unit, and a
+    /// configuration's `-std=c89`, `-include` or `-D` is the project's, not
+    /// theirs.
     pub unit_args: &'a FileArgs,
     /// The unit's headers (its include closure), for the wrapper's includes.
     pub headers: &'a [PathBuf],
@@ -175,6 +179,9 @@ fn run_inner(ctx: &BoundaryCtx<'_>, report: &mut Option<BoundaryReport>) -> Resu
     let probe_c = write(boundary::PROBE_C_NAME, boundary::PROBE_C)?;
     // `bd/` first (the guard's own header), then the unit's arguments.
     let harness_args = ctx.unit_args.with_first(bd.clone());
+    // The harness's own runtimes: their own folder only, as the features
+    // map's probe runtime is built.
+    let runtime_args = FileArgs::includes(vec![bd.clone()]);
     let mut header_includes: Vec<String> = Vec::new();
     for h in ctx.headers {
         let text = h.display().to_string();
@@ -204,9 +211,13 @@ fn run_inner(ctx: &BoundaryCtx<'_>, report: &mut Option<BoundaryReport>) -> Resu
             },
         )
     };
-    // The harness's own files and every link.
+    // The harness's files that include the unit's headers, and every link.
     let cc = |out: &Path, inputs: &[PathBuf], cflags: &[&str]| {
         cc_with(&harness_args, out, inputs, cflags)
+    };
+    // The guard and tracing-probe runtimes.
+    let runtime_cc = |out: &Path, inputs: &[PathBuf], cflags: &[&str]| {
+        cc_with(&runtime_args, out, inputs, cflags)
     };
 
     // 3. Classification: the symbol's prototype must compile on its own
@@ -322,18 +333,21 @@ fn run_inner(ctx: &BoundaryCtx<'_>, report: &mut Option<BoundaryReport>) -> Resu
         }};
     }
     let rt = build!(
+        runtime_cc;
         "the guard runtime",
         bd.join("rt.o"),
         std::slice::from_ref(&guard_c),
         &["-O0", "-c"]
     );
     let rt_measure = build!(
+        runtime_cc;
         "the guard runtime (measure)",
         bd.join("rt_measure.o"),
         std::slice::from_ref(&guard_c),
         &["-O0", "-c", boundary::MEASURE_DEFINE]
     );
     let probe_cov = build!(
+        runtime_cc;
         "the tracing probe",
         bd.join("probe_cov.o"),
         std::slice::from_ref(&probe_c),

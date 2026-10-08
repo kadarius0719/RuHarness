@@ -84,19 +84,26 @@ pub(crate) struct Need {
 }
 
 /// The external symbols of one object: those it defines (commons included)
-/// and those it needs (a common symbol is never a need). Local symbols are
-/// never read.
+/// and those it needs (a common symbol is never a need), and the external
+/// names it defines outside any section (`other`). Local symbols are never
+/// read.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct External {
     pub defines: Vec<Definition>,
     pub needs: Vec<Need>,
+    /// External symbols that are absolute (Mach-O `N_ABS`, ELF `SHN_ABS`:
+    /// `_absval = 42` in assembly) or indirect (Mach-O `N_INDR`, an alias of
+    /// another name), by name as [`Definition`]'s. They hold no code or data
+    /// of their own, so the project map ignores them; the driver-shape check
+    /// counts each as a definition (`nm -gU` listed them so).
+    pub other: Vec<String>,
 }
 
 /// The external symbols `object` defines and needs, with kinds and weakness
 /// — the project map's read (docs/PROJECT-MAP-DESIGN.md §3.1 step 5). Unlike
-/// [`defined`], it reports common symbols, as definitions. An ELF absolute
-/// symbol (`SHN_ABS`) is not reported, as [`defined`] skips it. `Err` names
-/// what could not be read.
+/// [`defined`], it reports common symbols, as definitions, and absolute and
+/// indirect ones apart ([`External::other`]). `Err` names what could not be
+/// read.
 pub(crate) fn external(object: &[u8]) -> Result<External, String> {
     symbols(object).map(|read| read.external)
 }
@@ -160,11 +167,33 @@ fn u64_at(b: &[u8], at: usize) -> Option<u64> {
     ))
 }
 
-/// The NUL-terminated name at `at` in a string table.
-fn name_at(strings: &[u8], at: usize) -> Option<String> {
-    let tail = strings.get(at..)?;
-    let end = tail.iter().position(|b| *b == 0)?;
-    Some(String::from_utf8_lossy(&tail[..end]).into_owned())
+/// A string table with a budget on the bytes its names may take: symbols
+/// pointing into one long run of shared tails would otherwise cost about
+/// the square of the object's size to read. A compiler's object reads each
+/// name about once, so the budget is the object's size twice over, plus a
+/// margin.
+struct Names<'a> {
+    strings: &'a [u8],
+    left: std::cell::Cell<usize>,
+}
+
+impl<'a> Names<'a> {
+    fn new(strings: &'a [u8], object_len: usize) -> Names<'a> {
+        Names {
+            strings,
+            left: std::cell::Cell::new(object_len.saturating_mul(2).saturating_add(1 << 16)),
+        }
+    }
+
+    /// The NUL-terminated name at `at`; `None` when it lies outside the
+    /// table, has no terminator, or the budget is spent.
+    fn at(&self, at: usize) -> Option<String> {
+        let tail = self.strings.get(at..)?;
+        let window = &tail[..tail.len().min(self.left.get())];
+        let end = window.iter().position(|b| *b == 0)?;
+        self.left.set(self.left.get() - (end + 1));
+        Some(String::from_utf8_lossy(&tail[..end]).into_owned())
+    }
 }
 
 const LC_SYMTAB: u32 = 0x2;
@@ -174,6 +203,12 @@ const N_TYPE: u8 = 0x0e;
 const N_SECT: u8 = 0x0e;
 const N_EXT: u8 = 0x01;
 const N_UNDF: u8 = 0x00;
+const N_ABS: u8 = 0x02;
+const N_INDR: u8 = 0x0a;
+/// The size of a `segment_64_command` before its sections, and of one
+/// `section_64`.
+const SEGMENT_64_SIZE: usize = 72;
+const SECTION_64_SIZE: usize = 80;
 const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x400;
 const SECTION_TYPE: u32 = 0xff;
@@ -211,7 +246,10 @@ fn macho_kind(flags: u32, segment: &[u8], section: &[u8]) -> Kind {
 
 /// Mach-O: `LC_SYMTAB`'s `nlist_64` entries of type `N_SECT`; a section's
 /// flags (`LC_SEGMENT_64`, numbered from 1 in order) say whether it holds
-/// instructions, and with its names what kind of symbol it holds.
+/// instructions, and with its names what kind of symbol it holds. Each
+/// segment's section count must fit its command's size, and all of them
+/// together the object's (many small commands cannot each claim a large
+/// count over the same bytes).
 fn macho(b: &[u8]) -> Result<Symbols, String> {
     let bad = |what: &str| format!("the Mach-O object's {what} cannot be read");
     let ncmds = u32_at(b, 16).ok_or_else(|| bad("header"))? as usize;
@@ -226,6 +264,13 @@ fn macho(b: &[u8]) -> Result<Symbols, String> {
         }
         if cmd == LC_SEGMENT_64 {
             let nsects = u32_at(b, at.saturating_add(64)).ok_or_else(|| bad("segments"))? as usize;
+            let fits = nsects
+                .checked_mul(SECTION_64_SIZE)
+                .and_then(|n| n.checked_add(SEGMENT_64_SIZE))
+                .is_some_and(|n| n <= size);
+            if !fits || kinds.len().saturating_add(nsects) > b.len() / SECTION_64_SIZE {
+                return Err(bad("segments"));
+            }
             for k in 0..nsects {
                 // A section_64: sectname at 0, segname at 16, flags at 64.
                 let s = k
@@ -264,8 +309,9 @@ fn macho(b: &[u8]) -> Result<Symbols, String> {
         .get(stroff..stroff.saturating_add(strsize))
         .ok_or_else(|| bad("string table"))?;
     let mut read = Symbols::default();
+    let names = Names::new(strings, b.len());
     let name_of = |strx: u32| -> Result<String, String> {
-        let name = name_at(strings, strx as usize).ok_or_else(|| bad("names"))?;
+        let name = names.at(strx as usize).ok_or_else(|| bad("names"))?;
         Ok(name.strip_prefix('_').unwrap_or(&name).to_string())
     };
     for k in 0..nsyms {
@@ -302,6 +348,11 @@ fn macho(b: &[u8]) -> Result<Symbols, String> {
                 }),
                 None => {}
             }
+            continue;
+        }
+        // An absolute or indirect external symbol: no section of its own.
+        if ty & N_STAB == 0 && ty & N_EXT != 0 && matches!(ty & N_TYPE, N_ABS | N_INDR) {
+            read.external.other.push(name_of(strx)?);
             continue;
         }
         if ty & N_STAB != 0 || ty & N_TYPE != N_SECT {
@@ -407,6 +458,7 @@ fn elf(b: &[u8]) -> Result<Symbols, String> {
             .checked_add(str_size)
             .and_then(|end| b.get(str_off..end))
             .ok_or_else(|| bad("string table"))?;
+        let names = Names::new(strings, b.len());
         // Extended section indexes (SHN_XINDEX): the SHT_SYMTAB_SHNDX table
         // linked to this symbol table, entry k (fix pass 3's check).
         let mut shndx_table: Option<usize> = None;
@@ -437,7 +489,7 @@ fn elf(b: &[u8]) -> Result<Symbols, String> {
             let kind = info & 0xf;
             let binding = info >> 4;
             if shndx == SHN_UNDEF && binding != STB_LOCAL && name != 0 {
-                let name = name_at(strings, name as usize).ok_or_else(|| bad("names"))?;
+                let name = names.at(name as usize).ok_or_else(|| bad("names"))?;
                 read.external.needs.push(Need {
                     name: name.clone(),
                     weak: binding == STB_WEAK,
@@ -445,10 +497,21 @@ fn elf(b: &[u8]) -> Result<Symbols, String> {
                 read.undefined.push(name);
                 continue;
             }
+            // An absolute external symbol: no section of its own.
+            if shndx == SHN_ABS
+                && binding != STB_LOCAL
+                && name != 0
+                && !matches!(kind, STT_SECTION | STT_FILE)
+            {
+                read.external
+                    .other
+                    .push(names.at(name as usize).ok_or_else(|| bad("names"))?);
+                continue;
+            }
             // A common symbol: a definition for the map's read only.
             if shndx == SHN_COMMON && binding != STB_LOCAL && name != 0 {
                 read.external.defines.push(Definition {
-                    name: name_at(strings, name as usize).ok_or_else(|| bad("names"))?,
+                    name: names.at(name as usize).ok_or_else(|| bad("names"))?,
                     kind: Kind::Common,
                     weak: binding == STB_WEAK,
                 });
@@ -487,7 +550,7 @@ fn elf(b: &[u8]) -> Result<Symbols, String> {
             let function = matches!(kind, STT_FUNC | STT_GNU_IFUNC)
                 || (kind == STT_NOTYPE
                     && holder.is_some_and(|(_, flags)| flags & SHF_EXECINSTR != 0));
-            let name = name_at(strings, name as usize).ok_or_else(|| bad("names"))?;
+            let name = names.at(name as usize).ok_or_else(|| bad("names"))?;
             if binding != STB_LOCAL {
                 read.external.defines.push(Definition {
                     name: name.clone(),
@@ -924,5 +987,75 @@ int odd(void) { return 4; }
         assert_eq!(code(&build([0, 5, 4], [0, 4, 5])), pair(false, true));
         // An entry past the last section is not code.
         assert_eq!(code(&build([0, 4, 99], [0, 4, 4])), pair(true, false));
+    }
+
+    /// A Mach-O header with `ncmds` commands; the caller appends them.
+    fn macho_header(ncmds: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 32];
+        b[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
+        b[16..20].copy_from_slice(&ncmds.to_le_bytes());
+        b
+    }
+
+    /// A segment's section count must fit its own command: a 72-byte
+    /// command claiming two sections over the bytes after it is refused,
+    /// and the same command claiming none is read.
+    #[test]
+    fn a_macho_section_count_beyond_its_command_is_refused() {
+        let object = |nsects: u32| {
+            let mut b = macho_header(1);
+            let mut cmd = vec![0u8; SEGMENT_64_SIZE];
+            cmd[..4].copy_from_slice(&LC_SEGMENT_64.to_le_bytes());
+            cmd[4..8].copy_from_slice(&(SEGMENT_64_SIZE as u32).to_le_bytes());
+            cmd[64..68].copy_from_slice(&nsects.to_le_bytes());
+            b.extend(cmd);
+            b.extend(vec![0u8; 2 * SECTION_64_SIZE]);
+            b
+        };
+        assert_eq!(external(&object(0)), Ok(External::default()));
+        let err = external(&object(2)).expect_err("refused");
+        assert!(err.contains("segments"), "{err}");
+    }
+
+    /// Many symbols naming one long run of the string table spend the name
+    /// budget: the read stops with "names" instead of copying the run once
+    /// per symbol.
+    #[test]
+    fn names_have_a_budget() {
+        let nsyms: u32 = 1000;
+        let run = 100_000usize;
+        let mut b = macho_header(1);
+        let symoff = 32 + 24;
+        let stroff = symoff + 16 * nsyms as usize;
+        let mut cmd = vec![0u8; 24];
+        for (k, v) in [
+            LC_SYMTAB,
+            24,
+            symoff as u32,
+            nsyms,
+            stroff as u32,
+            (run + 1) as u32,
+        ]
+        .iter()
+        .enumerate()
+        {
+            cmd[4 * k..4 * k + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        b.extend(cmd);
+        for _ in 0..nsyms {
+            // strx 0, an external symbol in section 1.
+            let mut e = vec![0u8; 16];
+            e[4] = N_SECT | N_EXT;
+            e[5] = 1;
+            b.extend(e);
+        }
+        b.extend(std::iter::repeat_n(b'A', run));
+        b.push(0);
+        let err = external(&b).expect_err("budget spent");
+        assert!(err.contains("names"), "{err}");
+        // Two symbols on the same run fit the budget.
+        let mut two = b.clone();
+        two[32 + 12..32 + 16].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(external(&two).expect("reads").defines.len(), 2);
     }
 }

@@ -556,15 +556,24 @@ impl Ctx<'_> {
     }
 }
 
+/// What [`Ctx::mutant_includes`] gives: `original`'s own arguments, its
+/// folder searched first by every quoted include.
+pub(crate) fn mutant_args(base: &crate::Base, original: &Path) -> Result<FileArgs, Error> {
+    let orig_dir = original
+        .parent()
+        .ok_or_else(|| Error::Invariant(format!("{} has no parent", original.display())))?
+        .to_path_buf();
+    Ok(base.file_args(original)?.with_quote_first(orig_dir))
+}
+
 impl Ctx<'_> {
     /// The arguments of a (possibly mutated copy of a) unit file: the
-    /// ORIGINAL file's own, its directory searched first.
+    /// ORIGINAL file's own, its directory searched first by every quoted
+    /// include (`-iquote`, before the configuration's folders), as the
+    /// compiler searches a file's own folder — so the copy in `dv/mut-N/`
+    /// and the original compiled in place read the same headers.
     fn mutant_includes(&self, original: &Path) -> Result<FileArgs, Error> {
-        let orig_dir = original
-            .parent()
-            .ok_or_else(|| Error::Invariant(format!("{} has no parent", original.display())))?
-            .to_path_buf();
-        Ok(self.base.file_args(original)?.with_first(orig_dir))
+        mutant_args(self.base, original)
     }
 
     /// Compile an original unit file to `<dir>/<stem>.o`.

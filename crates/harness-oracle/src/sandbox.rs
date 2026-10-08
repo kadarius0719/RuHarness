@@ -10,9 +10,9 @@
 //!   locations and temp;
 //! - the **map profile** ([`render_map_profile`], docs/PROJECT-MAP-DESIGN.md
 //!   §3.9) for the project map's compiler: network denied, reads of
-//!   `/Users`, `/Volumes` and `/private/tmp` denied except the project root
-//!   and one fresh folder, the cargo and rustup homes denied wherever they
-//!   are, and writes only to that fresh folder;
+//!   `/Users`, `/Volumes`, `/private/tmp` and `/private/var/tmp` denied
+//!   except the project root and one fresh folder, the cargo and rustup
+//!   homes denied wherever they are, and writes only to that fresh folder;
 //! - the **run profile** ([`render_run_profile`], M4 R1 run confinement) for
 //!   every binary the oracle built: network denied, `exec` of nothing but
 //!   the binary itself, reads denied under the user's home AND under the
@@ -271,8 +271,9 @@ pub(crate) fn render_profile(spec: &ProfileSpec<'_>) -> Result<String, Error> {
 
 /// The places the map profile denies reading, whole, wherever the project
 /// lies: every person's home folder and `/Users/Shared`, mounted volumes,
-/// and the shared temporary folder (`/tmp` is a link to it).
-const MAP_DENIED_READS: [&str; 3] = ["/Users", "/Volumes", "/private/tmp"];
+/// and the shared temporary folders (`/tmp` is a link to the first;
+/// `/private/var/tmp` is world-writable and kept across restarts).
+const MAP_DENIED_READS: [&str; 4] = ["/Users", "/Volumes", "/private/tmp", "/private/var/tmp"];
 
 /// What the project map's compiler may touch (docs/PROJECT-MAP-DESIGN.md
 /// §3.9).
@@ -289,9 +290,10 @@ pub(crate) struct MapSpec<'a> {
 
 /// The map profile, its own renderer (the tool profile always adds the
 /// temporary folders to its writable list): network denied; reads of
-/// `/Users`, `/Volumes`, `/private/tmp` and the home folder denied except
-/// the project root, the fresh folder and the work folder (the compiler's
-/// working folder, empty), with metadata only on the folders above them;
+/// `/Users`, `/Volumes`, `/private/tmp`, `/private/var/tmp` and the home
+/// folder denied except the project root, the fresh folder and the work
+/// folder (the compiler's working folder, empty), with metadata only on
+/// the folders above them;
 /// `/private/var/folders` stays readable (the system's per-user caches);
 /// the cargo and rustup homes denied wherever they are (a custom
 /// `CARGO_HOME` holds credentials; `cc` needs neither); writes only to the
@@ -904,7 +906,7 @@ mod tests {
 (version 1)
 (allow default)
 (deny network*)
-(deny file-read* (subpath \"/Users\") (subpath \"/Volumes\") (subpath \"/private/tmp\"))
+(deny file-read* (subpath \"/Users\") (subpath \"/Volumes\") (subpath \"/private/tmp\") (subpath \"/private/var/tmp\"))
 (allow file-read-metadata (literal \"/Users\") (literal \"/Users/u\") (literal \"/Users/u/Library\") (literal \"/Users/u/Library/Caches\") (literal \"/Users/u/Library/Caches/ruharness\") (literal \"/Users/u/code\"))
 (allow file-read* (subpath \"/Users/u/code/lz4\") (subpath \"/private/var/folders/xy/T/ruharness-map-1\") (subpath \"/Users/u/Library/Caches/ruharness/work\"))
 (deny file-read* (subpath \"/Users/u/.cargo\") (subpath \"/Users/u/.rustup\"))
@@ -933,7 +935,7 @@ mod tests {
         assert!(
             text.contains(
                 "(deny file-read* (subpath \"/Users\") (subpath \"/Volumes\") \
-                 (subpath \"/private/tmp\") (subpath \"/home/u\"))\n"
+                 (subpath \"/private/tmp\") (subpath \"/private/var/tmp\") (subpath \"/home/u\"))\n"
             ),
             "{text}"
         );

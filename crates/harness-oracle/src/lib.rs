@@ -78,6 +78,7 @@ mod confine;
 mod exec;
 mod featuremap;
 mod features;
+mod include_rule;
 mod objsyms;
 mod perf;
 mod probebuild;
@@ -224,6 +225,10 @@ pub fn compute_inputs(
 /// flags, so `-ffp-contract=off`, the level and `-w` always come first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct FileArgs {
+    /// A folder every quoted include searches before the configuration's
+    /// folders (`-iquote`, placed before the configuration's flags): a
+    /// mutant's copy searches its original's folder as the original does.
+    pub quote_first: Option<PathBuf>,
     /// The configuration's flags, in order: paths absolute, `-O` left out
     /// (recorded, never applied — every compile keeps its own level).
     pub flags: Vec<String>,
@@ -235,18 +240,30 @@ impl FileArgs {
     /// No flags, these folders (the boundary check's own runtime, tests).
     pub(crate) fn includes(includes: Vec<PathBuf>) -> FileArgs {
         FileArgs {
+            quote_first: None,
             flags: Vec::new(),
             includes,
         }
     }
 
-    /// The same flags, `dir` searched first.
+    /// The same flags, `dir` searched first among the `-I` folders.
     pub(crate) fn with_first(&self, dir: PathBuf) -> FileArgs {
         FileArgs {
+            quote_first: self.quote_first.clone(),
             flags: self.flags.clone(),
             includes: std::iter::once(dir)
                 .chain(self.includes.iter().cloned())
                 .collect(),
+        }
+    }
+
+    /// The same arguments, `dir` searched by every quoted include before
+    /// the configuration's folders: the compiler's own-folder rule for a
+    /// copy that lies elsewhere (a mutant in `dv/mut-N/`).
+    pub(crate) fn with_quote_first(&self, dir: PathBuf) -> FileArgs {
+        FileArgs {
+            quote_first: Some(dir),
+            ..self.clone()
         }
     }
 }
@@ -463,6 +480,7 @@ impl Base {
     /// configuration flag that reaches a link), no folder.
     pub(crate) fn link_file_args(&self) -> FileArgs {
         FileArgs {
+            quote_first: None,
             flags: self
                 .flags
                 .iter()
@@ -489,6 +507,7 @@ impl Base {
             )),
             Layout::FileList { files } => match files.iter().find(|l| l.path == file) {
                 Some(listed) => Ok(FileArgs {
+                    quote_first: None,
                     flags: self.flags()?,
                     includes: listed.includes.clone(),
                 }),
@@ -524,6 +543,7 @@ impl Base {
                     }
                 }
                 Ok(FileArgs {
+                    quote_first: None,
                     flags: self.flags()?,
                     includes,
                 })
@@ -531,12 +551,17 @@ impl Base {
         }
     }
 
-    /// The unit's headers (the `.h` files of its include closure), canonical:
-    /// inside the source dir for the folder form; inside the root and never
-    /// under `migration/` for a file list.
-    pub(crate) fn unit_headers(&self, facts: &Facts, unit: &Unit) -> Result<Vec<PathBuf>, Error> {
-        facts
-            .include_closure(&unit.files)
+    /// The unit's headers (the `.h` files of its include closure,
+    /// [`include_rule::closure`]), canonical: inside the source dir for the
+    /// folder form; inside the root and never under `migration/` for a file
+    /// list.
+    pub(crate) fn unit_headers(
+        &self,
+        target: &TargetContext,
+        facts: &Facts,
+        unit: &Unit,
+    ) -> Result<Vec<PathBuf>, Error> {
+        include_rule::closure(target, facts, &unit.files)
             .into_iter()
             .filter(|p| p.ends_with(".h"))
             .map(|rel| match &self.layout {
@@ -591,7 +616,9 @@ pub(crate) fn project_path(
 /// The driver's include folders for a file-list target, project-relative
 /// and in order (docs/PROJECT-MAP-DESIGN.md §3.7): for each `.c` of the
 /// unit, its own folder, then its listed folders; then the folder of every
-/// header of the unit's include closure; without repeats. `.` is the root.
+/// header of the unit's include closure ([`include_rule::closure`]: the
+/// configuration's folders and `-include` files followed too); without
+/// repeats. `.` is the root.
 /// Lexical — the spelling the facts use; [`Base::unit_args`] resolves them.
 /// Empty for a folder-form target.
 pub(crate) fn driver_folders(target: &TargetContext, facts: &Facts, unit: &Unit) -> Vec<String> {
@@ -619,8 +646,7 @@ pub(crate) fn driver_folders(target: &TargetContext, facts: &Facts, unit: &Unit)
             }
         }
     }
-    for header in facts
-        .include_closure(&unit.files)
+    for header in include_rule::closure(target, facts, &unit.files)
         .into_iter()
         .filter(|p| p.ends_with(".h"))
     {
@@ -893,6 +919,12 @@ impl CAbiDifferential {
             format!("sandbox: {}", sandbox_mode()),
             CFLAGS_TOOLCHAIN_ENTRY.to_string(),
         ];
+        // A file-list target's configuration (its flags and each file's
+        // folders): `state status` reads a change as a stale verdict. The
+        // folder form records none, so its verdicts keep their bytes.
+        if let Some(entry) = harness_core::status::configuration_entry(target) {
+            inputs.toolchain.push(entry);
+        }
         if boundary {
             inputs.toolchain.push(format!(
                 "{}{}",
@@ -1079,7 +1111,7 @@ impl CAbiDifferential {
         // 8. Boundary (design B, opt-in): last, and only when everything
         // above passed, so recorded red turns keep their evidence.
         if boundary && checks.iter().all(|c| c.passed) {
-            let (headers, unit_c) = boundary_inputs(&prep, &facts, unit)?;
+            let (headers, unit_c) = boundary_inputs(target, &prep, &facts, unit)?;
             checks.push(
                 boundary_run::run(&boundary_run::BoundaryCtx {
                     runner: &runner,
@@ -1183,7 +1215,7 @@ impl CAbiDifferential {
             &crate_target_dir,
         )?;
         let unit_args = prep.base.unit_args(target, &facts, unit)?;
-        let (headers, unit_c) = boundary_inputs(&prep, &facts, unit)?;
+        let (headers, unit_c) = boundary_inputs(target, &prep, &facts, unit)?;
         boundary_run::run(&boundary_run::BoundaryCtx {
             runner: &runner,
             confined: &confined,
@@ -1453,12 +1485,13 @@ fn run_failure_check(
 /// entry point so both see the same files): the unit's headers (its include
 /// closure, [`Base::unit_headers`]) and its `.c` files (inside the root).
 fn boundary_inputs(
+    target: &TargetContext,
     prep: &Prepared,
     facts: &Facts,
     unit: &Unit,
 ) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Error> {
     let root = &prep.base.root;
-    let headers = prep.base.unit_headers(facts, unit)?;
+    let headers = prep.base.unit_headers(target, facts, unit)?;
     let unit_c = unit
         .files
         .iter()
@@ -1698,10 +1731,12 @@ pub(crate) fn load_facts(target: &TargetContext) -> Result<Facts, Error> {
 }
 
 /// The quoted-include names a driver may use for the unit's own headers:
-/// every header of the unit's include closure as its repo-relative path, its
-/// basename, and its path relative to each folder the driver is compiled
-/// with — `source_dir` and each include dir for the folder form, the
-/// driver's folders ([`driver_folders`]) for a file list.
+/// every header of the unit's include closure ([`include_rule::closure`])
+/// as its repo-relative path, its basename, and its path relative to each
+/// folder the driver is compiled with — `source_dir` and each include dir
+/// for the folder form; for a file list, the configuration's `-iquote`,
+/// `-I` and `-isystem` folders and the driver's folders
+/// ([`driver_folders`]).
 pub(crate) fn unit_header_names(target: &TargetContext, facts: &Facts, unit: &Unit) -> Vec<String> {
     let clean = |p: &str| {
         p.split('/')
@@ -1714,15 +1749,22 @@ pub(crate) fn unit_header_names(target: &TargetContext, facts: &Facts, unit: &Un
             .chain(folder.include_dirs.iter().map(String::as_str))
             .map(clean)
             .collect(),
-        Form::FileList(_) => driver_folders(target, facts, unit)
-            .iter()
-            .map(|d| clean(d))
-            .filter(|d| !d.is_empty())
-            .collect(),
+        Form::FileList(list) => {
+            let config = include_rule::ConfigFolders::of(&list.configuration.flags);
+            config
+                .iquote
+                .iter()
+                .chain(&config.angled)
+                .chain(&config.system)
+                .cloned()
+                .chain(driver_folders(target, facts, unit))
+                .map(|d| clean(&d))
+                .filter(|d| !d.is_empty())
+                .collect()
+        }
     };
     let mut names = std::collections::BTreeSet::new();
-    for header in facts
-        .include_closure(&unit.files)
+    for header in include_rule::closure(target, facts, &unit.files)
         .into_iter()
         .filter(|p| p.ends_with(".h"))
     {
@@ -1744,7 +1786,8 @@ pub(crate) fn unit_header_names(target: &TargetContext, facts: &Facts, unit: &Un
 /// are uniform — the judge's own flags, then the configuration's, then the
 /// file's folders ([`Base::file_args`]):
 /// `cc -ffp-contract=off <cflags> [-O2 unless cflags sets -O*] [-w]
-/// <configuration flags…> -I<dir>… -o <out> <inputs…> <libs…>`.
+/// [-iquote<mutant's original folder>] <configuration flags…> -I<dir>…
+/// -o <out> <inputs…> <libs…>`.
 ///
 /// `libs` (e.g. `-lm` from `extra_link_args`) go AFTER the inputs: linkers
 /// with `--as-needed` defaults (Ubuntu gcc) drop libraries listed before the
@@ -1773,6 +1816,9 @@ pub(crate) fn cc_argv(inv: &CcInvocation<'_>) -> Result<Vec<String>, Error> {
     }
     if inv.quiet {
         argv.push("-w".to_string());
+    }
+    if let Some(dir) = &inv.args.quote_first {
+        argv.push(format!("-iquote{}", path_str(dir)?));
     }
     argv.extend(inv.args.flags.iter().cloned());
     for dir in &inv.args.includes {
@@ -2236,6 +2282,7 @@ mod tests {
         // A configuration's flags come after the judge's and before the
         // file's folders.
         let configured = FileArgs {
+            quote_first: None,
             flags: vec!["-DLAYOUT=2".to_string(), "-I/t/conf".to_string()],
             includes: vec![PathBuf::from("/t/own")],
         };
@@ -2256,6 +2303,29 @@ mod tests {
                 "-c",
                 "-O2",
                 "-w",
+                "-DLAYOUT=2",
+                "-I/t/conf",
+                "-I/t/own"
+            ]
+        );
+        // A mutant's original folder: `-iquote`, before the configuration's
+        // flags, so a quoted include finds the original's neighbour before
+        // a same-named header in a configuration folder.
+        let mutant = configured.with_quote_first(PathBuf::from("/t/orig"));
+        let argv = cc_argv(&CcInvocation {
+            args: &mutant,
+            cflags: &["-c".to_string()],
+            quiet: true,
+            out: Path::new("/t/b/d.o"),
+            inputs: &inputs,
+            libs: &[],
+        })
+        .expect("argv");
+        assert_eq!(
+            argv[4..9],
+            [
+                "-w",
+                "-iquote/t/orig",
                 "-DLAYOUT=2",
                 "-I/t/conf",
                 "-I/t/own"
@@ -2810,6 +2880,12 @@ mod tests {
         .expect("runs")
         .expect("builds");
         assert_eq!(run_stdout(&out), "34\n");
+        // The objects served their one link: no copy of them stays behind.
+        assert!(build.join("drv").is_file());
+        assert!(
+            !build.join("drv.obj").exists(),
+            "the object folder is removed"
+        );
         // The whole program's path does the same.
         let whole = build.join("whole");
         perf::build::whole_cc_into(
@@ -2948,7 +3024,7 @@ mod tests {
         )
         .expect("unit");
         let why = base
-            .unit_headers(&facts, &unit)
+            .unit_headers(&target, &facts, &unit)
             .expect_err("refused")
             .to_string();
         assert!(why.contains("under migration/"), "{why}");

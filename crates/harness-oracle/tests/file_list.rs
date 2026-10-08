@@ -141,16 +141,28 @@ impl harness_oracle::MapProgress for Quiet {
 /// the struct) is seen by the driver's builds — the C-linked driver prints
 /// what the Rust of the widened layout prints — by the driver's own
 /// compile (the shape gate), by the boundary check's wrapper, probes and
-/// unit objects, and by the whole program the features step builds. Each
-/// listed file finds `pair.h` only through its own folder.
+/// unit objects, and by the whole program the features step builds. Its
+/// `-std=c89` reaches them too, and every check stays green: the
+/// harness's own C under the configuration (the call wrapper) is C89, and
+/// the guard and tracing-probe runtimes are built without the
+/// configuration. Both listed files find `pair.h` through the one folder
+/// they share, `inc/`; that each file is compiled with its own folders is
+/// proven by the library test `a_units_files_compile_each_with_its_own_folders`.
 #[test]
 fn the_configuration_reaches_the_driver_build_and_the_boundary_check() {
     let tmp = TempDir::new("fl-verify");
-    let (target, unit) = tool(tmp.path(), "\"-DPAIR_WIDE=4\", \"-O3\"");
+    let (target, unit) = tool(tmp.path(), "\"-DPAIR_WIDE=4\", \"-O3\", \"-std=c89\"");
     let verdict = CAbiDifferential
         .verify(&target, &unit)
         .expect("oracle runs");
     assert!(verdict.green, "{}", describe(&verdict));
+    // The verdict records the configuration it was built under.
+    let entry = harness_core::status::configuration_entry(&target).expect("a file list");
+    assert!(
+        verdict.inputs.toolchain.contains(&entry),
+        "{:?}",
+        verdict.inputs.toolchain
+    );
     let names: Vec<&str> = verdict.checks.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(
         names,
@@ -218,6 +230,30 @@ fn the_configuration_reaches_the_features_maps_probed_build() {
     assert!(mirror.join("inc/pair.h").is_file());
     assert!(mirror.join("lib/pair.c").is_file());
     assert!(!mirror.join("migration").exists());
+}
+
+/// The mirror reads each file as a regular file with a size cap: a
+/// configuration `-include` that names a FIFO is refused by name, never
+/// opened for a read that would wait forever for a writer.
+#[test]
+fn a_forced_include_that_is_a_fifo_is_refused_never_read() {
+    let tmp = TempDir::new("fl-fifo");
+    let (target, _) = tool(tmp.path(), "\"-DPAIR_WIDE=4\", \"-includeinc/fifo.h\"");
+    let made = std::process::Command::new("mkfifo")
+        .arg(tmp.path().join("inc/fifo.h"))
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success());
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid features")
+    };
+    let why = harness_oracle::map_features(&target, &facts(), &features, &digest, &mut Quiet)
+        .expect_err("refused")
+        .to_string();
+    assert!(
+        why.contains("fifo.h") && why.contains("not a regular file"),
+        "{why}"
+    );
 }
 
 /// Confinement, for the mirror: a listed file under `migration/` (reached
