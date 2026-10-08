@@ -116,17 +116,22 @@ change at the switch points below.
    exists; verdicts made elsewhere marked by adoption time; each unit's hashed closure is the
    resolver's with `-idirafter` in the grammar; the mirror's 64 MiB cap, `[project]` refused, the
    reader's quadratic `<` rule fixed, the five preprocessor forms; "once per checkout").
-   **RUNNING NOW (launched 2026-10-08 from 0552d67, three Opus builders at medium):** fix pass D
-   the map (harness-oracle projectmap/*, project.rs, the lock, the design/SCHEMAS sentences), fix
-   pass E the person's side round two (adopt.rs, features `invalid`, perf words, observer,
-   runtime_view, status's mark, harness-cli except project.rs, harness-tui, harness-mcp, the hint
-   strings in harness-llm/oracle, cockpit-drive, SCHEMAS' adoption paragraphs), fix pass F the
-   residuals (sources.rs's resolver closure, the grammar's `-idirafter`, planner/status hashes,
-   harness-scan, harness-detect, trajectory's scope, include_rule.rs, the mirror's cap,
-   unit_crate.rs). Merge each when green by ownership (D's two adopt.rs lines vs E's adopt.rs;
-   E's hint strings vs F's logic in trajectory.rs/lib.rs), full gates, `bench check --suite
-   targets/tractor --replay --jobs 6 --adopt`, DECISIONS; a short check of the three passes if
-   usage allows; then (d), (e), (f), (g).
+   **Fix passes D, E and F are MERGED** (6dd80d6; one conflict in adopt.rs, both sides kept;
+   the session also made the map's path-prefix table the grammar's so a stated `-idirafter`
+   compiles and settles its include, with a test). At the time of writing the whole-workspace
+   tests run on 6dd80d6; then push, fast-forward main, `bench check --suite targets/tractor
+   --replay --jobs 6 --adopt`, DECISIONS. Small leftovers named by the builders, for the next
+   pass: `mapfile::gitignore_text`'s first line says `project map` wrote it though any command's
+   first ledger does now; the workloads blocker says "or Edit the workloads file" (the cockpit's
+   button name) on the command line; `perf/words.rs` names `migration/build/perf-logs/…` for a
+   tool; decision 1's "reuse the map's objects" was not done (the link check compiles its own);
+   status builds a resolver per unit without caching reads (slow on tools with many units);
+   `attempts::current_binding`, driver validation, `perf/measure.rs`, bench, promote, gen-driver
+   and `read_sources` still hash the facts' closure (safe direction: an attempt shows unbound);
+   ~70 recursive tree walks remain in harness-scan's lint/interface/mutate; a missing header
+   leaves no `-MD` list, so that failure cannot drop outside names (§6 says so); `Adoption::
+   describe` prints "nothing to adopt" when `--adopt` states a shipped config. Then (d), (e),
+   (f), (g).
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
    toolchain line — folder-form `inputs` stay untouched.
