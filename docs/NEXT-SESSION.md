@@ -7,6 +7,19 @@ inherits the main session's model, so set it on each call; hand-off answers by p
 subagents with `model: "opus"` and `--model claude-opus-5-5`. Ask the person before giving any
 handed-off work Fable. Fable's own job: triage, design judgement, the shape of each workflow.
 
+**Effort** (the person, 2026-10-07). A session cannot change its own effort — only the person can,
+in the app — so the session STOPS and asks at each switch point, in one plain line ("Please set my
+effort to high now: the design review's findings are back and the judging starts"), and waits:
+- **Start on medium**: triage of the check round, fix pass 3 and its check, Part 11, merges.
+- **Ask for high** when the map design review's findings have come back — before triaging them and
+  writing the revision (step 3 below).
+- **Ask for medium again** once the revision is written and its check has been launched.
+- Never ask for xhigh or max without saying why the work needs it.
+Handed-off agents copy the main session's effort unless it is set on each call: Workflow
+`agent()` calls get `effort: 'medium'` for mechanical stages (fixers, mutation runners) and
+`effort: 'high'` for checkers, verifiers and judges; Agent subagents answering hand-offs get
+`effort: "medium"`.
+
 Read first: DECISIONS.md's last three entries (2026-10-07), then docs/NEXT-WEEK-PLAN.md "Status
 2026-10-07". Check `get_usage` before each large workflow and say roughly what it costs. Plain words,
 no review codes.
