@@ -54,14 +54,26 @@ change at the switch points below.
    crates/harness-oracle/src/projectmap.rs, API `map_folder(root, folder)`). Not yet: set-aside
    counts per folder, the project's-own-`migration/` sentence, the 30-minute budget and the
    200 000-name cap (step b). `bench check --replay --adopt` after it: 198 reproduce, 2 expected
-   divergences, 0 problems, no regression (DECISIONS 2026-10-08, step a). **Step (c) is BEING BUILT**: part 1 (the layout, `harness.toml` v2 read version-first
-   with the flag grammar at load, `--tool` on every command, the lookup order, `sync-runtime` per
-   tool) on branch `worktree-agent-a9a2d5f674619afb3`; parts 2 (harness-oracle: `Base`'s
-   configuration and per-file folders in every compile, multi-source builds on perf's path, the
-   driver's folders, verify's driver-shape check to objsyms, the features mirror) and 3 (the
-   scanner's file-list read, detect's walk, the v2 digest and staleness, confinement in every reader)
-   follow once part 1's types are merged; then (b), (d), (e), (f), (g); then the review of (a)+(c) together, fix passes,
-   mutation checks.
+   divergences, 0 problems, no regression (DECISIONS 2026-10-08, step a). **Step (c), part 1 is MERGED on main** (247e5bc, 1 398 tests green): the layout
+   (ledger beside the root, mapped tools under `migration/tools/<id>/`), `harness.toml` v2 read
+   version-first with the file-list form (`Form::{Folder, FileList}`, `TargetFile {path,
+   include_dirs}`, `Configuration {name, from, flags}` checked by the flag grammar at load,
+   `MapStamp`, `Pick`), `--tool <id>` on every command with the lookup order
+   (`config::find_target`), `TargetContext::open(root, tool)` with `ledger`, `Ledger::of(&ctx)`,
+   `sync-runtime` one block per tool, SCHEMAS' "Mapped tools". Commands that read sources refuse a
+   file-list target in one sentence (`TargetSection::folder(what)`) until parts 2 and 3 land.
+   **Parts 2 and 3 are BEING BUILT** (launched 2026-10-08 from 247e5bc, two Opus builders at
+   medium effort in their own worktrees): part 2 (harness-oracle: `Base` carries the
+   configuration's flags and a per-file include table, every compile asks it; multi-source builds
+   on perf's `compile_objects`/`link_side` generalized; the driver's folders and
+   `unit_header_names`; verify's driver-shape check on `objsyms` with the identifier filter; the
+   features mirror and the boundary check confined) and part 3 (the scanner's file-list read with
+   walk errors and non-UTF-8 as facts and the ledger pruned; harness-detect on the confined walk;
+   the v2 program digest and staleness with the v1 record untouched; `read_sources` confined).
+   Merge each when its report is green, by file ownership (part 2 owns harness-oracle; part 3 owns
+   harness-scan, harness-detect, harness-core features.rs/planner.rs, harness-llm trajectory.rs),
+   run the full gates and `bench check --suite targets/tractor --replay --adopt`; then (b), (d),
+   (e), (f), (g); then the review of (a)+(c) together, fix passes, mutation checks.
 2. The briefing's M5 after the map's first accepted tool (DECISIONS 2026-10-08).
 
 **Environment:** as the previous kickoff says (below). Test downloads only in
