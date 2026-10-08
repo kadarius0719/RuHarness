@@ -29,8 +29,12 @@ change at the switch points below.
   oracle; a `@file` argument from `compile_commands.json` lets a download add compiler options. The
   verifiers corrected the spike's counts (`lib/lz4.c` in 29 of 33 closures; no benchmark case has a
   `main`).
-- Part 11 of the testing guide on liblzg: not started (needs a quiet machine; the practice worktree
-  `.claude/worktrees/practice-lzg` as described in the previous kickoff below).
+- **Part 11 of the testing guide on liblzg: DONE** (Steps 11.3–11.6 and the checkpoint, headless
+  cockpit drive; the practice branch `practice-lzg` holds the committed rows, local only). The guide
+  now uses a 900-copy input (the `fast` workload was too short to time with 300) and the real
+  counts and times. Two small candidates seen, not fixed: the Measure dialogs' estimates read high
+  (about 3 min for a run that took 87 s; 83 s for the program-as-it-stands run, about half the
+  work); the help's Speed section leaves out "Measure the program as it stands".
 
 **The work, in order:**
 1. `bench check --replay` once the person has copied the fixtures (above).
@@ -40,8 +44,7 @@ change at the switch points below.
    say what is dropped and why), write revision 1 of docs/PROJECT-MAP-DESIGN.md, and CHECK THE
    REVISION (Opus checkers at high effort) before any building. Ask for medium again once the check
    is launched.
-3. Part 11 on liblzg (quiet machine; medium).
-4. Then weigh the briefing's M5 against building the map.
+3. Then weigh the briefing's M5 against building the map.
 
 **Environment:** as the previous kickoff says (below). Test downloads only in
 `~/code/ruharness-test-downloads/`; nothing installed; the binaries from a worktree's
