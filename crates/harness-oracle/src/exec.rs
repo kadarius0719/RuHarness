@@ -443,7 +443,6 @@ impl Runner {
     /// [`Runner::targetless`] over `project_root` under the map profile
     /// (when this computer has a sandbox), writing only into `fresh`, which
     /// is also its tools' `TMPDIR`. Both paths canonical.
-    #[allow(dead_code)] // the map's compiles (§5 step a) are its first caller
     pub(crate) fn map(
         project_root: &Path,
         fresh: &Path,

@@ -60,9 +60,10 @@
 //! and on the differential and symbol-set checks, not on ASan/UBSan coverage.
 //!
 //! Dependency note: this crate depends on `harness-scan` (a workspace path
-//! dependency, no crates.io addition) for exactly two pure functions —
-//! `mutants` and `lint_driver` — so the tree-sitter C grammar has a single
-//! owner and the oracle never re-implements C parsing.
+//! dependency, no crates.io addition) for exactly three pure functions —
+//! `mutants`, `lint_driver` and the project map's `file_facts` — so the
+//! tree-sitter C grammar has a single owner and the oracle never
+//! re-implements C parsing.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -79,6 +80,7 @@ mod objsyms;
 mod perf;
 mod probebuild;
 mod probecopy;
+pub mod projectmap;
 mod sandbox;
 mod scrub;
 mod shape;
