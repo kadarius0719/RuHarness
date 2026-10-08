@@ -3354,6 +3354,22 @@ mod tests {
             perf_measurable(&target, &plan, &facts).expect("reads"),
             vec!["s1".to_string()]
         );
+        // The rest, each with why in the run's words (the early
+        // `--as-it-stands-only` refusal names them).
+        let interrupted = "its Accept was interrupted — Re-check it to finish or undo it";
+        assert_eq!(
+            perf_left_out(&target, &plan, &facts).expect("reads"),
+            vec![
+                ("s2".to_string(), interrupted),
+                ("s3".to_string(), interrupted),
+                ("s4".to_string(), "verify it first"),
+                ("s5".to_string(), "verify it first"),
+                (
+                    "s6".to_string(),
+                    "its replaced files changed since verify — Re-check it"
+                ),
+            ]
+        );
     }
 
     /// A request builds what it measures (§3.10, §6 *Cost*): `--unit` alone
