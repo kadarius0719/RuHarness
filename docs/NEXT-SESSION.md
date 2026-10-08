@@ -1,19 +1,55 @@
-# In progress — session ee312a (Fable, 2026-10-07), branch `claude/ruharness-resume-ee312a` (pushed)
+# Next session — kickoff (from 2026-10-08)
 
-- **Fix pass 3** (docs/reviews/2026-10-07-perf-fix3-plan.md: the triage of the check round, 28 items in
-  five areas, 7 dropped with reasons): all five areas fixed by Opus fixers in their own worktrees and
-  merged (areas A–E; one re-export conflict resolved by hand; harness-mcp's bounded-head test now
-  forges 16 rows per list, the reader's new cap). At ec78455: 1 275 tests green, fmt and clippy clean.
-  Its **scoped check is RUNNING** (ten Opus checkers at high effort: holds + mutation checks and a
-  regression hunter per area A–D, a docs checker for E, one whole-pass hunter); their reports go to
-  docs/reviews/2026-10-07-perf-fix3-check.md next, then a fix pass 4 if needed, then the merge to
-  `main` with `bench check --replay`.
-- **The project-map design review** is DONE and saved: docs/reviews/2026-10-07-project-map-design-review.md
-  (four lenses — facts, security, integration, the model step — each verified finding by finding;
-  the spike's counts corrected: `lib/lz4.c` is in 29 of 33 closures; no benchmark case has a `main`).
-  **Next: the triage and revision 1 of docs/PROJECT-MAP-DESIGN.md at HIGH effort** (the switch
-  point: the session asked the person; not yet triaged).
-- Part 11 of the testing guide on liblzg: not started (needs a quiet machine).
+Resume RuHarness on `main` (everything below merged and pushed). Models and effort as in CLAUDE.md:
+the main session may run on Fable, every hand-off on Opus; the session stops and asks for an effort
+change at the switch points below.
+
+**Where things stand (2026-10-07 evening, session ee312a, Fable):**
+- The speed work's **fix passes 3, 4 and 5 are merged**: 1 312 tests green, fmt and clippy clean.
+  Reports: docs/reviews/2026-10-07-perf-fix3-plan.md (the triage), -fix3-check.md (ten checkers,
+  86 mutants, fix pass 4's triage), -fix4-check.md (three checkers, 48 mutants, fix pass 5's triage).
+  DECISIONS' last entry says what changed in plain words and what was decided (no check round after
+  the small fix pass 5; unreadable facts stay a whole-target refusal in the cockpit and harness-mcp;
+  harness-mcp copies the 999-unit words; the own-build rule stays by location).
+- **`bench check --replay` NOT run** for these merges: the permission classifier refuses the agent's
+  `cp -cR` of the gitignored `targets/tractor/.scorer-vendor` and `.bench` (vendored third-party
+  code). The person copies them from `.claude/worktrees/rust-migration-harness-7d1c42/targets/tractor/`
+  into the worktree, then the session runs it on a quiet machine (expect 198 reproduce, 2 expected
+  divergences, 0 problems, ~29 min). Fix passes 3–5 touched perf, the cockpit, harness-mcp and the
+  results reader; nothing verify, migrate or bench read — but run it anyway, as the rule says.
+- **The project-map design review is DONE and verified**, not triaged:
+  docs/reviews/2026-10-07-project-map-design-review.md (four lenses — facts, security, integration,
+  the model step — each finding checked by its own Opus verifier, the spike rerun, `nm`/include/
+  `@file`/`#embed`/asm-label experiments reproduced). The biggest confirmed problems: angle-bracket
+  includes get no include folder (every liblzg tool fails to compile as the walk is written); the
+  link check cannot tell a wrong definer or wrong flags from right ones, and the design claims it
+  can; "inside the project" is undecided in the body while today's code ties five jobs to one folder;
+  per-file flags must reach every compile, not only the whole-program build; the ledger inside an
+  untrusted download makes its `.cargo/config.toml` and `rust-toolchain.toml` live inputs to the
+  oracle; a `@file` argument from `compile_commands.json` lets a download add compiler options. The
+  verifiers corrected the spike's counts (`lib/lz4.c` in 29 of 33 closures; no benchmark case has a
+  `main`).
+- Part 11 of the testing guide on liblzg: not started (needs a quiet machine; the practice worktree
+  `.claude/worktrees/practice-lzg` as described in the previous kickoff below).
+
+**The work, in order:**
+1. `bench check --replay` once the person has copied the fixtures (above).
+2. **The map design triage and revision 1 — ASK FOR HIGH EFFORT FIRST** ("Please set my effort to
+   high now: the map design review's findings are back and verified, and the triage and revision of
+   the design start next"). Then: triage the eight files' findings (keep what the verifier confirmed;
+   say what is dropped and why), write revision 1 of docs/PROJECT-MAP-DESIGN.md, and CHECK THE
+   REVISION (Opus checkers at high effort) before any building. Ask for medium again once the check
+   is launched.
+3. Part 11 on liblzg (quiet machine; medium).
+4. Then weigh the briefing's M5 against building the map.
+
+**Environment:** as the previous kickoff says (below). Test downloads only in
+`~/code/ruharness-test-downloads/`; nothing installed; the binaries from a worktree's
+`target/debug` on PATH. The pid/launcher tests are timing-sensitive under load: rerun one alone
+before calling it a failure (known flakes under load: `chat::tests::an_exited_leaders_pipes_are_read_first`,
+`golden_dialog_before_and_after_arming`, chat_e2e's `a_deaf_or_stopped_runtime_is_ended_on_quit`).
+
+---
 
 # Next session — kickoff (Fable, from 2026-10-07)
 
