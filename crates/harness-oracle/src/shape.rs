@@ -16,6 +16,7 @@
 //!   and the paths/basenames of the unit's include-closure headers.
 
 use crate::objsyms;
+use crate::projectmap::MAX_OBJECT_BYTES;
 use harness_core::error::Error;
 use harness_core::verdict::Check;
 use std::collections::BTreeSet;
@@ -282,15 +283,31 @@ pub(crate) struct ObjectSymbols {
     /// name a symbol with any text), shown escaped; refused by
     /// [`object_violations`].
     pub odd: BTreeSet<String>,
+    /// The object's size when it is larger than the harness reads
+    /// ([`MAX_OBJECT_BYTES`]): nothing else was read, and
+    /// [`object_violations`] refuses it.
+    pub too_large: Option<u64>,
 }
 
-/// Read the driver object `obj`'s external symbols. `nm` stays a required
-/// tool for the staticlib checks (`symbol-set`, `capabilities`), which read
-/// the Rust archive member by member, constructor sections included —
-/// `objsyms` does not report section names yet (docs/PROJECT-MAP-DESIGN.md
-/// §3.7, "The symbol readers").
+/// Read the driver object `obj`'s external symbols — never one larger than
+/// [`MAX_OBJECT_BYTES`] (a driver with a large initialized array; the map
+/// caps its objects alike), which is reported in
+/// [`ObjectSymbols::too_large`] instead. `nm` stays a required tool for the
+/// staticlib checks (`symbol-set`, `capabilities`), which read the Rust
+/// archive member by member, constructor sections included — `objsyms`
+/// does not report section names yet (docs/PROJECT-MAP-DESIGN.md §3.7, "The
+/// symbol readers").
 pub(crate) fn object_symbols(obj: &Path) -> Result<ObjectSymbols, Error> {
-    let bytes = std::fs::read(obj).map_err(|e| Error::io(obj, e))?;
+    let size = std::fs::symlink_metadata(obj)
+        .map_err(|e| Error::io(obj, e))?
+        .len();
+    if size > MAX_OBJECT_BYTES {
+        return Ok(ObjectSymbols {
+            too_large: Some(size),
+            ..ObjectSymbols::default()
+        });
+    }
+    let bytes = harness_core::ledger::read_regular(obj, MAX_OBJECT_BYTES)?;
     let read = objsyms::external(&bytes).map_err(|why| {
         Error::Invariant(format!(
             "the driver object {} could not be read: {why}",
@@ -318,6 +335,12 @@ fn symbols_of(read: &objsyms::External) -> ObjectSymbols {
             syms.defined.insert(name);
         }
     }
+    // An absolute or indirect symbol (`_absval = 42`) is a definition too.
+    for raw in &read.other {
+        if let Some(name) = name_of(raw, &mut syms) {
+            syms.defined.insert(name);
+        }
+    }
     for n in &read.needs {
         if let Some(name) = name_of(&n.name, &mut syms) {
             if n.weak {
@@ -333,6 +356,15 @@ fn symbols_of(read: &objsyms::External) -> ObjectSymbols {
 /// rule, the undefined-symbol allowlist and the no-weak rule.
 pub(crate) fn object_violations(syms: &ObjectSymbols, unit_symbols: &[String]) -> Vec<String> {
     let mut out = Vec::new();
+    if let Some(size) = syms.too_large {
+        out.push(format!(
+            "the driver object is {} MiB, larger than the {} MiB the harness reads (a large \
+             initialized array?): keep the driver's data small",
+            size.div_ceil(1 << 20),
+            MAX_OBJECT_BYTES >> 20
+        ));
+        return out;
+    }
     if !syms.odd.is_empty() {
         let odd: Vec<&str> = syms.odd.iter().map(String::as_str).collect();
         out.push(format!(
@@ -524,6 +556,33 @@ mod tests {
         );
         let syms = object_symbols(&weak).expect("reads");
         assert!(syms.weak.contains("rust_probe"), "{syms:?}");
+
+        // An absolute symbol (`nm -gU` lists `A _absval`) is a second
+        // definition, as the `nm` reading refused it.
+        let absolute = compile(
+            "absolute",
+            "int unit_f(int);\n\
+             #ifdef __APPLE__\n__asm__(\".globl _absval\\n_absval = 42\");\n\
+             #else\n__asm__(\".globl absval\\nabsval = 42\");\n#endif\n\
+             int main(void) { return unit_f(1); }\n",
+        );
+        let syms = object_symbols(&absolute).expect("reads");
+        assert!(syms.defined.contains("absval"), "{syms:?}");
+        let v = object_violations(&syms, &unit);
+        assert!(v.iter().any(|v| v.contains("absval")), "{v:?}");
+
+        // An object over the cap is refused unread.
+        let big = tmp.path().join("big.o");
+        std::fs::File::create(&big)
+            .and_then(|f| f.set_len(MAX_OBJECT_BYTES + 1))
+            .expect("sparse object");
+        let syms = object_symbols(&big).expect("sized");
+        assert_eq!(syms.too_large, Some(MAX_OBJECT_BYTES + 1));
+        let v = object_violations(&syms, &unit);
+        assert!(
+            v.len() == 1 && v[0].contains("larger than the 64 MiB"),
+            "{v:?}"
+        );
     }
 
     #[test]
@@ -544,6 +603,7 @@ mod tests {
                     weak: false,
                 },
             ],
+            other: Vec::new(),
         };
         let syms = symbols_of(&read);
         assert!(syms.undefined.contains("realpath"), "{syms:?}");
@@ -558,6 +618,7 @@ mod tests {
             undefined: set(&["printf", "unit_f", "__stack_chk_guard"]),
             weak: BTreeSet::new(),
             odd: BTreeSet::new(),
+            too_large: None,
         };
         assert!(object_violations(&clean, &unit).is_empty());
 
@@ -566,6 +627,7 @@ mod tests {
             undefined: set(&["printf", "fopen", "getenv"]),
             weak: set(&["rust_eh_personality"]),
             odd: BTreeSet::new(),
+            too_large: None,
         };
         let v = object_violations(&bad, &unit);
         assert_eq!(v.len(), 3, "{v:?}");

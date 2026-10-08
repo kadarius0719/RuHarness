@@ -34,8 +34,46 @@ pub struct VerdictReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub green: Option<bool>,
     /// Which of its inputs no longer match the tree: `source`, `rust-crate`,
-    /// `driver` (present only; empty = fresh).
+    /// `driver`, `configuration` (present only; empty = fresh).
     pub stale: Vec<String>,
+}
+
+/// The start of the toolchain entry a file-list verdict records for its
+/// configuration ([`configuration_entry`]).
+pub const CONFIGURATION_ENTRY_PREFIX: &str = "configuration: ";
+
+/// The toolchain entry a file-list target's verdict records for the
+/// configuration it was built under (the 2026-10-08 triage, decision 5):
+/// `configuration: <name> <blake3 of the flags, then each listed file with
+/// its include folders>`, all as `harness.toml` writes them. `None` for the
+/// folder form, whose verdicts carry no such entry (they stay byte for
+/// byte). A verdict whose entry differs from this one is stale: a changed
+/// `-D` can change a struct's layout under the verified Rust.
+pub fn configuration_entry(ctx: &TargetContext) -> Option<String> {
+    let crate::config::Form::FileList(list) = &ctx.config.target.form else {
+        return None;
+    };
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut field = |s: &str| {
+        bytes.extend_from_slice(s.as_bytes());
+        bytes.push(0);
+    };
+    field("flags");
+    for flag in &list.configuration.flags {
+        field(flag);
+    }
+    for file in &list.files {
+        field("file");
+        field(&file.path);
+        for dir in &file.include_dirs {
+            field(dir);
+        }
+    }
+    Some(format!(
+        "{CONFIGURATION_ENTRY_PREFIX}{} {}",
+        crate::text::safe_line(&list.configuration.name),
+        hash::bytes_hash(&bytes)
+    ))
 }
 
 /// One recorded migrate attempt, for the list a client shows.
@@ -309,6 +347,16 @@ fn compute(
                     }
                 }
             }
+            // The configuration a file-list verdict was built under: an
+            // edited flag or folder, or a verdict that predates the entry.
+            let recorded = v
+                .inputs
+                .toolchain
+                .iter()
+                .find(|t| t.starts_with(CONFIGURATION_ENTRY_PREFIX));
+            if recorded.map(String::as_str) != configuration_entry(ctx).as_deref() {
+                stale.push("configuration".into());
+            }
             VerdictReport {
                 state: VerdictState::Present,
                 green: Some(v.green),
@@ -369,6 +417,86 @@ fn compute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A target over `root` with this `harness.toml` text.
+    fn target(root: &std::path::Path, body: &str) -> TargetContext {
+        let config: crate::TargetConfig = toml::from_str(&format!("{body}\n")).expect("config");
+        TargetContext {
+            root: root.to_path_buf(),
+            ledger: root.join("migration"),
+            tool: None,
+            config,
+        }
+    }
+
+    /// A file-list verdict records its configuration; status reads an
+    /// edited flag, an edited folder, or a verdict without the entry as a
+    /// stale verdict (`configuration`). A folder-form verdict has none and
+    /// needs none.
+    #[test]
+    fn a_changed_configuration_makes_a_file_list_verdict_stale() {
+        let root = std::env::temp_dir().join(format!(
+            "ruharness-status-config-{}-{}",
+            std::process::id(),
+            crate::hash::random_hex(4)
+        ));
+        std::fs::create_dir_all(root.join("lib")).expect("dir");
+        std::fs::write(root.join("lib/a.c"), "int a;\n").expect("a.c");
+        let files = |dirs: &str, flags: &str| {
+            format!(
+                "schema_version = 2\n[target]\nname = \"t\"\n\
+                 files = [{{ path = \"lib/a.c\", include_dirs = [{dirs}] }}]\n\
+                 configuration = {{ name = \"make\", from = \"stated\", flags = [{flags}] }}"
+            )
+        };
+        let built = target(&root, &files("\"lib\"", "\"-DW=4\""));
+        let entry = configuration_entry(&built).expect("a file list has one");
+        assert!(entry.starts_with("configuration: make blake3:"), "{entry}");
+        let ledger = Ledger::of(&built);
+        let unit: Unit = toml::from_str(
+            "id = \"u\"\nstatus = \"pending\"\nfiles = [\"lib/a.c\"]\nsymbols = [\"a\"]\n",
+        )
+        .expect("unit");
+        let facts = crate::Facts::default();
+        let store = |toolchain: Vec<String>| {
+            let inputs = crate::verdict::VerdictInputs {
+                toolchain,
+                ..Default::default()
+            };
+            Verdict::new("u", inputs, Vec::new())
+                .store(&ledger.verdict_latest_path("u"))
+                .expect("stored");
+        };
+        let stale = |ctx: &TargetContext| -> Vec<String> {
+            compute(ctx, &ledger, &facts, &unit, None)
+                .expect("report")
+                .verdict
+                .stale
+        };
+        std::fs::create_dir_all(ledger.unit_dir("u")).expect("unit dir");
+        store(vec!["cflags: -ffp-contract=off".into(), entry.clone()]);
+        assert!(!stale(&built).contains(&"configuration".to_string()));
+        for changed in [
+            files("\"lib\"", "\"-DW=8\""),
+            files("\"lib\", \"inc\"", "\"-DW=4\""),
+        ] {
+            assert!(
+                stale(&target(&root, &changed)).contains(&"configuration".to_string()),
+                "{changed}"
+            );
+        }
+        // A file-list verdict from before the entry.
+        store(vec!["cflags: -ffp-contract=off".into()]);
+        assert!(stale(&built).contains(&"configuration".to_string()));
+        // The folder form: no entry recorded, none expected.
+        let folder = target(
+            &root,
+            "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"lib\"",
+        );
+        assert_eq!(configuration_entry(&folder), None);
+        assert!(!stale(&folder).contains(&"configuration".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn report(state: VerdictState, green: Option<bool>, stale: &[&str]) -> UnitReport {
         UnitReport {

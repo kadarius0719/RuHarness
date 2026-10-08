@@ -12,15 +12,24 @@ use std::path::Path;
 /// Finder's folder notes: ignored wherever they appear.
 const DS_STORE: &str = ".DS_Store";
 
-/// Top-level manifest tables a unit crate may not hold: each makes cargo
-/// fetch, build or run code beyond the unit's own sources.
-const REFUSED_TABLES: [&str; 5] = [
+/// Top-level manifest keys a unit crate may not hold: each makes cargo
+/// fetch, build or run code beyond the unit's own sources (cargo reads the
+/// underscore spellings as the dashed ones), or, for `cargo-features`,
+/// switches on unstable manifest behaviour on a nightly toolchain.
+const REFUSED_TABLES: [&str; 8] = [
     "dependencies",
     "dev-dependencies",
+    "dev_dependencies",
     "build-dependencies",
+    "build_dependencies",
     "patch",
     "target",
+    "cargo-features",
 ];
+
+/// The cache file the symbol-set baseline crate keeps beside its manifest
+/// ([`crate::symbols`]).
+pub(crate) const BASELINE_CACHE: &str = "symbols.txt";
 
 /// Refuse the unit crate at `crate_dir` (canonical) unless the folder holds
 /// only `Cargo.toml`, an optional `Cargo.lock`, `src/*.rs` and the
@@ -28,6 +37,18 @@ const REFUSED_TABLES: [&str; 5] = [
 /// manifest passes [`manifest_problem`]. `unit` names the unit in the
 /// refusal. Reads the folder; never runs anything.
 pub(crate) fn check_unit_crate(unit: &str, crate_dir: &Path) -> Result<(), Error> {
+    check_crate(unit, crate_dir, &[])
+}
+
+/// [`check_unit_crate`] for the harness's own symbol-set baseline crate
+/// (`<build>/symbol-baseline/<strategy>/`), which also keeps its cache file
+/// ([`BASELINE_CACHE`]): it lies in the target's ledger, so a download can
+/// plant a `build.rs` or a manifest there as in any unit crate.
+pub(crate) fn check_baseline_crate(crate_dir: &Path) -> Result<(), Error> {
+    check_crate(crate::symbols::BASELINE_DIR, crate_dir, &[BASELINE_CACHE])
+}
+
+fn check_crate(unit: &str, crate_dir: &Path, also: &[&str]) -> Result<(), Error> {
     let refuse = |what: String| {
         Error::InvalidPlan(format!(
             "unit `{unit}`: its crate folder {} {what}; a unit crate holds only Cargo.toml, \
@@ -40,6 +61,7 @@ pub(crate) fn check_unit_crate(unit: &str, crate_dir: &Path) -> Result<(), Error
             (DS_STORE, _) => {}
             ("Cargo.toml" | "Cargo.lock", Kind::File) => {}
             ("target" | "src", Kind::Dir) => {}
+            (other, Kind::File) if also.contains(&other) => {}
             (_, Kind::Link) => return Err(refuse(format!("holds `{name}`, a link"))),
             _ => return Err(refuse(format!("holds `{name}`"))),
         }
@@ -109,8 +131,11 @@ fn entries(dir: &Path) -> Result<Vec<(String, Kind)>, Error> {
 /// Why a unit crate's manifest `text` is refused, or `None`: it must parse,
 /// and hold no `build` key but `build = false` (the harness's own manifest
 /// says so), no `links` or `workspace` key in `[package]`, no
-/// `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`,
-/// `[patch]` or `[target.*]` table, and a `[workspace]`, if any, empty.
+/// `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]` (either
+/// spelling), `[patch]` or `[target.*]` table, no `cargo-features`, no
+/// `path` in `[lib]` or any `[[bin]]` (a source outside the crate's
+/// digest), and an empty `[workspace]` — without one cargo searches the
+/// folders above for a workspace root, whose profile would then apply.
 /// zopfli's hand-written crate and the benchmark's crates (an earlier
 /// harness manifest) pass.
 pub(crate) fn manifest_problem(text: &str) -> Option<String> {
@@ -131,11 +156,33 @@ pub(crate) fn manifest_problem(text: &str) -> Option<String> {
     }
     for key in REFUSED_TABLES {
         if table.contains_key(key) {
-            return Some(format!("holds `[{key}]`"));
+            return Some(if key == "cargo-features" {
+                "holds `cargo-features`".into()
+            } else {
+                format!("holds `[{key}]`")
+            });
+        }
+    }
+    if table
+        .get("lib")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|lib| lib.contains_key("path"))
+    {
+        return Some("holds `lib.path`".into());
+    }
+    if let Some(bins) = table.get("bin") {
+        let has_path = match bins.as_array() {
+            Some(bins) => bins
+                .iter()
+                .any(|b| b.as_table().is_none_or(|t| t.contains_key("path"))),
+            None => true,
+        };
+        if has_path {
+            return Some("holds a `[[bin]]` with a `path`".into());
         }
     }
     match table.get("workspace") {
-        None => None,
+        None => Some("has no `[workspace]` (an empty one keeps cargo inside the crate)".into()),
         Some(toml::Value::Table(t)) if t.is_empty() => None,
         Some(_) => Some("holds a `[workspace]` that is not empty".into()),
     }
@@ -244,6 +291,15 @@ mod tests {
                 "\n[target.'cfg(unix)'.dependencies]\nx = \"1\"\n",
                 "`[target]`",
             ),
+            ("\n[dev_dependencies]\nx = \"1\"\n", "`[dev_dependencies]`"),
+            (
+                "\n[build_dependencies]\nx = \"1\"\n",
+                "`[build_dependencies]`",
+            ),
+            (
+                "\n[[bin]]\nname = \"b\"\npath = \"../../x.rs\"\n",
+                "`[[bin]]`",
+            ),
         ] {
             let tmp = TempDir::new("unit-crate-manifest");
             let dir = harness_crate(&tmp);
@@ -270,6 +326,27 @@ mod tests {
                 manifest_problem(&text)
             );
         }
+        // A source outside the crate, unstable manifest features, and no
+        // `[workspace]` at all (cargo would look above for one).
+        let lib_path = HARNESS_MANIFEST.replace("[lib]\n", "[lib]\npath = \"../../x.rs\"\n");
+        assert_eq!(
+            manifest_problem(&lib_path).as_deref(),
+            Some("holds `lib.path`")
+        );
+        let features = format!("cargo-features = [\"edition2024\"]\n{HARNESS_MANIFEST}");
+        assert_eq!(
+            manifest_problem(&features).as_deref(),
+            Some("holds `cargo-features`")
+        );
+        let no_workspace = HARNESS_MANIFEST.replace("\n[workspace]\n", "\n");
+        assert!(
+            manifest_problem(&no_workspace).is_some_and(|w| w.contains("no `[workspace]`")),
+            "{:?}",
+            manifest_problem(&no_workspace)
+        );
+        // A `[[bin]]` without a path is not refused by this rule.
+        let bin = format!("{HARNESS_MANIFEST}\n[[bin]]\nname = \"b\"\n");
+        assert_eq!(manifest_problem(&bin), None);
         let members =
             HARNESS_MANIFEST.replace("[workspace]\n", "[workspace]\nmembers = [\"..\"]\n");
         assert_eq!(

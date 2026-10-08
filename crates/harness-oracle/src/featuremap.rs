@@ -19,6 +19,7 @@ use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::features::{self, FeatureMap, Features, MapInputs, ScenarioRecord};
 use harness_core::ledger::Ledger;
+use harness_core::sources::MAX_SOURCE_BYTES;
 use harness_core::walk;
 use harness_core::Facts;
 use std::collections::BTreeMap;
@@ -202,7 +203,7 @@ fn map_inner(
     let index = PairIndex::from_facts(facts);
     let mirror = build.join("mirror");
     let mut probe = Probe::new(gcc);
-    let times = write_mirror(&base, facts, &index, &mirror, &mut probe)?;
+    let times = write_mirror(target, &base, facts, &index, &mirror, &mut probe)?;
     // What the scratch copy holds, in the refusals below.
     let copied_what = match base.source_dir() {
         Some(_) => "source_dir",
@@ -230,6 +231,7 @@ fn map_inner(
         .iter()
         .map(|a| -> Result<FileArgs, Error> {
             Ok(FileArgs {
+                quote_first: None,
                 flags: copy_flags.clone(),
                 includes: a
                     .includes
@@ -1195,6 +1197,7 @@ fn make_prerequisites(rules: &str) -> Vec<String> {
 /// descended: its files are copied once, under their real paths (the walk's
 /// aliases are not copied). Returns the unwatched pairs.
 fn write_mirror(
+    target: &TargetContext,
     base: &Base,
     facts: &Facts,
     index: &PairIndex,
@@ -1204,7 +1207,7 @@ fn write_mirror(
     let source_dir = match &base.layout {
         Layout::Folder { source_dir, .. } => source_dir,
         Layout::FileList { files } => {
-            return write_mirror_files(base, facts, index, mirror, probe, files)
+            return write_mirror_files(target, base, facts, index, mirror, probe, files)
         }
     };
     let skipped_dirs = [base.root.join("migration")];
@@ -1275,13 +1278,17 @@ fn write_mirror(
 }
 
 /// [`write_mirror`] for a file-list target: the listed files and every
-/// header they reach (the facts' include closure), and every file the
-/// configuration `-include`s, each copied at its project-relative path — and
-/// each inside the root, never under `migration/` (any tool's ledger, the
-/// map) and not reached through a link: nothing the harness or a model
-/// wrote reaches the copy as the project's C (docs/PROJECT-MAP-DESIGN.md
-/// §3.7, "Confinement").
+/// header they reach (the include rule's closure, [`crate::include_rule`]:
+/// the configuration's folders and `-include` files followed too), and
+/// every file the configuration `-include`s, each copied at its
+/// project-relative path — and each inside the root, never under
+/// `migration/` (any tool's ledger, the map) and not reached through a
+/// link: nothing the harness or a model wrote reaches the copy as the
+/// project's C (docs/PROJECT-MAP-DESIGN.md §3.7, "Confinement"). Each is
+/// read as a regular file of at most [`MAX_SOURCE_BYTES`] (a FIFO is
+/// refused, never opened for a blocking read).
 fn write_mirror_files(
+    target: &TargetContext,
     base: &Base,
     facts: &Facts,
     index: &PairIndex,
@@ -1291,7 +1298,9 @@ fn write_mirror_files(
 ) -> Result<Vec<(PathBuf, std::time::SystemTime)>, Error> {
     let listed: Vec<String> = files.iter().map(|l| l.rel.clone()).collect();
     let mut copied: std::collections::BTreeSet<String> =
-        facts.include_closure(&listed).into_iter().collect();
+        crate::include_rule::closure(target, facts, &listed)
+            .into_iter()
+            .collect();
     copied.extend(listed);
     if copied.len() > MIRROR_MAX_FILES {
         return Err(Error::Invariant(format!(
@@ -1335,7 +1344,12 @@ fn write_mirror_files(
     let mut total: u64 = 0;
     let mut times: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
     for (rel, path) in &paths {
-        let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
+        let bytes = harness_core::ledger::read_regular(path, MAX_SOURCE_BYTES).map_err(|e| {
+            Error::Invariant(format!(
+                "the features map copies only regular files of at most {} MiB: {e}",
+                MAX_SOURCE_BYTES / (1024 * 1024)
+            ))
+        })?;
         total += bytes.len() as u64;
         if total > MIRROR_MAX_BYTES {
             return Err(Error::Invariant(format!(

@@ -211,7 +211,7 @@ pub(crate) fn whole_cc_into(
 /// into `<out>.obj/` with the arguments `args_of` gives it, then one link
 /// of the inputs in their order — objects in their sources' places, the
 /// other inputs (staticlibs, objects built before) as they are — with
-/// `link_args` after them.
+/// `link_args` after them. `<out>.obj/` is removed once the link succeeds.
 pub(crate) fn build_program(
     compile: &Compile<'_>,
     base: &Base,
@@ -233,12 +233,12 @@ pub(crate) fn build_program(
     for input in inputs.iter().filter(|p| is_c_source(p)) {
         sources.push((input.clone(), args_of(input)?));
     }
-    let objects = if sources.is_empty() {
-        Vec::new()
+    let (objects, obj_dir) = if sources.is_empty() {
+        (Vec::new(), None)
     } else {
         let obj_dir = sub_folder(parent, &format!("{name}.obj"))?;
         match compile_objects_with(compile, &sources, &obj_dir)? {
-            Ok(objects) => objects,
+            Ok(objects) => (objects, Some(obj_dir)),
             Err(words) => return Ok(Err(words)),
         }
     };
@@ -257,14 +257,20 @@ pub(crate) fn build_program(
         }
     }
     let args = base.link_file_args();
-    compile.cc(&CcInvocation {
+    let linked = compile.cc(&CcInvocation {
         args: &args,
         cflags: compile.cflags,
         quiet: true,
         out,
         inputs: &link_inputs,
         libs: link_args,
-    })
+    })?;
+    // The objects served their one link: a successful build leaves no copy
+    // of the program's objects behind (a failed one keeps them to look at).
+    if let (Ok(()), Some(dir)) = (&linked, &obj_dir) {
+        std::fs::remove_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+    }
+    Ok(linked)
 }
 
 /// A C source the build compiles to an object first.
