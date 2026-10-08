@@ -1209,7 +1209,8 @@ mod tests {
         let t0 = Instant::now();
         let stubborn = Runtime::spawn(
             1,
-            sh("trap '' TERM; while :; do sleep 0.05; done"),
+            // Never outlives the test process, however it ends.
+            sh("trap '' TERM; while kill -0 $PPID 2>/dev/null; do sleep 0.05; done"),
             create_dir(&tmp.0).unwrap(),
             &env,
             &procs,

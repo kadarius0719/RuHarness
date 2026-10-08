@@ -196,6 +196,17 @@ pub struct SpeedModel {
     pub units: Vec<UnitSpeed>,
     /// Results files that could not be read, in words.
     pub errors: Vec<String>,
+    /// The same files by name (`program.json`, `units/<id>.json`, or
+    /// `units` for the folder) with the first line of why — for clients
+    /// that list them apart (harness-mcp's `unreadable`).
+    pub unreadable: Vec<(String, String)>,
+    /// Whether the C alone's and the program as it stands's rows were
+    /// judged against the C and the units held today: false without facts
+    /// (the header says so), when those comparisons are skipped.
+    pub program_checked: bool,
+    /// Why perf refuses this plan whatever is measurable, in its words (a
+    /// plan over [`results::MAX_UNITS`] units): `None` when it does not.
+    pub plan_refused: Option<String>,
     /// Units no longer in the plan that still have a results file (the
     /// first names).
     pub orphans: Vec<String>,
@@ -602,6 +613,13 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         left_out: Vec::new(),
         units: Vec::new(),
         errors: perf.errors.clone(),
+        unreadable: perf
+            .errors
+            .iter()
+            .map(|e| (results::UNITS_DIR.to_string(), first_line(e)))
+            .collect(),
+        program_checked: snapshot.facts_state.is_some(),
+        plan_refused: None,
         orphans: perf.orphans.clone(),
         orphans_more: perf.orphans_more,
         header: Vec::new(),
@@ -651,7 +669,17 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         .filter(|u| left_out_today(u).is_none())
         .map(|u| u.unit.id.clone())
         .collect();
-    model.measurable = measurable.clone();
+    // perf refuses a plan over its slots by name, before it selects
+    // anything (§3.2): then no unit is measurable, in those words.
+    if perf.plan_units.len() > results::MAX_UNITS {
+        model.plan_refused = Some(format!(
+            "perf measures a plan of at most {} units — this plan has {}",
+            results::MAX_UNITS,
+            perf.plan_units.len()
+        ));
+    } else {
+        model.measurable = measurable.clone();
+    }
     // Without facts the snapshot holds no unit at all: which units the
     // program as it stands holds today is not known, so those rules are
     // skipped (`None`) — never "left out now" for every held unit — and the
@@ -776,18 +804,31 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
             }
         }
         Ok(None) => {}
-        Err(e) => model.errors.push(format!(
-            "program.json cannot be read: {}",
-            harness_core::text::safe_line(e)
-        )),
+        Err(e) => {
+            model.errors.push(format!(
+                "program.json cannot be read: {}",
+                harness_core::text::safe_line(e)
+            ));
+            model
+                .unreadable
+                .push((results::PROGRAM_FILE.to_string(), first_line(e)));
+        }
     }
     model.c_rows.sort_by_key(|r| order(&r.workload));
     model.program_rows.sort_by_key(|r| order(&r.workload));
-    for u in &snapshot.units {
-        let id = &u.unit.id;
-        match perf.units.get(id) {
-            Some(Ok(file)) => {
-                let replaces = Some(u.unit.oracle_param_list("replaces"));
+    // Every plan unit perf's files were read for — also without facts, when
+    // the snapshot holds no unit: its rows are shown, judged on all but
+    // what needs the plan's unit today (its `replaces`, skipped then).
+    for (id, file) in perf
+        .plan_units
+        .iter()
+        .filter_map(|id| perf.units.get(id).map(|f| (id, f)))
+    {
+        match file {
+            Ok(file) => {
+                let replaces = snapshot
+                    .unit(id)
+                    .map(|u| u.unit.oracle_param_list("replaces"));
                 let mut rows: Vec<SpeedRow> = file
                     .rows
                     .iter()
@@ -810,11 +851,15 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                     });
                 }
             }
-            Some(Err(e)) => model.errors.push(format!(
-                "{id}'s results cannot be read: {}",
-                harness_core::text::safe_line(e)
-            )),
-            None => {}
+            Err(e) => {
+                model.errors.push(format!(
+                    "{id}'s results cannot be read: {}",
+                    harness_core::text::safe_line(e)
+                ));
+                model
+                    .unreadable
+                    .push((format!("{}/{id}.json", results::UNITS_DIR), first_line(e)));
+            }
         }
     }
     // A workload with no C-alone row (only units measured so far) takes the
@@ -895,6 +940,11 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
         }
     }
     model
+}
+
+/// The first line of an error's words.
+fn first_line(e: &str) -> String {
+    e.lines().next().unwrap_or_default().to_string()
 }
 
 /// Each workload `c_clock` lacks, from the first of `rows` on it whose C
@@ -1049,6 +1099,198 @@ mod tests {
         let _ = std::fs::remove_dir_all(&target);
     }
 
+    /// Five runs of 1.3 s of clock time, each exiting 0.
+    fn five_runs() -> Vec<serde_json::Value> {
+        (0..5)
+            .map(|_| serde_json::json!({"wall_us": 1_300_000, "end": "exit 0"}))
+            .collect()
+    }
+
+    /// A row's inputs on one workload; `rustc` for a row with Rust in it.
+    fn inputs(rustc: bool) -> serde_json::Value {
+        let fake = format!("blake3:{}", "f".repeat(64));
+        let mut compilers = serde_json::json!({"cc": "cc"});
+        if rustc {
+            compilers["rustc"] = "rustc 1.94.1".into();
+        }
+        serde_json::json!({
+            "workload": fake, "program": fake, "program_name": "zopfli",
+            "recipe": harness_core::perf::PERF_RECIPE,
+            "launcher": harness_core::perf::PERF_LAUNCHER,
+            "computer": {"os": "15.6", "build": "b", "arch": "arm64", "cpu": "Apple M3",
+                         "two_kinds": true, "fast_cores": 8},
+            "compilers": compilers
+        })
+    }
+
+    /// u001's measured row on big-text (its Rust's digest made up).
+    fn unit_row() -> Row {
+        let mut i = inputs(true);
+        i["crates"] = serde_json::json!([{"id": "u001-katajainen",
+                                          "digest": format!("blake3:{}", "f".repeat(64))}]);
+        i["replaces"] = serde_json::json!(["src/zopfli/katajainen.c"]);
+        serde_json::from_value(serde_json::json!({
+            "workload": "big-text", "outcome": "measured", "inputs": i, "runs": 5,
+            "short": false, "platform_metrics": "macos-v6-cycles", "std": true,
+            "c": five_runs(), "other": five_runs()
+        }))
+        .expect("a unit row")
+    }
+
+    /// zopfli with one workload (big-text) and the rows asked for stored:
+    /// a C-alone row, an as-it-stands row holding u001.
+    fn probe_target(tag: &str, c_alone: bool, as_it_stands: bool) -> std::path::PathBuf {
+        let target = crate::testutil::scratch_target("targets/zopfli", tag);
+        let perf = harness_core::perf::perf_dir(&target);
+        std::fs::create_dir_all(target.join("bench")).unwrap();
+        std::fs::write(target.join("bench/big.txt"), "big ".repeat(1000)).unwrap();
+        std::fs::create_dir_all(&perf).unwrap();
+        std::fs::write(
+            perf.join("workloads.toml"),
+            "schema_version = 1\n\
+             [[workload]]\nid = \"big-text\"\nargs = [\"-c\", \"{input}\"]\ninput = \"bench/big.txt\"\n",
+        )
+        .unwrap();
+        let c_row: Row = serde_json::from_value(serde_json::json!({
+            "workload": "big-text", "outcome": "baseline", "inputs": inputs(false), "runs": 5,
+            "short": false, "platform_metrics": "macos-v6-cycles", "c": five_runs()
+        }))
+        .expect("a C row");
+        let mut i = inputs(true);
+        i["units"] = serde_json::json!([{"id": "u001-katajainen",
+                                         "crate": format!("blake3:{}", "f".repeat(64))}]);
+        let row: Row = serde_json::from_value(serde_json::json!({
+            "workload": "big-text", "outcome": "measured", "inputs": i, "runs": 5,
+            "short": false, "platform_metrics": "macos-v6-cycles",
+            "c": five_runs(), "other": five_runs()
+        }))
+        .expect("a row");
+        let program = results::ProgramResults {
+            c_alone: if c_alone { vec![c_row] } else { vec![] },
+            as_it_stands: if as_it_stands { vec![row] } else { vec![] },
+            ..results::ProgramResults::default()
+        };
+        results::write_program(&results::program_path(&perf), &program).unwrap();
+        target
+    }
+
+    /// With only C-alone rows stored and no facts, the header names the C
+    /// alone — no row holds units.
+    #[test]
+    fn without_facts_and_only_the_c_alone_the_header_names_the_c_alone() {
+        let t = probe_target("speed-c-only-no-facts", true, false);
+        std::fs::remove_file(t.join("migration/facts.jsonl")).unwrap();
+        let m = build(&Snapshot::load(&t).expect("loads"));
+        let _ = std::fs::remove_dir_all(&t);
+        assert_eq!(
+            m.header
+                .iter()
+                .filter(|h| h.contains("not checked here:"))
+                .collect::<Vec<_>>(),
+            ["the C is not checked here: no facts — run harness scan"]
+        );
+        assert!(!m.program_checked);
+    }
+
+    /// Without facts the snapshot holds no unit, yet a plan unit's stored
+    /// rows are shown (its Rust still judged) and a results file that
+    /// cannot be read is reported — a unit's, and program.json.
+    #[test]
+    fn without_facts_the_units_rows_and_unreadable_files_are_shown() {
+        let t = probe_target("speed-units-no-facts", true, false);
+        let perf = harness_core::perf::perf_dir(&t);
+        let mut file = results::UnitResults::new("u001-katajainen");
+        file.rows = vec![unit_row()];
+        results::write_unit(&results::unit_path(&perf, "u001-katajainen"), &file).unwrap();
+        std::fs::remove_file(t.join("migration/facts.jsonl")).unwrap();
+        let snapshot = Snapshot::load(&t).expect("loads");
+        assert!(
+            snapshot.units.is_empty(),
+            "no facts: no unit in the snapshot"
+        );
+        let m = build(&snapshot);
+        assert_eq!(
+            m.units.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(),
+            ["u001-katajainen"],
+            "{:?}",
+            m.errors
+        );
+        assert_eq!(m.group, Group::Units { measured: 1, of: 1 });
+        assert!(
+            m.units[0].rows[0]
+                .out_of_date
+                .iter()
+                .any(|w| w.contains("Rust changed")),
+            "its Rust is still judged: {:?}",
+            m.units[0].rows[0].out_of_date
+        );
+        assert!(
+            m.errors.is_empty() && m.unreadable.is_empty(),
+            "{:?}",
+            m.errors
+        );
+        // A junk unit file, then a junk program.json: each reported.
+        std::fs::write(results::unit_path(&perf, "u001-katajainen"), "junk").unwrap();
+        let m = build(&Snapshot::load(&t).expect("loads"));
+        assert!(m.units.is_empty());
+        assert_eq!(m.errors.len(), 1, "{:?}", m.errors);
+        assert!(
+            m.errors[0].starts_with("u001-katajainen's results cannot be read: "),
+            "{:?}",
+            m.errors
+        );
+        assert_eq!(
+            m.unreadable
+                .iter()
+                .map(|(f, _)| f.as_str())
+                .collect::<Vec<_>>(),
+            ["units/u001-katajainen.json"]
+        );
+        std::fs::write(results::program_path(&perf), "junk").unwrap();
+        let m = build(&Snapshot::load(&t).expect("loads"));
+        let _ = std::fs::remove_dir_all(&t);
+        assert!(
+            m.errors
+                .iter()
+                .any(|e| e.starts_with("program.json cannot be read: ")),
+            "{:?}",
+            m.errors
+        );
+        assert_eq!(
+            m.unreadable
+                .iter()
+                .map(|(f, _)| f.as_str())
+                .collect::<Vec<_>>(),
+            ["program.json", "units/u001-katajainen.json"]
+        );
+        assert!(m.unreadable.iter().all(|(_, why)| !why.contains('\n')));
+    }
+
+    /// A plan over perf's 999 slots: perf refuses it by name before it
+    /// selects anything, so nothing is measurable and the model says why.
+    #[test]
+    fn a_plan_over_999_units_is_refused_in_perfs_words() {
+        let t = probe_target("speed-1000-units", true, false);
+        let plan = t.join("migration/plan.toml");
+        let mut text = std::fs::read_to_string(&plan).unwrap();
+        let have = text.matches("[[unit]]").count();
+        for i in 0..(1000 - have) {
+            text.push_str(&format!(
+                "\n[[unit]]\nid = \"u-pad-{i:04}\"\nstatus = \"pending\"\nfiles = []\n"
+            ));
+        }
+        std::fs::write(&plan, text).unwrap();
+        // Without facts (the plan's size is known all the same), and quick.
+        std::fs::remove_file(t.join("migration/facts.jsonl")).unwrap();
+        let m = build(&Snapshot::load(&t).expect("loads"));
+        let _ = std::fs::remove_dir_all(&t);
+        assert_eq!(
+            m.plan_refused.as_deref(),
+            Some("perf measures a plan of at most 999 units — this plan has 1000")
+        );
+        assert!(m.measurable.is_empty());
+    }
+
     #[test]
     fn the_labels_fit_19_columns() {
         let m = |group: Group| SpeedModel {
@@ -1059,6 +1301,9 @@ mod tests {
             left_out: Vec::new(),
             units: Vec::new(),
             errors: Vec::new(),
+            unreadable: Vec::new(),
+            program_checked: true,
+            plan_refused: None,
             orphans: Vec::new(),
             orphans_more: 0,
             header: Vec::new(),
