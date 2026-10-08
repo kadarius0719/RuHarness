@@ -2792,3 +2792,50 @@ cockpit's change advice: several reasons had no test at all.
 
 **Not done here:** `bench check --replay` was not run for this merge (fix pass 2 touched perf, the
 cockpit's estimate and tests only — nothing verify, migrate or bench read); run it at the next merge.
+
+## 2026-10-07 — Speed work, fix passes 3 and 4: the check round's findings fixed, checked, fixed again
+
+**Fix pass 3** (docs/reviews/2026-10-07-perf-fix3-plan.md: the triage of fix pass 2's check round —
+28 findings kept in five areas, 7 dropped with reasons; five Opus fixers in their own worktrees,
+merged at ec78455, 1 275 tests green). In plain words: without facts, `perf show`, the cockpit and
+harness-mcp no longer judge a program-as-it-stands row in opposite wrong ways — all three say the C
+and the units it holds are not checked; the early `--as-it-stands-only` refusal names the units left
+out and why; `perf show` stops at the first compiler that fails and no longer hides every row behind
+one bad unit file; the cockpit's Measure dialog answers with certainty only for the `harness` beside
+its own binary, gives a three-way launcher answer (current / will build / cannot use, with perf's own
+refusal words) and never blocks the UI thread (the open mutation survivor closed); `perf run` refuses
+a plan of more than 999 units by name before anything is built; the results reader reads the version
+without building the whole file (peak 57 → 12 MB on a forged 4 MiB file), caps each rows list at 16
+and checks a last try's units like the row's own; the "3.7× as slow" low end a float hair past 2 %
+reads 1.03×, not 1.0× (the other open survivor); the launcher tests use bounded waits and a decoy with
+a living parent; looping test children are killed when a test ends either way (eight week-old loops
+had been found running).
+
+**Its check** (docs/reviews/2026-10-07-perf-fix3-check.md: ten Opus checkers — holds + mutation
+checks and a regression hunter per area, a docs checker, a whole-pass hunter; 86 mutants — 63 killed,
+17 given a test by the checkers, 4 equivalent, 2 by design): every area holds; 0 high, 10 medium,
+~25 low findings, triaged into **fix pass 4** (four areas, merged at c2fcf02, 1 301 tests green):
+one selection with the plan cap first so `--as-it-stands-only` on a huge plan gets the size refusal
+(it had printed a 39 KB "needs two" line), the left-out list capped at 10 then "and N more", the
+post-build refusal in the early one's words; `perf show` reads what it can past a junk `program.json`
+or a broken units folder and names orphan files without reading them; harness-mcp says
+`program_checked: false` and `current: null` for rows nobody judged, names unreadable results files
+(`unreadable`, ≤ 20) and the plan refusal (`note`); the cockpit shows unit rows without facts and
+greys Measure for a plan over 999 units in perf's words; the cache answer refuses a `.lock` that is a
+link as the run does; test loops bound themselves to their parent (`kill -0 $PPID`); a results-file
+error kind ("results file: <path>: …", no longer "invalid plan: …"); the version is read only from an
+object. The checkers' own killing tests (17) were adopted.
+
+**Decided: harness-mcp copies the 999-unit words rather than calling the oracle** (its read model
+stays harness-core only, and the cockpit's gate must not select units on the UI thread): the cockpit's
+and harness-mcp's tests pin the same string as `check_plan_size`'s; a reword must change both.
+**Decided: the own-build rule stays by location** — a build-identity check would need new CLI
+surface; after reinstalling harness-cli alone the dialog's launcher line can be wrong, said in
+PERF-DESIGN §3.11 and README (reinstall harness-tui with harness-cli). `perf_launcher_cached()` of the
+2026-10-07 entry above is now `perf_launcher_cache()` with the three-way answer.
+
+**Recorded, not fixed:** a bounded-depth pid rule (launchd neither parent nor grandparent) passes the
+decoy test — no fixed decoy catches every such rule; the early `--as-it-stands-only` check runs
+before the units-folder check (both refusals genuine); the cockpit refuses a target whose ledger unit
+folder is unreadable where the CLI shows rows (pre-existing); `stale_launchers_go_but_never_one_in_use`
+failed once at load ~100 (a flake to watch); without facts a unit row's `replaces` check is skipped.
