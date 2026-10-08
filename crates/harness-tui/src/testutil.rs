@@ -36,6 +36,8 @@ pub fn scratch_target(rel: &str, tag: &str) -> PathBuf {
     let dst = std::env::temp_dir().join(format!("harness-tui-{tag}-{:010}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dst);
     copy(&repo().join(rel), &dst);
+    // Adopted for this test process (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adopt(&dst);
     dst.canonicalize().unwrap()
 }
 

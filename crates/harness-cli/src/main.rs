@@ -15,6 +15,7 @@ mod report;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use harness_core::adopt;
 use harness_core::attempts;
 use harness_core::ledger::Ledger;
 use harness_core::ledger::WriterLock;
@@ -38,8 +39,82 @@ struct Cli {
     /// `ruharness-events`); human logs stay on stderr
     #[arg(long, global = true)]
     json: bool,
+    /// Trust the migration results already in this folder (made on another
+    /// computer, or shipped in a download) from now on, on this computer:
+    /// deletes their build folders; their verdicts stay claims until
+    /// `harness verify` runs them here. Needed once per folder
+    #[arg(long, global = true)]
+    adopt: bool,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+impl Cmd {
+    /// The folder whose ledger(s) this command opens, and how it is adopted
+    /// (docs/PROJECT-MAP-DESIGN.md §3.7): a target is one project; a bench
+    /// suite is one root covering every case under it.
+    fn ledger_root(&self) -> Option<(PathBuf, adopt::Scope)> {
+        let project = |t: &PathBuf| Some((t.clone(), adopt::Scope::Project));
+        match self {
+            Cmd::Scan { target }
+            | Cmd::Plan { target }
+            | Cmd::Verify { target, .. }
+            | Cmd::State {
+                cmd: StateCmd::Status { target },
+            }
+            | Cmd::Detect { target }
+            | Cmd::Observe { target }
+            | Cmd::Review { target, .. }
+            | Cmd::Migrate { target, .. }
+            | Cmd::Override { target, .. }
+            | Cmd::Promote { target, .. }
+            | Cmd::GenDriver { target, .. }
+            | Cmd::SyncRuntime { target, .. } => project(target),
+            Cmd::Features { cmd } => match cmd {
+                FeaturesCmd::Init { target }
+                | FeaturesCmd::Save { target, .. }
+                | FeaturesCmd::Map { target, .. } => project(target),
+            },
+            Cmd::Perf { cmd } => match cmd {
+                PerfCmd::Run { target, .. }
+                | PerfCmd::Init { target }
+                | PerfCmd::Save { target, .. }
+                | PerfCmd::Show { target, .. } => project(target),
+            },
+            Cmd::Bench { cmd } => bench::suite_root(cmd).map(|s| (s, adopt::Scope::Suite)),
+        }
+    }
+}
+
+/// Before a command opens its ledger: adopt it when `--adopt` was given
+/// (and say what that did), refuse a bench suite made elsewhere up front
+/// (a target is refused by `TargetContext::load`), and note a folder that
+/// holds no ledger yet — what this command writes there is its own. `true`
+/// when the folder held no ledger.
+fn open_ledger(root: &Path, scope: adopt::Scope, adopt_it: bool) -> Result<bool> {
+    if !root.is_dir() {
+        // The command says what is wrong with its folder.
+        return Ok(false);
+    }
+    let had = match scope {
+        adopt::Scope::Project => adopt::has_ledger(root),
+        adopt::Scope::Suite => adopt::suite_has_ledger(root),
+    };
+    if adopt_it {
+        let done = match scope {
+            adopt::Scope::Project => adopt::adopt(root)?,
+            adopt::Scope::Suite => adopt::adopt_suite(root)?,
+        };
+        for line in done.describe() {
+            out(line);
+        }
+    } else if scope == adopt::Scope::Suite {
+        adopt::check_suite(root)?;
+    }
+    if !had {
+        adopt::note_created_here(root);
+    }
+    Ok(!had)
 }
 
 #[derive(Subcommand)]
@@ -427,7 +502,14 @@ fn install_signal_handler() {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     install_signal_handler();
-    report::set_args(std::env::args().skip(1).filter(|a| a != "--json").collect());
+    // `--adopt` is the person's word for this run only: never carried into
+    // a resume command.
+    report::set_args(
+        std::env::args()
+            .skip(1)
+            .filter(|a| a != "--json" && a != "--adopt")
+            .collect(),
+    );
     if cli.json {
         report::init(report::Mode::Json);
         let _ = harness_llm::progress::install(Box::new(report::Progress));
@@ -435,7 +517,48 @@ fn main() -> ExitCode {
         let command = argv.first().cloned().unwrap_or_default();
         report::header(&command, argv.get(1..).unwrap_or(&[]));
     }
-    let result = match cli.cmd {
+    let opened = cli.cmd.ledger_root();
+    let fresh = match &opened {
+        Some((root, scope)) => open_ledger(root, *scope, cli.adopt),
+        None => Ok(false),
+    };
+    let (result, fresh) = match fresh {
+        Err(e) => (Err(e), false),
+        Ok(fresh) => (run(cli.cmd), fresh),
+    };
+    // The first command that made this folder's ledger records it as made
+    // on this computer.
+    if let (true, Some((root, scope))) = (fresh, &opened) {
+        if let Err(e) = adopt::record_created(root, *scope) {
+            let _ = writeln!(
+                std::io::stderr(),
+                "harness: could not record {} as made on this computer ({}); the next command \
+                 will ask for `--adopt`",
+                root.display(),
+                report::terminal_safe(&e.to_string())
+            );
+        }
+    }
+    let code = match result {
+        Ok(code) => code,
+        Err(e) => {
+            // A closed stderr must not turn exit 1 into a panic (101).
+            let _ = writeln!(
+                std::io::stderr(),
+                "error: {}",
+                report::terminal_safe(&format!("{e:#}"))
+            );
+            report::error(&e);
+            1
+        }
+    };
+    report::result(i32::from(code), None);
+    ExitCode::from(code)
+}
+
+/// Run one command.
+fn run(cmd: Cmd) -> Result<u8> {
+    match cmd {
         Cmd::Scan { target } => cmd_scan(target),
         Cmd::Plan { target } => cmd_plan(target),
         Cmd::Verify {
@@ -556,22 +679,7 @@ fn main() -> ExitCode {
             retry,
             attempt,
         }),
-    };
-    let code = match result {
-        Ok(code) => code,
-        Err(e) => {
-            // A closed stderr must not turn exit 1 into a panic (101).
-            let _ = writeln!(
-                std::io::stderr(),
-                "error: {}",
-                report::terminal_safe(&format!("{e:#}"))
-            );
-            report::error(&e);
-            1
-        }
-    };
-    report::result(i32::from(code), None);
-    ExitCode::from(code)
+    }
 }
 
 fn cmd_scan(target: PathBuf) -> Result<u8> {

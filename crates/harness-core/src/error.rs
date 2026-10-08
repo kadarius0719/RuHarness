@@ -119,6 +119,31 @@ pub enum Error {
         /// What the run did instead.
         why: String,
     },
+    /// The ledger at `root` was made elsewhere: its root is not listed in
+    /// this computer's adoption file, or its token is missing or different
+    /// (docs/PROJECT-MAP-DESIGN.md §3.7). Nothing was read beyond the plan's
+    /// unit count.
+    #[error(
+        "this folder already holds migration results made elsewhere ({}): to trust them here, \
+         add `--adopt` once",
+        crate::adopt::counted(*.units, *.verified)
+    )]
+    NotAdopted {
+        /// The canonical root refused.
+        root: PathBuf,
+        /// Units its plan claims.
+        units: usize,
+        /// Of which verified or merged.
+        verified: usize,
+    },
+    /// `--adopt` was refused: the root's `migration/` is not the harness's
+    /// (it holds none of its files, or something outside the ledger's fixed
+    /// names), so it is the project's own.
+    #[error("this project has a migration/ folder of its own; move or rename it, or map a copy")]
+    ForeignMigration {
+        /// The project root.
+        root: PathBuf,
+    },
 }
 
 impl Error {

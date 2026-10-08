@@ -114,6 +114,20 @@ pub enum BenchCmd {
     },
 }
 
+/// The suite whose case ledgers a bench command opens — adopted as one root
+/// with `--adopt` (docs/PROJECT-MAP-DESIGN.md §3.7). `vendor` and
+/// `verify-corpus` read no ledger.
+pub fn suite_root(cmd: &BenchCmd) -> Option<PathBuf> {
+    match cmd {
+        BenchCmd::Vendor { .. } | BenchCmd::VerifyCorpus { .. } => None,
+        BenchCmd::Init { suite, .. }
+        | BenchCmd::Status { suite }
+        | BenchCmd::Score { suite, .. }
+        | BenchCmd::Check { suite, .. }
+        | BenchCmd::Boundary { suite, .. } => Some(suite.clone()),
+    }
+}
+
 pub fn run(cmd: BenchCmd) -> Result<u8> {
     match cmd {
         BenchCmd::Vendor { suite, from } => cmd_vendor(&suite, &from),
@@ -965,6 +979,15 @@ fn cmd_score(suite_dir: &Path, cases: &[String], write: bool, jobs: usize) -> Re
     Ok(0)
 }
 
+/// `bench check`. The documented line, from the repository root:
+///
+/// ```text
+/// harness bench check --suite targets/tractor --replay --adopt
+/// ```
+///
+/// `--adopt` is needed once per worktree (once per computer and folder): the
+/// cases' ledgers were made elsewhere, and a `corpus.lock` that verifies says
+/// nothing about them (docs/PROJECT-MAP-DESIGN.md §3.7).
 fn cmd_check(suite_dir: &Path, replay: bool, jobs: usize) -> Result<u8> {
     let baseline = Scores::load(&suite_dir.join("scores.json"))
         .context("loading the committed scores.json (run `bench score --write` first)")?;

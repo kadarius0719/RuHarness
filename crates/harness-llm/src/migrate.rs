@@ -1447,6 +1447,7 @@ int add(int a, int b) { return a + b; }\n";
         std::fs::write(root.join("src/unit.c"), C_SOURCE).unwrap();
         std::fs::write(root.join("src/unit.h"), H_SOURCE).unwrap();
         std::fs::write(unit_dir.join("driver.c"), "int main(void) { return 0; }\n").unwrap();
+        harness_core::adopt::testing::adopt(&root);
         let target = TargetContext::load(&root).unwrap();
         let file = |path: &str, includes: &[&str]| FileRecord {
             path: path.into(),

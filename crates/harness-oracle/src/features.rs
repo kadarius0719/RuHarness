@@ -315,6 +315,7 @@ mod tests {
         write("src/unit.c", "int unit(void) { return 1; }\n");
         write("migration/units/u-unit/driver.c", "\n");
         std::fs::create_dir_all(root.join("migration/units/u-unit/unit_rs")).unwrap();
+        harness_core::adopt::testing::adopt(&root);
         let target = TargetContext::load(&root).unwrap();
         let unit: Unit = toml::from_str(
             "id = \"u-unit\"\nstatus = \"pending\"\nfiles = [\"src/unit.c\"]\n\

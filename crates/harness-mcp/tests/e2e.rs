@@ -23,6 +23,9 @@ use std::path::Path;
 use std::process::Command;
 
 fn harness(args: &[&str]) -> (i32, String, String) {
+    // Every child inherits the test process's own adoption file, never the
+    // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::testing::adoption_file();
     let out = Command::new(harness_bin()).args(args).output().unwrap();
     (
         out.status.code().unwrap_or(-1),

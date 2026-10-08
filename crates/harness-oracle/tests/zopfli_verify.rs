@@ -16,6 +16,7 @@ fn u001_katajainen_is_green_with_the_m3_trust_boundaries() {
     let tmp = common::TempDir::new("zopfli");
     common::copy_dir(&src, tmp.path());
 
+    harness_core::adopt::testing::adopt(tmp.path());
     let target = TargetContext::load(tmp.path()).expect("harness.toml loads");
     assert!(
         target.config.oracle_allowlist().iter().any(|t| t == "nm"),
@@ -164,6 +165,7 @@ fn u001_driver_self_validates_against_the_original_c() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../targets/zopfli");
     let tmp = common::TempDir::new("zopfli-dv");
     common::copy_dir(&src, tmp.path());
+    harness_core::adopt::testing::adopt(tmp.path());
     let target = TargetContext::load(tmp.path()).expect("harness.toml loads");
     let plan = Plan::load(&tmp.path().join("migration/plan.toml")).expect("plan loads");
     let unit = plan.unit("u001-katajainen").expect("u001 exists");

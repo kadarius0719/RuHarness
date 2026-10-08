@@ -314,6 +314,7 @@ mod tests {
             "#include <stdio.h>\nint unit(int);\nint main(void) { printf(\"%d\\n\", unit(41)); return 0; }\n",
         );
         put("src/unit.c", "int unit(int x) { return x + 1; }\n");
+        harness_core::adopt::testing::adopt(&root);
         let target = harness_core::TargetContext::load(&root).expect("target");
         let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
         let scratch = perf_scratch(&root).expect("scratch");
@@ -446,6 +447,7 @@ mod tests {
         );
         put("src/sub/a.c", "int sub_fn(void) { return 3; }\n");
         std::os::unix::fs::symlink("sub/a.c", root.join("src/b.c")).expect("link");
+        harness_core::adopt::testing::adopt(&root);
         let target = harness_core::TargetContext::load(&root).expect("target");
         let base = Base::resolve(&target, "perf", &["cc"]).expect("base");
         let scratch = perf_scratch(&root).expect("scratch");

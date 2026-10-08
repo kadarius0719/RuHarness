@@ -965,6 +965,38 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     }
+    // A ledger made elsewhere is asked about first, before the terminal is
+    // taken (docs/PROJECT-MAP-DESIGN.md §3.7): the same question as the
+    // CLI's `--adopt`; away from a terminal it is refused in words.
+    if let Err(e) = harness_core::adopt::check(&target) {
+        use std::io::IsTerminal;
+        if !matches!(e, harness_core::Error::NotAdopted { .. }) {
+            eprintln!("harness-tui: {} is unreadable: {e}", target.display());
+            return ExitCode::from(1);
+        }
+        if !std::io::stdin().is_terminal() {
+            eprintln!(
+                "harness-tui: {}: {e} (start the cockpit in a terminal to be asked, or run any \
+                 harness command on it with --adopt)",
+                target.display()
+            );
+            return ExitCode::from(1);
+        }
+        let asked = harness_tui::adoption::ask(
+            &target,
+            &e.to_string(),
+            &mut std::io::stdin().lock(),
+            &mut std::io::stderr(),
+        );
+        match asked {
+            Ok(true) => {}
+            Ok(false) => return ExitCode::from(1),
+            Err(why) => {
+                eprintln!("harness-tui: {why}");
+                return ExitCode::from(1);
+            }
+        }
+    }
     // The first read runs here, before the terminal is taken: a target the
     // preflight refuses is refused in words.
     let snapshot = match load::read(&target) {
@@ -1149,6 +1181,7 @@ mod tests {
             .join("../../targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib")
             .canonicalize()
             .unwrap();
+        harness_core::adopt::testing::adopt(&case);
         let mut app = App::new(
             Config {
                 target: case.clone(),
@@ -1197,6 +1230,7 @@ mod tests {
             .join("../../targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib")
             .canonicalize()
             .unwrap();
+        harness_core::adopt::testing::adopt(&case);
         let mut app = App::new(
             Config {
                 target: case.clone(),

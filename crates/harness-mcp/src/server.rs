@@ -391,7 +391,18 @@ impl<W: Write> Server<W> {
             })
     }
 
+    /// Before any read or act: a ledger made elsewhere is refused with the
+    /// CLI's sentence — harness-mcp never adopts (an agent is not the
+    /// person; docs/PROJECT-MAP-DESIGN.md §3.7) — then the size preflight.
     fn preflight(target: &Path) -> Result<(), Refusal> {
+        harness_core::adopt::check(target).map_err(|e| Refusal {
+            kind: if matches!(e, harness_core::Error::NotAdopted { .. }) {
+                "not-adopted"
+            } else {
+                "unreadable"
+            },
+            message: e.to_string(),
+        })?;
         policy::preflight(target).map_err(|message| Refusal {
             kind: "unreadable",
             message,
@@ -848,6 +859,9 @@ mod tests {
     }
 
     fn config(harness: PathBuf, providers: &[&str]) -> Config {
+        // The fixtures this server reads, adopted for this test process
+        // (docs/PROJECT-MAP-DESIGN.md §3.7): zopfli and the benchmark suite.
+        harness_core::adopt::testing::adoption_file();
         Config {
             target: repo().join("targets/zopfli"),
             target_roots: vec![repo().join("targets/tractor/cases")],
@@ -1279,6 +1293,53 @@ mod tests {
             json!({"unit": "u", "from": "a-1", "steer": "x"}),
         );
         assert_eq!(code(&r), Some(-32602), "external needs a model: {r}");
+    }
+
+    /// A ledger made elsewhere is refused by every read and act with the
+    /// CLI's sentence, and harness-mcp never adopts it
+    /// (docs/PROJECT-MAP-DESIGN.md §3.7).
+    #[test]
+    fn a_ledger_made_elsewhere_is_refused_never_adopted() {
+        let _guard = crate::policy::tests::TmpDir::new("not-adopted");
+        let base = _guard.0.clone();
+        let t = crate::policy::tests::zopfli_copy(&base.join("root/zopfli"));
+        // Another tree at the same path: a token of its own.
+        let token = t.join("migration/.ruharness-adopted");
+        std::fs::write(&token, format!("{}\n", "b".repeat(32))).unwrap();
+        let mut cfg = config(PathBuf::from("/bin/sh"), &["external"]);
+        cfg.target_roots = vec![base.join("root").canonicalize().unwrap()];
+        let mut s = Server::new(cfg, Vec::new(), ChildSlot::default(), Gate::default());
+        let target = t.to_string_lossy().into_owned();
+        for (tool, args) in [
+            ("harness_status", json!({"target": target})),
+            (
+                "harness_unit",
+                json!({"unit": "u001-katajainen", "target": target}),
+            ),
+            (
+                "harness_promote",
+                json!({"unit": "u001-katajainen", "attempt": "a-1", "target": target}),
+            ),
+        ] {
+            let r = call(&mut s, 1, tool, args);
+            assert_eq!(
+                structured(&r)["error"]["kind"],
+                "not-adopted",
+                "{tool}: {r}"
+            );
+            assert_eq!(
+                structured(&r)["error"]["message"]["text"],
+                "this folder already holds migration results made elsewhere (11 units, 1 \
+                 verified): to trust them here, add `--adopt` once",
+                "{tool}: {r}"
+            );
+        }
+        // Still refused: nothing was adopted, the foreign token kept.
+        assert!(harness_core::adopt::check(&t).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&token).unwrap(),
+            format!("{}\n", "b".repeat(32))
+        );
     }
 
     /// §R2 TESTS-4: the preflight runs before every read and every act.

@@ -471,11 +471,33 @@ mod tests {
         }
     }
 
+    /// The read model refuses a ledger made elsewhere with the CLI's
+    /// sentence (docs/PROJECT-MAP-DESIGN.md §3.7), and so does a read.
+    #[test]
+    fn a_ledger_made_elsewhere_is_refused_by_the_read_model() {
+        let tmp =
+            std::env::temp_dir().join(format!("harness-tui-elsewhere-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        copy(&repo().join("targets/zopfli"), &tmp);
+        harness_core::adopt::testing::adoption_file();
+        let err = Snapshot::load(&tmp).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "this folder already holds migration results made elsewhere (11 units, 1 verified): \
+             to trust them here, add `--adopt` once"
+        );
+        assert_eq!(crate::load::read(&tmp).unwrap_err(), err.to_string());
+        harness_core::adopt::testing::adopt(&tmp);
+        Snapshot::load(&tmp).unwrap();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn a_c_file_edited_after_the_scan_is_never_sliced() {
         let tmp = std::env::temp_dir().join(format!("harness-tui-stale-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         copy(&repo().join("targets/zopfli"), &tmp);
+        harness_core::adopt::testing::adopt(&tmp);
         let snap = Snapshot::load(&tmp).unwrap();
         let unit = snap.unit("u001-katajainen").unwrap().clone();
         let before = snap.pairs(&unit, None);
@@ -523,6 +545,7 @@ mod tests {
             &tmp,
         );
         std::fs::remove_file(tmp.join("test_case/include/lib.h")).unwrap();
+        harness_core::adopt::testing::adopt(&tmp);
         let snap = Snapshot::load(&tmp).expect("the ledger still reads");
         let unit = snap.unit("u-lib").unwrap();
         assert!(unit.attempts.iter().all(|a| !a.bound));

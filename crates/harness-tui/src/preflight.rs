@@ -523,6 +523,7 @@ mod tests {
         for i in 0..1000 {
             std::os::unix::fs::symlink("zz_big.c", src.join(format!("zz_{i}.c"))).unwrap();
         }
+        harness_core::adopt::testing::adopt(&t);
         preflight(&t).unwrap();
         // Distinct files past the budget: refused, before anything is read.
         let cap = harness_core::features::MAX_PROGRAM_FILE_BYTES;

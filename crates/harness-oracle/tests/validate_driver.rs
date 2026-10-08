@@ -70,6 +70,7 @@ fn score_target(root: &Path) -> (TargetContext, Unit) {
          symbols = [\"unit_score\", \"unit_twice\"]\n",
     )
     .expect("unit parses");
+    harness_core::adopt::testing::adopt(root);
     (TargetContext::load(root).expect("target loads"), unit)
 }
 

@@ -1630,6 +1630,7 @@ mod tests {
         put("src/unit.c", "int unit(void) { return 1; }\n");
         put("migration/units/u-unit/driver.c", "\n");
         std::fs::create_dir_all(root.join("migration/units/u-unit/unit_rs")).unwrap();
+        harness_core::adopt::testing::adopt(&root);
         let target = TargetContext::load(&root).unwrap();
         let unit: Unit = toml::from_str(
             "id = \"u-unit\"\nstatus = \"pending\"\nfiles = [\"src/unit.c\"]\n\
@@ -2035,6 +2036,7 @@ mod tests {
         std::fs::create_dir_all(unit_dir.join("u_rs/src")).expect("crate");
         std::fs::write(unit_dir.join("driver.c"), "int main(void) { return 0; }\n")
             .expect("driver");
+        harness_core::adopt::testing::adopt(root);
         TargetContext::load(root).expect("target loads")
     }
 

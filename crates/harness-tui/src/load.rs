@@ -39,6 +39,9 @@ pub struct Read {
 /// Read the target at `target`: the preflight, then the snapshot, the walk
 /// and the lock holder. `Err` is a reason in words.
 pub fn read(target: &Path) -> Result<Read, String> {
+    // A ledger made elsewhere is refused before anything of it is read —
+    // the preflight measures its files (docs/PROJECT-MAP-DESIGN.md §3.7).
+    harness_core::adopt::check(target).map_err(|e| e.to_string())?;
     preflight::preflight(target)?;
     let snapshot = Snapshot::load(target).map_err(|e| e.to_string())?;
     let ctx = harness_core::TargetContext::load(target).map_err(|e| e.to_string())?;
@@ -262,6 +265,7 @@ mod tests {
             .status()
             .unwrap()
             .success());
+        harness_core::adopt::testing::adopt(&dir);
         assert!(read(&dir).is_ok(), "the copy reads");
         // A facts file past the cap (sparse): the loader alone would read
         // 64 MiB of zeros and report a parse error.
@@ -302,6 +306,7 @@ mod tests {
             .filter(|l| !l.starts_with("include_dirs"))
             .map(|l| format!("{l}\n"))
             .collect();
+        harness_core::adopt::testing::adopt(&dir);
         for bad in ["/", "..", "test_case/../.."] {
             std::fs::write(
                 &config,
