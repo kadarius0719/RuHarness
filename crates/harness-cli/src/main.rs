@@ -787,6 +787,11 @@ pub(crate) fn scan_target(ctx: &TargetContext) -> Result<Facts> {
             harness_core::text::safe_line(path)
         ));
     }
+    for line in notes.ambiguous_lines() {
+        // A header whose include lands differently under two listed files:
+        // recorded with no edge, said here, settled by the configuration.
+        out(format!("scan: {}", harness_core::text::safe_line(&line)));
+    }
     std::fs::create_dir_all(ledger.dir()).context("creating migration dir")?;
     facts.store(&ledger.facts_path())?;
     Ok(facts)
@@ -1184,7 +1189,21 @@ fn cmd_detect(target: TargetArg) -> Result<u8> {
         return Err(facts_stale(&ctx, stale).into());
     }
     let suite = harness_detect::CTreeSitterSuite;
-    let findings = suite.detect(&ctx, &facts)?;
+    let (findings, skipped) = suite.detect_reporting(&ctx, &facts)?;
+    for (path, why) in &skipped {
+        // A file the detectors could not read: the scan's own note, never a
+        // stop.
+        out(format!(
+            "detect: skipped {}: {}",
+            harness_core::text::safe_line(
+                &path
+                    .strip_prefix(&ctx.root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+            ),
+            harness_core::text::safe_line(why)
+        ));
+    }
     let file = FindingsFile {
         detector_suite: suite.name().to_string(),
         facts_hash: facts_records_hash(&facts),
