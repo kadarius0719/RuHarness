@@ -64,7 +64,8 @@ fn the_map_is_refused_without_a_sandbox() {
 }
 
 /// A walk that reaches the depth cap stops there: exit 1, the cap named,
-/// and the files it did visit still printed with their facts.
+/// and the files it did visit still written to the map file with their
+/// facts (the screen prints no summary when refusing).
 #[test]
 fn a_walk_cut_short_exits_1_by_name_with_its_facts() {
     let dir = Tmp::new("deep");
@@ -87,7 +88,9 @@ fn a_walk_cut_short_exits_1_by_name_with_its_facts() {
         stderr.contains("error: the map stopped at its depth limit of 32 folders deep"),
         "{stderr}"
     );
-    // The facts gathered before the cap are printed.
-    assert!(stdout.contains("top.c"), "{stdout}");
-    assert!(!stdout.contains("deep.c"), "{stdout}");
+    // The facts gathered before the cap are written; the file past it is not.
+    let map = std::fs::read_to_string(dir.0.join("migration/map/project-map.json"))
+        .expect("the map file holds the facts past a cap");
+    assert!(map.contains("\"top.c\""), "{map}");
+    assert!(!map.contains("deep.c"), "{map}");
 }
