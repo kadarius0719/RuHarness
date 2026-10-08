@@ -30,6 +30,7 @@ highlighted menu row is the `I:` mark (a greyed row can be highlighted: `ID:`).
 The spike of docs/PROJECT-MAP-INVESTIGATION.md: compiles every `.c` alone (`cc -c`, include folders
 = every folder holding a `.h`, `-D` flags only when given as arguments), reads `nm -g`, and prints
 JSON: each `main`'s and fuzz target's closure, outside symbols, ambiguities, files in no closure,
-duplicate definitions. Compiles only — runs nothing from the project.
+duplicate definitions. Compiles only — runs nothing from the project — but with **no sandbox**: `cc`
+reads whatever the account can; run it on downloads you trust enough to compile unconfined.
 
     python3 -I devtools/project-map/closure.py <project> <scratch dir> [-DNAME ...] > map.json

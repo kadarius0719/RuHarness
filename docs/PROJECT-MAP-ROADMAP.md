@@ -69,7 +69,9 @@ rest of RuHarness uses):
    each shared library becomes units whose Rust is judged against **every** tool that links it.
 
 Why this order: the link closures alone usually get it right; the model only settles what is
-left, so it is cheaper and repeatable, and the link check catches a model's mistake.
+left, so it is cheaper and repeatable, and the link check catches a model's mistake that leaves a
+symbol missing or doubled — not a wrong kind, a wrong definer when both link, or wrong flags (the
+spike and the design review, 2026-10-07; design §1).
 
 Staged value, roughly:
 1. Use the project's own build information (`compile_commands.json`): several folders and

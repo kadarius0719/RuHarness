@@ -8,8 +8,8 @@ lines: compile each `.c` to an object, read what it defines and needs with `nm`,
 ## What is on this Mac to look at
 
 - **The 100 benchmark cases** (`targets/tractor/cases`): every one has the same shape — a
-  CMake file, `test_case/include/*.h`, `test_case/src/*.c`, built as a **library** (99 have no
-  `main()` at all; one has one). So the benchmark never exercised the "which program?" question:
+  CMake file, `test_case/include/*.h`, `test_case/src/*.c`, built as a **library** (none of the 100
+  has a `main()` — the design review's verifier checked every file; draft 0 said one did). So the benchmark never exercised the "which program?" question:
   each case is already one unit of one library. It does show something else: the C sits in
   `src/`, a subfolder of `source_dir`, and the harness only reads it because `bench init` wrote
   `source_dir = "test_case"` with `include_dirs` — one folder level is the most the current
@@ -93,8 +93,10 @@ library, its three tools and an `extra/` folder).
 ### Result 3 — lz4: the closures separate 33 programs in two seconds
 
 48 `.c` files, all compiling alone with no flags (2.2 s). 33 entry points: 23 `main`s (1 tool in
-`programs/`, 10 in `examples/`, 12 in `tests/`) and 10 fuzz targets in `ossfuzz/`. The folder names
-alone would classify every one of them. `lib/lz4.c` is in 32 of the 33 closures — the library they
+`programs/`, 10 in `examples/`, 11 in `tests/`, 1 in `ossfuzz/` — the driver below) and 10 fuzz
+targets in `ossfuzz/`. The folder names alone would classify every one of them. `lib/lz4.c` is in 29
+of the 33 closures (the review's rerun; this note first said 32 — `standaloneengine.c`,
+`checkTag.c`, `datagencli.c` and `freestanding.c` do not reach it) — the library they
 all share; `tests/datagencli.c` reaches into `programs/lorem.c` — sharing across folders. The tool:
 
 | entry | closure (besides itself) | outside |
