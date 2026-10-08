@@ -1363,8 +1363,9 @@ plan-order | computer | compilers`, and the cockpit's own `measuring | too-large
   run harness perf run". Without facts (none, or unreadable) the C is not judged, said once:
   "perf: the C not checked: no facts — run harness scan", or, when a program-as-it-stands row is
   stored, "perf: the C and the units the program as it stands holds not checked: no facts — run
-  harness scan" (its held and left-out units are then not judged either); the rest of each row is
-  still judged. A unit's results file that cannot be read does not hide the others: the rows that
+  harness scan" (its held and left-out units are then not judged either); with facts but units
+  that cannot be read, "perf: the units the program as it stands holds not checked: <error>"; the
+  rest of each row is still judged. A unit's results file that cannot be read does not hide the others: the rows that
   read are shown, then the error naming the file, exit 1. Exit 0/1.
 - Events (`--json`): `perf-row {side: c | program | unit, unit (unit rows), workload, outcome,
   words}` — `words` is a display-only courtesy (the CLI's line), never parsed.

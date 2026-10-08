@@ -645,7 +645,8 @@ checks nothing (no check is worth its runs) and says only "nothing measured yet"
 the C is not judged, said once in one line ("perf: the C not checked: no facts — run harness
 scan"); when a program-as-it-stands row is stored, the same line says the units that program
 holds are not checked either ("perf: the C and the units the program as it stands holds not
-checked: no facts — run harness scan"); the rest of each row is still judged. One unit's results
+checked: no facts — run harness scan"; with facts but units that cannot be read, "perf: the units
+the program as it stands holds not checked: <error>"); the rest of each row is still judged. One unit's results
 file that cannot be read does not hide the other rows: `perf show` prints the rows that read, then
 the error naming the bad file, and exits 1, as the cockpit shows the other rows. The cockpit
 judges what it can without starting a process and says the rest is not checked (§3.11). A results
