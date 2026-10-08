@@ -65,9 +65,9 @@ fn project(tag: &str) -> PathBuf {
 fn the_lookup_order_and_every_ledger_path_of_a_tool() {
     let root = project("lookup");
     let target = root.to_str().unwrap();
-    // Two tools, no --tool: refused, both named (the first command adopts
-    // the project, whose migration/ the test wrote).
-    let r = harness(&["--adopt", "scan", "--target", target]);
+    // Two tools, no --tool: refused, both named (and no adoption asked: a
+    // migration/ of hand-written tools holds no results).
+    let r = harness(&["scan", "--target", target]);
     assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
     assert!(
         r.stderr.contains("2 mapped tools") && r.stderr.contains("t-a, t-b"),
@@ -136,19 +136,184 @@ fn the_lookup_order_and_every_ledger_path_of_a_tool() {
     assert!(after.contains("src/a/a2.c") && !after.contains("src/b/b.c"));
 }
 
+/// `harness` with `stdin` piped in.
+fn harness_in(args: &[&str], stdin: &str) -> Run {
+    use std::io::Write;
+    let file = harness_core::adopt::testing::adoption_file();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(args)
+        .env(harness_core::adopt::ADOPTED_ENV, file)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn harness");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    Run {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// Every command that takes `--tool` opens the tool's ledger with it,
+/// through the binary: without it a project of two tools is refused; with
+/// it the command reaches its own work (or its own reason) in that tool's
+/// ledger, and its next-step hints spell `--tool` so they open it again.
+#[test]
+fn every_tool_command_opens_the_tool_it_names() {
+    let root = project("commands");
+    let target = root.to_str().unwrap();
+    let a = root.join("migration/tools/t-a");
+    let edit = root.join("edit");
+    std::fs::create_dir_all(edit.join("src")).unwrap();
+    let edit = edit.to_str().unwrap();
+    let with_tool = |args: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        v.extend(["--target", target, "--tool", "t-a"].map(String::from));
+        v
+    };
+    let run = |args: &[String]| harness(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    // Before a scan: each reaches the tool's ledger and says to scan it.
+    let cases: [(&[&str], &str); 4] = [
+        (
+            &["review", "f-x", "--uphold-dismiss"],
+            "run `harness detect --tool t-a` first",
+        ),
+        (
+            &["migrate", "u-x", "--allow-unsandboxed"],
+            "migration/tools/t-a",
+        ),
+        (
+            &["override", "u-x", edit, "--allow-unsandboxed"],
+            "migration/tools/t-a",
+        ),
+        (
+            &["promote", "u-x", "a-1", "--allow-unsandboxed"],
+            "migration/tools/t-a",
+        ),
+    ];
+    for (args, says) in cases {
+        let r = harness(&[args, &["--target", target]].concat());
+        assert_eq!(r.code, 1, "{args:?} without --tool: {}", r.stderr);
+        assert!(
+            r.stderr.contains("2 mapped tools"),
+            "{args:?}: {}",
+            r.stderr
+        );
+        let r = run(&with_tool(args));
+        assert_eq!(r.code, 1, "{args:?}: {}\n{}", r.stdout, r.stderr);
+        assert!(
+            r.stderr.contains(says) && !r.stderr.contains("mapped tools"),
+            "{args:?}: {}",
+            r.stderr
+        );
+    }
+    // perf show before anything: the starter's command carries --tool.
+    let r = run(&with_tool(&["perf", "show", "--no-check"]));
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout
+            .contains("write your workloads file first — harness perf init --tool t-a"),
+        "{}",
+        r.stdout
+    );
+    // features save and perf save write the tool's files, named by its path.
+    let features = "schema_version = 1\n";
+    let r = harness_in(
+        &with_tool(&["features", "save", "--expect", "none", "--bytes", "19"])
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        features,
+    );
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout
+            .contains("features: saved migration/tools/t-a/features/features.toml"),
+        "{}",
+        r.stdout
+    );
+    assert!(a.join("features/features.toml").is_file());
+    let r = harness_in(
+        &with_tool(&["perf", "save", "--expect", "none", "--bytes", "19"])
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        features,
+    );
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(a.join("perf/workloads.toml").is_file());
+    assert!(!root.join("migration/features").exists() && !root.join("migration/perf").exists());
+    // perf show: the workloads file it names is the tool's.
+    let r = run(&with_tool(&["perf", "show", "--no-check"]));
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout
+            .contains("add a [[workload]] to migration/tools/t-a/perf/workloads.toml"),
+        "{}",
+        r.stdout
+    );
+    // A features file with an error is named by the tool's path.
+    let bad = "schema_version = 1\nnope = 1\n";
+    let expect = harness_core::hash::bytes_hash(features.as_bytes());
+    let bytes = bad.len().to_string();
+    let r = harness_in(
+        &with_tool(&["features", "save", "--expect", &expect, "--bytes", &bytes])
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        bad,
+    );
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stderr
+            .contains("error: migration/tools/t-a/features/features.toml:"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// No target here, and `--tool` on a project without tools: one sentence
+/// each, exit 1.
+#[test]
+fn a_folder_that_names_no_target_is_told_so_plainly() {
+    let root = tmp("no-target");
+    let target = root.to_str().unwrap();
+    let r = harness(&["state", "status", "--target", target]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert_eq!(
+        r.stderr.trim_end(),
+        format!(
+            "error: {target} is not a harness target (no harness.toml, and no mapped tool under \
+             migration/tools/); point --target at a folder that holds a harness.toml"
+        )
+    );
+    std::fs::write(root.join("harness.toml"), folder_toml("x", ".")).unwrap();
+    let r = harness(&["state", "status", "--target", target, "--tool", "t-a"]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert_eq!(
+        r.stderr.trim_end(),
+        format!(
+            "error: {target}: this project has no mapped tools; drop --tool (its harness.toml \
+             is the target)"
+        )
+    );
+}
+
 #[test]
 fn sync_runtime_keeps_one_block_per_tool() {
     let root = project("sync");
     let target = root.to_str().unwrap();
-    let mut first = true;
     for id in ["t-a", "t-b"] {
         for cmd in ["scan", "plan"] {
-            let mut args = vec![cmd, "--target", target, "--tool", id];
-            if first {
-                args.insert(0, "--adopt");
-                first = false;
-            }
-            let r = harness(&args);
+            let r = harness(&[cmd, "--target", target, "--tool", id]);
             assert_eq!(r.code, 0, "{id} {cmd}: {}\n{}", r.stdout, r.stderr);
         }
     }
@@ -230,35 +395,39 @@ fn a_file_list_target_is_refused_by_no_command() {
     .unwrap();
     let target = root.to_str().unwrap();
     // The scanner and the detectors read the file list.
-    let r = harness(&["--adopt", "scan", "--target", target]);
+    let r = harness(&["scan", "--target", target]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     let facts = std::fs::read_to_string(tool.join("facts.jsonl")).unwrap();
     assert!(facts.contains("src/lib/lzg.c"), "{facts}");
     let r = harness(&["detect", "--target", target]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
-    // Every other command opens it: plan writes the tool's plan; verify
-    // and observe go as far as their own reasons (no such unit; no
-    // provider), never refusing the form.
+    // Every other command opens it: plan writes the tool's plan; verify,
+    // gen-driver and perf go as far as their own reasons (no such unit; no
+    // workloads file), observe all the way — each by its exit code and its
+    // own words, never refusing the form.
     let r = harness(&["plan", "--target", target, "--tool", "t-lzg"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     assert!(Path::new(&tool).join("plan.toml").is_file());
-    for args in [
-        vec!["verify", "u-x", "--allow-unsandboxed"],
-        vec!["observe"],
-        vec!["gen-driver", "u-x"],
-        vec!["perf", "run"],
+    for (args, code, why) in [
+        (
+            vec!["verify", "u-x", "--allow-unsandboxed"],
+            1,
+            "error: unknown unit `u-x`",
+        ),
+        (vec!["observe"], 0, ""),
+        (vec!["gen-driver", "u-x"], 1, "error: unknown unit `u-x`"),
+        (
+            vec!["perf", "run"],
+            1,
+            "error: write your workloads file first — harness perf init --tool t-lzg gives a \
+             starter",
+        ),
     ] {
         let mut argv = args.clone();
         argv.extend(["--target", target, "--tool", "t-lzg"]);
         let r = harness(&argv);
-        for words in ["lists its files", "does not read that form"] {
-            assert!(
-                !r.stderr.contains(words),
-                "{args:?}: {}\n{}",
-                r.stdout,
-                r.stderr
-            );
-        }
+        assert_eq!(r.code, code, "{args:?}: {}\n{}", r.stdout, r.stderr);
+        assert_eq!(r.stderr.trim_end(), why, "{args:?}: {}", r.stdout);
     }
     // A too-new schema says so, before anything else.
     std::fs::write(tool.join("harness.toml"), "schema_version = 3\n").unwrap();

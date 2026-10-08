@@ -36,15 +36,35 @@ impl BlockTarget<'_> {
             Some(id) => format!("{BEGIN_PREFIX} tool={id} ("),
         }
     }
+}
 
-    /// The arguments every command line of the block carries.
-    fn args(&self) -> String {
-        match self.tool {
-            None => "`--target`".into(),
-            Some(id) => format!("`--target` and `--tool {id}`"),
-        }
+/// A `harness` command line as a next-step hint spells it: `harness <cmd>`,
+/// with `--tool <id>` after it when a mapped tool is open — the one
+/// spelling every hint and the generated block use, so a hint run as
+/// written opens the same tool (an agent copies commands literally).
+pub fn command_line(cmd: &str, tool: Option<&str>) -> String {
+    match tool {
+        None => format!("harness {cmd}"),
+        Some(id) => format!("harness {cmd} --tool {id}"),
     }
 }
+
+/// The mapped tool whose ledger folder is `ledger_rel` (root-relative:
+/// `migration/tools/<id>`), or `None` for the folder form's `migration`.
+pub fn tool_of(ledger_rel: &str) -> Option<&str> {
+    ledger_rel
+        .strip_prefix(crate::ledger::MIGRATION_DIR)?
+        .strip_prefix('/')?
+        .strip_prefix(crate::config::TOOLS_DIR)?
+        .strip_prefix('/')
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+}
+
+/// The block's line for agents on adoption (docs/PROJECT-MAP-DESIGN.md
+/// §3.7): the trust decision is the person's.
+pub const AGENTS_NEVER_ADOPT: &str = "If a command says this folder holds migration results \
+     made elsewhere, ask the person to adopt it (`harness … --adopt`, or the cockpit's \
+     question); an agent never adopts.\n";
 
 /// Render the managed block body (without markers). Deterministic, ≤60 lines,
 /// only non-derivable ledger state (per the M2 spike's context-file evidence).
@@ -103,11 +123,20 @@ pub fn render_block_body(
             ));
         }
     }
-    b.push_str(&format!(
-        "\nCommands: `harness scan` · `harness plan` · `harness detect` · `harness observe` · `harness verify <unit>` · `harness state status` · `harness review <finding>` (all take {}).\n",
-        at.args()
-    ));
+    let commands = [
+        "scan",
+        "plan",
+        "detect",
+        "observe",
+        "verify <unit>",
+        "state status",
+        "review <finding>",
+    ]
+    .map(|cmd| format!("`{}`", command_line(cmd, at.tool)))
+    .join(" · ");
+    b.push_str(&format!("\nCommands: {commands} (all take `--target`).\n"));
     b.push_str(&format!("Read first: `{ledger}/plan.toml`, `{ledger}/observer/observations.md`, `{ledger}/DECISIONS.md`, `docs/SCHEMAS.md` (harness repo).\n"));
+    b.push_str(AGENTS_NEVER_ADOPT);
     b
 }
 
@@ -282,8 +311,45 @@ mod tests {
         );
         assert!(body.contains("(tool t-lz4)"), "{body}");
         assert!(body.contains("`migration/tools/t-lz4/plan.toml`"), "{body}");
-        assert!(body.contains("`--tool t-lz4`"), "{body}");
+        // Every command is spelled as it must be run (an agent copies it).
+        assert!(
+            body.contains(
+                "Commands: `harness scan --tool t-lz4` · `harness plan --tool t-lz4` · \
+                 `harness detect --tool t-lz4` · `harness observe --tool t-lz4` · \
+                 `harness verify <unit> --tool t-lz4` · `harness state status --tool t-lz4` · \
+                 `harness review <finding> --tool t-lz4` (all take `--target`).\n"
+            ),
+            "{body}"
+        );
+        assert!(body.ends_with(AGENTS_NEVER_ADOPT), "{body}");
         let folder = render_block_body("lz4", FOLDER, &plan, &[]);
-        assert!(folder.contains("`migration/plan.toml`") && !folder.contains("tool"));
+        assert!(folder.contains("`migration/plan.toml`") && !folder.contains("--tool"));
+    }
+
+    /// The folder form's body, pinned byte for byte: what every committed
+    /// AGENTS.md holds, plus the one line that tells agents never to adopt
+    /// (added deliberately; a `sync-runtime` regenerates the block once).
+    #[test]
+    fn the_folder_forms_body_is_pinned() {
+        let plan = Plan {
+            schema_version: 1,
+            target: "z".into(),
+            units: Vec::new(),
+        };
+        assert_eq!(
+            render_block_body("z", FOLDER, &plan, &[]),
+            "## RuHarness migration state — z\n\n\
+             0 of 0 units verified/merged. The ledger under `migration/` is the source of truth \
+             — never hand-edit generated files; drive everything through `harness`.\n\n\
+             Next units (execution order · risk 0-100):\n\
+             \nCommands: `harness scan` · `harness plan` · `harness detect` · `harness observe` \
+             · `harness verify <unit>` · `harness state status` · `harness review <finding>` \
+             (all take `--target`).\n\
+             Read first: `migration/plan.toml`, `migration/observer/observations.md`, \
+             `migration/DECISIONS.md`, `docs/SCHEMAS.md` (harness repo).\n\
+             If a command says this folder holds migration results made elsewhere, ask the \
+             person to adopt it (`harness … --adopt`, or the cockpit's question); an agent never \
+             adopts.\n"
+        );
     }
 }

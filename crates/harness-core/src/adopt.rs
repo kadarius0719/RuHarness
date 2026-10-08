@@ -14,10 +14,14 @@
 //! [`check`] is the one test every reader goes through
 //! ([`TargetContext::load`](crate::TargetContext::load) calls it): a ledger
 //! whose root is not listed, or whose token is missing or different, is
-//! refused with [`Error::NotAdopted`]. [`adopt`] and [`adopt_suite`] are the
-//! person's `--adopt`; [`record_created`] is the first command that makes a
-//! ledger. The ledger alone still holds everything needed to resume; only
-//! the trust question is per computer.
+//! refused with [`Error::NotAdopted`]; a `migration/` that holds no results
+//! (only hand-written tool files and the map's `config.toml`) needs no
+//! adoption, and one that is not the harness's at all is refused as the
+//! project's own first. [`adopt`] and [`adopt_suite`] are the person's
+//! `--adopt` (a project's adoption always writes a fresh token);
+//! [`record_created`] is the first command that makes a ledger. The ledger
+//! alone still holds everything needed to resume; only the trust question is
+//! per computer.
 
 use crate::error::Error;
 use crate::ledger::{read_regular, write_atomic, MIGRATION_DIR};
@@ -144,18 +148,59 @@ impl Adoption {
                 "adopt: {root} is already trusted on this computer; nothing deleted"
             )];
         }
-        vec![
-            format!(
-                "adopt: {root} is now trusted on this computer ({})",
-                counted(self.units, self.verified)
-            ),
-            format!(
+        let mut lines = vec![format!(
+            "adopt: {root} is now trusted on this computer ({})",
+            counted(self.units, self.verified)
+        )];
+        // Only when something was deleted or counted: a folder of
+        // hand-written files has no verdicts to call claims.
+        if !self.deleted.is_empty() || self.units > 0 {
+            lines.push(format!(
                 "adopt: deleted {} build folder(s) made elsewhere; the verdicts are claims made \
                  elsewhere until `harness verify` runs them here",
                 self.deleted.len()
-            ),
-        ]
+            ));
+        }
+        lines
     }
+}
+
+/// Who a not-adopted refusal speaks to: each reader is told only its own
+/// way to adopt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Way {
+    /// A `harness` command: add `--adopt` once.
+    Command,
+    /// The cockpit away from a terminal: start it in one and answer.
+    Cockpit,
+    /// An agent (harness-mcp): ask the person; an agent never adopts.
+    Agent,
+}
+
+/// The not-adopted refusal, one sentence: the folder, what it claims, and
+/// what `way`'s reader does next.
+pub fn refusal(root: &Path, units: usize, verified: usize, way: Way) -> String {
+    let head = made_elsewhere(root, units, verified);
+    match way {
+        Way::Command => format!("{head}: to trust them here, add `--adopt` once"),
+        Way::Cockpit => format!(
+            "{head}: to trust them here, start the cockpit in a terminal and answer its question"
+        ),
+        Way::Agent => format!(
+            "{head}: ask the person to adopt it (`harness state status --adopt --target {}`, or \
+             the cockpit's question); an agent never adopts",
+            root.display()
+        ),
+    }
+}
+
+/// The refusal's first half: the folder and what its ledger claims.
+pub fn made_elsewhere(root: &Path, units: usize, verified: usize) -> String {
+    format!(
+        "{}: this folder already holds migration results made elsewhere ({})",
+        root.display(),
+        counted(units, verified)
+    )
 }
 
 /// `3 units, 1 verified` (the refusal's words).
@@ -198,6 +243,66 @@ pub fn token_path(root: &Path, scope: Scope) -> PathBuf {
 /// to a folder counts too).
 pub fn has_ledger(root: &Path) -> bool {
     std::fs::symlink_metadata(root.join(MIGRATION_DIR)).is_ok()
+}
+
+/// `root` holds results: its `migration/` exists and is not one that holds
+/// none ([`holds_no_results`]). Only such a folder is asked about.
+pub fn holds_results(root: &Path) -> bool {
+    has_ledger(root) && !holds_no_results(&root.join(MIGRATION_DIR))
+}
+
+/// Does `dir` (a `migration/` folder) hold no results? It does when it is a
+/// real folder holding only what a person writes by hand —
+/// `tools/<id>/harness.toml` files and `map/config.toml` — and the
+/// harness's bookkeeping (`.gitignore`, the writer locks, the token;
+/// `.DS_Store` ignored): no facts, plan, units, map file or verdicts. Such
+/// a folder is the project's own ledger, made here; an empty one too.
+pub fn holds_no_results(dir: &Path) -> bool {
+    let only_files = |dir: &Path, allowed: &[&str]| {
+        is_real_dir(dir)
+            && names_in(dir).is_some_and(|names| {
+                names
+                    .iter()
+                    .all(|(name, path)| allowed.contains(&name.as_str()) && is_real_file(path))
+            })
+    };
+    if !is_real_dir(dir) {
+        return false;
+    }
+    let Some(names) = names_in(dir) else {
+        return false;
+    };
+    names.iter().all(|(name, path)| match name.as_str() {
+        ".gitignore" | ".lock" | TOKEN_FILE => is_real_file(path),
+        "map" => only_files(path, &["config.toml", ".lock"]),
+        "tools" => {
+            is_real_dir(path)
+                && names_in(path).is_some_and(|tools| {
+                    tools
+                        .iter()
+                        .all(|(_, tool)| only_files(tool, &["harness.toml", ".lock"]))
+                })
+        }
+        _ => false,
+    })
+}
+
+/// The entries of `dir` with their paths, `.DS_Store` left out; `None` when
+/// it cannot be read or holds a name that is not UTF-8.
+fn names_in(dir: &Path) -> Option<Vec<(String, PathBuf)>> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).ok()? {
+        let entry = entry.ok()?;
+        let name = entry.file_name().into_string().ok()?;
+        if name != IGNORED {
+            out.push((name, entry.path()));
+        }
+    }
+    Some(out)
+}
+
+fn is_real_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
 
 /// Is `dir` (a `migration/` folder) the harness's? It is when it is a real
@@ -261,18 +366,23 @@ fn canonical(path: &Path) -> PathBuf {
 // ---------- the check ----------
 
 /// The one check every reader of a ledger goes through: `Ok` when `root`
-/// holds no ledger, or its root (or a benchmark suite above it) is listed in
-/// the adoption file with the token the project holds; else
+/// holds no results ([`holds_results`]), or its root (or a benchmark suite
+/// above it) is listed in the adoption file with the token the project
+/// holds; else [`Error::ForeignMigration`] when its `migration/` is not the
+/// harness's at all (said before any adoption question), else
 /// [`Error::NotAdopted`], saying how many units and verified units the
 /// ledger claims.
 pub fn check(root: &Path) -> Result<(), Error> {
     let root = root.canonicalize().map_err(|e| Error::io(root, e))?;
-    if !has_ledger(&root) || created_here(&root) {
+    if !holds_results(&root) || created_here(&root) {
         return Ok(());
     }
     let file = read_adopted(&adoption_file()?)?;
     if trusted(&file, &root) {
         return Ok(());
+    }
+    if !is_harness_ledger(&root.join(MIGRATION_DIR)) {
+        return Err(Error::ForeignMigration { root });
     }
     let (units, verified) = count_units(&root);
     Err(Error::NotAdopted {
@@ -475,14 +585,62 @@ fn update<T>(change: impl FnOnce(&mut AdoptedFile) -> Result<T, Error>) -> Resul
     Ok(out)
 }
 
-/// The token at `path` when well formed, else a new one written there.
+/// A fresh random token written at `path`, replacing any there: what the
+/// person's `--adopt` of a project and the first command that makes a
+/// project's ledger record, so a token a download shipped is never trusted.
+fn fresh_token(path: &Path) -> Result<String, Error> {
+    let token = crate::hash::random_hex(16);
+    write_atomic(path, format!("{token}\n").as_bytes())?;
+    Ok(token)
+}
+
+/// The token at `path` when well formed, else a new one written there —
+/// made only when no file is there, so processes racing on one fixture
+/// agree on one token. Only the test helper and a benchmark suite's
+/// adoption (whose trust is `corpus.lock`) keep a token already there.
 fn ensure_token(path: &Path) -> Result<String, Error> {
     if let Some(token) = read_token(path) {
         return Ok(token);
     }
+    use std::io::Write;
     let token = crate::hash::random_hex(16);
-    write_atomic(path, format!("{token}\n").as_bytes())?;
-    Ok(token)
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+    }
+    // Created only when nothing is there (never through a link): the one
+    // that creates it writes its 33 bytes; another that finds it reads it
+    // once written.
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => {
+            file.write_all(format!("{token}\n").as_bytes())
+                .map_err(|e| Error::io(path, e))?;
+            Ok(token)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            for _ in 0..100 {
+                if let Some(theirs) = read_token(path) {
+                    return Ok(theirs);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            // A file there that is no token: replaced.
+            fresh_token(path)
+        }
+        Err(e) => Err(Error::io(path, e)),
+    }
+}
+
+/// The token a root is recorded with: a project's is always fresh; a
+/// benchmark suite keeps the one it holds.
+fn token_for(root: &Path, scope: Scope) -> Result<String, Error> {
+    match scope {
+        Scope::Project => fresh_token(&token_path(root, scope)),
+        Scope::Suite => ensure_token(&token_path(root, scope)),
+    }
 }
 
 fn upsert(file: &mut AdoptedFile, root: &Path, token: String, scope: Scope, how: How) {
@@ -497,9 +655,9 @@ fn upsert(file: &mut AdoptedFile, root: &Path, token: String, scope: Scope, how:
 }
 
 /// Record that a command on this computer created `root`'s first ledger
-/// (for a suite: its cases' first ledgers): a token is written into the
-/// project and the root listed. Nothing when it is already listed, or holds
-/// no ledger after all.
+/// (for a suite: its cases' first ledgers): a fresh token is written into
+/// the project (a suite keeps its own) and the root listed. Nothing when it
+/// is already listed, or holds no ledger after all.
 pub fn record_created(root: &Path, scope: Scope) -> Result<(), Error> {
     let root = root.canonicalize().map_err(|e| Error::io(root, e))?;
     let holds = match scope {
@@ -513,7 +671,7 @@ pub fn record_created(root: &Path, scope: Scope) -> Result<(), Error> {
         if listed(file, &root, scope) {
             return Ok(());
         }
-        let token = ensure_token(&token_path(&root, scope))?;
+        let token = token_for(&root, scope)?;
         upsert(file, &root, token, scope, How::Created);
         Ok(())
     })
@@ -521,16 +679,18 @@ pub fn record_created(root: &Path, scope: Scope) -> Result<(), Error> {
 
 /// The person's `--adopt` for one project: a root already listed with its
 /// token is left as it is (nothing deleted); a `migration/` that is the
-/// project's own is refused ([`Error::ForeignMigration`]); otherwise the
-/// harness's build folders made elsewhere are deleted (see
-/// [`delete_build_folders`]) and the root recorded with its token (the one
-/// the project holds, else a new one written there).
+/// project's own is refused ([`Error::ForeignMigration`]); one that holds no
+/// results has nothing to adopt (the command records it as made here);
+/// otherwise the harness's build folders made elsewhere are deleted (see
+/// [`delete_build_folders`]) and the root recorded with a fresh token,
+/// replacing any the folder holds.
 pub fn adopt(root: &Path) -> Result<Adoption, Error> {
     adopt_inner(root, Scope::Project, true)
 }
 
 /// The person's `--adopt` for a benchmark suite: the suite root adopted as
-/// one root covering every case ledger under it.
+/// one root covering every case ledger under it, with the token the suite
+/// holds (else a new one).
 pub fn adopt_suite(suite: &Path) -> Result<Adoption, Error> {
     adopt_inner(suite, Scope::Suite, true)
 }
@@ -539,7 +699,7 @@ fn adopt_inner(root: &Path, scope: Scope, delete: bool) -> Result<Adoption, Erro
     let root = root.canonicalize().map_err(|e| Error::io(root, e))?;
     let ledgers = match scope {
         Scope::Project => {
-            if has_ledger(&root) {
+            if holds_results(&root) {
                 vec![root.clone()]
             } else {
                 Vec::new()
@@ -580,7 +740,7 @@ fn adopt_inner(root: &Path, scope: Scope, delete: bool) -> Result<Adoption, Erro
                     .extend(delete_build_folders(&ledger_root.join(MIGRATION_DIR))?);
             }
         }
-        let token = ensure_token(&token_path(&root, scope))?;
+        let token = token_for(&root, scope)?;
         upsert(file, &root, token, scope, How::Adopted);
         adoption.newly = true;
         Ok(())
@@ -692,12 +852,19 @@ pub mod testing {
             std::fs::create_dir_all(&dir).expect("make the test adoption folder");
             let file = dir.join("adopted.toml");
             std::env::set_var(ADOPTED_ENV, &file);
-            // RuHarness's committed fixtures, adopted as they stand (their
-            // tokens are committed): zopfli and the benchmark suite.
+            // RuHarness's committed fixtures, adopted as they stand for this
+            // test process: zopfli and the benchmark suite. Their tokens are
+            // not committed (a person adopts them once per computer); the
+            // first test process to need one writes it, and every other
+            // process, running at the same time, records that same token.
             let targets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../targets");
-            for (fixture, scope) in [("zopfli", Scope::Project), ("tractor", Scope::Suite)] {
+            let fixtures = [
+                ("zopfli", MIGRATION_DIR, Scope::Project),
+                ("tractor", crate::bench::CASES_DIR, Scope::Suite),
+            ];
+            for (fixture, inside, scope) in fixtures {
                 let root = targets.join(fixture);
-                if root.join(token_path(Path::new(""), scope)).is_file() {
+                if is_real_dir(&root.join(inside)) {
                     record(&root, scope);
                 }
             }
@@ -705,7 +872,8 @@ pub mod testing {
         })
     }
 
-    /// List `root` with the token it holds (or a new one), deleting nothing.
+    /// List `root` with the token it holds (or a new one, made only when no
+    /// other process made one first), deleting nothing.
     fn record(root: &Path, scope: Scope) {
         let root = root.canonicalize().expect("the fixture root exists");
         update(|file| {
@@ -794,8 +962,30 @@ mod tests {
         let err = check(&root).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "this folder already holds migration results made elsewhere (2 units, 1 verified): \
-             to trust them here, add `--adopt` once"
+            format!(
+                "{}: this folder already holds migration results made elsewhere (2 units, 1 \
+                 verified): to trust them here, add `--adopt` once",
+                root.display()
+            )
+        );
+        // Each reader is told its own way, and an agent never adopts.
+        let Error::NotAdopted {
+            units, verified, ..
+        } = err
+        else {
+            panic!("not the refusal");
+        };
+        assert!(refusal(&root, units, verified, Way::Cockpit).ends_with(
+            "to trust them here, start the cockpit in a terminal and answer its question"
+        ));
+        let agent = refusal(&root, units, verified, Way::Agent);
+        assert!(
+            agent.ends_with(&format!(
+                "ask the person to adopt it (`harness state status --adopt --target {}`, or the \
+                 cockpit's question); an agent never adopts",
+                root.display()
+            )),
+            "{agent}"
         );
         // A folder with no ledger has nothing to trust.
         assert!(check(&tmp("empty")).is_ok());
@@ -862,18 +1052,160 @@ mod tests {
         // And with no token at all.
         std::fs::remove_file(root.join("migration").join(TOKEN_FILE)).unwrap();
         assert!(matches!(check(&root), Err(Error::NotAdopted { .. })));
-        // Adopting a root whose token file exists records that token, writes none.
+        // Adopting a root that shipped a token writes a fresh one over it:
+        // a later tree shipped with the same token is not trusted.
+        let shipped_token = "1".repeat(32);
         std::fs::write(
             root.join("migration").join(TOKEN_FILE),
-            format!("{}\n", "1".repeat(32)),
+            format!("{shipped_token}\n"),
         )
         .unwrap();
         adopt(&root).unwrap();
-        assert_eq!(
-            read_token(&root.join("migration").join(TOKEN_FILE)).unwrap(),
-            "1".repeat(32)
-        );
+        let fresh = read_token(&root.join("migration").join(TOKEN_FILE)).unwrap();
+        assert_ne!(fresh, shipped_token);
         check(&root).unwrap();
+        std::fs::remove_dir_all(root.join("migration")).unwrap();
+        shipped(&root);
+        std::fs::write(
+            root.join("migration").join(TOKEN_FILE),
+            format!("{shipped_token}\n"),
+        )
+        .unwrap();
+        assert!(matches!(check(&root), Err(Error::NotAdopted { .. })));
+    }
+
+    /// The first command that makes a ledger also writes a fresh token over
+    /// one a download shipped beside hand-written files.
+    #[test]
+    fn a_ledger_made_here_never_keeps_a_shipped_token() {
+        testing::adoption_file();
+        let root = tmp("made-here");
+        let m = root.join("migration");
+        std::fs::create_dir_all(m.join("tools/t-a")).unwrap();
+        std::fs::write(m.join("tools/t-a/harness.toml"), "schema_version = 2\n").unwrap();
+        let shipped_token = "2".repeat(32);
+        std::fs::write(m.join(TOKEN_FILE), format!("{shipped_token}\n")).unwrap();
+        record_created(&root, Scope::Project).unwrap();
+        assert_ne!(read_token(&m.join(TOKEN_FILE)).unwrap(), shipped_token);
+    }
+
+    /// A `migration/` holding only hand-written tool files and the map's
+    /// configuration holds no results: no adoption question, nothing to
+    /// adopt, and no "claims" line. Anything more is asked about.
+    #[test]
+    fn hand_written_tools_hold_no_results() {
+        testing::adoption_file();
+        let root = tmp("hand-written");
+        let m = root.join("migration");
+        std::fs::create_dir_all(m.join("tools/t-a")).unwrap();
+        std::fs::create_dir_all(m.join("map")).unwrap();
+        std::fs::write(m.join("tools/t-a/harness.toml"), "schema_version = 2\n").unwrap();
+        std::fs::write(m.join("map/config.toml"), "").unwrap();
+        std::fs::write(m.join(".DS_Store"), "x").unwrap();
+        assert!(holds_no_results(&m) && !holds_results(&root));
+        check(&root).unwrap();
+        let done = adopt(&root).unwrap();
+        assert!(!done.newly && !done.had_ledger);
+        assert!(!done.describe().iter().any(|l| l.contains("claims")));
+        // An empty migration/ holds none either.
+        let empty = tmp("empty-ledger");
+        std::fs::create_dir_all(empty.join("migration")).unwrap();
+        check(&empty).unwrap();
+        // A tool's plan, the map file, or facts are results.
+        for (path, body) in [
+            ("tools/t-a/plan.toml", "schema_version = 1\n"),
+            ("map/project-map.json", "{}"),
+            ("facts.jsonl", ""),
+        ] {
+            std::fs::write(m.join(path), body).unwrap();
+            assert!(holds_results(&root), "{path}");
+            assert!(
+                matches!(check(&root), Err(Error::NotAdopted { .. })),
+                "{path}"
+            );
+            std::fs::remove_file(m.join(path)).unwrap();
+        }
+        check(&root).unwrap();
+        // A link in place of a tool's file is no hand-written file.
+        std::fs::remove_file(m.join("tools/t-a/harness.toml")).unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere"), m.join("tools/t-a/harness.toml"))
+            .unwrap();
+        assert!(holds_results(&root));
+    }
+
+    /// A `migration/` that is not the harness's is refused as the project's
+    /// own before any adoption question.
+    #[test]
+    fn the_projects_own_migration_folder_is_named_before_adoption() {
+        testing::adoption_file();
+        let root = tmp("own-first");
+        std::fs::create_dir_all(root.join("migration")).unwrap();
+        std::fs::write(root.join("migration/001_init.sql"), "create table").unwrap();
+        assert!(matches!(check(&root), Err(Error::ForeignMigration { .. })));
+        // A "claims" line only when something was deleted or counted.
+        let quiet = Adoption {
+            root: root.clone(),
+            newly: true,
+            had_ledger: true,
+            deleted: Vec::new(),
+            units: 0,
+            verified: 0,
+        };
+        assert_eq!(quiet.describe().len(), 1);
+        let counted = Adoption { units: 1, ..quiet };
+        assert_eq!(counted.describe().len(), 2);
+    }
+
+    /// Adopting deletes each mapped tool's build folders too: its `build/`,
+    /// its crates' `target/`, an attempt's `candidate/target/`, a
+    /// `.promote-*/`.
+    #[test]
+    fn adopting_deletes_a_tools_build_folders() {
+        testing::adoption_file();
+        let root = tmp("tool-builds");
+        shipped(&root);
+        let tool = root.join("migration/tools/t-a");
+        std::fs::create_dir_all(tool.join("build/obj")).unwrap();
+        std::fs::write(tool.join("harness.toml"), "schema_version = 2\n").unwrap();
+        let unit = tool.join("units/u9");
+        std::fs::create_dir_all(unit.join("u9_rs/target/debug")).unwrap();
+        std::fs::create_dir_all(unit.join("u9_rs/src")).unwrap();
+        std::fs::create_dir_all(unit.join("attempts/a-2/candidate/target")).unwrap();
+        std::fs::create_dir_all(unit.join(".promote-a-2")).unwrap();
+        let done = adopt(&root).unwrap();
+        assert!(done.newly);
+        assert!(!tool.join("build").exists());
+        assert!(!unit.join("u9_rs/target").exists());
+        assert!(unit.join("u9_rs/src").exists());
+        assert!(!unit.join("attempts/a-2/candidate/target").exists());
+        assert!(!unit.join(".promote-a-2").exists());
+        assert!(tool.join("harness.toml").exists());
+        assert!(
+            done.deleted.contains(&tool.join("build")),
+            "{:?}",
+            done.deleted
+        );
+    }
+
+    /// Test processes racing on one fixture agree on one token.
+    #[test]
+    fn racing_helpers_agree_on_one_token() {
+        let root = tmp("race-token");
+        let path = root.join("migration").join(TOKEN_FILE);
+        let tokens: Vec<String> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| s.spawn(|| ensure_token(&path).unwrap()))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert!(tokens.iter().all(|t| *t == tokens[0]), "{tokens:?}");
+        assert_eq!(read_token(&path).as_ref(), Some(&tokens[0]));
+        // Nothing is left beside it.
+        let names: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["migration"]);
     }
 
     #[test]

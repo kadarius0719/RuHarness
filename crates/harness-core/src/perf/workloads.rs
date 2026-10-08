@@ -69,6 +69,9 @@ impl Workloads {
 /// A refusal of the workloads file: where, and what.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkloadsError {
+    /// The file, root-relative: `migration/perf/workloads.toml`, or a
+    /// mapped tool's `migration/tools/<id>/perf/workloads.toml`.
+    pub file: String,
     /// 1-based line.
     pub line: usize,
     /// 1-based column, in characters.
@@ -81,13 +84,45 @@ impl std::fmt::Display for WorkloadsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}/{}/{WORKLOADS_FILE} line {}, column {}: {}",
-            crate::ledger::MIGRATION_DIR,
-            super::PERF_DIR,
-            self.line,
-            self.column,
-            self.message
+            "{} line {}, column {}: {}",
+            self.file, self.line, self.column, self.message
         )
+    }
+}
+
+/// The workloads file of the ledger folder `ledger_rel` (root-relative:
+/// `migration`, or `migration/tools/<id>`), as a refusal names it.
+pub fn file_in(ledger_rel: &str) -> String {
+    format!("{ledger_rel}/{}/{WORKLOADS_FILE}", super::PERF_DIR)
+}
+
+/// A ledger's folder relative to its target root, `/`-separated.
+fn ledger_rel(ledger: &crate::ledger::Ledger) -> String {
+    ledger
+        .dir()
+        .strip_prefix(ledger.target_root())
+        .map(|rel| {
+            rel.components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_else(|_| crate::ledger::MIGRATION_DIR.to_string())
+}
+
+/// The file `path` names, from its ledger's `migration/` on (the folder
+/// form's name when it has none: a draft named by its file name alone).
+fn file_of(path: &Path) -> String {
+    let parts: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    match parts
+        .iter()
+        .rposition(|p| p == crate::ledger::MIGRATION_DIR)
+    {
+        Some(at) if at + 1 < parts.len() => parts[at..].join("/"),
+        _ => file_in(crate::ledger::MIGRATION_DIR),
     }
 }
 
@@ -106,17 +141,21 @@ pub enum WorkloadsState {
 
 impl WorkloadsState {
     /// Why perf cannot measure, in the CLI's and the cockpit's words, or
-    /// `None` when it can.
-    pub fn blocker(&self) -> Option<String> {
+    /// `None` when it can. `ledger_rel` is the ledger folder, root-relative
+    /// (`migration`, or `migration/tools/<id>`): the file and the command
+    /// named are that ledger's.
+    pub fn blocker(&self, ledger_rel: &str) -> Option<String> {
         match self {
-            WorkloadsState::NoFile => {
-                Some("write your workloads file first — harness perf init gives a starter".into())
-            }
-            WorkloadsState::NoWorkload => Some(format!(
-                "add a [[workload]] to {}/{}/{WORKLOADS_FILE}",
-                crate::ledger::MIGRATION_DIR,
-                super::PERF_DIR
+            WorkloadsState::NoFile => Some(format!(
+                "write your workloads file first — {} gives a starter",
+                crate::runtime_view::command_line(
+                    "perf init",
+                    crate::runtime_view::tool_of(ledger_rel)
+                )
             )),
+            WorkloadsState::NoWorkload => {
+                Some(format!("add a [[workload]] to {}", file_in(ledger_rel)))
+            }
             WorkloadsState::Invalid(e) => Some(format!("{e} — fix it, or Edit the workloads file")),
             WorkloadsState::Ready(_) => None,
         }
@@ -148,6 +187,7 @@ pub fn load(ledger: &crate::ledger::Ledger) -> Result<WorkloadsState, Error> {
     let bytes = crate::ledger::read_regular(&path, MAX_WORKLOADS_BYTES)?;
     let Ok(text) = std::str::from_utf8(&bytes) else {
         return Ok(WorkloadsState::Invalid(WorkloadsError {
+            file: file_in(&ledger_rel(ledger)),
             line: 1,
             column: 1,
             message: "not UTF-8 text".into(),
@@ -156,7 +196,10 @@ pub fn load(ledger: &crate::ledger::Ledger) -> Result<WorkloadsState, Error> {
     match parse(text, &path) {
         Ok(w) if w.workloads.is_empty() => Ok(WorkloadsState::NoWorkload),
         Ok(w) => Ok(WorkloadsState::Ready(w)),
-        Err(ParseError::Rule(e)) => Ok(WorkloadsState::Invalid(e)),
+        Err(ParseError::Rule(e)) => Ok(WorkloadsState::Invalid(WorkloadsError {
+            file: file_in(&ledger_rel(ledger)),
+            ..e
+        })),
         Err(ParseError::TooNew(e)) => Err(e),
     }
 }
@@ -175,6 +218,7 @@ type Spanned<'a> = toml::Spanned<toml::de::DeValue<'a>>;
 fn at(text: &str, span: std::ops::Range<usize>, message: String) -> ParseError {
     let (line, column) = line_column(text, span.start);
     ParseError::Rule(WorkloadsError {
+        file: file_in(crate::ledger::MIGRATION_DIR),
         line,
         column,
         message,
@@ -201,6 +245,17 @@ fn integer(v: &toml::de::DeValue<'_>) -> Option<i64> {
 /// Validate the text of a workloads file (see [`load`]); `path` names it in
 /// a too-new error.
 pub fn parse(text: &str, path: &Path) -> Result<Workloads, ParseError> {
+    parse_rules(text, path).map_err(|e| match e {
+        // The refusal names the file `path` is, from its ledger on.
+        ParseError::Rule(rule) => ParseError::Rule(WorkloadsError {
+            file: file_of(path),
+            ..rule
+        }),
+        other => other,
+    })
+}
+
+fn parse_rules(text: &str, path: &Path) -> Result<Workloads, ParseError> {
     let doc = toml::de::DeTable::parse(text).map_err(|e| {
         let span = e.span().unwrap_or(0..0);
         at(
@@ -853,7 +908,7 @@ mod tests {
             WorkloadsState::NoFile
         );
         assert!(WorkloadsState::NoFile
-            .blocker()
+            .blocker("migration")
             .expect("words")
             .contains("harness perf init"));
         std::fs::create_dir_all(super::super::perf_dir(&crate::ledger::Ledger::new(&dir)))
@@ -862,7 +917,7 @@ mod tests {
         let state = load(&crate::ledger::Ledger::new(&dir)).expect("load");
         assert_eq!(state, WorkloadsState::NoWorkload);
         assert!(state
-            .blocker()
+            .blocker("migration")
             .expect("words")
             .contains("add a [[workload]]"));
         std::fs::write(
@@ -871,7 +926,7 @@ mod tests {
         )
         .expect("write");
         let state = load(&crate::ledger::Ledger::new(&dir)).expect("load");
-        let words = state.blocker().expect("words");
+        let words = state.blocker("migration").expect("words");
         assert!(
             words.starts_with("migration/perf/workloads.toml line 3, column 6:")
                 && words.ends_with("— fix it, or Edit the workloads file"),
@@ -1076,5 +1131,42 @@ mod tests {
             ..ab.clone()
         };
         assert_ne!(digest(&ab, None), digest(&a_b, None));
+    }
+
+    /// A mapped tool's workloads file is named by its own path in every
+    /// refusal and blocker, and the starter's command carries `--tool`.
+    #[test]
+    fn a_tools_workloads_file_is_named_by_its_path() {
+        let root = std::env::temp_dir().join(format!("perf-t-{}", crate::hash::random_hex(6)));
+        let dir = root.join("migration/tools/t-lzg");
+        let ledger = crate::ledger::Ledger::at(&root, &dir);
+        let rel = "migration/tools/t-lzg";
+        assert_eq!(
+            load(&ledger).expect("load").blocker(rel).unwrap(),
+            "write your workloads file first — harness perf init --tool t-lzg gives a starter"
+        );
+        std::fs::create_dir_all(super::super::perf_dir(&ledger)).expect("dirs");
+        std::fs::write(workloads_path(&ledger), STARTER).expect("write");
+        assert_eq!(
+            load(&ledger).expect("load").blocker(rel).unwrap(),
+            "add a [[workload]] to migration/tools/t-lzg/perf/workloads.toml"
+        );
+        std::fs::write(workloads_path(&ledger), "schema_version = 1\nextra = 1\n").expect("write");
+        let words = load(&ledger).expect("load").blocker(rel).unwrap();
+        assert!(
+            words.starts_with("migration/tools/t-lzg/perf/workloads.toml line 2, column 1:"),
+            "{words}"
+        );
+        // The same file parsed by its path (a save) names it the same way.
+        let Err(ParseError::Rule(e)) = parse("x = 1\n", &workloads_path(&ledger)) else {
+            panic!("refused");
+        };
+        assert_eq!(e.file, "migration/tools/t-lzg/perf/workloads.toml");
+        // The folder form keeps its words.
+        assert_eq!(
+            WorkloadsState::NoWorkload.blocker("migration").unwrap(),
+            "add a [[workload]] to migration/perf/workloads.toml"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -47,7 +47,9 @@ pub fn read(target: &Path) -> Result<Read, String> {
 pub fn read_tool(target: &Path, tool: Option<&str>) -> Result<Read, String> {
     // A ledger made elsewhere is refused before anything of it is read —
     // the preflight measures its files (docs/PROJECT-MAP-DESIGN.md §3.7).
-    harness_core::adopt::check(target).map_err(|e| e.to_string())?;
+    // In the cockpit's own words: it is asked at the start, in a terminal.
+    harness_core::adopt::check(target)
+        .map_err(|e| e.words_for(harness_core::adopt::Way::Cockpit))?;
     preflight::preflight_tool(target, tool)?;
     let snapshot = Snapshot::open(target, tool).map_err(|e| e.to_string())?;
     let ctx = harness_core::TargetContext::open(target, tool).map_err(|e| e.to_string())?;
@@ -177,6 +179,13 @@ impl Loader {
             requested: 0,
             received: 0,
         })
+    }
+
+    /// The cockpit's loader: every read opens `tool` (the one the first
+    /// read opened), never the lookup order afresh — in a project of
+    /// several tools a read without it would refuse.
+    pub fn for_tool(tool: Option<String>) -> std::io::Result<Loader> {
+        Loader::spawn(move |t: &Path| read_tool(t, tool.as_deref()))
     }
 
     /// Ask for a read of `target`; its number.

@@ -56,12 +56,10 @@ fn every_read_works_on_a_file_list_tool() {
     );
     let harness = harness_bin();
     let target = root.to_str().unwrap();
-    for (i, cmd) in ["scan", "plan"].into_iter().enumerate() {
-        let mut args = vec![cmd, "--target", target, "--tool", "t-lzg"];
-        if i == 0 {
-            args.insert(0, "--adopt");
-        }
-        let out = Command::new(&harness).args(&args).output().unwrap();
+    // A hand-written tool holds no results: no adoption is asked.
+    for cmd in ["scan", "plan"] {
+        let args = [cmd, "--target", target, "--tool", "t-lzg"];
+        let out = Command::new(&harness).args(args).output().unwrap();
         assert!(
             out.status.success(),
             "{cmd}: {}",
@@ -81,6 +79,14 @@ fn every_read_works_on_a_file_list_tool() {
     c.call(1, "harness_status", json!({}), None);
     let (r, _) = c.response(&json!(1), 30);
     assert!(!is_error(&r), "{r}");
+    // Which tool's ledger the answers come from: in the status, and in the
+    // start line.
+    assert_eq!(structured(&r)["tool"], "t-lzg", "{r}");
+    let started = c.stderr.lock().unwrap().clone();
+    assert!(
+        started.contains(&format!("serving {target} · tool t-lzg (")),
+        "{started}"
+    );
     let status = structured(&r).to_string();
     for id in ["u-encode", "u-lzg"] {
         assert!(status.contains(id), "{id}: {status}");

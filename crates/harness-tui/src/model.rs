@@ -510,12 +510,23 @@ mod tests {
         copy(&repo().join("targets/zopfli"), &tmp);
         harness_core::adopt::testing::adoption_file();
         let err = Snapshot::load(&tmp).unwrap_err();
+        let head = format!(
+            "{}: this folder already holds migration results made elsewhere (11 units, 1 \
+             verified)",
+            tmp.canonicalize().unwrap().display()
+        );
         assert_eq!(
             err.to_string(),
-            "this folder already holds migration results made elsewhere (11 units, 1 verified): \
-             to trust them here, add `--adopt` once"
+            format!("{head}: to trust them here, add `--adopt` once")
         );
-        assert_eq!(crate::load::read(&tmp).unwrap_err(), err.to_string());
+        // The cockpit names only its own way.
+        assert_eq!(
+            crate::load::read(&tmp).unwrap_err(),
+            format!(
+                "{head}: to trust them here, start the cockpit in a terminal and answer its \
+                 question"
+            )
+        );
         harness_core::adopt::testing::adopt(&tmp);
         Snapshot::load(&tmp).unwrap();
         let _ = std::fs::remove_dir_all(&tmp);

@@ -499,11 +499,19 @@ pub fn short_symbol(name: &str) -> &str {
 /// A node's name in the tree.
 fn node_name(app: &App, sel: &Selection) -> String {
     match sel {
-        Selection::Project => app
-            .config
-            .target
-            .file_name()
-            .map_or_else(|| "project".into(), |n| n.to_string_lossy().into_owned()),
+        // The tool open, beside the project: in a project of several tools
+        // the screen says whose ledger it shows.
+        Selection::Project => {
+            let folder = app
+                .config
+                .target
+                .file_name()
+                .map_or_else(|| "project".into(), |n| n.to_string_lossy().into_owned());
+            match &app.config.tool {
+                Some(id) => format!("{folder} · tool {id}"),
+                None => folder,
+            }
+        }
         Selection::Dir(d) => format!("{}/", d.rsplit('/').next().unwrap_or(d)),
         Selection::File(p) => p.rsplit('/').next().unwrap_or(p).to_string(),
         Selection::Function(_, name) => format!("{}()", short_symbol(name)),
@@ -615,8 +623,14 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         && (name_w + 2 + word_w <= room
             || selected
             || (glyph.is_empty() && matches!(sel, Selection::Unit(_) | Selection::File(_))));
+    // "not part of this tool" is read whole: the name is cut first.
+    let word_whole = glyph == files::NOT_IN_TOOL;
     let (name_text, pad, word_text) = if show_word {
-        let name_keep = name_w.min(room / 2);
+        let name_keep = if word_whole {
+            name_w.min(room.saturating_sub(word_w + 1).max(1))
+        } else {
+            name_w.min(room / 2)
+        };
         let word_room = room.saturating_sub(name_keep + 1).max(1);
         let word_text = ellipsis(&word, word_room.min(word_w));
         let name_room = room.saturating_sub(width_of(&word_text) + 1);
@@ -2950,6 +2964,10 @@ const HELP_LEGEND: &[(&str, &str)] = &[
     ("·", "a header"),
     ("–", "no exported functions (never planned)"),
     ("○", "not in the plan"),
+    (
+        files::NOT_IN_TOOL,
+        "not part of this tool: a project file the open tool does not list",
+    ),
 ];
 
 const HELP_FEATURES: &[&str] = &[
@@ -7494,7 +7512,7 @@ mod tests {
         let root = app.config.target.clone();
         assert_eq!(
             greyed(&mut app, Selection::Speed, "Measure speed"),
-            WorkloadsState::NoFile.blocker()
+            WorkloadsState::NoFile.blocker("migration")
         );
         let dir = harness_core::perf::perf_dir(&harness_core::ledger::Ledger::new(&root));
         std::fs::create_dir_all(&dir).unwrap();
@@ -7502,7 +7520,7 @@ mod tests {
         let mut app = crate::app::tests::app_of_path(&root);
         assert_eq!(
             greyed(&mut app, Selection::Speed, "Measure speed"),
-            WorkloadsState::NoWorkload.blocker()
+            WorkloadsState::NoWorkload.blocker("migration")
         );
         std::fs::write(
             dir.join("workloads.toml"),
@@ -7515,7 +7533,7 @@ mod tests {
             Some(words.clone()),
             wl::load(&harness_core::ledger::Ledger::new(&root))
                 .unwrap()
-                .blocker()
+                .blocker("migration")
         );
         assert!(
             words.contains("workloads.toml line 4, column")
@@ -7975,5 +7993,52 @@ mod tests {
             screen.contains("None of your features runs this unit's functions"),
             "{screen}"
         );
+    }
+
+    /// In a project of tools the screen names the tool open, on the title
+    /// row; a project file outside it has a mark of its own (not the
+    /// Features legend's `◌`), listed in the help's States, its label
+    /// read whole on a narrow row.
+    #[test]
+    fn the_open_tool_is_named_and_its_outside_files_marked_apart() {
+        use crate::testutil::{file_list_tool, LZG_TOOL};
+        let dir = file_list_tool("view-tool-title");
+        let read = crate::load::read_tool(&dir.0, Some(LZG_TOOL)).unwrap();
+        let mut app = App::new(
+            crate::app::Config {
+                target: dir.0.clone(),
+                tool: Some(LZG_TOOL.into()),
+                harness: Some(PathBuf::from(crate::app::tests::HARNESS)),
+                allow_unsandboxed: false,
+                layout: LayoutMode::Auto,
+                providers: vec!["external".into()],
+            },
+            read,
+        );
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 140, 30));
+        assert!(screen.contains("· tool t-lzg"), "{screen}");
+        assert!(view_title(&app).contains("· tool t-lzg"));
+        // The mark: its own, and in the States legend.
+        let outside = Selection::File("src/other/decode.c".into());
+        let (glyph, word) = row_label(&app, &outside);
+        assert_eq!(
+            (glyph, word.as_str()),
+            (files::NOT_IN_TOOL, "not part of this tool")
+        );
+        assert!(HELP_FEATURE_LEGEND.iter().all(|(g, _)| *g != glyph));
+        assert!(HELP_LEGEND
+            .iter()
+            .any(|(g, w)| *g == glyph && w.starts_with("not part of this tool")));
+        // The selected row on a narrow pane: the name is cut, never the word.
+        let row = Row {
+            depth: 3,
+            kind: RowKind::Node(outside),
+            expandable: false,
+            open: false,
+        };
+        let line = tree_row(&app, &row, 40, true);
+        let shown: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(shown.ends_with("not part of this tool"), "{shown:?}");
     }
 }

@@ -21,18 +21,16 @@ pub fn choose(
     match config::find_target(root, tool) {
         Ok(Found::Tool(id)) => Ok(Some(id)),
         Ok(Found::Root) if root.join(config::CONFIG_FILE).is_file() => Ok(None),
-        Ok(Found::Root) => Err(format!(
-            "{} is not a harness target (no harness.toml, and no mapped tool under \
-             migration/tools/); start with `--target <target dir>`",
-            root.display()
-        )),
+        // The command line's own sentences (harness-core's): no target here,
+        // `--tool` on a project without tools.
+        Ok(Found::Root) => Err(harness_core::Error::no_target_here(root).to_string()),
         Err(e) => {
             let tools = config::mapped_tools(root);
             match ask {
                 Some((input, output)) if tool.is_none() && tools.len() > 1 => {
                     pick(root, &tools, input, output)
                 }
-                _ => Err(e.to_string()),
+                _ => Err(e.opening(root, tool).to_string()),
             }
         }
     }
@@ -147,8 +145,21 @@ mod tests {
         assert_eq!(choose(&p.0, None, None), Ok(None));
         assert_eq!(choose(&p.0, Some("t-a"), None), Ok(Some("t-a".into())));
         let bare = project("bare", &[]);
-        assert!(choose(&bare.0, None, None)
-            .unwrap_err()
-            .contains("is not a harness target"));
+        assert_eq!(
+            choose(&bare.0, None, None).unwrap_err(),
+            harness_core::Error::no_target_here(&bare.0).to_string()
+        );
+    }
+
+    /// `--tool` on a project with a harness.toml and no tools: the command
+    /// line's sentence, which says to drop it.
+    #[test]
+    fn a_tool_on_a_project_without_tools_is_told_to_drop_it() {
+        let p = project("no-tools", &[]);
+        std::fs::write(p.0.join(config::CONFIG_FILE), "schema_version = 1\n").unwrap();
+        assert_eq!(
+            choose(&p.0, Some("t-a"), None).unwrap_err(),
+            harness_core::Error::no_tools_to_pick(&p.0).to_string()
+        );
     }
 }

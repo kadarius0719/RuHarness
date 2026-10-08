@@ -982,32 +982,44 @@ fn main() -> ExitCode {
             };
         match harness_tui::chooser::choose(&target, args.tool.as_deref(), ask) {
             Ok(tool) => tool,
+            // Not a usage error (the id was checked with the arguments): the
+            // folder names no target to open — exit 1, as the command line.
             Err(why) => {
                 eprintln!("harness-tui: {why}");
-                return ExitCode::from(2);
+                return ExitCode::from(1);
             }
         }
     };
     // A ledger made elsewhere is asked about first, before the terminal is
     // taken (docs/PROJECT-MAP-DESIGN.md §3.7): the same question as the
-    // CLI's `--adopt`; away from a terminal it is refused in words.
+    // CLI's `--adopt`; away from a terminal it is refused in the cockpit's
+    // own words.
     if let Err(e) = harness_core::adopt::check(&target) {
         use std::io::IsTerminal;
-        if !matches!(e, harness_core::Error::NotAdopted { .. }) {
-            eprintln!("harness-tui: {} is unreadable: {e}", target.display());
+        let harness_core::Error::NotAdopted {
+            root,
+            units,
+            verified,
+        } = &e
+        else {
+            match e {
+                harness_core::Error::ForeignMigration { .. } => {
+                    eprintln!("harness-tui: {}: {e}", target.display())
+                }
+                _ => eprintln!("harness-tui: {} is unreadable: {e}", target.display()),
+            }
             return ExitCode::from(1);
-        }
+        };
         if !std::io::stdin().is_terminal() {
             eprintln!(
-                "harness-tui: {}: {e} (start the cockpit in a terminal to be asked, or run any \
-                 harness command on it with --adopt)",
-                target.display()
+                "harness-tui: {}",
+                e.words_for(harness_core::adopt::Way::Cockpit)
             );
             return ExitCode::from(1);
         }
         let asked = harness_tui::adoption::ask(
             &target,
-            &e.to_string(),
+            &harness_core::adopt::made_elsewhere(root, *units, *verified),
             &mut std::io::stdin().lock(),
             &mut std::io::stderr(),
         );
@@ -1029,8 +1041,8 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let read_tool = tool.clone();
-    let mut loader = match Loader::spawn(move |t: &Path| load::read_tool(t, read_tool.as_deref())) {
+    // Every background re-read opens the same tool as the first read.
+    let mut loader = match Loader::for_tool(tool.clone()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("harness-tui: the loader thread: {e}");

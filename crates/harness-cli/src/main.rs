@@ -42,7 +42,9 @@ struct Cli {
     json: bool,
     /// Trust the migration results already in this folder (made on another
     /// computer, or shipped in a download) from now on, on this computer:
-    /// deletes their build folders; their verdicts stay claims until
+    /// the harness will build and run the code they hold — drivers, Rust
+    /// crates, features and workloads — in the sandbox. Deletes their build
+    /// folders and writes a fresh token; their verdicts stay claims until
     /// `harness verify` runs them here. Needed once per folder
     #[arg(long, global = true)]
     adopt: bool,
@@ -73,7 +75,8 @@ fn parse_tool(id: &str) -> std::result::Result<String, String> {
 impl TargetArg {
     /// Load the target by the lookup order.
     pub(crate) fn load(&self) -> Result<TargetContext> {
-        Ok(TargetContext::open(&self.target, self.tool.as_deref())?)
+        let tool = self.tool.as_deref();
+        Ok(TargetContext::open(&self.target, tool).map_err(|e| e.opening(&self.target, tool))?)
     }
 
     /// The flags that name this target again in a resume command line,
@@ -138,8 +141,10 @@ fn open_ledger(root: &Path, scope: adopt::Scope, adopt_it: bool) -> Result<bool>
         // The command says what is wrong with its folder.
         return Ok(false);
     }
+    // A `migration/` holding only hand-written tool files holds no results:
+    // what this command writes there is made here.
     let had = match scope {
-        adopt::Scope::Project => adopt::has_ledger(root),
+        adopt::Scope::Project => adopt::holds_results(root),
         adopt::Scope::Suite => adopt::suite_has_ledger(root),
     };
     if adopt_it {
@@ -789,11 +794,26 @@ pub(crate) fn scan_target(ctx: &TargetContext) -> Result<Facts> {
 }
 
 /// The typed refusal for stale facts (`error.kind = "stale"`).
-fn facts_stale(stale: usize) -> Error {
+fn facts_stale(ctx: &TargetContext, stale: usize) -> Error {
     Error::Stale {
         subject: "facts.jsonl".into(),
-        hint: format!("{stale} file(s) changed on disk; run `harness scan` first"),
+        hint: format!(
+            "{stale} file(s) changed on disk; run `{}` first",
+            hint(ctx, "scan")
+        ),
     }
+}
+
+/// `harness <cmd>` as a next-step hint spells it for `ctx`'s target: with
+/// `--tool <id>` when a mapped tool is open, so the hint run as written
+/// opens the same tool (docs/PROJECT-MAP-DESIGN.md §3.7).
+pub(crate) fn hint(ctx: &TargetContext, cmd: &str) -> String {
+    harness_core::runtime_view::command_line(cmd, ctx.tool.as_deref())
+}
+
+/// What a facts load says when there are none: the scan to run.
+pub(crate) fn loading_facts(ctx: &TargetContext) -> String {
+    format!("loading facts (run `{}` first)", hint(ctx, "scan"))
 }
 
 /// Count facts file records whose hash no longer matches the working tree,
@@ -831,13 +851,12 @@ fn cmd_plan(target: TargetArg) -> Result<u8> {
 /// change lines, the execution-order line and the unit count.
 pub(crate) fn plan_target(ctx: &TargetContext) -> Result<(Vec<String>, String, usize)> {
     let ledger = Ledger::of(ctx);
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(ctx))?;
     // Planning from stale facts would write stale hashes and strand verify
     // in a refusal loop — refuse up front instead.
     let stale = stale_fact_files(ctx, &facts);
     if stale > 0 {
-        return Err(facts_stale(stale).into());
+        return Err(facts_stale(ctx, stale).into());
     }
     let mut computed = planner::compute_units(&facts)?;
     let plan_path = ledger.plan_path();
@@ -945,8 +964,7 @@ fn cmd_verify(unit_id: String, target: TargetArg, allow_unsandboxed: bool) -> Re
         .context("plan.toml is structurally invalid; fix it before verifying")?;
     let unit = plan_doc.unit(&unit_id)?;
     promote::recover_promotion(&ctx, &ledger, unit)?;
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
 
     // Stale-plan refusal (docs/SCHEMAS.md): the tree must match what was planned.
     let closure = facts.include_closure(&unit.files);
@@ -955,9 +973,11 @@ fn cmd_verify(unit_id: String, target: TargetArg, allow_unsandboxed: bool) -> Re
         return Err(Error::Stale {
             subject: format!("unit `{unit_id}`"),
             hint: format!(
-                "source changed since planning (plan {} vs tree {current}); run `harness scan`, \
-                 then `harness plan`, review the diff, then re-verify",
-                unit.source_hash
+                "source changed since planning (plan {} vs tree {current}); run `{}`, then \
+                 `{}`, review the diff, then re-verify",
+                unit.source_hash,
+                hint(&ctx, "scan"),
+                hint(&ctx, "plan")
             ),
         }
         .into());
@@ -1059,7 +1079,7 @@ fn cmd_status(target: TargetArg) -> Result<u8> {
     let facts = match Facts::load(&ledger.facts_path()) {
         Ok(f) => f,
         Err(e) if e.is_not_found() => {
-            out("status: no facts — run `harness scan`".into());
+            out(format!("status: no facts — run `{}`", hint(&ctx, "scan")));
             return Ok(0);
         }
         // Parse errors and newer-schema refusals must surface, not read as
@@ -1070,9 +1090,9 @@ fn cmd_status(target: TargetArg) -> Result<u8> {
     out(format!(
         "status: facts {} ({} files, {} stale vs tree)",
         if stale_files == 0 {
-            "fresh"
+            "fresh".to_string()
         } else {
-            "STALE — run `harness scan`"
+            format!("STALE — run `{}`", hint(&ctx, "scan"))
         },
         facts.files.len(),
         stale_files
@@ -1091,7 +1111,7 @@ fn cmd_status(target: TargetArg) -> Result<u8> {
 
     let plan_path = ledger.plan_path();
     if !plan_path.exists() {
-        out("status: no plan — run `harness plan`".into());
+        out(format!("status: no plan — run `{}`", hint(&ctx, "plan")));
         return Ok(0);
     }
     let plan_doc = Plan::load(&plan_path)?;
@@ -1144,11 +1164,10 @@ fn cmd_detect(target: TargetArg) -> Result<u8> {
     let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, "detect")?;
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
     let stale = stale_fact_files(&ctx, &facts);
     if stale > 0 {
-        return Err(facts_stale(stale).into());
+        return Err(facts_stale(&ctx, stale).into());
     }
     let suite = harness_detect::CTreeSitterSuite;
     let findings = suite.detect(&ctx, &facts)?;
@@ -1186,18 +1205,20 @@ type ObserverInputs = (
 
 fn observer_inputs(ctx: &TargetContext, ledger: &Ledger) -> Result<ObserverInputs> {
     use harness_core::observer::{self, ObserverPaths};
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(ctx))?;
     let plan_doc = Plan::load(&ledger.plan_path())?;
     plan_doc
         .execution_order()
         .context("plan.toml is structurally invalid")?;
     let findings = harness_core::observer::FindingsFile::load(&ObserverPaths::findings(ledger))
-        .context("loading findings (run `harness detect` first)")?;
+        .with_context(|| format!("loading findings (run `{}` first)", hint(ctx, "detect")))?;
     if findings.facts_hash != facts_records_hash(&facts) {
         return Err(Error::Stale {
             subject: "findings.jsonl".into(),
-            hint: "it is bound to different facts; run `harness detect`".into(),
+            hint: format!(
+                "it is bound to different facts; run `{}`",
+                hint(ctx, "detect")
+            ),
         }
         .into());
     }
@@ -1207,7 +1228,11 @@ fn observer_inputs(ctx: &TargetContext, ledger: &Ledger) -> Result<ObserverInput
         if now != f.file_hash {
             return Err(Error::Stale {
                 subject: format!("finding {}", f.id),
-                hint: format!("{} changed since detect; run `harness detect`", f.file),
+                hint: format!(
+                    "{} changed since detect; run `{}`",
+                    f.file,
+                    hint(ctx, "detect")
+                ),
             }
             .into());
         }
@@ -1317,7 +1342,7 @@ fn cmd_review(
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("review {finding}"))?;
     let findings = harness_core::observer::FindingsFile::load(&ObserverPaths::findings(&ledger))
-        .context("loading findings (run `harness detect` first)")?;
+        .with_context(|| format!("loading findings (run `{}` first)", hint(&ctx, "detect")))?;
     let annotations = observer::load_annotations(&ObserverPaths::annotations(&ledger))?;
     if !findings.findings.iter().any(|f| f.id == finding)
         && !annotations.iter().any(|f| f.id == finding)
@@ -1338,7 +1363,8 @@ fn cmd_review(
         },
     )?;
     out(format!(
-        "review: {finding} {action} recorded — re-run `harness observe` to re-render"
+        "review: {finding} {action} recorded — re-run `{}` to re-render",
+        hint(&ctx, "observe")
     ));
     Ok(0)
 }
@@ -1352,8 +1378,7 @@ fn cmd_sync_runtime(target: TargetArg, check: bool) -> Result<u8> {
     } else {
         Some(lock_ledger(&ledger, "sync-runtime")?)
     };
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
     let plan_doc = Plan::load(&ledger.plan_path())?;
     // Risk from whatever observer state exists: a MISSING file is fine
     // (empty), but parse errors and newer-schema refusals must propagate —
@@ -1395,10 +1420,7 @@ fn cmd_sync_runtime(target: TargetArg, check: bool) -> Result<u8> {
             out("sync-runtime: up to date".into());
             return Ok(0);
         }
-        let run = match &ctx.tool {
-            None => "harness sync-runtime".to_string(),
-            Some(id) => format!("harness sync-runtime --tool {id}"),
-        };
+        let run = hint(&ctx, "sync-runtime");
         eprintln!("sync-runtime: AGENTS.md managed block is out of date; run `{run}`");
         return Ok(1);
     }
@@ -1624,8 +1646,7 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     let unit = plan_doc.unit(&unit_id)?;
     promote::recover_promotion(&ctx, &ledger, unit)?;
 
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
     // The plan's staleness rule and R6 (a generated driver must carry a
     // FRESH green validation) — shared with `harness promote`.
     promote::migrate_preconditions(&ctx, &ledger, &facts, unit, "migrate")?;
@@ -1858,17 +1879,23 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         // never from a replay run (which writes nothing to the ledger).
         let already_done = matches!(unit.status, UnitStatus::Verified | UnitStatus::Merged);
         let (do_promote, reason) = if resolved.kind == "replay" {
-            (false, "replay run")
+            (false, "replay run".to_string())
         } else if promote_flag {
-            (true, "--promote")
+            (true, "--promote".to_string())
         } else if no_promote {
-            (false, "--no-promote")
+            (false, "--no-promote".to_string())
         } else if already_done {
-            (false, "unit already verified — pass --promote to replace")
+            (
+                false,
+                "unit already verified — pass --promote to replace".to_string(),
+            )
         } else if !promote_on_green {
-            (false, "promote_on_green = false — run `harness promote`")
+            (
+                false,
+                format!("promote_on_green = false — run `{}`", hint(&ctx, "promote")),
+            )
         } else {
-            (true, "default")
+            (true, "default".to_string())
         };
         let (Some(candidate), true) = (outcome.candidate_dir.as_ref(), do_promote) else {
             out(format!(

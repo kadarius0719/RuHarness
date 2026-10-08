@@ -437,8 +437,13 @@ pub fn status(
                 + 1
         }
     };
+    // The mapped tool whose ledger the answers come from (an id checked by
+    // the id rule; null for a folder-form target).
+    let ledger_rel = snapshot.ledger_rel();
+    let tool = harness_core::runtime_view::tool_of(&ledger_rel);
     let mut out = json!({
         "target": fence::path("path", &snapshot.root.to_string_lossy()),
+        "tool": tool,
         "speed": speed_head(&model),
         "facts": snapshot.facts_state.as_ref().map(|f| json!({"files": f.files, "stale": f.stale})),
         "note": snapshot.note.as_deref().map(|n| short("note", n)),

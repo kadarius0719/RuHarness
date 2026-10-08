@@ -31,8 +31,7 @@ pub(crate) fn cmd_override(
         .context("plan.toml is structurally invalid; fix it first")?;
     let unit = plan_doc.unit(&unit_id)?;
     promote::recover_promotion(&ctx, &ledger, unit)?;
-    let facts =
-        Facts::load(&ledger.facts_path()).context("loading facts (run `harness scan` first)")?;
+    let facts = Facts::load(&ledger.facts_path()).with_context(|| crate::loading_facts(&ctx))?;
     promote::migrate_preconditions(&ctx, &ledger, &facts, unit, "recording a hand edit")?;
     let (logic, ffi) = read_hand_edit(&ctx, unit, &dir)?;
 
@@ -103,8 +102,8 @@ pub(crate) fn cmd_override(
     });
     if record.outcome == "green" {
         out(format!(
-            "override: recorded, not promoted — `harness promote {unit_id} {}` promotes it",
-            record.id
+            "override: recorded, not promoted — `{}` promotes it",
+            crate::hint(&ctx, &format!("promote {unit_id} {}", record.id))
         ));
         Ok(0)
     } else {

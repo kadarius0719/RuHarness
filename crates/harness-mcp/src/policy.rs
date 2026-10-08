@@ -43,9 +43,25 @@ pub fn usage() -> &'static str {
     USAGE
 }
 
+/// Why the command line was refused, and the exit code: 2 for a usage
+/// error, 1 for a folder that names no target (as the command line).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArgError {
+    /// The exit code.
+    pub code: i32,
+    /// The sentence.
+    pub message: String,
+}
+
+impl From<String> for ArgError {
+    fn from(message: String) -> ArgError {
+        ArgError { code: 2, message }
+    }
+}
+
 /// Parse the command line (after the program name). `Ok(None)` for
 /// `--help`/`--version` (already answered on stderr).
-pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
+pub fn parse_args(args: &[String]) -> Result<Option<Config>, ArgError> {
     let mut target = None;
     let mut tool = None;
     let mut roots = Vec::new();
@@ -93,7 +109,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
                 );
                 return Ok(None);
             }
-            other => return Err(format!("unknown argument {other:?}\n{USAGE}")),
+            other => return Err(format!("unknown argument {other:?}\n{USAGE}").into()),
         }
         i += 1;
     }
@@ -110,23 +126,27 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
         if let Some((flag, _)) = given.iter().find(|(_, set)| *set) {
             return Err(format!(
                 "--cockpit takes no {flag}: the cockpit runs every act itself\n{USAGE}"
-            ));
+            )
+            .into());
         }
     }
     let target = target.ok_or_else(|| format!("--target is required\n{USAGE}"))?;
     let target = canonical_dir(&target, "--target")?;
     // The lookup order of the command line: `--tool`, else the root's
     // harness.toml, else the project's only mapped tool.
+    // A folder that names no target is the command line's refusal, in its
+    // words and with its exit code (1), not a usage error.
+    let refused = |e: harness_core::Error| ArgError {
+        code: 1,
+        message: e.to_string(),
+    };
     let tool = match harness_core::config::find_target(&target, tool.as_deref())
-        .map_err(|e| format!("--target {}: {e}", target.display()))?
+        .map_err(|e| refused(e.opening(&target, tool.as_deref())))?
     {
         harness_core::config::Found::Tool(id) => Some(id),
         harness_core::config::Found::Root => {
             if !target.join("harness.toml").is_file() {
-                return Err(format!(
-                    "--target {}: no harness.toml there",
-                    target.display()
-                ));
+                return Err(refused(harness_core::Error::no_target_here(&target)));
             }
             None
         }
@@ -140,7 +160,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, String> {
     }
     for p in &providers {
         if !harness_core::plan::is_clean_segment(p) || p.len() > 64 {
-            return Err(format!("--provider {p:?} is not a provider profile name"));
+            return Err(format!("--provider {p:?} is not a provider profile name").into());
         }
     }
     // Keep the first of each, in order; drop repeats.
@@ -350,13 +370,28 @@ pub(crate) mod tests {
         let project = project.canonicalize().unwrap();
         let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let p = project.to_str().unwrap();
+        // Two tools and no --tool: the command line's refusal and exit code.
         let err = parse_args(&args(&["--target", p])).unwrap_err();
         assert!(
-            err.contains("2 mapped tools") && err.contains("t-a, t-b"),
-            "{err}"
+            err.message.contains("2 mapped tools") && err.message.contains("t-a, t-b"),
+            "{err:?}"
         );
+        assert_eq!(err.code, 1);
         let err = parse_args(&args(&["--target", p, "--tool", "T-A"])).unwrap_err();
-        assert!(err.contains("is not a tool id"), "{err}");
+        assert!(err.message.contains("is not a tool id"), "{err:?}");
+        assert_eq!(err.code, 2, "a bad id is a usage error");
+        // A folder with neither: the one "no target here" sentence.
+        let bare = base.join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        let bare = bare.canonicalize().unwrap();
+        let err = parse_args(&args(&["--target", bare.to_str().unwrap()])).unwrap_err();
+        assert_eq!(
+            err,
+            ArgError {
+                code: 1,
+                message: harness_core::Error::no_target_here(&bare).to_string()
+            }
+        );
         let cfg = parse_args(&args(&["--cockpit", "--target", p, "--tool=t-b"]))
             .unwrap()
             .unwrap();
@@ -432,6 +467,7 @@ pub(crate) mod tests {
         assert!(parse_args(&args(&[])).is_err());
         assert!(parse_args(&args(&["--target", base.to_str().unwrap()]))
             .unwrap_err()
+            .message
             .contains("harness.toml"));
         assert!(parse_args(&args(&["--target", t.to_str().unwrap(), "--bogus"])).is_err());
         assert!(parse_args(&args(&[
@@ -481,7 +517,7 @@ pub(crate) mod tests {
             let mut v = vec!["--cockpit", target.as_str()];
             v.extend(extra.iter().copied());
             let err = parse_args(&args(&v)).unwrap_err();
-            assert!(err.contains("--cockpit takes no"), "{v:?}: {err}");
+            assert!(err.message.contains("--cockpit takes no"), "{v:?}: {err:?}");
         }
         // The flag takes no value.
         assert!(parse_args(&args(&["--cockpit=yes", &target])).is_err());

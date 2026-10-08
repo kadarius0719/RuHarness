@@ -23,8 +23,6 @@ targets/tractor/.bench/
 /targets/tractor/cases/**/migration/units/*/.replay-*/
 
 # The adoption token (docs/PROJECT-MAP-DESIGN.md §3.7): written into any
-# fixture a test or a command adopts; committed only for zopfli and the
-# benchmark suite, whose tests adopt them as they stand.
+# folder a test or a command adopts, zopfli and the benchmark suite too —
+# never committed: the person adopts each once per computer.
 .ruharness-adopted
-!/targets/zopfli/migration/.ruharness-adopted
-!/targets/tractor/.ruharness-adopted

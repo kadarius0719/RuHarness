@@ -394,7 +394,9 @@ pub fn build(
     let (list, now_features) = match &snapshot.features {
         FeatureSnapshot::None => return model,
         FeatureSnapshot::Invalid(why) => {
-            model.group = Group::Invalid(why.clone());
+            // Named by the open tool's own path.
+            model.group =
+                Group::Invalid(harness_core::error::in_ledger(why, &snapshot.ledger_rel()));
             return model;
         }
         FeatureSnapshot::Valid { features, digest } => {

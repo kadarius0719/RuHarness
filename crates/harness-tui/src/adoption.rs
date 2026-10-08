@@ -11,8 +11,11 @@ use std::path::Path;
 pub fn explanation(adoption_file: &str) -> String {
     format!(
         "Adopting trusts these results on this computer from now on:\n\
-         \x20 - the folder and a random token are recorded in {adoption_file}\n\
-         \x20   (the token is also written to migration/.ruharness-adopted);\n\
+         \x20 - the harness will build and run the code they hold — drivers, Rust crates,\n\
+         \x20   features and workloads — in the sandbox;\n\
+         \x20 - the folder and a fresh random token are recorded in {adoption_file}\n\
+         \x20   (the token is also written to migration/.ruharness-adopted, replacing any\n\
+         \x20   that came with the folder);\n\
          \x20 - the build folders that came with them are deleted: migration/build/, each unit\n\
          \x20   crate's target/, each attempt's candidate/target/ and every .promote-*/ —\n\
          \x20   nothing else;\n\
@@ -20,8 +23,9 @@ pub fn explanation(adoption_file: &str) -> String {
     )
 }
 
-/// Ask whether to adopt the target at `target`, refused with `refusal`
-/// (the sentence), on `input`/`output`; adopt it on a `y`. `Ok(true)` when
+/// Ask whether to adopt the target at `target`, whose ledger `refusal`
+/// describes (the folder and what it claims, [`harness_core::adopt::
+/// made_elsewhere`]), on `input`/`output`; adopt it on a `y`. `Ok(true)` when
 /// the folder is now trusted; `Ok(false)` when the person declined; `Err`
 /// is a reason in words (the project's own `migration/`, an unwritable
 /// adoption file).
@@ -43,9 +47,8 @@ pub fn ask(
     say(
         output,
         &format!(
-            "harness-tui: {}: {refusal}.\n\n{}\nAdopt this folder? Type y and Enter to adopt; \
+            "harness-tui: {refusal}.\n\n{}\nAdopt this folder? Type y and Enter to adopt; \
              anything else leaves it untouched: ",
-            target.display(),
             explanation(&file)
         ),
     )?;
@@ -79,14 +82,33 @@ mod tests {
         let m = dir.join("migration");
         std::fs::create_dir_all(m.join("build/x")).unwrap();
         std::fs::write(m.join("plan.toml"), "schema_version = 1\n").unwrap();
-        let refusal = harness_core::adopt::check(&dir).unwrap_err().to_string();
+        let harness_core::Error::NotAdopted {
+            root,
+            units,
+            verified,
+        } = harness_core::adopt::check(&dir).unwrap_err()
+        else {
+            panic!("not the refusal");
+        };
+        let refusal = harness_core::adopt::made_elsewhere(&root, units, verified);
         for declined in ["\n", "yes please\n", ""] {
             let mut out = Vec::new();
             let adopted = ask(&dir, &refusal, &mut declined.as_bytes(), &mut out).unwrap();
             assert!(!adopted);
             let text = String::from_utf8(out).unwrap();
             assert!(
-                text.contains("made elsewhere (0 units, 0 verified)"),
+                text.contains(&format!(
+                    "{}: this folder already holds migration results made elsewhere (0 units, \
+                     0 verified).",
+                    root.display()
+                )),
+                "{text}"
+            );
+            // Only the cockpit's own way: no `--adopt` to add.
+            assert!(!text.contains("--adopt"), "{text}");
+            assert!(
+                text.contains("the harness will build and run the code they hold")
+                    && text.contains("in the sandbox"),
                 "{text}"
             );
             assert!(text.contains("the build folders that came with them are deleted"));

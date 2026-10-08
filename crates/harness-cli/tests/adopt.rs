@@ -88,11 +88,21 @@ fn a_ledger_made_elsewhere_is_refused_until_adopted_once() {
     )
     .unwrap();
     let t = root.to_str().unwrap();
+    // The token a download would ship.
+    let shipped = format!("{}\n", "c".repeat(32));
+    std::fs::write(root.join("migration/.ruharness-adopted"), &shipped).unwrap();
 
     let r = harness(&["state", "status", "--target", t]);
     assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
     assert!(
         r.stderr.contains(REFUSAL_HEAD) && r.stderr.contains(REFUSAL_TAIL),
+        "{}",
+        r.stderr
+    );
+    // The refusal names the folder.
+    assert!(
+        r.stderr
+            .contains(&format!("error: {t}: this folder already holds")),
         "{}",
         r.stderr
     );
@@ -114,12 +124,11 @@ fn a_ledger_made_elsewhere_is_refused_until_adopted_once() {
             .is_err()
     );
     assert!(outside.join("keep").exists(), "a link's target is kept");
-    // The copied token was recorded, none written.
+    // A fresh token was written over the one the copy brought along: a
+    // later tree shipped with that token is not trusted.
     let token = std::fs::read_to_string(root.join("migration/.ruharness-adopted")).unwrap();
-    let committed =
-        std::fs::read_to_string(repo().join("targets/zopfli/migration/.ruharness-adopted"))
-            .unwrap();
-    assert_eq!(token, committed);
+    assert_ne!(token.trim(), shipped.trim());
+    assert_eq!(token.trim().len(), 32);
     assert!(adoption_text().contains(token.trim()));
 
     // Trusted from now on; a second --adopt deletes nothing.
@@ -152,16 +161,62 @@ fn the_projects_own_migration_folder_is_not_adopted() {
     std::fs::create_dir_all(root.join("migration")).unwrap();
     std::fs::write(root.join("migration/0001_create_users.sql"), "create table").unwrap();
     let t = root.to_str().unwrap();
-    let r = harness(&["state", "status", "--target", t, "--adopt"]);
-    assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
-    assert!(
-        r.stderr.contains(
-            "this project has a migration/ folder of its own; move or rename it, or map a copy"
-        ),
-        "{}",
-        r.stderr
-    );
+    // Said first, before any adoption question — and the same with --adopt.
+    for args in [
+        &["state", "status", "--target", t][..],
+        &["state", "status", "--target", t, "--adopt"][..],
+    ] {
+        let r = harness(args);
+        assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
+        assert!(
+            r.stderr.contains(
+                "this project has a migration/ folder of its own; move or rename it, or map a \
+                 copy"
+            ),
+            "{}",
+            r.stderr
+        );
+        assert!(!r.stderr.contains("--adopt"), "{}", r.stderr);
+    }
     assert!(!adoption_text().contains(t));
+}
+
+/// A tool written by hand holds no results: its first command is not asked
+/// to adopt, and records the project as made here (with a fresh token, not
+/// one a download shipped beside the file).
+#[test]
+fn a_hand_written_tool_is_made_here() {
+    let root = tmp("hand");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/a.c"), "int f(void) { return 1; }\n").unwrap();
+    let tool = root.join("migration/tools/t-a");
+    std::fs::create_dir_all(&tool).unwrap();
+    std::fs::write(
+        tool.join("harness.toml"),
+        "schema_version = 2\n[target]\nname = \"a\"\nfiles = [\n\
+         { path = \"src/a.c\", include_dirs = [] },\n]\n\
+         configuration = { name = \"make\", from = \"stated\", flags = [] }\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("migration/map")).unwrap();
+    std::fs::write(root.join("migration/map/config.toml"), "").unwrap();
+    let shipped = format!("{}\n", "d".repeat(32));
+    std::fs::write(root.join("migration/.ruharness-adopted"), &shipped).unwrap();
+    let t = root.to_str().unwrap();
+    let r = harness(&["scan", "--target", t, "--tool", "t-a"]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    let token = std::fs::read_to_string(root.join("migration/.ruharness-adopted")).unwrap();
+    assert_ne!(token, shipped);
+    let text = adoption_text();
+    assert!(
+        text.contains(t) && text.contains(token.trim()) && text.contains("how = \"created\""),
+        "{text}"
+    );
+    // The next command is not asked either; --adopt on it says nothing of
+    // claims (nothing was made elsewhere).
+    let r = harness(&["plan", "--target", t, "--tool", "t-a", "--adopt"]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    assert!(!r.stdout.contains("claims"), "{}", r.stdout);
 }
 
 #[test]
