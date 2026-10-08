@@ -225,7 +225,8 @@ or **fat LTO** (std code merged into the crate's own member: no std member, but 
   "u-x's Rust changed since"; a changed order → "the plan's order changed". The CLI names the left-
   out units on every run ("the program as it stands — u001, u002 (u-tree left out: its crate does
   not build)"). Fewer than two measurable units: no as-it-stands row ("one unit measured (u001) —
-  u-tree left out: verify it first", or "no accepted unit to compare yet").
+  u-tree left out: verify it first", or "no accepted unit to compare yet"); every left-out list
+  names at most 10 units, then "; and N more left out".
 
 **Build** — "as verify builds them: C -O2 -ffp-contract=off, Rust release as each crate's own
 profile sets it (verify builds the same)", said in every result; a unit whose archive shows fat
@@ -799,7 +800,7 @@ c79]. Stale facts: `perf run` refuses ("scan first").
   `environment_checked: false` (computer and compilers); for the C alone: CPU time, memory and the
   outcome. Ranked by the worst order above; fenced as the features facts are. Without facts the
   speed head says `program_checked: false` and the C-alone and as-it-stands rows' `current` is
-  `null`; the results files that could not be read are listed (`unreadable`, at most 20); a plan
+  `null` (unless a reason was found anyway, then `false` with it); the results files that could not be read are listed (`unreadable`, at most 20); a plan
   perf refuses for its size has `units_measurable` 0 and the words in `note` (SCHEMAS has the
   fields). The cockpit's read model counts the plan against the same cap with the same words, so
   the gate and harness-mcp need no oracle call; the cache answer also refuses a `.lock` that is a
