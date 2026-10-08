@@ -435,8 +435,26 @@ struct FileCtx<'a> {
 /// One pre-order walk running every tree-driven category visitor. Every
 /// tree-driven finding's identity bytes are the flagged node's exact byte
 /// range (see [`tree_finding`]); the node kind per category is listed in
-/// the crate docs.
-fn visit(node: tree_sitter::Node, ctx: &FileCtx, in_function: bool, out: &mut Vec<RawFinding>) {
+/// the crate docs. The walk keeps its own stack, not the thread's: a deeply
+/// nested expression (a 400 KB `0 < 1 < 1 …` line) is tens of thousands of
+/// levels deep.
+fn visit(root: tree_sitter::Node, ctx: &FileCtx, in_function: bool, out: &mut Vec<RawFinding>) {
+    let mut stack = vec![(root, in_function)];
+    while let Some((node, in_function)) = stack.pop() {
+        let inside = visit_one(node, ctx, in_function, out);
+        let mut cursor = node.walk();
+        let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
+        stack.extend(children.into_iter().rev().map(|child| (child, inside)));
+    }
+}
+
+/// One node's findings; whether its children lie inside a function.
+fn visit_one(
+    node: tree_sitter::Node,
+    ctx: &FileCtx,
+    in_function: bool,
+    out: &mut Vec<RawFinding>,
+) -> bool {
     match node.kind() {
         "union_specifier" => {
             if node.child_by_field_name("body").is_some() {
@@ -490,12 +508,7 @@ fn visit(node: tree_sitter::Node, ctx: &FileCtx, in_function: bool, out: &mut Ve
         }
         "function_definition" => {
             variadic_finding(node, ctx, out);
-            let mut cursor = node.walk();
-            let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
-            for child in children {
-                visit(child, ctx, true, out);
-            }
-            return;
+            return true;
         }
         "type_definition" => {
             // Only the typedef's own declarator counts: a function pointer
@@ -558,11 +571,32 @@ fn visit(node: tree_sitter::Node, ctx: &FileCtx, in_function: bool, out: &mut Ve
         }
         _ => {}
     }
+    in_function
+}
+
+/// Every node at or below `node`, in pre-order, walked with tree-sitter's
+/// cursor (no recursion, however deep the tree).
+fn preorder(node: tree_sitter::Node) -> Vec<tree_sitter::Node> {
+    let mut out = Vec::new();
     let mut cursor = node.walk();
-    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
-    for child in children {
-        visit(child, ctx, in_function, out);
+    'walk: loop {
+        out.push(cursor.node());
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.node() == node {
+                break 'walk;
+            }
+            if cursor.goto_next_sibling() {
+                continue 'walk;
+            }
+            if !cursor.goto_parent() {
+                break 'walk;
+            }
+        }
     }
+    out
 }
 
 /// `macros` group: lexical scan for function-like `#define`s. One finding per
@@ -947,18 +981,15 @@ fn has_const_qualifier(node: tree_sitter::Node, src: &[u8]) -> bool {
 
 /// Collect names declared by function-type typedefs (both `typedef R F(A)`
 /// and `typedef R (*F)(A)` shapes).
-fn collect_fn_typedef_names(node: tree_sitter::Node, src: &[u8], out: &mut BTreeSet<String>) {
-    if node.kind() == "type_definition" {
-        if let Some(fd) = declarator_function(node) {
-            if let Some(name) = declared_type_name(fd, src) {
-                out.insert(name);
+fn collect_fn_typedef_names(root: tree_sitter::Node, src: &[u8], out: &mut BTreeSet<String>) {
+    for node in preorder(root) {
+        if node.kind() == "type_definition" {
+            if let Some(fd) = declarator_function(node) {
+                if let Some(name) = declared_type_name(fd, src) {
+                    out.insert(name);
+                }
             }
         }
-    }
-    let mut cursor = node.walk();
-    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
-    for child in children {
-        collect_fn_typedef_names(child, src, out);
     }
 }
 
@@ -966,26 +997,23 @@ fn collect_fn_typedef_names(node: tree_sitter::Node, src: &[u8], out: &mut BTree
 /// (`typedef cmp_t chained_t;`, `typedef cmp_t *cmp_ptr_t;`). Returns
 /// whether `known` grew, so the caller can iterate to a fixpoint.
 fn collect_fn_typedef_aliases(
-    node: tree_sitter::Node,
+    root: tree_sitter::Node,
     src: &[u8],
     known: &mut BTreeSet<String>,
 ) -> bool {
     let mut grew = false;
-    if node.kind() == "type_definition" {
-        let base_is_fn = node
-            .child_by_field_name("type")
-            .filter(|t| t.kind() == "type_identifier")
-            .is_some_and(|t| known.contains(text(t, src)));
-        if base_is_fn {
-            if let Some(name) = alias_type_name(node, src) {
-                grew |= known.insert(name);
+    for node in preorder(root) {
+        if node.kind() == "type_definition" {
+            let base_is_fn = node
+                .child_by_field_name("type")
+                .filter(|t| t.kind() == "type_identifier")
+                .is_some_and(|t| known.contains(text(t, src)));
+            if base_is_fn {
+                if let Some(name) = alias_type_name(node, src) {
+                    grew |= known.insert(name);
+                }
             }
         }
-    }
-    let mut cursor = node.walk();
-    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
-    for child in children {
-        grew |= collect_fn_typedef_aliases(child, src, known);
     }
     grew
 }
@@ -1037,27 +1065,24 @@ fn declarator_function(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
 /// it returns a pointer: a `pointer_declarator` sits between the
 /// definition and its function declarator. Keyed by canonical symbol id.
 fn collect_pointer_returns(
-    node: tree_sitter::Node,
+    root: tree_sitter::Node,
     src: &[u8],
     rel: &str,
     out: &mut BTreeMap<String, bool>,
 ) {
-    if node.kind() == "function_definition" {
-        if let (Some(name), Some((_, returns_pointer))) =
-            (function_name(node, src), function_declarator_of(node))
-        {
-            let canonical = if is_static_definition(node, src) {
-                format!("{rel}::{name}")
-            } else {
-                name
-            };
-            out.insert(canonical, returns_pointer);
+    for node in preorder(root) {
+        if node.kind() == "function_definition" {
+            if let (Some(name), Some((_, returns_pointer))) =
+                (function_name(node, src), function_declarator_of(node))
+            {
+                let canonical = if is_static_definition(node, src) {
+                    format!("{rel}::{name}")
+                } else {
+                    name
+                };
+                out.insert(canonical, returns_pointer);
+            }
         }
-    }
-    let mut cursor = node.walk();
-    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
-    for child in children {
-        collect_pointer_returns(child, src, rel, out);
     }
 }
 
@@ -1202,18 +1227,10 @@ fn first_descendant_of_kinds<'a>(
     node: tree_sitter::Node<'a>,
     kinds: &[&str],
 ) -> Option<tree_sitter::Node<'a>> {
-    let mut cursor = node.walk();
-    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
-    drop(cursor);
-    for child in children {
-        if kinds.contains(&child.kind()) {
-            return Some(child);
-        }
-        if let Some(found) = first_descendant_of_kinds(child, kinds) {
-            return Some(found);
-        }
-    }
-    None
+    preorder(node)
+        .into_iter()
+        .skip(1)
+        .find(|n| kinds.contains(&n.kind()))
 }
 
 /// Build a raw finding whose identity bytes are the flagged node's exact
@@ -1334,26 +1351,21 @@ fn source_files(target: &TargetContext) -> Result<Vec<PathBuf>, Error> {
 /// `abs`'s text and its hash, read through `read_regular` with the
 /// scanner's cap (never a link, a FIFO, or more than the cap even when the
 /// file grows while it is read): `Ok(None)` over the cap (the scanner
-/// parses none of it either); `Err` is why it cannot be read, in the
-/// scan's words. A file that is not UTF-8 is decoded lossily (the scanner
+/// parses none of it either); `Err` is why it cannot be read, the scan's
+/// own note ([`sources::unreadable_note`]). A file that is not UTF-8 is decoded lossily (the scanner
 /// parses its bytes; the detectors read text).
 fn read_source(abs: &Path) -> Result<Option<(String, String)>, String> {
     let len = std::fs::metadata(abs)
-        .map_err(|e| format!("cannot be read: {e}"))?
+        .map_err(|e| sources::unreadable_note(abs, &e))?
         .len();
     if len > sources::MAX_SOURCE_BYTES {
         return Ok(None);
     }
     let real = abs
         .canonicalize()
-        .map_err(|e| format!("cannot be read: {e}"))?;
-    let bytes =
-        harness_core::ledger::read_regular(&real, sources::MAX_SOURCE_BYTES).map_err(|e| {
-            format!(
-                "cannot be read: {}",
-                harness_core::text::safe_line(&e.to_string())
-            )
-        })?;
+        .map_err(|e| sources::unreadable_note(abs, &e))?;
+    let bytes = harness_core::ledger::read_regular(&real, sources::MAX_SOURCE_BYTES)
+        .map_err(|e| sources::unreadable_note(&real, &e))?;
     let hash = harness_core::hash::bytes_hash(&bytes);
     Ok(Some((
         match String::from_utf8(bytes) {

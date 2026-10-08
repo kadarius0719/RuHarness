@@ -42,30 +42,58 @@ pub struct VerdictReport {
 /// configuration ([`configuration_entry`]).
 pub const CONFIGURATION_ENTRY_PREFIX: &str = "configuration: ";
 
-/// The toolchain entry a file-list target's verdict records for the
-/// configuration it was built under (the 2026-10-08 triage, decision 5):
-/// `configuration: <name> <blake3 of the flags, then each listed file with
-/// its include folders>`, all as `harness.toml` writes them. `None` for the
-/// folder form, whose verdicts carry no such entry (they stay byte for
-/// byte). A verdict whose entry differs from this one is stale: a changed
-/// `-D` can change a struct's layout under the verified Rust.
-pub fn configuration_entry(ctx: &TargetContext) -> Option<String> {
+/// The toolchain entry a file-list target's verdict of `unit` records for
+/// the configuration it was built under (the 2026-10-08 triage, decisions 5
+/// and 12): `configuration: <name> <blake3 of the flags, then each of the
+/// unit's listed files with its include folders>`, every path in its
+/// resolved form (as a scan records it: `-Ix/` and `-Ix` are one flag), so
+/// a file added to the tool or a cosmetic spelling stales no verdict.
+/// `None` for the folder form, whose verdicts carry no such entry (they
+/// stay byte for byte). A verdict whose entry differs from this one is
+/// stale: a changed `-D` can change a struct's layout under the verified
+/// Rust. (A header the unit reaches is the `source` digest's.)
+pub fn configuration_entry(ctx: &TargetContext, unit: &Unit) -> Option<String> {
     let crate::config::Form::FileList(list) = &ctx.config.target.form else {
         return None;
     };
+    let resolver = crate::sources::Resolver::of(ctx).ok().flatten();
     let mut bytes: Vec<u8> = Vec::new();
     let mut field = |s: &str| {
         bytes.extend_from_slice(s.as_bytes());
         bytes.push(0);
     };
     field("flags");
-    for flag in &list.configuration.flags {
+    let flags = match &resolver {
+        Some(resolver) => resolver.resolved_flags(&list.configuration.flags),
+        None => list.configuration.flags.clone(),
+    };
+    for flag in &flags {
         field(flag);
     }
-    for file in &list.files {
+    let files: Vec<(String, Vec<String>)> = match &resolver {
+        Some(resolver) => resolver
+            .listed()
+            .iter()
+            .map(|f| (f.path.clone(), f.include_dirs.clone()))
+            .collect(),
+        None => list
+            .files
+            .iter()
+            .map(|f| (f.path.clone(), f.include_dirs.clone()))
+            .collect(),
+    };
+    // The unit's files as the plan names them (root-relative, as a scan
+    // records them, which the resolver's listed paths are).
+    let mut own: Vec<&(String, Vec<String>)> = files
+        .iter()
+        .filter(|(path, _)| unit.files.contains(path))
+        .collect();
+    own.sort();
+    own.dedup();
+    for (path, dirs) in own {
         field("file");
-        field(&file.path);
-        for dir in &file.include_dirs {
+        field(path);
+        for dir in dirs {
             field(dir);
         }
     }
@@ -315,7 +343,9 @@ fn compute(
     unit: &Unit,
     features: Option<&crate::features::FeaturesNow>,
 ) -> Result<UnitReport, Error> {
-    let closure = facts.include_closure(&unit.files);
+    // The files the unit's compile reads (a file list's resolver closure,
+    // the 2026-10-08 triage, decision 11): what `verify` hashed.
+    let closure = crate::sources::unit_closure(ctx, facts, &unit.files);
     let source_now = hash::file_set_hash_on_disk(&ctx.root, &closure)
         .unwrap_or_else(|_| "blake3:unreadable".into());
     let source_fresh = source_now == unit.source_hash;
@@ -354,7 +384,7 @@ fn compute(
                 .toolchain
                 .iter()
                 .find(|t| t.starts_with(CONFIGURATION_ENTRY_PREFIX));
-            if recorded.map(String::as_str) != configuration_entry(ctx).as_deref() {
+            if recorded.map(String::as_str) != configuration_entry(ctx, unit).as_deref() {
                 stale.push("configuration".into());
             }
             VerdictReport {
@@ -449,14 +479,33 @@ mod tests {
                  configuration = {{ name = \"make\", from = \"stated\", flags = [{flags}] }}"
             )
         };
-        let built = target(&root, &files("\"lib\"", "\"-DW=4\""));
-        let entry = configuration_entry(&built).expect("a file list has one");
-        assert!(entry.starts_with("configuration: make blake3:"), "{entry}");
-        let ledger = Ledger::of(&built);
         let unit: Unit = toml::from_str(
             "id = \"u\"\nstatus = \"pending\"\nfiles = [\"lib/a.c\"]\nsymbols = [\"a\"]\n",
         )
         .expect("unit");
+        let built = target(&root, &files("\"lib\"", "\"-DW=4\", \"-Ilib\""));
+        let entry = configuration_entry(&built, &unit).expect("a file list has one");
+        assert!(entry.starts_with("configuration: make blake3:"), "{entry}");
+        // Resolved forms, and only the unit's own files' folders: a
+        // cosmetic spelling or another file of the tool moves nothing.
+        std::fs::write(root.join("lib/b.c"), "int b;\n").expect("b.c");
+        for same in [
+            files("\"lib/\"", "\"-DW=4\", \"-Ilib/\""),
+            format!(
+                "{}\n",
+                files("\"lib\"", "\"-DW=4\", \"-Ilib\"").replace(
+                    "include_dirs = [\"lib\"] }]",
+                    "include_dirs = [\"lib\"] }, { path = \"lib/b.c\", include_dirs = [\"x\"] }]"
+                )
+            ),
+        ] {
+            assert_eq!(
+                configuration_entry(&target(&root, &same), &unit).as_ref(),
+                Some(&entry),
+                "{same}"
+            );
+        }
+        let ledger = Ledger::of(&built);
         let facts = crate::Facts::default();
         let store = |toolchain: Vec<String>| {
             let inputs = crate::verdict::VerdictInputs {
@@ -477,8 +526,9 @@ mod tests {
         store(vec!["cflags: -ffp-contract=off".into(), entry.clone()]);
         assert!(!stale(&built).contains(&"configuration".to_string()));
         for changed in [
-            files("\"lib\"", "\"-DW=8\""),
-            files("\"lib\", \"inc\"", "\"-DW=4\""),
+            files("\"lib\"", "\"-DW=8\", \"-Ilib\""),
+            files("\"lib\", \"inc\"", "\"-DW=4\", \"-Ilib\""),
+            files("\"lib\"", "\"-DW=4\", \"-Iinc\""),
         ] {
             assert!(
                 stale(&target(&root, &changed)).contains(&"configuration".to_string()),
@@ -493,8 +543,114 @@ mod tests {
             &root,
             "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"lib\"",
         );
-        assert_eq!(configuration_entry(&folder), None);
+        assert_eq!(configuration_entry(&folder, &unit), None);
         assert!(!stale(&folder).contains(&"configuration".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The 2026-10-08 check's case: `inc/common.h` includes `"cfg.h"` and is
+    /// reached from `a.c` (folders `inc, d1`) and `b.c` (folders `inc, d2`).
+    /// The scan records no edge for that ambiguous name, but `a.c`'s
+    /// compile reads `d1/cfg.h`: the planner's `source_hash`, `verify`'s
+    /// `unit_source` (the same closure) and status hash it, so an edit to
+    /// it stales the plan and the verdict.
+    #[test]
+    fn an_edit_behind_an_ambiguous_include_stales_the_verdict() {
+        let root = std::env::temp_dir().join(format!(
+            "ruharness-status-ambiguous-{}-{}",
+            std::process::id(),
+            crate::hash::random_hex(4)
+        ));
+        let put = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().expect("parent")).expect("dir");
+            std::fs::write(p, text).expect("write");
+        };
+        put("a.c", "#include \"common.h\"\nint a(void) { return W; }\n");
+        put("b.c", "#include \"common.h\"\nint b(void) { return W; }\n");
+        put("inc/common.h", "#include \"cfg.h\"\n");
+        put("d1/cfg.h", "#define W 1\n");
+        put("d2/cfg.h", "#define W 2\n");
+        let ctx = target(
+            &root,
+            "schema_version = 2\n[target]\nname = \"t\"\n\
+             files = [{ path = \"a.c\", include_dirs = [\"inc\", \"d1\"] }, \
+                      { path = \"b.c\", include_dirs = [\"inc\", \"d2\"] }]\n\
+             configuration = { name = \"make\", from = \"stated\", flags = [] }",
+        );
+        // The facts as a scan records them: no edge for the ambiguous name.
+        let record = |path: &str, includes: &[&str]| crate::facts::FileRecord {
+            path: path.into(),
+            hash: crate::hash::file_hash(&root.join(path)).expect("hash"),
+            includes: includes.iter().map(|s| s.to_string()).collect(),
+        };
+        let symbol = |name: &str, file: &str| crate::facts::SymbolRecord {
+            name: name.into(),
+            kind: "function".into(),
+            file: file.into(),
+            visibility: "public".into(),
+            signature: format!("int {name}(void)"),
+            span: (2, 2),
+        };
+        let facts = crate::Facts {
+            frontend: "c-tree-sitter".into(),
+            files: vec![
+                record("a.c", &["inc/common.h"]),
+                record("b.c", &["inc/common.h"]),
+                record("d1/cfg.h", &[]),
+                record("d2/cfg.h", &[]),
+                record("inc/common.h", &[]),
+            ],
+            symbols: vec![symbol("a", "a.c"), symbol("b", "b.c")],
+            refs: Vec::new(),
+        };
+        let a = vec!["a.c".to_string()];
+        assert_eq!(facts.include_closure(&a), ["a.c", "inc/common.h"]);
+        assert_eq!(
+            crate::sources::unit_closure(&ctx, &facts, &a),
+            ["a.c", "d1/cfg.h", "inc/common.h"]
+        );
+        // The planner hashes the same closure (from the facts' hashes).
+        let computed = crate::planner::compute_units_in(&ctx, &facts).expect("plan");
+        let planned = computed.iter().find(|u| u.files == a).expect("a's unit");
+        let mut moved = facts.clone();
+        moved.files[2].hash = "blake3:other".into();
+        let replanned = crate::planner::compute_units_in(&ctx, &moved).expect("plan");
+        assert_ne!(
+            replanned
+                .iter()
+                .find(|u| u.files == a)
+                .expect("a")
+                .source_hash,
+            planned.source_hash,
+            "d1/cfg.h is in a's source_hash"
+        );
+        let unit: Unit = toml::from_str(&format!(
+            "id = \"u\"\nstatus = \"pending\"\nfiles = [\"a.c\"]\nsymbols = [\"a\"]\n\
+             source_hash = \"{}\"\n",
+            planned.source_hash
+        ))
+        .expect("unit");
+        let ledger = Ledger::of(&ctx);
+        std::fs::create_dir_all(ledger.unit_dir("u")).expect("unit dir");
+        let closure = crate::sources::unit_closure(&ctx, &facts, &a);
+        let inputs = crate::verdict::VerdictInputs {
+            unit_source: crate::hash::file_set_hash_on_disk(&root, &closure).expect("hash"),
+            toolchain: vec![configuration_entry(&ctx, &unit).expect("entry")],
+            ..Default::default()
+        };
+        Verdict::new("u", inputs, Vec::new())
+            .store(&ledger.verdict_latest_path("u"))
+            .expect("stored");
+        let now = || compute(&ctx, &ledger, &facts, &unit, None).expect("report");
+        assert!(now().source_fresh);
+        assert!(now().verdict.stale.is_empty(), "{:?}", now().verdict.stale);
+        // b.c's header moves nothing of a's; a's moves both.
+        put("d2/cfg.h", "#define W 3\n");
+        assert!(now().verdict.stale.is_empty(), "{:?}", now().verdict.stale);
+        put("d1/cfg.h", "#define W 4\n");
+        assert!(!now().source_fresh);
+        assert_eq!(now().verdict.stale, ["source"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 

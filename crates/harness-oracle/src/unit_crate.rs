@@ -16,7 +16,10 @@ const DS_STORE: &str = ".DS_Store";
 /// fetch, build or run code beyond the unit's own sources (cargo reads the
 /// underscore spellings as the dashed ones), or, for `cargo-features`,
 /// switches on unstable manifest behaviour on a nightly toolchain.
-const REFUSED_TABLES: [&str; 8] = [
+const REFUSED_TABLES: [&str; 9] = [
+    // Cargo still reads `[project]` as an old spelling of `[package]`, so a
+    // `build` there would run (the 2026-10-08 check of fix passes A and B).
+    "project",
     "dependencies",
     "dev-dependencies",
     "dev_dependencies",
@@ -130,8 +133,8 @@ fn entries(dir: &Path) -> Result<Vec<(String, Kind)>, Error> {
 
 /// Why a unit crate's manifest `text` is refused, or `None`: it must parse,
 /// and hold no `build` key but `build = false` (the harness's own manifest
-/// says so), no `links` or `workspace` key in `[package]`, no
-/// `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]` (either
+/// says so), no `links` or `workspace` key in `[package]`, no `[project]`
+/// (cargo's old spelling of `[package]`), no `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]` (either
 /// spelling), `[patch]` or `[target.*]` table, no `cargo-features`, no
 /// `path` in `[lib]` or any `[[bin]]` (a source outside the crate's
 /// digest), and an empty `[workspace]` — without one cargo searches the
@@ -300,6 +303,7 @@ mod tests {
                 "\n[[bin]]\nname = \"b\"\npath = \"../../x.rs\"\n",
                 "`[[bin]]`",
             ),
+            ("\n[project]\nbuild = \"src/b.rs\"\n", "`[project]`"),
         ] {
             let tmp = TempDir::new("unit-crate-manifest");
             let dir = harness_crate(&tmp);

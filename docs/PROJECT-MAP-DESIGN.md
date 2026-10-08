@@ -256,6 +256,9 @@ configuration per accepted tool**, and a map's closures carry the configuration 
   - `-D<name>` and `-D<name>=<value>` with the name a C identifier; `-U<name>`;
   - `-I<dir>`, `-iquote<dir>`, `-isystem<dir>`, `-include<file>` with the path inside the project root
     after resolving and not under `migration/`;
+  - `-idirafter<dir>` under the same rule, so an accepted tool can carry `system_headers`: its folder
+    is searched after the system's, so a project file there is taken only for a name the system
+    lacks;
   - `-std=` with a value from a fixed set (`c89 c90 c99 c11 c17 c18 c23 c2x gnu89 gnu90 gnu99
     gnu11 gnu17 gnu18 gnu23 gnu2x`);
   - `-pthread`;

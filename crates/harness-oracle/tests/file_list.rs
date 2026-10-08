@@ -157,7 +157,7 @@ fn the_configuration_reaches_the_driver_build_and_the_boundary_check() {
         .expect("oracle runs");
     assert!(verdict.green, "{}", describe(&verdict));
     // The verdict records the configuration it was built under.
-    let entry = harness_core::status::configuration_entry(&target).expect("a file list");
+    let entry = harness_core::status::configuration_entry(&target, &unit).expect("a file list");
     assert!(
         verdict.inputs.toolchain.contains(&entry),
         "{:?}",

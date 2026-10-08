@@ -864,7 +864,7 @@ pub(crate) fn plan_target(ctx: &TargetContext) -> Result<(Vec<String>, String, u
     if stale > 0 {
         return Err(facts_stale(ctx, stale).into());
     }
-    let mut computed = planner::compute_units(&facts)?;
+    let mut computed = planner::compute_units_in(ctx, &facts)?;
     let plan_path = ledger.plan_path();
     let existing_text = if plan_path.exists() {
         let existing = Plan::load(&plan_path)?;
