@@ -1347,8 +1347,9 @@ plan-order | computer | compilers`, and the cockpit's own `measuring | too-large
   fewer than two measurable units is refused before anything is built, naming the units left out
   and why ("one measurable unit (u001) — u-tree left out: verify it first — the program as it
   stands needs two", or "no measurable unit — … — the program as it stands needs two"; "no accepted
-  unit to compare yet" when no unit is verified or merged at all); the left-out list names at most
-  10 units, then "and N more". When fewer than two units build, the refusal after the builds uses
+  unit to compare yet" when no unit is verified or merged at all); the left-out list ("u-x left out: why",
+  joined by "; ") names at most 10 units, then " and N more" — in the full run's progress lines
+  too. When fewer than two units build, the refusal after the builds uses
   the same words, the units that did not build among those left out ("one measurable unit (ua) —
   ud left out: its crate does not build — the program as it stands needs two"; "no accepted unit
   to compare yet" only when no unit was verified). Without `--unit` / `--as-it-stands-only`: the C
@@ -1380,7 +1381,8 @@ plan-order | computer | compilers`, and the cockpit's own `measuring | too-large
   "perf: the units the program as it stands holds not checked: <error>"; the rest of each row is
   still judged. A results file that cannot be read hides no other row: the rows that read are
   shown, then every error — a `program.json` that does not read, a `migration/perf/units` that is
-  a file, a link or unreadable, each unit file that does not read — and the show exits 1. A
+  a file, a link or unreadable, each unit file that does not read ("<path>: <reason>", the reader's
+  own words) — and the show exits 1. A
   results file of a unit no longer in the plan is named ("perf: u009 — no longer in the plan"),
   not read. Exit 0/1.
 - Events (`--json`) of `perf run` (`perf show` sends its lines as `message` events): `perf-row
