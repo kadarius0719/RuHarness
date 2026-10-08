@@ -15,23 +15,16 @@ change at the switch points below.
   the classifier refuses that `cp -cR` for the agent): 198 reproduce (1 conformant, 197 drifted),
   2 expected divergences, 0 problems, `bench check: OK — no regression`, 27 min 44 s. The fixtures
   now sit in this worktree (`targets/tractor/.scorer-vendor`, `.bench`).
-- **The project-map design: triaged and REVISED** — docs/PROJECT-MAP-DESIGN.md is revision 1
-  (commit cc2b752; §8 lists seven decisions proposed for the person, §9 maps every change to the
-  review); the triage is at the end of the review record. **Its check is RUNNING** (five Opus checkers
-  at high effort: the four lenses plus coherence); their findings go to
-  docs/reviews/2026-10-08-project-map-rev1-check.md, then revision 2 if needed, then the person's
-  answers to §8, then the build in §5's order. The review itself:
-  docs/reviews/2026-10-07-project-map-design-review.md (four lenses — facts, security, integration,
-  the model step — each finding checked by its own Opus verifier, the spike rerun, `nm`/include/
-  `@file`/`#embed`/asm-label experiments reproduced). The biggest confirmed problems: angle-bracket
-  includes get no include folder (every liblzg tool fails to compile as the walk is written); the
-  link check cannot tell a wrong definer or wrong flags from right ones, and the design claims it
-  can; "inside the project" is undecided in the body while today's code ties five jobs to one folder;
-  per-file flags must reach every compile, not only the whole-program build; the ledger inside an
-  untrusted download makes its `.cargo/config.toml` and `rust-toolchain.toml` live inputs to the
-  oracle; a `@file` argument from `compile_commands.json` lets a download add compiler options. The
-  verifiers corrected the spike's counts (`lib/lz4.c` in 29 of 33 closures; no benchmark case has a
-  `main`).
+- **The project-map design is at revision 2.1** (docs/PROJECT-MAP-DESIGN.md; the person answered
+  every proposal as recommended under the rule "simplicity means usability": CLI first, the cockpit
+  runs the same acts). The trail: the four-lens review and its triage
+  (docs/reviews/2026-10-07-project-map-design-review.md), revision 1's check and triage (…-08-project-
+  map-rev1-check.md), revision 2's re-check (…-rev2-check.md), revision 2.1's edits (§9 of the
+  design). A final Opus reader over 2.1 was running at the time of writing; then the **build starts
+  in §5's order** — (a) the walk and symbols over one folder, (c) the layout and the file-list
+  target, (b) the whole-root map, (d) the model step, (e) accept and the cockpit's acts, (f) docs,
+  (g) the features step — each committed green with §4's tests, then the usual review, fix passes,
+  mutation checks. Building is medium-effort work (briefing §17); the design holds the judgement.
 - **Part 11 of the testing guide on liblzg: DONE** (Steps 11.3–11.6 and the checkpoint, headless
   cockpit drive; the practice branch `practice-lzg` holds the committed rows, local only). The guide
   now uses a 900-copy input (the `fast` workload was too short to time with 300) and the real
@@ -40,11 +33,11 @@ change at the switch points below.
   work); the help's Speed section leaves out "Measure the program as it stands".
 
 **The work, in order:**
-1. Collect the revision's check (medium effort suffices to collect; ask for HIGH again before
-   triaging its findings and writing revision 2, if the check finds more than wording); then the
-   person's answers to §8 of the design.
-2. Then weigh the briefing's M5 against building the map (§5's order: (a), (c), (b), (d), (e), (f),
-   (g)).
+1. Read the final reader's report on revision 2.1 (docs/reviews, or the session's scratchpad);
+   fix any wording it names; then build step (a) of the design's §5, as its own worktree branch,
+   with the tests of §4 that belong to it; commit green; (c) next. The map's code lives in
+   harness-oracle, the commands in harness-cli, the cockpit's acts in harness-tui.
+2. The briefing's M5 after the map's first accepted tool (DECISIONS 2026-10-08).
 
 **Environment:** as the previous kickoff says (below). Test downloads only in
 `~/code/ruharness-test-downloads/`; nothing installed; the binaries from a worktree's

@@ -2898,3 +2898,24 @@ harness guesses; multi-source compiles go per file on perf's path; staleness kee
 `root_hash` is a notice. **Decided: a project with its own `migration/` folder is refused in
 place** (move, rename or map a copy) rather than a second ledger location. The re-check of the
 changed sections runs next; then the build in §5's order.
+
+**Revision 2.1** (2026-10-08, after the re-check of revision 2 — three Opus readers,
+docs/reviews/2026-10-08-project-map-rev2-check.md): two rules of revision 2 would have broken what
+exists — the unit-crate file check refused zopfli's hand-written M0 crate and the harness's own
+`target/` folder (now: the rule is what makes cargo run code — no `build.rs`, no `.cargo/`, a manifest
+with no build, links, dependency, patch or target keys, and `build = false` in the harness's own
+manifest), and the per-computer adoption rule refused the benchmark suite in every fresh worktree
+and made the test suite write the person's real trust file (now: the file's path is injectable,
+each record carries a token also written in the ledger, the benchmark suite is adopted as one root,
+and adoption deletes only the harness's build folders). Also fixed in place: the walk's four
+additions named and scheduled; the map profile's real reads and the dependency list's blind spot
+(inline assembly); a file neither parsed nor compiled marks every closure with an outside symbol
+incomplete; the header a compile actually used is recorded and an unsettled ambiguous include stops
+`accept`; a need already met in the closure is met, not a collision; definer sets numbered once per
+project, nested sets counted; `ask` builds nothing and `ask --build` is always allowed; the reply
+and response files' lifecycles written honestly; the duplicate question carries bounded source
+slices; `compile_commands.json`'s two-argument forms; verify's staticlib checks keep `nm` until
+`objsyms` reads archives; `RUSTUP_TOOLCHAIN` takes the harness's own value with auto-install off.
+**Decided: the compile's disk use stays unbounded for now** (a resource limit needs the launcher
+pattern; the first item to add before the map runs on untrusted downloads at scale), said in §6.
+A final reader checks 2.1; then the build in §5's order: (a), (c), (b), (d), (e), (f), (g).
