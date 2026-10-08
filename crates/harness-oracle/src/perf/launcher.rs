@@ -508,14 +508,31 @@ pub(crate) fn cache_state(host: &HostDirs, find: fn() -> Result<Compiler, Error>
     }
 }
 
-/// A lock [`lock_file`] would take, looked at without following a link and
-/// without making it: missing or a regular file is fine; a link is refused
-/// in the run's words, anything else as a lock the run could not hold.
+/// A lock [`lock_file`] would take, looked at without making it (nor a
+/// link's target): missing or a regular file is fine. A folder, or a link
+/// to one, is opened read-write as the run opens it — without creating —
+/// so its refusal is the run's own error ("Is a directory"); any other
+/// link is refused in the run's words; anything else as a lock the run
+/// could not hold.
 fn lock_is_a_file(path: &Path) -> Result<(), Error> {
+    let opened_as_the_run = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map(drop)
+            .map_err(|e| Error::io(path, e))
+    };
+    let to_a_folder = || std::fs::metadata(path).is_ok_and(|m| m.is_dir());
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(Error::io(path, e)),
         Ok(m) if m.is_file() => Ok(()),
+        Ok(m) if m.is_dir() || (m.file_type().is_symlink() && to_a_folder()) => opened_as_the_run()
+            .and(Err(Error::Invariant(format!(
+                "{}: could not hold perf's lock",
+                path.display()
+            )))),
         Ok(m) if m.file_type().is_symlink() => Err(Error::Invariant(format!(
             "{}: perf's lock is a link — remove it",
             path.display()
@@ -684,6 +701,87 @@ mod cache_state_tests {
         let refused = words(cache_state(&host, compiler));
         assert!(refused.ends_with("(no link)"), "{refused}");
         assert!(existing_launcher(&host).is_none());
+    }
+
+    /// A stale version folder whose lock is a link: the run removes the
+    /// folder and builds again, so the answer is a build — never "cannot
+    /// use" — and the link's target is not made.
+    #[test]
+    fn a_stale_folder_with_a_linked_lock_is_rebuilt() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let Some((home, host)) = home("stale-link") else {
+            return;
+        };
+        let parent = host.perf_cache.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&host.perf_cache).unwrap();
+        for d in [&parent, &host.perf_cache] {
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let version = host.perf_cache.join(version_name(&compiler().unwrap()));
+        std::fs::create_dir(&version).unwrap();
+        std::fs::write(version.join(HASHES_FILE), "junk").unwrap();
+        let nowhere = home.0.join("nowhere");
+        std::os::unix::fs::symlink(&nowhere, version.join(".lock")).unwrap();
+        assert_eq!(words(cache_state(&host, compiler)), "will build");
+        assert!(std::fs::symlink_metadata(&nowhere).is_err());
+    }
+
+    /// A `.lock` that is a folder, or a link to one — the cache's own or a
+    /// current version folder's: "cannot use" in the run's own words, the
+    /// error its read-write open gives, never words of the answer's own.
+    #[test]
+    fn a_lock_that_is_a_folder_reads_as_the_runs_error() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let Some((home, host)) = home("lock-folder") else {
+            return;
+        };
+        let parent = host.perf_cache.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&host.perf_cache).unwrap();
+        for d in [&parent, &host.perf_cache] {
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let version = host.perf_cache.join(version_name(&compiler().unwrap()));
+        std::fs::create_dir(&version).unwrap();
+        let mut hashes = String::new();
+        for name in ["perfrun", "perfgo"] {
+            let bin = version.join(name);
+            std::fs::write(&bin, name).unwrap();
+            hashes.push_str(&format!(
+                "{name} {}\n",
+                harness_core::hash::file_hash(&bin).unwrap()
+            ));
+        }
+        std::fs::write(version.join(HASHES_FILE), hashes).unwrap();
+        assert_eq!(words(cache_state(&host, compiler)), "current");
+        // The run's own words for a lock it opens read-write: a folder.
+        let runs_error = |lock: &Path| {
+            let e = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(lock)
+                .unwrap_err();
+            Error::io(lock, e).to_string()
+        };
+        let folder = home.0.join("a-folder");
+        std::fs::create_dir(&folder).unwrap();
+        for lock in [host.perf_cache.join(".lock"), version.join(".lock")] {
+            let _ = std::fs::remove_file(&lock);
+            std::fs::create_dir(&lock).unwrap();
+            let expected = runs_error(&lock);
+            assert!(expected.contains("Is a directory"), "{expected}");
+            assert_eq!(words(cache_state(&host, compiler)), expected);
+            std::fs::remove_dir(&lock).unwrap();
+            std::os::unix::fs::symlink(&folder, &lock).unwrap();
+            assert_eq!(words(cache_state(&host, compiler)), runs_error(&lock));
+            std::fs::remove_file(&lock).unwrap();
+        }
+        assert_eq!(words(cache_state(&host, compiler)), "current");
     }
 
     /// The run's order: the refused folders, then the private-folder

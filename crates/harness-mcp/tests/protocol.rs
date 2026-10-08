@@ -132,14 +132,32 @@ while kill -0 $PPID 2>/dev/null; do sleep 0.05; done
     path
 }
 
-/// Processes SIGKILLed when the guard drops — when the test ends, passing
-/// or failing — unless gone or their pid now names another program.
-struct Reaper(Vec<(u32, String)>);
+/// The server's children, SIGKILLed when the guard drops — when the test
+/// ends, passing or failing — unless gone or their pid now names another
+/// process: its command name, its parent (the server) and the server's
+/// parent (this test process) are checked first, as harness-tui's
+/// `KillOnDrop` checks its own, so a reused pid is never killed.
+struct Reaper {
+    server: u32,
+    children: Vec<(u32, String)>,
+}
+
+/// `pid`'s parent (`ps -o ppid=`), `None` when it is gone.
+fn parent_of(pid: u32) -> Option<u32> {
+    std::process::Command::new("/bin/ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+}
 
 impl Drop for Reaper {
     fn drop(&mut self) {
-        for (pid, comm) in &self.0 {
-            if comm.is_empty() || comm_of(*pid) != *comm {
+        if parent_of(self.server) != Some(std::process::id()) {
+            return;
+        }
+        for (pid, comm) in &self.children {
+            if comm.is_empty() || comm_of(*pid) != *comm || parent_of(*pid) != Some(self.server) {
                 continue;
             }
             let _ = std::process::Command::new("/bin/kill")
@@ -174,12 +192,13 @@ fn start_spinning(tag: &str) -> (Client, std::path::PathBuf, Reaper) {
         seen.iter().any(|m| m["method"] == "notifications/progress"),
         "{seen:?}"
     );
-    let reaper = Reaper(
-        children_of(c.pid())
+    let reaper = Reaper {
+        server: c.pid(),
+        children: children_of(c.pid())
             .into_iter()
             .map(|pid| (pid, comm_of(pid)))
             .collect(),
-    );
+    };
     (c, fake, reaper)
 }
 
