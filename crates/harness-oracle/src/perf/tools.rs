@@ -112,12 +112,17 @@ mod tests {
             let (cc, rustc) = perf_compilers(&t, false).expect("both ran");
             assert!(!cc.is_empty() && cc.chars().count() <= 160, "{cc}");
             assert!(rustc.starts_with("rustc "), "{rustc}");
-            // The same line a plain tool run gives (perf run's way).
+            // The same line an unsandboxed tool run gives: the sandbox
+            // changes nothing in a version line. This is not perf run's
+            // read (its Runner is steps.writing's, under the tool profile,
+            // with VERSION_OUTPUT_CAP): that perf run stores the very lines
+            // perf show reads is guarded by measure.rs's
+            // a_run_over_verified_units_end_to_end.
             let runner = Runner {
                 cwd: t.root.canonicalize().expect("root"),
                 allowlist: vec!["rustc".into()],
                 timeout: std::time::Duration::from_secs(120),
-                max_output: crate::exec::DEFAULT_MAX_OUTPUT,
+                max_output: VERSION_OUTPUT_CAP,
                 tool_profile: None,
                 tool_tmpdir: None,
             };
