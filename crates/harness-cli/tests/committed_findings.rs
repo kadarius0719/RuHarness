@@ -15,6 +15,7 @@ use std::path::Path;
 #[test]
 fn zopfli_findings_stay_byte_identical() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../targets/zopfli");
+    harness_core::adopt::testing::adopt(&root);
     let ctx = TargetContext::load(&root).expect("target loads");
     let facts = harness_scan::CFrontend.scan(&ctx).expect("scan");
     let suite = harness_detect::CTreeSitterSuite;
