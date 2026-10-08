@@ -583,17 +583,26 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>, Error> {
     }
 }
 
+/// Only the version, read first: every other key is skipped as it is
+/// scanned, never built (no tree of the whole file).
+#[derive(Deserialize)]
+struct VersionOnly {
+    #[serde(default)]
+    schema_version: Option<u64>,
+}
+
 fn parse_json<T: for<'de> Deserialize<'de>>(path: &Path, bytes: &[u8]) -> Result<T, Error> {
     // The version first: a newer file is its own error, whatever its shape.
-    if let Ok(serde_json::Value::Object(map)) = serde_json::from_slice::<serde_json::Value>(bytes) {
-        if let Some(found) = map.get("schema_version").and_then(|v| v.as_u64()) {
-            if found > RESULTS_SCHEMA_VERSION {
-                return Err(Error::SchemaTooNew {
-                    path: path.to_path_buf(),
-                    found,
-                    supported: RESULTS_SCHEMA_VERSION,
-                });
-            }
+    if let Ok(VersionOnly {
+        schema_version: Some(found),
+    }) = serde_json::from_slice(bytes)
+    {
+        if found > RESULTS_SCHEMA_VERSION {
+            return Err(Error::SchemaTooNew {
+                path: path.to_path_buf(),
+                found,
+                supported: RESULTS_SCHEMA_VERSION,
+            });
         }
     }
     serde_json::from_slice(bytes).map_err(|e| bad(path, format!("not a perf results file: {e}")))
@@ -649,6 +658,14 @@ pub fn is_set_up(outcome: &str) -> bool {
 }
 
 fn check_rows(path: &Path, rows: &[Row], kind: RowKind) -> Result<(), Error> {
+    // One row per workload, and the writer keeps only the workloads file's
+    // rows: no list is longer than that file can name.
+    let what = match kind {
+        RowKind::CAlone => "c_alone",
+        RowKind::AsItStands => "as_it_stands",
+        RowKind::Unit => "rows",
+    };
+    at_most(rows, super::workloads::MAX_WORKLOADS, what).map_err(|why| bad(path, why))?;
     let mut seen: Vec<&str> = Vec::new();
     for row in rows {
         if seen.contains(&row.workload.as_str()) {
@@ -788,7 +805,10 @@ pub fn check_row(row: &Row, kind: RowKind) -> Result<(), String> {
             );
         }
         if let Some(u) = &t.units {
-            at_most(u, MAX_UNITS, "last_try's units")?;
+            if kind != RowKind::AsItStands {
+                return Err("only the program as it stands holds units".into());
+            }
+            check_units(u, "last_try's units", &mut Vec::new())?;
         }
         check_setup(&t.outcome, t.setup.as_ref())?;
     }
@@ -871,13 +891,7 @@ fn check_inputs(i: &RowInputs, kind: RowKind) -> Result<(), String> {
         if kind != RowKind::AsItStands {
             return Err("only the program as it stands holds units".into());
         }
-        at_most(units, MAX_UNITS, "units")?;
-        for u in units {
-            if !unit_ok(&u.id) || !is_digest(&u.crate_digest) || ids.contains(&u.id.as_str()) {
-                return Err("units are unit ids, once each, with crate digests".into());
-            }
-            ids.push(&u.id);
-        }
+        check_units(units, "units", &mut ids)?;
     }
     if let Some(left) = &i.left_out {
         if kind != RowKind::AsItStands {
@@ -895,6 +909,24 @@ fn check_inputs(i: &RowInputs, kind: RowKind) -> Result<(), String> {
             }
             ids.push(&u.id);
         }
+    }
+    Ok(())
+}
+
+/// A list of units held: capped, then each a clean unit id, once each
+/// (counting the ids already in `ids`), with its crate's digest.
+fn check_units<'a>(units: &'a [UnitRef], what: &str, ids: &mut Vec<&'a str>) -> Result<(), String> {
+    at_most(units, MAX_UNITS, what)?;
+    for u in units {
+        if !crate::plan::is_clean_segment(&u.id)
+            || !is_digest(&u.crate_digest)
+            || ids.contains(&u.id.as_str())
+        {
+            return Err(format!(
+                "{what} are unit ids, once each, with crate digests"
+            ));
+        }
+        ids.push(&u.id);
     }
     Ok(())
 }
@@ -1829,6 +1861,119 @@ mod tests {
             let words = format!("{what} holds {} entries, at most {cap}", cap + 1);
             assert!(err.contains(&words), "{what}: {err}");
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn each_list_of_rows_holds_at_most_one_row_per_workload_the_file_can_name() {
+        // The writer keeps only the workloads file's rows, so no list holds
+        // more than MAX_WORKLOADS: a forged 17th row is refused by name.
+        use super::super::workloads::MAX_WORKLOADS;
+        let dir = std::env::temp_dir().join(format!("perf-w-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(dir.join(UNITS_DIR)).expect("dir");
+        let rows = |kind: RowKind, n: usize| -> Vec<Row> {
+            (0..n)
+                .map(|i| Row {
+                    workload: format!("w{i}"),
+                    ..measured(kind)
+                })
+                .collect()
+        };
+        for n in [MAX_WORKLOADS, MAX_WORKLOADS + 1] {
+            let p = program_path(&dir);
+            let u = unit_path(&dir, "u001");
+            let c_alone = ProgramResults {
+                c_alone: rows(RowKind::CAlone, n),
+                ..ProgramResults::default()
+            };
+            let as_it_stands = ProgramResults {
+                as_it_stands: rows(RowKind::AsItStands, n),
+                ..ProgramResults::default()
+            };
+            let unit = UnitResults {
+                rows: rows(RowKind::Unit, n),
+                ..UnitResults::new("u001")
+            };
+            let mut got = Vec::new();
+            for (what, f) in [("c_alone", &c_alone), ("as_it_stands", &as_it_stands)] {
+                std::fs::write(&p, serde_json::to_string(f).expect("json")).expect("write");
+                got.push((what, read_program(&p).map(|_| ())));
+            }
+            std::fs::write(&u, serde_json::to_string(&unit).expect("json")).expect("write");
+            got.push(("rows", read_unit(&u, "u001").map(|_| ())));
+            for (what, read) in got {
+                if n == MAX_WORKLOADS {
+                    read.unwrap_or_else(|e| panic!("{what} at its cap: {e}"));
+                } else {
+                    let err = read.expect_err(what).to_string();
+                    let words = format!("{what} holds 17 entries, at most 16");
+                    assert!(err.contains(&words), "{what}: {err}");
+                }
+            }
+            // The writer refuses the same lists.
+            if n > MAX_WORKLOADS {
+                assert!(write_program(&p, &c_alone).is_err());
+                assert!(write_unit(&u, &unit).is_err());
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_last_trys_units_are_checked_as_the_rows_own_units_are() {
+        let unit = |id: &str| UnitRef {
+            id: id.into(),
+            crate_digest: digest('c'),
+        };
+        let with = |units: Vec<UnitRef>, kind: RowKind| {
+            let mut r = measured(kind);
+            r.last_try = Some(LastTry {
+                outcome: "crate-does-not-build".into(),
+                setup: None,
+                units: Some(units),
+            });
+            check_row(&r, kind)
+        };
+        let s = RowKind::AsItStands;
+        with(vec![unit("u001"), unit("u002")], s).expect("clean ids");
+        for (units, why) in [
+            (vec![unit("../u001")], "an odd id"),
+            (vec![unit("u001"), unit("u001")], "an id twice"),
+            (
+                vec![UnitRef {
+                    id: "u001".into(),
+                    crate_digest: "blake3:short".into(),
+                }],
+                "a crate that is no digest",
+            ),
+        ] {
+            let err = with(units, s).expect_err(why);
+            assert_eq!(
+                err, "last_try's units are unit ids, once each, with crate digests",
+                "{why}"
+            );
+        }
+        // Only the program as it stands holds units, in its last try too.
+        let err = with(vec![unit("u001")], RowKind::Unit).expect_err("a unit row");
+        assert_eq!(err, "only the program as it stands holds units");
+    }
+
+    #[test]
+    fn a_forged_file_full_of_an_unknown_field_is_refused_by_its_name() {
+        // About 1.4 million empty arrays under a key the schema does not
+        // have, inside the 4 MiB cap: the version is read without building
+        // the file as a tree, and the typed read stops at the unknown key.
+        let dir = std::env::temp_dir().join(format!("perf-u-{}", crate::hash::random_hex(6)));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let p = program_path(&dir);
+        let head = "{\"schema\":\"ruharness-perf\",\"schema_version\":1,\"junk\":[";
+        let tail = "[]],\"c_alone\":[],\"as_it_stands\":[]}";
+        let room = MAX_RESULTS_BYTES as usize - head.len() - tail.len();
+        let text = format!("{head}{}{tail}", "[],".repeat(room / 3));
+        assert!(text.len() as u64 <= MAX_RESULTS_BYTES);
+        std::fs::write(&p, text).expect("write");
+        let err = read_program(&p).expect_err("forged").to_string();
+        assert!(err.contains("unknown field `junk`"), "{err}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

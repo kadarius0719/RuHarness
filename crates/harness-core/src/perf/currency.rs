@@ -128,33 +128,23 @@ pub fn reasons(row: &Row, kind: RowKind, today: &Today<'_>) -> Vec<Reason> {
                     why.push(reason("left-out", format!("{id} is left out now")));
                 }
             }
-            let left: Vec<&str> = i.left_out.iter().flatten().map(|l| l.id.as_str()).collect();
             for id in now {
                 if held.contains(&id.as_str()) {
                     continue;
                 }
-                match i
-                    .left_out
-                    .iter()
-                    .flatten()
-                    .find(|l| l.id == *id)
-                    .map(|l| l.reason.as_str())
-                {
-                    None if !left.contains(&id.as_str()) => {
-                        why.push(reason("accepted", format!("{id} was accepted since")))
-                    }
-                    Some("not-fresh") | Some("accept-interrupted") | Some("replaces-changed") => {
+                let Some(l) = i.left_out.iter().flatten().find(|l| l.id == *id) else {
+                    why.push(reason("accepted", format!("{id} was accepted since")));
+                    continue;
+                };
+                match l.reason.as_str() {
+                    "not-fresh" | "accept-interrupted" | "replaces-changed" => {
                         why.push(reason("verified", format!("{id} was verified since")))
                     }
-                    Some(_) => {
-                        if let Some(l) = i.left_out.iter().flatten().find(|l| l.id == *id) {
-                            if (today.crate_digest)(id).as_deref() != Some(l.crate_digest.as_str())
-                            {
-                                why.push(reason("rust", format!("{id}'s Rust changed since")));
-                            }
+                    _ => {
+                        if (today.crate_digest)(id).as_deref() != Some(l.crate_digest.as_str()) {
+                            why.push(reason("rust", format!("{id}'s Rust changed since")));
                         }
                     }
-                    None => {}
                 }
             }
             let order_now: Vec<&str> = now

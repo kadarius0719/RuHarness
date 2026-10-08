@@ -758,6 +758,9 @@ pub fn perf_run(
     req: &PerfRequest,
     progress: &mut dyn PerfProgress,
 ) -> Result<PerfSummary, Error> {
+    // The plan's size first: more than 999 units is refused by name before
+    // anything is selected, built or written (§3.2).
+    build::check_plan_size(plan.units.len())?;
     if !cfg!(target_os = "macos") || sandbox::sandbox_mode() != "sandbox-exec" {
         return Err(Error::Invariant(
             "perf runs on macOS only for now — the Linux launcher is not built yet".into(),
@@ -3621,6 +3624,67 @@ mod tests {
             untouched(&units);
             assert!(!root.join("migration/build").exists(), "nothing built");
         }
+    }
+
+    /// A plan of more than 999 units is refused by name before anything is
+    /// selected, built or written (§3.2): otherwise its units past the
+    /// 999th, never given a slot, could fill a left-out list past the
+    /// results files' cap and stop the run partway. 999 units pass.
+    #[test]
+    fn a_plan_of_more_than_999_units_is_refused_by_name_before_anything_is_built() {
+        let tmp = crate::testutil::TempDir::new("perf-plan-cap");
+        let root = tmp.path().canonicalize().expect("root");
+        mini_program(&root, &["ua"]);
+        let perf_dir = root.join("migration/perf");
+        std::fs::create_dir_all(&perf_dir).expect("perf dir");
+        let target = TargetContext::load(&root).expect("target");
+        let workloads = wl::parse(
+            "schema_version = 1\n[[workload]]\nid = \"w\"\nargs = []\n",
+            Path::new("w.toml"),
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let plan_of = |n: usize| {
+            let units: String = (1..=n)
+                .map(|i| {
+                    format!("\n[[unit]]\nid = \"u{i:04}\"\nstatus = \"verified\"\nfiles = [\"src/ua.c\"]\n")
+                })
+                .collect();
+            Plan::parse(
+                Path::new("plan.toml"),
+                &format!("schema_version = 1\ntarget = \"tool\"\n{units}"),
+            )
+            .expect("plan")
+        };
+        let mut seen = Seen {
+            messages: Vec::new(),
+            rows: Vec::new(),
+        };
+        let mut run = |n: usize, facts: &Facts| {
+            perf_run(
+                &target,
+                &plan_of(n),
+                facts,
+                &workloads,
+                &perf_dir,
+                &PerfRequest::default(),
+                &mut seen,
+            )
+            .map(|_| ())
+        };
+        let refused = run(1000, &facts_of(&root));
+        assert!(
+            matches!(&refused, Err(Error::InvalidPlan(w))
+                if w == "perf measures a plan of at most 999 units — this plan has 1000"),
+            "{refused:?}"
+        );
+        // 999 units pass the size check: the stale facts (or, off macOS,
+        // the platform) are what refuses them, also before any build.
+        let at_cap = run(999, &Facts::default());
+        assert!(matches!(&at_cap, Err(Error::Invariant(_))), "{at_cap:?}");
+        assert!(seen.messages.is_empty() && seen.rows.is_empty());
+        assert!(!root.join("migration/build").exists(), "nothing built");
+        let written: Vec<_> = std::fs::read_dir(&perf_dir).expect("perf dir").collect();
+        assert!(written.is_empty(), "nothing written");
     }
 
     /// The C's step-1 runs on a side's row (§3.3, §3.5 step 1, note 23): a
