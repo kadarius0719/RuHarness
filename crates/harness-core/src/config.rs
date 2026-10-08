@@ -468,6 +468,121 @@ fn is_digest(value: &str) -> bool {
     hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// Largest `harness.toml` read: far above any real one (a long file list
+/// is a few hundred KiB).
+pub const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The text of the config at `path`, read as the ledger files are: a
+/// regular file only, never through a link (a download's `harness.toml`
+/// linked to a file outside the project would otherwise be parsed, and a
+/// parse error could show its lines), never a FIFO (which would hang every
+/// command), at most [`MAX_CONFIG_BYTES`].
+fn read_config_text(path: &Path) -> Result<String, Error> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) => return Err(Error::io(path, e)),
+        Ok(meta) if !meta.file_type().is_file() => {
+            return Err(Error::parse(
+                path,
+                "is not a regular file (a link, a folder, a FIFO or a device); a target's \
+                 harness.toml must be a plain file in its folder",
+            ));
+        }
+        Ok(meta) if meta.len() > MAX_CONFIG_BYTES => {
+            return Err(Error::parse(
+                path,
+                format!(
+                    "is larger than {} MiB, far beyond any real harness.toml; check the file",
+                    MAX_CONFIG_BYTES / (1024 * 1024)
+                ),
+            ));
+        }
+        Ok(_) => {}
+    }
+    let bytes = crate::ledger::read_regular(path, MAX_CONFIG_BYTES).map_err(|e| match e {
+        Error::Io { .. } => e,
+        _ => Error::parse(
+            path,
+            "changed while it was read, or is not a regular file; check the file",
+        ),
+    })?;
+    String::from_utf8(bytes).map_err(|_| Error::parse(path, "is not UTF-8 text"))
+}
+
+/// A TOML parse error in one sentence that names the line and the column
+/// and never quotes the file's text.
+fn toml_error_words(text: &str, e: &toml::de::Error) -> String {
+    let message = e
+        .message()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.');
+    match e.span() {
+        Some(span) => {
+            let before = &text.as_bytes()[..span.start.min(text.len())];
+            let line = before.iter().filter(|&&b| b == b'\n').count() + 1;
+            let column = before.iter().rev().take_while(|&&b| b != b'\n').count() + 1;
+            format!("line {line}, column {column}: {message}")
+        }
+        None => message.to_string(),
+    }
+}
+
+/// The `[target]` refusals that serde would word in its own terms, each
+/// as one sentence saying what to write: an unknown `from`, a key a files
+/// entry does not hold, a missing `configuration`.
+fn check_file_list_shape(target: &toml::Table) -> Result<(), String> {
+    const FROM: &[&str] = &["make", "meson", "cmake", "compile_commands", "stated"];
+    if let Some(toml::Value::Array(files)) = target.get("files") {
+        for entry in files {
+            let toml::Value::Table(entry) = entry else {
+                return Err(
+                    "each [target] files entry is a table, like { path = \"src/main.c\", \
+                     include_dirs = [\"include\"] }; fix that entry"
+                        .into(),
+                );
+            };
+            let shown = entry
+                .get("path")
+                .and_then(toml::Value::as_str)
+                .map(crate::text::safe_line)
+                .unwrap_or_else(|| "(no path)".into());
+            if !entry.contains_key("path") {
+                return Err(
+                    "a [target] files entry has no path; write path = \"src/main.c\" in it".into(),
+                );
+            }
+            if let Some(key) = entry
+                .keys()
+                .find(|k| !matches!(k.as_str(), "path" | "include_dirs"))
+            {
+                return Err(format!(
+                    "the [target] files entry `{shown}` holds `{}`, which a files entry does not \
+                     have; write only path and include_dirs",
+                    crate::text::safe_line(key)
+                ));
+            }
+        }
+    }
+    let Some(configuration) = target.get("configuration") else {
+        return Err(
+            "[target] configuration is missing; add the build the files are compiled under, like \
+             configuration = { name = \"make\", from = \"make\", flags = [] }"
+                .into(),
+        );
+    };
+    if let Some(from) = configuration.get("from").and_then(toml::Value::as_str) {
+        if !FROM.contains(&from) {
+            return Err(format!(
+                "[target] configuration from = `{}` is not one the harness knows; write one of {}",
+                crate::text::safe_line(from),
+                FROM.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `rel` (`.` or a clean relative path) resolved against `root`: the
 /// deepest part that exists, with its links followed, must lie inside the
 /// root and outside its `migration/`. A part that does not exist yet
@@ -502,10 +617,10 @@ impl TargetConfig {
     /// [`Error::SchemaTooNew`] before any other key is looked at.
     pub fn load_file(path: &Path, root: &Path) -> Result<TargetConfig, Error> {
         let path = path.to_path_buf();
-        let text = std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
+        let text = read_config_text(&path)?;
         let table: toml::Table = text
             .parse()
-            .map_err(|e: toml::de::Error| Error::parse(&path, e.to_string()))?;
+            .map_err(|e: toml::de::Error| Error::parse(&path, toml_error_words(&text, &e)))?;
         if let Some(found) = table
             .get("schema_version")
             .and_then(toml::Value::as_integer)
@@ -537,7 +652,20 @@ impl TargetConfig {
     /// file-list form's paths. `Err` is one sentence.
     pub fn from_table(mut table: toml::Table) -> Result<TargetConfig, String> {
         let schema_version = match table.remove("schema_version") {
-            None => return Err("`schema_version` is missing; write schema_version = 1".into()),
+            None => {
+                let lists = table
+                    .get("target")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|t| t.contains_key("files"));
+                let version = if lists {
+                    FILE_LIST_FORM_VERSION
+                } else {
+                    FOLDER_FORM_VERSION
+                };
+                return Err(format!(
+                    "`schema_version` is missing; write schema_version = {version}"
+                ));
+            }
             Some(v) => v
                 .as_integer()
                 .and_then(|v| u64::try_from(v).ok())
@@ -588,6 +716,7 @@ impl TargetConfig {
                         .into(),
                 );
             }
+            check_file_list_shape(&target)?;
             let t: FileListTarget = toml::Value::Table(target)
                 .try_into()
                 .map_err(|e: toml::de::Error| format!("[target]: {}", e.message()))?;
@@ -710,6 +839,22 @@ fn check_paths_resolve(root: &Path, list: &FileList) -> Result<(), String> {
         if !resolves_inside(root, &file.path) {
             return Err(outside(format!("[target] files entry `{shown}`")));
         }
+        // A typo must not shrink the tool silently (the triage's decision
+        // 3): a listed file is there, and a regular file (links followed).
+        match std::fs::metadata(root.join(&file.path)) {
+            Err(_) => {
+                return Err(format!(
+                    "[target] files entry `{shown}` does not exist; fix the path"
+                ))
+            }
+            Ok(meta) if !meta.is_file() => {
+                return Err(format!(
+                    "[target] files entry `{shown}` is not a regular file (a folder, a FIFO or a \
+                     device); list the program's .c files"
+                ))
+            }
+            Ok(_) => {}
+        }
         for dir in &file.include_dirs {
             if !resolves_inside(root, dir) {
                 return Err(outside(format!(
@@ -726,6 +871,17 @@ fn check_paths_resolve(root: &Path, list: &FileList) -> Result<(), String> {
                     "the flag `{}`",
                     crate::text::safe_line(flag)
                 )));
+            }
+            // A forced include is read by every compile and by the
+            // features mirror: a FIFO there would hang them.
+            if flag.starts_with("-include")
+                && !std::fs::metadata(root.join(p)).is_ok_and(|m| m.is_file())
+            {
+                return Err(format!(
+                    "the flag `{}` names no regular file; -include takes a header of the \
+                     project, like -includeconfig.h",
+                    crate::text::safe_line(flag)
+                ));
             }
         }
     }
@@ -980,7 +1136,128 @@ mod tests {
         for dir in ["src/tools", "src/lib", "src/include"] {
             std::fs::create_dir_all(root.join(dir)).expect("dirs");
         }
+        for file in ["src/tools/lzg.c", "src/lib/encode.c", "src/lib/decode.c"] {
+            std::fs::write(root.join(file), "int x;\n").expect("file");
+        }
         root
+    }
+
+    /// The triage's decision 3 and the person's side 12 and 15: a listed
+    /// file that is missing or not a regular file, a `-include` that names
+    /// no regular file, a file list without `schema_version`, and the three
+    /// refusals serde would word are each one sentence saying what to write.
+    #[test]
+    fn a_missing_listed_file_and_the_serde_shaped_mistakes_are_refused_in_words() {
+        let root = project("words");
+        let text = file_list("").replace("src/lib/decode.c", "src/nope.c");
+        let err = load_text(&root, &text).unwrap_err().to_string();
+        assert!(
+            err.contains("[target] files entry `src/nope.c` does not exist; fix the path"),
+            "{err}"
+        );
+        let text = file_list("").replace("src/lib/decode.c", "src/include");
+        let err = load_text(&root, &text).unwrap_err().to_string();
+        assert!(err.contains("`src/include` is not a regular file"), "{err}");
+        // A forced include must be a regular file: a FIFO would hang the
+        // mirror and every compile.
+        let err = load_text(&root, &file_list("\"-includesrc/include/none.h\""))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("the flag `-includesrc/include/none.h` names no regular file"),
+            "{err}"
+        );
+        let fifo = root.join("src/include/fifo.h");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .is_ok_and(|s| s.success());
+        if made {
+            let err = load_text(&root, &file_list("\"-includesrc/include/fifo.h\""))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("names no regular file"), "{err}");
+        }
+        std::fs::write(root.join("src/include/config.h"), "#define X 1\n").expect("config.h");
+        load_text(&root, &file_list("\"-includesrc/include/config.h\"")).expect("a real header");
+        // Without schema_version, a file list is told to write 2.
+        let text = file_list("").replace("schema_version = 2\n", "");
+        let err = load_text(&root, &text).unwrap_err().to_string();
+        assert!(err.contains("write schema_version = 2"), "{err}");
+        let err = load_text(&root, &FOLDER.replace("schema_version = 1\n", ""))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("write schema_version = 1"), "{err}");
+        // The three serde-worded refusals, in the harness's words.
+        let configuration = "configuration = { name = \"make\", from = \"make\", flags = [] }\n";
+        for (text, says) in [
+            (
+                file_list("").replace("from = \"make\"", "from = \"Makefile\""),
+                "[target] configuration from = `Makefile` is not one the harness knows; write \
+                 one of make, meson, cmake, compile_commands, stated",
+            ),
+            (
+                file_list("").replace(configuration, ""),
+                "[target] configuration is missing; add the build the files are compiled under",
+            ),
+        ] {
+            let err = load_text(&root, &text).unwrap_err().to_string();
+            assert!(err.contains(says), "{err}");
+            assert!(
+                !err.contains("unknown variant") && !err.contains("missing field"),
+                "{err}"
+            );
+        }
+        let text = file_list("").replacen(
+            "include_dirs = [\"src/include\"]",
+            "include_dir = [\"src/include\"]",
+            1,
+        );
+        let err = load_text(&root, &text).unwrap_err().to_string();
+        assert!(
+            err.contains(
+                "the [target] files entry `src/tools/lzg.c` holds `include_dir`, which a files \
+                 entry does not have; write only path and include_dirs"
+            ),
+            "{err}"
+        );
+    }
+
+    /// The security check's first finding: the root `harness.toml` is read
+    /// as a regular file only — a link to a file outside the project is
+    /// refused before it is parsed, so none of its lines is shown — and a
+    /// parse error names the line and the column without quoting the line.
+    #[cfg(unix)]
+    #[test]
+    fn the_root_file_is_never_read_through_a_link_and_a_parse_error_quotes_nothing() {
+        let root = project("link");
+        let outside = tmp("secret");
+        std::fs::write(
+            outside.join("credentials"),
+            "aws_access_key_id = AKIAFAKE\n[[[\n",
+        )
+        .expect("secret");
+        std::os::unix::fs::symlink(outside.join("credentials"), root.join(CONFIG_FILE))
+            .expect("link");
+        let err = TargetConfig::load(&root).unwrap_err().to_string();
+        assert!(err.contains("is not a regular file"), "{err}");
+        assert!(!err.contains("AKIA"), "{err}");
+        std::fs::remove_file(root.join(CONFIG_FILE)).expect("unlink");
+        // A FIFO is refused at once, never opened.
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join(CONFIG_FILE))
+            .status()
+            .is_ok_and(|s| s.success());
+        if made {
+            let err = TargetConfig::load(&root).unwrap_err().to_string();
+            assert!(err.contains("is not a regular file"), "{err}");
+            std::fs::remove_file(root.join(CONFIG_FILE)).expect("rm fifo");
+        }
+        let err = load_text(&root, "schema_version = 1\nsecret_value = AKIAFAKE oops\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("line 2, column"), "{err}");
+        assert!(!err.contains("AKIA") && !err.contains('\n'), "{err}");
     }
 
     fn write_tool(root: &Path, id: &str, text: &str) {
@@ -1171,7 +1448,7 @@ mod tests {
             ),
             (
                 "{ name = \"make\", from = \"ninja\", flags = [] }",
-                "unknown variant",
+                "from = `ninja` is not one the harness knows; write one of make, meson",
             ),
             (
                 "{ name = \"a b\", from = \"stated\", flags = [] }",

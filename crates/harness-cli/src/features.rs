@@ -311,6 +311,11 @@ mod tests {
             harness_core::hash::random_hex(4)
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        // A listed file must exist when harness.toml loads.
+        for file in ["src/tools/lzg.c", "src/lib/lib.c"] {
+            std::fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(file), "int x;\n").unwrap();
+        }
         let ctx = |text: &str| {
             std::fs::write(dir.join("harness.toml"), text).unwrap();
             TargetContext::folder_form(

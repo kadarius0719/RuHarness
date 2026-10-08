@@ -796,17 +796,19 @@ fn facts_stale(stale: usize) -> Error {
     }
 }
 
-/// Count facts file records whose hash no longer matches the working tree,
-/// and — for a file-list target — the files a scan would record that the
-/// facts lack (a listed file, or a header an include would now find).
+/// Count facts file records whose hash no longer matches the working tree
+/// (a file the scan recorded as unreadable is current while it stays so),
+/// and — for a file-list target — the files a scan would record otherwise
+/// (a file the facts lack, or one whose includes now resolve elsewhere).
 pub(crate) fn stale_fact_files(ctx: &TargetContext, facts: &Facts) -> usize {
     facts
         .files
         .iter()
-        .filter(|f| {
-            hash::file_hash(&ctx.root.join(&f.path))
-                .map(|h| h != f.hash)
-                .unwrap_or(true)
+        .filter(|f| match hash::file_hash(&ctx.root.join(&f.path)) {
+            Ok(h) => h != f.hash,
+            Err(_) => {
+                f.hash != harness_core::sources::UNREADABLE_HASH || !ctx.root.join(&f.path).exists()
+            }
         })
         .count()
         + harness_core::features::unrecorded_program_files(ctx, facts).len()

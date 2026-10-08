@@ -24,7 +24,10 @@
 //!
 //! The project map, step (c) (docs/PROJECT-MAP-DESIGN.md §3.7): a file-list
 //! target is read as its listed files plus every header their includes
-//! reach (both include forms, through each file's own include folders), and
+//! reach, by harness-core's one include rule ([`sources::Resolver`]: the
+//! configuration's path flags and each file's own folders in the
+//! compiler's order, its `-include` files first), every include name read
+//! by the one include reader ([`sources::include_names`]), and
 //! every scan prunes `migration/` and keeps walk errors, files over 8 MiB
 //! and non-UTF-8 files as notes ([`ScanNotes`]) instead of stopping.
 
@@ -146,19 +149,64 @@ pub struct ScanNotes {
     /// Files that are not UTF-8, root-relative: parsed from their bytes like
     /// any other (Latin-1 comments are common in older C).
     pub not_utf8: Vec<String>,
+    /// Files that cannot be read, root-relative: recorded with
+    /// [`sources::UNREADABLE_HASH`] and no includes (also in `skipped`,
+    /// with the error in words), so staleness counts them as recorded.
+    pub unreadable: Vec<String>,
+    /// A file-list target's ambiguous includes: a header reached from two
+    /// listed files whose folders resolve one of its include names to two
+    /// places. No edge is recorded for such a name.
+    pub ambiguous: Vec<sources::Ambiguous>,
+}
+
+impl ScanNotes {
+    /// Each ambiguous include in one sentence, for the person.
+    pub fn ambiguous_lines(&self) -> Vec<String> {
+        self.ambiguous
+            .iter()
+            .map(|a| {
+                let lands: Vec<String> = a
+                    .lands
+                    .iter()
+                    .map(|(unit, landing)| {
+                        let at = match landing {
+                            sources::Landing::Project(rel) => rel.clone(),
+                            sources::Landing::Outside(_) => "a file outside the project".into(),
+                            sources::Landing::NotProject => "no project file".into(),
+                        };
+                        format!("{at} when compiled for {unit}")
+                    })
+                    .collect();
+                let (open, close) = if a.quoted { ('"', '"') } else { ('<', '>') };
+                format!(
+                    "{}'s include {open}{}{close} reaches {}: an ambiguous include, recorded for \
+                     none; give those files the same include folder for it",
+                    a.file,
+                    a.name,
+                    lands.join(" but ")
+                )
+            })
+            .collect()
+    }
 }
 
 /// One file the scan records.
 struct Scanned {
     /// Root-relative path.
     rel: String,
-    /// Its content hash.
+    /// Its content hash ([`sources::UNREADABLE_HASH`] for a file that
+    /// cannot be read).
     hash: String,
     /// The project files its includes reach, root-relative.
     includes: BTreeSet<String>,
-    /// Its parse and bytes; `None` for a file too large to parse.
+    /// Its parse and bytes; `None` for a file too large to parse, or one
+    /// that cannot be read.
     parse: Option<(tree_sitter::Tree, Vec<u8>)>,
 }
+
+/// A file's include names, `(name, quoted)`, as [`sources::include_names`]
+/// reads them.
+type Names = Vec<(String, bool)>;
 
 /// One file's hash and parse, as both readers take it.
 struct Source {
@@ -167,25 +215,41 @@ struct Source {
 }
 
 /// Read and parse `abs` (root-relative `rel`), its size checked before it
-/// is read; `None` when it cannot be read, noted.
+/// is read, with the include names [`sources::include_names`] reads in it
+/// (none for a file too large to parse). A file that cannot be read is
+/// recorded all the same, with [`sources::UNREADABLE_HASH`] and a note
+/// (the readers review, finding 4: a fact, so staleness counts it as
+/// recorded); `None` only for an entry that is not a regular file, noted.
 fn read_source(
     abs: &Path,
     rel: &str,
     parser: &mut tree_sitter::Parser,
     notes: &mut ScanNotes,
-) -> Option<Source> {
+) -> Option<(Source, Names)> {
     use std::io::Read as _;
-    let mut skip = |why: String| notes.skipped.push((abs.to_path_buf(), why));
+    let unreadable = |notes: &mut ScanNotes, e: &dyn std::fmt::Display| {
+        notes.skipped.push((
+            abs.to_path_buf(),
+            format!("cannot be read: {e}; recorded as unreadable"),
+        ));
+        notes.unreadable.push(rel.to_string());
+        Some((
+            Source {
+                hash: sources::UNREADABLE_HASH.to_string(),
+                parse: None,
+            },
+            Vec::new(),
+        ))
+    };
     let meta = match std::fs::metadata(abs) {
         Ok(meta) if meta.is_file() => meta,
         Ok(_) => {
-            skip("not a regular file".into());
+            notes
+                .skipped
+                .push((abs.to_path_buf(), "not a regular file".into()));
             return None;
         }
-        Err(e) => {
-            skip(format!("cannot be read: {e}"));
-            return None;
-        }
+        Err(e) => return unreadable(notes, &e),
     };
     let mut bytes = Vec::new();
     if meta.len() <= sources::MAX_SOURCE_BYTES {
@@ -194,8 +258,7 @@ fn read_source(
                 .read_to_end(&mut bytes)
         });
         if let Err(e) = read {
-            skip(format!("cannot be read: {e}"));
-            return None;
+            return unreadable(notes, &e);
         }
     }
     if meta.len() > sources::MAX_SOURCE_BYTES || bytes.len() as u64 > sources::MAX_SOURCE_BYTES {
@@ -203,31 +266,37 @@ fn read_source(
         return match file_hash(abs) {
             Ok(hash) => {
                 notes.too_large.push(rel.to_string());
-                Some(Source { hash, parse: None })
+                Some((Source { hash, parse: None }, Vec::new()))
             }
-            Err(e) => {
-                skip(format!("cannot be read: {e}"));
-                None
-            }
+            Err(e) => unreadable(notes, &e),
         };
     }
+    let names = sources::include_names(&bytes);
+    let hash = harness_core::hash::bytes_hash(&bytes);
     let Some(tree) = parser.parse(&bytes, None) else {
-        skip("the parser could not read it".into());
-        return None;
+        notes.skipped.push((
+            abs.to_path_buf(),
+            "the parser could not read it; recorded, not parsed".into(),
+        ));
+        return Some((Source { hash, parse: None }, names));
     };
     if std::str::from_utf8(&bytes).is_err() {
         notes.not_utf8.push(rel.to_string());
     }
-    Some(Source {
-        hash: harness_core::hash::bytes_hash(&bytes),
-        parse: Some((tree, bytes)),
-    })
+    Some((
+        Source {
+            hash,
+            parse: Some((tree, bytes)),
+        },
+        names,
+    ))
 }
 
 /// A folder target (`source_dir`): every `.c` and `.h` the confined walk
 /// finds under it, `migration/` and the ledger pruned; quoted includes
 /// resolved as since M4 (the file's own folder, then `include_dirs`, the
-/// first hit in the scanned set inside `source_dir`).
+/// first hit in the scanned set inside `source_dir`), their names read by
+/// [`sources::include_names`], the one reader.
 fn read_folder(
     target: &TargetContext,
     folder: &FolderForm,
@@ -261,27 +330,24 @@ fn read_folder(
         files.push((repo_relative(&target.root, &abs)?, abs));
     }
     files.sort();
-    let mut read: Vec<(String, Source)> = Vec::with_capacity(files.len());
+    let mut read: Vec<(String, Source, Names)> = Vec::with_capacity(files.len());
     for (rel, abs) in &files {
-        if let Some(source) = read_source(abs, rel, parser, notes) {
-            read.push((rel.clone(), source));
+        if let Some((source, names)) = read_source(abs, rel, parser, notes) {
+            read.push((rel.clone(), source, names));
         }
     }
-    let scanned: BTreeSet<String> = read.iter().map(|(rel, _)| rel.clone()).collect();
+    let scanned: BTreeSet<String> = read.iter().map(|(rel, _, _)| rel.clone()).collect();
     Ok(read
         .into_iter()
-        .map(|(rel, source)| {
-            let mut includes = BTreeSet::new();
-            if let Some((tree, src)) = &source.parse {
-                let mut raw: BTreeSet<String> = BTreeSet::new();
-                collect_includes(tree.root_node(), src, &mut raw);
-                includes = raw
-                    .iter()
-                    .filter_map(|raw| {
-                        resolve_quoted_include(&rel, raw, &include_dirs, &source_rel, &scanned)
-                    })
-                    .collect();
-            }
+        .map(|(rel, source, names)| {
+            // `<...>` system includes are deliberately skipped by the scan.
+            let includes = names
+                .iter()
+                .filter(|(_, quoted)| *quoted)
+                .filter_map(|(raw, _)| {
+                    resolve_quoted_include(&rel, raw, &include_dirs, &source_rel, &scanned)
+                })
+                .collect();
             Scanned {
                 rel,
                 hash: source.hash,
@@ -292,56 +358,46 @@ fn read_folder(
         .collect())
 }
 
-/// A file-list target: the listed files plus every file their includes
-/// reach — both include forms, through each listed file's own include
-/// folders (a header is searched with the folders of the listed file that
-/// reached it), followed to closure — inside the project root and never
-/// under `migration/` (docs/PROJECT-MAP-DESIGN.md §3.1 step 3, §3.7).
+/// A file-list target: what the include rule ([`sources::Resolver`])
+/// reaches — the listed files, the configuration's `-include` files and
+/// every header their includes reach through the configuration's folders
+/// and each listed file's own, both include forms, to closure — inside the
+/// project root and never under `migration/` (docs/PROJECT-MAP-DESIGN.md
+/// §3.1 step 3, §3.7). An include that lands outside the project, or under
+/// `migration/`, is a note; an include a header resolves differently under
+/// two listed files is an ambiguous include, recorded for neither.
 fn read_file_list(
-    confine: &sources::Confine,
-    listed: &[sources::ListedFile],
+    resolver: &sources::Resolver,
     parser: &mut tree_sitter::Parser,
     notes: &mut ScanNotes,
 ) -> Vec<Scanned> {
-    // Each file read once; `None` when it could not be.
-    let mut read: BTreeMap<String, Option<(Source, Vec<Include>)>> = BTreeMap::new();
-    let mut includes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut seen: BTreeSet<(String, Vec<String>)> = BTreeSet::new();
-    let mut queue: Vec<(String, Vec<String>)> = listed
-        .iter()
-        .rev()
-        .map(|f| (f.path.clone(), f.include_dirs.clone()))
-        .collect();
-    while let Some((rel, dirs)) = queue.pop() {
-        if !seen.insert((rel.clone(), dirs.clone())) {
-            continue;
-        }
-        let entry = read.entry(rel.clone()).or_insert_with(|| {
-            let abs = confine.root().join(&rel);
-            read_source(&abs, &rel, parser, notes).map(|source| {
-                let mut names = BTreeSet::new();
-                if let Some((tree, src)) = &source.parse {
-                    collect_include_names(tree.root_node(), src, &mut names);
-                }
-                (source, names.into_iter().collect())
-            })
-        });
-        let Some((_, names)) = entry else { continue };
-        let reached = includes.entry(rel.clone()).or_default();
-        for include in names.iter() {
-            if let Some(to) = confine.resolve_include(&rel, &include.name, include.quoted, &dirs) {
-                reached.insert(to.clone());
-                queue.push((to, dirs.clone()));
-            }
-        }
+    let mut read: BTreeMap<String, Source> = BTreeMap::new();
+    let program = resolver.walk(|rel| {
+        let abs = resolver.root().join(rel);
+        let (source, names) = read_source(&abs, rel, parser, notes)?;
+        read.insert(rel.to_string(), source);
+        Some(names)
+    });
+    for outside in &program.outside {
+        notes.skipped.push((
+            outside.path.clone(),
+            format!(
+                "{} includes it as `{}`, but it lies outside the project or under migration/: \
+                 never read as project C",
+                outside.file, outside.name
+            ),
+        ));
     }
-    read.into_iter()
-        .filter_map(|(rel, entry)| {
-            let (source, _) = entry?;
+    notes.ambiguous = program.ambiguous;
+    program
+        .files
+        .into_iter()
+        .filter_map(|(rel, includes)| {
+            let source = read.remove(&rel)?;
             Some(Scanned {
-                includes: includes.remove(&rel).unwrap_or_default(),
                 rel,
                 hash: source.hash,
+                includes,
                 parse: source.parse,
             })
         })
@@ -364,9 +420,8 @@ impl CFrontend {
             .set_language(&tree_sitter_c::LANGUAGE.into())
             .map_err(|e| Error::Invariant(format!("tree-sitter C grammar mismatch: {e}")))?;
         let mut notes = ScanNotes::default();
-        let confine = sources::Confine::new(target)?;
-        let mut files = match (&target.config.target.form, confine.listed_files(target)?) {
-            (_, Some(listed)) => read_file_list(&confine, &listed, &mut parser, &mut notes),
+        let mut files = match (&target.config.target.form, sources::Resolver::of(target)?) {
+            (_, Some(resolver)) => read_file_list(&resolver, &mut parser, &mut notes),
             (Form::Folder(folder), None) => read_folder(target, folder, &mut parser, &mut notes)?,
             (Form::FileList(_), None) => Vec::new(),
         };
@@ -523,46 +578,6 @@ fn resolve_quoted_include(
         .find(|candidate| scanned.contains(candidate))
 }
 
-/// Recursively collect the raw paths of quoted `#include "x"` directives.
-fn collect_includes(node: tree_sitter::Node, src: &[u8], out: &mut BTreeSet<String>) {
-    let mut both = BTreeSet::new();
-    collect_include_names(node, src, &mut both);
-    // `<...>` system includes are deliberately skipped by the scan.
-    out.extend(both.into_iter().filter(|i| i.quoted).map(|i| i.name));
-}
-
-/// Recursively collect every `#include` directive's name, quoted (a
-/// `string_literal`) or angle-bracketed (a `system_lib_string`), from every
-/// `#if` branch alike. An include built by a macro names no file here.
-fn collect_include_names(node: tree_sitter::Node, src: &[u8], out: &mut BTreeSet<Include>) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind() == "preproc_include" {
-            if let Some(path) = child.child_by_field_name("path") {
-                let raw = text(path, src);
-                let (name, quoted) = match path.kind() {
-                    "string_literal" => (raw.trim_matches('"'), true),
-                    "system_lib_string" => (
-                        raw.strip_prefix('<')
-                            .and_then(|r| r.strip_suffix('>'))
-                            .unwrap_or(""),
-                        false,
-                    ),
-                    _ => ("", false),
-                };
-                if !name.is_empty() {
-                    out.insert(Include {
-                        name: name.to_string(),
-                        quoted,
-                    });
-                }
-            }
-        } else {
-            collect_include_names(child, src, out);
-        }
-    }
-}
-
 /// One `#include` directive's name, as written between its quotes or its
 /// angle brackets.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -600,14 +615,16 @@ pub fn file_facts(source: &[u8]) -> Result<FileFacts, Error> {
         .parse(source, None)
         .ok_or_else(|| Error::Invariant("tree-sitter parse failed".into()))?;
     let root = tree.root_node();
-    let mut includes = BTreeSet::new();
-    collect_include_names(root, source, &mut includes);
     let mut defs = Vec::new();
     collect_functions(root, source, "", &mut defs);
     Ok(FileFacts {
         calls: defs.iter().flat_map(|d| d.calls.iter().cloned()).collect(),
         functions: defs.into_iter().map(|d| d.name).collect(),
-        includes: includes.into_iter().collect(),
+        // The one include reader, as `harness scan` takes names.
+        includes: sources::include_names(source)
+            .into_iter()
+            .map(|(name, quoted)| Include { name, quoted })
+            .collect(),
     })
 }
 
@@ -2647,7 +2664,11 @@ mod tests {
         // quotes, is found first: stale until a scan records it.
         put(&ctx.root, "src/lib/lzg.h", "int lzg_version(void);\n");
         assert_eq!(program_digest_now(&ctx, &facts), STALE_PROGRAM);
-        assert_eq!(unrecorded_program_files(&ctx, &facts), ["src/lib/lzg.h"]);
+        // The new header is unrecorded, and version.c now reaches it.
+        assert_eq!(
+            unrecorded_program_files(&ctx, &facts),
+            ["src/lib/lzg.h", "src/lib/version.c"]
+        );
         let facts = CFrontend.scan(&ctx).expect("rescan");
         assert!(program_digest_now(&ctx, &facts).starts_with("blake3:"));
         let version = facts
@@ -2660,5 +2681,449 @@ mod tests {
         // A listed file that vanished stales.
         std::fs::remove_file(ctx.root.join("src/lib/checksum.c")).expect("rm");
         assert_eq!(program_digest_now(&ctx, &facts), STALE_PROGRAM);
+    }
+
+    /// A mapped tool `t-x` over `files`, its `harness.toml` holding
+    /// `files_toml` and `flags` (the configuration's), loaded as the CLI
+    /// loads it.
+    fn tool(
+        tag: &str,
+        files: &[(&str, &str)],
+        files_toml: &str,
+        flags: &str,
+    ) -> (Lzg, TargetContext) {
+        let root = tmp_root(tag);
+        for (rel, text) in files {
+            put(&root, rel, text);
+        }
+        let ctx = retool(&root, files_toml, flags);
+        (Lzg(root), ctx)
+    }
+
+    /// `root`'s tool `t-x` rewritten with `files_toml` and `flags`, loaded.
+    fn retool(root: &Path, files_toml: &str, flags: &str) -> TargetContext {
+        let ledger = harness_core::config::tool_dir(root, "t-x");
+        put(
+            &ledger,
+            "harness.toml",
+            &format!(
+                "schema_version = 2\n[target]\nname = \"x\"\nfiles = [{files_toml}]\n\
+                 configuration = {{ name = \"make\", from = \"stated\", flags = [{flags}] }}\n"
+            ),
+        );
+        let config =
+            harness_core::config::TargetConfig::load_file(&ledger.join("harness.toml"), root)
+                .expect("the file list loads");
+        TargetContext {
+            root: root.to_path_buf(),
+            ledger,
+            tool: Some("t-x".into()),
+            config,
+        }
+    }
+
+    fn includes_in(facts: &Facts, path: &str) -> Vec<String> {
+        facts
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .map(|f| f.includes.clone())
+            .unwrap_or_else(|| panic!("{path} not recorded: {:?}", facts.files))
+    }
+
+    fn fresh(ctx: &TargetContext, facts: &Facts) -> bool {
+        harness_core::features::program_digest_now(ctx, facts).starts_with("blake3:")
+            && harness_core::features::unrecorded_program_files(ctx, facts).is_empty()
+    }
+
+    /// Experiment e1 of the readers review (finding 1, the triage's
+    /// decision 1): the configuration's `-I` and `-include` reach the scan
+    /// in the compiler's order — before the file's own folders — so the
+    /// facts name the headers the compile reads, the forced include and
+    /// what it includes are each listed file's first includes, and an edit
+    /// to any of them moves the program.
+    #[test]
+    fn the_configurations_path_flags_reach_the_scan_in_the_compilers_order() {
+        let (_t, ctx) = tool(
+            "e1",
+            &[
+                (
+                    "src/main.c",
+                    "#include \"x.h\"\n#include <y.h>\nint main(void) { return X + Y; }\n",
+                ),
+                ("a/x.h", "#define X 1\n"),
+                ("a/y.h", "#define Y 1\n"),
+                ("a/forced.h", "#include \"fh.h\"\n"),
+                ("a/fh.h", "#define LZG_FAST 1\n"),
+                ("b/x.h", "#define X 2\n"),
+                ("b/y.h", "#define Y 2\n"),
+            ],
+            "{ path = \"src/main.c\", include_dirs = [\"b\"] }",
+            "\"-Ia\", \"-includea/forced.h\"",
+        );
+        let (facts, notes) = CFrontend.scan_reporting(&ctx).expect("scan");
+        assert_eq!(notes, ScanNotes::default());
+        assert_eq!(
+            includes_in(&facts, "src/main.c"),
+            ["a/forced.h", "a/x.h", "a/y.h"]
+        );
+        assert_eq!(includes_in(&facts, "a/forced.h"), ["a/fh.h"]);
+        assert!(!facts.files.iter().any(|f| f.path.starts_with("b/")));
+        let first = harness_core::features::program_digest_now(&ctx, &facts);
+        assert!(fresh(&ctx, &facts), "{first}");
+        for edited in ["a/forced.h", "a/fh.h", "a/x.h", "a/y.h"] {
+            let before = std::fs::read_to_string(ctx.root.join(edited)).expect("read");
+            put(&ctx.root, edited, "#define LZG_FAST 0\n");
+            assert_eq!(
+                harness_core::features::program_digest_now(&ctx, &facts),
+                harness_core::features::STALE_PROGRAM,
+                "{edited}"
+            );
+            put(&ctx.root, edited, &before);
+        }
+        // The planner's closure, from the facts, holds what the compile reads.
+        assert_eq!(
+            facts.include_closure(&["src/main.c".to_string()]),
+            ["a/fh.h", "a/forced.h", "a/x.h", "a/y.h", "src/main.c"]
+        );
+
+        // The search order itself, every kind at once: quoted is own
+        // folder, -iquote, -I, the file's folders, -isystem; angle the same
+        // without the own folder and -iquote.
+        let ctx = retool(
+            &ctx.root,
+            "{ path = \"src/main.c\", include_dirs = [\"b\"] }",
+            "\"-iquoteq\", \"-Ia\", \"-isystems\"",
+        );
+        let resolver = sources::Resolver::of(&ctx)
+            .expect("resolver")
+            .expect("a file list");
+        assert_eq!(
+            resolver.search_order("src/main.c", "src/main.c", true),
+            ["src", "q", "a", "b", "s"]
+        );
+        assert_eq!(
+            resolver.search_order("src/main.c", "a/forced.h", false),
+            ["a", "b", "s"]
+        );
+        // Checked against the compiler where one is at hand: the files
+        // `cc -M` reads, in the oracle's argument order, are the
+        // resolver's.
+        for (rel, text) in [
+            ("q/x.h", "#define X 3\n"),
+            ("src/x.h", "#define X 4\n"),
+            ("s/z.h", "#define Z 1\n"),
+            ("q/w.h", "#define W 0\n"),
+            ("s/w.h", "#define W 1\n"),
+        ] {
+            put(&ctx.root, rel, text);
+        }
+        put(
+            &ctx.root,
+            "src/main.c",
+            "#include \"x.h\"\n#include <y.h>\n#include <z.h>\n#include <w.h>\n\
+             int main(void) { return X + Y + Z + W; }\n",
+        );
+        let found: Vec<String> = [
+            ("x.h", true),
+            ("y.h", false),
+            ("z.h", false),
+            ("w.h", false),
+        ]
+        .iter()
+        .filter_map(|(name, quoted)| resolver.resolve("src/main.c", "src/main.c", name, *quoted))
+        .collect();
+        assert_eq!(found, ["src/x.h", "a/y.h", "s/z.h", "s/w.h"]);
+        let cc = std::process::Command::new("cc")
+            .current_dir(&ctx.root)
+            .args(["-M", "-iquoteq", "-Ia", "-isystems", "-Ib", "src/main.c"])
+            .output();
+        if let Some(out) = cc.ok().filter(|o| o.status.success()) {
+            let deps = String::from_utf8_lossy(&out.stdout).replace("\\\n", " ");
+            for want in &found {
+                assert!(deps.contains(want.as_str()), "{want} in {deps}");
+            }
+            for not in ["q/x.h", "a/x.h", "b/y.h", "q/w.h"] {
+                assert!(!deps.contains(not), "{not} in {deps}");
+            }
+        }
+    }
+
+    /// The readers review, finding 2 (experiment e3): every case where the
+    /// former parser and the staleness reader parted — includes inside a
+    /// struct, a union, an enum or an initializer (the X-macro pattern), a
+    /// continued `#inc\` line, `#/**/include`, trailing junk, `<sys//types.h>`
+    /// — is recorded by a scan, and the facts are fresh right after it: one
+    /// reader for both. The project map's [`file_facts`] reads the same.
+    #[test]
+    fn the_scanner_and_staleness_read_the_same_includes() {
+        for (case, body, name) in [
+            (
+                "struct",
+                "struct s {\n#include \"inc.h\"\n};\n",
+                "inc/inc.h",
+            ),
+            ("union", "union u {\n#include \"inc.h\"\n};\n", "inc/inc.h"),
+            ("enum", "enum op {\n#include \"inc.h\"\n};\n", "inc/inc.h"),
+            (
+                "initializer",
+                "static const char *names[] = {\n#include \"inc.h\"\n};\n",
+                "inc/inc.h",
+            ),
+            ("continued", "#inc\\\nlude \"inc.h\"\n", "inc/inc.h"),
+            ("comment", "#/**/include \"inc.h\"\n", "inc/inc.h"),
+            ("junk", "#include \"inc.h\" junk\n", "inc/inc.h"),
+            ("slashes", "#include <sys//types.h>\n", "inc/sys/types.h"),
+        ] {
+            let source = format!("{body}int main(void) {{ return 0; }}\n");
+            let (_t, ctx) = tool(
+                &format!("e3-{case}"),
+                &[
+                    ("src/main.c", source.as_str()),
+                    ("inc/inc.h", "X(a)\n"),
+                    ("inc/sys/types.h", "typedef int t;\n"),
+                ],
+                "{ path = \"src/main.c\", include_dirs = [\"inc\"] }",
+                "",
+            );
+            let facts = CFrontend.scan(&ctx).expect("scan");
+            assert_eq!(includes_in(&facts, "src/main.c"), [name], "{case}");
+            assert!(fresh(&ctx, &facts), "{case}: stale right after a scan");
+            let read: Vec<(String, bool)> = file_facts(source.as_bytes())
+                .expect("facts")
+                .includes
+                .into_iter()
+                .map(|i| (i.name, i.quoted))
+                .collect();
+            assert_eq!(read, sources::include_names(source.as_bytes()), "{case}");
+        }
+    }
+
+    /// The readers review, finding 3 (experiment e6): staleness compares the
+    /// include a file resolves to now with the one its record names, both
+    /// ways — a changed folder list stales, a recorded include that no
+    /// longer resolves stales, and a scan clears each.
+    #[test]
+    fn staleness_compares_where_each_include_lands_with_the_record() {
+        let files = [
+            (
+                "src/main.c",
+                "#include \"x.h\"\nint main(void) { return X; }\n",
+            ),
+            (
+                "src/other.c",
+                "#include \"x.h\"\nint other(void) { return X; }\n",
+            ),
+            ("a/x.h", "#define X 1\n"),
+            ("b/x.h", "#define X 2\n"),
+        ];
+        let listed = |main: &str| {
+            format!(
+                "{{ path = \"src/main.c\", include_dirs = [{main}] }}, \
+                 {{ path = \"src/other.c\", include_dirs = [\"a\"] }}"
+            )
+        };
+        let (_t, ctx) = tool("e6", &files, &listed("\"b\""), "");
+        let facts = CFrontend.scan(&ctx).expect("scan");
+        assert_eq!(includes_in(&facts, "src/main.c"), ["b/x.h"]);
+        assert!(fresh(&ctx, &facts));
+
+        // main.c's folders now say `a`: its record names b/x.h.
+        let ctx = retool(&ctx.root, &listed("\"a\""), "");
+        assert_eq!(
+            harness_core::features::unrecorded_program_files(&ctx, &facts),
+            ["src/main.c"]
+        );
+        let facts = CFrontend.scan(&ctx).expect("rescan");
+        assert_eq!(includes_in(&facts, "src/main.c"), ["a/x.h"]);
+        assert!(fresh(&ctx, &facts));
+
+        // No folder at all: the recorded include no longer resolves.
+        let ctx = retool(&ctx.root, &listed(""), "");
+        assert_eq!(
+            harness_core::features::unrecorded_program_files(&ctx, &facts),
+            ["src/main.c"]
+        );
+        let facts = CFrontend.scan(&ctx).expect("rescan");
+        assert!(includes_in(&facts, "src/main.c").is_empty());
+        assert!(fresh(&ctx, &facts));
+    }
+
+    /// The readers review, finding 6: a header reached from two listed
+    /// files whose folders resolve one of its includes to two files is an
+    /// ambiguous include — noted, recorded for neither — never the union;
+    /// both files it lands on are still recorded, and the facts are fresh.
+    #[test]
+    fn a_header_resolving_differently_under_two_files_is_an_ambiguous_include() {
+        let (_t, ctx) = tool(
+            "ambiguous",
+            &[
+                (
+                    "src/a.c",
+                    "#include \"common.h\"\nint a(void) { return CFG; }\n",
+                ),
+                (
+                    "src/b.c",
+                    "#include \"common.h\"\nint b(void) { return CFG; }\n",
+                ),
+                ("inc/common.h", "#include \"cfg.h\"\n#include \"same.h\"\n"),
+                ("inc/same.h", "#define SAME 1\n"),
+                ("d1/cfg.h", "#define CFG 1\n"),
+                ("d2/cfg.h", "#define CFG 2\n"),
+            ],
+            "{ path = \"src/a.c\", include_dirs = [\"inc\", \"d1\"] }, \
+             { path = \"src/b.c\", include_dirs = [\"inc\", \"d2\"] }",
+            "",
+        );
+        let (facts, notes) = CFrontend.scan_reporting(&ctx).expect("scan");
+        assert_eq!(includes_in(&facts, "inc/common.h"), ["inc/same.h"]);
+        assert!(facts.files.iter().any(|f| f.path == "d1/cfg.h"));
+        assert!(facts.files.iter().any(|f| f.path == "d2/cfg.h"));
+        assert_eq!(notes.ambiguous.len(), 1, "{notes:?}");
+        let line = &notes.ambiguous_lines()[0];
+        assert!(
+            line.contains(
+                "inc/common.h's include \"cfg.h\" reaches d1/cfg.h when compiled for \
+                 src/a.c but d2/cfg.h when compiled for src/b.c"
+            ),
+            "{line}"
+        );
+        assert!(fresh(&ctx, &facts));
+    }
+
+    /// The readers review, finding 4 (experiment e5): a file the scan cannot
+    /// read is recorded as a fact (`unreadable`), so the facts are fresh
+    /// right after the scan instead of stale forever — in the folder form
+    /// and the file list alike.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_is_a_fact_and_never_a_permanent_staleness() {
+        use std::os::unix::fs::PermissionsExt;
+        let lock = |p: &Path, mode| {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).expect("chmod")
+        };
+        // The folder form.
+        let t = TempTarget::new("e5", "[]");
+        t.write("src/a.c", "int a(void) { return 0; }\n");
+        t.write("src/b.c", "int b(void) { return 1; }\n");
+        let b = t.0.join("src/b.c");
+        lock(&b, 0o000);
+        if std::fs::read(&b).is_ok() {
+            return; // run as root: nothing is unreadable
+        }
+        let target = TargetContext::load(&t.0).expect("target loads");
+        let scanned = CFrontend.scan_reporting(&target);
+        let digest = scanned
+            .as_ref()
+            .map(|(facts, _)| harness_core::features::program_digest_now(&target, facts))
+            .ok();
+        lock(&b, 0o644);
+        let (facts, notes) = scanned.expect("the scan goes on");
+        let record = facts
+            .files
+            .iter()
+            .find(|f| f.path == "src/b.c")
+            .expect("recorded");
+        assert_eq!(record.hash, sources::UNREADABLE_HASH);
+        assert_eq!(notes.unreadable, ["src/b.c"]);
+        assert!(digest.expect("digest").starts_with("blake3:"));
+
+        // The file list: an unreadable header.
+        let (_t, ctx) = tool(
+            "e5-list",
+            &[
+                (
+                    "src/main.c",
+                    "#include \"h.h\"\nint main(void) { return 0; }\n",
+                ),
+                ("src/h.h", "#define H 1\n"),
+            ],
+            "{ path = \"src/main.c\" }",
+            "",
+        );
+        let h = ctx.root.join("src/h.h");
+        lock(&h, 0o000);
+        let facts = CFrontend.scan(&ctx).expect("scan");
+        let was_fresh = fresh(&ctx, &facts);
+        lock(&h, 0o644);
+        assert_eq!(includes_in(&facts, "src/main.c"), ["src/h.h"]);
+        assert!(was_fresh, "stale right after a scan");
+        // Readable again: the record's hash no longer matches.
+        assert_eq!(
+            harness_core::features::program_digest_now(&ctx, &facts),
+            harness_core::features::STALE_PROGRAM
+        );
+    }
+
+    /// The readers review, finding 11: with `source_dir` itself a link, a
+    /// top-level `.c` that links to another is named as the scan names it —
+    /// under `source_dir` as written — so the facts are fresh after a scan.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_source_dir_is_fresh_after_a_scan() {
+        let root = tmp_root("linked-src");
+        let _guard = Lzg(root.clone());
+        put(&root, "real/a.c", "int a(void) { return 0; }\n");
+        std::os::unix::fs::symlink(root.join("real/a.c"), root.join("real/b.c")).expect("link");
+        std::os::unix::fs::symlink(root.join("real"), root.join("src")).expect("link");
+        put(
+            &root,
+            "harness.toml",
+            "schema_version = 1\n[target]\nname = \"t\"\nsource_dir = \"src\"\n",
+        );
+        let ctx = TargetContext::folder_form(
+            root.clone(),
+            harness_core::config::TargetConfig::load(&root).expect("config"),
+        );
+        let facts = CFrontend.scan(&ctx).expect("scan");
+        let paths: Vec<&str> = facts.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["src/a.c"]);
+        assert!(harness_core::features::program_digest_now(&ctx, &facts).starts_with("blake3:"));
+    }
+
+    /// The readers review, finding 7: an include that lands under
+    /// `migration/` or outside the project is a scan note naming it — never
+    /// read, never recorded.
+    #[test]
+    fn an_include_landing_outside_the_project_is_a_note() {
+        let outside = tmp_root("outside-inc");
+        let _outside_guard = Lzg(outside.clone());
+        put(&outside, "secret.h", "int secret;\n");
+        let main = format!(
+            "#include \"../migration/tools/t-x/model.h\"\n#include \"{}\"\n\
+             int main(void) {{ return 0; }}\n",
+            outside.join("secret.h").display()
+        );
+        let (_t, ctx) = tool(
+            "outside",
+            &[("src/main.c", main.as_str())],
+            "{ path = \"src/main.c\" }",
+            "",
+        );
+        put(&ctx.ledger, "model.h", "int model_written;\n");
+        let (facts, notes) = CFrontend.scan_reporting(&ctx).expect("scan");
+        assert!(includes_in(&facts, "src/main.c").is_empty());
+        assert_eq!(facts.files.len(), 1);
+        for (path, name) in [
+            (
+                ctx.ledger
+                    .join("model.h")
+                    .canonicalize()
+                    .expect("canonical"),
+                "../migration/tools/t-x/model.h".to_string(),
+            ),
+            (
+                outside.join("secret.h"),
+                outside.join("secret.h").display().to_string(),
+            ),
+        ] {
+            assert!(
+                notes.skipped.iter().any(|(p, why)| p == &path
+                    && why.contains(&format!("src/main.c includes it as `{name}`"))
+                    && why.contains("outside the project or under migration/")),
+                "{path:?}: {notes:?}"
+            );
+        }
+        assert!(fresh(&ctx, &facts));
     }
 }
