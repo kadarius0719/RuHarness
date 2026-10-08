@@ -62,18 +62,29 @@ change at the switch points below.
    (`config::find_target`), `TargetContext::open(root, tool)` with `ledger`, `Ledger::of(&ctx)`,
    `sync-runtime` one block per tool, SCHEMAS' "Mapped tools". Commands that read sources refuse a
    file-list target in one sentence (`TargetSection::folder(what)`) until parts 2 and 3 land.
-   **Parts 2 and 3 are BEING BUILT** (launched 2026-10-08 from 247e5bc, two Opus builders at
-   medium effort in their own worktrees): part 2 (harness-oracle: `Base` carries the
-   configuration's flags and a per-file include table, every compile asks it; multi-source builds
-   on perf's `compile_objects`/`link_side` generalized; the driver's folders and
-   `unit_header_names`; verify's driver-shape check on `objsyms` with the identifier filter; the
-   features mirror and the boundary check confined) and part 3 (the scanner's file-list read with
-   walk errors and non-UTF-8 as facts and the ledger pruned; harness-detect on the confined walk;
-   the v2 program digest and staleness with the v1 record untouched; `read_sources` confined).
-   Merge each when its report is green, by file ownership (part 2 owns harness-oracle; part 3 owns
-   harness-scan, harness-detect, harness-core features.rs/planner.rs, harness-llm trajectory.rs),
-   run the full gates and `bench check --suite targets/tractor --replay --adopt`; then (b), (d),
+   **Parts 2 and 3 are MERGED on main** (68649d2; fmt, clippy and the whole workspace green):
+   part 2 (harness-oracle: `Base` carries the configuration's flags and a per-file include table,
+   `Base::file_args/unit_args/unit_headers`, `cc_argv` orders the judge's flags, the configuration's,
+   then `-I`; multi-source builds through `perf::build::build_program` (compile each, link once;
+   `whole_cc_into` too); `driver_folders` and `unit_header_names` for v2; verify's driver-shape check
+   on `objsyms` with the identifier filter, `nm` kept for the staticlib checks; the mirror and the
+   boundary check confined through `project_path`; tests/file_list.rs with the `t-pair` tool) and
+   part 3 (harness-scan reads a file list with both include forms to closure, walk errors, too-large
+   and non-UTF-8 files as `ScanNotes`, the ledger pruned for both forms; harness-detect on the
+   confined walk; harness-core `sources.rs` shared by the readers; the v2 program digest and
+   `unrecorded_program_files` staleness, v1 untouched; `read_sources(ctx)` confined). Folder-form
+   targets byte-identical (facts, findings, digests, verdict `inputs`).
+   **Part 4 is BEING BUILT** (launched 2026-10-08 from 68649d2, one Opus builder, medium): the CLI's
+   remaining `load_folder` refusals lifted (plan, verify, observe, migrate, gen-driver, override,
+   promote, perf run, features map), the cockpit's read model, preflight and tree on a file-list
+   target (the tool's files under their real folders, the rest greyed "not part of this tool"),
+   harness-mcp's reads, an end-to-end CLI test over the liblzg-shaped tool and a `verify` on the
+   `t-pair` shape through the CLI. Merge when green, gates, then `bench check --suite targets/tractor
+   --replay --jobs 6 --adopt` (one replay on 68649d2 was started at the same time); then (b), (d),
    (e), (f), (g); then the review of (a)+(c) together, fix passes, mutation checks.
+   Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
+   flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
+   toolchain line — folder-form `inputs` stay untouched.
    Open from part 1 for step (b): the project lock for `sync-runtime`'s shared `AGENTS.md`; the
    features and workloads error messages still spell `migration/features/…` as fixed text (wrong
    wording for a mapped tool); `project map` takes no `--tool` (it maps the whole project).

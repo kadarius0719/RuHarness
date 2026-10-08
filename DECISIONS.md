@@ -2950,3 +2950,34 @@ one walk is the rule; the committed facts, findings and digests stayed byte-iden
 
 **Not yet (step b):** set-aside counts per folder, the project's-own-`migration/` sentence as its
 own refusal, the 30-minute budget and the 200 000-name cap, the configuration's flags in the compile.
+
+## 2026-10-08 — The map's step (c), parts 1 to 3, built and merged
+
+**What was built** (main at 68649d2; fmt, clippy and the whole workspace green). Part 1: the ledger
+folder beside the root with mapped tools under `migration/tools/<id>/`; `harness.toml` read version
+first, with the file-list form (`files = [{path, include_dirs}]`, `configuration = {name, from,
+flags}`, optional `map` and `picks`) and the flag grammar checked at load; `--tool <id>` on every
+command with the lookup order (a root file, else the only tool, else "pick one"); `sync-runtime` one
+block per tool. Part 2: the oracle builds a file-list target — `Base` carries the configuration's
+flags and a per-file include table and every compile asks it for a file's arguments (the judge's
+flags, the configuration's, then that file's folders); builds with several C sources compile each
+file to an object with its own folders and link once, on perf's path; the driver's folders are the
+unit file's own, its listed ones, then the folders of every header in the unit's include closure;
+verify's driver-shape check reads the object with `objsyms` and refuses a name that is not an
+identifier (`nm` stays for the Rust staticlib checks); the features mirror and the boundary check are
+confined to the listed files and their reached headers, inside the root and never under the ledger.
+Part 3: the scanner reads a file list through both include forms to closure, records walk errors,
+too-large and non-UTF-8 files as notes instead of stopping, and prunes the ledger for both forms (a
+`source_dir = "."` no longer scans the ledger's own `driver.c`); harness-detect dropped its own walk
+for the confined one; the program digest hashes a v2 record (files, folders, configuration, link
+arguments, run name) while v1 stays byte for byte; staleness keeps the rule "stale only where a scan
+would record otherwise"; what a prompt may read is confined the same way.
+
+**Decided.** A v2 unit verdict's `inputs` does not record the configuration's flags: a flag change
+reaches the verdict through the v2 program digest, so folder-form `inputs` stay untouched. The
+scanner's return value changed (`scan_reporting` gives `ScanNotes`), which no committed file
+records. Every folder-form target stayed byte-identical: the 101 committed facts, zopfli's findings,
+digests and verdict `inputs`.
+
+**Still to do in step (c)** (part 4, building): the CLI's remaining refusals lifted, the cockpit's
+read model, preflight and tree, harness-mcp's reads, the end-to-end test over a liblzg-shaped tool.
