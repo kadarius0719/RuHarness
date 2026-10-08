@@ -3032,4 +3032,7 @@ folder form (none of the 101 committed roots has one).
 
 **Gates.** fmt, clippy, the whole workspace green after each merge (one test fixed at the merge of
 fix pass C: the cut-short-walk test now reads the facts from the map file, where the design puts
-them). The bench replay after the fix passes is recorded below when it finishes.
+them). `bench check --suite targets/tractor --replay --jobs 6 --adopt` on c8d5f58 (all four
+merged): 198 reproduce (1 conformant, 197 drifted), 2 expected divergences, 0 problems, no
+regression — the boundary wrapper's new template and the fresh-token adoption changed nothing the
+replay scores.

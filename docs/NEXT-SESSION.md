@@ -107,8 +107,8 @@ change at the switch points below.
      record (`validate.rs`) carries no configuration entry (the triage named the verdict only);
      the committed B01 `read_scalefactors_lib` verdict holds the old boundary digest (status does
      not compare it).
-   **All four merged; main at 1cded59 (1 529 tests green, pushed).** The bench replay on it was
-   running at the time of writing (DECISIONS gets its line). **The check round is RUNNING**
+   **All four merged; main at 1cded59 (1 529 tests green, pushed).** The bench replay on it: 198
+   reproduce, 2 expected divergences, 0 problems, no regression. **The check round is RUNNING**
    (launched 2026-10-08 from 1cded59, four Opus checkers at high, reports to the session's
    scratchpad `check2/reports/{fix-ab, fix-c-flow, step-b, step-b-security}.md`): two verify fix
    passes A+B and C (re-running the review's experiments and reverts), two review step (b) itself
