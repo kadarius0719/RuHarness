@@ -1965,12 +1965,15 @@ pub(crate) fn read_sources(
                 unit.id
             )));
         }
-        // No scan reads a dot-folder (`.git`, `.env`, `.cache`): neither
-        // does a prompt.
-        if confine
-            .rel(&resolved)
-            .is_some_and(|rel| sources::in_dot_folder(&rel))
-            || sources::in_dot_folder(&path)
+        // No folder-form scan reads a dot-folder (`.git`, `.env`, `.cache`):
+        // neither does a prompt. A file list's dot-folder header is read
+        // when the include rule reaches it (the scope check below confines
+        // it to what the rule reaches, as the scan and the compile read it).
+        if scope.is_err()
+            && (confine
+                .rel(&resolved)
+                .is_some_and(|rel| sources::in_dot_folder(&rel))
+                || sources::in_dot_folder(&path))
         {
             return Err(Error::InvalidPlan(format!(
                 "unit `{}`: source path {path:?} lies in a folder whose name starts with a dot, \
@@ -2523,6 +2526,40 @@ mod read_sources_tests {
         .err()
         .expect("refused");
         assert!(err.to_string().contains("starts with a dot"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The 2026-10-08 check: a file list's header in a dot-folder that the
+    /// include rule reaches (`"../.gen/config.h"`) is scanned and compiled,
+    /// so a prompt reads it too; the scope still confines it.
+    #[test]
+    fn a_dot_folder_header_the_rule_reaches_is_read() {
+        let root = tmp("dot-reached");
+        write(&root, "src/main.c", "#include \"../.gen/config.h\"\n");
+        write(&root, ".gen/config.h", "#define W 4\n");
+        let ledger = harness_core::config::tool_dir(&root, "t-a");
+        write(
+            &ledger,
+            "harness.toml",
+            "schema_version = 2\n[target]\nname = \"a\"\n\
+             files = [{ path = \"src/main.c\" }]\n\
+             configuration = { name = \"make\", from = \"stated\", flags = [] }\n",
+        );
+        let ctx = TargetContext {
+            root: root.clone(),
+            config: TargetConfig::load_file(&ledger.join("harness.toml"), &root).unwrap(),
+            ledger,
+            tool: Some("t-a".into()),
+        };
+        let read = read_sources(
+            &root,
+            &ctx,
+            &facts("src/main.c", ".gen/config.h"),
+            &unit(&["src/main.c"]),
+        )
+        .unwrap();
+        let paths: Vec<&str> = read.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, [".gen/config.h", "src/main.c"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -28,9 +28,18 @@ pub const F_FLAGS: &[&str] = &[
     "-fvisibility=default",
 ];
 
-/// The path-taking flags, longest prefix first (`-include` before `-I`
-/// cannot clash, but `-isystem`/`-iquote`/`-include` all start with `-i`).
-const PATH_FLAGS: &[&str] = &["-isystem", "-include", "-iquote", "-I"];
+/// The path-taking flags (`-isystem`, `-include`, `-iquote` and
+/// `-idirafter` all start with `-i` and none is a prefix of another).
+pub const PATH_FLAGS: &[&str] = &["-isystem", "-include", "-iquote", "-idirafter", "-I"];
+
+/// A path flag split into its prefix (one of [`PATH_FLAGS`]) and its path
+/// as written; `None` for any other flag. Every reader that places a path
+/// flag's folder takes the prefix from here.
+pub fn split_path_flag(flag: &str) -> Option<(&'static str, &str)> {
+    PATH_FLAGS
+        .iter()
+        .find_map(|p| flag.strip_prefix(p).map(|rest| (*p, rest)))
+}
 
 /// What a flag of the grammar is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +48,8 @@ pub enum Flag<'a> {
     Define,
     /// `-U<name>`.
     Undefine,
-    /// `-I`, `-iquote`, `-isystem` or `-include` with its path, as written
+    /// `-I`, `-iquote`, `-isystem`, `-idirafter` or `-include` with its
+    /// path, as written
     /// (`.` or a clean path relative to the project root, never under
     /// `migration/`); the caller resolves it against the root.
     Path(&'a str),
@@ -170,6 +180,7 @@ mod tests {
             "-Isrc/include/",
             "-iquotesrc",
             "-isystemvendor/inc",
+            "-idiraftercompat",
             "-includeconfig.h",
             "-std=c99",
             "-std=gnu2x",
@@ -183,6 +194,16 @@ mod tests {
         }
         assert_eq!(check_flag("-Iinc").unwrap(), Flag::Path("inc"));
         assert_eq!(check_flag("-O2").unwrap(), Flag::Optimization);
+        assert_eq!(
+            check_flag("-idiraftercompat").unwrap(),
+            Flag::Path("compat")
+        );
+        assert_eq!(
+            split_path_flag("-idiraftercompat"),
+            Some(("-idirafter", "compat"))
+        );
+        assert_eq!(split_path_flag("-Iinc"), Some(("-I", "inc")));
+        assert_eq!(split_path_flag("-DX"), None);
     }
 
     #[test]
@@ -206,6 +227,15 @@ mod tests {
                 "outside the project or under migration/",
             ),
             ("-I", "has no path joined"),
+            ("-idirafter", "has no path joined"),
+            (
+                "-idirafter/usr/include",
+                "outside the project or under migration/",
+            ),
+            (
+                "-idiraftermigration/x",
+                "outside the project or under migration/",
+            ),
             ("-std=c++17", "C standard"),
             ("-O", "is not one"),
             ("-Os", "is not one"),

@@ -17,7 +17,8 @@
 //!
 //! 1. a quoted include: F's own folder; the configuration's `-iquote`
 //!    folders in order; its `-I` folders in order; U's `include_dirs` in
-//!    order; its `-isystem` folders in order; then the system;
+//!    order; its `-isystem` folders in order; then the system; then its
+//!    `-idirafter` folders in order;
 //! 2. an angle-bracket include: the same without F's own folder and without
 //!    the `-iquote` folders (the compiler searches `-iquote` for quoted
 //!    includes only);
@@ -25,15 +26,26 @@
 //!    every listed file, and its own includes are followed like any
 //!    header's.
 //!
+//! A folder named by `-isystem` and also by `-I` or an `include_dirs` is
+//! searched at its `-isystem` place only, as the compiler does (it drops
+//! the `-I` of a system folder).
+//!
 //! The first folder holding N as a regular file is the one the compiler
 //! takes ([`Landing`]). A file it takes that lies outside the project root
 //! or under `migration/` is never project C: it is [`Landing::Outside`],
 //! which a scan notes and nothing reads. Otherwise the system holds N, or
-//! nothing does ([`Landing::NotProject`]).
+//! nothing does ([`Landing::NotProject`]). An `-idirafter` folder comes
+//! after the system: its file is taken only when none of the usual system
+//! folders of this computer's C compiler, found on disk, holds N
+//! ([`system_holds`]).
 //!
 //! A header reached from two listed files whose folders differ may resolve
 //! one name to two places. Such a name is an **ambiguous include**
-//! ([`Ambiguous`]): no edge is recorded for it, never a silent union.
+//! ([`Ambiguous`]): no edge is recorded for it, never a silent union. The
+//! files a unit's compile reads are still its **closure**
+//! ([`Resolver::closure`], [`unit_closure`]): what `verify`'s
+//! `unit_source`, the planner's `source_hash` and `state status` hash, so
+//! an edit to a header an ambiguous include lands on stales the verdict.
 //!
 //! The API, for every reader (harness-scan, harness-detect, harness-llm,
 //! the program digest and staleness, and the oracle's closure readers):
@@ -49,7 +61,10 @@
 //!   quoted)`: where one include lands;
 //! - [`Resolver::walk`]`(names_of)`: the whole program — every file the
 //!   listed files reach and the edges a scan records — given each file's
-//!   include names ([`names_on_disk`] reads them as a scan would).
+//!   include names ([`names_on_disk`] reads them as a scan would);
+//! - [`Resolver::closure`]`(facts, start)` and [`unit_closure`]`(ctx,
+//!   facts, start)`: the files one unit's compile reads (the facts'
+//!   closure for a folder target).
 //!
 //! Paths are as a scan records them: links resolved, relative to the
 //! canonical root, `/`-joined, `""` for the root itself.
@@ -57,13 +72,23 @@
 //! # The include reader
 //!
 //! [`include_names`] reads names lexically, as the preprocessor does:
-//! continued lines joined first, then comments removed, then every line
-//! `# include "name"` or `# include <name>` from every `#if` branch alike,
-//! wherever it sits (inside a struct, an enum or an initializer too: the
-//! X-macro pattern). An include built by a macro names no file.
+//! a lone carriage return read as a line end, continued lines joined first
+//! (a backslash, then blanks, then the line end, is a continuation too),
+//! then comments removed, then every line `# include "name"` or
+//! `# include <name>` from every `#if` branch alike, wherever it sits
+//! (inside a struct, an enum or an initializer too: the X-macro pattern).
+//! `#import` and `#include_next` are read as includes, and `%:` is read as
+//! `#`. `#include_next` is resolved as an ordinary include; since no
+//! include lands on the file that writes it ([`Resolver::find`]), a
+//! header's `#include_next` of its own name reaches the next one, as the
+//! compiler's does. A limit: when a same-named file also lies in a folder
+//! searched before the including file's own, the reader lands there
+//! instead of after the including file's folder. An include built by a macro names no file. The reader's time grows
+//! with the file's length, never with its square.
 
 use crate::config::{TargetContext, TargetSection};
 use crate::error::Error;
+use crate::facts::Facts;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -75,6 +100,23 @@ pub const MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
 /// permissions, say): the file is a fact, so staleness counts it as
 /// recorded while it stays unreadable, and detect skips it.
 pub const UNREADABLE_HASH: &str = "unreadable";
+
+/// The note scan and detect both give a file they could not read, `abs`
+/// being its path and `why` the error: `cannot be read: <why>; recorded as
+/// unreadable`, with no machine path in it (the caller shows the file by
+/// its root-relative path).
+pub fn unreadable_note(abs: &Path, why: &dyn std::fmt::Display) -> String {
+    let shown = abs.display().to_string();
+    let text = why.to_string();
+    let text = text
+        .strip_prefix(&format!("io error at {shown}: "))
+        .or_else(|| text.strip_prefix(&format!("{shown}: ")))
+        .unwrap_or(&text);
+    format!(
+        "cannot be read: {}; recorded as unreadable",
+        crate::text::safe_line(text)
+    )
+}
 
 /// The folders every scan, detect and prompt read leaves out:
 /// `<root>/migration/` (every tool's ledger and the map) and the target's
@@ -322,6 +364,11 @@ pub struct Program {
     pub outside: Vec<OutsideInclude>,
 }
 
+/// A reader of one file's include names, `(name, quoted)`, by its
+/// root-relative path: `None` when the file cannot be read
+/// ([`Resolver::closure_with`]).
+pub type NamesOf<'a> = dyn FnMut(&str) -> Option<Vec<(String, bool)>> + 'a;
+
 /// The include rule of one file-list target (see the module docs).
 #[derive(Debug, Clone)]
 pub struct Resolver {
@@ -330,6 +377,7 @@ pub struct Resolver {
     iquote: Vec<String>,
     dash_i: Vec<String>,
     isystem: Vec<String>,
+    idirafter: Vec<String>,
     forced: Vec<String>,
 }
 
@@ -357,6 +405,7 @@ impl Resolver {
             iquote: Vec::new(),
             dash_i: Vec::new(),
             isystem: Vec::new(),
+            idirafter: Vec::new(),
             forced: Vec::new(),
             confine,
         };
@@ -375,10 +424,11 @@ impl Resolver {
                     ledger,
                 )
             })?;
-            let list = match &flag[..flag.len() - path.len()] {
-                "-iquote" => &mut resolver.iquote,
-                "-isystem" => &mut resolver.isystem,
-                "-include" => &mut resolver.forced,
+            let list = match crate::config::flags::split_path_flag(flag).map(|(p, _)| p) {
+                Some("-iquote") => &mut resolver.iquote,
+                Some("-isystem") => &mut resolver.isystem,
+                Some("-idirafter") => &mut resolver.idirafter,
+                Some("-include") => &mut resolver.forced,
                 _ => &mut resolver.dash_i,
             };
             list.push(placed);
@@ -430,8 +480,11 @@ impl Resolver {
     /// The folders an include written in `including` is searched in, in
     /// order, when compiled as part of the listed file `unit` (see the
     /// module docs), root-relative (`""` is the root); the system's folders
-    /// come after them. A `unit` that is not listed contributes no folders
-    /// of its own.
+    /// come after them, then the `-idirafter` folders
+    /// ([`Resolver::after_system`]). A `unit` that is not listed
+    /// contributes no folders of its own. A folder `-isystem` names is
+    /// left out of the `-I` folders and `unit`'s `include_dirs`: the
+    /// compiler searches it at its `-isystem` place only.
     pub fn search_order(&self, unit: &str, including: &str, quoted: bool) -> Vec<String> {
         let own = match including.rsplit_once('/') {
             Some((dir, _)) => dir,
@@ -443,15 +496,22 @@ impl Resolver {
             .find(|f| f.path == unit)
             .map(|f| f.include_dirs.as_slice())
             .unwrap_or_default();
+        let not_system = |dir: &&String| !self.isystem.contains(dir);
         let mut order = Vec::new();
         if quoted {
             order.push(own.to_string());
             order.extend(self.iquote.iter().cloned());
         }
-        order.extend(self.dash_i.iter().cloned());
-        order.extend(unit_dirs.iter().cloned());
+        order.extend(self.dash_i.iter().filter(not_system).cloned());
+        order.extend(unit_dirs.iter().filter(not_system).cloned());
         order.extend(self.isystem.iter().cloned());
         order
+    }
+
+    /// The configuration's `-idirafter` folders, in order, root-relative:
+    /// searched after the system's folders.
+    pub fn after_system(&self) -> &[String] {
+        &self.idirafter
     }
 
     /// Where the include `name` written in `including` lands when compiled
@@ -460,23 +520,42 @@ impl Resolver {
         if name.is_empty() {
             return Landing::NotProject;
         }
-        let candidates: Vec<PathBuf> = if name.starts_with('/') {
-            vec![PathBuf::from(name)]
-        } else {
-            self.search_order(unit, including, quoted)
-                .iter()
-                .map(|dir| self.root().join(dir).join(name))
-                .collect()
+        if name.starts_with('/') {
+            return self.take(Path::new(name)).unwrap_or(Landing::NotProject);
+        }
+        // The including file itself is passed over: a header's
+        // `#include_next` of its own name, read as an ordinary include,
+        // reaches the next one, as the compiler's does.
+        let next = |dir: &str| {
+            self.take(&self.root().join(dir).join(name))
+                .filter(|l| *l != Landing::Project(including.to_string()))
         };
-        for candidate in candidates {
-            let Ok(real) = candidate.canonicalize() else {
-                continue;
-            };
-            if !real.is_file() {
-                continue;
+        if let Some(landing) = self
+            .search_order(unit, including, quoted)
+            .iter()
+            .find_map(|dir| next(dir))
+        {
+            return landing;
+        }
+        // After the system: an `-idirafter` folder only when the system
+        // has no such name.
+        if !self.idirafter.is_empty() && !system_holds(name) {
+            if let Some(landing) = self.idirafter.iter().find_map(|dir| next(dir)) {
+                return landing;
             }
-            // The compiler takes this file: project C only when confined.
-            return match self
+        }
+        Landing::NotProject
+    }
+
+    /// The landing of `candidate` when it is a regular file: the compiler
+    /// takes it, project C only when confined.
+    fn take(&self, candidate: &Path) -> Option<Landing> {
+        let real = candidate.canonicalize().ok()?;
+        if !real.is_file() {
+            return None;
+        }
+        Some(
+            match self
                 .confine
                 .allows(&real)
                 .then(|| self.confine.rel(&real))
@@ -484,9 +563,61 @@ impl Resolver {
             {
                 Some(rel) => Landing::Project(rel),
                 None => Landing::Outside(real),
-            };
+            },
+        )
+    }
+
+    /// The files the compile of `start` (root-relative, as a scan records
+    /// them) reads from the project, `start` included, sorted: the files
+    /// the rule reaches from every listed `.c` of `start` (each its own
+    /// compile, the configuration's `-include` files first; a `start` with
+    /// no listed `.c` is read as no listed file's), joined with the facts'
+    /// closure — so a header an ambiguous include lands on is in, and a
+    /// header the facts name stays in. Each file's include names come from
+    /// `names_of` (`None` adds no includes; a caller may cache it across
+    /// units).
+    pub fn closure_with(
+        &self,
+        facts: &Facts,
+        start: &[String],
+        names_of: &mut NamesOf<'_>,
+    ) -> Vec<String> {
+        let mut out: BTreeSet<String> = facts.include_closure(start).into_iter().collect();
+        // Each listed `.c` of the start is a compile of its own; a header
+        // named in the start is read under each of them.
+        let mut compiles: Vec<&str> = start
+            .iter()
+            .filter(|f| f.ends_with(".c"))
+            .filter(|c| self.listed.iter().any(|l| l.path == **c))
+            .map(String::as_str)
+            .collect();
+        if compiles.is_empty() {
+            compiles.push("");
         }
-        Landing::NotProject
+        for unit in compiles {
+            let mut seen: BTreeSet<String> = BTreeSet::new();
+            let mut stack: Vec<String> = start.iter().rev().cloned().collect();
+            stack.extend(self.forced.iter().rev().cloned());
+            while let Some(file) = stack.pop() {
+                if !seen.insert(file.clone()) {
+                    continue;
+                }
+                for (name, quoted) in names_of(&file).unwrap_or_default() {
+                    if let Some(found) = self.resolve(unit, &file, &name, quoted) {
+                        stack.push(found);
+                    }
+                }
+            }
+            out.extend(seen);
+        }
+        out.into_iter().collect()
+    }
+
+    /// [`Resolver::closure_with`], each file read as a scan reads it
+    /// ([`names_on_disk`]).
+    pub fn closure(&self, facts: &Facts, start: &[String]) -> Vec<String> {
+        let root = self.root().to_path_buf();
+        self.closure_with(facts, start, &mut |rel| names_on_disk(&root, rel))
     }
 
     /// [`Resolver::find`]'s project file, when it lands on one.
@@ -576,6 +707,94 @@ impl Resolver {
     }
 }
 
+/// The files a unit's compile reads from the project, sorted
+/// (docs/PROJECT-MAP-DESIGN.md §3.7; the 2026-10-08 triage, decision 11):
+/// for a file-list target, [`Resolver::closure`]; for a folder target (or a
+/// file list whose resolver refuses), the facts' include closure as ever.
+/// What `unit_source`, the planner's `source_hash` and `state status` hash.
+pub fn unit_closure(ctx: &TargetContext, facts: &Facts, start: &[String]) -> Vec<String> {
+    match Resolver::of(ctx) {
+        Ok(Some(resolver)) => resolver.closure(facts, start),
+        _ => facts.include_closure(start),
+    }
+}
+
+/// Whether one of the usual system include folders of this computer's C
+/// compiler holds `name` as a file: what an `-idirafter` folder comes
+/// after. The folders are found on disk, never by running a compiler (the
+/// SDK's and the toolchain's on macOS; `/usr/local/include`,
+/// `/usr/include`, its multiarch folders and the compilers' own on other
+/// systems), and read once per process.
+pub fn system_holds(name: &str) -> bool {
+    system_dirs().iter().any(|dir| dir.join(name).is_file())
+}
+
+fn system_dirs() -> &'static [PathBuf] {
+    static DIRS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    DIRS.get_or_init(|| {
+        // `<dir>/*/<tail>`: each version folder's include folder.
+        let each = |dir: &str, tail: &str| -> Vec<PathBuf> {
+            let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .map(|e| e.path().join(tail))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            found.sort();
+            found
+        };
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        if let Some(sdk) = std::env::var_os("SDKROOT") {
+            dirs.push(PathBuf::from(sdk).join("usr/include"));
+        }
+        if cfg!(target_os = "macos") {
+            for developer in [
+                "/Applications/Xcode.app/Contents/Developer",
+                "/Library/Developer/CommandLineTools",
+            ] {
+                let sdk = if developer.ends_with("CommandLineTools") {
+                    format!("{developer}/SDKs/MacOSX.sdk/usr/include")
+                } else {
+                    format!("{developer}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include")
+                };
+                let toolchain = if developer.ends_with("CommandLineTools") {
+                    format!("{developer}/usr")
+                } else {
+                    format!("{developer}/Toolchains/XcodeDefault.xctoolchain/usr")
+                };
+                dirs.push(PathBuf::from(sdk));
+                dirs.push(PathBuf::from(format!("{toolchain}/include")));
+                dirs.extend(each(&format!("{toolchain}/lib/clang"), "include"));
+            }
+        } else {
+            dirs.push(PathBuf::from("/usr/local/include"));
+            dirs.push(PathBuf::from("/usr/include"));
+            dirs.extend(
+                std::fs::read_dir("/usr/include")
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .map(|e| e.path())
+                            .filter(|p| {
+                                p.file_name()
+                                    .is_some_and(|n| n.to_string_lossy().contains("-linux-"))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+            );
+            for triple in each("/usr/lib/gcc", "") {
+                dirs.extend(each(&triple.to_string_lossy(), "include"));
+            }
+            dirs.extend(each("/usr/lib/clang", "include"));
+        }
+        dirs.retain(|d| d.is_dir());
+        dirs
+    })
+}
+
 /// A file's include names as a scan sees them, read through
 /// [`crate::ledger::read_regular`] with the scanner's cap: `Some(empty)`
 /// for a file over the cap (recorded, never parsed), `None` when it cannot
@@ -625,29 +844,59 @@ fn include_of(line: &[u8]) -> Option<(&[u8], bool)> {
     Some((&body[..end], quoted))
 }
 
-/// What follows `# include` on a line, when the line starts so.
+/// The include directives' words, longest first: `#include_next` is
+/// resolved as an ordinary include (it can only add a file), and `#import`
+/// is an include read once.
+const INCLUDE_WORDS: [&[u8]; 3] = [b"include_next", b"include", b"import"];
+
+/// What follows `# include` (or `#include_next`, `#import`, with `%:` for
+/// `#`) on a line, when the line starts so.
 fn include_head(line: &[u8]) -> Option<&[u8]> {
-    let rest = trim_start(line).strip_prefix(b"#")?;
-    trim_start(rest).strip_prefix(b"include")
+    let line = trim_start(line);
+    let rest = line
+        .strip_prefix(b"#")
+        .or_else(|| line.strip_prefix(b"%:"))?;
+    let rest = trim_start(rest);
+    INCLUDE_WORDS.iter().find_map(|w| rest.strip_prefix(*w))
+}
+
+fn is_blank(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\r')
 }
 
 fn trim_start(s: &[u8]) -> &[u8] {
-    let at = s
-        .iter()
-        .position(|b| !matches!(b, b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\r'))
-        .unwrap_or(s.len());
+    let at = s.iter().position(|&b| !is_blank(b)).unwrap_or(s.len());
     &s[at..]
 }
 
-/// The bytes with every backslash-newline removed (the preprocessor's line
-/// splicing, which comes before comments are read).
+/// The bytes with every lone carriage return read as a line end and every
+/// backslash-newline removed — a backslash, blanks, then a line end too, as
+/// the compiler reads it (the preprocessor's line splicing, which comes
+/// before comments are read).
 fn splice(src: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len());
     let mut i = 0;
     while i < src.len() {
         match src[i] {
-            b'\\' if src.get(i + 1) == Some(&b'\n') => i += 2,
-            b'\\' if src.get(i + 1) == Some(&b'\r') && src.get(i + 2) == Some(&b'\n') => i += 3,
+            b'\\' => {
+                let mut j = i + 1;
+                while j < src.len() && matches!(src[j], b' ' | b'\t' | b'\x0b' | b'\x0c') {
+                    j += 1;
+                }
+                match src.get(j) {
+                    Some(b'\n') => i = j + 1,
+                    Some(b'\r') if src.get(j + 1) == Some(&b'\n') => i = j + 2,
+                    Some(b'\r') => i = j + 1,
+                    _ => {
+                        out.push(b'\\');
+                        i += 1;
+                    }
+                }
+            }
+            b'\r' if src.get(i + 1) != Some(&b'\n') => {
+                out.push(b'\n');
+                i += 1;
+            }
             b => {
                 out.push(b);
                 i += 1;
@@ -657,24 +906,99 @@ fn splice(src: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Where the line being written stands against "`# include` then blanks
+/// only": kept as each byte is written, so the `<` rule never searches back
+/// through the line (a long line with many `<` costs its length, never its
+/// square).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Head {
+    /// Blanks only so far.
+    Start,
+    /// `%` written after blanks only (the first half of `%:`).
+    Percent,
+    /// `#` or `%:` written, then blanks.
+    Hash,
+    /// The first `n` bytes of a directive word written after the `#`.
+    Word(usize),
+    /// A whole include word written, then blanks only.
+    Include,
+    /// Anything else: no include line.
+    Other,
+}
+
+/// The longest directive word read ([`INCLUDE_WORDS`]).
+const MAX_WORD: usize = 12;
+
+impl Head {
+    /// The state after `b` is written, `word` holding the directive word's
+    /// bytes so far.
+    fn feed(self, b: u8, word: &mut [u8; MAX_WORD]) -> Head {
+        if b == b'\n' {
+            return Head::Start;
+        }
+        let blank = is_blank(b);
+        match self {
+            Head::Start if blank => Head::Start,
+            Head::Start if b == b'#' => Head::Hash,
+            Head::Start if b == b'%' => Head::Percent,
+            Head::Percent if b == b':' => Head::Hash,
+            Head::Hash if blank => Head::Hash,
+            Head::Hash | Head::Word(_) if b.is_ascii_lowercase() || b == b'_' => {
+                let n = match self {
+                    Head::Word(n) => n,
+                    _ => 0,
+                };
+                if n == MAX_WORD {
+                    return Head::Other;
+                }
+                word[n] = b;
+                Head::Word(n + 1)
+            }
+            Head::Word(n) if blank && INCLUDE_WORDS.contains(&&word[..n]) => Head::Include,
+            Head::Include if blank => Head::Include,
+            _ => Head::Other,
+        }
+    }
+
+    /// Whether a `<` written now opens an include's `<name>`.
+    fn opens_name(self, word: &[u8; MAX_WORD]) -> bool {
+        match self {
+            Head::Include => true,
+            Head::Word(n) => INCLUDE_WORDS.contains(&&word[..n]),
+            _ => false,
+        }
+    }
+}
+
 /// The bytes with every `/* … */` and `// …` comment replaced by one space
 /// (newlines inside a block comment kept), string and character literals
 /// passed through as they are, and an include's `<name>` passed through
 /// whole (`<sys//types.h>` holds no comment).
 fn strip_comments(src: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(src.len());
+    struct Out {
+        bytes: Vec<u8>,
+        head: Head,
+        word: [u8; MAX_WORD],
+    }
+    impl Out {
+        fn push(&mut self, b: u8) {
+            self.bytes.push(b);
+            self.head = self.head.feed(b, &mut self.word);
+        }
+    }
+    let mut out = Out {
+        bytes: Vec::with_capacity(src.len()),
+        head: Head::Start,
+        word: [0; MAX_WORD],
+    };
     let mut i = 0;
     while i < src.len() {
         match src[i] {
-            b'<' if {
-                let line_start = out.iter().rposition(|&b| b == b'\n').map_or(0, |n| n + 1);
-                include_head(&out[line_start..]).is_some_and(|rest| trim_start(rest).is_empty())
-            } =>
-            {
+            b'<' if out.head.opens_name(&out.word) => {
                 while i < src.len() && src[i] != b'\n' {
                     out.push(src[i]);
                     i += 1;
-                    if out.last() == Some(&b'>') {
+                    if out.bytes.last() == Some(&b'>') {
                         break;
                     }
                 }
@@ -718,7 +1042,7 @@ fn strip_comments(src: &[u8]) -> Vec<u8> {
             }
         }
     }
-    out
+    out.bytes
 }
 
 #[cfg(test)]
@@ -762,6 +1086,21 @@ mod tests {
             (b"# include <x.h> // trailing\n", vec![a("x.h")]),
             (b"// #include \"no.h\" \\\n#include \"also-no.h\"\n", vec![]),
             (b"#include NAME\n", vec![]),
+            // The forms the 2026-10-08 check found unread (each checked
+            // against `cc -M` by harness-oracle's
+            // `the_reader_reads_every_form_cc_reads`).
+            (b"#import \"i.h\"\n", vec![q("i.h")]),
+            (b"#include_next <n.h>\n", vec![a("n.h")]),
+            (b"%:include \"d.h\"\n", vec![q("d.h")]),
+            (b"%: include <d2.h>\n", vec![a("d2.h")]),
+            (b"int x;\r#include \"r.h\"\rint y;\r", vec![q("r.h")]),
+            (b"#inc\\  \nlude \"s.h\"\n", vec![q("s.h")]),
+            (b"#include \\ \t\n\"s2.h\"\n", vec![q("s2.h")]),
+            (b"#include_nextx <no.h>\n#includes <no2.h>\n", vec![]),
+            (
+                b"#include_next<n2.h>\n#import<i2.h>\n",
+                vec![a("i2.h"), a("n2.h")],
+            ),
             (
                 b"/* #include \"no.h\" */\n#include \"a.h\"\n  #  include <b/c.h>\n\
                   #ifdef X\n#include \"d.h\"\n#endif\n\
@@ -776,6 +1115,51 @@ mod tests {
                 String::from_utf8_lossy(src)
             );
         }
+    }
+
+    /// The `<` rule keeps where the line stands as it writes it: a 1 MiB
+    /// line full of `<` (and one led by 1 MiB of blanks) reads in well under
+    /// a second, where searching back for the line's start took minutes.
+    #[test]
+    fn a_long_line_full_of_angle_brackets_reads_in_linear_time() {
+        let mut line = b"x=a<b;".repeat((1 << 20) / 6);
+        line.extend_from_slice(b"\n#include <ok.h>\n");
+        let mut blanks = vec![b' '; 1 << 20];
+        blanks.extend(std::iter::repeat_n(b'<', 1 << 19));
+        blanks.extend_from_slice(b"\n#  \t<x>\n");
+        let mut hashed = b"#".to_vec();
+        hashed.extend(vec![b' '; 1 << 20]);
+        hashed.extend(std::iter::repeat_n(b'<', 1 << 19));
+        let started = std::time::Instant::now();
+        assert_eq!(include_names(&line), vec![a("ok.h")]);
+        assert_eq!(include_names(&blanks), vec![]);
+        assert_eq!(include_names(&hashed), vec![]);
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(1),
+            "three 1 MiB lines took {took:?}"
+        );
+    }
+
+    #[test]
+    fn the_skip_note_names_no_machine_path() {
+        let abs = Path::new("/home/me/proj/src/a.c");
+        let io = Error::io(
+            abs,
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        );
+        let note = unreadable_note(abs, &io);
+        assert_eq!(
+            note,
+            "cannot be read: permission denied; recorded as unreadable"
+        );
+        let plain = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(unreadable_note(abs, &plain), note);
+        let refused = Error::Invariant(format!("{}: not a regular file", abs.display()));
+        assert_eq!(
+            unreadable_note(abs, &refused),
+            "cannot be read: not a regular file; recorded as unreadable"
+        );
     }
 
     #[test]

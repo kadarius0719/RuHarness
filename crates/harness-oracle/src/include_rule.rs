@@ -6,70 +6,43 @@
 //! harness-core's shared resolver ([`Resolver::search_order`]): quoted —
 //! the own folder, the configuration's `-iquote`, `-I`, the listed file's
 //! `include_dirs`, `-isystem`; angle-bracket — the same without the own
-//! folder and the `-iquote` folders; each `-include` file first. This
-//! module walks it for the oracle's readers (`unit_headers`,
-//! `driver_folders`, `unit_header_names`, the features mirror).
+//! folder and the `-iquote` folders; each `-include` file first; the
+//! `-idirafter` folders after the system. The oracle's readers
+//! (`unit_headers`, `driver_folders`, `unit_header_names`, the features
+//! mirror) and `compute_inputs`' `unit_source` take the unit's closure
+//! from harness-core ([`unit_closure`], the 2026-10-08 triage, decision
+//! 11), the one the planner and `state status` hash too.
 
 use harness_core::config::TargetContext;
-use harness_core::sources::{names_on_disk, Resolver};
+use harness_core::sources::{unit_closure, Resolver};
 use harness_core::Facts;
-use std::collections::BTreeSet;
 
 /// The files the compile of `start` (project-relative, as a scan records
-/// them) reads from the project, starts included, under the rule: for the
-/// folder form the facts' include closure as ever; for a file list, the
-/// files the resolver reaches from every listed `.c` of `start` (each as
-/// its own compile, the configuration's `-include` files first), joined
-/// with the facts' closure — a header the facts name stays in, so a forged
-/// or stale record is still checked by the callers' confinement. Each file
-/// is read as a scan reads it ([`names_on_disk`]); one that cannot be read
-/// adds no includes.
+/// them) reads from the project, starts included: harness-core's
+/// [`unit_closure`] (for the folder form the facts' include closure as
+/// ever; for a file list the resolver's closure joined with the facts', so
+/// a forged or stale record is still checked by the callers'
+/// confinement).
 pub(crate) fn closure(target: &TargetContext, facts: &Facts, start: &[String]) -> Vec<String> {
-    let mut out: BTreeSet<String> = facts.include_closure(start).into_iter().collect();
-    let Ok(Some(resolver)) = Resolver::of(target) else {
-        return out.into_iter().collect();
-    };
-    // Each listed `.c` of the start is a compile of its own; a header named
-    // in the start is read under each of them.
-    let mut compiles: Vec<&str> = start
-        .iter()
-        .filter(|f| f.ends_with(".c"))
-        .filter(|c| resolver.listed().iter().any(|l| l.path == **c))
-        .map(String::as_str)
-        .collect();
-    if compiles.is_empty() {
-        compiles.push("");
-    }
-    for unit in compiles {
-        let mut seen: BTreeSet<String> = BTreeSet::new();
-        let mut stack: Vec<String> = start.iter().rev().cloned().collect();
-        stack.extend(resolver.forced_includes().iter().rev().cloned());
-        while let Some(file) = stack.pop() {
-            if !seen.insert(file.clone()) {
-                continue;
-            }
-            for (name, quoted) in names_on_disk(resolver.root(), &file).unwrap_or_default() {
-                if let Some(found) = resolver.resolve(unit, &file, &name, quoted) {
-                    stack.push(found);
-                }
-            }
-        }
-        out.extend(seen);
-    }
-    out.into_iter().collect()
+    unit_closure(target, facts, start)
 }
 
 /// The folders the unit's own `.c` files search, in the rule's order and
 /// without repeats (each listed `.c`'s quoted order: its own folder, the
-/// configuration's `-iquote` and `-I`, its `include_dirs`, `-isystem`);
-/// empty for a folder target.
+/// configuration's `-iquote` and `-I`, its `include_dirs`, `-isystem`; then
+/// the `-idirafter` folders, searched after the system); empty for a folder
+/// target.
 pub(crate) fn unit_search_folders(target: &TargetContext, unit_files: &[String]) -> Vec<String> {
     let Ok(Some(resolver)) = Resolver::of(target) else {
         return Vec::new();
     };
     let mut out: Vec<String> = Vec::new();
     for c in unit_files.iter().filter(|f| f.ends_with(".c")) {
-        for dir in resolver.search_order(c, c, true) {
+        for dir in resolver
+            .search_order(c, c, true)
+            .into_iter()
+            .chain(resolver.after_system().iter().cloned())
+        {
             if !out.contains(&dir) {
                 out.push(dir);
             }
@@ -83,6 +56,7 @@ mod tests {
     use super::*;
     use crate::testutil::TempDir;
     use crate::{cc_argv, Base, CcInvocation};
+    use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
     fn put(root: &Path, rel: &str, text: &str) {
@@ -222,6 +196,152 @@ mod tests {
         let headers = base.unit_headers(&target, &facts, &unit).expect("headers");
         assert!(headers.contains(&root.join("f/forced.h")), "{headers:?}");
         assert!(!headers.contains(&root.join("q/own.h")), "{headers:?}");
+    }
+
+    /// A tool over `root` listing `files` (TOML array items) under `flags`
+    /// (TOML strings).
+    fn tool(root: &Path, files: &str, flags: &str) -> TargetContext {
+        let config: harness_core::TargetConfig = toml::from_str(&format!(
+            "schema_version = 2\n[target]\nname = \"t\"\nfiles = [{files}]\n\
+             configuration = {{ name = \"make\", from = \"stated\", flags = [{flags}] }}\n\
+             [oracle]\nallowlist = [\"cc\"]\n"
+        ))
+        .expect("config");
+        TargetContext {
+            ledger: root.join("migration/tools/t-x"),
+            tool: Some("t-x".into()),
+            root: root.to_path_buf(),
+            config,
+        }
+    }
+
+    /// What `cc -M` reads compiling the listed `rel` of `target`, and what
+    /// the rule predicts.
+    fn cc_and_rule(root: &Path, target: &TargetContext, rel: &str) -> [BTreeSet<String>; 2] {
+        let base = Base::resolve(target, "u", &["cc"]).expect("base");
+        let file = root.join(rel);
+        let by_cc = read_by_cc(root, &base.file_args(&file).expect("args"), &file);
+        let predicted = closure(target, &harness_core::Facts::default(), &[rel.into()])
+            .into_iter()
+            .collect();
+        [by_cc, predicted]
+    }
+
+    fn set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// A folder named by both `-I` (or a file's `include_dirs`) and
+    /// `-isystem` is searched at its `-isystem` place; an `-idirafter`
+    /// folder after the system, so the system's `<stdio.h>` wins over its
+    /// own and a name the system lacks is taken from it.
+    #[test]
+    fn the_rule_reads_what_cc_reads_after_the_system_and_for_a_doubled_folder() {
+        let tmp = TempDir::new("include-rule-after");
+        let root = tmp.path().to_path_buf();
+        put(
+            &root,
+            "m/main.c",
+            "#include \"x.h\"\n#include \"ua.h\"\n#include <stdio.h>\n\
+             #include \"after.h\"\n#include <after2.h>\nint main(void) { return 0; }\n",
+        );
+        // `a` is -I and -isystem: searched after the file's `b`.
+        put(&root, "a/x.h", "/* a */\n");
+        put(&root, "b/x.h", "/* b */\n");
+        // `u` is an include_dirs and -isystem: searched after `a`.
+        put(&root, "a/ua.h", "/* a */\n");
+        put(&root, "u/ua.h", "/* u */\n");
+        // `c` is -idirafter: after the system.
+        put(&root, "c/stdio.h", "#error not the system's\n");
+        put(&root, "c/after.h", "/* c */\n");
+        put(&root, "c/after2.h", "/* c */\n");
+        let target = tool(
+            &root,
+            "{ path = \"m/main.c\", include_dirs = [\"b\", \"u\"] }",
+            "\"-Ia\", \"-isystemt\", \"-isystema\", \"-isystemu\", \"-idirafterc\"",
+        );
+        std::fs::create_dir_all(root.join("t")).expect("t");
+        let [by_cc, predicted] = cc_and_rule(&root, &target, "m/main.c");
+        let expected = set(&["m/main.c", "b/x.h", "a/ua.h", "c/after.h", "c/after2.h"]);
+        assert_eq!(by_cc, expected, "what cc reads");
+        assert_eq!(predicted, expected, "what the rule predicts");
+        // The driver searches `c` after the system too, never as an `-I`.
+        let unit: harness_core::Unit = toml::from_str(
+            "id = \"u\"\nstatus = \"pending\"\nfiles = [\"m/main.c\"]\nsymbols = [\"main\"]\n",
+        )
+        .expect("unit");
+        let folders = crate::driver_folders(&target, &harness_core::Facts::default(), &unit);
+        assert!(!folders.contains(&"c".to_string()), "{folders:?}");
+        let names = crate::unit_header_names(&target, &harness_core::Facts::default(), &unit);
+        assert!(names.contains(&"after.h".to_string()), "{names:?}");
+    }
+
+    /// The forms the 2026-10-08 check found unread — `#import`,
+    /// `#include_next` (a header wrapping a same-named one in a later
+    /// folder), `%:include`, a lone carriage return as a line end and a
+    /// backslash with blanks before the line end — are read as `cc -M`
+    /// reads them.
+    #[test]
+    fn the_reader_reads_every_form_cc_reads() {
+        let tmp = TempDir::new("include-rule-forms");
+        let root = tmp.path().to_path_buf();
+        put(
+            &root,
+            "r/main.c",
+            "#import \"imp.h\"\n%:include \"dig.h\"\n#inc\\  \nlude \"spl.h\"\n\
+             #include \"cr.h\"\n#include <nx.h>\nint main(void) { return 0; }\n",
+        );
+        put(&root, "r/imp.h", "/* imp */\n");
+        put(&root, "r/dig.h", "/* dig */\n");
+        put(&root, "r/spl.h", "/* spl */\n");
+        put(&root, "r/cr.h", "int q;\r#include \"crx.h\"\rint z;\r");
+        put(&root, "r/crx.h", "/* crx */\n");
+        put(&root, "k/nx.h", "#include_next <nx.h>\n");
+        put(&root, "l/nx.h", "/* the next one */\n");
+        let target = tool(
+            &root,
+            "{ path = \"r/main.c\", include_dirs = [\"k\", \"l\"] }",
+            "",
+        );
+        let [by_cc, predicted] = cc_and_rule(&root, &target, "r/main.c");
+        let expected = set(&[
+            "r/main.c", "r/imp.h", "r/dig.h", "r/spl.h", "r/cr.h", "r/crx.h", "k/nx.h", "l/nx.h",
+        ]);
+        assert_eq!(by_cc, expected, "what cc reads");
+        assert_eq!(predicted, expected, "what the rule predicts");
+    }
+
+    /// A header an ambiguous include lands on is in the unit's closure (the
+    /// one `compute_inputs` hashes), though the scan records no edge for it.
+    #[test]
+    fn the_closure_holds_the_header_an_ambiguous_include_lands_on() {
+        let tmp = TempDir::new("include-rule-ambiguous");
+        let root = tmp.path().to_path_buf();
+        put(
+            &root,
+            "a.c",
+            "#include \"common.h\"\nint main(void) { return 0; }\n",
+        );
+        put(
+            &root,
+            "b.c",
+            "#include \"common.h\"\nint b(void) { return 0; }\n",
+        );
+        put(&root, "inc/common.h", "#include \"cfg.h\"\n");
+        put(&root, "d1/cfg.h", "/* d1 */\n");
+        put(&root, "d2/cfg.h", "/* d2 */\n");
+        let target = tool(
+            &root,
+            "{ path = \"a.c\", include_dirs = [\"inc\", \"d1\"] }, \
+             { path = \"b.c\", include_dirs = [\"inc\", \"d2\"] }",
+            "",
+        );
+        let resolver = Resolver::of(&target).expect("resolver").expect("a list");
+        let program = resolver.walk(|rel| harness_core::sources::names_on_disk(&root, rel));
+        assert_eq!(program.ambiguous.len(), 1, "{:?}", program.ambiguous);
+        let [by_cc, predicted] = cc_and_rule(&root, &target, "a.c");
+        assert_eq!(by_cc, set(&["a.c", "inc/common.h", "d1/cfg.h"]));
+        assert_eq!(predicted, by_cc);
     }
 
     /// A mutant's copy, compiled away from its original's folder, reads the

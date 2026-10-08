@@ -19,7 +19,6 @@ use harness_core::config::TargetContext;
 use harness_core::error::Error;
 use harness_core::features::{self, FeatureMap, Features, MapInputs, ScenarioRecord};
 use harness_core::ledger::Ledger;
-use harness_core::sources::MAX_SOURCE_BYTES;
 use harness_core::walk;
 use harness_core::Facts;
 use std::collections::BTreeMap;
@@ -32,6 +31,10 @@ const FNPROBE_C: &str = include_str!("fnprobe/fnprobe.c");
 /// The mirror's bounds (§5.3).
 const MIRROR_MAX_FILES: usize = 20_000;
 const MIRROR_MAX_BYTES: u64 = 256 * 1024 * 1024;
+/// The largest one file the file-list mirror copies: well above the
+/// scanner's cap, since the scanner records a bigger file (hashed, never
+/// parsed) and the compile builds it (SQLite's `sqlite3.c` is about 9 MB).
+const MIRROR_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// The scratch dir's name under the ledger build dir (never a unit id).
 pub const FEATURES_BUILD_DIR: &str = ".features";
 
@@ -1285,8 +1288,8 @@ fn write_mirror(
 /// `migration/` (any tool's ledger, the map) and not reached through a
 /// link: nothing the harness or a model wrote reaches the copy as the
 /// project's C (docs/PROJECT-MAP-DESIGN.md §3.7, "Confinement"). Each is
-/// read as a regular file of at most [`MAX_SOURCE_BYTES`] (a FIFO is
-/// refused, never opened for a blocking read).
+/// read as a regular file of at most [`MIRROR_MAX_FILE_BYTES`] (a FIFO is
+/// refused, never opened for a blocking read), under the mirror's total.
 fn write_mirror_files(
     target: &TargetContext,
     base: &Base,
@@ -1344,12 +1347,7 @@ fn write_mirror_files(
     let mut total: u64 = 0;
     let mut times: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
     for (rel, path) in &paths {
-        let bytes = harness_core::ledger::read_regular(path, MAX_SOURCE_BYTES).map_err(|e| {
-            Error::Invariant(format!(
-                "the features map copies only regular files of at most {} MiB: {e}",
-                MAX_SOURCE_BYTES / (1024 * 1024)
-            ))
-        })?;
+        let bytes = mirror_read(path)?;
         total += bytes.len() as u64;
         if total > MIRROR_MAX_BYTES {
             return Err(Error::Invariant(format!(
@@ -1378,6 +1376,17 @@ fn write_mirror_files(
     }
     keep_times(&times);
     Ok(times)
+}
+
+/// One file of the file-list mirror, read as a regular file of at most
+/// [`MIRROR_MAX_FILE_BYTES`].
+fn mirror_read(path: &Path) -> Result<Vec<u8>, Error> {
+    harness_core::ledger::read_regular(path, MIRROR_MAX_FILE_BYTES).map_err(|e| {
+        Error::Invariant(format!(
+            "the features map copies only regular files of at most {} MiB: {e}",
+            MIRROR_MAX_FILE_BYTES / (1024 * 1024)
+        ))
+    })
 }
 
 /// Give each mirror file its original's modification time: gcc's
@@ -1492,6 +1501,25 @@ mod tests {
 
     use super::*;
     use harness_core::facts::SymbolRecord;
+
+    /// The file-list mirror copies a file over the scanner's 8 MiB cap (the
+    /// scan records it and the compile builds it) up to its own 64 MiB cap.
+    #[test]
+    fn the_mirror_copies_a_file_over_the_scanners_cap_up_to_its_own() {
+        let tmp = crate::testutil::TempDir::new("mirror-cap");
+        let big = tmp.path().join("table.h");
+        let file = std::fs::File::create(&big).expect("create");
+        file.set_len(harness_core::sources::MAX_SOURCE_BYTES + 1)
+            .expect("size");
+        assert_eq!(
+            mirror_read(&big).expect("read").len() as u64,
+            harness_core::sources::MAX_SOURCE_BYTES + 1
+        );
+        file.set_len(MIRROR_MAX_FILE_BYTES + 1).expect("size");
+        let err = mirror_read(&big).expect_err("over 64 MiB").to_string();
+        assert!(err.contains("at most 64 MiB"), "{err}");
+        const { assert!(MIRROR_MAX_FILE_BYTES < MIRROR_MAX_BYTES) };
+    }
 
     #[test]
     fn make_rules_read_as_their_prerequisites() {

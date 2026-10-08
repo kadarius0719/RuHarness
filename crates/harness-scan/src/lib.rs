@@ -228,10 +228,9 @@ fn read_source(
 ) -> Option<(Source, Names)> {
     use std::io::Read as _;
     let unreadable = |notes: &mut ScanNotes, e: &dyn std::fmt::Display| {
-        notes.skipped.push((
-            abs.to_path_buf(),
-            format!("cannot be read: {e}; recorded as unreadable"),
-        ));
+        notes
+            .skipped
+            .push((abs.to_path_buf(), sources::unreadable_note(abs, e)));
         notes.unreadable.push(rel.to_string());
         Some((
             Source {
@@ -628,27 +627,73 @@ pub fn file_facts(source: &[u8]) -> Result<FileFacts, Error> {
     })
 }
 
-/// Recursively collect function definitions with their storage class,
-/// signature, span, and direct-call names.
+/// Collect function definitions with their storage class, signature, span,
+/// and direct-call names, in source order.
 fn collect_functions(node: tree_sitter::Node, src: &[u8], file: &str, defs: &mut Vec<FnDef>) {
-    collect_functions_in(node, src, file, false, false, defs);
+    collect_functions_in(node, src, file, defs);
 }
 
-/// [`collect_functions`], knowing whether an ERROR node encloses `node` and
-/// whether a definition does. A definition's own body is searched too: a
-/// misread `#if` can make the parser run one body on over every later
-/// definition (sqlite3.c's winWrite holds 19 700 lines of them), which
-/// would otherwise vanish from the facts.
-fn collect_functions_in(
-    node: tree_sitter::Node,
-    src: &[u8],
-    file: &str,
+/// One step of [`collect_functions_in`]'s walk.
+enum Step<'t> {
+    /// Visit a node, knowing whether an ERROR node encloses it and whether
+    /// a definition does.
+    Visit {
+        node: tree_sitter::Node<'t>,
+        under_error: bool,
+        nested: bool,
+    },
+    /// After a misread definition's own children were searched: its bounds
+    /// are a guess when it held definitions (rule 1).
+    Misread {
+        at: usize,
+        before: usize,
+        recorded: bool,
+    },
+}
+
+/// The children of `node` as visit steps, last first (popped in order).
+fn push_children<'t>(
+    stack: &mut Vec<Step<'t>>,
+    node: tree_sitter::Node<'t>,
     under_error: bool,
     nested: bool,
-    defs: &mut Vec<FnDef>,
 ) {
     let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
+    let children: Vec<tree_sitter::Node<'t>> = node.children(&mut cursor).collect();
+    stack.extend(children.into_iter().rev().map(|child| Step::Visit {
+        node: child,
+        under_error,
+        nested,
+    }));
+}
+
+/// [`collect_functions`]'s walk, with its own stack rather than the
+/// thread's: a deeply nested expression (a 400 KB `0 < 1 < 1 …` line) is
+/// tens of thousands of levels deep. A definition's own body is searched
+/// too: a misread `#if` can make the parser run one body on over every
+/// later definition (sqlite3.c's winWrite holds 19 700 lines of them),
+/// which would otherwise vanish from the facts.
+fn collect_functions_in(node: tree_sitter::Node, src: &[u8], file: &str, defs: &mut Vec<FnDef>) {
+    let mut stack: Vec<Step> = Vec::new();
+    push_children(&mut stack, node, false, false);
+    while let Some(step) = stack.pop() {
+        let (child, under_error, nested) = match step {
+            Step::Misread {
+                at,
+                before,
+                recorded,
+            } => {
+                if recorded && defs.len() > before {
+                    defs[at].note_at = Err(NoNote::Parser);
+                }
+                continue;
+            }
+            Step::Visit {
+                node,
+                under_error,
+                nested,
+            } => (node, under_error, nested),
+        };
         if child.kind() == "function_definition" {
             let at = defs.len();
             // A keyword "name" (`if( rc==0 ){` misread as a definition) is a
@@ -723,16 +768,18 @@ fn collect_functions_in(
                 .child_by_field_name("body")
                 .is_some_and(|b| body_misread(&src[b.start_byte()..b.end_byte()]));
             if misread {
-                let before = defs.len();
-                collect_functions_in(child, src, file, under_error, true, defs);
-                // Its bounds are a guess, as under a parse error (rule 1).
-                if recorded && defs.len() > before {
-                    defs[at].note_at = Err(NoNote::Parser);
-                }
+                // Its bounds are a guess, as under a parse error (rule 1),
+                // once its children are searched.
+                stack.push(Step::Misread {
+                    at,
+                    before: defs.len(),
+                    recorded,
+                });
+                push_children(&mut stack, child, under_error, true);
             }
         } else {
             let error = under_error || child.is_error();
-            collect_functions_in(child, src, file, error, nested, defs);
+            push_children(&mut stack, child, error, nested);
         }
     }
 }
@@ -1989,18 +2036,22 @@ fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
     }
 }
 
-/// Recursively collect names appearing as direct (identifier) callees.
+/// Collect names appearing as direct (identifier) callees below `node`,
+/// with a stack of its own (a body can nest as deep as any expression).
 fn collect_calls(node: tree_sitter::Node, src: &[u8], out: &mut BTreeSet<String>) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind() == "call_expression" {
-            if let Some(f) = child.child_by_field_name("function") {
-                if f.kind() == "identifier" {
-                    out.insert(text(f, src).to_string());
+    let mut stack = vec![node];
+    while let Some(node) = stack.pop() {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "call_expression" {
+                if let Some(f) = child.child_by_field_name("function") {
+                    if f.kind() == "identifier" {
+                        out.insert(text(f, src).to_string());
+                    }
                 }
             }
+            stack.push(child);
         }
-        collect_calls(child, src, out);
     }
 }
 
@@ -2837,15 +2888,20 @@ mod tests {
         let cc = std::process::Command::new("cc")
             .current_dir(&ctx.root)
             .args(["-M", "-iquoteq", "-Ia", "-isystems", "-Ib", "src/main.c"])
-            .output();
-        if let Some(out) = cc.ok().filter(|o| o.status.success()) {
-            let deps = String::from_utf8_lossy(&out.stdout).replace("\\\n", " ");
-            for want in &found {
-                assert!(deps.contains(want.as_str()), "{want} in {deps}");
-            }
-            for not in ["q/x.h", "a/x.h", "b/y.h", "q/w.h"] {
-                assert!(!deps.contains(not), "{not} in {deps}");
-            }
+            .output()
+            .expect("cc runs (the oracle needs it too)");
+        // A failed cc is a failed check, never a skipped one.
+        assert!(
+            cc.status.success(),
+            "cc -M failed: {}",
+            String::from_utf8_lossy(&cc.stderr)
+        );
+        let deps = String::from_utf8_lossy(&cc.stdout).replace("\\\n", " ");
+        for want in &found {
+            assert!(deps.contains(want.as_str()), "{want} in {deps}");
+        }
+        for not in ["q/x.h", "a/x.h", "b/y.h", "q/w.h"] {
+            assert!(!deps.contains(not), "{not} in {deps}");
         }
     }
 
@@ -3026,6 +3082,18 @@ mod tests {
             .expect("recorded");
         assert_eq!(record.hash, sources::UNREADABLE_HASH);
         assert_eq!(notes.unreadable, ["src/b.c"]);
+        // The note detect gives the same file, word for word
+        // (harness-detect's `an_unreadable_file_is_skipped_with_a_note`).
+        let note = notes
+            .skipped
+            .iter()
+            .find(|(p, _)| p.ends_with("src/b.c"))
+            .map(|(_, why)| why.as_str());
+        assert_eq!(
+            note,
+            Some("cannot be read: Permission denied (os error 13); recorded as unreadable"),
+            "{notes:?}"
+        );
         assert!(digest.expect("digest").starts_with("blake3:"));
 
         // The file list: an unreadable header.
@@ -3053,6 +3121,43 @@ mod tests {
             harness_core::features::program_digest_now(&ctx, &facts),
             harness_core::features::STALE_PROGRAM
         );
+    }
+
+    /// The 2026-10-08 check: a 400 KB line `int x = 0 < 1 < 1 …;` nests
+    /// tree-sitter's tree tens of thousands deep; the walk keeps its own
+    /// stack, so the scan reads it (and the functions around it) instead of
+    /// overflowing the thread's.
+    #[test]
+    fn a_deeply_nested_expression_is_walked_without_overflowing() {
+        let mut deep = String::from("int before(void) { return 1; }\nint x = 0");
+        deep.push_str(&" < 1".repeat(100_000));
+        deep.push_str(";\nint after(void) { return before(); }\n");
+        assert!(deep.len() > 400_000);
+        let src = deep.clone();
+        // A test thread's stack, explicitly: what `harness scan`'s main
+        // thread has more of.
+        let facts = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || file_facts(src.as_bytes()).expect("parsed"))
+            .expect("thread")
+            .join()
+            .expect("no overflow");
+        assert_eq!(facts.functions, ["before", "after"]);
+        assert!(facts.calls.contains("before"));
+        let t = TempTarget::new("deep", "[]");
+        t.write("src/deep.c", &deep);
+        let target = TargetContext::load(&t.0).expect("target loads");
+        let scanned = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                CFrontend
+                    .scan_reporting(&target)
+                    .map(|(f, _)| f.symbols.len())
+            })
+            .expect("thread")
+            .join()
+            .expect("no overflow");
+        assert_eq!(scanned.expect("scanned"), 2);
     }
 
     /// The readers review, finding 11: with `source_dir` itself a link, a

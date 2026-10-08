@@ -1828,7 +1828,7 @@ allowlist = ["cc", "cargo", "rustc"]
 |---|---|
 | `-D<name>`, `-D<name>=<value>` | `<name>` a C identifier `[A-Za-z_][A-Za-z0-9_]*` |
 | `-U<name>` | `<name>` a C identifier |
-| `-I<dir>`, `-iquote<dir>`, `-isystem<dir>`, `-include<file>` | the path `.` or clean and relative to the project root, not under `migration/`; inside the root after its links are followed |
+| `-I<dir>`, `-iquote<dir>`, `-isystem<dir>`, `-idirafter<dir>`, `-include<file>` | the path `.` or clean and relative to the project root, not under `migration/`; inside the root after its links are followed |
 | `-std=<v>` | `<v>` one of `c89 c90 c99 c11 c17 c18 c23 c2x gnu89 gnu90 gnu99 gnu11 gnu17 gnu18 gnu23 gnu2x` |
 | `-pthread` | — |
 | `-f…` | exactly one of `-fno-strict-aliasing -fwrapv -fno-common -fcommon -fPIC -fpic -fsigned-char -funsigned-char -fno-builtin -fvisibility=hidden -fvisibility=default` |

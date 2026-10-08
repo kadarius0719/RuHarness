@@ -1024,6 +1024,38 @@ fn an_unreadable_file_is_skipped_with_a_note() {
     assert_eq!(files_of(&findings), ["src/a.c"], "{findings:#?}");
     assert_eq!(skipped.len(), 1, "{skipped:?}");
     assert_eq!(skipped[0].0, b);
-    assert!(skipped[0].1.starts_with("cannot be read"), "{skipped:?}");
+    // The scan's note word for word (harness-core's `unreadable_note`;
+    // harness-scan's `a_non_utf8_file_and_an_unreadable_folder_are_noted…`
+    // checks the same words), with no machine path in it.
+    assert_eq!(
+        skipped[0].1, "cannot be read: Permission denied (os error 13); recorded as unreadable",
+        "{skipped:?}"
+    );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The 2026-10-08 check: a 400 KB line `int x = 0 < 1 < 1 …;` nests the
+/// tree tens of thousands deep. Every detector walk keeps its own stack, so
+/// detect reads the file (a mutable global, and a function pointer after
+/// it) instead of overflowing the thread's.
+#[test]
+fn a_deeply_nested_expression_is_walked_without_overflowing() {
+    let mut deep = String::from("int x = 0");
+    deep.push_str(&" < 1".repeat(100_000));
+    deep.push_str(";\nvoid take(void (*cb)(int));\n");
+    assert!(deep.len() > 400_000);
+    let findings = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || detect_snippet("deep", &deep, vec![], vec![]))
+        .expect("thread")
+        .join()
+        .expect("no overflow");
+    assert!(
+        !by_category(&findings, "global-mutable").is_empty(),
+        "{findings:#?}"
+    );
+    assert!(
+        !by_category(&findings, "function-pointer-decl").is_empty(),
+        "{findings:#?}"
+    );
 }

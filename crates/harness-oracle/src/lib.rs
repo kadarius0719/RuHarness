@@ -186,8 +186,10 @@ pub struct CAbiDifferential;
 ///
 /// Pure hashing — this never runs a subprocess — so the CLI reuses it for
 /// staleness reporting (`harness state status`). Digests:
-/// - `unit_source`: file-set hash of the unit's files plus their transitive
-///   project includes (per `facts`);
+/// - `unit_source`: file-set hash of the files the unit's compile reads
+///   ([`harness_core::sources::unit_closure`]: the facts' include closure
+///   for the folder form; for a file list the resolver's closure, so a
+///   header an ambiguous include lands on is in);
 /// - `driver`: per-file hash of the `driver` param (empty string when the
 ///   unit has no `driver` param);
 /// - `rust_crate`: the closed-list crate digest (`Cargo.toml`, `Cargo.lock`
@@ -200,7 +202,7 @@ pub fn compute_inputs(
     facts: &Facts,
 ) -> Result<VerdictInputs, Error> {
     let ledger = Ledger::of(target);
-    let closure = facts.include_closure(&unit.files);
+    let closure = include_rule::closure(target, facts, &unit.files);
     let unit_source = hash::file_set_hash_on_disk(&target.root, &closure)?;
     let driver = match unit.oracle_param_str("driver") {
         Some(rel) => hash::file_hash(&target.root.join(rel))?,
@@ -646,11 +648,22 @@ pub(crate) fn driver_folders(target: &TargetContext, facts: &Facts, unit: &Unit)
             }
         }
     }
+    // An `-idirafter` folder is searched after the system by the
+    // configuration's own flag: as an `-I` it would shadow the system's
+    // headers of the names it holds too.
+    let after_system: Vec<String> = harness_core::sources::Resolver::of(target)
+        .ok()
+        .flatten()
+        .map(|r| r.after_system().iter().map(|d| clean_rel(d)).collect())
+        .unwrap_or_default();
     for header in include_rule::closure(target, facts, &unit.files)
         .into_iter()
         .filter(|p| p.ends_with(".h"))
     {
-        push(parent(&header));
+        let folder = parent(&header);
+        if !after_system.contains(&clean_rel(&folder)) {
+            push(folder);
+        }
     }
     out
 }
@@ -922,7 +935,7 @@ impl CAbiDifferential {
         // A file-list target's configuration (its flags and each file's
         // folders): `state status` reads a change as a stale verdict. The
         // folder form records none, so its verdicts keep their bytes.
-        if let Some(entry) = harness_core::status::configuration_entry(target) {
+        if let Some(entry) = harness_core::status::configuration_entry(target, unit) {
             inputs.toolchain.push(entry);
         }
         if boundary {

@@ -19,7 +19,43 @@ use std::collections::{BTreeMap, BTreeSet};
 /// consuming unit's `source_hash` via the include closure.
 ///
 /// Deterministic: identical facts yield identical clusters, ids, and order.
+///
+/// Each unit's `source_hash` covers the facts' include closure: right for a
+/// folder target. `harness plan` calls [`compute_units_in`], which hashes a
+/// file-list target's compile closure instead.
 pub fn compute_units(facts: &Facts) -> Result<Vec<ComputedUnit>, Error> {
+    compute_units_with(facts, &mut |files| facts.include_closure(files))
+}
+
+/// [`compute_units`] for the target `ctx`: each unit's `source_hash`
+/// covers the files its compile reads ([`crate::sources::unit_closure`];
+/// the 2026-10-08 triage, decision 11), so for a file-list target a header
+/// an ambiguous include lands on is hashed too. A folder target's hashes
+/// are [`compute_units`]'s, byte for byte.
+pub fn compute_units_in(
+    ctx: &crate::TargetContext,
+    facts: &Facts,
+) -> Result<Vec<ComputedUnit>, Error> {
+    let Ok(Some(resolver)) = crate::sources::Resolver::of(ctx) else {
+        return compute_units(facts);
+    };
+    let root = resolver.root().to_path_buf();
+    // Each file's include names read once for every unit.
+    let mut names: BTreeMap<String, Option<Vec<(String, bool)>>> = BTreeMap::new();
+    compute_units_with(facts, &mut |files| {
+        resolver.closure_with(facts, files, &mut |rel| {
+            names
+                .entry(rel.to_string())
+                .or_insert_with(|| crate::sources::names_on_disk(&root, rel))
+                .clone()
+        })
+    })
+}
+
+fn compute_units_with(
+    facts: &Facts,
+    closure_of: &mut dyn FnMut(&[String]) -> Vec<String>,
+) -> Result<Vec<ComputedUnit>, Error> {
     // Which file defines each symbol (canonical id -> file).
     let sym_file: BTreeMap<&str, &str> = facts
         .symbols
@@ -108,7 +144,7 @@ pub fn compute_units(facts: &Facts) -> Result<Vec<ComputedUnit>, Error> {
                 interface.push(s.signature.clone());
             }
         }
-        let closure = facts.include_closure(&files);
+        let closure = closure_of(&files);
         let pairs: Vec<(String, String)> = closure
             .iter()
             .filter_map(|p| {
