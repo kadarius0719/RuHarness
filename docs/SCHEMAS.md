@@ -1283,7 +1283,8 @@ replaces-changed | rust-changed | accept-interrupted`, `attempt`, `never_started
 step-1 run was under both legs of the floor (fewer than 1e9 instructions and under half a second
 of CPU); never on the C alone.
 `inputs`: `workload`, `program` (the features' program digest), `crates [{id, digest}]` (unit
-rows; a crate that does not build records its real digest), `replaces` (unit rows),
+rows, one; as-it-stands rows, one per held unit; a crate that does not build records its real
+digest), `replaces` (unit rows),
 `program_name`, `units [{id, crate}]` and `left_out [{id, crate, reason}]`
 (every as-it-stands row, set-up ones included; reasons `not-fresh | replaces-mismatch |
 replaces-changed | crate-does-not-build | does-not-link | accept-interrupted`), `recipe`
@@ -1297,8 +1298,13 @@ the row's `replaces` when it holds them). Every list a row holds is capped, its 
 before its entries, and a row over a cap is refused by name ("left_out holds 1000 entries, at
 most 999"): `replaces` ≤ 65 536 paths; `crates`, `units`, `left_out`, a set-up's `runtimes` and
 `units` and a last try's `units` ≤ 999 entries each (perf measures a plan of at most 999 units,
-one slot each); `profile` ≤ 4 settings; `kept` ≤ 4 files. The caps bound what the reader accepts
-and hands on; the parse itself is bounded only by the file's 4 MiB.
+one slot each); `profile` ≤ 4 settings; `kept` ≤ 4 files. A file's rows lists (`c_alone`,
+`as_it_stands`, a unit file's `rows`) hold at most 16 rows each, one per workload (the workloads
+file's own cap; the writer already drops the rows of workloads no longer in it), and a longer list
+is refused by name. `schema_version` is read through that one field, without building the whole
+file first; the file is then parsed once, and the caps are checked after that parse. So the caps
+bound what the reader hands on (to the words, `perf show`, the cockpit and harness-mcp); the
+memory the parse itself takes is bounded only by the file's 4 MiB cap.
 
 **The replace rule** (one, in `harness-core`): a set-up outcome never replaces an earlier row that
 is not itself a set-up row — it is kept beside it as `last_try`; on the C-alone rows the C's own
@@ -1310,15 +1316,14 @@ says when it keeps the baseline). Rows of workloads no longer in the file are dr
 next write.
 
 **Current** iff every input equals today's: the workload's digest, the program digest, the
-program's name, the recipe, the launcher, each unit's crate digest and its `replaces` (unit
-rows), the held units, those left out and the plan's order (as-it-stands rows); the computer
-and the compilers are checked only by `perf show` (never with `--no-check`), never by the
-cockpit or harness-mcp — the computer through the launcher's `perfrun facts`, only when the
-launcher cache is current; the compilers as tool runs (`cc --version`, `rustc -V`; the CLI
+program's name, the recipe, the launcher, each unit's crate digest and its `replaces` (unit rows),
+the held units, those left out and the plan's order (as-it-stands rows); the computer and the
+compilers are checked only by `perf show` (never with `--no-check`, nor when no row is stored),
+never by the cockpit or harness-mcp — the computer through the launcher's `perfrun facts`, only
+when the launcher cache is current; the compilers as tool runs (`cc --version`, `rustc -V`; the CLI
 below), whatever the launcher cache. Each reason has a closed token: `workload | workload-gone |
 program | program-name | recipe | launcher | rust | replaces | left-out | accepted | verified |
-plan-order | computer | compilers`, and the cockpit's own `measuring | too-large |
-input-unusable`.
+plan-order | computer | compilers`, and the cockpit's own `measuring | too-large | input-unusable`.
 
 ## CLI
 
@@ -1327,19 +1332,25 @@ input-unusable`.
 - `harness perf save --expect <blake3|none> --bytes N [--target]` — the text on stdin (exactly N
   bytes, ≤ 64 KiB), saved only when it validates and the file is still the one `--expect` names.
   Exit 0/1.
-- `harness perf run [--target] [--unit ID]… [--workload ID]… [--runs 5–31]
-  [--as-it-stands-only] [--allow-unsandboxed]` — the writer lock (`perf run …` is the holder's
-  command); refuses without workloads, with stale facts ("scan the project first"), unknown ids
-  (naming the known ones). Without `--unit` / `--as-it-stands-only`: the C alone, each measurable
-  unit (verified or merged, verdict green and fresh, no interrupted Accept), and the program as it
-  stands; `--unit` alone builds and links only the units named. Each build step may write only
-  its own folder (the compiles `.perf/obj`, each link its slot, each crate build its `target/`
-  and `Cargo.lock`), and every object and staticlib is checked against its hash before each link.
-  When the C fails on a workload in step 1 (one of its own outcomes, or a SIGKILL perf did not
-  send), that workload's other rows are not run and keep their earlier rows. The progress names
-  each left-out unit in words ("u-tree left out: its crate does not build"); the summary counts
-  only what this run measured, and a row the replace rule kept is said to be kept. Exit 0 when
-  it ran (a difference is a row, not a failure), 1 refused, 2 usage.
+- `harness perf run [--target] [--unit ID]… [--workload ID]… [--runs 5–31] [--as-it-stands-only]
+  [--allow-unsandboxed]` — the writer lock (`perf run …` is the holder's command); refuses without
+  workloads, with stale facts ("scan the project first"), unknown ids (naming the known ones), a
+  plan of more than 999 units (by name, before anything is selected or built), and a link or a
+  non-folder at `migration/perf/units` ("…/migration/perf/units: must be a directory (a link is
+  refused)") — when the run starts, before anything is built, and again before each unit row is
+  written; it never reads through such a folder or removes it. `--as-it-stands-only` with fewer
+  than two measurable units is refused before anything is built, naming the units left out and why
+  ("one measurable unit (u001) — u-tree left out: verify it first", or "no measurable unit …"); the
+  same words when fewer than two units build. Without `--unit` / `--as-it-stands-only`: the C
+  alone, each measurable unit (verified or merged, verdict green and fresh, no interrupted Accept),
+  and the program as it stands; `--unit` alone builds and links only the units named. Each build
+  step may write only its own folder (the compiles `.perf/obj`, each link its slot, each crate
+  build its `target/` and `Cargo.lock`), and every object and staticlib is checked against its hash
+  before each link. When the C fails on a workload in step 1 (one of its own outcomes, or a SIGKILL
+  perf did not send), that workload's other rows are not run and keep their earlier rows. The
+  progress names each left-out unit in words ("u-tree left out: its crate does not build"); the
+  summary counts only what this run measured, and a row the replace rule kept is said to be kept.
+  Exit 0 when it ran (a difference is a row, not a failure), 1 refused, 2 usage.
 - `harness perf show [--target] [--no-check] [--allow-unsandboxed]` — every stored row's words,
   rebuilt, with why it is out of date. Creates and writes nothing in the target; never builds the
   launcher; refuses a link (or a non-folder) at `migration/`, `migration/perf` or
@@ -1348,7 +1359,13 @@ input-unusable`.
   (the tool sandbox, the tool environment, the allowlist, `[oracle] timeout_secs`); "compilers not
   checked" when either is not allowlisted, either run fails, or no sandbox is available and
   `--allow-unsandboxed` was not given. `--no-check` checks neither the computer nor the compilers.
-  Exit 0/1.
+  With no row stored it checks nothing and starts nothing, and says only "nothing measured yet —
+  run harness perf run". Without facts (none, or unreadable) the C is not judged, said once:
+  "perf: the C not checked: no facts — run harness scan", or, when a program-as-it-stands row is
+  stored, "perf: the C and the units the program as it stands holds not checked: no facts — run
+  harness scan" (its held and left-out units are then not judged either); the rest of each row is
+  still judged. A unit's results file that cannot be read does not hide the others: the rows that
+  read are shown, then the error naming the file, exit 1. Exit 0/1.
 - Events (`--json`): `perf-row {side: c | program | unit, unit (unit rows), workload, outcome,
   words}` — `words` is a display-only courtesy (the CLI's line), never parsed.
 
