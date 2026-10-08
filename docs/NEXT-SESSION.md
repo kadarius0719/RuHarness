@@ -33,10 +33,24 @@ change at the switch points below.
   work); the help's Speed section leaves out "Measure the program as it stands".
 
 **The work, in order:**
-1. Read the final reader's report on revision 2.1 (docs/reviews, or the session's scratchpad);
-   fix any wording it names; then build step (a) of the design's §5, as its own worktree branch,
-   with the tests of §4 that belong to it; commit green; (c) next. The map's code lives in
-   harness-oracle, the commands in harness-cli, the cockpit's acts in harness-tui.
+1. **Step (a) of the map's §5 is BEING BUILT** (launched 2026-10-08 from commit 3f54389, revision
+   2.2): four Opus builders at medium effort in their own worktrees — merge each branch when its
+   report says it is green, resolve conflicts by file ownership, run the full gates, then step (c):
+   - `worktree-agent-ab93152a9e0742945` — (a1) the walk's four additions (harness-core walk.rs,
+     the callers) and the `--json` escape fix (harness-cli report.rs, SCHEMAS);
+   - `worktree-agent-a367e9fa49de8404a` — (a2) adoption of a ledger made elsewhere (harness-core
+     module + `TargetContext::load`, `--adopt` on every CLI command and `bench`, the cockpit's
+     dialog, harness-mcp's refusal, the test helper and `$RUHARNESS_ADOPTED`, committed tokens for
+     zopfli and the tractor suite, SCHEMAS' fixed-names table and writer row);
+   - `worktree-agent-ac521dd6b4231da16` — (a3) the `objsyms` extension (kinds, weakness, commons;
+     the `$`-suffix and identifier helpers);
+   - `worktree-agent-ae9dd210f1e7a03c0` — (a4) the map sandbox profile renderer, the targetless
+     runner extracted from harness-oracle bench.rs, the work folder and the children's `PATH` and
+     `RUSTUP_TOOLCHAIN`/`RUSTUP_AUTO_INSTALL`, the unit-crate file check and `build = false` in the
+     harness manifest (harness-oracle lib.rs/exec.rs/sandbox.rs, harness-llm migrate.rs).
+   Still to build in (a) after these: the per-file facts and include folders over one folder and
+   the `project map` command's first form (printing per-file facts; closures come in (b)). Then
+   the usual review of (a)+(c) together, fix passes, mutation checks.
 2. The briefing's M5 after the map's first accepted tool (DECISIONS 2026-10-08).
 
 **Environment:** as the previous kickoff says (below). Test downloads only in
