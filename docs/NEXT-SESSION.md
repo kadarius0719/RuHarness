@@ -74,6 +74,9 @@ change at the switch points below.
    harness-scan, harness-detect, harness-core features.rs/planner.rs, harness-llm trajectory.rs),
    run the full gates and `bench check --suite targets/tractor --replay --adopt`; then (b), (d),
    (e), (f), (g); then the review of (a)+(c) together, fix passes, mutation checks.
+   Open from part 1 for step (b): the project lock for `sync-runtime`'s shared `AGENTS.md`; the
+   features and workloads error messages still spell `migration/features/…` as fixed text (wrong
+   wording for a mapped tool); `project map` takes no `--tool` (it maps the whole project).
 2. The briefing's M5 after the map's first accepted tool (DECISIONS 2026-10-08).
 
 **Environment:** as the previous kickoff says (below). Test downloads only in
