@@ -1,6 +1,6 @@
 # Next session — kickoff (from 2026-10-08, late)
 
-Resume RuHarness on `main` (7767a1b, everything below merged and pushed; 1 646 tests, fmt and
+Resume RuHarness on `main` (everything below merged and pushed; 1 646 tests, fmt and
 clippy clean, `bench check --replay` green). Models and effort as in CLAUDE.md.
 
 **Where things stand, in plain words.** The project map is built end to end: `harness project
@@ -25,9 +25,11 @@ Proof before more building (the person's own rule).
    guide's Part 12, past one unit — ideally to several promoted units — with every stumble
    written down. That run decides what comes next. Step (g) of the map (record the first accepted
    tool's features before its first unit moves) happens inside it.
-2. **A wording pass** (small, Opus medium): the four items the docs builder judged wrong (below),
-   the ask prompt's "in this order" (keep or drop with the trace keys re-recorded), `accept`
-   link-checking every program again, the earlier passes' leftovers (below).
+2. **The wording pass is DONE** (c3a85d2, fast-forwarded; its eight sentences and the tests and
+   docs that pin them). Still open, small: the ask prompt's "in this order" (keep, or drop with
+   the trace keys re-recorded), `accept` link-checking every program again, "did not link" on
+   ask's answer line could add "when the map was made" too, and the earlier passes' leftovers
+   (below in the trail).
 3. **Then the briefing's M5**, or the direction the map opens (design §3.12), as the person decides
    after the run.
 
