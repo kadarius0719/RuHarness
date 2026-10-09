@@ -3131,3 +3131,50 @@ fix passes G (the map, ask and accept) and H (the person's side and step (f)'s d
 
 **Gates on 0682103.** fmt, clippy, 1 624 tests green; `bench check --suite targets/tractor
 --replay --jobs 6 --adopt`: 198 reproduce, 2 expected divergences, 0 problems, no regression.
+
+## 2026-10-08 — Fix passes G and H, the cockpit's narrator, the docs of step (f): the map is complete
+
+**Fix pass G, the map, ask and accept.** `accept` takes nothing from the map file: it maps the
+project again, recomputes programs, closures, duplicate sets and libraries with their link checks,
+refuses when the file disagrees, and counts a set settled only when linking again finds exactly
+one choice that links. Accepting again keeps every key and section the person added (the closing
+line names what was kept). A program's written file carries a commented `[oracle.whole_program]`
+example and the screen says the check is off until it is filled in. While the configuration is a
+guess, the map's closing line shows `config.toml`'s lines and does not name `accept`. `ask` says
+"the map did not link these choices (too many to try)" for a set over the limit, tells a guessed
+map with nothing held to use `--build`, and names a driver as such. The cockpit's acts follow the
+open question (Ask runs `--build` under a guess; Accept says a stated configuration is needed
+before any picker; the picker skips an unreached set and shows the reply's advice labelled as the
+model's, none preselected); the pre-terminal project mode now also opens when tools exist,
+leading with "Open <id> — <program path>". Library ids follow their files. The map file records,
+per accepted tool, what changed and the sentence to say; `state status`, the cockpit and
+harness-mcp read that record. Slices sent to a model are capped in bytes with a one-pass search;
+kept reply items are re-validated; repeated JSON keys and mark-only names are refused; the
+"fixed field order" sentence left the design. `config.toml` refusals come all at once with the
+relative path, the joined-`-I` hint and "warning or tuning flags: drop them". `migration/tools`
+must be a real folder before any lock.
+
+**Fix pass H, the person's side and step (f).** `verify` and `promote` print an unconfigured
+whole-program check as "[SKIP] whole-program — not run: …" while the recorded verdict is byte for
+byte what it was (zopfli's and two bench cases' verdicts proved identical). The hand-off envelope
+is stated once in SCHEMAS and named on every awaiting line; a response that is not the envelope
+is refused by name; the awaiting lines say to pass `--model` before answering, since the model's
+name is part of the request key. `harness project --help` gives the order; scan and plan print
+their next step; gen-driver says what it is doing; `state status` names the only tool it read;
+harness-mcp's status note carries the notice. README gained "Start from your own C project",
+the tutorial "Mapping a whole C project", the testing guide Part 12 "liblzg by map" (every
+command run on a real copy, the real lines pasted), SCHEMAS a `config.toml` section. The cockpit's
+narrator counts an unrun check as "not run" (fixtures and goldens re-rendered). A docs pass
+re-ran Part 12 on the merged binary so every quoted screen matches.
+
+**Gates on 91ec836 and after.** fmt, clippy, 1 646 tests green; `bench check --suite
+targets/tractor --replay --jobs 6 --adopt`: 198 reproduce, 2 expected divergences, 0 problems,
+no regression.
+
+**Where the map stands.** Steps (a) to (f) of docs/PROJECT-MAP-DESIGN.md §5 are built, reviewed
+in three rounds and fixed; a newcomer reached a verified unit on liblzg and on zopfli from a cold
+start by the docs alone, and the zopfli tool accepted from the map is byte-identical to the
+hand-written target. Step (g) is a process step: after the first accepted tool, record its
+features before its first unit moves. Open, in words, in docs/NEXT-SESSION.md: four wording
+items, the ask prompt's "in this order", `accept` link-checking every program again, the map
+profile's read allow-list, and the leftovers from the earlier passes.
