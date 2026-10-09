@@ -161,10 +161,15 @@ change at the switch points below.
    the hand-off envelope stated once and refused plainly, the awaiting lines, project --help's
    order, scan/plan next steps, gen-driver's progress line, harness-mcp's notice, README's "Start
    from your own C project", the tutorial's chapter, the testing guide's Part 12 "liblzg by map",
-   SCHEMAS' config.toml section). Merge each when green, reconcile the docs' quoted sentences
-   with G's words, full gates, bench replay, DECISIONS, fast-forward main; then (g) — record the
-   first accepted tool's features before its first unit moves — and the person's own cold-start
-   run.
+   SCHEMAS' config.toml section). **Fix pass H is MERGED** (lint clean; the workspace tests were
+   running at the time of writing); its docs quote by meaning the map's closing line under a
+   guess, the config.toml error words, re-accept keeping `[oracle.whole_program]`, the cockpit's
+   Ask under a guess, the "what changed" and notice wording — all G's: reconcile README, TUTORIAL,
+   TESTING-GUIDE Steps 12.2/12.3/12.10/12.11 and the troubleshooting rows with G's exact words at
+   G's merge. A small builder makes the cockpit's narrator show the unrun whole-program check as
+   not run (its fixtures too). Then: G's merge, full gates, bench replay, DECISIONS, fast-forward
+   main; then (g) — record the first accepted tool's features before its first unit moves — and
+   the person's own cold-start run.
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
    toolchain line — folder-form `inputs` stay untouched.
