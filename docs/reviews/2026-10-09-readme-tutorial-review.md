@@ -488,3 +488,250 @@ Two writers in parallel (README; tutorial), each keeping every real command and 
 running what they quote; the guide's two small corrections (Known quirk 1, the `◐` row) go with
 the tutorial's writer. Then one fresh-eyes read over README → tutorial → the guide's first 120
 lines as a newcomer would meet them, a fix pass, and the push.
+
+
+---
+
+# The fresh-eyes read of the rewritten README and tutorial (2026-10-09)
+
+A reader who had not seen the old documents or the reviews arrived at the README as a non-programmer, followed where it sent them (the tutorial, the guide's Part 0), and did Quick start and the own-project steps on fresh copies. Every promised screen came true. Their findings are fixed in the pass that follows.
+
+# Fresh eyes, second reader: README, tutorial and guide Part 0 at 7c250e7
+
+Reader: a careful non-programmer. Copies: the repository cloned into the scratchpad, programs
+built there with `cargo install --offline --root`, trust file at a scratch path, a copy of the
+liblzg download. No model called; the one hand-off answered with guide Step 12.4's own text.
+
+## My path through the documents
+
+1. README lines 1-291. "Start here" sent me (never programmed) to guide Part 0, or the tutorial.
+2. The tutorial (line 9) says to read its sections 1-2 before Part 0, so I read it whole (about
+   the hour it promises), then the guide's opening and Part 0 (lines 1-893).
+3. Ran Part 0's safe steps, the README Quick start, "Your own C project" on liblzg, and the
+   "Using AI" hand-off box; then read the README reference and tutorial sections 15-16 to look up.
+
+## Run log (matched? / knew what to do next?)
+
+Guide Part 0
+- 0.1-0.6 Terminal, `arm64`, the Xcode path, `Apple clang version 21.0.0 …`, `nm` and
+  `sandbox-exec`, git 2.50.1: all matched / yes.
+- 0.7 `git config user.name` printed nothing: the step's own row applies; I did not run the two
+  `--global` boxes (they change settings) / yes, the row says exactly what to do.
+- 0.8 clone replaced by a local clone (no download); 0.15 sign-in and 0.17 pull skipped / n.a.
+- 0.9-0.13 rustup 1.29.0, `~/.cargo/bin/cargo`, `stable-aarch64-apple-darwin (overridden by …)`,
+  rustc 1.94.1, jq-1.8.1, `2.1.293 (Claude Code)`: all matched / yes.
+- 0.14 printed `ANTHROPIC_BASE_URL` above `check done`: not matched, but the step warns that
+  inside another app's terminal "that app's own settings show up here", which is my case / yes.
+- 0.16 clean, 0.18 `ok`, 0.19-0.20 three installs, three paths, `harness 0.1.0`: matched / yes.
+- 0.21 the `adopt:` and `status:` lines exactly; 0.22 16 `[PASS]`, GREEN, `exit=0` in 12 s; 0.23
+  `0`: matched / yes.
+
+README Quick start (on the same copy, after Part 0)
+- Step 1 build: done in Part 0 / yes.
+- Step 2 adopt: first run matched the two quoted lines; run again it printed `already trusted on
+  this computer; nothing deleted`, which the step's "If not" covers / yes.
+- Step 3: 16 `[PASS]`, GREEN, `exit=0`; the elision "(10 more [PASS] lines …)" adds up / yes.
+- Step 4: grep showed line 211; edit (by sed; I cannot drive nano) gave `= 2;`; both quoted
+  `[FAIL]` lines, `RED — status demoted verified -> in-progress`, `exit=10` / yes.
+- Step 5 `git checkout targets/zopfli` -> `Updated 4 paths from the index`: matched / yes.
+- Step 6: the three `plan` lines exactly; observations.md showed `findings: 31` and the `… | 51 |`
+  row: matched / no: nothing says what to do after step 6.
+
+README "Your own C project" (liblzg copy)
+- Making the copy: the README says "work on a copy" but not how; I used `cp -R` / no.
+- Step 1 `harness project map`: `programs: 3`, `link check: linked`, `not linked while d1 is
+  open`, `duplicate set d1 (…): held`, closing "the configuration is a guess…": matched / yes.
+- Step 2: flags copied literally from `src/tools/Makefile`, as the step says, were refused
+  (`-c`, `-I../include`, `-funroll-loops`, `-W`, `-Wall`, each named); the README's lines: OK / yes.
+- Step 3: the quoted second line, plus "-O3 is recorded only, never applied" (a surprise); last
+  line names `project accept`: matched / yes.
+- Step 4: stopped at `error: awaiting response: …/traces/d9e8ca06.response.json`, exit 1: matched;
+  answered with Step 12.4's box, advice recorded / yes, only because I went to the guide.
+- Step 5: `accept t-lzg` printed the quoted `wrote …` line (after an unmentioned "whole-program
+  check is off" line); `accept t-unlzg` refused as quoted, then wrote with `--keep d1=d1.2` /
+  mostly yes (unsure whether the t-unlzg commands were for running or only reading).
+- Step 6 `scan` -> `scan: 6 files, 18 symbols, 42 refs`, `plan` -> the quoted order; `gen-driver
+  u-version --model by-hand` stopped as promised; `migrate` refused with ``validation is
+  `missing` ``; `verify` refused with `has no [unit.oracle] configured`: all matched / no: the
+  README ends here and sends me to guide Steps 12.7-12.14.
+
+README "Using AI" box: `migrate … --model my-test` stopped at the hand-off, exit 1; `git clean`
+printed `Removing …/attempts/a-b4f9ea6e7870/`: matched / yes.
+
+How far: all safe Part 0 steps, all Quick start steps, all "Your own C project" steps up to the
+README's hand-over to the guide (a driver hand-off left unanswered).
+
+## Findings
+
+### Stops me
+
+1. README line 53: "To download RuHarness (the guide's Step 0.8; not run here, like step 1):".
+   Right before the very first command box, "not run here, like step 1" reads as "do not run
+   this", and also as "step 1 is not run either". It is a note about how the README was tested,
+   leaking to the reader. Fix: drop the parenthesis's second half, or say "(skip it if you already
+   have the folder)".
+
+2. README lines 191-240, "Your own C project": the commands are written inside sentences, in the
+   same backtick style as the output I should see (step 6 holds five commands and four expected
+   outputs in one paragraph). The guide's first rule is "copy a Run box whole"; here there is no
+   box, and I could not tell what to type from what to expect. Fix: one box per command, as in
+   Quick start, with "You should see" after each.
+
+3. README line 188: "Work on a copy of the project, from inside its folder (`cd` there first)."
+   No command makes the copy, and `cd` is never explained in the README. A non-programmer stops
+   here. Fix: give the two boxes (`cp -R <project> ~/my-copy` and `cd ~/my-copy`), or point at
+   guide Step 12.1 by name.
+
+4. README lines 117-118 (and guide line 791): "…prints the same bytes as the C … and runs clean
+   under memory checkers", with "the Rust" as the subject. The tutorial (line 166) says the
+   opposite and is right: the `sanitizers` check "checks the C and the driver, not the Rust" (the
+   oracle's own comment says stable Rust has no sanitizer). This is the one place I was told
+   something untrue about what GREEN proves. Fix: "and the driver runs clean under memory
+   checkers on the C side".
+
+5. README line 36 ("Nothing a model wrote becomes part of the program until it is GREEN *and*
+   you accept it") and the diagram's "accept / yours to decide" (line 41), against the README's
+   own reference (line 306, "Green is promoted"), the tutorial line 187 and guide 12B: on the
+   command line `harness migrate` accepts a GREEN result by itself. The newcomer half never says
+   so. Fix: add to line 36 "(in the cockpit; on the command line, typing `migrate` is your yes,
+   unless you add `--no-promote`)".
+
+### Slows me
+
+6. README line 238: the whole-program example "such as `args = ["-c"]`" sits in the liblzg walk,
+   but liblzg's `lzg` has no `-c` flag: it would take `-c` as the input file name, so the check
+   would compare two identical "cannot open" runs and test nothing. The guide uses `["-9"]`
+   (lines 1538, 6263), the tutorial `["-9"]` (line 310). (`-c` comes from the comment `accept`
+   writes, which is a generic example.) Fix: say `args = ["-9"]` here.
+
+7. README lines 39-41 versus tutorial lines 69-76: two different "six steps". The README's are
+   scan, plan, driver, migrate, verify, accept; the tutorial's are scan, plan, detect, observe,
+   migrate, verify, and it says "only two of them involve an AI model", although its own section
+   5 says the driver is asked of a model too. Fix: one list in both, or say the tutorial's six are
+   "the commands" and name gen-driver as a third model step.
+
+8. README line 199 says to "take [the flags] from the project's `Makefile`", but liblzg's
+   Makefile says `-I../include` (relative to `src/tools`) and the README's answer is
+   `-Isrc/include`, with no word on why they differ; it also only warns about warning flags,
+   while `-c` and `-funroll-loops` are refused too. The harness's refusal message did rescue me
+   (it names every flag and why). Fix: one sentence: "write folders from the project's top
+   folder, and keep only `-I`, `-D` and `-O` flags".
+
+9. README line 199 calls `-O` "a speed level" and the box includes `-O3`; the map then says
+   "-O3 is recorded only, never applied". Unexpected. Fix: add "(recorded, not used)" after
+   `-O3`, or explain in step 3's "You should see".
+
+10. README line 228 and step 5 generally: `--keep d1=d1.2` is given without saying what `d1.1`
+    and `d1.2` are or why d1.2 is the one to keep. For my own project, how would I decide? Fix:
+    "the map lists the files as d1.1, d1.2 (here the small decoder and the library's own); keep
+    the one the project's own build uses".
+
+11. README line 233 uses `--model by-hand` for the driver hand-off, then sends me to guide Steps
+    12.7-12.14, which use `--model guide-written` and insist on the same word both times. If I
+    skip 12.7 because I already ran it, my answer is filed under the by-hand question and 12.12
+    asks a new one. The refusal from `migrate` also suggests `harness gen-driver u-version --tool
+    t-lzg` with no `--model` (which, per tutorial line 125, would record `claude-sonnet-5` as the
+    author). Fix: use `guide-written` in the README too.
+
+12. README line 293: "a newcomer can stop reading here". When I came back to look something up,
+    the command table (lines 301-318) is written for developers ("include closure", "C-ABI
+    shim", "crash-safe two-rename", "nonce-delimited"). The tutorial's section 16 is the friendly
+    version, but the rule line does not say so. Fix: "Newcomers: look things up in
+    docs/TUTORIAL.md section 16 instead."
+
+13. README lines 17-19 offer "Part 0" and "the tutorial" as alternatives; the tutorial (line 9)
+    says to read its sections 1 and 2 before Part 0. I only learned the order by opening the
+    tutorial. Fix: "Never programmed? Read the tutorial's sections 1-3 (20 minutes), then follow
+    the guide from Part 0."
+
+14. Words the README uses before (or without) explaining them, for a reader who never programmed:
+    - line 4 "memory mistakes" (tutorial line 19 explains it; README never does);
+    - lines 56, 59, 188 `cd`, and `~` (the guide explains `~` at line 82);
+    - lines 64, 72 `--locked` and "the lock file";
+    - lines 107-108 "capability", "asm", "allowlisted libc", "source lint" (lint is explained only
+      in the guide, line 793);
+    - line 125 `grep`, line 132 `-w`;
+    - line 141 "lens" (lengths);
+    - line 169 "differential driver" ("differential" is never defined in the README);
+    - line 175 "findings";
+    - lines 201-209 `EOF` and what Terminal shows while the box pastes (the guide says
+      `heredoc>`);
+    - line 221 `<key>`; line 226 `git diff`; line 235 `[unit.oracle]`;
+    - line 262 "JSON" and the token fields of the envelope.
+
+### Polish
+
+15. README line 23: "How it works, in ten lines" has eight numbered points. Fix: "in eight points".
+
+16. README line 17: "30-60 minutes, then … 4-5 hours" reads as 4-5 hours after setup; the guide
+    (line 31) says 4-5 hours altogether, Part 0 included. Fix: "(about 4-5 hours in all, setup
+    included)".
+
+17. README lines 12-13 "What it touches … one folder, `migration/`": adopting also writes
+    `~/Library/Application Support/ruharness/adopted.toml` (line 91 says so later) and the build
+    puts three programs in `~/.cargo/bin`. Fix: add "plus one small trust file in your Library
+    folder".
+
+18. README line 34 and line 338: the sandbox has "no access to your home folder"; guide line 332
+    says it lets tools read `~/.cargo` and `~/.rustup`. Fix: "no access to your personal files"
+    (the tutorial's wording, line 139).
+
+19. README line 82: "these two lines first … then a `status:` line per unit"; there are also a
+    `facts` line, an `attempts` line and a closing line telling me to run `harness verify`. Fix:
+    "then the status lines, ending with one that tells you to run step 3".
+
+20. README line 129: on a Mac `nano` opens pico (the screen header says "UW PICO"); the README does
+    not say so, the guide does (line 892). Fix: add "(its title says pico; that is normal)".
+
+21. README steps 5 and 6 (lines 152-176) and the cockpit paragraph (lines 244-249) have no "If
+    not"; step 6 ends without a "you are done: next, …". Fix: one closing line pointing to "Your
+    own C project" or guide Part 1.
+
+22. README line 224 quotes the `wrote …` line but not the "whole-program check is off …" line
+    printed before it; lines 230-232 go to `u-version` though the plan suggests `u-checksum`,
+    without saying why (the guide: "the smallest unit"). Fix: mention both in a few words.
+
+23. README line 356: "it uses the `harness` installed beside it", against its own line 351
+    ("default on PATH, else next to the cockpit"), `harness-tui --help`, and guide line 876.
+    Fix: "it uses the `harness` first on your PATH".
+
+24. README line 270: providers.example.toml "shows one" profile; it holds two
+    (`ollama-anthropic`, `ollama-openai`), and the model `llama3.2-1b-32k` has to be created
+    first (the file's comment shows how). Fix: "shows two" and "create the model as its comment
+    shows".
+
+25. The `migrate` refusal (program text) calls a missing driver "stale" (``unit `u-version` is
+    stale: its generated driver's validation is `missing` ``), while the tutorial (line 249)
+    defines stale as "something changed after the record was made". Fix in the program's words,
+    or one line in the tutorial's section 16 table.
+
+26. Tutorial line 9: the reading-order sentence is one long run-on; a three-column table would be
+    easier. Tutorial line 478 sends a "no sandbox" reader to section 9, which only mentions
+    `--allow-unsandboxed` in passing; the useful text is at line 400. Fix: point at section 16.
+
+## Within the first screen of the README
+
+- What it is: yes, lines 3-6 say it plainly.
+- Whether it is for me: mostly; "anyone with a C program" plus "walks a careful non-programmer".
+- What it does to my files: yes (line 12), though not quite complete (finding 17).
+- What to do first: yes, four clear doors, but not their order (finding 13), and the first box
+  says "not run here" (finding 1).
+
+## What was good
+
+- Every count the README promised came true: 11 units, 16 `[PASS]`, the exact elision of 10,
+  `exit=0` and `exit=10`, `Updated 4 paths`, `findings: 31`, score 51, `scan: 6 files, 18
+  symbols, 42 refs`, the plan order, `programs: 3`, the hand-off key paths and the refusals.
+  Twenty-five steps, no surprise output except "-O3 never applied".
+- The plant-a-bug experiment is excellent: one keystroke, and the judge catches it on two
+  checks with the exact byte. It made the idea of the judge real in five minutes.
+- "Meant to stop" before every hand-off: the `error:` and exit 1 never frightened me.
+- The harness's own refusals are teachers: the config error named every bad flag and why, and
+  `accept t-unlzg` told me exactly what `--keep` to write.
+- The tutorial reads well for a non-programmer: section 1 (programs, compiling, linking) and
+  section 7's "GREEN is only as good as the tests" are the clearest explanations in the project.
+  Every menu label and symbol in its appendix exists in the cockpit's code.
+- Guide Part 0 is long but never left me guessing: every step has its "If you do not see that"
+  row, and Step 0.14 even predicted my odd result.
+- Exit codes, the hand-off and building/linking are explained in more than one place, and those
+  repeats agree with each other; only findings 4 and 7 disagree.
