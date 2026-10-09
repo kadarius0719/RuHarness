@@ -1,688 +1,460 @@
 # RuHarness
 
-A harness that migrates existing codebases to safe, idiomatic Rust **incrementally
-and verifiably** — LLM agents supply judgment, deterministic tooling supplies
-measurement, and a differential oracle is the only definition of done.
+RuHarness moves a program written in **C**, an older programming language, to **Rust**, a newer
+one that rules out a whole family of memory mistakes. It moves one piece at a time, and proves each
+piece behaves the same as the C it replaces by running both and comparing what they print. An AI
+model may write the Rust; it never decides whether the Rust is right.
 
-**Phase 1 (current): C → Rust.** C is the starting point because the verification
-oracle is cheapest there: the migrated Rust exposes the identical C ABI, so old and
-new implementations can be differentially tested behind the same interface, and the
-project keeps building and passing its tests as a mixed C/Rust link at every commit.
-Phase 2 (later) targets dynamic languages, where types and ownership must be
-invented rather than translated — same skeleton, different planner and oracle.
+- **Who it is for.** Anyone with a C program they want in Rust without reading every line of the
+  translation. The testing guide walks a careful non-programmer through it.
+- **Where it runs.** A Mac. On Linux it runs only without its safety box (the *sandbox*, below);
+  Windows has not been tried.
+- **What it touches.** It adds one folder, `migration/`, inside the project. Your C files are
+  never changed.
 
-## Core principles
+## Start here
 
-- **The oracle is the product.** Models are swappable commodities; the verification
-  machinery is the durable value. "Compiles and passes the oracle" is the *only*
-  definition of done for a migrated unit — never an agent's judgment of correctness.
-- **State lives on disk, not in conversation.** All pipeline state is committed
-  plain text in the target repo (the *ledger*); anything binary or regenerable is a
-  derived, gitignored cache. Any agent, from any provider, resumes any stage cold by
-  reading the ledger — and every `verified` claim is **content-bound**: verdicts
-  record blake3 digests of exactly what was tested.
-- **Deterministic tools measure; agents interpret.** Parsing, graph construction,
-  planning order, test execution, and diffing are plain code with byte-reproducible
-  output. LLMs rank, explain, plan, and write code — nothing a script could do.
-- **Provider-agnostic by construction; migrate in dependency order behind an FFI
-  seam; unsafe Rust only at the boundary shim.**
+- **Never programmed?** Follow the testing guide from [Part 0](docs/TESTING-GUIDE.md#part-0--get-your-mac-ready):
+  it sets up your Mac (30–60 minutes), then walks a real migration with every screen (4–5 hours).
+- **Want the ideas first?** Read [docs/TUTORIAL.md](docs/TUTORIAL.md). It asks you to run nothing.
+- **Tools already set up?** Do the [Quick start](#quick-start-the-built-in-example) below.
+- **Your own C project?** The section after it, [Your own C project](#your-own-c-project).
 
-The normative ledger schemas are in [docs/SCHEMAS.md](docs/SCHEMAS.md); every
-engineering decision, research spike, and milestone handoff is in
-[DECISIONS.md](DECISIONS.md).
+## How it works, in ten lines
 
-## Status
+1. The program is cut into **units**: pieces (usually one C file each) that move to Rust as a whole.
+2. For one unit, a **model** (an AI such as Claude) writes the Rust; the rest of the program stays C.
+3. The Rust keeps the C's **function** names (a function is a named piece of code other files
+   call), so it drops into the program in place of the C file.
+4. The **judge** (the files call it the **oracle**) runs a **driver**, a small test program that
+   calls the unit with fixed inputs and prints every result, once with the C and once with the
+   Rust; then the whole program both ways. The outputs must match byte for byte (letter for letter).
+5. Every check passes: the **verdict** is **GREEN**. One fails: **RED**.
+6. Everything is recorded as plain text in the project's **ledger**, its `migration/` folder.
+7. Code a model wrote runs only in a **sandbox**: a locked-down space with no network, no access to
+   your home folder, and a time limit.
+8. Nothing a model wrote becomes part of the program until it is GREEN *and* you accept it.
 
-| Milestone | Scope | Status |
-|---|---|---|
-| **M0** — end-to-end thread | One leaf unit migrated and differentially verified | ✅ |
-| **M1** — ledger + schemas | Fact model, plan, content-bound verdicts, multi-unit ordering, workspace, CI | ✅ |
-| **M2** — observer | Gotcha detectors, risk scoring, LLM triage, human review loop, runtime-view sync | ✅ |
-| **M3** — executor + provider #2 | `harness migrate` (translate → oracle → repair), sandboxed execution, two wire adapters proven live | ✅ |
-| **M4** — benchmark | TRACTOR B01 library suite (100 cases), LLM driver generation with C-vs-C self-validation, held-out scoring with the corpus's own runners, scores as regression suite | ✅ |
-| **M5** — extension proof | External detector plugin + `EXTENDING.md` | — |
-| **M6+** — Phase 2 spike | Second language frontend, golden-test oracle | — |
-
-The working target is a vendored [zopfli](https://github.com/google/zopfli) (pinned
-commit in `DECISIONS.md`). Its plan currently holds 11 units in dependency order;
-`u001-katajainen` (length-limited Huffman codes) is migrated to safe Rust behind the
-identical C ABI and oracle-verified, with zero human-written Rust.
-
-**M4 benchmark result** (DARPA TRACTOR public corpus v2, Battery-01 library cases,
-macOS arm64, recorded in `targets/tractor/scores.json`). Headline = per-case strict
-pass (every non-UB held-out vector passes) over scorable cases:
-
-| Split | Strict pass | Oracle-verified | Blind spots | Non-UB vectors |
-|---|---|---|---|---|
-| public (80 cases) | **70/77** (90.9%) | 70 | 0 | 908/950 |
-| released-hidden (20 cases) | **15/17** (88.2%) | 16 | 1 | 83/87 |
-
-A *blind spot* is a unit the oracle verified that still fails a held-out vector:
-exactly what the benchmark exists to find. M4 found three, all diagnosed in
-`DECISIONS.md`: one was a real oracle hole (stderr was not compared) — fixed, the unit
-re-migrated; one was the corpus's own undefined behavior — its two vectors are now
-excused, with disclosure, by a sanitized-C pass (`unmarked-UB`), which leaves that case
-unscorable; one (an FFI-boundary bug in the Rust) remains open. M4 recorded 14/18.
-These are public-vector scores (the vectors predate the answering models' training cutoff),
-**not comparable** to the First TRACTOR Evaluation Report (different case set,
-platform and scoring harness). See `targets/tractor/README.md` for what a score means.
-
-## How it works, in plain English
-
-For a full guide written for non-technical readers — how it works, the cockpit, the chat
-and the commands — see [docs/TUTORIAL.md](docs/TUTORIAL.md).
-
-**The problem.** You have C code you want in Rust. An AI model can write the Rust,
-but you can't trust it: it may compile and still behave differently. So the question
-this project answers is not "can a model translate C?" but **"how do we *know* a
-translation is right without reading it?"**
-
-**The idea.** Translate one small piece at a time, and keep the rest of the program
-in C. The new Rust piece exposes exactly the same C function names and signatures, so
-it can be dropped into the program in place of the C file it replaces. Then run the
-old and the new side by side and compare.
-
-There are three moving parts:
-
-1. **The harness** — the `harness` command-line tool in this repo. It is ordinary,
-   deterministic code: it reads the C, works out which files depend on which, decides
-   a safe order to migrate them, asks a model for a translation, and keeps records.
-   It never *judges* whether a translation is correct.
-2. **The oracle** — the judge. For one piece ("unit") it:
-   - builds a small test program twice — once linked with the original C, once with
-     the new Rust — feeds both ~500 identical inputs, and requires the outputs to
-     match **byte for byte**;
-   - builds the *whole* real program both ways (all C vs. C-with-the-Rust-piece) and
-     requires identical output on sample files;
-   - checks the Rust library exports *only* the functions it is supposed to (so it
-     can't cheat by replacing `printf`), and runs the C side under memory checkers.
-
-   All green → the unit is **verified**. Anything else → **red**. That is the only
-   definition of "done" — nobody's opinion, including the model's, counts.
-3. **The ledger** — a folder of plain text files inside the target project
-   (`targets/zopfli/migration/`). Everything the harness knows lives there: the facts
-   it scanned, the plan, every verdict, every attempt. Nothing important lives in a
-   chat window, so anyone (or any AI agent) can pick the work up cold by reading it.
-   Verdicts record fingerprints (hashes) of exactly what was tested, so "verified"
-   can't silently go stale — if the code changes, `harness state status` says so.
-
-**The flow:**
-
-```
-scan ──▶ plan ──▶ detect ──▶ observe ──▶ migrate ──▶ verify
-read C   order    flag risky   AI reviews   AI writes    the oracle
-         units    C patterns   the flags    Rust + tests  judges it
+```text
+scan ──▶  plan ──▶   driver ──▶ migrate ──▶ verify ──▶ accept
+read C    cut into   a test     a model     the judge  yours
+          units      program    writes Rust compares   to decide
 ```
 
-**Why it's safe to run.** Model-written code is treated as hostile: it is compiled and
-run inside a sandbox (no network, can't read your home folder, time-limited), and the
-project being migrated can't choose where your API key is sent — that lives in *your*
-config, not the project's.
+## Quick start: the built-in example
 
-## Quick start (5 minutes, no AI or API key needed)
+An experiment in six steps on **zopfli**, Google's compression program, which comes with RuHarness
+in `targets/zopfli`; one unit, `u001-katajainen`, is already in Rust. No AI and no API key (a secret
+code that bills an AI service to a paid account) are needed.
 
-You need Rust and a C compiler (on a Mac: `xcode-select --install`). From the repo
-root:
+**What you need.** The guide's Part 0 done; or Apple's developer tools (`xcode-select --install`),
+Rust ([rustup.rs](https://rustup.rs)) and git (a tool that keeps every saved version of a
+project's files). Each box is one **command**: paste it into the Terminal app, press Return. To
+download RuHarness (the guide's Step 0.8; not run here, like step 1):
 
-**1. Install the tool**
 ```bash
-cargo install --path crates/harness-cli
+git clone https://github.com/kadarius0719/RuHarness.git ~/code/RuHarness && cd ~/code/RuHarness
 ```
 
-**2. See the state of the migration** — what's verified, what's pending, is anything stale
+Every command below runs inside that folder: if you already have it, run `cd ~/code/RuHarness`.
+
+**1. Build and install the three programs** with cargo, Rust's build tool (guide Step 0.19).
+
 ```bash
-harness state status --target targets/zopfli
+cargo install --locked --path crates/harness-cli
+cargo install --locked --path crates/harness-tui
+cargo install --locked --path crates/harness-mcp
 ```
 
-**3. Run the judge on the piece that's already migrated** — expect eight `PASS` lines and `GREEN`
+*You should see* many `Compiling` lines, each install ending `` (executable `harness`) ``, then
+`harness-tui`, then `harness-mcp`; minutes each the first time. *What it means:* `harness` (the
+command-line tool), `harness-tui` (the **cockpit**, a full-screen view with an AI chat) and
+`harness-mcp` (the chat's connector) are in `~/.cargo/bin`. *If not:* a message that the lock file
+needs updating: run the line again without `--locked`.
+
+**2. Trust the example's records, once.** `state status` is the "where am I?" command; `--target`
+names the project.
+
 ```bash
-harness verify u001-katajainen --target targets/zopfli
+harness state status --target targets/zopfli --adopt
 ```
 
-**4. Watch it catch a bug.** Open
-`targets/zopfli/migration/units/u001-katajainen/katajainen_rs/src/lib.rs`, find
-`bitlengths[leaves[0].count as usize] = 1;` and change the `1` to `2`. Run step 3
-again: `differential-driver` now `FAIL`s, the verdict is `RED`, and the unit is demoted
-from `verified`. Undo everything with:
+*You should see* these two lines first (`<you>` is your Mac user name), then a `status:` line per unit:
+
+```text
+adopt: /Users/<you>/code/RuHarness/targets/zopfli is now trusted on this computer (11 units, 1 verified)
+adopt: 1 verified unit came with it, marked "made elsewhere" until you run `harness verify <unit> --target targets/zopfli` here (`harness state status --target targets/zopfli` lists them)
+```
+
+*What it means:* the judge builds and runs the code a ledger holds, so the first time the harness
+meets a ledger made on another computer it asks once; `--adopt` is your yes, kept in
+`~/Library/Application Support/ruharness/adopted.toml`. *If not:* `adopt: … is already trusted on
+this computer; nothing deleted` is fine; `error: … is not a harness target` means you are not in
+`~/code/RuHarness`.
+
+**3. Run the judge on the unit already in Rust**, and print how it ended.
+
+```bash
+harness verify u001-katajainen --target targets/zopfli; echo "exit=$?"
+```
+
+*You should see*, after 15 seconds or so, 16 `[PASS]` lines (8 checks, then 8 of zopfli's
+**features**, runs of the whole program with fixed options), `GREEN` and `exit=0`:
+
+```text
+verify: running your 8 feature scenarios after the other checks
+verify: [PASS] symbol-set — 1 exported symbol(s) match the unit's symbols exactly
+verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm
+verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean
+verify: [PASS] differential-driver — 183832 bytes identical
+verify: [PASS] whole-program:sample_text.txt — 205 bytes identical
+… (10 more [PASS] lines: two more sample files, sanitizers, 7 more features)
+verify: [PASS] feature:no-file/missing — exit 0; stdout empty; stderr 29 bytes identical
+verify: u001-katajainen GREEN — status set to verified
+exit=0
+```
+
+*What it means:* the Rust offers the same function names, asks for nothing more than the C, prints
+the same bytes as the C (driver, whole program, features) and runs clean under memory checkers.
+`exit=0` is the command's **exit code** ("If something goes wrong" lists them). *If not:* the
+"made elsewhere … add `--adopt` once" error means step 2 was skipped.
+
+**4. Plant a bug and watch the judge catch it.** Find the line to break:
+
+```bash
+grep -n 'leaves\[0\]\.count as usize\] =' targets/zopfli/migration/units/u001-katajainen/katajainen_rs/src/lib.rs
+```
+
+*You should see* `211:        bitlengths[leaves[0].count as usize] = 1;`. Open the file in the
+`nano` editor:
+
+```bash
+nano -w targets/zopfli/migration/units/u001-katajainen/katajainen_rs/src/lib.rs
+```
+
+Press Ctrl-W, then Ctrl-T, type `211`, press Return: the cursor is on that line. Press Ctrl-E (end
+of line), then `←` once: the cursor is just after the `1`. Press Backspace, type `2`. Save with
+Ctrl-O, then Return; leave with Ctrl-X. Run the `grep` box again: the line now ends `= 2;`. Then
+run step 3's box again. *You should see* (some lines left out here):
+
+```text
+verify: [FAIL] differential-driver — outputs differ (lens 183832 vs 183832, first diff at byte 88)
+verify: [FAIL] whole-program:sample_text.txt — outputs differ (lens 205 vs 206, first diff at byte 10)
+…
+verify: u001-katajainen RED — status demoted verified -> in-progress
+exit=10
+```
+
+*What it means:* one changed number makes the Rust print different bytes; the judge says RED (exit
+code 10) and the unit no longer counts as migrated. *If not:* still GREEN means the file was not
+saved: open it again, Ctrl-O, Return.
+
+**5. Put everything back.** git keeps each saved version (a **commit**); this restores the saved one:
+
 ```bash
 git checkout targets/zopfli
 ```
 
-**5. See the plan and the risk report**
+*You should see* `Updated 4 paths from the index`: the file, the plan and two verdict files.
+
+**6. See the plan and the risk report.** *You should see* the three lines under the box.
+
 ```bash
 harness plan --target targets/zopfli
 ```
-then open `targets/zopfli/migration/observer/observations.md`.
 
-### Trying the AI part
-
-**With a free local model** ([Ollama](https://ollama.com)). In one terminal run
-`ollama serve`; in another:
-```bash
-export RUHARNESS_PROVIDERS=$PWD/providers.example.toml
+```text
+plan: no changes (11 units)
+plan: execution order: u-cache -> u-hash -> u-lz77 -> u-util -> u001-katajainen -> u-tree -> u-blocksplitter-deflate-squeeze -> u-gzip_container -> u-zlib_container -> u-zopfli_lib -> u-zopfli_bin
+plan: next, write the first unit's differential driver: `harness gen-driver u-cache --target targets/zopfli`
 ```
-```bash
-harness migrate u001-katajainen --target targets/zopfli --provider ollama-openai --model llama3.2-1b-32k --retry
-```
-You'll see each turn (`translate`, then `repair`s) and a final outcome. A tiny model
-will fail — that's the point: the oracle catches it and the attempt is recorded under
-`migration/units/u001-katajainen/attempts/`. (The example profile file explains how to
-create the `llama3.2-1b-32k` model.)
 
-**With no model at all** — the harness writes the prompt to a file and waits:
+*What it means:* the order units can move in, each after those it depends on. The suggested next
+step asks a model for a driver: that is the guide's Part 3, not this experiment. Then run
+`head -12 targets/zopfli/migration/observer/observations.md`: *you should see* `# Observations`,
+`findings: 31` and a table `Units by risk` starting `| u-blocksplitter-deflate-squeeze | pending |
+51 |`: each unit's risk score, from the risky C patterns (**hazards**) found in it.
+
+## Your own C project
+
+Your project has no settings file for the harness, so the harness first **maps** it: it finds each
+program (a `.c` file holding `main()`, where a program starts), the files each needs, and the
+**held choices**, where two files offer the same function and you must pick one. You say how the
+project is built and **accept** a program as a **tool**: the harness writes its settings file,
+`harness.toml`, in `migration/tools/<id>/`, and you name it from then on with `--tool <id>`. The
+screens quoted are liblzg's, a small compression library; your names will differ. The guide's
+[Part 12](docs/TESTING-GUIDE.md#part-12--liblzg-by-map-let-the-harness-find-the-program) walks it
+whole: 12A (Steps 12.1–12.5) the map and accept, 12B (Steps 12.6–12.14) the first unit. Work on a
+copy of the project, from inside its folder (`cd` there first): without `--target`, a command
+works on the folder you are in.
+
+**1. Map it:** `harness project map`. *You should see* a long screen with `programs: 3`; under each
+program `link check: linked` (every function found exactly once) or `not linked while d1 is open`
+with a `duplicate set d1 (…): held` line; and at the end `the configuration is a guess, so nothing
+can be accepted yet`. *What it means:* it compiled every file in the sandbox under a guess and wrote
+`migration/map/`; none of your files changed.
+
+**2. Say how it is built.** The **compiler** turns C text into a program the Mac can run; a
+**flag** is an option given to it: `-I` plus a folder says where the **header** files (`.h`) are,
+`-D` sets a name, `-O` a speed level. Take them from the project's `Makefile` (the file that tells
+the `make` program how to build); leave out warning flags such as `-Wall`, which the harness
+refuses. Paste the four lines, a heading and three settings, as one command down to `EOF`:
+
+```bash
+cat > migration/map/config.toml <<'EOF'
+[[configuration]]
+name = "make"
+from = "make"
+flags = ["-O3", "-Isrc/include"]
+EOF
+```
+
+Read it back with `cat migration/map/config.toml`: *you should see* those four lines. (Or have a
+model propose the file: `harness project ask --build`, answered as in step 4.)
+
+**3. Map again:** `harness project map`. *You should see* the second line now `configuration: make,
+from make (stated in config.toml), flags -O3, -Isrc/include; …`, and the last line naming
+`harness project accept <id>`. *If not:* `error: migration/map/config.toml: …` names each refused flag.
+
+**4. Optional, a model's advice on a held choice:** `harness project ask --model by-hand`
+(`--model` names who will answer: a model, or you). It is **meant to stop** with `error: awaiting
+response: …/migration/map/traces/<key>.response.json` and exit code 1: a **hand-off** (see "Using
+AI"). The guide's Step 12.4 answers it. The advice decides nothing.
+
+**5. Accept a program:** `harness project accept t-lzg`. *You should see* `project accept: wrote
+migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; …)`. Read it with
+`cat migration/tools/t-lzg/harness.toml` (the message says `git diff`, which shows nothing for a
+new file). A program with a held choice is refused, `error: duplicate set d1 of t-unlzg (…) is not
+settled`, until you name the file to keep: `harness project accept t-unlzg --keep d1=d1.2`.
+
+**6. Work on the tool**, naming it each time: `harness scan --tool t-lzg` (*you should see*
+`scan: 6 files, 18 symbols, 42 refs -> …`), `harness plan --tool t-lzg` (`plan: execution order:
+u-checksum -> u-encode -> u-version -> u-lzg`), then `harness gen-driver u-version --tool t-lzg
+--model by-hand`, which is **meant to stop** with `error: awaiting response: …` (exit 1) until you
+answer it. Until then `harness migrate u-version --tool t-lzg` refuses (``its generated driver's
+validation is `missing` ``), and so does `harness verify u-version --tool t-lzg` (`has no
+[unit.oracle] configured`). The guide's Steps 12.7–12.14 answer the driver, translate the unit,
+verify it, and turn on the whole-program check (`[oracle.whole_program]` with the program's
+arguments, such as `args = ["-c"]`, in the tool's `harness.toml`; until then `verify` shows
+`[SKIP] … not run`). When the project changes later, `harness project map` names each tool that
+changed and what to do (scan it, or accept it again); the guide's 12C walks it, cockpit included.
+
+## Using AI
+
+**The easy way: the cockpit's chat, on your Claude subscription, no API key.** You need Claude Code
+(Anthropic's program for using Claude in a terminal) installed and signed in with your
+subscription; the guide's Steps 0.13–0.15 check both. Run `harness-tui --target targets/zopfli`,
+press `Tab` until the Chat pane is highlighted, and ask in plain words ("migrate this unit"). The
+chat never runs anything itself: what it wants waits on a yellow line until you review and confirm
+it. The guide's Parts 4 and 6 walk it.
+
+**On the command line: a hand-off.** The harness writes its question to a file and stops; you, or
+any AI you paste it into, write the answer file, and the same command run again reads it and goes
+on. Each try at a translation is an **attempt**; `--model` names who answers, recorded with it.
+
 ```bash
 harness migrate u001-katajainen --target targets/zopfli --model my-test
 ```
-Answer it by creating the matching `….response.json` next to the `….request.json` it
-names, then run the same command again.
 
-### What the flags mean
+*You should see* `awaiting response: …/u001-katajainen/traces/<key>.response.json`, a line on the
+answer's format, then `error: awaiting response: …` and exit code 1: waiting, not failed. The
+answer file holds the reply inside this **envelope**:
+`{"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}`. The
+guide's Plan B (after Part 4) does it with Claude Code. To drop the waiting attempt instead:
+`git clean -fd targets/zopfli/migration/units/u001-katajainen/attempts` (*you should see*
+`Removing …/attempts/a-<code>/`).
 
-| Flag | Meaning |
+**Optional: a live service or a local model.** A **provider** is how the harness reaches a model.
+`--provider anthropic` uses your `ANTHROPIC_API_KEY` (billed per use). An OpenAI-compatible
+service, or a model on your Mac through Ollama, is a profile in your own providers file:
+[providers.example.toml](providers.example.toml) shows one; run
+`export RUHARNESS_PROVIDERS=$PWD/providers.example.toml` and add `--provider ollama-openai --model
+llama3.2-1b-32k`. A tiny model fails the judge, which is the point. (Not run for this README: it
+needs Ollama installed and a model downloaded.)
+
+## If something goes wrong
+
+`echo "exit=$?"`, run right after a command, prints its exit code:
+
+| Code | Meaning |
 |---|---|
-| `--target DIR` | Which project to work on (the folder containing `harness.toml`, or a mapped C project). Always `targets/zopfli` here. |
-| `--tool ID` | On a mapped project (next section): which accepted tool to work on, as `harness project map` names it (`t-lzg`). Left out, the project's only tool is used; with two or more, the command asks you to pick. |
-| `u001-katajainen` | The *unit* — one piece of the plan. Ids are listed by `harness state status`. |
-| `--provider NAME` | Which AI backend to use: `external` (file hand-off, the default), `replay`, `anthropic` (needs `ANTHROPIC_API_KEY`), or a profile from your providers file such as `ollama-openai`. |
-| `--model NAME` | The model name sent to that backend. |
-| `--retry` | Finished attempts are never overwritten; this records a *new* sample instead. |
-| `--promote` | Replace an already-verified unit's Rust with a new green candidate. |
-| `--no-promote` | Record a green attempt without promoting it; `harness promote <unit> <attempt> [--replace]` promotes it later, explicitly (`[llm.migrate] promote_on_green = false` makes that the only path). |
-| `--steer <NOTE> --from <ATTEMPT>` | A new attempt seeded from a finished one: the model sees that attempt's code and stored verdict plus your note, on every turn. A note that starts with `-` must be attached: `--steer='- keep the loop'`. The benchmark never counts a steered crate as unassisted pipeline output. |
-| `--requester=chat` | Label the attempt as asked for in a chat (harness-mcp's acts pass it): its hand-offs live in `traces/chat/`, apart from the blind protocol's, and the benchmark never scores it. With it, `--answer=FILE --answer-key=KEY` (`external` only; FILE `-` reads stdin, framed by `--answer-bytes=N`) files the answer to the pending request KEY and resumes: refused up front (`answer-refused`) unless the attempt the run resumes waits on KEY; `answer-unused` when the run never asked for it. |
-| `harness override <unit> <dir>` | Record a hand edit (exactly `src/logic.rs` and `src/ffi.rs` of `dir`) as a labelled `human` attempt, judged like a model reply; `harness promote` promotes it; the benchmark never counts it as the pipeline's. |
-| `--attempt ID` | With `--provider replay`: which recorded attempt to re-check. |
-| `--allow-unsandboxed` | Only needed where no sandbox exists (e.g. Linux): accept running untrusted code unconfined. |
+| `0` | success, or GREEN |
+| `1` | the harness refused or stopped with an error (the message says why); also "waiting for an answer" at a hand-off |
+| `2` | the command was typed wrong |
+| `10` | the judge said RED |
+| `130` | you stopped it with Ctrl-C, and it stopped everything it had started; run it again |
 
-Exit codes, for scripting: `0` success/green · `1` the harness refused or errored ·
-`2` bad command line · `10` the oracle said red.
+For any other line, the guide's [Troubleshooting](docs/TESTING-GUIDE.md#troubleshooting) says what
+to do, and its [Known quirks](docs/TESTING-GUIDE.md#known-quirks-in-this-version) lists the few
+out-of-date messages.
 
-## Start from your own C project
+---
 
-`targets/zopfli` comes with a hand-written `harness.toml`. Your own C project has none:
-the harness first **maps** it, you say how it is built, and you **accept** one of its
-programs as a *tool* — a `harness.toml` the harness writes for you under
-`migration/tools/<id>/`. Everything after that is the usual scan, plan, driver, migrate
-and verify, each told which tool with `--tool`. `harness project --help` prints the same
-order. docs/TESTING-GUIDE.md Part 12 walks it on liblzg, with every screen;
-docs/TUTORIAL.md "Mapping a whole C project" explains the words.
-
-Run every command from inside the project's folder (or add `--target <folder>`):
-
-1. **Map it.** `harness project map` lists each program (a `.c` file with its own
-   `main()`), the files it needs, the files programs share, and the *held choices*: places
-   where two files define the same functions and linking cannot tell which one is meant.
-   It changes none of your files; it writes `migration/map/project-map.json`.
-2. **Say how it is built.** The first map compiles under a *guess* (no flags), so its
-   closing lines say nothing can be accepted yet and show the lines to write, with
-   `flags = []` for you to fill in. Write `migration/map/config.toml` — three lines are
-   enough:
-
-   ```toml
-   [[configuration]]
-   name = "make"
-   from = "make"
-   flags = ["-O3", "-Isrc/include"]
-   ```
-
-   Take the flags from the project's build files: `-I` folders written from the project's
-   top (`-Isrc/include`, joined, no space), `-D` defines, `-O` levels. Leave out warning and
-   tuning flags (`-W`, `-Wall`, `-funroll-loops`): the harness refuses flags it does not
-   pass to a compiler. docs/SCHEMAS.md "`migration/map/config.toml`" lists every field. Or
-   let a model propose one: `harness project ask --build` writes
-   `migration/map/config.proposed.toml` for you to copy from.
-3. **Map again**: `harness project map`. Its screen now shows your configuration.
-4. **Optionally ask for advice**: `harness project ask` asks a model which file to keep
-   in each held choice. Its answer is advice only; you still decide.
-5. **Accept a program as a tool**: `harness project accept t-lzg`. When the program holds
-   a choice, name the file to keep: `--keep d1=d1.2` (the set, then the definer's index or
-   path; repeat for each set). `--run-name NAME` sets the file name the program runs as
-   (default: its `.c` file's name). It writes `migration/tools/t-lzg/harness.toml`; read it
-   with `git diff`.
-6. **Work on the tool**, naming it each time:
-
-   ```bash
-   harness scan --tool t-lzg
-   harness plan --tool t-lzg
-   harness gen-driver u-version --tool t-lzg
-   harness migrate u-version --tool t-lzg
-   harness verify u-version --tool t-lzg
-   ```
-
-   `scan` and `plan` each end with the next command to run. An accepted tool has no
-   whole-program check until you give the program's arguments (`accept` says so, and leaves
-   a commented example in the file): add `[oracle.whole_program]` with `args = ["-9"]` (for
-   example) to its `harness.toml`; until then `verify` shows that check as `[SKIP] … not
-   run`. Accepting the tool again keeps that section and names what it kept.
-
-When the project changes later, `harness project map` names each accepted tool that
-changed and how — when only the tool's own C changed, it says to scan it; when what it needs
-or how it links changed, to accept it again — and `harness state status --tool t-lzg` then
-starts with the same sentence.
+**Reference: look things up here; a newcomer can stop reading here.**
 
 ## Command reference
 
-Prerequisites: stable Rust (pinned via `rust-toolchain.toml`) and a C compiler
-(clang with ASan/UBSan; developed on macOS, CI also runs Ubuntu).
+Every command is `harness <command>`; `cargo run -p harness-cli -- <command>` is the same program
+run from the source. Each takes `--target <folder>` (default: the current folder) and, on a mapped
+project, `--tool <id>`; `harness <command> --help` lists every option.
+
+| Command | What it does |
+|---|---|
+| `scan` | Parses the C (tree-sitter) into `migration/facts.jsonl`: files with include edges, symbols with canonical ids and signatures, call refs. |
+| `plan` | Clusters files into units (cycles collapse into one), hashes each unit's include closure (`source_hash`), and reconciles `migration/plan.toml`: statuses, comments and unknown fields survive; order is re-derived from `depends_on`. |
+| `gen-driver <unit>` | Asks a model for the unit's differential driver, then validates it against the original C only: strict build, `driver-shape`, every symbol called, three identical runs, `-O0` == `-O2`, ASan/UBSan, mutation adequacy (broken copies of the C must change its output; equivalent mutants discarded). Green: `units/<id>/driver.c` + `driver-validation.json`. |
+| `migrate <unit>` | Asks the provider for exactly `src/logic.rs` (safe Rust) and `src/ffi.rs` (the C-ABI shim) in a harness-owned crate whose `lib.rs` confines `unsafe` to the shim; runs the oracle; up to three stateless repair turns. Each attempt is recorded under `units/<id>/attempts/<id>/` (turns, tokens, candidate, `prompt_digest`). Green is promoted (crash-safe two-rename) and re-verified in place. Refuses a unit whose driver is not freshly validated. |
+| `verify <unit>` | Refuses if the source changed since planning; else runs the oracle (symbol-set, capabilities, driver-shape, differential driver, whole program all-C vs mixed, sanitizers, features) and writes a content-bound verdict, `oracle-latest.json` (blake3 digests of all it tested). Red demotes `verified → in-progress` and keeps `oracle-last-green.json`. |
+| `promote <unit> <attempt>` | Promotes a recorded green attempt and verifies it in place: the explicit act a review's Accept is (`--replace` over a verified unit). |
+| `override <unit> <dir>` | Records a hand edit (exactly `src/logic.rs`, `src/ffi.rs` of `dir`) as a labelled `human` attempt, judged like a model reply; never promotes. |
+| `state status` | Staleness: facts, plan hashes and verdict digests vs the tree; contradictions; verdicts "made elsewhere". |
+| `features init\|save\|map` | Named runs of the whole program, checked on every `verify` (`feature:<name>/<scenario>`); `map` records which functions each runs. Guide Part 8; docs/FEATURES-DESIGN.md. |
+| `project map\|accept\|ask` | A whole C project's programs, files and held choices; `accept` writes a tool's `harness.toml`. docs/PROJECT-MAP-DESIGN.md. |
+| `perf init\|save\|run\|show` | The C against the Rust on your workloads (CPU time, instructions, memory), information only, in `migration/perf/`. Guide Part 11; docs/PERF-DESIGN.md. |
+| `detect` | Deterministic hazard detectors (macros, function pointers, unions/bitfields, setjmp/signals/threads, variadics, mutable globals, allocator ownership) into content-keyed findings; what the suite cannot see (pointer arithmetic, aliasing) stays a standing caveat. |
+| `observe` | Model triage of findings per unit (confirm/dismiss/uncertain; nonce-delimited code, content hashes binding each verdict) into `triage.jsonl` and `observations.md`, ranked by a deterministic risk score. |
+| `review <finding>` | A person's review: `--uphold-dismiss` or `--reinstate`. A dismissal keeps full risk weight until upheld. |
+| `bench …` | The benchmark: `vendor`, `verify-corpus`, `init`, `status`, `score [--write]`, `boundary`, `check [--replay]` (the regression suite, exit 10 on a regression; `--replay` re-judges every recorded trajectory from its evidence, zero tokens; docs/REPLAY-DESIGN.md). targets/tractor/README.md. |
+| `sync-runtime` | Regenerates the managed block of the target's `AGENTS.md`; `--check` for CI. |
+
+| Flag | Meaning |
+|---|---|
+| `--adopt` | Trust a ledger made on another computer, once per checkout: deletes its build folders, writes a fresh token; its verdicts show "made elsewhere" until verified here. |
+| `--target DIR`, `--tool ID` | The project; on a mapped project, which accepted tool. With two or more tools and no `--tool`, the command asks you to pick. |
+| `--provider NAME` | `external` (file hand-off, the default), `replay`, `anthropic` (`ANTHROPIC_API_KEY`), or a profile from `$RUHARNESS_PROVIDERS`. A target's `harness.toml` can only name a profile; endpoints and keys live in your file. |
+| `--model NAME` | The model sent to the provider; with `external`, who answers (recorded). |
+| `--retry` | Records a new sample; finished attempts are never overwritten. |
+| `--promote`, `--no-promote` | Replace a verified unit's Rust with a new green candidate; or record green without promoting (`[llm.migrate] promote_on_green = false` makes that the only path). |
+| `--steer <NOTE> --from <ATTEMPT>` | A new attempt seeded from a finished one (its code, verdict and your note on every turn); a note starting with `-` is attached: `--steer='- keep the loop'`. Never counted as unassisted. |
+| `--requester=chat` | Labels the attempt as asked in a chat (hand-offs in `traces/chat/`, never scored); with `--answer=FILE --answer-key=KEY` (`-` reads stdin, framed by `--answer-bytes=N`) files the answer to pending request KEY and resumes, else `answer-refused`. |
+| `--attempt ID` | With `--provider replay`: which recorded attempt to re-check. |
+| `--allow-unsandboxed` | Where no sandbox exists (Linux): accept running untrusted code unconfined. |
+| `--json` | Global: stdout becomes newline-delimited `ruharness-events` (docs/SCHEMAS.md "CLI hardening"); human logs stay on stderr. |
+
+Exit codes as above; for `migrate`, `10` also means blocked, truncated or format. Machine consumers
+read the ledger, not stdout. Writing commands hold a writer lock on `migration/.lock`; a second
+writer fails fast naming the holder. Ctrl-C kills every live sandboxed process group and the
+harness dies by the signal. Target and model code builds and runs under `sandbox-exec` (no network,
+no reads of your home folder, writes confined to the build folder, scrubbed environment, timeouts),
+and the symbol-set check rejects a candidate exporting more than the unit's symbols or a pre-main
+constructor.
+
+## The cockpit (`harness-tui`)
 
 ```bash
-cargo run -p harness-cli -- scan --target targets/zopfli
-```
-Parses the C sources (tree-sitter), writes the canonical fact model to
-`migration/facts.jsonl`: files with include edges, symbols with canonical ids and
-signatures, call refs.
-
-```bash
-cargo run -p harness-cli -- plan --target targets/zopfli
-```
-Clusters files into migration units (dependency cycles collapse into one unit),
-computes each unit's `source_hash` over its include closure, and **reconciles**
-`migration/plan.toml` — statuses, human comments, and unknown fields survive every
-replan; execution order is re-derived from `depends_on`, never trusted from block
-order.
-
-```bash
-cargo run -p harness-cli -- verify u001-katajainen --target targets/zopfli
-```
-Refuses if the unit's source changed since planning (re-plan first). Otherwise runs
-the unit's oracle — for `c-abi-differential`: a differential driver linked against
-original C vs the Rust staticlib over ~500 deterministic cases (byte-compared),
-the whole program built all-C vs mixed C/Rust (gzip output byte-compared over three
-samples), and an ASan/UBSan run — then writes a **content-bound verdict**
-(`oracle-latest.json`, digests of everything tested) and updates the plan status.
-Red demotes `verified → in-progress` and preserves `oracle-last-green.json`.
-
-```bash
-cargo run -p harness-cli -- state status --target targets/zopfli
-```
-The staleness detector: facts vs tree, every unit's plan hash vs tree, every
-verdict's input digests vs tree, and status/evidence contradictions.
-
-**The observer (M2):**
-
-```bash
-cargo run -p harness-cli -- detect --target targets/zopfli
-```
-Runs the deterministic gotcha detectors (tree-sitter, 8 taxonomy categories:
-macros, function pointers, unions/bitfields, setjmp/signals/threads, variadics,
-mutable globals, allocator ownership) and writes content-keyed findings bound to
-the facts they were computed from. Hazards the suite *cannot* see (pointer
-arithmetic, type punning, aliasing) are carried as standing caveats; oracle- and
-human-discovered hazards live in `annotations.jsonl` (M0's two real findings are
-the founding entries).
-
-```bash
-cargo run -p harness-cli -- observe --target targets/zopfli
-```
-The LLM triage pass: findings are batched per unit and adjudicated
-(confirm/dismiss/uncertain with rationale) under a hardened prompt contract —
-nonce-delimited untrusted code slices, no source text in the trusted region,
-harness-computed content hashes binding every verdict to exactly what was
-serialized. Verdicts land in `triage.jsonl`; `observations.md` renders units
-ranked by a deterministic risk score. Provider is configurable (`[llm]` in
-harness.toml): `anthropic` (live, key from env), `replay` (recorded traces), or
-`external` — the harness writes request files and any capable agent runtime
-supplies the responses, which is also how triage runs without an API key.
-Dismissals never delete: they keep full risk weight until a human upholds them
-via `harness review <finding> --uphold-dismiss`, and human-mandatory categories
-stay flagged until reviewed.
-
-```bash
-cargo run -p harness-cli -- migrate u001-katajainen --target targets/zopfli
-```
-**The executor (M3).** Builds a translation prompt (ABI contract, confirmed hazards,
-nonce-delimited C source), asks the configured provider for exactly two files —
-`src/logic.rs` (100% safe Rust) and `src/ffi.rs` (the C-ABI shim) — and drops them
-into a **harness-owned** crate scaffold whose `lib.rs` makes the *compiler* confine
-`unsafe` to the shim. The candidate then faces the full oracle; failures feed up to
-three stateless repair turns carrying bounded evidence (rustc errors, differing
-cases). Every attempt is recorded under `units/<id>/attempts/<id>/` with a
-content-derived id, per-turn results and token usage, the candidate source, and a
-`prompt_digest` — equal digests across attempts prove the same migration was posed
-to different providers. Green candidates are promoted through a crash-safe
-two-rename protocol and re-verified in place. `--provider replay` re-runs a recorded
-attempt from its traces and *verifies* it against the ledger.
-
-Model-written code is untrusted: every build and run happens under `sandbox-exec`
-(no network, no reads of your home directory, writes confined to the build dir,
-scrubbed environment, timeouts with process-group kill), and a **symbol-set check**
-rejects candidates that export anything beyond the unit's symbols or smuggle in
-pre-main constructors — so a candidate cannot forge a green by shadowing `printf` or
-exiting before `main`. On platforms without a sandbox, `verify` and `migrate` refuse
-unless you pass `--allow-unsandboxed`.
-
-**Providers.** A target's `harness.toml` can only *name* a provider profile and a
-model — endpoints and credentials live in user-level config
-(`$RUHARNESS_PROVIDERS`, see [providers.example.toml](providers.example.toml)), so a
-hostile target can't point your API key at its own server. Built in: `external`
-(file hand-off to any agent runtime), `replay`, `anthropic`. Wire adapters:
-Anthropic Messages and OpenAI-compatible Chat Completions (OpenAI, Ollama,
-llama.cpp, vLLM, LM Studio, Groq, OpenRouter, …). Fully local, no API key:
-
-```bash
-export RUHARNESS_PROVIDERS=$PWD/providers.example.toml
-cargo run -p harness-cli -- migrate u001-katajainen --target targets/zopfli --provider ollama-openai --model llama3.2-1b-32k
+harness-tui --target targets/zopfli
 ```
 
-```bash
-cargo run -p harness-cli -- sync-runtime --target targets/zopfli
-```
-Regenerates the managed block in the target's `AGENTS.md` (current state, next
-units by risk, the exact commands) with a content hash; `--check` is CI-usable.
-The ledger stays the single source of truth — the view is always derived.
+Files and units on the left, the selection on the right, a chat pane; `Enter` opens a menu of what
+can be done now. On a ledger not yet adopted it first asks `Adopt this folder? Type y and Enter to
+adopt`. Keys, menus and symbols: [docs/TUTORIAL.md](docs/TUTORIAL.md); the walk: guide Parts 4 and 9.
+Flags (`harness-tui --help`): `--target DIR` (default `.`), `--tool ID`, `--harness PATH` (default
+on PATH, else next to the cockpit), `--provider NAME` (repeatable, default `external`; the target
+never chooses it), `--allow-unsandboxed`, `--layout split|stacked`, `--no-mouse`, `--no-chat`,
+`--chat-runtime PATH` (the `claude` to run), `--harness-mcp PATH` (default next to the cockpit,
+else on PATH), `--chat-model NAME`. `cargo build` at the root skips it (`cargo build -p
+harness-tui`); reinstall it with harness-cli, as it uses the `harness` installed beside it.
 
-```bash
-cargo run -p harness-cli -- gen-driver u-lib --target targets/tractor/cases/Public-Tests/B01_organic/rev16_lib --model claude-sonnet-5
-```
-Asks a model for the unit's **differential driver** (a C `main` that calls every
-exported function with deterministic inputs and prints everything), then validates it
-against the ORIGINAL C only: strict build, `driver-shape` (it may define only `main`
-and call only the unit and allowlisted libc), every symbol called, three identical
-runs, `-O0` == `-O2`, ASan/UBSan, and **mutation adequacy** — deliberately broken
-copies of the C must change its output (provably-equivalent mutants are discarded by
-Trivial Compiler Equivalence). A green driver is promoted to
-`migration/units/<id>/driver.c` with `driver-validation.json`; `migrate` then refuses a
-unit whose generated driver is not freshly validated.
-
-```bash
-cargo run -p harness-cli -- bench status --suite targets/tractor
-```
-The benchmark suite: `bench vendor --from <checkout>` (pinned, checksummed copy of the
-corpus), `bench verify-corpus`, `bench init` (every case becomes a harness target),
-`bench status` (per-case pipeline progress), `bench score [--case …] [--write]`
-(scores oracle-verified Rust on the corpus's held-out vectors with the corpus's own
-runners, sandboxed; `--write` re-verifies everything first and records `scores.json`),
-`bench boundary [--case …]` (design B calibration: the boundary check alone on every
-verified unit, written nowhere — docs/ORACLE-HARDENING.md §B.7),
-and `bench check [--replay]` (the regression suite: re-verify, re-validate, re-score,
-compare per vector — exit 10 on a regression). `--replay` also re-judges every recorded
-model trajectory from its stored evidence (zero tokens): prompt edits do not break it —
-they show up as `prompt: drifted`, while any change in how the harness judges the recorded
-replies fails the check (docs/REPLAY-DESIGN.md). See `targets/tractor/README.md`.
-
-Exit codes (stable contract): `0` ok/green · `1` harness error · `2` usage ·
-`10` oracle red (for `migrate`: red, blocked, truncated, or format). Machine consumers read the ledger files, not stdout.
-With the global `--json` flag (`harness --json migrate …`) stdout is instead a
-newline-delimited stream of `ruharness-events` (docs/SCHEMAS.md "CLI hardening") for
-a consumer such as the review cockpit; human logs stay on stderr. Ctrl-C kills every
-live sandboxed process group and the harness dies by the signal (no evidence is
-journaled for a child it killed). Writing commands hold a writer lock on
-`migration/.lock`; a second writer fails fast naming the holder.
-
-## Features: user-visible behaviour, mapped and checked
-
-`migration/features/features.toml` holds the person's features — named runs of the whole
-program (flags plus one of the three samples). Every `verify` runs each scenario on the all-C
-program and the mixed one (`feature:<feature>/<scenario>` checks: exit status and both streams
-byte-identical); `harness features map` runs them on a probed copy of the C and records which
-functions — hence which units — each one runs (`map.json`); the cockpit's Features view shows
-both. `harness features init` writes a starter; `features save` is what the cockpit's Edit uses.
-Design and contracts: docs/FEATURES-DESIGN.md, docs/SCHEMAS.md "The person's features".
-
-## The review cockpit (`harness-tui`)
-
-```bash
-cargo run -p harness-tui -- --target targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib
-```
-New to it? [docs/TUTORIAL.md](docs/TUTORIAL.md) walks through the screen, every action and
-the chat in plain language, with a first migration step by step.
-
-A terminal UI for the migration, made for arrow keys — nothing to memorise. On the left,
-**Files**: a tree of the target's C files (and, under each, its functions), then its
-**Units** with each unit's crate and attempts. Every row shows its state as a glyph and a
-word: `✓ migrated`, `✓? verified, origin not recorded`, `✗ failing`, `⚠ needs attention`,
-`◐ tried`, `◇ planned`, `! changed since scan`, `+ not scanned yet`, `? missing`, … (`?`
-opens the full legend). On the right, the **View** shows what is selected: the project's
-summary with its next step, a directory's files, a file's C beside its Rust (the exported
-shim and the safe logic function it calls), a unit's checks in words, an attempt's turns.
-Below, the **activity panel** says in plain words what the running command is doing
-("Turn 1: asking the model…", "Checked: same outputs as C — passed"), and the last row
-lists the keys that work right now.
-
-Move with `↑`/`↓`, fold and open with `←`/`→` (`→` on a leaf moves into the View, `←`
-comes back), switch panes with `Tab`, go back with `Esc`. **`Enter` opens a short menu of
-what you can do with the selection in its current state** — Scan the project, Refresh the
-plan, Find hazards, Re-check with the oracle, Accept an attempt, Hand edit, Modify with a
-note, Retry, Resume. Items that cannot run now are greyed with the reason. Every act is a
-spawned `harness --json …` command: its dialog names every file it writes, shows the
-exact command, and becomes **ready** only after it was on screen, whole, for a moment
-with no keys pending — keys typed or pasted ahead, and a held `Enter`, never run anything
-(focus starts on Cancel; after "ready", press the key shown or `→` then `Enter`). `c` shows
-the running command's details, `x` cancels it (asked first), `g` re-reads the project, `q`
-quits (asked while a command runs). The letters `a m e E r R x d v` are shortcuts for the
-selection's menu items.
-
-The mouse works too: a click selects a row (and its pane), a click on `▸`/`▾` opens or folds
-it, a double click is `Enter` (a row's menu, or a View link's target), the wheel scrolls the
-open menu or dialog, else the pane under the pointer, and a click on a key in the bottom bar
-or on `[Cancel x]`/`[Details c]`/`[Try again t]` presses it (Quit asks first). A dialog's
-buttons answer a click a second after it opened — Run and the others that act only once it
-is **ready** — so the second press of a double click never lands on one. Selecting text belongs to the terminal: hold Shift (most
-terminals) or Option (iTerm2) while you drag; in Apple's Terminal, ⌘R turns its mouse
-reporting off and on; or turn the cockpit's mouse off with `m` in Help (`?`). `--no-mouse`
-starts with it off (for a terminal whose clicks print odd characters); in tmux, `set -g
-mouse on`. The mouse is switched off whenever the cockpit hands the terminal back: on quit,
-a crash, a signal, and while a hand edit's editor runs.
-
-The cockpit only *reads* the ledger, on a background thread after a size and type check
-(a hostile target cannot hang it). Its own gates: Re-check runs only on code the harness
-knows (a recorded attempt's candidate, or what the oracle last judged) — a crate changed
-outside the harness shows `⚠` with how to restore it or record it (`harness override`);
-model work runs only with a provider you allow (`--provider NAME`, repeatable, default
-`external`; the target's `harness.toml` never chooses it); a blind `external` hand-off is
-never retried from the cockpit. A hand edit is never lost: one that was not recorded is
-kept, offered again, and its path printed on exit. `--harness <path>` picks the binary the
-acts run (default: `harness` on your PATH, else the one next to the cockpit);
-`--allow-unsandboxed` is passed on to the acts that run code (the dialog says so); below 80
-columns one pane shows at a time; `--layout split|stacked` forces how the pairs sit. A
-closed terminal cancels a running command cleanly. A plain `cargo build` at the root skips
-the cockpit; build it with `cargo build -p harness-tui` (CI builds everything); installed
-with `cargo install`, reinstall it with harness-cli (see the MCP install below). After a
-change made elsewhere (the CLI, or an act from chat — next section) press `g`.
-
-### The chat pane
-
-Model work happens in a chat inside the cockpit (docs/CHAT-PANE-DESIGN.md). `Tab` moves
-Files → View → **Chat**; at 156 columns and wider the chat gets a column of its own, below
-that it takes the right column while it has the focus, and a `View │ Chat` strip on the
-right column's border is always one click away (`Chat ●` when it has something for you).
-Ask in plain words — "migrate this", "why is u-lib red?" — or choose **Migrate — ask in
-chat** from a unit's menu. The chat is your own installed Claude Code (`claude`), run
-headless as a child of the cockpit, signed in its own way (it says which before the first
-message: your subscription, an API key, Bedrock, …). It reads the project through
-`harness-mcp --cockpit` and has no tool that writes; the cockpit never touches a
-credential.
-
-**The chat never runs anything.** When it wants model work — Migrate, Modify with a note,
-Retry, or its answer to a hand-off — the request waits on a line above the input, inert
-for a second; `Enter` (on an empty input) reviews it in the same armed dialog as every act,
-with the exact command, and `Esc` declines it. Scan, Refresh the plan, Re-check and Accept
-stay yours: the chat tells you which menu item to use. What the chat asked for is recorded
-`requester: chat` ("asked in chat"), keeps its hand-offs apart from the blind protocol's
-and is never scored. With the hand-off provider (`external`, the default) the chat also
-answers the model's turns: when you run a migration it asked for, each answer continues the
-run without asking again — until you hold one (`Esc` on its line), decline or cancel one,
-stop the chat or start a new one — and never when the cockpit runs `--allow-unsandboxed`.
-Nothing is accepted without you.
-
-In the chat letters are text: `Enter` sends, `Ctrl-J` (or `\` then `Enter`, or
-`Alt-Enter`) is a new line, `Esc` declines a request or stops the reply (it never leaves
-the chat — `Tab` does), `Ctrl-C` stops, clears the draft, or quits (asked), `Ctrl-X`
-cancels the running command, `Ctrl-N` starts a new chat (asked), `↑↓ PgUp PgDn` scroll,
-`F1` is help. After you leave the chat with a draft, letters in the panes are dropped until
-you press an arrow, `Tab` or `Esc` (they would be commands there). Quitting asks while a
-conversation exists; the conversation is not kept. Flags: `--no-chat`, `--chat-runtime
-PATH` (the `claude` to run), `--harness-mcp PATH` (default: the one next to the cockpit),
-`--chat-model NAME`.
+The chat's safety rule: the chat is your own Claude Code, reading the project through
+`harness-mcp --cockpit`, with no tool that writes. Every act it wants waits until you review it in
+the same armed dialog as any act; it is labelled `requester: chat`, never scored (docs/CHAT-PANE-DESIGN.md).
 
 ## The ledger in chat (`harness-mcp`)
 
-A small stdio MCP server lets an agent runtime such as Claude Code read the ledger as
-structured data and pose the review acts that stay labelled. Like the cockpit it reads
-the ledger itself and every act is a spawned `harness --json …` command, so the writer
-lock, the sandbox and the oracle apply unchanged; it writes nothing in the ledger (an
-answer to a hand-off it posed goes to the CLI's `--answer`, which files it).
-
-The cockpit's chat pane runs it as `harness-mcp --cockpit`: no harness binary at all, the
-reads, and act tools that only ask — the cockpit runs what you confirm. You can also run it
-standalone in its own agent session (for example Claude Code in a second terminal, with the
-`.mcp.json` entry below) beside the cockpit: both read the same ledger, the cockpit shows
-what an act from chat recorded once it re-reads (`g`), and if both start a writing command
-at once the CLI's writer lock refuses the second (`locked`, with the holder). Every attempt a chat act
-creates is labelled `requester: chat` in the ledger — its own id, its hand-offs in the
-unit's `traces/chat/`, never scored as pipeline output; this server still poses no fresh
-translation.
-
-| Tool | What it does |
-|---|---|
-| `harness_status` | the units (paged with `after`): status, verdict, provenance of its crate, its attempts (bound, promoted, authorship); the migrate routing; pending blind hand-offs |
-| `harness_unit` | one unit's crate (or an attempt's): the verdict's checks, the notes, and each C function beside its Rust (`symbol` shows one) |
-| `harness_steer` | a **steer attempt**: your note over a finished attempt (`migrate --no-promote --from=… --steer=…`) |
-| `harness_request` | read the pending request of a hand-off a chat act posed (`request_key`), in pages |
-| `harness_answer` | answer a hand-off that one of this server's acts posed, for the `request_key` you read: the CLI files the answer (`--answer`) and resumes the attempt |
-| `harness_retry` | re-run a chat-labelled steer attempt in its own run shape (`--retry`); an `external` one only by the model that answered it (`model`) |
-| `harness_promote` | promote a green attempt and verify it in place (`harness promote`) |
-
-**What you contribute in chat is recorded as guided, never as the pipeline's.** A
-hand-off answered in chat — by an agent that can read the repository, the held-out
-vectors and the conversation — must not score as blind pipeline output. So the server
-records steer attempts only (the benchmark reports a steered crate as a problem, never a
-score): it never retries an unseeded attempt, and it has no fresh-migrate, verify or
-hand-edit tool. Fresh translations go through the blind, audited hand-off
-(`targets/tractor/handoff-tools/`) or a live provider. When a steer attempt awaits a
-response, the result names the request to read (`request_key`, with `harness_request`)
-and the model that must answer (for `harness_steer`, the `model` you passed);
-`harness_answer` hands the answer to the CLI (token counts 0) only for a hand-off this
-server posed and the key it named, and only when the caller names that model (the server
-checks the name it is given; it cannot check who is answering). A
-pending unseeded hand-off — the blind protocol's, migrate or driver — is counted in
-`harness_status` (`blind_hand_offs_pending`), flagged on its unit, and refused by every
-tool.
-
-Install both binaries, then add the server to the project's `.mcp.json`:
-
-```bash
-cargo install --path crates/harness-cli && cargo install --path crates/harness-mcp
-```
-
-If you also installed the cockpit (`cargo install --path crates/harness-tui`), reinstall it
-whenever you reinstall harness-cli: the cockpit takes the `harness` installed beside it for its
-own build, so with an older cockpit next to a newer `harness` its Measure dialog can be wrong
-about whether perf's launcher needs building.
+A stdio MCP server (the Model Context Protocol: how an agent runtime such as Claude Code calls
+outside tools). It reads the ledger as data and poses labelled review acts (`harness_status`,
+`harness_unit`, `harness_steer`, `harness_request`, `harness_answer`, `harness_retry`,
+`harness_promote`), each a spawned `harness --json …` under the writer lock, sandbox and oracle. It
+records steer attempts only, never a fresh translation, and refuses every pending blind hand-off.
+Protocol and design: [docs/MCP-DESIGN.md](docs/MCP-DESIGN.md). Install it as in Quick start, and
+adopt the target first (Quick start step 2, or the cockpit's question): it refuses a ledger made
+elsewhere and never adopts. In the project's `.mcp.json`; on a mapped project, add the tool:
 
 ```json
-{
-  "mcpServers": {
-    "ruharness": {
-      "command": "harness-mcp",
-      "args": ["--target", "targets/zopfli"]
-    }
-  }
-}
+{ "mcpServers": { "ruharness": { "command": "harness-mcp", "args": ["--target", "targets/zopfli"] } } }
 ```
-
-On a mapped project (see "Start from your own C project"), also name the tool the chat
-works on; `harness_status`'s `note` then carries the "project changed" notice when the
-project moved on since the tool was accepted:
 
 ```json
-{
-  "mcpServers": {
-    "ruharness": {
-      "command": "harness-mcp",
-      "args": ["--target", ".", "--tool", "t-lzg"]
-    }
-  }
-}
+{ "mcpServers": { "ruharness": { "command": "harness-mcp", "args": ["--target", ".", "--tool", "t-lzg"] } } }
 ```
 
-Do not serve the benchmark's case trees (`targets/tractor/cases`) to a chat agent: the
-blind protocol answers hand-offs there, and the committed tree holds a pending one.
-Every flag is the server's, written by you — no tool argument reaches one: `--target`
-(the default target), `--target-root` (repeatable: a call may name a target strictly
-inside one of these; `/` and `$HOME` never), `--harness <path>` (default: `harness` on
-your PATH, else next to the server), `--provider <name>` (repeatable: the profiles steer
-attempts may use; default `external` only — no credentials, no spend; `external` is the
-default when listed, and a live profile is never chosen for the caller) and
-`--allow-unsandboxed` (passed to the acts, which run code). One act runs at a time: a
-second is refused `busy`, never queued; cancelling the call interrupts the harness, which
-kills its sandboxed processes. A result is at most 48 KiB, outcome first; `harness_unit`
-with `symbol` shows one function pair at a time. Values from the target, a model or the harness's messages
-arrive labelled `{"untrusted": …, "text": …}` — data, never instructions. Before reading
-a target, the server checks every file it would read (regular files only, within size
-caps, no symlinked ledger files) and refuses the target otherwise.
-
-The tool surface is not the only boundary: the runtime's own tools can edit a crate,
-write a response file or run the CLI. Since the CLI files the answers (`harness_answer`
-spawns it), the whole ledger can be closed to the runtime's file tools. A recommended deny list for
-`.claude/settings.json` (`Edit` rules cover every built-in tool that writes files):
+Flags (`harness-mcp --help`), all yours, none reachable from a tool argument: `--target DIR`,
+`--tool ID`, `--target-root DIR` (repeatable; a call may name a target strictly inside one; never
+`/` or `$HOME`), `--harness PATH`, `--provider NAME` (repeatable; default `external` only: no
+credentials, no spend), `--allow-unsandboxed`; `--cockpit` is the cockpit's mode (reads, and acts
+that only ask). **Never serve `targets/tractor/cases` to a chat agent:** the blind protocol answers
+hand-offs there and the committed tree holds a pending one. Close the ledger to the runtime's own
+file tools (best effort: a shell can still write any file), in `.claude/settings.json`:
 
 ```json
-{
-  "permissions": {
-    "deny": [
-      "Edit(/targets/**/migration/**)",
-      "Bash(harness *)",
-      "Bash(cargo run -p harness-cli *)"
-    ]
-  }
-}
+{ "permissions": { "deny": ["Edit(/targets/**/migration/**)", "Bash(harness *)", "Bash(cargo run -p harness-cli *)"] } }
 ```
 
-This is best effort, and stated as such: a shell the agent may use can still write any
-file, so keep blind hand-offs out of a target a chat agent works in while they are
-pending, or run the blind protocol in its own checkout.
+## Project status and benchmark
 
-## Repository layout
+| Milestone | Scope | Status |
+|---|---|---|
+| **M0** end-to-end thread | One leaf unit migrated and differentially verified | ✅ |
+| **M1** ledger + schemas | Fact model, plan, content-bound verdicts, multi-unit ordering, workspace, CI | ✅ |
+| **M2** observer | Hazard detectors, risk scoring, model triage, human review loop, runtime view | ✅ |
+| **M3** executor + provider #2 | `migrate` (translate → oracle → repair), sandboxed execution, two wire adapters live | ✅ |
+| **M4** benchmark | TRACTOR B01 library suite (100 cases), driver generation with C-vs-C self-validation, held-out scoring, scores as regression suite | ✅ |
+| **M5** extension proof | External detector plugin + `EXTENDING.md` | — |
+| **M6+** Phase 2 spike | Second language frontend, golden-test oracle | — |
 
+Since M4: the cockpit and its chat, harness-mcp, features, perf and the project map. zopfli is
+vendored at a pinned commit (DECISIONS.md). Benchmark: DARPA TRACTOR public corpus v2, Battery-01
+library cases, macOS arm64, `targets/tractor/scores.json`; per-case strict pass (every non-UB
+held-out vector passes) over scorable cases.
+
+| Split | Strict pass | Oracle-verified | Blind spots | Non-UB vectors |
+|---|---|---|---|---|
+| public (80 cases) | **70/77** (90.9%) | 70 | 0 | 908/950 |
+| released-hidden (20 cases) | **16/17** (94.1%) | 16 | 0 | 86/87 |
+
+A *blind spot* is a unit the oracle verified that still fails a held-out vector. M4 found three,
+diagnosed in DECISIONS.md: an oracle hole (stderr not compared), fixed; the corpus's own undefined
+behaviour, excused with disclosure (`unmarked-UB`); an FFI-boundary bug, closed 2026-09-24 when
+`read_scalefactors_lib` was re-baselined. Public-vector scores (the vectors predate the models'
+training cutoff), **not comparable** to the First TRACTOR Evaluation Report; see
+targets/tractor/README.md.
+
+## Repository layout and working on the harness
+
+```text
+crates/harness-core/    fact model, schemas, plan, verdicts, observer, risk, planner, adoption
+crates/harness-scan/    C frontend (tree-sitter): facts, mutation sites, driver lint
+crates/harness-detect/  built-in hazard detectors (c-treesitter-v1)
+crates/harness-llm/     provider profiles + adapters, triage, the trajectory engine
+crates/harness-oracle/  c-abi-differential oracle: sandbox, gates, validate_driver, scorer
+crates/harness-cli/     the `harness` binary
+crates/harness-tui/     the cockpit: read model + events reader (a library) and front end
+crates/harness-mcp/     the stdio MCP server (reuses harness-tui's library)
+devtools/               scripts for testing RuHarness itself: cockpit driver, map spike, guide gates
+docs/                   SCHEMAS.md (normative ledger schemas), TESTING-GUIDE.md, TUTORIAL.md,
+                        AGENT-BRIEFING.md; designs: TUI, CHAT-PANE, MCP, CLI-HARDENING, FEATURES,
+                        FEATURES-PROBE-REDESIGN, PERF, PROJECT-MAP (+ -INVESTIGATION, -ROADMAP),
+                        ORACLE-HARDENING, REPLAY, M4, COCKPIT-WRAPPER; FEATURES-PROGRESS.md,
+                        NEXT-SESSION.md, NEXT-WEEK-PLAN.md; reviews/
+providers.example.toml  example provider profiles (user-level; never read from a target)
+targets/tractor/        TRACTOR B01 suite: suite.toml, corpus.lock, cases/, heldout/, scores.json,
+                        handoff-tools/
+targets/zopfli/         the example: harness.toml, AGENTS.md (generated), migration/ (the ledger)
+DECISIONS.md            engineering log: spikes, decisions, milestone handoffs
 ```
-crates/
-  harness-core/     # fact model, schemas, plan, verdicts, observer, risk, planner, traits
-  harness-scan/     # C frontend (tree-sitter): facts, mutation sites, driver lint
-  harness-detect/   # built-in hazard detectors (c-treesitter-v1 suite)
-  harness-llm/      # provider profiles + adapters (anthropic, openai-compat,
-                    #   replay/external), triage pass, and the shared trajectory
-                    #   engine behind migrate + driver generation
-  harness-oracle/   # c-abi-differential OracleStrategy: sandbox + run confinement,
-                    #   symbol-set/capabilities/driver-shape gates, validate_driver,
-                    #   held-out benchmark scorer
-  harness-cli/      # the `harness` binary
-  harness-tui/      # the review cockpit: read model + events reader (a library, also
-                    #   for other clients) and the `harness-tui` terminal front end
-  harness-mcp/      # the stdio MCP server: the ledger and the labelled review acts
-                    #   for an agent runtime (reuses harness-tui's library)
-docs/SCHEMAS.md     # normative ledger schemas, v1
-targets/tractor/    # TRACTOR B01 library suite: suite.toml, corpus.lock, cases/ (one
-                    #   harness target per case), heldout/ (vectors + corpus scorer,
-                    #   never inside a target root), scores.json, handoff-tools/
-targets/zopfli/     # vendored migration target (pinned)
-  harness.toml      #   target config
-  AGENTS.md         #   generated runtime view (managed block; `harness sync-runtime`)
-  migration/        #   THE LEDGER: facts.jsonl, plan.toml, units/<id>/ (contract,
-                    #   driver, Rust crate, content-bound verdicts), DECISIONS.md,
-                    #   observer/ (findings, annotations, triage, reviews,
-                    #   observations.md; traces/ gitignored)
-DECISIONS.md        # engineering log: spikes, decisions, milestone handoffs
-```
 
-Unit crates under `targets/` are deliberately **not** workspace members — the
-oracle builds them via `--manifest-path`, so a broken in-progress unit can never
-brick the harness's own tooling on a fresh clone.
-
-## Working on the harness
-
-CI (GitHub Actions, macOS + Ubuntu) enforces: `cargo fmt --check`, `cargo clippy
---all-targets -- -D warnings`, `cargo test --workspace` (includes an end-to-end
-pipeline test that migrates-and-verifies u001 in a temp copy), and `cargo deny`
-(advisories, license allowlist, source policy). `Cargo.lock` is committed.
-
-Dependency policy is tight (§11 of the project briefing): every addition is
-justified in `DECISIONS.md`. Current tree: serde/serde_json, toml/toml_edit,
-blake3, thiserror, tree-sitter (+C and Rust grammars), clap, anyhow, signal-hook, ureq
-(provider HTTP); the cockpit adds ratatui (on crossterm), similar,
-tree-sitter-highlight and unicode-width, in its own crate only.
+Unit crates under `targets/` are not workspace members: the oracle builds them via
+`--manifest-path`, so a broken unit never bricks the harness's own build. Stable Rust (pinned in
+`rust-toolchain.toml`) and a C compiler with ASan/UBSan. CI (GitHub Actions, macOS + Ubuntu):
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`
+(including an end-to-end migrate-and-verify of u001 in a temp copy), `cargo deny`; `Cargo.lock` is
+committed. Every dependency is justified in DECISIONS.md ([docs/AGENT-BRIEFING.md](docs/AGENT-BRIEFING.md)
+§11): serde/serde_json, toml/toml_edit, blake3, thiserror, tree-sitter (+C and Rust grammars),
+clap, anyhow, signal-hook, libc, ureq (provider HTTP); the cockpit adds ratatui (on crossterm),
+similar, tree-sitter-highlight and unicode-width. Working on RuHarness: the briefing first, then
+docs/NEXT-SESSION.md and DECISIONS.md's last entries.
 
 ## License
 
-Harness crates: MIT OR Apache-2.0. `targets/zopfli/` is Google's zopfli, Apache-2.0
-(see its `COPYING`); `katajainen_rs` is a derivative of it and stays Apache-2.0.
+Harness crates: MIT OR Apache-2.0. `targets/zopfli/` is Google's zopfli, Apache-2.0 (see its
+`COPYING`); `katajainen_rs` is a derivative of it and stays Apache-2.0.
