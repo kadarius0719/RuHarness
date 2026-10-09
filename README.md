@@ -1,26 +1,30 @@
 # RuHarness
 
 RuHarness moves a program written in **C**, an older programming language, to **Rust**, a newer
-one that rules out a whole family of memory mistakes. It moves one piece at a time, and proves each
-piece behaves the same as the C it replaces by running both and comparing what they print. An AI
-model may write the Rust; it never decides whether the Rust is right.
+one that rules out a whole family of **memory mistakes** (a program reading or writing parts of the
+computer's memory it should not, a common cause of crashes and security holes). It moves one piece
+at a time, and proves each piece behaves the same as the C it replaces by running both and
+comparing what they print. An AI model may write the Rust; it never decides whether the Rust is
+right.
 
 - **Who it is for.** Anyone with a C program they want in Rust without reading every line of the
   translation. The testing guide walks a careful non-programmer through it.
 - **Where it runs.** A Mac. On Linux it runs only without its safety box (the *sandbox*, below);
   Windows has not been tried.
-- **What it touches.** It adds one folder, `migration/`, inside the project. Your C files are
-  never changed.
+- **What it touches.** It adds one folder, `migration/`, inside the project, plus one small trust
+  file in your Library folder (step 2 below). Your C files are never changed.
 
 ## Start here
 
-- **Never programmed?** Follow the testing guide from [Part 0](docs/TESTING-GUIDE.md#part-0--get-your-mac-ready):
-  it sets up your Mac (30–60 minutes), then walks a real migration with every screen (4–5 hours).
-- **Want the ideas first?** Read [docs/TUTORIAL.md](docs/TUTORIAL.md). It asks you to run nothing.
+- **Never programmed?** Read the [tutorial](docs/TUTORIAL.md)'s sections 1–3 first (about 20
+  minutes; it asks you to run nothing), then follow the testing guide from
+  [Part 0](docs/TESTING-GUIDE.md#part-0--get-your-mac-ready). Part 0 sets up your Mac (30–60
+  minutes); the whole guide takes about 4–5 hours in all, setup included. The tutorial's opening
+  says which of its sections to read before each later part of the guide.
 - **Tools already set up?** Do the [Quick start](#quick-start-the-built-in-example) below.
 - **Your own C project?** The section after it, [Your own C project](#your-own-c-project).
 
-## How it works, in ten lines
+## How it works, in eight points
 
 1. The program is cut into **units**: pieces (usually one C file each) that move to Rust as a whole.
 2. For one unit, a **model** (an AI such as Claude) writes the Rust; the rest of the program stays C.
@@ -32,13 +36,19 @@ model may write the Rust; it never decides whether the Rust is right.
 5. Every check passes: the **verdict** is **GREEN**. One fails: **RED**.
 6. Everything is recorded as plain text in the project's **ledger**, its `migration/` folder.
 7. Code a model wrote runs only in a **sandbox**: a locked-down space with no network, no access to
-   your home folder, and a time limit.
-8. Nothing a model wrote becomes part of the program until it is GREEN *and* you accept it.
+   your personal files, and a time limit.
+8. Nothing a model wrote replaces the C until it is GREEN *and* you say yes. The cockpit (the
+   full-screen view, below) asks you. On the command line, typing `harness migrate` is your yes: it
+   puts a GREEN result in place by itself, unless you add `--no-promote`, which holds it until you
+   run `harness promote`.
+
+The six steps, for every unit (the tutorial's [section 4](docs/TUTORIAL.md#4-from-c-to-a-plan)
+explains each):
 
 ```text
 scan ──▶  plan ──▶   driver ──▶ migrate ──▶ verify ──▶ accept
-read C    cut into   a test     a model     the judge  yours
-          units      program    writes Rust compares   to decide
+read C    cut into   a test     a model     the judge  you say
+          units      program    writes Rust compares   yes
 ```
 
 ## Quick start: the built-in example
@@ -49,16 +59,23 @@ code that bills an AI service to a paid account) are needed.
 
 **What you need.** The guide's Part 0 done; or Apple's developer tools (`xcode-select --install`),
 Rust ([rustup.rs](https://rustup.rs)) and git (a tool that keeps every saved version of a
-project's files). Each box is one **command**: paste it into the Terminal app, press Return. To
-download RuHarness (the guide's Step 0.8; not run here, like step 1):
+project's files). Each box is one **command**: paste it into the Terminal app, press Return. If you
+did the guide's Part 0, you already have the next box's folder and steps 1 to 3 are Steps 0.19 to
+0.22 again: running them again is harmless.
+
+To download RuHarness (you ran this in the guide's Step 0.8; skip it if so). `~` is your home
+folder, the one named after your Mac user name; `cd` ("change directory") moves Terminal into a
+folder, and every command after it works there:
 
 ```bash
 git clone https://github.com/kadarius0719/RuHarness.git ~/code/RuHarness && cd ~/code/RuHarness
 ```
 
-Every command below runs inside that folder: if you already have it, run `cd ~/code/RuHarness`.
+Every command below runs inside that folder. In a new Terminal window, first run
+`cd ~/code/RuHarness`.
 
-**1. Build and install the three programs** with cargo, Rust's build tool (guide Step 0.19).
+**1. Build and install the three programs** with cargo, Rust's build tool (you ran this in the
+guide's Step 0.19; skip it if so).
 
 ```bash
 cargo install --locked --path crates/harness-cli
@@ -69,8 +86,10 @@ cargo install --locked --path crates/harness-mcp
 *You should see* many `Compiling` lines, each install ending `` (executable `harness`) ``, then
 `harness-tui`, then `harness-mcp`; minutes each the first time. *What it means:* `harness` (the
 command-line tool), `harness-tui` (the **cockpit**, a full-screen view with an AI chat) and
-`harness-mcp` (the chat's connector) are in `~/.cargo/bin`. *If not:* a message that the lock file
-needs updating: run the line again without `--locked`.
+`harness-mcp` (the chat's connector) are in `~/.cargo/bin`. `--locked` builds with the exact
+versions of the building blocks listed in the project's **lock file** (`Cargo.lock`), the ones it
+was tested with. *If not:* a message that the lock file needs updating: run the line again without
+`--locked`.
 
 **2. Trust the example's records, once.** `state status` is the "where am I?" command; `--target`
 names the project.
@@ -79,7 +98,8 @@ names the project.
 harness state status --target targets/zopfli --adopt
 ```
 
-*You should see* these two lines first (`<you>` is your Mac user name), then a `status:` line per unit:
+*You should see* these two lines first (`<you>` is your Mac user name), then lines starting
+`status:`, one per unit, ending with one that tells you to run step 3's command:
 
 ```text
 adopt: /Users/<you>/code/RuHarness/targets/zopfli is now trusted on this computer (11 units, 1 verified)
@@ -89,8 +109,8 @@ adopt: 1 verified unit came with it, marked "made elsewhere" until you run `harn
 *What it means:* the judge builds and runs the code a ledger holds, so the first time the harness
 meets a ledger made on another computer it asks once; `--adopt` is your yes, kept in
 `~/Library/Application Support/ruharness/adopted.toml`. *If not:* `adopt: … is already trusted on
-this computer; nothing deleted` is fine; `error: … is not a harness target` means you are not in
-`~/code/RuHarness`.
+this computer; nothing deleted` is fine (you did this in Part 0); `error: … is not a harness target`
+means you are not in `~/code/RuHarness`.
 
 **3. Run the judge on the unit already in Rust**, and print how it ended.
 
@@ -114,19 +134,30 @@ verify: u001-katajainen GREEN — status set to verified
 exit=0
 ```
 
-*What it means:* the Rust offers the same function names, asks for nothing more than the C, prints
-the same bytes as the C (driver, whole program, features) and runs clean under memory checkers.
-`exit=0` is the command's **exit code** ("If something goes wrong" lists them). *If not:* the
-"made elsewhere … add `--adopt` once" error means step 2 was skipped.
+Words in those lines: a **capability** is something a program asks the computer for (files, the
+network, the clock); **asm** is assembly, machine instructions written by hand; **allowlisted
+libc** means only harmless standard C functions from a fixed list; a **lint** is an automatic check
+of a program's text against rules; **differential** means the C and the Rust ran on the same input
+and their outputs were compared.
 
-**4. Plant a bug and watch the judge catch it.** Find the line to break:
+*What it means:* the Rust offers the same function names, asks for nothing more than the C, and
+prints the same bytes as the C (driver, whole program, features). The `sanitizers` line means the
+memory checkers ran the C side and the test program and found nothing wrong; they do not run the
+Rust. The Rust is checked another way: its working part is safe Rust, which the Rust compiler
+itself checks for memory mistakes. `exit=0` is the command's **exit code** ("If something goes
+wrong" lists them). *If not:* the "made elsewhere … add `--adopt` once" error means step 2 was
+skipped.
+
+**4. Plant a bug and watch the judge catch it.** Find the line to break (`grep` searches a file for
+a piece of text; `-n` prints the line's number):
 
 ```bash
 grep -n 'leaves\[0\]\.count as usize\] =' targets/zopfli/migration/units/u001-katajainen/katajainen_rs/src/lib.rs
 ```
 
 *You should see* `211:        bitlengths[leaves[0].count as usize] = 1;`. Open the file in the
-`nano` editor:
+`nano` editor (`-w` stops it from splitting long lines; on a Mac its title says pico, which is
+normal):
 
 ```bash
 nano -w targets/zopfli/migration/units/u001-katajainen/katajainen_rs/src/lib.rs
@@ -145,9 +176,10 @@ verify: u001-katajainen RED — status demoted verified -> in-progress
 exit=10
 ```
 
-*What it means:* one changed number makes the Rust print different bytes; the judge says RED (exit
-code 10) and the unit no longer counts as migrated. *If not:* still GREEN means the file was not
-saved: open it again, Ctrl-O, Return.
+*What it means:* one changed number makes the Rust print different bytes (`lens` are the lengths of
+the two outputs, in bytes; the first difference is at byte 88); the judge says RED (exit code 10)
+and the unit no longer counts as migrated. *If not:* still GREEN means the file was not saved: open
+it again, Ctrl-O, Return.
 
 **5. Put everything back.** git keeps each saved version (a **commit**); this restores the saved one:
 
@@ -156,12 +188,16 @@ git checkout targets/zopfli
 ```
 
 *You should see* `Updated 4 paths from the index`: the file, the plan and two verdict files.
+*If not:* another number of paths is fine: it counts the files that had changed.
+Run step 3's box once more if you like: it is GREEN again.
 
-**6. See the plan and the risk report.** *You should see* the three lines under the box.
+**6. See the plan and the risk report.**
 
 ```bash
 harness plan --target targets/zopfli
 ```
+
+*You should see* these three lines:
 
 ```text
 plan: no changes (11 units)
@@ -170,35 +206,82 @@ plan: next, write the first unit's differential driver: `harness gen-driver u-ca
 ```
 
 *What it means:* the order units can move in, each after those it depends on. The suggested next
-step asks a model for a driver: that is the guide's Part 3, not this experiment. Then run
-`head -12 targets/zopfli/migration/observer/observations.md`: *you should see* `# Observations`,
-`findings: 31` and a table `Units by risk` starting `| u-blocksplitter-deflate-squeeze | pending |
-51 |`: each unit's risk score, from the risky C patterns (**hazards**) found in it.
+step asks a model for a driver (the "differential driver" is the test program of "How it works",
+point 4): that is the guide's Part 3, not this experiment. *If not:* `error: … is not a harness target`
+means you are not in `~/code/RuHarness`. Then the risk report:
+
+```bash
+head -12 targets/zopfli/migration/observer/observations.md
+```
+
+*You should see* `# Observations`, `findings: 31` (31 places in the C the detectors flagged as
+risky to translate) and a table `Units by risk` starting `| u-blocksplitter-deflate-squeeze |
+pending | 51 |`: each unit's risk score, from the risky C patterns (**hazards**) found in it.
+
+**You are done with the experiment.** Next: your own project, just below, or the guide's
+[Part 1](docs/TESTING-GUIDE.md#part-1--get-liblzg-and-turn-it-into-a-target), which walks a whole
+migration with an AI.
 
 ## Your own C project
 
-Your project has no settings file for the harness, so the harness first **maps** it: it finds each
-program (a `.c` file holding `main()`, where a program starts), the files each needs, and the
-**held choices**, where two files offer the same function and you must pick one. You say how the
-project is built and **accept** a program as a **tool**: the harness writes its settings file,
-`harness.toml`, in `migration/tools/<id>/`, and you name it from then on with `--tool <id>`. The
-screens quoted are liblzg's, a small compression library; your names will differ. The guide's
+A project of your own has no settings file for the harness, so the harness first **maps** it: it
+finds each program (a `.c` file holding `main()`, where a program starts), the files each needs,
+and the **held choices**, where two files offer the same function and you must pick one. You say
+how the project is built and **accept** a program as a **tool**: the harness writes its settings
+file, `harness.toml`, in `migration/tools/<id>/`, and you name it from then on with `--tool <id>`.
+Then the six steps of "How it works" run on the tool as on any project. The ideas are in the
+tutorial's [section 13](docs/TUTORIAL.md#13-mapping-a-whole-c-project); the guide's
 [Part 12](docs/TESTING-GUIDE.md#part-12--liblzg-by-map-let-the-harness-find-the-program) walks it
-whole: 12A (Steps 12.1–12.5) the map and accept, 12B (Steps 12.6–12.14) the first unit. Work on a
-copy of the project, from inside its folder (`cd` there first): without `--target`, a command
-works on the folder you are in.
+whole, every screen included. The screens quoted here are liblzg's, a small compression library
+the guide's Part 1 downloads into `~/code/liblzg-upstream`; your names will differ.
 
-**1. Map it:** `harness project map`. *You should see* a long screen with `programs: 3`; under each
-program `link check: linked` (every function found exactly once) or `not linked while d1 is open`
-with a `duplicate set d1 (…): held` line; and at the end `the configuration is a guess, so nothing
-can be accepted yet`. *What it means:* it compiled every file in the sandbox under a guess and wrote
-`migration/map/`; none of your files changed.
+**1. Make a copy to work on.** The harness writes only inside the project's `migration/` folder,
+but a copy keeps your original untouched. Put your project's folder in place of
+`~/code/liblzg-upstream` (dragging a folder from Finder into Terminal types its path), and a new
+name that does not exist yet in place of `~/my-copy`.
 
-**2. Say how it is built.** The **compiler** turns C text into a program the Mac can run; a
+```bash
+cp -R ~/code/liblzg-upstream ~/my-copy
+```
+
+*You should see* nothing; the prompt comes back. *What it means:* `cp -R` copies a folder with
+everything inside it. *If not:* `No such file or directory` means the first name is wrong (`ls
+~/code` lists what is there). The guide's Step 12.1 makes the same kind of copy another way.
+
+**2. Go into the copy.** Every command from here works on the folder you are in, so none of them
+names `--target`.
+
+```bash
+cd ~/my-copy
+```
+
+*You should see* nothing. *What it means:* Terminal now works in `~/my-copy`. In a new Terminal
+window, run this box again first. *If not:* `no such file or directory`: step 1 did not make the
+copy.
+
+**3. Map it.**
+
+```bash
+harness project map
+```
+
+*You should see* a long screen. Among its lines: `programs: 3`; under each program, `link check:
+linked` (every function it needs found exactly once) or `link check: not linked while d1 is open`
+with a line `duplicate set d1 (…): held, …`; and at the end `the configuration is a guess, so
+nothing can be accepted yet`, with an example of the next step's file. *What it means:* it compiled
+every file in the sandbox under a guess and wrote `migration/map/`; none of your files changed.
+*If not:* `error: no C files (.c or .h) were found in …`: you are not in the copy (step 2).
+
+**4. Say how it is built.** The **compiler** turns C text into a program the Mac can run; a
 **flag** is an option given to it: `-I` plus a folder says where the **header** files (`.h`) are,
-`-D` sets a name, `-O` a speed level. Take them from the project's `Makefile` (the file that tells
-the `make` program how to build); leave out warning flags such as `-Wall`, which the harness
-refuses. Paste the four lines, a heading and three settings, as one command down to `EOF`:
+`-D` sets a name the C can test, `-O` a speed level. Find them in the project's `Makefile` (the
+file that tells the `make` program how to build) and keep only the `-I`, `-D` and `-O` flags; the
+harness refuses the others. Write each folder from the project's top folder: liblzg's
+`src/tools/Makefile` says `-I../include`, meaning "one folder up from `src/tools`, then `include`",
+which from the top is `src/include`. An `-O` level is recorded only, never used: the harness always
+compiles at its own level. The box writes a file of four lines, a heading and three settings:
+everything from `cat >` down to `EOF` is one command, so paste it whole. While it pastes, Terminal
+starts each line with `heredoc>`; that is normal.
 
 ```bash
 cat > migration/map/config.toml <<'EOF'
@@ -209,34 +292,125 @@ flags = ["-O3", "-Isrc/include"]
 EOF
 ```
 
-Read it back with `cat migration/map/config.toml`: *you should see* those four lines. (Or have a
-model propose the file: `harness project ask --build`, answered as in step 4.)
+*You should see* nothing. Read the file back:
 
-**3. Map again:** `harness project map`. *You should see* the second line now `configuration: make,
-from make (stated in config.toml), flags -O3, -Isrc/include; …`, and the last line naming
-`harness project accept <id>`. *If not:* `error: migration/map/config.toml: …` names each refused flag.
+```bash
+cat migration/map/config.toml
+```
 
-**4. Optional, a model's advice on a held choice:** `harness project ask --model by-hand`
-(`--model` names who will answer: a model, or you). It is **meant to stop** with `error: awaiting
-response: …/migration/map/traces/<key>.response.json` and exit code 1: a **hand-off** (see "Using
-AI"). The guide's Step 12.4 answers it. The advice decides nothing.
+*You should see* the four lines between `<<'EOF'` and `EOF`. *What it means:* the harness now knows
+how the project is built. (A model can propose this file instead: `harness project ask --build`,
+answered as in step 6.)
 
-**5. Accept a program:** `harness project accept t-lzg`. *You should see* `project accept: wrote
-migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; …)`. Read it with
-`cat migration/tools/t-lzg/harness.toml`, as the message says. A program with a held choice is refused, `error: duplicate set d1 of t-unlzg (…) is not
-settled`, until you name the file to keep: `harness project accept t-unlzg --keep d1=d1.2`.
+**5. Map again.**
 
-**6. Work on the tool**, naming it each time: `harness scan --tool t-lzg` (*you should see*
-`scan: 6 files, 18 symbols, 42 refs -> …`), `harness plan --tool t-lzg` (`plan: execution order:
-u-checksum -> u-encode -> u-version -> u-lzg`), then `harness gen-driver u-version --tool t-lzg
---model by-hand`, which is **meant to stop** with `error: awaiting response: …` (exit 1) until you
-answer it. Until then `harness migrate u-version --tool t-lzg` refuses (``its generated driver's
-validation is `missing` ``), and so does `harness verify u-version --tool t-lzg` (`has no
-[unit.oracle] configured`). The guide's Steps 12.7–12.14 answer the driver, translate the unit,
-verify it, and turn on the whole-program check (`[oracle.whole_program]` with the program's
-arguments, such as `args = ["-c"]`, in the tool's `harness.toml`; until then `verify` shows
-`[SKIP] … not run`). When the project changes later, `harness project map` names each tool that
-changed and what to do (scan it, or accept it again); the guide's 12C walks it, cockpit included.
+```bash
+harness project map
+```
+
+*You should see* the second line now say `configuration: make, from make (stated in config.toml),
+flags -O3, -Isrc/include; -O3 is recorded only, never applied (every compile keeps the harness's
+own)`, and the last line name `harness project accept <id>` and the held choices (`d1`). *What it
+means:* the guess is replaced by your configuration, so programs can be accepted. *If not:* `error:
+migration/map/config.toml: …` names each refused flag and why: take those out and redo step 4.
+
+**6. Optional: a model's advice on a held choice.** Skip to step 7 if you like: the advice decides
+nothing. `--model` names who will answer (a model, or you), and is recorded with the answer.
+
+```bash
+harness project ask --model by-hand; echo "exit=$?"
+```
+
+*You should see* it **meant to stop**: `error: awaiting response:
+…/migration/map/traces/<key>.response.json` (`<key>` is eight letters and digits naming the
+question), then `exit=1`. *What it means:* a **hand-off** (see "Using AI"): the harness wrote its
+question to a file and waits for an answer file beside it. The guide's Step 12.4 gives the answer
+and runs the same command again, which then shows the advice. *If not:* a different key than the
+guide's is normal when your project is not liblzg.
+
+**7. Accept a program.**
+
+```bash
+harness project accept t-lzg
+```
+
+*You should see* two lines: `project accept t-lzg: the whole-program check is off until you fill in
+[oracle.whole_program] in migration/tools/t-lzg/harness.toml (a commented example is there)`, then
+`project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; …)`.
+*What it means:* `t-lzg` is now a tool, with its own settings file and ledger in
+`migration/tools/t-lzg/`; `cat migration/tools/t-lzg/harness.toml` shows the file. The
+whole-program check is turned on later (the end of this section). *If not:* `error: the configuration is a
+guess, …`: do steps 4 and 5.
+
+**8. Accept a program with a held choice.** The map lists the files of a held choice as `d1.1`,
+`d1.2`, …: for liblzg, `d1.1` is `src/extra/lzgmini.c` (a small decoder) and `d1.2` is
+`src/lib/decode.c` (the library's own). Keep the one the project's own build uses: liblzg's
+`src/lib/Makefile` builds `decode.c`. Without `--keep`, accept refuses with `error: duplicate set
+d1 of t-unlzg (…) is not settled`, naming both files.
+
+```bash
+harness project accept t-unlzg --keep d1=d1.2
+```
+
+*You should see* ``project accept t-unlzg: keeping `src/lib/decode.c` over `src/extra/lzgmini.c`
+…`` and, last, `project accept: wrote migration/tools/t-unlzg/harness.toml (3 file(s), linked, run
+as unlzg; …)`. *What it means:* the decompressor is a second tool. This walk goes on with `t-lzg`.
+
+**9. Read the tool's C.** Name the tool each time with `--tool`.
+
+```bash
+harness scan --tool t-lzg
+```
+
+*You should see* `scan: 6 files, 18 symbols, 42 refs -> …` and a line naming the next command.
+*What it means:* the harness recorded every function of the tool's files (a **symbol**) and which
+file uses which (the **refs**). *If not:* `error: … has 2 mapped tools … pick one with --tool (t-lzg, t-unlzg)`:
+you left out `--tool t-lzg`.
+
+**10. Cut it into units.**
+
+```bash
+harness plan --tool t-lzg
+```
+
+*You should see* four `plan: unit … added (pending)` lines, then `plan: execution order:
+u-checksum -> u-encode -> u-version -> u-lzg` and a line suggesting `harness gen-driver
+u-checksum`. *What it means:* four units, in the order they can move.
+
+**11. Ask for the first unit's driver.** The plan suggests `u-checksum`; the guide's Part 12 takes
+`u-version`, the smallest unit, and so does this walk. The answer's author is named
+`guide-written`, the word the guide uses for this same command, so the guide can pick up from here.
+Use the same `--model` word every time you run this command: the word is part of the question, so
+another word asks a new question, under a new key, and your answer is not found.
+
+```bash
+harness gen-driver u-version --tool t-lzg --model guide-written; echo "exit=$?"
+```
+
+*You should see* it **meant to stop**: `error: awaiting response:
+…/migration/tools/t-lzg/units/u-version/driver-traces/<key>.response.json`, then `exit=1`. *What it
+means:* the harness asked for a driver and waits for the answer. *If not:* `error: … pick one with
+--tool …`: you left out `--tool t-lzg`.
+
+**Then the guide takes over.** The box above is the guide's Step 12.7: go on from its
+[Step 12.8](docs/TESTING-GUIDE.md#step-128--write-the-driver-into-your-scratch-folder), which
+writes the driver's answer (Steps 12.8–12.12), translates the unit (12.13), verifies it and turns on
+the whole-program check (12.14) by adding to the tool's `harness.toml`:
+
+```toml
+[oracle.whole_program]
+args = ["-9"]
+```
+
+`args` are the options the program is run with (for liblzg's `lzg`, `-9` means "compress as small
+as possible"); until they are there, `verify` shows that check as `[SKIP] … not run`. Run before the
+driver is answered, `harness migrate u-version --tool t-lzg` refuses with ``unit `u-version` is
+stale: its generated driver's validation is `missing` `` (here "stale" means the unit has no tested
+driver yet), and `harness verify u-version --tool t-lzg` refuses with `has no [unit.oracle]
+configured` (`[unit.oracle]` is the part of the plan that tells the judge how to test a unit;
+answering the driver writes it). Both are expected. When your project changes later, `harness
+project map` names each tool that changed and what to do (scan it, or accept it again); the guide's
+12C walks that, the cockpit way included.
 
 ## Using AI
 
@@ -245,7 +419,8 @@ changed and what to do (scan it, or accept it again); the guide's 12C walks it, 
 subscription; the guide's Steps 0.13–0.15 check both. Run `harness-tui --target targets/zopfli`,
 press `Tab` until the Chat pane is highlighted, and ask in plain words ("migrate this unit"). The
 chat never runs anything itself: what it wants waits on a yellow line until you review and confirm
-it. The guide's Parts 4 and 6 walk it.
+it. The guide's Parts 4 and 6 walk it. *If not:* the cockpit asks `Adopt this folder?` first when
+step 2 of Quick start was not done: type `y` and Enter. `q` quits.
 
 **On the command line: a hand-off.** The harness writes its question to a file and stops; you, or
 any AI you paste it into, write the answer file, and the same command run again reads it and goes
@@ -257,19 +432,24 @@ harness migrate u001-katajainen --target targets/zopfli --model my-test
 
 *You should see* `awaiting response: …/u001-katajainen/traces/<key>.response.json`, a line on the
 answer's format, then `error: awaiting response: …` and exit code 1: waiting, not failed. The
-answer file holds the reply inside this **envelope**:
-`{"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}`. The
-guide's Plan B (after Part 4) does it with Claude Code. To drop the waiting attempt instead:
-`git clean -fd targets/zopfli/migration/units/u001-katajainen/attempts` (*you should see*
-`Removing …/attempts/a-<code>/`).
+answer file holds the reply inside this **envelope** of JSON (a common way of writing data as
+text): `{"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}`.
+The reply goes in `"text"`; the other three fields are bookkeeping a paid service fills in, and an
+answer written by hand keeps them as shown. The guide's Plan B (after Part 4) does it with Claude
+Code. To drop the waiting attempt instead (you should see `Removing …/attempts/a-<code>/`):
+
+```bash
+git clean -fd targets/zopfli/migration/units/u001-katajainen/attempts
+```
 
 **Optional: a live service or a local model.** A **provider** is how the harness reaches a model.
 `--provider anthropic` uses your `ANTHROPIC_API_KEY` (billed per use). An OpenAI-compatible
 service, or a model on your Mac through Ollama, is a profile in your own providers file:
-[providers.example.toml](providers.example.toml) shows one; run
-`export RUHARNESS_PROVIDERS=$PWD/providers.example.toml` and add `--provider ollama-openai --model
-llama3.2-1b-32k`. A tiny model fails the judge, which is the point. (Not run for this README: it
-needs Ollama installed and a model downloaded.)
+[providers.example.toml](providers.example.toml) shows two, `ollama-anthropic` and
+`ollama-openai`. They need Ollama installed and the model `llama3.2-1b-32k` created first, as the
+file's comment shows; then run `export RUHARNESS_PROVIDERS=$PWD/providers.example.toml` and add
+`--provider ollama-openai --model llama3.2-1b-32k`. A tiny model fails the judge, which is the
+point.
 
 ## If something goes wrong
 
@@ -289,7 +469,9 @@ out-of-date messages.
 
 ---
 
-**Reference: look things up here; a newcomer can stop reading here.**
+**Reference: look things up here; a newcomer can stop reading here.** Newcomers: look things up in
+the tutorial's friendly [appendix](docs/TUTORIAL.md#16-appendix-reference) instead; the tables
+below are written for developers.
 
 ## Command reference
 
@@ -352,7 +534,7 @@ on PATH, else next to the cockpit), `--provider NAME` (repeatable, default `exte
 never chooses it), `--allow-unsandboxed`, `--layout split|stacked`, `--no-mouse`, `--no-chat`,
 `--chat-runtime PATH` (the `claude` to run), `--harness-mcp PATH` (default next to the cockpit,
 else on PATH), `--chat-model NAME`. `cargo build` at the root skips it (`cargo build -p
-harness-tui`); reinstall it with harness-cli, as it uses the `harness` installed beside it.
+harness-tui`); reinstall it with harness-cli, as it uses the `harness` first on your PATH.
 
 The chat's safety rule: the chat is your own Claude Code, reading the project through
 `harness-mcp --cockpit`, with no tool that writes. Every act it wants waits until you review it in

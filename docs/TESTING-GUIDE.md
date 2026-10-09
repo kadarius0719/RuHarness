@@ -788,7 +788,7 @@ echo "exit=$?"
 exit=0
 ```
 
-**What it means.** The judge rebuilt zopfli's Rust unit, ran it against the original C inside the sandbox, and every check passed: the Rust offers the same function names, asks for nothing more than the C did, prints the same bytes as the C for the driver and for the whole program on three sample files, runs clean under memory checkers, and gives the same results for zopfli's 8 **features** (runs of the whole program with fixed options, such as compressing a text file). That answers this part's question: RuHarness works on your Mac.
+**What it means.** The judge rebuilt zopfli's Rust unit, ran it against the original C inside the sandbox, and every check passed: the Rust offers the same function names, asks for nothing more than the C did, prints the same bytes as the C for the driver and for the whole program on three sample files, and gives the same results for zopfli's 8 **features** (runs of the whole program with fixed options, such as compressing a text file). The `sanitizers` line means the memory checkers ran the C side and the test program and found nothing wrong; they do not run the Rust, which is checked another way: its working part is safe Rust, which the Rust compiler itself checks for memory mistakes. That answers this part's question: RuHarness works on your Mac.
 
 Two words from those lines: **differential** means the C and the Rust are run on the same input and their outputs compared, and a **lint** is an automatic check of a program's text against a list of rules (`source lint clean` means no rule was broken).
 

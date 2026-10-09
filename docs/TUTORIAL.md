@@ -1,12 +1,26 @@
 # Understanding RuHarness
 
-RuHarness moves a program written in C to Rust one piece at a time: a model writes the Rust, an automatic judge proves it behaves exactly like the C, and nothing becomes final until you accept it. This page explains how and why, in plain words, for a careful reader who has never programmed.
+RuHarness moves a program written in C to Rust one piece at a time: a model writes the Rust, an automatic judge proves it behaves exactly like the C, and nothing replaces the C until you say yes. This page explains how and why, in plain words, for a careful reader who has never programmed.
 
 By the end you will know what a program is made of and how it is built; what C and Rust are and why anyone moves a program from one to the other; how RuHarness splits the work into pieces, asks a model for each, and judges the answer; what that proof covers and what it does not; and how to read everything the cockpit and the commands show you.
 
 This page is the companion of the [testing guide](TESTING-GUIDE.md). **The guide is where you type and see**: every command, what it prints, and what to do when it differs. **This page never asks you to run anything.** Each section explains one idea, in the order the guide meets it, and names the guide part it prepares: read the section, then do that part. You can also read the whole page first; it takes about an hour. The words are recapped in section 15, and section 16 is a reference to look things up in.
 
-Which section to read before which part of the guide: sections 1 and 2 before Parts 0 and 1; section 3 before Step 0.21 in Part 0; section 4 before Part 2 (and Part 7); sections 5 and 6 before Part 3; sections 7, 8 and 9 before Parts 4 and 5 (they come back in Parts 6 and 9); section 10 before Part 8; section 11 before Part 10; section 12 before Part 11; section 13 before Part 12. Section 14 says how RuHarness itself is tested.
+Which section to read before which part of the guide:
+
+| Read these sections | Before this part of the guide | They come back in |
+|---|---|---|
+| 1 and 2 | Part 0 | Part 1 |
+| 3 | Step 0.21, in Part 0 | Part 2 |
+| 4 | Part 2 | Part 7 |
+| 5 and 6 | Part 3 | Parts 4, 6 and 12 |
+| 7, 8 and 9 | Part 4 | Parts 5, 6 and 9 |
+| 10 | Part 8 | |
+| 11 | Part 10 | |
+| 12 | Part 11 | |
+| 13 | Part 12 | |
+
+Section 14 says how RuHarness itself is tested.
 
 ## 1. Programs, files and building
 
@@ -24,7 +38,7 @@ That is why people move C programs to Rust. Rewriting a whole program at once is
 
 *Prepares the guide's [Part 1](TESTING-GUIDE.md#part-1--get-liblzg-and-turn-it-into-a-target).*
 
-RuHarness moves a program written in C to Rust one small piece at a time, and proves each piece behaves exactly like the original before it counts. You never have to read or trust the new code yourself: an automatic judge decides. Nothing becomes final until you accept it: a translation the judge passes waits for you, and until you accept it, the program keeps running the C.
+RuHarness moves a program written in C to Rust one small piece at a time, and proves each piece behaves exactly like the original before it counts. You never have to read or trust the new code yourself: an automatic judge decides. Nothing replaces the C until you say yes. In the cockpit, a translation the judge passes waits for you, and until you accept it, the program keeps running the C; on the command line, typing `harness migrate` is your yes (section 8).
 
 The program is split into **units**: one C file, or a small group of files that belong together. The rest of the program stays in C while one unit moves. The new Rust unit keeps the same function names as the C it replaces, so it drops straight into the program:
 
@@ -66,16 +80,21 @@ targets/zopfli/              the target: the C project
 
 *Prepares the guide's [Part 2](TESTING-GUIDE.md#part-2--let-the-harness-read-the-c-and-make-a-plan), and [Part 7](TESTING-GUIDE.md#part-7--why-the-other-three-units-stay-in-c).*
 
-A project goes through six steps, and only two of them involve an AI model. The others are ordinary code that gives the same answer every time, so the facts the AI works from, and the judge that checks it, cannot be talked into anything.
+A project goes through six steps, the same six the README draws: scan, plan, driver, migrate, verify, accept. Two of them ask an AI model to write something: the driver and the Rust. The others are ordinary code that gives the same answer every time, so the facts the AI works from, and the judge that checks it, cannot be talked into anything.
 
 1. **Scan** reads every C file and writes down what it contains (the **facts**): each function, and which file uses which. The harness calls a named function a **symbol**: a **public** one can be called from other files, an **internal** one is private to its own file.
 2. **Plan** splits the program into units and orders them so each unit moves after the units it depends on.
-3. **Detect** flags C patterns that are known to be tricky to translate, so they are not missed: **macros** (shorthands the compiler expands into code before compiling), **function pointers** (handing a function to another function, to be called back later), and data shared across the whole program. Each flag is a **hazard**.
-4. **Observe** asks a model to review each flag, keeping the real ones, and ranks the units by risk in `observations.md`. A flag the model dismisses still counts until a person agrees (`harness review` records that person's word).
-5. **Migrate** asks a model to write the Rust for one unit, has the judge check it, and gives the model up to three turns to repair what failed (section 8). Every attempt is kept.
-6. **Verify** runs the judge on the unit and records the verdict. You can run it again at any time; if the code has changed since, the unit shows as out of date.
+3. **Driver** (the command `harness gen-driver`) gets a test program for one unit, written by a model or a person, and tests it against the C before it may be used (section 5).
+4. **Migrate** asks a model to write the Rust for one unit, has the judge check it, and gives the model up to three turns to repair what failed (section 8). Every attempt is kept.
+5. **Verify** runs the judge on the unit and records the verdict. You can run it again at any time; if the code has changed since, the unit shows as out of date.
+6. **Accept** makes a GREEN translation the unit's Rust. In the cockpit you choose; on the command line `harness migrate` does it by itself unless you add `--no-promote` (section 8).
 
-In the cockpit, steps 1–3 are the project's menu items (Scan the project, Refresh the plan, Find hazards (run the detectors)), and step 5 is what the chat asks for.
+Two more commands find the risky parts, so they are not missed:
+
+- **Detect** flags C patterns that are known to be tricky to translate: **macros** (shorthands the compiler expands into code before compiling), **function pointers** (handing a function to another function, to be called back later), and data shared across the whole program. Each flag is a **hazard**.
+- **Observe** asks a model to review each flag, keeping the real ones, and ranks the units by risk in `observations.md`. This model gives advice only: a flag it dismisses still counts until a person agrees (`harness review` records that person's word).
+
+In the cockpit, scan, plan and detect are the project's menu items Scan the project, Refresh the plan and Find hazards (run the detectors); migrate is what the chat asks for; Accept is a menu item of a GREEN attempt.
 
 **Why some units wait.** In this version only a **leaf unit** can be migrated: one whose C calls nothing in the project's other `.c` files. A unit that calls another unit's functions cannot be tested alone, because its test program would not link without the other unit's C. That is what Part 7 shows for liblzg's other three units.
 
@@ -455,7 +474,7 @@ Beside an attempt row (under its unit), `✓` is GREEN, `✗` is RED, and `◐` 
 
 | Menu item | Where | What it does |
 |---|---|---|
-| Scan the project · Refresh the plan · Find hazards (run the detectors) | The project | Steps 1–3 of section 4. |
+| Scan the project · Refresh the plan · Find hazards (run the detectors) | The project | Scan, plan and detect, section 4. |
 | Migrate — ask in chat · Ask in chat… | A unit, or anywhere | Puts a request in the chat, or moves you there to ask. |
 | Re-check with the oracle · Show the checks | A unit, or an attempt with a verdict | Runs the judge again; lists every check in words, passed or failed. |
 | Accept … into … · Replace …'s verified crate with … | A GREEN attempt | Makes it the unit's Rust (only you can); on a verified unit, swaps it in for the one in use (used with Speed). |
@@ -475,6 +494,7 @@ Beside an attempt row (under its unit), `✓` is GREEN, `✗` is RED, and `◐` 
 | a command ends `error: awaiting response: …` | A hand-off, not a failure: section 6. |
 | "the response file must hold the envelope …" | The answer needs its envelope: section 6. |
 | "Refused: another command is changing this project" | Wait for it, then press `t`. |
-| `verify` or `migrate` refuses: no sandbox | Not a Mac: see section 9 on `--allow-unsandboxed`. |
+| `migrate` refuses: ``unit `…` is stale: its generated driver's validation is `missing` `` | Here "stale" means the unit has no tested driver yet: run `harness gen-driver` for it first (section 5). |
+| `verify` or `migrate` refuses: no sandbox | Not a Mac: see `--allow-unsandboxed` in the common options of `migrate`, above. |
 
 For every other line, the guide's [Troubleshooting](TESTING-GUIDE.md#troubleshooting) lists the message, what it means and what to do.
