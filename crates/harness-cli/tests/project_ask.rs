@@ -178,8 +178,8 @@ fn a_recorded_answer_is_read_as_advice_and_shown_with_its_link_results() {
         assert!(
             out.contains(
                 "d1 (decode; held by t-main, t-other): the model's advice (claude-sonnet-5): \
-                 keep d1.2 src/mini.c, reason platform; in t-main that choice linked; in \
-                 t-other it did not link"
+                 keep d1.2 src/mini.c, reason platform; in t-main that choice linked when the map \
+                 was made; in t-other it did not link"
             ),
             "{out}"
         );

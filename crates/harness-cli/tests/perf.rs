@@ -354,7 +354,8 @@ fn run_refuses_by_name() {
     assert_eq!(r.code, 1);
     assert!(
         r.stderr.contains("line 4, column 8")
-            && r.stderr.contains("— fix it, or Edit the workloads file"),
+            && r.stderr
+                .contains("— fix it (the cockpit's Edit button opens it)"),
         "{}",
         r.stderr
     );

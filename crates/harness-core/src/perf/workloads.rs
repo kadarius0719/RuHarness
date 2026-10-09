@@ -140,11 +140,22 @@ pub enum WorkloadsState {
 }
 
 impl WorkloadsState {
-    /// Why perf cannot measure, in the CLI's and the cockpit's words, or
-    /// `None` when it can. `ledger_rel` is the ledger folder, root-relative
+    /// Why perf cannot measure, in the command line's words, or `None` when
+    /// it can. `ledger_rel` is the ledger folder, root-relative
     /// (`migration`, or `migration/tools/<id>`): the file and the command
     /// named are that ledger's.
     pub fn blocker(&self, ledger_rel: &str) -> Option<String> {
+        match self {
+            WorkloadsState::Invalid(e) => {
+                Some(format!("{e} — fix it (the cockpit's Edit button opens it)"))
+            }
+            _ => self.cockpit_blocker(ledger_rel),
+        }
+    }
+
+    /// [`Self::blocker`] in the cockpit's words: a file that does not
+    /// validate names the cockpit's own action, Edit the workloads file.
+    pub fn cockpit_blocker(&self, ledger_rel: &str) -> Option<String> {
         match self {
             WorkloadsState::NoFile => Some(format!(
                 "write your workloads file first — {} gives a starter",
@@ -927,6 +938,13 @@ mod tests {
         .expect("write");
         let state = load(&crate::ledger::Ledger::new(&dir)).expect("load");
         let words = state.blocker("migration").expect("words");
+        assert!(
+            words.starts_with("migration/perf/workloads.toml line 3, column 6:")
+                && words.ends_with("— fix it (the cockpit's Edit button opens it)"),
+            "{words}"
+        );
+        // The cockpit names its own action instead.
+        let words = state.cockpit_blocker("migration").expect("words");
         assert!(
             words.starts_with("migration/perf/workloads.toml line 3, column 6:")
                 && words.ends_with("— fix it, or Edit the workloads file"),

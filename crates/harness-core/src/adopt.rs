@@ -149,6 +149,9 @@ pub struct Adoption {
     pub units: usize,
     /// Of which verified or merged.
     pub verified: usize,
+    /// A folder with no results whose `migration/map/config.toml` came with
+    /// the project: this `--adopt` stated it as the person's.
+    pub stated_config: bool,
 }
 
 impl Adoption {
@@ -157,6 +160,12 @@ impl Adoption {
     /// printed.
     pub fn describe(&self, tool: Option<&str>) -> Vec<String> {
         let root = self.root.display();
+        if !self.had_ledger && self.stated_config {
+            return vec![format!(
+                "adopt: {root} holds a migration/map/config.toml that came with the project; \
+                 adopting states it as yours"
+            )];
+        }
         if !self.had_ledger {
             return vec![format!(
                 "adopt: {root} holds no migration results yet; nothing to adopt"
@@ -861,12 +870,15 @@ fn adopt_inner(root: &Path, scope: Scope, delete: bool) -> Result<Adoption, Erro
         deleted: Vec::new(),
         units,
         verified,
+        stated_config: false,
     };
     // The person's `--adopt` also states a `config.toml` that came with the
     // project (§3.2), even in a folder that holds no results yet.
     let states_config = scope == Scope::Project && map_config_hash(&root).is_some();
     if ledgers.is_empty() {
         if states_config {
+            // Read before it is stated, for the words only.
+            adoption.stated_config = shipped_config_hash(&root).is_some();
             update(|file| {
                 if listed(file, &root, scope) {
                     state_config(file, &root);
@@ -1281,9 +1293,20 @@ mod tests {
         // it is theirs (the recorded hash stays as it was).
         std::fs::write(&config, "[[configuration]]\nname = \"y\"\n").unwrap();
         assert_eq!(shipped_config_hash(&root), Some(first));
-        // `--adopt` states it, even in a folder that holds no results.
-        adopt(&root).unwrap();
+        // `--adopt` states it, even in a folder that holds no results, and
+        // says so.
+        let done = adopt(&root).unwrap();
         assert_eq!(shipped_config_hash(&root), None);
+        assert_eq!(
+            done.describe(None),
+            [format!(
+                "adopt: {} holds a migration/map/config.toml that came with the project; \
+                 adopting states it as yours",
+                root.canonicalize().unwrap().display()
+            )]
+        );
+        // Adopted again, it is the person's already: nothing to adopt.
+        assert!(adopt(&root).unwrap().describe(None)[0].ends_with("nothing to adopt"));
 
         // A root first recorded with no config.toml has none shipped.
         let plain = tmp("no-shipped-config");
@@ -1369,6 +1392,7 @@ mod tests {
             deleted: Vec::new(),
             units: 4,
             verified: 0,
+            stated_config: false,
         };
         assert_eq!(
             quiet.describe(None),

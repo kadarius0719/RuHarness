@@ -646,7 +646,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
     let workloads = match &perf.workloads {
         Ok(WorkloadsState::Ready(w)) => w,
         Ok(state) => {
-            model.blocker = state.blocker(&model.ledger_rel);
+            model.blocker = state.cockpit_blocker(&model.ledger_rel);
             model.group = match state {
                 WorkloadsState::NoWorkload => Group::NoWorkload,
                 WorkloadsState::Invalid(e) => Group::FileError(e.to_string()),

@@ -415,13 +415,14 @@ fn config_toml_refusals_name_every_flag_at_once() {
     tmp.write(
         "migration/map/config.toml",
         "[[configuration]]\nname = \"make\"\nfrom = \"make\"\n\
-         flags = [\"-O3\", \"-funroll-loops\", \"-W\", \"-Wall\", \"-I src/include\", \
+         flags = [\"-c\", \"-O3\", \"-funroll-loops\", \"-W\", \"-Wall\", \"-I src/include\", \
          \"-I../include\"]\n",
     );
     let run = harness(&["project", "map", "--target", tmp.arg()]);
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
     for says in [
         "error: migration/map/config.toml: ",
+        "the flag `-c` is added by the harness itself: remove it; ",
         "`-I src/include` has a blank after -I: write it joined, like -Isrc/include",
         "the flag `-I../include` names a path outside the project or under migration/",
         "`-funroll-loops`, `-W`, `-Wall` are warning or tuning flags the harness does not pass: \
@@ -932,9 +933,16 @@ fn state_status_says_when_the_project_changed_since_a_tool_was_accepted() {
     let run = harness(&["project", "map", "--target", tmp.arg()]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(
-        run.stdout.contains(&format!(
-            "accepted tool t-alpha changed since it was accepted: {CHANGED}"
-        )),
+        run.stdout
+            .contains(&format!("accepted tool t-alpha: {CHANGED}")),
+        "{}",
+        run.stdout
+    );
+    // The line names the tool once: "changed since it was accepted" is
+    // said by the record's own words, never twice.
+    assert_eq!(
+        run.stdout.matches("since it was accepted").count(),
+        1,
         "{}",
         run.stdout
     );

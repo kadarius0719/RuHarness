@@ -525,17 +525,42 @@ pub const ENVELOPE: &str =
 
 /// Read a response file's bytes as the [`ENVELOPE`]. A file that is not
 /// the envelope (a bare reply, a missing field, not JSON) is refused with
-/// one sentence saying what to write, and what the reader stumbled on.
+/// one sentence saying what to write, and what the file held instead: what
+/// kind of JSON it is when it is JSON, the reader's own words when it is not.
 pub fn parse_response(path: &Path, bytes: &[u8]) -> Result<CompletionResponse, Error> {
     serde_json::from_slice(bytes).map_err(|e| {
         Error::parse(
             path,
             format!(
                 "the response file must hold the envelope {ENVELOPE}: write the model's reply \
-                 as its \"text\" (read: {e})"
+                 as its \"text\" ({})",
+                what_the_file_holds(bytes, &e)
             ),
         )
     })
+}
+
+/// The bracketed detail of a refused response file: a file that is JSON
+/// but not the envelope is named by what it is; serde's words are kept
+/// only for a file that is not JSON, or an object whose `text` is there but
+/// whose other fields are not the envelope's (they name the field).
+fn what_the_file_holds(bytes: &[u8], e: &serde_json::Error) -> String {
+    use serde_json::Value;
+    let kind = match serde_json::from_slice::<Value>(bytes) {
+        Err(_) => return format!("read: {e}"),
+        Ok(Value::Object(o)) if o.contains_key("text") => {
+            return format!("the file holds a JSON object, but {e}");
+        }
+        Ok(Value::Object(_)) => {
+            return "the file holds a JSON object without a \"text\" field".into()
+        }
+        Ok(Value::Array(_)) => "array",
+        Ok(Value::String(_)) => "string",
+        Ok(Value::Number(_)) => "number",
+        Ok(Value::Bool(_)) => "true or false",
+        Ok(Value::Null) => "null",
+    };
+    format!("the file holds a JSON {kind}, not the envelope object")
 }
 
 fn write_pretty<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), Error> {
@@ -899,10 +924,20 @@ mod tests {
         let request = req();
         assert!(adapter.complete(&request).is_err()); // awaiting
         let response_path = TraceAdapter::response_path(&dir, &request).unwrap();
-        for bad in [
-            r#"[{"item": "d1", "keep": "d1.2"}]"#,
-            r#"{"text": "[]"}"#,
-            "not json",
+        for (bad, holds) in [
+            (
+                r#"[{"item": "d1", "keep": "d1.2"}]"#,
+                "(the file holds a JSON array, not the envelope object)",
+            ),
+            (
+                r#"{"item": "d1"}"#,
+                "(the file holds a JSON object without a \"text\" field)",
+            ),
+            (
+                r#"{"text": "[]"}"#,
+                "(the file holds a JSON object, but missing field `input_tokens`",
+            ),
+            ("not json", "(read: expected ident"),
         ] {
             std::fs::write(&response_path, bad).unwrap();
             let err = adapter.complete(&request).unwrap_err().to_string();
@@ -913,6 +948,10 @@ mod tests {
                 )),
                 "{bad}: {err}"
             );
+            assert!(err.contains(holds), "{bad}: {err}");
+            if bad.starts_with('[') {
+                assert!(!err.contains("invalid type"), "{bad}: {err}");
+            }
             assert!(err.contains(&response_path.display().to_string()), "{err}");
         }
         std::fs::write(

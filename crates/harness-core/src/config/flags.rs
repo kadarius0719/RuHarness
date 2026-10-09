@@ -120,10 +120,21 @@ pub fn check_flag(flag: &str) -> Result<Flag<'_>, String> {
     if matches!(flag, "-O0" | "-O1" | "-O2" | "-O3") {
         return Ok(Flag::Optimization);
     }
+    if is_bookkeeping(flag) {
+        return Err(format!(
+            "the flag `{shown}` is added by the harness itself: remove it"
+        ));
+    }
     Err(format!(
         "the flag `{shown}` is not one the harness passes to a compiler; remove it (the flags \
          allowed are listed in docs/SCHEMAS.md, \"harness.toml, file-list form\")"
     ))
+}
+
+/// A flag the harness adds to every compile itself (`-c`, `-o <object>`,
+/// `-MD -MF <deps>`, joined or not): a configuration never carries it.
+fn is_bookkeeping(flag: &str) -> bool {
+    matches!(flag, "-c" | "-MD") || flag.starts_with("-o") || flag.starts_with("-MF")
 }
 
 /// A value a compiler would read as another option (`-…`) or as a file of
@@ -243,8 +254,11 @@ mod tests {
             ("-fplugin=x.so", "is not one"),
             ("-Xclang", "is not one"),
             ("-Wl,-rpath,x", "is not one"),
-            ("-MD", "is not one"),
-            ("-o", "is not one"),
+            ("-MD", "is added by the harness itself: remove it"),
+            ("-MFdeps.d", "is added by the harness itself: remove it"),
+            ("-o", "is added by the harness itself: remove it"),
+            ("-oout.o", "is added by the harness itself: remove it"),
+            ("-c", "is added by the harness itself: remove it"),
             ("-x", "is not one"),
             ("@args", "is not one"),
             ("-lfoo", "is not one"),

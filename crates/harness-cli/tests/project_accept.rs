@@ -595,7 +595,7 @@ fn a_later_map_reports_what_changed_for_each_accepted_tool() {
                        configuration and link are the same: scan it to read them (`harness scan \
                        --tool t-unlzg`); accepting it again only clears this note";
     for says in [
-        format!("accepted tool t-unlzg changed since it was accepted: {unlzg_files}"),
+        format!("accepted tool t-unlzg: {unlzg_files}"),
         // A file elsewhere: nothing to do, and the notice stays silent.
         "accepted tool t-solo: a file elsewhere in the project changed; nothing to do for this \
          tool"
@@ -661,8 +661,8 @@ fn a_later_map_reports_what_changed_for_each_accepted_tool() {
                  stated, flags none, the map's is plain, from stated, flags -DLZG_FAST; accept it \
                  again with `harness project accept t-unlzg`";
     for says in [
-        format!("accepted tool t-unlzg changed since it was accepted: {unlzg}"),
-        "accepted tool t-solo changed since it was accepted: the project's files and the \
+        format!("accepted tool t-unlzg: {unlzg}"),
+        "accepted tool t-solo: the project's files and the \
          configuration or the compiler changed: closure changed: it no longer needs \
          solo/util.c; configuration changed:"
             .to_string(),
@@ -1097,7 +1097,7 @@ fn a_library_keeps_its_id_when_a_file_joins_it() {
     );
     assert!(
         run.stdout.contains(
-            "accepted tool l-crc changed since it was accepted: the project's files changed: \
+            "accepted tool l-crc: the project's files changed: \
              closure changed: it now needs lib/aa.c; accept it again with `harness project \
              accept l-crc`"
         ),

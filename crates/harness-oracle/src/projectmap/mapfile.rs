@@ -1660,7 +1660,7 @@ pub fn write_bytes(root: &Path, bytes: &[u8]) -> Result<PathBuf, Error> {
 /// The text of `migration/.gitignore`.
 pub fn gitignore_text() -> String {
     let mut text = String::from(
-        "# Written by `harness project map` once; edit freely, it is never overwritten.\n\
+        "# Written by the harness the first time it made this folder; never overwritten.\n\
          # The harness's scratch: build folders, locks, traces and the map's reply.\n",
     );
     for name in IGNORED_NAMES {
@@ -1765,6 +1765,11 @@ mod tests {
         std::fs::create_dir_all(root.join("migration")).unwrap();
         assert!(write_gitignore(&root).unwrap());
         let text = std::fs::read_to_string(root.join(GITIGNORE)).unwrap();
+        // Any command's first ledger writes it, not only `project map`.
+        assert_eq!(
+            text.lines().next(),
+            Some("# Written by the harness the first time it made this folder; never overwritten.")
+        );
         for name in IGNORED_NAMES {
             assert!(text.lines().any(|l| l == *name), "{name}");
         }

@@ -434,7 +434,10 @@ fn show_answer(item: &Item, answer: &Answer, model: &str, provider: &str) {
                         safe_line(path)
                     );
                     if !linked_in.is_empty() {
-                        line.push_str(&format!("; in {} that choice linked", linked_in.join(", ")));
+                        line.push_str(&format!(
+                            "; in {} that choice linked when the map was made",
+                            linked_in.join(", ")
+                        ));
                     }
                     if !not_linked_in.is_empty() {
                         line.push_str(&format!(

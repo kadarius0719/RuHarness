@@ -1736,7 +1736,7 @@ not link these choices (too many to try) while d1 is open"), never "did not link
 level among the configuration's flags is said to be "recorded only, never applied". Then
 **what changed** for each accepted tool (a `migration/tools/<id>/harness.toml` with `map`)
 whose digests differ from this map's: its record in the map file's `accepted_tools` (below),
-one line each — "accepted tool <id> changed since it was accepted: <says>", or for `none`
+one line each — "accepted tool <id>: <says>" (the record's own words say what changed), or for `none`
 "accepted tool <id>: a file elsewhere in the project changed; nothing to do for this tool"; a
 tool whose `harness.toml` cannot be read: "…: its harness.toml could not be read, so nothing is
 compared"; while any tool exists, "programs not accepted as tools: <id> (<path>), …; accept one
@@ -1925,8 +1925,9 @@ so the same project, configuration and toolchain give byte-identical files. Opti
 
 ### `migration/.gitignore`
 
-Written by the first `project map` when there is none, never overwritten (the person may edit
-it): a two-line comment, then one name per line — `build/`, `.lock`, `traces/`,
+Written by the first command that makes the project's ledger (or the first `project map`) when
+there is none, never overwritten (the person may edit it): a two-line comment ("# Written by the
+harness the first time it made this folder; never overwritten."), then one name per line — `build/`, `.lock`, `traces/`,
 `.promote-*/`, `.*.prev/`, `.replay-*/`, `target/`, `.ruharness-adopted`, `map/.lock`,
 `map/project-map.reply.json`.
 
@@ -1952,7 +1953,7 @@ own files), so its silence means only "the digests match".
 | File | Writer | Lock |
 |---|---|---|
 | `migration/map/project-map.json` | `project map` (in full, atomically) | the project lock `migration/map/.lock`, then a folder-form target's `migration/.lock` |
-| `migration/.gitignore` | the first `project map` (never overwritten) | the same |
+| `migration/.gitignore` | the first command that makes the ledger, or the first `project map` (never overwritten) | the same |
 | `migration/map/.lock` | `project map`, `project accept`, `sync-runtime` | — (it is the lock) |
 | `migration/tools/<id>/harness.toml` | `project accept <id>` (in full, atomically; never through a link) | the project lock, then — when `<id>` was accepted before — that tool's `migration/tools/<id>/.lock`, in that order |
 
@@ -2191,7 +2192,7 @@ Under `external`, each reply below is written as the `text` of the hand-off enve
   and model (the model is part of the trace key), values shell-quoted and attached.
 - **The screen**: each answer labelled as the model's, naming the model (`p3 t-foo (path): the
   model's label (M): kind …, name "…"; purpose, in its words: …`; `d1 (symbols; held by ids):
-  the model's advice (M): keep d1.2 <path>, reason …; in t-a that choice linked; in t-b it did
+  the model's advice (M): keep d1.2 <path>, reason …; in t-a that choice linked when the map was made; in t-b it did
   not link`, from the map's own `links` — "in t-c the map did not link these choices (too many
   to try)" for a program held without its choices linked (no `linked` and no set with `links`); `undecided` says the choice goes to the person and
   lists the definers), then once that the words are labels and advice only. Every project and

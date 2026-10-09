@@ -7625,7 +7625,7 @@ mod tests {
             Some(words.clone()),
             wl::load(&harness_core::ledger::Ledger::new(&root))
                 .unwrap()
-                .blocker("migration")
+                .cockpit_blocker("migration")
         );
         assert!(
             words.contains("workloads.toml line 4, column")

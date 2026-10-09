@@ -157,7 +157,8 @@ runs = 15                  # optional: runs a side, 5 to 31 (default 15)
 - **States**, each with its words in the CLI and the cockpit [c16, c82]: no file ("write your
   workloads file first — harness perf init gives a starter"); a file with no workload, which is
   what the starter is ("add a [[workload]] to migration/perf/workloads.toml"); a file with an error
-  ("migration/perf/workloads.toml line 7, column 3: … — fix it, or Edit the workloads file"). Each
+  ("migration/perf/workloads.toml line 7, column 3: … — fix it (the cockpit's Edit button opens
+  it)"; in the cockpit "… — fix it, or Edit the workloads file"). Each
   is exit 1 for `perf run`; in the cockpit Measure is greyed with the same words.
 - The starter teaches [c15, n34]:
   ```toml

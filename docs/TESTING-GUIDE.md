@@ -4106,7 +4106,7 @@ as they are (`"-c", "-O3", "-funroll-loops", "-W", "-Wall"`) with `"-I src/inclu
 `"-I../include"`, it would say (exit 1):
 
 ```text
-error: migration/map/config.toml: the flag `-c` is not one the harness passes to a compiler; remove it (the flags allowed are listed in docs/SCHEMAS.md, "harness.toml, file-list form"); `-I src/include` has a blank after -I: write it joined, like -Isrc/include; the flag `-I../include` names a path outside the project or under migration/; name a folder inside the project, relative to its root; `-funroll-loops`, `-W`, `-Wall` are warning or tuning flags the harness does not pass: drop them, the map does not need them
+error: migration/map/config.toml: the flag `-c` is added by the harness itself: remove it; `-I src/include` has a blank after -I: write it joined, like -Isrc/include; the flag `-I../include` names a path outside the project or under migration/; name a folder inside the project, relative to its root; `-funroll-loops`, `-W`, `-Wall` are warning or tuning flags the harness does not pass: drop them, the map does not need them
 ```
 
 A message with `line 1: invalid type: map, expected a sequence` (or `unknown field`) means
@@ -4173,7 +4173,7 @@ harness project ask --model by-hand
 project ask: asking external (by-hand) about 1 item(s) in 1 call(s): d1
 project ask: d1.1 src/extra/lzgmini.c: the slice stops at 120 lines or 16 KiB, before the definitions end
 project ask: d1.2 src/lib/decode.c: the slice stops at 120 lines or 16 KiB, before the definitions end
-d1 (LZG_Decode, LZG_DecodedSize; held by t-benchmark, t-unlzg): the model's advice (by-hand): keep d1.2 src/lib/decode.c, reason alternative-implementation; in t-benchmark, t-unlzg that choice linked
+d1 (LZG_Decode, LZG_DecodedSize; held by t-benchmark, t-unlzg): the model's advice (by-hand): keep d1.2 src/lib/decode.c, reason alternative-implementation; in t-benchmark, t-unlzg that choice linked when the map was made
 project ask: the model's words above are labels and advice only: nothing was built or linked, and the choice of each held set stays yours (`harness project accept` never reads the reply)
 project ask: wrote migration/map/project-map.reply.json (1 answer(s) this run, under this map's digests)
 ```
@@ -4182,7 +4182,7 @@ project ask: wrote migration/map/project-map.reply.json (1 answer(s) this run, u
 harness refuses it, naming the file:
 
 ```text
-error: parse error in /Users/<you>/lzg-map/migration/map/traces/<key>.response.json: the response file must hold the envelope {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}: write the model's reply as its "text" (read: invalid type: map, expected a string at line 1 column 1)
+error: parse error in /Users/<you>/lzg-map/migration/map/traces/<key>.response.json: the response file must hold the envelope {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}: write the model's reply as its "text" (the file holds a JSON array, not the envelope object)
 ```
 
 Run the `jq` line above again: it overwrites the file.
@@ -4565,7 +4565,7 @@ harness project map
 **You should see** the usual screen, and just before its last line these three:
 
 ```text
-accepted tool t-lzg changed since it was accepted: its own files changed since it was accepted (src/lib/version.c); its closure, configuration and link are the same: scan it to read them (`harness scan --tool t-lzg`); accepting it again only clears this note
+accepted tool t-lzg: its own files changed since it was accepted (src/lib/version.c); its closure, configuration and link are the same: scan it to read them (`harness scan --tool t-lzg`); accepting it again only clears this note
 accepted tool t-unlzg: a file elsewhere in the project changed; nothing to do for this tool
 programs not accepted as tools: t-benchmark (src/tools/benchmark.c); accept one with `harness project accept <id>`
 ```
@@ -4761,7 +4761,7 @@ A few messages and documents in this version of RuHarness are out of date. The s
 | Part 12: ``error: --keep d1=decode.c names no definer of d1: its definers are d1.1 src/extra/lzgmini.c, d1.2 src/lib/decode.c`` | The value after `d1=` must be one of the listed indexes or the whole path. | `--keep d1=d1.2` or `--keep d1=src/lib/decode.c`. |
 | Part 12: `… duplicate set d1 of t-unlzg … is not settled: pick its definer yourself with --keep d1=<index or path> …` | The program holds a choice only you can make. | Add `--keep d1=d1.2` (Step 12.5). |
 | `error: parse error in …response.json: the response file must hold the envelope {"text": <the reply>, …}: write the model's reply as its "text" …` | The answer file holds the bare reply (or a field is missing): every hand-off answer is wrapped in the envelope. | Write it again with the `jq` line of the step you are on (Steps 3.3, 12.4, 12.7, 12.8); it overwrites the file. |
-| Part 12: `error: migration/map/config.toml: …`, naming flags (``… are warning or tuning flags the harness does not pass: drop them …``, ``… has a blank after -I: write it joined, like -Isrc/include``) | A flag is not one the harness passes to a compiler (`-c`, `-Wall`, `-funroll-loops`), or a path is outside the project or has a space (`-I../include`, `-I src/include`). Every refused flag is named at once. | Remove warning and tuning flags; write paths from the project's top folder, joined: `-Isrc/include` (Step 12.3). |
+| Part 12: `error: migration/map/config.toml: …`, naming flags (``… are warning or tuning flags the harness does not pass: drop them …``, ``… has a blank after -I: write it joined, like -Isrc/include``) | A flag is one the harness adds itself (`-c`), or one it does not pass to a compiler (`-Wall`, `-funroll-loops`), or a path is outside the project or has a space (`-I../include`, `-I src/include`). Every refused flag is named at once. | Remove warning and tuning flags; write paths from the project's top folder, joined: `-Isrc/include` (Step 12.3). |
 | Part 12: `verify: [SKIP] whole-program — not run: …` | The tool has no `[oracle.whole_program]` section yet, so the whole program was not run. It is not a failure. | Add the program's arguments to the tool's `harness.toml` (Step 12.9). |
 
 ### Check the start of your answer file

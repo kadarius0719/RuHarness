@@ -642,6 +642,20 @@ fn c_side_words(o: &str, cx: &Context) -> String {
     }
 }
 
+/// The ledger folder, root-relative, of the mapped tool open (`None`: the
+/// folder form's `migration`) — the inverse of
+/// [`crate::runtime_view::tool_of`], so a path named is that tool's own.
+fn ledger_rel(tool: Option<&str>) -> String {
+    match tool {
+        None => crate::ledger::MIGRATION_DIR.to_string(),
+        Some(id) => format!(
+            "{}/{}/{id}",
+            crate::ledger::MIGRATION_DIR,
+            crate::config::TOOLS_DIR
+        ),
+    }
+}
+
 /// The words of a set-up outcome, rebuilt from its facts (§3.9).
 pub fn set_up_words(o: &str, setup: Option<&SetupFacts>, cx: &Context) -> String {
     let unit = match cx.side {
@@ -652,7 +666,7 @@ pub fn set_up_words(o: &str, setup: Option<&SetupFacts>, cx: &Context) -> String
     let log = s
         .log
         .as_deref()
-        .map(|l| format!(" — see migration/build/perf-logs/{l}"))
+        .map(|l| format!(" — see {}/build/perf-logs/{l}", ledger_rel(cx.tool)))
         .unwrap_or_default();
     match o {
         "not-verified" => match s.reason.as_deref() {
@@ -3049,6 +3063,20 @@ mod tests {
         };
         assert!(set_up_words("not-verified", Some(&interrupted), &on_tool)
             .contains("(or run harness verify u001 --tool t-lzg)"));
+        // A run's log is named by the tool's own path; the folder form's
+        // stays under migration/.
+        let logged = SetupFacts {
+            log: Some("run-1.log".into()),
+            ..SetupFacts::default()
+        };
+        assert_eq!(
+            set_up_words("crate-does-not-build", Some(&logged), &on_tool),
+            "u001's crate does not build — see migration/tools/t-lzg/build/perf-logs/run-1.log"
+        );
+        assert_eq!(
+            set_up_words("crate-does-not-build", Some(&logged), &UNIT),
+            "u001's crate does not build — see migration/build/perf-logs/run-1.log"
+        );
         let mixed = words(
             "mixed-panic",
             s(SetupFacts {

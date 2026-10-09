@@ -190,19 +190,13 @@ fn show_changes(map: &FolderMap, file: &MapFile, json: bool) {
                 says: &c.says,
             });
         }
-        if c.changed == "none" {
-            out(format!(
-                "accepted tool {}: {}",
-                safe_line(&c.id),
-                safe_line(&c.says)
-            ));
-        } else {
-            out(format!(
-                "accepted tool {} changed since it was accepted: {}",
-                safe_line(&c.id),
-                safe_line(&c.says)
-            ));
-        }
+        // The record's own words say what changed: the line names the tool
+        // once and gives them.
+        out(format!(
+            "accepted tool {}: {}",
+            safe_line(&c.id),
+            safe_line(&c.says)
+        ));
     }
     for id in mapfile::unreadable_tools(&map.root) {
         out(format!(
