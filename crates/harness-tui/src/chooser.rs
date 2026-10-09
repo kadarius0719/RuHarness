@@ -49,8 +49,14 @@ fn pick(
         root.display(),
         tools.len()
     );
+    // Each tool with its program's file, from the map when it names it.
+    let map = crate::project::read_map(root).ok().flatten();
     for (i, id) in tools.iter().enumerate() {
-        text.push_str(&format!("  {}. {id}\n", i + 1));
+        text.push_str(&format!(
+            "  {}. {}\n",
+            i + 1,
+            crate::project::tool_label(root, map.as_ref(), id)
+        ));
     }
     text.push_str(&format!(
         "Open which one? Type its number (1-{}) and Enter; anything else opens nothing: ",

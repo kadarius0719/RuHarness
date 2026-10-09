@@ -112,10 +112,16 @@ fn map_locked(root: &Path, configuration: Option<String>) -> Result<u8> {
     } else {
         None
     };
-    let (file, bytes) = mapfile::render_bounded(&mut map, analysis.as_ref())?;
-    // The programs of the map this one replaces, for the "what changed"
-    // report.
-    let before = mapfile::previous_programs(root);
+    let (mut file, mut bytes) = mapfile::render_bounded(&mut map, analysis.as_ref())?;
+    // What changed for each accepted tool, recorded in the file (§3.6): read
+    // against the map this one replaces, before it is replaced.
+    if map.limits_hit.is_empty() {
+        let before = mapfile::previous(root);
+        file.accepted_tools = mapfile::what_changed(&map, &file, before.as_ref());
+        if !file.accepted_tools.is_empty() {
+            bytes = mapfile::to_bytes(&file);
+        }
+    }
     let wrote_ignore = mapfile::write_gitignore(root)?;
     mapfile::write_bytes(root, &bytes)?;
     let json = report::mode() == report::Mode::Json;
@@ -143,7 +149,16 @@ fn map_locked(root: &Path, configuration: Option<String>) -> Result<u8> {
         );
     }
     show(&map, &file, json);
-    show_changes(&map, &file, before.as_deref(), json);
+    show_changes(&map, &file, json);
+    // A folder-form ledger left behind by a harness.toml that is gone: no
+    // command reads it while the project is mapped.
+    if !root.join("harness.toml").exists() && Ledger::new(root).plan_path().is_file() {
+        out(format!(
+            "note: {MIGRATION_DIR}/ still holds the ledger of a folder-form target whose \
+             harness.toml is gone (its plan and units); no command reads it while the project is \
+             mapped: put that harness.toml back to use it, or move it away"
+        ));
+    }
     let mut wrote = mapfile::MAP_FILE.to_string();
     if wrote_ignore {
         wrote.push_str(&format!(" and {}", mapfile::GITIGNORE));
@@ -152,44 +167,57 @@ fn map_locked(root: &Path, configuration: Option<String>) -> Result<u8> {
     Ok(0)
 }
 
-/// One accepted tool's changes, as the `--json` stream carries them.
+/// One accepted tool's record, as the `--json` stream carries it.
 #[derive(Serialize)]
 struct ToolChangedEvent<'a> {
     k: &'static str,
     id: &'a str,
-    what: &'a [String],
+    changed: &'a str,
+    says: &'a str,
 }
 
-/// The "what changed" report (§3.6): for each accepted tool whose map
-/// digests differ from this map's, what changed — and, when any tool was
-/// accepted, the programs new since the map this one replaced.
-fn show_changes(map: &FolderMap, file: &MapFile, before: Option<&[(String, String)]>, json: bool) {
-    let changes = mapfile::what_changed(map, file);
-    for c in &changes {
+/// The "what changed" report (§3.6): each accepted tool's record, as the
+/// map file holds it (`state status`, the cockpit and harness-mcp say the
+/// same sentence); the tools whose harness.toml cannot be read; and, while
+/// any tool exists, the programs not accepted as tools.
+fn show_changes(map: &FolderMap, file: &MapFile, json: bool) {
+    for c in &file.accepted_tools {
         if json {
             report::event(&ToolChangedEvent {
                 k: "project-tool-changed",
                 id: &c.id,
-                what: &c.what,
+                changed: &c.changed,
+                says: &c.says,
             });
         }
+        if c.changed == "none" {
+            out(format!(
+                "accepted tool {}: {}",
+                safe_line(&c.id),
+                safe_line(&c.says)
+            ));
+        } else {
+            out(format!(
+                "accepted tool {} changed since it was accepted: {}",
+                safe_line(&c.id),
+                safe_line(&c.says)
+            ));
+        }
+    }
+    for id in mapfile::unreadable_tools(&map.root) {
         out(format!(
-            "accepted tool {} changed since it was accepted: {}; accept it again with `harness \
-             project accept {}`",
-            safe_line(&c.id),
-            c.what.join("; "),
-            safe_line(&c.id)
+            "accepted tool {}: its harness.toml could not be read, so nothing is compared",
+            safe_line(&id)
         ));
     }
-    let accepted = harness_core::config::mapped_tools(&map.root)
-        .iter()
-        .any(|id| mapfile::tool_config(&map.root, id).is_some());
-    if let (true, Some(before)) = (accepted, before) {
-        let new = mapfile::new_programs(file, before);
-        if !new.is_empty() {
+    let tools = harness_core::config::mapped_tools(&map.root);
+    if !tools.is_empty() {
+        let rest = mapfile::not_accepted(&map.root, file);
+        if !rest.is_empty() {
             out(format!(
-                "new programs since the last map: {}",
-                new.iter()
+                "programs not accepted as tools: {}; accept one with `harness project accept \
+                 <id>`",
+                rest.iter()
                     .map(|(id, path)| format!("{} ({})", safe_line(id), safe_line(path)))
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -198,8 +226,11 @@ fn show_changes(map: &FolderMap, file: &MapFile, before: Option<&[(String, Strin
     }
 }
 
-/// The closing sentence (§3.6): what was written, and the next step —
-/// `harness project accept <id>`; `ask` named only when a choice is held.
+/// The closing sentence (§3.6): what was written, and the next step. While
+/// the configuration is not stated, the next step is to state it — the
+/// lines of `config.toml` shown, `ask --build` named — and `accept` is not
+/// named; once stated, `harness project accept <id>`, with `ask` named only
+/// when a choice is held.
 fn closing_line(wrote: &str, file: &MapFile) -> String {
     let held: Vec<String> = {
         let mut sets: Vec<String> = file
@@ -212,12 +243,42 @@ fn closing_line(wrote: &str, file: &MapFile) -> String {
         sets
     };
     let libraries = file.libraries.len();
-    let mut line = format!(
+    let head = format!(
         "project map: wrote {wrote} ({} program(s), {libraries} librar{}; the project's own \
-         files were not changed); next, make a program or library a tool with `harness \
-         project accept <id>`",
+         files were not changed)",
         file.programs.len(),
         if libraries == 1 { "y" } else { "ies" },
+    );
+    let c = &file.configuration;
+    if c.proposed {
+        return format!(
+            "{head}; next, state the configuration that came with the project: run `harness \
+             project map --adopt` once (or write your own {}), then accept",
+            projectmap::config::CONFIG_FILE
+        );
+    }
+    if c.name == projectmap::config::GUESSED_NAME {
+        let from = example_from(file);
+        let name = if from == "stated" { "plain" } else { from };
+        return format!(
+            "{head}; the configuration is a guess, so nothing can be accepted yet: next, state \
+             the build in {}, for example\n  [[configuration]]\n  name = \"{name}\"\n  from = \
+             \"{from}\"\n  flags = []  # the -I and -D flags the build passes, each joined, \
+             like \"-Isrc/include\"\nthen run `harness project map` again (or have a model \
+             propose one: `harness project ask --build`)",
+            projectmap::config::CONFIG_FILE
+        );
+    }
+    if c.source == "guessed" {
+        return format!(
+            "{head}; the configuration is still a guess (its files compile with different \
+             flags, or a file is in no compile_commands.json entry): next, state one build in \
+             {} and run `harness project map` again",
+            projectmap::config::CONFIG_FILE
+        );
+    }
+    let mut line = format!(
+        "{head}; next, make a program or library a tool with `harness project accept <id>`"
     );
     if !held.is_empty() {
         line.push_str(&format!(
@@ -227,6 +288,26 @@ fn closing_line(wrote: &str, file: &MapFile) -> String {
         ));
     }
     line
+}
+
+/// The `from` word the closing line's example names: the build the walk
+/// found (`make` for a Makefile, `cmake`, `meson`), else `stated`.
+fn example_from(file: &MapFile) -> &'static str {
+    let has = |name: &str| {
+        file.build_evidence
+            .build_files
+            .iter()
+            .any(|f| f.rsplit('/').next() == Some(name))
+    };
+    if has("Makefile") || has("makefile") || has("GNUmakefile") {
+        "make"
+    } else if has("CMakeLists.txt") {
+        "cmake"
+    } else if has("meson.build") {
+        "meson"
+    } else {
+        "stated"
+    }
 }
 
 // ---------- the `--json` events ----------
@@ -458,7 +539,21 @@ fn configuration_line(map: &FolderMap, file: &MapFile) -> String {
         }
         _ => "still a guess: a file is listed with other flags, or not listed at all",
     };
-    format!("configuration: {name}, from {from} ({whose}), flags {flags}{headers}")
+    let optimization: Vec<&str> = c
+        .flags
+        .iter()
+        .filter(|f| matches!(f.as_str(), "-O0" | "-O1" | "-O2" | "-O3"))
+        .map(String::as_str)
+        .collect();
+    let recorded = if optimization.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; {} is recorded only, never applied (every compile keeps the harness's own)",
+            optimization.join(" ")
+        )
+    };
+    format!("configuration: {name}, from {from} ({whose}), flags {flags}{headers}{recorded}")
 }
 
 /// The configuration, what the build says and what was set aside.
@@ -642,13 +737,23 @@ fn not_compiled_words(root: &Path, c: &CompiledRec) -> String {
     }
 }
 
-/// How a duplicate set stands for its program: settled, held, none of its
-/// choices linking, or not link-checked.
+/// How a duplicate set stands for its program: settled, held, held without
+/// any link tried (over the limit), none of its choices linking, or not
+/// link-checked.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SetState {
     Held,
+    NotTried,
     NoneLinks,
     Open,
+}
+
+/// A held program whose choices the map never linked: more definers or
+/// combinations than linking tries (`closure::MAX_DEFINERS`,
+/// `MAX_CHOICES`). It is held with no link result and no set of it records
+/// a choice that linked.
+fn not_tried(c: &ClosureRec) -> bool {
+    !c.questions.is_empty() && c.linked.is_none() && c.duplicates.iter().all(|d| d.links.is_empty())
 }
 
 fn duplicate_line(d: &DuplicateRec, state: SetState) -> String {
@@ -674,6 +779,11 @@ fn duplicate_line(d: &DuplicateRec, state: SetState) -> String {
         SetState::Held => format!(
             "{what}: held, linking cannot tell {} apart, so the choice is yours",
             all.join(" from ")
+        ),
+        SetState::NotTried => format!(
+            "{what}: held, the map did not link these choices (too many to try), so the choice \
+             is yours: {}",
+            all.join(", ")
         ),
         SetState::NoneLinks => format!(
             "{what}: neither choice links ({}); the link check below is the closest one",
@@ -818,7 +928,12 @@ fn show_program(p: &ProgramRec, c: Option<&ClosureRec>, file: &MapFile) {
             libs.join(" ")
         }
     ));
-    let link = if c.linked.is_none() && !c.questions.is_empty() {
+    let link = if not_tried(c) {
+        format!(
+            "not linked: the map did not link these choices (too many to try) while {} is open",
+            c.questions.join(", ")
+        )
+    } else if c.linked.is_none() && !c.questions.is_empty() {
         format!("not linked while {} is open", c.questions.join(", "))
     } else {
         linked_words(&c.linked)
@@ -831,7 +946,9 @@ fn show_program(p: &ProgramRec, c: Option<&ClosureRec>, file: &MapFile) {
         ));
     }
     for d in &c.duplicates {
-        let state = if c.questions.contains(&d.set) {
+        let state = if c.questions.contains(&d.set) && not_tried(c) {
+            SetState::NotTried
+        } else if c.questions.contains(&d.set) {
             SetState::Held
         } else if matches!(c.linked, Some(LinkedRec::Failed { .. })) {
             SetState::NoneLinks

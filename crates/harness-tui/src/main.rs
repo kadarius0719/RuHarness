@@ -1014,11 +1014,12 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // A project with no target yet (no harness.toml, no mapped tool): the
-    // project mode, in a terminal — Map the project, then Ask and Accept a
-    // program, each a dialog over the `harness project` command
-    // (docs/PROJECT-MAP-DESIGN.md §3.7). Once a tool exists it is opened
-    // below as on any target.
+    // A mapped project with no root harness.toml and no --tool: the project
+    // mode, in a terminal — Map the project, then Ask and Accept a program,
+    // each a dialog over the `harness project` command, and once tools
+    // exist each tool to open (docs/PROJECT-MAP-DESIGN.md §3.7). The tool
+    // picked (or the only one) is opened below as on any target.
+    let mut picked: Option<String> = None;
     if harness_tui::project::applies(&target, args.tool.as_deref()) && {
         use std::io::IsTerminal;
         std::io::stdin().is_terminal()
@@ -1054,8 +1055,8 @@ fn main() -> ExitCode {
             &mut std::io::stderr(),
             &mut exec,
         ) {
-            Ok(true) => {}
-            Ok(false) => return ExitCode::SUCCESS,
+            Ok(harness_tui::project::Next::Open(id)) => picked = id,
+            Ok(harness_tui::project::Next::Leave) => return ExitCode::SUCCESS,
             Err(why) => {
                 eprintln!("harness-tui: {why}");
                 return ExitCode::from(1);
@@ -1075,7 +1076,8 @@ fn main() -> ExitCode {
             } else {
                 None
             };
-        match harness_tui::chooser::choose(&target, args.tool.as_deref(), ask) {
+        let tool = args.tool.as_deref().or(picked.as_deref());
+        match harness_tui::chooser::choose(&target, tool, ask) {
             Ok(tool) => tool,
             // Not a usage error (the id was checked with the arguments): the
             // folder names no target to open — exit 1, as the command line.

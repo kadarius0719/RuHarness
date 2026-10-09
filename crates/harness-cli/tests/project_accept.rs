@@ -559,9 +559,11 @@ fn an_accepted_tool_keeps_its_id_across_maps() {
     );
 }
 
-/// A later map reports, per accepted tool, what changed: a header edit
-/// alone, a configuration change, a file it now needs, new programs, a
-/// tool that no longer links. A tool whose digests match says nothing.
+/// A later map reports, per accepted tool, what changed, and records it in
+/// the map file for `state status`: a header edit alone (its own files for
+/// one tool, "nothing to do" for the other), a configuration change, a file
+/// it now needs, a tool that no longer links, and the programs not accepted
+/// as tools. A tool whose digests match says nothing.
 #[test]
 fn a_later_map_reports_what_changed_for_each_accepted_tool() {
     let tmp = Tmp::new("changed");
@@ -589,16 +591,55 @@ fn a_later_map_reports_what_changed_for_each_accepted_tool() {
         "int lzg_decode(int x);\nint lzg_size(int x);\nunsigned lzg_checksum(int x);\n/* v2 */\n",
     );
     let run = map(&tmp);
+    let unlzg_files = "its own files changed since it was accepted (include/lzg.h); its closure, \
+                       configuration and link are the same: scan it to read them (`harness scan \
+                       --tool t-unlzg`); accepting it again only clears this note";
     for says in [
-        "accepted tool t-unlzg changed since it was accepted: its files changed since it was \
-         accepted (same closure, same configuration; the map does not link it while a choice is \
-         held); accept it again with `harness project accept t-unlzg`",
-        "accepted tool t-solo changed since it was accepted: its files changed since it was \
-         accepted (same closure, same configuration, it still links); accept it again with \
-         `harness project accept t-solo`",
+        format!("accepted tool t-unlzg changed since it was accepted: {unlzg_files}"),
+        // A file elsewhere: nothing to do, and the notice stays silent.
+        "accepted tool t-solo: a file elsewhere in the project changed; nothing to do for this \
+         tool"
+            .to_string(),
+        "programs not accepted as tools: t-lzgcheck (tools/lzgcheck.c); accept one with \
+         `harness project accept <id>`"
+            .to_string(),
     ] {
-        assert!(run.stdout.contains(says), "{says}\n{}", run.stdout);
+        assert!(run.stdout.contains(&says), "{says}\n{}", run.stdout);
     }
+    let changed: Vec<(String, String)> = map_json(&tmp.0)["accepted_tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["id"].as_str().unwrap().to_string(),
+                r["changed"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        changed,
+        [
+            ("t-solo".to_string(), "none".to_string()),
+            ("t-unlzg".to_string(), "files".to_string())
+        ]
+    );
+    // state status says the map's sentence, and nothing for t-solo.
+    let status = |id: &str| {
+        let run = harness(&["state", "status", "--target", tmp.arg(), "--tool", id]);
+        assert_eq!(run.code, 0, "{}", run.all());
+        run.stdout
+    };
+    assert!(
+        status("t-unlzg").contains(&format!("status: {unlzg_files}")),
+        "{}",
+        status("t-unlzg")
+    );
+    assert!(
+        !status("t-solo").contains("elsewhere"),
+        "{}",
+        status("t-solo")
+    );
 
     // A file it now needs, a configuration change, a new program, a tool
     // that no longer links.
@@ -615,17 +656,26 @@ fn a_later_map_reports_what_changed_for_each_accepted_tool() {
         "[[configuration]]\nname = \"plain\"\nfrom = \"stated\"\nflags = [\"-DLZG_FAST\"]\n",
     );
     let run = map(&tmp);
+    let unlzg = "the project's files and the configuration or the compiler changed: closure \
+                 changed: it now needs src/extra.c; configuration changed: it was plain, from \
+                 stated, flags none, the map's is plain, from stated, flags -DLZG_FAST; accept it \
+                 again with `harness project accept t-unlzg`";
     for says in [
-        "accepted tool t-unlzg changed since it was accepted: closure changed: it now needs \
-         src/extra.c; configuration changed: it was plain, from stated, flags none, the map's is \
-         plain, from stated, flags -DLZG_FAST; accept it again",
-        "accepted tool t-solo changed since it was accepted: closure changed: it no longer needs \
-         solo/util.c; configuration changed:",
-        "it no longer links (missing util)",
-        "new programs since the last map: t-newtool (tools/newtool.c)",
+        format!("accepted tool t-unlzg changed since it was accepted: {unlzg}"),
+        "accepted tool t-solo changed since it was accepted: the project's files and the \
+         configuration or the compiler changed: closure changed: it no longer needs \
+         solo/util.c; configuration changed:"
+            .to_string(),
+        "it no longer links (missing util); accept it again with `harness project accept \
+         t-solo`"
+            .to_string(),
+        "programs not accepted as tools: t-lzgcheck (tools/lzgcheck.c), t-newtool \
+         (tools/newtool.c)"
+            .to_string(),
     ] {
-        assert!(run.stdout.contains(says), "{says}\n{}", run.stdout);
+        assert!(run.stdout.contains(&says), "{says}\n{}", run.stdout);
     }
+    assert!(status("t-unlzg").contains(&format!("status: {unlzg}")));
     // The tools were not touched.
     assert_eq!(
         listed(&tmp.tool("t-unlzg")),

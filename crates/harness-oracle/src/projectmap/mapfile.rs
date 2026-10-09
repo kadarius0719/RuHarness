@@ -89,6 +89,11 @@ pub struct MapFile {
     pub build_evidence: EvidenceRec,
     /// The caps reached: while any is, there are no closures.
     pub limits_hit: Vec<LimitRec>,
+    /// Per accepted tool whose map digests differ from this map's: what
+    /// changed since it was accepted ([`what_changed`]), filled in by the
+    /// command that writes the file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub accepted_tools: Vec<ToolRecord>,
 }
 
 /// `toolchain`.
@@ -582,7 +587,8 @@ pub fn tool_config(root: &Path, id: &str) -> Option<harness_core::config::Target
 /// `(path, id)` for each accepted tool (§3.3: a program at the path of an
 /// accepted tool keeps that tool's id across maps): a `t-` tool's listed
 /// files that are `main` programs in `files`, every listed file of an `l-`
-/// tool (a library's id follows its first file). Tools in id order.
+/// tool (a library keeps its id for the group holding the most of its
+/// files, `closure::libraries`). Tools in id order.
 pub fn accepted_ids(root: &Path, files: &[super::FileFacts]) -> Vec<(String, String)> {
     let mains: BTreeSet<&str> = files
         .iter()
@@ -613,14 +619,32 @@ pub fn accepted_ids(root: &Path, files: &[super::FileFacts]) -> Vec<(String, Str
 }
 
 /// What changed for one accepted tool since it was accepted
-/// (docs/PROJECT-MAP-DESIGN.md §3.6), in words.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolChange {
+/// (docs/PROJECT-MAP-DESIGN.md §3.6), as the map file records it in
+/// `accepted_tools`: `state status`, the cockpit and harness-mcp read this
+/// record (through `harness_core::ledger::project_changed_notice`) instead
+/// of comparing digests themselves, so every screen says the same sentence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct ToolRecord {
     /// The tool's id.
     pub id: String,
-    /// One sentence each: its closure, its configuration, its link.
-    pub what: Vec<String>,
+    /// `none`, `files`, `configuration`, `closure` or `link` (see
+    /// [`CHANGED_WORDS`]).
+    pub changed: String,
+    /// The sentence every screen shows (none for `none`).
+    pub says: String,
 }
+
+/// The words of a [`ToolRecord`]'s `changed`: `none` — only a file
+/// elsewhere in the project changed, nothing to do; `files` — the tool's
+/// own files changed, its closure, configuration and link did not;
+/// `configuration` — its configuration (or the compiler) changed;
+/// `closure` — the files it needs changed (or its program is gone); `link`
+/// — it no longer links.
+pub const CHANGED_WORDS: &[&str] = &["none", "files", "configuration", "closure", "link"];
+
+/// The sentence of a `none` record.
+pub const NOTHING_TO_DO: &str =
+    "a file elsewhere in the project changed; nothing to do for this tool";
 
 fn words(items: &[String]) -> String {
     items
@@ -634,19 +658,101 @@ fn bare(h: &str) -> &str {
     h.strip_prefix(harness_core::hash::HASH_PREFIX).unwrap_or(h)
 }
 
+/// What a new map needs of the map file it replaces (read before it is
+/// replaced): its `root_hash`, each file's hash, its programs and its
+/// `accepted_tools` records.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Previous {
+    /// Its `root_hash`.
+    pub root_hash: String,
+    /// `path → blake3` of every walked file.
+    pub files: BTreeMap<String, String>,
+    /// Its records.
+    pub tools: Vec<ToolRecord>,
+}
+
+/// The map file under `root` as it stands, read before a new map replaces
+/// it: `None` when there is none or it cannot be read.
+pub fn previous(root: &Path) -> Option<Previous> {
+    #[derive(serde::Deserialize)]
+    struct File {
+        path: String,
+        blake3: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Map {
+        root_hash: String,
+        #[serde(default)]
+        files: Vec<File>,
+        #[serde(default)]
+        accepted_tools: Vec<ToolRecord>,
+    }
+    let path = root.join(MAP_FILE);
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > MAX_MAP_BYTES as u64 {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    let m: Map = serde_json::from_slice(&bytes).ok()?;
+    Some(Previous {
+        root_hash: m.root_hash,
+        files: m.files.into_iter().map(|f| (f.path, f.blake3)).collect(),
+        tools: m.accepted_tools,
+    })
+}
+
+/// The mapped tools whose `harness.toml` cannot be read (so nothing is
+/// compared for them), in id order.
+pub fn unreadable_tools(root: &Path) -> Vec<String> {
+    harness_core::config::mapped_tools(root)
+        .into_iter()
+        .filter(|id| tool_config(root, id).is_none())
+        .collect()
+}
+
+/// The `main` programs of `file` that are not accepted tools, `(id, path)`
+/// in id order: listed on every map while any tool exists.
+pub fn not_accepted(root: &Path, file: &MapFile) -> Vec<(String, String)> {
+    let tools = harness_core::config::mapped_tools(root);
+    file.programs
+        .iter()
+        .filter(|p| p.kind == "main" && !tools.contains(&p.id))
+        .map(|p| (p.id.clone(), p.path.clone()))
+        .collect()
+}
+
+/// `files` and every project file their includes reach, transitively.
+fn with_includes(map: &FolderMap, files: &[String]) -> BTreeSet<String> {
+    let by_path: BTreeMap<&str, &super::FileFacts> =
+        map.files.iter().map(|f| (f.path.as_str(), f)).collect();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut queue: Vec<String> = files.to_vec();
+    while let Some(p) = queue.pop() {
+        if !seen.insert(p.clone()) {
+            continue;
+        }
+        if let Some(f) = by_path.get(p.as_str()) {
+            queue.extend(f.includes.iter().cloned());
+        }
+    }
+    seen
+}
+
 /// For each accepted tool (a `harness.toml` with `map`) whose map digests
-/// differ from `file`'s: what changed — its closure (files it now needs or
-/// no longer needs, include folders), its configuration, a duplicate set
-/// open again, a program gone, a tool that no longer links. A hand-written
-/// tool (no `map`) and a tool whose digests match get nothing.
-pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
+/// differ from `file`'s, the record of what changed since it was accepted:
+/// which digest moved — the project's files, or the configuration or the
+/// compiler — and what that did to the tool: its closure (files it now
+/// needs or no longer needs, include folders, a duplicate set open again, a
+/// program or library gone), its configuration, its link. When none of
+/// those changed, the tool's own files (and the headers they include) are
+/// compared with the map it was accepted under, through `prev` (the map
+/// file this one replaces): unchanged is `none` ([`NOTHING_TO_DO`]),
+/// changed is `files`. A hand-written tool (no `map`), a tool whose digests
+/// match, or one whose `harness.toml` cannot be read gets no record.
+pub fn what_changed(map: &FolderMap, file: &MapFile, prev: Option<&Previous>) -> Vec<ToolRecord> {
     let mut out = Vec::new();
     for id in harness_core::config::mapped_tools(&map.root) {
         let Some(config) = tool_config(&map.root, &id) else {
-            out.push(ToolChange {
-                id: id.clone(),
-                what: vec!["its harness.toml could not be read, so nothing is compared".into()],
-            });
             continue;
         };
         let Some(list) = config.target.file_list() else {
@@ -655,22 +761,29 @@ pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
         let Some(stamp) = &list.map else {
             continue;
         };
-        if bare(&stamp.root_hash) == bare(&file.root_hash)
-            && bare(&stamp.inputs_hash) == bare(&file.inputs_hash)
-        {
+        let root_moved = bare(&stamp.root_hash) != bare(&file.root_hash);
+        let inputs_moved = bare(&stamp.inputs_hash) != bare(&file.inputs_hash);
+        if !root_moved && !inputs_moved {
             continue;
         }
-        let mut what = Vec::new();
         let input = Input {
             files: &map.files,
             parser: &map.parser,
             walk_issues: &map.walk_issues,
             accepted: &[],
         };
+        let listed_paths: Vec<String> = list.files.iter().map(|f| f.path.clone()).collect();
+        let shown = harness_core::text::safe_line(&id);
+        // What the tool is now, by kind of change.
+        let mut closure_says: Vec<String> = Vec::new();
+        let mut config_says: Vec<String> = Vec::new();
+        let mut link_says: Vec<String> = Vec::new();
+        // The id to accept again under (a library's id may have moved).
+        let mut accept_as = id.clone();
         let expected: Option<Vec<String>> = if id.starts_with("t-") {
             match file.programs.iter().find(|p| p.id == id) {
                 None => {
-                    what.push(
+                    closure_says.push(
                         "its program is no longer in the map (its file is gone, or no longer \
                          defines main)"
                             .to_string(),
@@ -685,7 +798,7 @@ pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
                         .collect();
                     match closure::chosen_closure(&input, &p.path, &picks) {
                         None => {
-                            what.push(format!(
+                            closure_says.push(format!(
                                 "{} is no longer a main program",
                                 harness_core::text::safe_line(&p.path)
                             ));
@@ -693,7 +806,7 @@ pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
                         }
                         Some(chosen) => {
                             for open in &chosen.open {
-                                what.push(format!(
+                                closure_says.push(format!(
                                     "a duplicate set is open that its picks do not settle ({} \
                                      each define {})",
                                     words(&open.definers),
@@ -707,16 +820,40 @@ pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
             }
         } else {
             match file.libraries.iter().find(|l| l.id == id) {
+                Some(l) => Some(l.files.clone()),
                 None => {
-                    what.push("it is no longer a library in the map".to_string());
+                    // Its files may now be another library's: named, so the
+                    // accept command given is one that is taken.
+                    let mut holders: Vec<(usize, &LibraryRec)> = file
+                        .libraries
+                        .iter()
+                        .map(|l| {
+                            let n = l.files.iter().filter(|f| listed_paths.contains(f)).count();
+                            (n, l)
+                        })
+                        .filter(|(n, _)| *n > 0)
+                        .collect();
+                    holders.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.id.cmp(&b.1.id)));
+                    match holders.first() {
+                        Some((_, l)) => {
+                            closure_says.push(format!(
+                                "its files are now in library {} ({})",
+                                harness_core::text::safe_line(&l.id),
+                                words(&l.files)
+                            ));
+                            accept_as = l.id.clone();
+                        }
+                        None => {
+                            closure_says.push("it is no longer a library in the map".to_string())
+                        }
+                    }
                     None
                 }
-                Some(l) => Some(l.files.clone()),
             }
         };
         if let Some(files) = expected {
             match super::accept::shape(map, &files) {
-                Err(why) => what.push(why),
+                Err(why) => config_says.push(why),
                 Ok(shape) => {
                     let listed: BTreeMap<&str, &[String]> = list
                         .files
@@ -744,16 +881,17 @@ pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
                         .map(|(p, _)| p.to_string())
                         .collect();
                     if !added.is_empty() {
-                        what.push(format!("closure changed: it now needs {}", words(&added)));
+                        closure_says
+                            .push(format!("closure changed: it now needs {}", words(&added)));
                     }
                     if !removed.is_empty() {
-                        what.push(format!(
+                        closure_says.push(format!(
                             "closure changed: it no longer needs {}",
                             words(&removed)
                         ));
                     }
                     if !moved.is_empty() {
-                        what.push(format!(
+                        closure_says.push(format!(
                             "closure changed: the include folders of {} are different",
                             words(&moved)
                         ));
@@ -773,7 +911,7 @@ pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
                                 }
                             )
                         };
-                        what.push(format!(
+                        config_says.push(format!(
                             "configuration changed: it was {}, the map's is {}",
                             say(&was.name, was.from, &was.flags),
                             say(&shape.name, shape.from, &shape.flags)
@@ -798,7 +936,7 @@ pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
             if !doubled.is_empty() {
                 why.push(format!("defined twice {}", words(doubled)));
             }
-            what.push(format!(
+            link_says.push(format!(
                 "it no longer links{}",
                 if why.is_empty() {
                     String::new()
@@ -807,56 +945,122 @@ pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
                 }
             ));
         }
-        if what.is_empty() {
-            what.push(format!(
-                "its files changed since it was accepted (same closure, same configuration{})",
-                match linked {
-                    Some(LinkedRec::Ok(_)) => ", it still links",
-                    // A held program is linked by `accept`, under its picks.
-                    _ if id.starts_with("t-") =>
-                        "; the map does not link it while a choice is held",
-                    _ => "",
+        let moved = match (root_moved, inputs_moved) {
+            (true, false) => "the project's files changed",
+            (false, true) => "the configuration or the compiler changed",
+            _ => "the project's files and the configuration or the compiler changed",
+        };
+        let changed = if !closure_says.is_empty() {
+            "closure"
+        } else if !link_says.is_empty() {
+            "link"
+        } else if !config_says.is_empty() {
+            "configuration"
+        } else {
+            ""
+        };
+        let accept_cmd = format!(
+            "accept it again with `harness project accept {}`",
+            harness_core::text::safe_line(&accept_as)
+        );
+        let record = if !changed.is_empty() {
+            let mut what = closure_says;
+            what.extend(config_says);
+            what.extend(link_says);
+            ToolRecord {
+                id,
+                changed: changed.into(),
+                says: format!("{moved}: {}; {accept_cmd}", what.join("; ")),
+            }
+        } else if inputs_moved {
+            ToolRecord {
+                id,
+                changed: "configuration".into(),
+                says: format!(
+                    "{moved}, but this tool's files, flags and link are the same: {accept_cmd} \
+                     only to record that"
+                ),
+            }
+        } else {
+            // Only the project's files moved, and nothing of the tool did:
+            // its own files (and the headers they include) against the map
+            // it was accepted under.
+            let own = with_includes(map, &listed_paths);
+            let now: BTreeMap<&str, &str> = map
+                .files
+                .iter()
+                .map(|f| (f.path.as_str(), f.blake3.as_str()))
+                .collect();
+            let differ = |base: &BTreeMap<String, String>| -> Vec<String> {
+                own.iter()
+                    .filter(|p| now.get(p.as_str()).copied() != base.get(*p).map(String::as_str))
+                    .cloned()
+                    .collect()
+            };
+            let baseline: Option<Result<&BTreeMap<String, String>, ()>> = prev.and_then(|p| {
+                if bare(&p.root_hash) == bare(&stamp.root_hash) {
+                    return Some(Ok(&p.files));
                 }
-            ));
-        }
-        out.push(ToolChange { id, what });
+                match p
+                    .tools
+                    .iter()
+                    .find(|t| t.id == id)
+                    .map(|t| t.changed.as_str())
+                {
+                    // The map before found its own files as accepted.
+                    Some("none") => Some(Ok(&p.files)),
+                    // The map before found them changed already.
+                    Some("files") => Some(Err(())),
+                    _ => None,
+                }
+            });
+            let scan = format!(
+                "scan it to read them (`harness scan --tool {shown}`); accepting it again only \
+                 clears this note"
+            );
+            match baseline {
+                Some(Ok(base)) => {
+                    let changed_files = differ(base);
+                    if changed_files.is_empty() {
+                        ToolRecord {
+                            id,
+                            changed: "none".into(),
+                            says: NOTHING_TO_DO.into(),
+                        }
+                    } else {
+                        ToolRecord {
+                            id,
+                            changed: "files".into(),
+                            says: format!(
+                                "its own files changed since it was accepted ({}); its closure, \
+                                 configuration and link are the same: {scan}",
+                                words(&changed_files)
+                            ),
+                        }
+                    }
+                }
+                Some(Err(())) => ToolRecord {
+                    id,
+                    changed: "files".into(),
+                    says: format!(
+                        "its own files changed since it was accepted; its closure, \
+                         configuration and link are the same: {scan}"
+                    ),
+                },
+                None => ToolRecord {
+                    id,
+                    changed: "files".into(),
+                    says: format!(
+                        "the project's files changed since it was accepted (the map it was \
+                         accepted under is gone, so its own files are not compared); its \
+                         closure, configuration and link are the same: {scan}"
+                    ),
+                },
+            }
+        };
+        out.push(record);
     }
     out
-}
-
-/// The program paths of the map file under `root` as it stands (read
-/// before a new map replaces it): `None` when there is none or it cannot be
-/// read.
-pub fn previous_programs(root: &Path) -> Option<Vec<(String, String)>> {
-    #[derive(serde::Deserialize)]
-    struct Program {
-        id: String,
-        path: String,
-    }
-    #[derive(serde::Deserialize)]
-    struct Programs {
-        #[serde(default)]
-        programs: Vec<Program>,
-    }
-    let path = root.join(MAP_FILE);
-    let meta = std::fs::symlink_metadata(&path).ok()?;
-    if !meta.file_type().is_file() || meta.len() > MAX_MAP_BYTES as u64 {
-        return None;
-    }
-    let bytes = std::fs::read(&path).ok()?;
-    let p: Programs = serde_json::from_slice(&bytes).ok()?;
-    Some(p.programs.into_iter().map(|p| (p.id, p.path)).collect())
-}
-
-/// The programs of `file` whose path no program of the map before it had:
-/// `(id, path)`.
-pub fn new_programs(file: &MapFile, before: &[(String, String)]) -> Vec<(String, String)> {
-    let had: BTreeSet<&str> = before.iter().map(|(_, p)| p.as_str()).collect();
-    file.programs
-        .iter()
-        .filter(|p| !had.contains(p.path.as_str()))
-        .map(|p| (p.id.clone(), p.path.clone()))
-        .collect()
 }
 
 /// The largest map file written (§3.10): past it the map is a limit hit.
@@ -1289,6 +1493,7 @@ pub fn render(map: &FolderMap, analysis: Option<&Analysis>) -> Result<MapFile, E
             also_found: sorted(ev.also_found.clone()),
         },
         limits_hit,
+        accepted_tools: Vec::new(),
     })
 }
 

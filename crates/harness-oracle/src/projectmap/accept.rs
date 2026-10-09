@@ -85,11 +85,14 @@ pub struct StoredProgram {
     pub kind: String,
 }
 
-/// A stored closure's duplicate sets.
+/// A stored closure's files and duplicate sets.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StoredClosure {
     /// The program's id.
     pub program: String,
+    /// Its files.
+    #[serde(default)]
+    pub files: Vec<String>,
     /// Its duplicate sets.
     #[serde(default)]
     pub duplicates: Vec<StoredSet>,
@@ -105,9 +108,6 @@ pub struct StoredSet {
     pub symbols: Vec<String>,
     /// Its definers.
     pub definers: Vec<StoredDefiner>,
-    /// Settled by linking.
-    #[serde(default)]
-    pub choice: Option<StoredChoice>,
 }
 
 /// A stored definer.
@@ -117,13 +117,6 @@ pub struct StoredDefiner {
     pub index: String,
     /// Its file.
     pub path: String,
-}
-
-/// A stored choice.
-#[derive(Debug, Clone, Deserialize)]
-pub struct StoredChoice {
-    /// The kept definer's index.
-    pub keep: String,
 }
 
 /// A stored library.
@@ -141,12 +134,6 @@ impl StoredSet {
             .iter()
             .find(|d| d.index == index)
             .map(|d| d.path.as_str())
-    }
-
-    fn paths(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.definers.iter().map(|d| d.path.clone()).collect();
-        v.sort();
-        v
     }
 
     /// `d1.1 a.c, d1.2 b.c`.
@@ -355,6 +342,15 @@ pub struct Prepared {
     pub libs: Vec<String>,
     /// The run name.
     pub run_name: String,
+    /// The keys of the `harness.toml` there that `accept` does not own and
+    /// carried over, as dotted names (`oracle.whole_program`, `llm.model`).
+    pub kept: Vec<String>,
+    /// A program whose whole-program check is not configured: the file
+    /// holds a commented example.
+    pub whole_program_off: bool,
+    /// The sets the person picked that these picks do not reach: not
+    /// recorded.
+    pub dropped: Vec<String>,
 }
 
 /// Parse one `--keep`: `(set, value)`.
@@ -449,6 +445,175 @@ fn stem(path: &str) -> &str {
     name.strip_suffix(".c").unwrap_or(name)
 }
 
+/// A program id, a library id, a set index and a definer index of the map
+/// file have their shapes (`t-…`/`l-…` tool ids, `d<n>`, `d<n>.<m>`): the
+/// map file lives in the project, so nothing else is printed or compared.
+fn check_shapes(stored: &Stored) -> Result<(), Error> {
+    let number = |s: &str| {
+        (1..=9).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit()) && !s.starts_with('0')
+    };
+    let set_ok = |s: &str| s.strip_prefix('d').is_some_and(number);
+    let definer_ok = |set: &str, s: &str| {
+        s.strip_prefix(set)
+            .and_then(|r| r.strip_prefix('.'))
+            .is_some_and(number)
+    };
+    let ok = stored
+        .programs
+        .iter()
+        .all(|p| p.id.starts_with("t-") && hconfig::is_tool_id(&p.id))
+        && stored
+            .libraries
+            .iter()
+            .all(|l| l.id.starts_with("l-") && hconfig::is_tool_id(&l.id))
+        && stored.closures.iter().all(|c| {
+            hconfig::is_tool_id(&c.program)
+                && c.duplicates.iter().all(|d| {
+                    set_ok(&d.set) && d.definers.iter().all(|x| definer_ok(&d.set, &x.index))
+                })
+        });
+    if ok {
+        Ok(())
+    } else {
+        Err(refuse(format!(
+            "{} holds an id or an index that is not one the map writes: run `harness project \
+             map` again",
+            mapfile::MAP_FILE
+        )))
+    }
+}
+
+/// The folders a tool is written under — `migration/`, `migration/tools/`
+/// and `migration/tools/<id>/` — are real folders where they exist (a link
+/// or a file there is refused), checked before any lock is taken, so no
+/// lock file is made or emptied outside the project.
+pub fn check_folders(root: &Path, id: &str) -> Result<(), Error> {
+    hconfig::check_tool_id(id).map_err(refuse)?;
+    let migration = root.join(harness_core::ledger::MIGRATION_DIR);
+    let tools = hconfig::tools_dir(root);
+    let dir = hconfig::tool_dir(root, id);
+    for path in [&migration, &tools, &dir] {
+        match std::fs::symlink_metadata(path) {
+            Ok(m) if m.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(refuse(format!(
+                    "{} is not a folder (a link or a file), so no tool is written there: move it \
+                     away",
+                    safe_line(&path.display().to_string())
+                )))
+            }
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+/// What the stored map says of the program or library `id` against the
+/// map made again now: the same programs (id, file, kind), the same
+/// libraries (id, files) and, for `id`, the same closure files and
+/// duplicate sets (set, definers). The map file only turns the person's
+/// indexes into paths; every file list, path and choice comes from the
+/// fresh map.
+fn same_as_fresh(stored: &Stored, fresh: &mapfile::MapFile, id: &str) -> bool {
+    type Sets = Vec<(String, Vec<(String, String)>)>;
+    fn sorted<T: Ord>(mut v: Vec<T>) -> Vec<T> {
+        v.sort();
+        v
+    }
+    let stored_programs = sorted(
+        stored
+            .programs
+            .iter()
+            .map(|p| (p.id.clone(), p.path.clone(), p.kind.clone()))
+            .collect(),
+    );
+    let fresh_programs = sorted(
+        fresh
+            .programs
+            .iter()
+            .map(|p| (p.id.clone(), p.path.clone(), p.kind.to_string()))
+            .collect(),
+    );
+    let stored_libraries = sorted(
+        stored
+            .libraries
+            .iter()
+            .map(|l| (l.id.clone(), sorted(l.files.clone())))
+            .collect(),
+    );
+    let fresh_libraries = sorted(
+        fresh
+            .libraries
+            .iter()
+            .map(|l| (l.id.clone(), sorted(l.files.clone())))
+            .collect(),
+    );
+    let stored_closure: Option<(Vec<String>, Sets)> =
+        stored.closures.iter().find(|c| c.program == id).map(|c| {
+            (
+                sorted(c.files.clone()),
+                c.duplicates
+                    .iter()
+                    .map(|d| {
+                        (
+                            d.set.clone(),
+                            d.definers
+                                .iter()
+                                .map(|x| (x.index.clone(), x.path.clone()))
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            )
+        });
+    let fresh_closure: Option<(Vec<String>, Sets)> =
+        fresh.closures.iter().find(|c| c.program == id).map(|c| {
+            (
+                sorted(c.files.clone()),
+                c.duplicates
+                    .iter()
+                    .map(|d| {
+                        (
+                            d.set.clone(),
+                            d.definers
+                                .iter()
+                                .map(|x| (x.index.clone(), x.path.clone()))
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            )
+        });
+    stored_programs == fresh_programs
+        && stored_libraries == fresh_libraries
+        && stored_closure == fresh_closure
+}
+
+/// The `harness.toml` already at `path`, as a table: `None` when there is
+/// none; refused when it is not a regular file this harness reads.
+fn read_existing(path: &Path) -> Result<Option<toml::Table>, Error> {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return Ok(None);
+    };
+    let unreadable = |why: &str| {
+        refuse(format!(
+            "the harness.toml already there ({}) {why}, and accepting again keeps what you added \
+             to it: fix it or move it away, then accept",
+            safe_line(&path.display().to_string())
+        ))
+    };
+    if !meta.file_type().is_file() {
+        return Err(unreadable("is not a regular file"));
+    }
+    if meta.len() > mapfile::MAX_TOOL_CONFIG_BYTES {
+        return Err(unreadable("is over 1 MiB"));
+    }
+    let text = std::fs::read_to_string(path).map_err(|_| unreadable("cannot be read as text"))?;
+    text.parse::<toml::Table>()
+        .map(Some)
+        .map_err(|_| unreadable("cannot be read as TOML"))
+}
+
 /// Check everything and render the tool's `harness.toml` (see the module
 /// docs). `root` is the project root. Nothing is written.
 pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
@@ -469,6 +634,7 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
              project map`), then accept",
         ));
     }
+    check_shapes(&stored)?;
     let program = stored.programs.iter().find(|p| p.id == id);
     let library = stored.libraries.iter().find(|l| l.id == id);
     if program.is_none() && library.is_none() {
@@ -501,23 +667,31 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
             }
         }
     }
-    let sets: Vec<StoredSet> = stored
+    if library.is_some() && req.run_name.is_some() {
+        return Err(refuse(format!(
+            "--run-name names the program a tool runs, and {id} is a library, which runs \
+             nothing: leave --run-name out (a library's name is its id)"
+        )));
+    }
+    let stored_sets: Vec<StoredSet> = stored
         .closures
         .iter()
         .find(|c| c.program == id)
         .map(|c| c.duplicates.clone())
         .unwrap_or_default();
-    // The person's picks, by set.
+    // The person's picks, by set: the map file turns each index into a
+    // path (the paths are checked against the fresh map below).
     let mut person: BTreeMap<String, String> = BTreeMap::new();
     for raw in &req.keeps {
         let (set, value) = parse_keep(raw)?;
-        let Some(s) = sets.iter().find(|s| s.set == set) else {
-            let named = if sets.is_empty() {
+        let Some(s) = stored_sets.iter().find(|s| s.set == set) else {
+            let named = if stored_sets.is_empty() {
                 format!("{id} has none")
             } else {
                 format!(
                     "{id}'s are {}",
-                    sets.iter()
+                    stored_sets
+                        .iter()
                         .map(|s| s.set.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -563,7 +737,7 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
             .then(|| stored.configuration.name.clone()),
         ..MapOptions::default()
     };
-    let map = super::map_root(&root, &options)?;
+    let mut map = super::map_root(&root, &options)?;
     if !map.closures_possible() {
         return Err(refuse(
             "mapping the project again stopped at a limit, so nothing can be accepted: map a \
@@ -598,26 +772,67 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
         )));
     }
 
+    // The programs, closures, duplicate sets and libraries again, with
+    // their link checks, as `project map` computed them: the stored map is
+    // trusted for none of them.
+    let Some(analysis) = mapfile::analyze(&mut map)? else {
+        return Err(refuse(
+            "mapping the project again ran out of time during the link checks, so nothing can be \
+             accepted: map a smaller folder",
+        ));
+    };
+    let fresh = mapfile::render(&map, Some(&analysis))?;
+    if !same_as_fresh(&stored, &fresh, id) {
+        return Err(refuse(format!(
+            "{} does not say what mapping the project again finds (its programs, libraries or \
+             the files and choices of {id} differ): run `harness project map` again, read the \
+             screen, then accept",
+            mapfile::MAP_FILE
+        )));
+    }
+    let sets: Vec<mapfile::DuplicateRec> = fresh
+        .closures
+        .iter()
+        .find(|c| c.program == id)
+        .map(|c| c.duplicates.clone())
+        .unwrap_or_default();
+    let named = |s: &mapfile::DuplicateRec| {
+        s.definers
+            .iter()
+            .map(|d| format!("{} {}", d.index, safe_line(&d.path)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let paths_of = |s: &mapfile::DuplicateRec| {
+        let mut v: Vec<String> = s.definers.iter().map(|d| d.path.clone()).collect();
+        v.sort();
+        v
+    };
+
     let input = Input {
         files: &map.files,
         parser: &map.parser,
         walk_issues: &map.walk_issues,
         accepted: &[],
     };
+    let fresh_program = fresh.programs.iter().find(|p| p.id == id);
     let mut picks: Vec<PickOut> = Vec::new();
-    let files: Vec<String> = if let Some(p) = program {
+    let mut dropped: Vec<String> = Vec::new();
+    let files: Vec<String> = if let Some(p) = fresh_program {
         for s in &sets {
+            // A choice is the person's, or linking's when exactly one
+            // choice links in the map made again now.
             let (keep, by) = match (person.get(&s.set), &s.choice) {
                 (Some(path), _) => (path.clone(), "person"),
-                (None, Some(c)) => match s.path_of(&c.keep) {
-                    Some(path) => (path.to_string(), "links"),
+                (None, Some(c)) => match s.definers.iter().find(|d| d.index == c.keep) {
+                    Some(d) => (d.path.clone(), "links"),
                     None => continue,
                 },
                 (None, None) => continue,
             };
             picks.push(PickOut {
                 set: s.set.clone(),
-                definers: s.paths(),
+                definers: paths_of(s),
                 keep,
                 by,
                 symbols: s.symbols.clone(),
@@ -634,32 +849,29 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
             ))
         })?;
         if let Some(open) = chosen.open.first() {
-            return Err(match sets.iter().find(|s| s.paths() == open.definers) {
+            let syms = open
+                .symbols
+                .iter()
+                .map(|s| safe_line(s))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(match sets.iter().find(|s| paths_of(s) == open.definers) {
                 Some(s) => refuse(format!(
-                    "duplicate set {} of {id} ({}) is not settled: pick its definer yourself with \
-                     --keep {}=<index or path> (its definers: {})",
+                    "duplicate set {} of {id} ({syms}) is not settled: pick its definer yourself \
+                     with --keep {}=<index or path> (its definers: {})",
                     s.set,
-                    open.symbols
-                        .iter()
-                        .map(|s| safe_line(s))
-                        .collect::<Vec<_>>()
-                        .join(", "),
                     s.set,
-                    s.named()
+                    named(s)
                 )),
                 None => refuse(format!(
-                    "the files {} all define {} and the map holds no set for them: run `harness \
-                     project map` again",
+                    "these picks reach a choice the map did not list for {id} (the files {} all \
+                     define {syms}): keep the definers linking settled, or map again and read \
+                     the screen",
                     open.definers
                         .iter()
                         .map(|p| safe_line(p))
                         .collect::<Vec<_>>()
                         .join(", "),
-                    open.symbols
-                        .iter()
-                        .map(|s| safe_line(s))
-                        .collect::<Vec<_>>()
-                        .join(", ")
                 )),
             });
         }
@@ -675,11 +887,21 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
                     .join("; ")
             )));
         }
-        // Only the picks this closure reached are recorded.
+        // Only the picks this closure reached are recorded; the person's
+        // others are said to be dropped.
+        for p in &picks {
+            if !chosen.files.contains(&p.keep) && p.by == "person" {
+                dropped.push(p.set.clone());
+            }
+        }
         picks.retain(|p| chosen.files.contains(&p.keep));
         chosen.files
     } else {
-        let lib = library.expect("a library when no program (checked above)");
+        let lib = fresh
+            .libraries
+            .iter()
+            .find(|l| l.id == id)
+            .ok_or_else(|| refuse(format!("{id} is no library of the map made again")))?;
         let by_path: BTreeMap<&str, &FileFacts> =
             map.files.iter().map(|f| (f.path.as_str(), f)).collect();
         for f in &lib.files {
@@ -694,6 +916,17 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
                     )))
                 }
             }
+        }
+        let gaps = closure::library_gaps(&input, &lib.files);
+        if !gaps.is_empty() {
+            return Err(refuse(format!(
+                "the library {id} is incomplete ({}): make those files compile or readable, map \
+                 again, then accept",
+                gaps.iter()
+                    .map(incomplete_words)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )));
         }
         lib.files.clone()
     };
@@ -728,7 +961,7 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
 
     // The link, again, before anything is written (a library is compiled,
     // never linked).
-    let libs = if program.is_some() {
+    let libs = if fresh_program.is_some() {
         let setup = LinkSetup {
             walked: map.files.iter().map(|f| f.path.as_str()).collect(),
             system_headers: &map.configuration.system_headers,
@@ -755,12 +988,12 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
         Vec::new()
     };
 
-    let run_name = match (&req.run_name, program) {
+    let run_name = match (&req.run_name, fresh_program) {
         (Some(name), _) => name.clone(),
         (None, Some(p)) => stem(&p.path).to_string(),
         (None, None) => id.to_string(),
     };
-    if program.is_some() && !is_run_name(&run_name) {
+    if fresh_program.is_some() && !is_run_name(&run_name) {
         return Err(refuse(format!(
             "`{}` cannot be the run name (the file name features run the program as): give one \
              with --run-name, 1 to {MAX_RUN_NAME} letters, digits, ., _ or -",
@@ -771,31 +1004,40 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
         .iter()
         .flat_map(|p| p.definers.iter().filter(|d| **d != p.keep).cloned())
         .collect();
-    let text = render(
-        id,
-        &run_name,
-        &shape,
-        &stored.root_hash,
-        &stored.inputs_hash,
-        &picks,
-        &libs,
+    let dir = hconfig::tool_dir(&root, id);
+    let path = dir.join(hconfig::CONFIG_FILE);
+    let existing = read_existing(&path)?;
+    let rendered = render(
+        &Owned {
+            id,
+            run_name: &run_name,
+            shape: &shape,
+            root_hash: &stored.root_hash,
+            inputs_hash: &stored.inputs_hash,
+            picks: &picks,
+            libs: &libs,
+            library: fresh_program.is_none(),
+        },
+        existing.as_ref(),
     );
     // What is written must be what every command reads.
-    let table: toml::Table = text
-        .parse()
-        .map_err(|e: toml::de::Error| Error::Invariant(format!("accept rendered bad TOML: {e}")))?;
+    let table: toml::Table = rendered.text.parse().map_err(|e: toml::de::Error| {
+        refuse(format!(
+            "the harness.toml for {id} would not be TOML ({}): move the harness.toml there away, \
+             then accept",
+            safe_line(e.message())
+        ))
+    })?;
     hconfig::TargetConfig::from_table(table).map_err(|m| {
         refuse(format!(
-            "the harness.toml for {id} would not load ({}): rename the file it names, or write \
-             the tool by hand",
+            "the harness.toml for {id} would not load ({}): rename the file it names, fix what \
+             you added to the harness.toml there, or write the tool by hand",
             safe_line(&m)
         ))
     })?;
-    let dir = hconfig::tool_dir(&root, id);
-    let path = dir.join(hconfig::CONFIG_FILE);
     Ok(Prepared {
         id: id.to_string(),
-        existed: std::fs::symlink_metadata(&path).is_ok(),
+        existed: existing.is_some(),
         rel: format!(
             "{}/{}/{id}/{}",
             harness_core::ledger::MIGRATION_DIR,
@@ -803,13 +1045,16 @@ pub fn prepare(root: &Path, req: &Request) -> Result<Prepared, Error> {
             hconfig::CONFIG_FILE
         ),
         path,
-        text,
-        library: program.is_none(),
+        text: rendered.text,
+        library: fresh_program.is_none(),
         picks,
         not_kept,
         shape,
         libs,
         run_name,
+        kept: rendered.kept,
+        whole_program_off: fresh_program.is_some() && !rendered.whole_program,
+        dropped,
     })
 }
 
@@ -828,23 +1073,108 @@ fn q_list<S: AsRef<str>>(items: &[S]) -> String {
     )
 }
 
-/// The tool's `harness.toml` (docs/SCHEMAS.md "The file-list form").
-pub fn render(
-    id: &str,
-    run_name: &str,
-    shape: &Shape,
-    root_hash: &str,
-    inputs_hash: &str,
-    picks: &[PickOut],
-    libs: &[String],
-) -> String {
+/// What `accept` owns of a tool's `harness.toml` (docs/SCHEMAS.md "The
+/// file-list form"): `schema_version`, the whole `[target]` (files and
+/// their folders, configuration, map stamp, picks, run name), `[oracle]
+/// extra_link_args` and the allowlist's fixed entries.
+#[derive(Debug, Clone, Copy)]
+pub struct Owned<'a> {
+    /// The id.
+    pub id: &'a str,
+    /// The run name.
+    pub run_name: &'a str,
+    /// The files and the configuration.
+    pub shape: &'a Shape,
+    /// The map's `root_hash`.
+    pub root_hash: &'a str,
+    /// The map's `inputs_hash`.
+    pub inputs_hash: &'a str,
+    /// The picks.
+    pub picks: &'a [PickOut],
+    /// The outside libraries the link used.
+    pub libs: &'a [String],
+    /// A library (no program: no whole-program example).
+    pub library: bool,
+}
+
+/// A rendered `harness.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rendered {
+    /// Its text.
+    pub text: String,
+    /// What was carried over from the file there (dotted names).
+    pub kept: Vec<String>,
+    /// It configures `[oracle.whole_program]` (carried over).
+    pub whole_program: bool,
+}
+
+/// `key = value` for a kept value (inline form).
+fn kept_line(key: &str, value: &toml::Value) -> String {
+    format!("{} = {value}\n", toml_key(key))
+}
+
+/// A key as TOML writes it: bare when it can be, else quoted.
+fn toml_key(key: &str) -> String {
+    let bare = !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if bare {
+        key.to_string()
+    } else {
+        q(key)
+    }
+}
+
+/// The sub-table at `path` (`["oracle", "whole_program"]`) as TOML text
+/// with its headers.
+fn kept_table(path: &[&str], table: &toml::Table) -> String {
+    let mut wrapped = toml::Value::Table(table.clone());
+    for key in path.iter().rev() {
+        let mut t = toml::Table::new();
+        t.insert((*key).to_string(), wrapped);
+        wrapped = toml::Value::Table(t);
+    }
+    match wrapped {
+        toml::Value::Table(t) => toml::to_string(&t).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// The tool's `harness.toml` (docs/SCHEMAS.md "The file-list form"):
+/// `accept`'s own keys from `owned`, every other key or section of
+/// `existing` (the file there, when accepting again) carried over
+/// unchanged. Comments are `accept`'s own: the person's are not carried
+/// over. A program with no `[oracle.whole_program]` gets a commented
+/// example; a file with no `[llm] model` a commented `model =` line.
+pub fn render(owned: &Owned<'_>, existing: Option<&toml::Table>) -> Rendered {
+    let empty = toml::Table::new();
+    let old = existing.unwrap_or(&empty);
+    let table_of = |key: &str| old.get(key).and_then(toml::Value::as_table);
+    let mut kept: Vec<String> = Vec::new();
+    let id = owned.id;
+    let shape = owned.shape;
     let mut t = format!(
         "# Written by `harness project accept {id}` from {}.\n\
-         # Review it with `git diff`; accepting {id} again rewrites only this file.\n\
-         schema_version = 2\n\n[target]\nname = {}\nfiles = [\n",
+         # Review it with `git diff`. Accepting {id} again rewrites [target] and what the map\n\
+         # decides of [oracle], and keeps every other key you add (not its comments).\n\
+         schema_version = 2\n",
         mapfile::MAP_FILE,
-        q(run_name)
     );
+    // Top-level keys that are no table: before any header.
+    for (key, value) in old {
+        if matches!(key.as_str(), "schema_version" | "target" | "oracle" | "llm")
+            || value.is_table()
+        {
+            continue;
+        }
+        t.push_str(&kept_line(key, value));
+        kept.push(key.clone());
+    }
+    t.push_str(&format!(
+        "\n[target]\nname = {}\nfiles = [\n",
+        q(owned.run_name)
+    ));
     for (path, dirs) in &shape.files {
         t.push_str(&format!(
             "  {{ path = {}, include_dirs = {} }},\n",
@@ -861,12 +1191,12 @@ pub fn render(
     ));
     t.push_str(&format!(
         "map = {{ root_hash = {}, inputs_hash = {} }}\n",
-        q(root_hash),
-        q(inputs_hash)
+        q(owned.root_hash),
+        q(owned.inputs_hash)
     ));
-    if !picks.is_empty() {
+    if !owned.picks.is_empty() {
         t.push_str("picks = [\n");
-        for p in picks {
+        for p in owned.picks {
             t.push_str(&format!(
                 "  {{ definers = {}, keep = {}, by = {} }},\n",
                 q_list(&p.definers),
@@ -876,14 +1206,113 @@ pub fn render(
         }
         t.push_str("]\n");
     }
-    t.push_str(&format!("\n[oracle]\nallowlist = {}\n", q_list(ALLOWLIST)));
-    if !libs.is_empty() {
-        t.push_str(&format!("extra_link_args = {}\n", q_list(libs)));
+
+    // [oracle]: the fixed allowlist, then the person's own entries.
+    let oracle = table_of("oracle");
+    let mut allow: Vec<String> = ALLOWLIST.iter().map(|s| s.to_string()).collect();
+    let mut extra_allowed = Vec::new();
+    if let Some(list) = oracle
+        .and_then(|o| o.get("allowlist"))
+        .and_then(toml::Value::as_array)
+    {
+        for v in list {
+            if let Some(s) = v.as_str() {
+                if !allow.iter().any(|a| a == s) {
+                    allow.push(s.to_string());
+                    extra_allowed.push(s.to_string());
+                }
+            }
+        }
     }
-    t.push_str(&format!(
-        "\n[llm]\nprovider = \"external\"\nmax_tokens = {MAX_TOKENS}\n"
-    ));
-    t
+    if !extra_allowed.is_empty() {
+        kept.push(format!("oracle.allowlist ({})", extra_allowed.join(", ")));
+    }
+    t.push_str(&format!("\n[oracle]\nallowlist = {}\n", q_list(&allow)));
+    if !owned.libs.is_empty() {
+        t.push_str(&format!("extra_link_args = {}\n", q_list(owned.libs)));
+    }
+    let mut oracle_tables: Vec<(&String, &toml::Table)> = Vec::new();
+    if let Some(o) = oracle {
+        for (key, value) in o {
+            if matches!(key.as_str(), "allowlist" | "extra_link_args") {
+                continue;
+            }
+            match value.as_table() {
+                Some(sub) => oracle_tables.push((key, sub)),
+                None => t.push_str(&kept_line(key, value)),
+            }
+            kept.push(format!("oracle.{key}"));
+        }
+    }
+    let whole_program = oracle_tables.iter().any(|(k, _)| *k == "whole_program");
+    for (key, sub) in &oracle_tables {
+        t.push('\n');
+        t.push_str(&kept_table(&["oracle", key], sub));
+    }
+    if !owned.library && !whole_program {
+        t.push_str(
+            "\n# The whole-program check is off until this is filled in: verify then runs the C\n\
+             # program and its Rust port with these arguments on the same samples and compares\n\
+             # what they print. Flags only (at most 4); the sample's path is added last.\n\
+             # [oracle.whole_program]\n\
+             # args = [\"-c\"]\n",
+        );
+    }
+
+    // [llm]: the person's, else the defaults.
+    t.push_str("\n[llm]\n");
+    let mut llm_tables: Vec<(&String, &toml::Table)> = Vec::new();
+    let defaults = [
+        ("provider", toml::Value::String("external".into())),
+        ("max_tokens", toml::Value::Integer(i64::from(MAX_TOKENS))),
+    ];
+    match table_of("llm") {
+        Some(llm) => {
+            for (key, value) in llm {
+                match value.as_table() {
+                    Some(sub) => llm_tables.push((key, sub)),
+                    None => t.push_str(&kept_line(key, value)),
+                }
+                let default = defaults.iter().any(|(k, v)| k == key && v == value);
+                if !default {
+                    kept.push(format!("llm.{key}"));
+                }
+            }
+        }
+        None => {
+            for (key, value) in &defaults {
+                t.push_str(&kept_line(key, value));
+            }
+        }
+    }
+    if !table_of("llm").is_some_and(|l| l.contains_key("model")) {
+        t.push_str(&format!(
+            "# Who answers the hand-offs, recorded with every attempt (when left out, `{}`):\n\
+             # name them, for example the model you answer with, or yourself.\n\
+             # model = \"my-claude-code\"\n",
+            harness_core::config::LlmSection::default().model
+        ));
+    }
+    for (key, sub) in &llm_tables {
+        t.push('\n');
+        t.push_str(&kept_table(&["llm", key], sub));
+    }
+    // Every other section, as it was.
+    for (key, value) in old {
+        if matches!(key.as_str(), "schema_version" | "target" | "oracle" | "llm") {
+            continue;
+        }
+        if let Some(sub) = value.as_table() {
+            t.push('\n');
+            t.push_str(&kept_table(&[key], sub));
+            kept.push(key.clone());
+        }
+    }
+    Rendered {
+        text: t,
+        kept,
+        whole_program,
+    }
 }
 
 /// A real folder at `path`, made when absent; a link or a file there is
@@ -971,15 +1400,24 @@ mod tests {
             by: "person",
             symbols: vec!["f".into()],
         }];
-        let text = render(
-            "t-a",
-            "a",
-            &shape,
-            &format!("blake3:{}", "a".repeat(64)),
-            &format!("blake3:{}", "b".repeat(64)),
-            &picks,
-            &["-lm".to_string()],
+        let (root_hash, inputs_hash) = (
+            format!("blake3:{}", "a".repeat(64)),
+            format!("blake3:{}", "b".repeat(64)),
         );
+        let libs = ["-lm".to_string()];
+        let owned = Owned {
+            id: "t-a",
+            run_name: "a",
+            shape: &shape,
+            root_hash: &root_hash,
+            inputs_hash: &inputs_hash,
+            picks: &picks,
+            libs: &libs,
+            library: false,
+        };
+        let rendered = render(&owned, None);
+        assert!(rendered.kept.is_empty() && !rendered.whole_program);
+        let text = rendered.text;
         let table: toml::Table = text.parse().unwrap();
         let config = hconfig::TargetConfig::from_table(table).unwrap();
         let list = config.target.file_list().unwrap();
@@ -994,6 +1432,64 @@ mod tests {
         assert!(text.contains("extra_link_args = [\"-lm\"]"), "{text}");
         assert_eq!(config.llm.provider, "external");
         assert_eq!(config.llm.max_tokens, MAX_TOKENS);
+        // The whole-program check and the model, as commented examples.
+        assert!(
+            text.contains("# [oracle.whole_program]\n# args = [\"-c\"]\n"),
+            "{text}"
+        );
+        assert!(text.contains("# model = \"my-claude-code\"\n"), "{text}");
+        assert!(config.oracle.get("whole_program").is_none());
+
+        // Accepted again over a file the person added to: their keys and
+        // sections are carried over unchanged, accept's own are rewritten.
+        let mut old: toml::Table = text.parse().unwrap();
+        let person: toml::Table = "schema_version = 2\n\
+             [target]\nname = \"old\"\nfiles = []\n\
+             [oracle]\nallowlist = [\"cc\", \"rustfmt\"]\nextra_link_args = [\"-lz\"]\n\
+             timeout_secs = 30\n\
+             [oracle.whole_program]\nargs = [\"-9\"]\n\
+             [llm]\nprovider = \"external\"\nmax_tokens = 16384\nmodel = \"me\"\n\
+             [llm.driver]\nmax_repairs = 2\n\
+             [driver]\nmax_mutants = 24\n"
+            .parse()
+            .unwrap();
+        old.extend(person);
+        let again = render(&owned, Some(&old));
+        let config =
+            hconfig::TargetConfig::from_table(again.text.parse().unwrap()).unwrap_or_else(|e| {
+                panic!("{e}\n{}", again.text);
+            });
+        assert_eq!(config.target.name, "a");
+        assert_eq!(
+            config.oracle_allowlist(),
+            ["cc", "cargo", "rustc", "nm", "rustfmt"]
+        );
+        assert_eq!(
+            config.oracle["whole_program"]["args"],
+            toml::Value::Array(vec![toml::Value::String("-9".into())])
+        );
+        assert_eq!(config.oracle["timeout_secs"], toml::Value::Integer(30));
+        assert_eq!(config.llm.model, "me");
+        assert_eq!(config.llm.driver.as_ref().unwrap().max_repairs, Some(2));
+        assert!(again.text.contains("extra_link_args = [\"-lm\"]"));
+        assert!(
+            !again.text.contains("# [oracle.whole_program]"),
+            "{}",
+            again.text
+        );
+        assert!(!again.text.contains("# model ="), "{}", again.text);
+        assert!(again.whole_program);
+        assert_eq!(
+            again.kept,
+            [
+                "oracle.allowlist (rustfmt)",
+                "oracle.timeout_secs",
+                "oracle.whole_program",
+                "llm.driver",
+                "llm.model",
+                "driver"
+            ]
+        );
     }
 
     #[test]

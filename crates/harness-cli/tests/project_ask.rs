@@ -242,7 +242,8 @@ fn ask_is_refused_while_the_configuration_is_a_guess_unless_allowed() {
     assert!(
         run.stderr.contains(
             "the configuration is a guess, so the questions may be wrong: state it in \
-             migration/map/config.toml, or pass --allow-guessed"
+             migration/map/config.toml (or ask a model to propose one with `harness project ask \
+             --build`) and map again, or pass --allow-guessed"
         ),
         "{}",
         run.stderr
