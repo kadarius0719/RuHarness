@@ -246,6 +246,7 @@ enum Cmd {
     },
     /// A whole C project: which files make up its programs
     /// (docs/PROJECT-MAP-DESIGN.md)
+    #[command(after_help = PROJECT_ORDER)]
     Project {
         #[command(subcommand)]
         cmd: ProjectCmd,
@@ -440,6 +441,21 @@ enum FeaturesCmd {
         allow_unsandboxed: bool,
     },
 }
+
+/// The order of the project commands, shown under `harness project --help`
+/// (README "Start from your own C project" says the same at length).
+const PROJECT_ORDER: &str = "\
+The order, from a C project with no harness.toml:
+  1. harness project map             see the programs, what they share and what is held
+  2. state the configuration         write migration/map/config.toml (three lines: name,
+                                     from, flags; see docs/SCHEMAS.md), or let a model
+                                     propose one: harness project ask --build
+  3. harness project map             map again, under the stated configuration
+  4. harness project ask             optional: a model's advice on the held choices
+  5. harness project accept <ID>     make a program a tool (--keep d1=d1.2 for each held
+                                     choice); writes migration/tools/<ID>/harness.toml
+  6. harness scan --tool <ID>        then plan, gen-driver, migrate and verify, each
+                                     with --tool <ID>";
 
 #[derive(Subcommand)]
 enum ProjectCmd {
@@ -898,6 +914,10 @@ fn cmd_scan(target: TargetArg) -> Result<u8> {
         facts.refs.len(),
         ledger.facts_path().display()
     ));
+    out(format!(
+        "scan: next, cut the code into units: `{}`",
+        hint(&ctx, "plan")
+    ));
     Ok(0)
 }
 
@@ -959,6 +979,32 @@ pub(crate) fn hint(ctx: &TargetContext, cmd: &str) -> String {
     harness_core::runtime_view::command_line(cmd, ctx.tool.as_deref())
 }
 
+/// The awaiting line of an `external` hand-off (`gen-driver`, `migrate`,
+/// `observe`): where the response goes, the envelope it is written in
+/// (docs/SCHEMAS.md "Global rules") and the command to run again. With
+/// `model` (the commands that take `--model`), it also says to name who
+/// answers, since the answer is recorded under that model's name.
+pub(crate) fn handoff_line(
+    cmd: &str,
+    traces: &std::path::Path,
+    resume: &str,
+    model: Option<&str>,
+) -> String {
+    let rerun = match model {
+        Some(m) => format!(
+            "re-run with --model naming who answers (this run records the answer as `{}`)",
+            harness_core::text::safe_line(m)
+        ),
+        None => "re-run".to_string(),
+    };
+    format!(
+        "{cmd}: external provider mode — write the reply beside its request under {} as the \
+         envelope {} (the model's reply as its \"text\"), then {rerun}: {resume}",
+        traces.display(),
+        harness_llm::adapters::ENVELOPE
+    )
+}
+
 /// What a facts load says when it fails: the scan to run.
 pub(crate) fn loading_facts(ctx: &TargetContext) -> String {
     format!("loading facts (run `{}` first)", hint(ctx, "scan"))
@@ -1006,7 +1052,35 @@ fn cmd_plan(target: TargetArg) -> Result<u8> {
         }
     }
     out(format!("plan: execution order: {order_line}"));
+    let plan_doc = Plan::load(&Ledger::of(&ctx).plan_path())?;
+    if let Some(next) = plan_next_step(&ctx, &plan_doc) {
+        out(format!("plan: next, {next}"));
+    }
     Ok(0)
+}
+
+/// The next step after `plan`, for the first unit in execution order that
+/// is not verified yet: write its driver when it has no oracle, else
+/// translate it. `None` when every unit is verified (or the plan is empty).
+fn plan_next_step(ctx: &TargetContext, plan_doc: &Plan) -> Option<String> {
+    let order = plan_doc.execution_order().ok()?;
+    let unit = order.into_iter().find(|u| {
+        !matches!(
+            u.status,
+            plan::UnitStatus::Verified | plan::UnitStatus::Merged
+        )
+    })?;
+    Some(if unit.oracle.is_none() {
+        format!(
+            "write the first unit's differential driver: `{}`",
+            hint(ctx, &format!("gen-driver {}", unit.id))
+        )
+    } else {
+        format!(
+            "translate the first unit not yet verified: `{}`",
+            hint(ctx, &format!("migrate {}", unit.id))
+        )
+    })
 }
 
 /// Reconcile and write `plan.toml` (the body of `harness plan`): returns the
@@ -1170,12 +1244,7 @@ fn cmd_verify(unit_id: String, target: TargetArg, allow_unsandboxed: bool) -> Re
     )?;
     report::verdict(&unit_id, &verdict, &ledger.verdict_latest_path(&unit_id));
     for c in &verdict.checks {
-        out(format!(
-            "verify: [{}] {} — {}",
-            if c.passed { "PASS" } else { "FAIL" },
-            c.name,
-            c.detail
-        ));
+        out(format!("verify: {}", harness_oracle::check_screen_line(c)));
     }
     if verdict.green {
         verdict.store(&ledger.verdict_last_green_path(&unit_id))?;
@@ -1241,6 +1310,13 @@ pub(crate) fn announce_skips(verdict: &harness_core::Verdict) {
 fn cmd_status(target: TargetArg) -> Result<u8> {
     let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
+    // No --tool, and the project's only mapped tool was opened: say which.
+    if let (None, Some(id)) = (&target.tool, &ctx.tool) {
+        out(format!(
+            "status: reading tool {id}, the project's only mapped tool (its ledger is {})",
+            ctx.ledger_rel()
+        ));
+    }
     // A mapped tool's "project changed" notice: a notice, not staleness.
     if let Some(says) = harness_core::ledger::project_changed_notice(&ctx) {
         out(format!("status: {says}"));
@@ -1491,10 +1567,8 @@ fn cmd_observe(target: TargetArg) -> Result<u8> {
         Err(e @ Error::Awaiting { .. }) => {
             eprintln!("{e:#}");
             eprintln!(
-                "observe: external provider mode — supply the response file(s) under {} and \
-                 re-run: {}",
-                traces.display(),
-                observe_resume(&target)
+                "{}",
+                handoff_line("observe", &traces, &observe_resume(&target), None)
             );
             if let Error::Awaiting { path, .. } = &e {
                 report::event(&report::Awaiting {
@@ -2033,9 +2107,8 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         Err(e @ Error::Awaiting { .. }) => {
             eprintln!("{e:#}");
             eprintln!(
-                "migrate: external provider mode — supply the response file under {} and re-run: \
-                 {resume}",
-                traces.display()
+                "{}",
+                handoff_line("migrate", &traces, &resume, Some(&model))
             );
             if let Error::Awaiting { path, attempt } = &e {
                 report::event(&report::Awaiting {

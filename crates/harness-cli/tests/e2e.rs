@@ -6,6 +6,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The hand-off envelope as the awaiting lines spell it (docs/SCHEMAS.md
+/// "Global rules").
+const ENVELOPE: &str =
+    r#"{"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}"#;
+
 fn copy_dir(src: &Path, dst: &Path) {
     // Every child inherits the test process's own adoption file, never the
     // person's (docs/PROJECT-MAP-DESIGN.md §3.7).
@@ -171,6 +176,15 @@ fn full_pipeline_on_zopfli() {
         r.stdout, r.stderr
     );
     assert!(r.stderr.contains("awaiting"), "{}", r.stderr);
+    // The awaiting line names the envelope the reply is written in.
+    assert!(
+        r.stderr.contains(&format!(
+            "as the envelope {ENVELOPE} (the model's reply as its \"text\"), then re-run: \
+             harness observe --target="
+        )),
+        "{}",
+        r.stderr
+    );
     let traces: Vec<_> = std::fs::read_dir(tmp.join("migration/observer/traces"))
         .unwrap()
         .filter_map(|e| e.ok())
@@ -273,6 +287,16 @@ fn full_pipeline_on_zopfli() {
     ]);
     assert_eq!(r.code, 1, "expected awaiting: {}\n{}", r.stdout, r.stderr);
     assert!(r.stderr.contains("awaiting response"), "{}", r.stderr);
+    // The envelope, and --model naming who answers (the answer is recorded
+    // under the model's name).
+    assert!(
+        r.stderr.contains(&format!("as the envelope {ENVELOPE}"))
+            && r.stderr.contains(
+                "then re-run with --model naming who answers (this run records the answer as `"
+            ),
+        "{}",
+        r.stderr
+    );
     let request = pending_request(&traces_dir).expect("translate request written");
     let request_text = std::fs::read_to_string(&request).unwrap();
     assert!(

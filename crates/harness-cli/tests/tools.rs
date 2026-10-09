@@ -380,6 +380,147 @@ fn a_tools_refusals_name_the_next_step() {
     );
 }
 
+/// The small silences of the newcomer's walk: `project --help` gives the
+/// order; scan and plan end with the next step (spelled with the tool);
+/// `state status` says which tool it read when it picked the only one.
+#[test]
+fn the_person_is_told_the_order_the_next_step_and_the_tool_read() {
+    let r = harness(&["project", "--help"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for step in [
+        "1. harness project map",
+        "migration/map/config.toml",
+        "harness project ask --build",
+        "4. harness project ask",
+        "5. harness project accept <ID>",
+        "6. harness scan --tool <ID>",
+    ] {
+        assert!(r.stdout.contains(step), "{step}: {}", r.stdout);
+    }
+
+    let root = project("next-step");
+    let target = root.to_str().unwrap();
+    let r = harness(&["scan", "--target", target, "--tool", "t-a"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout
+            .contains("scan: next, cut the code into units: `harness plan --tool t-a"),
+        "{}",
+        r.stdout
+    );
+    let r = harness(&["plan", "--target", target, "--tool", "t-a"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout.contains(
+            "plan: next, write the first unit's differential driver: `harness gen-driver u-"
+        ) && r.stdout.contains(" --tool t-a"),
+        "{}",
+        r.stdout
+    );
+
+    // Two tools: status needs --tool, and with it says nothing of a pick.
+    let r = harness(&["state", "status", "--target", target, "--tool", "t-a"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        !r.stdout.contains("the project's only mapped tool"),
+        "{}",
+        r.stdout
+    );
+    std::fs::remove_dir_all(root.join("migration/tools/t-b")).unwrap();
+    let r = harness(&["state", "status", "--target", target]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout.starts_with(
+            "status: reading tool t-a, the project's only mapped tool (its ledger is \
+             migration/tools/t-a)"
+        ),
+        "{}",
+        r.stdout
+    );
+}
+
+/// `gen-driver` through the hand-off: the awaiting line names the envelope
+/// and `--model`; a reply that is not the envelope is refused saying what
+/// to write; a driver being checked prints a progress line first (the check
+/// takes tens of seconds on a real project).
+#[test]
+fn gen_driver_names_the_envelope_and_says_while_it_checks() {
+    let root = project("gen-driver");
+    let target = root.to_str().unwrap();
+    for cmd in ["scan", "plan"] {
+        let r = harness(&[cmd, "--target", target, "--tool", "t-a"]);
+        assert_eq!(r.code, 0, "{cmd}: {}\n{}", r.stdout, r.stderr);
+    }
+    let plan = std::fs::read_to_string(root.join("migration/tools/t-a/plan.toml")).unwrap();
+    let unit = plan
+        .lines()
+        .find_map(|l| l.strip_prefix("id = \""))
+        .and_then(|l| l.strip_suffix('"'))
+        .unwrap_or_else(|| panic!("no unit: {plan}"))
+        .to_string();
+    let args = [
+        "gen-driver",
+        unit.as_str(),
+        "--target",
+        target,
+        "--tool",
+        "t-a",
+        "--allow-unsandboxed",
+    ];
+    let r = harness(&args);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stderr.contains(
+            "as the envelope {\"text\": <the reply>, \"input_tokens\": 0, \"output_tokens\": 0, \
+             \"stop_reason\": \"end_turn\"} (the model's reply as its \"text\"), then re-run \
+             with --model naming who answers (this run records the answer as `"
+        ),
+        "{}",
+        r.stderr
+    );
+    let traces = root.join(format!("migration/tools/t-a/units/{unit}/driver-traces"));
+    let request = std::fs::read_dir(&traces)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.to_string_lossy().ends_with(".request.json"))
+        .expect("a request");
+    let response = PathBuf::from(
+        request
+            .to_string_lossy()
+            .replace(".request.json", ".response.json"),
+    );
+    // The bare reply, without the envelope: refused, saying what to write.
+    let driver = "driver.c\n```c\nint main(void) { return 0; }\n```\nRUHARNESS_END_OF_OUTPUT\n";
+    std::fs::write(&response, driver).unwrap();
+    let r = harness(&args);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stderr.contains(
+            "the response file must hold the envelope {\"text\": <the reply>, \
+             \"input_tokens\": 0, \"output_tokens\": 0, \"stop_reason\": \"end_turn\"}: write \
+             the model's reply as its \"text\""
+        ),
+        "{}",
+        r.stderr
+    );
+    // In the envelope: read, and checked (a driver that calls nothing is
+    // red), with the progress line before the check.
+    let envelope = serde_json::json!({
+        "text": driver, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn",
+    });
+    std::fs::write(&response, envelope.to_string()).unwrap();
+    let r = harness(&args);
+    assert!(
+        r.stdout.contains(
+            "gen-driver: checking the driver against the original C (it is built and run \
+             several times; this can take a minute) …"
+        ),
+        "{}\n{}",
+        r.stdout,
+        r.stderr
+    );
+}
+
 /// No target here, and `--tool` on a project without tools: one sentence
 /// each, exit 1.
 #[test]

@@ -168,16 +168,20 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         attempt: attempt.as_deref(),
         steer: None,
     };
-    let judge = |candidate: &Path| harness_oracle::validate_driver(&ctx, unit, candidate);
+    let judge = |candidate: &Path| {
+        // Validation builds and runs the driver several times: a line
+        // first, so a long wait is never silent.
+        out(checking_line().to_string());
+        harness_oracle::validate_driver(&ctx, unit, candidate)
+    };
     let outcome =
         match harness_llm::run_driver_generation(&params, &judge, &ctx, &facts, &plan_doc, unit) {
             Ok(o) => o,
             Err(e @ harness_core::Error::Awaiting { .. }) => {
                 eprintln!("{e:#}");
                 eprintln!(
-                    "gen-driver: external provider mode — supply the response file under {} and \
-                     re-run: {resume}",
-                    traces.display()
+                    "{}",
+                    crate::handoff_line("gen-driver", &traces, &resume, Some(&model))
                 );
                 if let harness_core::Error::Awaiting { path, attempt } = &e {
                     report::event(&report::Awaiting {
@@ -263,6 +267,13 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
     Ok(0)
 }
 
+/// The progress line printed before each driver check: the check builds
+/// and runs the driver several times (tens of seconds on a real project).
+pub(crate) fn checking_line() -> &'static str {
+    "gen-driver: checking the driver against the original C (it is built and run several \
+     times; this can take a minute) …"
+}
+
 /// Write the driver, validate it IN PLACE, and persist the validation only
 /// when green; otherwise restore the previous driver (or none).
 fn promote_driver(
@@ -285,6 +296,7 @@ fn promote_driver(
         }
         Ok(())
     };
+    out(checking_line().to_string());
     let validation: Result<DriverValidation, _> = harness_oracle::validate_driver(ctx, unit, dest);
     match validation {
         Ok(v) if v.green => {

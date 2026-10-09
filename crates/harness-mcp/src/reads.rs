@@ -394,6 +394,18 @@ fn speed_only_summary(model: &SpeedModel, id: &str) -> Value {
     })
 }
 
+/// `harness_status`'s `note`: a mapped tool's "project changed" notice
+/// first (`harness_core::ledger::project_changed_notice`, as `state status`
+/// and the cockpit show it), then why there are no units; `None` when
+/// neither applies.
+fn status_note(snapshot: &Snapshot) -> Option<String> {
+    match (&snapshot.project_notice, &snapshot.note) {
+        (Some(notice), Some(note)) => Some(format!("{notice}; {note}")),
+        (Some(one), None) | (None, Some(one)) => Some(one.clone()),
+        (None, None) => None,
+    }
+}
+
 /// `harness_status`: the ledger, outcome-first within the budget, one page
 /// of units in plan order (without facts, only the units with Speed rows,
 /// each `{id, speed, speed_rows}`) — from the one after `after`, when given — up
@@ -451,7 +463,7 @@ pub fn status(
         "tool": tool,
         "speed": speed_head(&model),
         "facts": snapshot.facts_state.as_ref().map(|f| json!({"files": f.files, "stale": f.stale})),
-        "note": snapshot.note.as_deref().map(|n| short("note", n)),
+        "note": status_note(snapshot).map(|n| short("note", &n)),
         "routing": routing,
         "act_in_flight": in_flight,
         "blind_hand_offs_pending": pending,
@@ -2652,6 +2664,25 @@ mod tests {
         let s = status(&snap, json!({}), Value::Null, None).unwrap();
         assert!(is_untrusted(&s["note"]));
         assert!(is_untrusted(&s["units"][0]["write_in_flight"]["started"]));
+    }
+
+    /// A chat agent on a mapped tool learns that the project changed: the
+    /// notice `state status` prints is the status `note` (before any other).
+    #[test]
+    fn the_status_note_carries_the_project_changed_notice() {
+        let mut snap = adopted_load(&repo().join("targets/zopfli")).unwrap();
+        let says = "the project changed since this tool was accepted: run `harness project \
+                    map`, then `accept` again";
+        snap.project_notice = Some(says.into());
+        let s = status(&snap, json!({}), Value::Null, None).unwrap();
+        assert_eq!(s["note"]["text"], says, "{}", s["note"]);
+        snap.note = Some("no plan yet".into());
+        let s = status(&snap, json!({}), Value::Null, None).unwrap();
+        assert_eq!(s["note"]["text"], format!("{says}; no plan yet"));
+        snap.project_notice = None;
+        snap.note = None;
+        let s = status(&snap, json!({}), Value::Null, None).unwrap();
+        assert_eq!(s["note"], Value::Null);
     }
 
     #[test]
