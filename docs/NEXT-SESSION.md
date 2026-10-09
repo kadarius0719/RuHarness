@@ -133,19 +133,26 @@ change at the switch points below.
    leaves no `-MD` list, so that failure cannot drop outside names (§6 says so); `Adoption::
    describe` prints "nothing to adopt" when `--adopt` states a shipped config. Then (d), (e),
    (f), (g).
-   **Steps (d) and (e) are BEING BUILT** (launched 2026-10-08 from 56f22cd, two Opus builders at
-   medium): `worktree-agent-af3124cf1d53803ad` — (d) MERGED (06a3d14; llm and CLI gates green):
-   `harness project ask` (harness-llm projectask.rs like triage.rs, the CLI's `Ask` arm, the reply contracts, the reply file,
-   `config.proposed.toml`, traces under `migration/map/traces/`, replay fixtures committed under
-   crates/harness-cli/tests/fixtures/project_ask/); `worktree-agent-a48e5fe3a0be4fa99` — (e)
-   `harness project accept` (projectmap/accept.rs, the re-link, the picks, the `harness.toml`
-   writer, the library case, the accepted-id wiring, the "what changed" report, the cockpit's
-   three acts and the notice shown). Merge each when green (both add an arm to the `Project`
-   subcommand: Accept before Ask; `ledger_root`'s match gains the arm too), full gates, bench
-   replay, DECISIONS; after (e) merges: the map screen's closing line names `ask` and `accept` plainly
-   (it still says "once they are built"); `migration/.gitignore` leaves `config.proposed.toml`
-   visible on purpose (the person reviews it); a check round over (d)+(e);
-   then (f) docs and (g).
+   **Steps (d) and (e) are MERGED** (0682103; four both-sides conflicts in main.rs resolved:
+   `mod` lines, the `ledger_root` match over Map|Accept|Ask, the two variants, the two dispatch
+   arms): (d) `harness project ask` (harness-llm projectask.rs, the CLI's `Ask` arm, both
+   contracts and validators, the reply file, `config.proposed.toml`, traces under
+   `migration/map/traces/`, replay fixtures under crates/harness-cli/tests/fixtures/project_ask/,
+   SCHEMAS' section); (e) `harness project accept` (projectmap/accept.rs: re-map and compare the
+   digests, picks, re-link, the `harness.toml` writer, the library case, accepted ids kept across
+   maps, the "what changed" lines and `project-tool-changed` event; the cockpit's project mode in
+   harness-tui project.rs with the three dialogs; the notice shown). **zopfli from the map is byte
+   for byte**: `accept t-zopfli_bin --run-name zopfli` (the id keeps the `_`), `scan --tool` gives
+   the committed facts, every `source_hash` matches the committed plan, u001 verifies green. At the
+   time of writing the whole-workspace tests and the bench replay run on 0682103. Leftovers:
+   `mapfile::gitignore_text`'s first line still credits `project map`; the cockpit's Ask dialog was
+   built against the command line before `ask` existed (words match; untested against the real
+   command); `accept` maps the whole project again to check its digests (as long as a map).
+   Next: a check round over (d)+(e) (two or three Opus checkers at high: correctness of ask's
+   contracts and accept's refusals/re-link, security of the prompts and the written harness.toml,
+   the person's flow through the cockpit's three acts), its fix pass, then (f) docs and (g); then
+   the **cold-start run on a real project** the person asked for (the beta question): liblzg or
+   lz4 from ~/code/ruharness-test-downloads/, by the docs alone, every stumble written down.
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
    toolchain line — folder-form `inputs` stay untouched.
