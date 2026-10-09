@@ -148,11 +148,23 @@ change at the switch points below.
    `mapfile::gitignore_text`'s first line still credits `project map`; the cockpit's Ask dialog was
    built against the command line before `ask` existed (words match; untested against the real
    command); `accept` maps the whole project again to check its digests (as long as a map).
-   Next: a check round over (d)+(e) (two or three Opus checkers at high: correctness of ask's
-   contracts and accept's refusals/re-link, security of the prompts and the written harness.toml,
-   the person's flow through the cockpit's three acts), its fix pass, then (f) docs and (g); then
-   the **cold-start run on a real project** the person asked for (the beta question): liblzg or
-   lz4 from ~/code/ruharness-test-downloads/, by the docs alone, every stumble written down.
+   **The check round over (d)+(e) is DONE and TRIAGED** (docs/reviews/2026-10-08-map-steps-d-e-check.md:
+   correctness, security, and a newcomer's cold start that reached a verified unit on liblzg and
+   on zopfli by the docs alone; fourteen decisions). **RUNNING NOW (launched 2026-10-08 from
+   cb74d43, two Opus builders at medium):** fix pass G the map/ask/accept
+   (`worktree-agent-?` — accept recomputes from the fresh map and never takes a choice from the
+   map file, re-accept keeps hand-added sections, the closing line while guessed, ask's "not
+   tried" wording, the cockpit's acts following the open question, library ids following the
+   files, "what changed" recorded per tool in the map file and read by the notice, byte caps on
+   slices, re-validated reply items, config.toml error wording, the missing tests) and fix pass H
+   the person's side + step (f) docs (verify's "[SKIP] … not run" with verdict bytes unchanged,
+   the hand-off envelope stated once and refused plainly, the awaiting lines, project --help's
+   order, scan/plan next steps, gen-driver's progress line, harness-mcp's notice, README's "Start
+   from your own C project", the tutorial's chapter, the testing guide's Part 12 "liblzg by map",
+   SCHEMAS' config.toml section). Merge each when green, reconcile the docs' quoted sentences
+   with G's words, full gates, bench replay, DECISIONS, fast-forward main; then (g) — record the
+   first accepted tool's features before its first unit moves — and the person's own cold-start
+   run.
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
    toolchain line — folder-form `inputs` stay untouched.
