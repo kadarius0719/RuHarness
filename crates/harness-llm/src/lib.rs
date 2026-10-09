@@ -49,6 +49,7 @@ pub mod emission;
 pub mod migrate;
 mod openai_compat;
 pub mod progress;
+pub mod projectask;
 pub mod providers;
 mod trajectory;
 pub mod triage;

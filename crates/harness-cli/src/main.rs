@@ -11,6 +11,7 @@ mod gen_driver;
 mod hand_edit;
 mod perf;
 mod project;
+mod project_ask;
 mod promote;
 mod report;
 
@@ -121,7 +122,7 @@ impl Cmd {
                 | FeaturesCmd::Map { target, .. } => project(&target.target),
             },
             Cmd::Project {
-                cmd: ProjectCmd::Map { target, .. },
+                cmd: ProjectCmd::Map { target, .. } | ProjectCmd::Ask { target, .. },
             } => project(target),
             Cmd::Perf { cmd } => match cmd {
                 PerfCmd::Run { target, .. }
@@ -452,6 +453,32 @@ enum ProjectCmd {
         #[arg(long, value_name = "NAME")]
         configuration: Option<String>,
     },
+    /// Ask a model about the map's open questions — the held duplicate
+    /// sets, or programs by id — or, with --build, to propose the
+    /// configuration from the build files; its answers are advice only
+    /// (writes migration/map/project-map.reply.json or config.proposed.toml)
+    Ask {
+        /// The mapped project folder
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Send the build files and ask for one configuration (written to
+        /// migration/map/config.proposed.toml); allowed at any time
+        #[arg(long, conflicts_with = "programs")]
+        build: bool,
+        /// Also ask the kind, name and purpose of these programs (ids joined
+        /// by commas, like t-main,t-demo)
+        #[arg(long, value_name = "IDS", value_parser = project_ask::parse_programs)]
+        programs: Option<String>,
+        /// Provider profile (default: external, the hand-off)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model (default: claude-sonnet-5)
+        #[arg(long)]
+        model: Option<String>,
+        /// Ask even though the map's configuration is a guess
+        #[arg(long)]
+        allow_guessed: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -704,6 +731,24 @@ fn run(cmd: Cmd) -> Result<u8> {
                     configuration,
                 },
         } => project::cmd_map(target, allow_unsandboxed, configuration),
+        Cmd::Project {
+            cmd:
+                ProjectCmd::Ask {
+                    target,
+                    build,
+                    programs,
+                    provider,
+                    model,
+                    allow_guessed,
+                },
+        } => project_ask::cmd_ask(project_ask::AskArgs {
+            target,
+            build,
+            programs,
+            provider,
+            model,
+            allow_guessed,
+        }),
         Cmd::Perf { cmd } => match cmd {
             PerfCmd::Run {
                 target,

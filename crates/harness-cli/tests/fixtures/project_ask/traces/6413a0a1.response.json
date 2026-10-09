@@ -1,0 +1,6 @@
+{
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "stop_reason": "end_turn",
+  "text": "[{\"item\":\"d1\",\"keep\":\"d1.2\",\"reason\":\"platform\"},\n{\"item\":\"d2\",\"keep\":\"undecided\",\"reason\":\"cannot-tell\"}]"
+}

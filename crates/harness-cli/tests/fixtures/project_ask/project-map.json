@@ -1,0 +1,419 @@
+{
+  "schema": "ruharness-project-map",
+  "schema_version": 1,
+  "root_hash": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+  "inputs_hash": "blake3:2222222222222222222222222222222222222222222222222222222222222222",
+  "toolchain": {
+    "cc": "fixture cc 1.0",
+    "target": "fixture-target",
+    "cflags": [
+      "-O2"
+    ],
+    "system_include_dirs": []
+  },
+  "configuration": {
+    "name": "guessed",
+    "from": "stated",
+    "source": "guessed",
+    "flags": [],
+    "digest": "blake3:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "files": [
+    {
+      "path": "examples/demo.c",
+      "aliases": [],
+      "kind": "c",
+      "bytes": 29,
+      "blake3": "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+      "parsed": true,
+      "compiled": "ok",
+      "functions": 1,
+      "includes": [],
+      "include_dirs": [],
+      "ambiguous_includes": [],
+      "included_by": [],
+      "included_other": [],
+      "defined_symbols": [
+        {
+          "name": "main",
+          "kind": "function"
+        }
+      ],
+      "needed_symbols": [],
+      "odd_names": 0
+    },
+    {
+      "path": "include/proj.h",
+      "aliases": [],
+      "kind": "h",
+      "bytes": 98,
+      "blake3": "blake3:0000000000000000000000000000000000000000000000000000000000000002",
+      "parsed": true,
+      "functions": 0,
+      "includes": [],
+      "include_dirs": [],
+      "ambiguous_includes": [],
+      "included_by": [
+        "src/crc_a.c",
+        "src/crc_b.c",
+        "src/decode.c",
+        "src/main.c",
+        "src/mini.c",
+        "tools/other.c"
+      ],
+      "included_other": [],
+      "defined_symbols": [],
+      "needed_symbols": [],
+      "odd_names": 0
+    },
+    {
+      "path": "src/crc_a.c",
+      "aliases": [],
+      "kind": "c",
+      "bytes": 136,
+      "blake3": "blake3:0000000000000000000000000000000000000000000000000000000000000003",
+      "parsed": true,
+      "compiled": "ok",
+      "functions": 1,
+      "includes": [
+        "include/proj.h"
+      ],
+      "include_dirs": [
+        "include"
+      ],
+      "ambiguous_includes": [],
+      "included_by": [],
+      "included_other": [],
+      "defined_symbols": [
+        {
+          "name": "fast_crc",
+          "kind": "function"
+        }
+      ],
+      "needed_symbols": [],
+      "odd_names": 0
+    },
+    {
+      "path": "src/crc_b.c",
+      "aliases": [],
+      "kind": "c",
+      "bytes": 135,
+      "blake3": "blake3:0000000000000000000000000000000000000000000000000000000000000004",
+      "parsed": true,
+      "compiled": "ok",
+      "functions": 1,
+      "includes": [
+        "include/proj.h"
+      ],
+      "include_dirs": [
+        "include"
+      ],
+      "ambiguous_includes": [],
+      "included_by": [],
+      "included_other": [],
+      "defined_symbols": [
+        {
+          "name": "fast_crc",
+          "kind": "function"
+        }
+      ],
+      "needed_symbols": [],
+      "odd_names": 0
+    },
+    {
+      "path": "src/decode.c",
+      "aliases": [],
+      "kind": "c",
+      "bytes": 212,
+      "blake3": "blake3:0000000000000000000000000000000000000000000000000000000000000005",
+      "parsed": true,
+      "compiled": "ok",
+      "functions": 1,
+      "includes": [
+        "include/proj.h"
+      ],
+      "include_dirs": [
+        "include"
+      ],
+      "ambiguous_includes": [],
+      "included_by": [],
+      "included_other": [],
+      "defined_symbols": [
+        {
+          "name": "decode",
+          "kind": "function"
+        }
+      ],
+      "needed_symbols": [],
+      "odd_names": 0
+    },
+    {
+      "path": "src/main.c",
+      "aliases": [],
+      "kind": "c",
+      "bytes": 83,
+      "blake3": "blake3:0000000000000000000000000000000000000000000000000000000000000006",
+      "parsed": true,
+      "compiled": "ok",
+      "functions": 1,
+      "includes": [
+        "include/proj.h"
+      ],
+      "include_dirs": [
+        "include"
+      ],
+      "ambiguous_includes": [],
+      "included_by": [],
+      "included_other": [],
+      "defined_symbols": [
+        {
+          "name": "main",
+          "kind": "function"
+        }
+      ],
+      "needed_symbols": [
+        {
+          "name": "decode"
+        },
+        {
+          "name": "fast_crc"
+        }
+      ],
+      "odd_names": 0
+    },
+    {
+      "path": "src/mini.c",
+      "aliases": [],
+      "kind": "c",
+      "bytes": 118,
+      "blake3": "blake3:0000000000000000000000000000000000000000000000000000000000000007",
+      "parsed": true,
+      "compiled": "ok",
+      "functions": 1,
+      "includes": [
+        "include/proj.h"
+      ],
+      "include_dirs": [
+        "include"
+      ],
+      "ambiguous_includes": [],
+      "included_by": [],
+      "included_other": [],
+      "defined_symbols": [
+        {
+          "name": "decode",
+          "kind": "function"
+        }
+      ],
+      "needed_symbols": [],
+      "odd_names": 0
+    },
+    {
+      "path": "tools/other.c",
+      "aliases": [],
+      "kind": "c",
+      "bytes": 73,
+      "blake3": "blake3:0000000000000000000000000000000000000000000000000000000000000008",
+      "parsed": true,
+      "compiled": "ok",
+      "functions": 1,
+      "includes": [
+        "include/proj.h"
+      ],
+      "include_dirs": [
+        "include"
+      ],
+      "ambiguous_includes": [],
+      "included_by": [],
+      "included_other": [],
+      "defined_symbols": [
+        {
+          "name": "main",
+          "kind": "function"
+        }
+      ],
+      "needed_symbols": [
+        {
+          "name": "decode"
+        }
+      ],
+      "odd_names": 0
+    }
+  ],
+  "programs": [
+    {
+      "id": "t-demo",
+      "index": "p1",
+      "path": "examples/demo.c",
+      "kind": "main",
+      "kind_guess": "example"
+    },
+    {
+      "id": "t-main",
+      "index": "p2",
+      "path": "src/main.c",
+      "kind": "main",
+      "kind_guess": "tool"
+    },
+    {
+      "id": "t-other",
+      "index": "p3",
+      "path": "tools/other.c",
+      "kind": "main",
+      "kind_guess": "tool"
+    }
+  ],
+  "programs_not_compiled": [],
+  "closures": [
+    {
+      "program": "t-demo",
+      "files": [
+        "examples/demo.c"
+      ],
+      "flags": [],
+      "incomplete": false,
+      "incomplete_why": [],
+      "outside": [],
+      "needs_from": [],
+      "duplicates": [],
+      "collisions": [],
+      "ambiguous_unsettled": [],
+      "linked": "ok",
+      "questions": []
+    },
+    {
+      "program": "t-main",
+      "files": [
+        "include/proj.h",
+        "src/main.c"
+      ],
+      "flags": [],
+      "incomplete": true,
+      "incomplete_why": [
+        {
+          "why": "pending",
+          "symbols": [
+            "decode",
+            "fast_crc"
+          ]
+        }
+      ],
+      "outside": [],
+      "needs_from": [],
+      "duplicates": [
+        {
+          "set": "d1",
+          "symbols": [
+            "decode"
+          ],
+          "definers": [
+            {
+              "index": "d1.1",
+              "path": "src/decode.c"
+            },
+            {
+              "index": "d1.2",
+              "path": "src/mini.c"
+            }
+          ],
+          "links": [
+            "d1.1",
+            "d1.2"
+          ]
+        },
+        {
+          "set": "d2",
+          "symbols": [
+            "fast_crc"
+          ],
+          "definers": [
+            {
+              "index": "d2.1",
+              "path": "src/crc_a.c"
+            },
+            {
+              "index": "d2.2",
+              "path": "src/crc_b.c"
+            }
+          ],
+          "links": [
+            "d2.1",
+            "d2.2"
+          ]
+        }
+      ],
+      "collisions": [],
+      "ambiguous_unsettled": [],
+      "questions": [
+        "d1",
+        "d2"
+      ]
+    },
+    {
+      "program": "t-other",
+      "files": [
+        "include/proj.h",
+        "src/decode.c",
+        "tools/other.c"
+      ],
+      "flags": [],
+      "incomplete": false,
+      "incomplete_why": [],
+      "outside": [],
+      "needs_from": [],
+      "duplicates": [
+        {
+          "set": "d1",
+          "symbols": [
+            "decode"
+          ],
+          "definers": [
+            {
+              "index": "d1.1",
+              "path": "src/decode.c"
+            },
+            {
+              "index": "d1.2",
+              "path": "src/mini.c"
+            }
+          ],
+          "links": [
+            "d1.1"
+          ],
+          "choice": {
+            "keep": "d1.1",
+            "by": "links"
+          }
+        }
+      ],
+      "collisions": [],
+      "ambiguous_unsettled": [],
+      "linked": "ok",
+      "questions": []
+    }
+  ],
+  "between_program_duplicates": [],
+  "shared": [
+    {
+      "file": "include/proj.h",
+      "programs": [
+        "t-main",
+        "t-other"
+      ]
+    }
+  ],
+  "libraries": [],
+  "set_aside": [],
+  "skipped_folders": [],
+  "walk_issues": [],
+  "build_evidence": {
+    "compile_commands": "absent",
+    "ignored_entries": 0,
+    "unfound_entries": [],
+    "build_files": [
+      "CMakeLists.txt",
+      "Makefile"
+    ]
+  },
+  "limits_hit": []
+}

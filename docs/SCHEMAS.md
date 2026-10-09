@@ -1807,6 +1807,100 @@ own files), so its silence means only "the digests match".
 | `migration/.gitignore` | the first `project map` (never overwritten) | the same |
 | `migration/map/.lock` | `project map`, `sync-runtime` (later `accept`) | — (it is the lock) |
 
+## `harness project ask` (docs/PROJECT-MAP-DESIGN.md §3.4, §3.8, §5 step d)
+
+`harness project ask --target DIR [--build | --programs IDS] [--provider P] [--model M]
+[--allow-guessed]` puts the map's open questions (or, with `--build`, its build files) to a
+model through the hand-off and keeps the answers as **advice**. It builds nothing and needs no
+sandbox; it reads `migration/map/project-map.json` as `project map` wrote it ("no map written
+yet: run `harness project map`" without one; a map it cannot read, or whose indexes, ids or
+set definers are not the shapes the harness makes, is refused with "run `harness project map`
+again"); it takes the project lock `migration/map/.lock` for the whole run. Without a target
+there is no `[llm]` section: the provider and model default to the hand-off's own
+(`external`, `claude-sonnet-5`, 8192 tokens). Exit 0 with the answers shown and written; 1
+refused or awaiting; 2 usage (`--build` with `--programs`, an id that is not `t-…`).
+
+- **The questions** (no `--build`): refused while `configuration.source` is `guessed` unless
+  `--allow-guessed` ("the configuration is a guess, so the questions may be wrong: state it in
+  migration/map/config.toml, or pass --allow-guessed"), and when nothing is open ("nothing is
+  open: every program linked and every duplicate set is settled"); both before anything is
+  written. The open items are the programs `--programs` names (ids joined by commas; only a
+  program with its own `index`) and then every set some closure lists in `questions`, in index
+  order (`p2` before `p10`), at most 10 a call. A program's facts are `{id, path, folder,
+  bytes, functions, includes}`; a set's `{symbols (the union over every closure holding it),
+  programs (their ids), definers: [{index, path, folder, bytes, functions, includes,
+  slice_lines, slice, no_slice?}]}`, the slice being each duplicated definition found by its
+  name at file scope (a prototype skipped), at most 120 lines per definer, read from the file
+  (8 MiB cap, never through a link).
+- **The request** (the trusted part holds only harness text and checked indexes): the system
+  prompt is the role, the zero-authority policy and the output contract, then one line naming
+  the exact delimiters `<project_facts_<nonce> item=".." trust="untrusted">` …
+  `</project_facts_<nonce>>`; the user content is, per item, a trusted line (`item=d1
+  kind=duplicate-set definers=d1.1,d1.2`, `item=p3 kind=program`) and its facts as compact
+  JSON with `<` written `\u003c` inside the delimiters. The nonce is the first 12 hex of
+  blake3 over `project-ask` ‖ each item's trusted line ‖ its JSON, concatenated:
+  deterministic for replay, and no block can hold its own delimiter.
+- **The reply contract**: a JSON array (a Markdown fence is stripped), exactly one object per
+  index asked, `{"item":"p3","kind":"tool|test|example|benchmark|other","name":"..",
+  "purpose":".."}` (`name` 1–40 characters, `purpose` 1–200) or `{"item":"d1","keep":
+  "d1.2|undecided","reason":"platform|alternative-implementation|cannot-tell"}` (`keep` one of
+  that set's own definers). Refused in full, naming the index and the rule, when it names an
+  index not asked, skips or repeats one, adds a field (unknown fields are refused), gives a
+  value outside its closed set, or holds anywhere a character `unsafe_to_show` names.
+- **The reply file** `migration/map/project-map.reply.json` (gitignored), pretty JSON with a
+  final newline: `{schema: "ruharness-project-map-reply", root_hash, inputs_hash, items:
+  {<index>: {kind?, name?, purpose?, keep?, reason?, model, provider}}}` (`provider` is the
+  profile name). A file bound to other digests is never read beyond them and is replaced; one
+  that cannot be read is replaced; one bound to this map's digests is merged into, batch by
+  batch as each batch validates, the latest answer per index winning. It holds the answers
+  only — no source text. It is advice: `accept` never reads it.
+- **`--build`**: allowed at any time (a guess too, and with nothing open). Sends the
+  `build_evidence.build_files` whose file name is a build file's fixed name (`Makefile`,
+  `GNUmakefile`, `CMakeLists.txt`, `configure`, `configure.ac`, `meson.build`, `*.mk`), each a
+  regular file reached through no link, at most 64 KiB each and 128 KiB in all — over the total
+  the largest is left out first; every file not sent is printed with why. Each file is a
+  trusted line (`file=N lines=L`) and a JSON `{path, text}` block between
+  `<build_file_<nonce> file="N" trust="untrusted">` delimiters (nonce: blake3 over
+  `project-ask-build` ‖ each block). The system prompt carries the flag grammar and says link
+  and warning flags are not asked for. The reply is one object `{"name":"..","from":
+  "make|meson|cmake","flags":[{"flag":"..","cites":["path:line"]}],"assumptions":[".."]}`:
+  `name` `[a-z0-9-]{1,20}`, at most 64 flags each through the grammar (`check_flag`, then its
+  path resolved inside the project as `config.toml`'s are), at most 16 cites each naming a file
+  sent and a line it has, at most 20 assumptions of one line and 1–200 characters; unknown
+  fields and unshowable characters refused. It writes `migration/map/config.proposed.toml` —
+  a comment saying it is the model's proposal and how to copy it into `config.toml`, then one
+  `[[configuration]]` entry in `config.toml`'s own form, the cites and assumptions as comments
+  — and changes nothing else.
+- **Calls, traces and resume**: every call goes through `checked_complete`; a truncated or
+  refused stop is a hard error. Live: a reply that fails the contract gets one retry with the
+  error appended, and the validated pair is recorded under the original request's key.
+  `external`: a response that fails is a hard error naming the response file, "delete it and
+  answer again"; `replay`: "record a live run". The traces (`<key>.request.json`,
+  `<key>.response.json`) live in `migration/map/traces/` (gitignored; made when absent, a link
+  refused); a response is bound to its exact question, not to a map, so a stored answer to the
+  same question is read again. With several calls every call's request is written in one run;
+  the run exits 1 with the `awaiting` event for the first pending one and the resume command:
+  `harness project ask --target=DIR [--build] [--programs=IDS] [--allow-guessed]
+  --provider=P --model=M` — every flag given but `--adopt` and `--json`, always the provider
+  and model (the model is part of the trace key), values shell-quoted and attached.
+- **The screen**: each answer labelled as the model's, naming the model (`p3 t-foo (path): the
+  model's label (M): kind …, name "…"; purpose, in its words: …`; `d1 (symbols; held by ids):
+  the model's advice (M): keep d1.2 <path>, reason …; in t-a that choice linked; in t-b it did
+  not link`, from the map's own `links`; `undecided` says the choice goes to the person and
+  lists the definers), then once that the words are labels and advice only. Every project and
+  model string is printed through `safe_line`. `--json` adds `project-answer {item, model,
+  provider, program?, path?, kind?, name?, purpose?, keep?, keep_path?, reason?, linked_in?,
+  not_linked_in?}` and `project-proposal {path, name, from, flags, model, provider}`, strings
+  raw and escaped as every event is.
+
+### Writer table additions
+
+| File | Writer | Lock |
+|---|---|---|
+| `migration/map/project-map.reply.json` | `project ask` (in full, atomically, after each batch validates) | the project lock |
+| `migration/map/config.proposed.toml` | `project ask --build` (in full, atomically) | the project lock |
+| `migration/map/traces/` | `project ask` (request files; a live run's validated pairs) | the project lock |
+
 ---
 
 # Mapped tools: the layout, `harness.toml` v2 and `--tool` (docs/PROJECT-MAP-DESIGN.md §3.7, §5 step c)
