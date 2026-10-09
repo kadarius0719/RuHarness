@@ -23,6 +23,39 @@ pub fn check_words(name: &str) -> String {
     }
 }
 
+/// Why a check did not run, for a check the oracle records as not run (an
+/// unconfigured whole-program check, recorded `passed: true`): `verify`'s
+/// own screen line ([`harness_oracle::check_screen_line`]) decides, so the
+/// cockpit and the CLI never disagree, and the sentence is the CLI's
+/// ("not configured for this target (add [oracle.whole_program] …)").
+/// `None` for a check that ran.
+pub fn not_run_why(name: &str, passed: bool, detail: &str) -> Option<String> {
+    let line = harness_oracle::check_screen_line(&harness_core::verdict::Check {
+        name: name.into(),
+        passed,
+        detail: detail.into(),
+    });
+    let rest = line.strip_prefix("[SKIP] ")?;
+    Some(
+        rest.split_once("not run: ")
+            .map_or(rest, |(_, why)| why)
+            .to_string(),
+    )
+}
+
+/// "1 not run (whole-program: not configured …)" for the checks that did
+/// not run, each `(name, why)`; empty when every check ran.
+pub fn not_run_words(not_run: &[(String, String)]) -> String {
+    if not_run.is_empty() {
+        return String::new();
+    }
+    let each: Vec<String> = not_run
+        .iter()
+        .map(|(name, why)| format!("{name}: {why}"))
+        .collect();
+    format!("{} not run ({})", not_run.len(), each.join("; "))
+}
+
 /// A turn's result in words.
 pub fn result_words(result: &str) -> String {
     match result {
@@ -81,6 +114,8 @@ pub struct Narrator {
     turn: Option<u64>,
     step: String,
     checks: Vec<(String, bool)>,
+    /// The checks that did not run: name, why (the CLI's words).
+    not_run: Vec<(String, String)>,
     verdict: Option<String>,
     awaited: bool,
     error: Option<(String, String)>,
@@ -125,6 +160,7 @@ impl Narrator {
             turn: None,
             step,
             checks: Vec::new(),
+            not_run: Vec::new(),
             verdict: None,
             awaited: false,
             error: None,
@@ -176,18 +212,33 @@ impl Narrator {
             Event::TurnEnd { index, result, .. } => {
                 self.step = format!("Turn {index}: {}", result_words(result));
             }
-            Event::Check { name, passed, .. } => {
+            Event::Check {
+                name,
+                passed,
+                detail,
+                ..
+            } => {
                 self.checks.push((name.clone(), *passed));
-                self.step = format!(
-                    "Checked: {} — {}",
-                    check_words(name),
-                    if *passed { "passed" } else { "FAILED" }
-                );
+                let state = match not_run_why(name, *passed, detail) {
+                    Some(why) => {
+                        let state = format!("not run: {why}");
+                        self.not_run.push((name.clone(), why));
+                        state
+                    }
+                    None if *passed => "passed".into(),
+                    None => "FAILED".into(),
+                };
+                self.step = format!("Checked: {} — {state}", check_words(name));
             }
             Event::Verdict { green, .. } => {
                 let n = self.checks.len();
-                let text = if *green {
+                let skipped = not_run_words(&self.not_run);
+                let text = if *green && skipped.is_empty() {
                     format!("GREEN — all {n} checks passed")
+                } else if *green {
+                    let passed = n - self.not_run.len();
+                    let s = if passed == 1 { "" } else { "s" };
+                    format!("GREEN — {passed} check{s} passed, {skipped}")
                 } else {
                     let failed: Vec<String> = self
                         .checks
@@ -195,8 +246,13 @@ impl Narrator {
                         .filter(|(_, ok)| !ok)
                         .map(|(name, _)| check_words(name))
                         .collect();
+                    let skipped = if skipped.is_empty() {
+                        skipped
+                    } else {
+                        format!("; {skipped}")
+                    };
                     format!(
-                        "RED — {} of {n} checks failed: {}",
+                        "RED — {} of {n} checks failed: {}{skipped}",
                         failed.len(),
                         failed.join(", ")
                     )
@@ -510,7 +566,9 @@ mod tests {
         run(&mut green, &fixture("verify-green.ndjson"));
         assert_eq!(
             green.last(Some(0), None, Duration::from_secs(41)),
-            "Re-check u-lib — GREEN — all 7 checks passed (41 s)"
+            "Re-check u-lib — GREEN — 6 checks passed, 1 not run (whole-program: not \
+             configured for this target (add [oracle.whole_program] args = [...] to \
+             harness.toml)) (41 s)"
         );
         let mut red = Narrator::new("Re-check u-lib", &argv_of("verify"));
         let steps = run(&mut red, &fixture("verify-red.ndjson"));
@@ -521,7 +579,9 @@ mod tests {
         assert_eq!(red.ending(Some(10), None), Ending::Red);
         assert_eq!(
             red.last(Some(10), None, Duration::from_secs(3)),
-            "Re-check u-lib — RED — 1 of 6 checks failed: same outputs as C (3 s)"
+            "Re-check u-lib — RED — 1 of 6 checks failed: same outputs as C; 1 not run \
+             (whole-program: not configured for this target (add [oracle.whole_program] \
+             args = [...] to harness.toml)) (3 s)"
         );
         let mut plan = Narrator::new("Refresh the plan", &argv_of("plan"));
         let steps = run(&mut plan, &fixture("plan.ndjson"));
@@ -552,6 +612,87 @@ mod tests {
         assert!(stale
             .last(Some(1), None, Duration::ZERO)
             .starts_with("Find hazards — Refused: facts.jsonl is stale"));
+    }
+
+    /// An unconfigured whole-program check did not run: the narration says
+    /// so, as `verify` does, and never counts it among the passes.
+    #[test]
+    fn an_unconfigured_whole_program_check_is_not_run_not_passed() {
+        let mut n = Narrator::new("Re-check u", &argv(&["harness", "--json", "verify"]));
+        let check = |name: &str, detail: &str| Event::Check {
+            unit: "u".into(),
+            name: name.into(),
+            passed: true,
+            detail: detail.into(),
+        };
+        n.on_event(&check("symbol-set", "ok"));
+        n.on_event(&check(
+            "whole-program",
+            harness_oracle::WHOLE_PROGRAM_NOT_CONFIGURED,
+        ));
+        assert_eq!(
+            n.step(),
+            "Checked: whole program — not run: not configured for this target (add \
+             [oracle.whole_program] args = [...] to harness.toml)"
+        );
+        n.on_event(&Event::Verdict {
+            unit: "u".into(),
+            green: true,
+            path: "p".into(),
+        });
+        assert_eq!(
+            n.step(),
+            "Verdict: GREEN — 1 check passed, 1 not run (whole-program: not configured \
+             for this target (add [oracle.whole_program] args = [...] to harness.toml))"
+        );
+        // A whole-program check that ran is a pass like any other.
+        assert_eq!(
+            not_run_why("whole-program", true, "3 sample(s) identical"),
+            None
+        );
+        assert_eq!(
+            not_run_why("whole-program", false, "not configured for this target"),
+            None
+        );
+    }
+
+    /// The verify fixtures say what today's binary prints: every check's
+    /// screen line is `verify: ` + `harness_oracle::check_screen_line`.
+    #[test]
+    fn the_verify_fixtures_print_what_verify_prints() {
+        for name in ["verify-green.ndjson", "verify-red.ndjson"] {
+            let events = fixture(name);
+            let lines: Vec<String> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Check {
+                        name,
+                        passed,
+                        detail,
+                        ..
+                    } => Some(format!(
+                        "verify: {}",
+                        harness_oracle::check_screen_line(&harness_core::verdict::Check {
+                            name: name.clone(),
+                            passed: *passed,
+                            detail: detail.clone(),
+                        })
+                    )),
+                    _ => None,
+                })
+                .collect();
+            let printed: Vec<&String> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Message { text } if text.starts_with("verify: [") => Some(text),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(printed.len(), lines.len(), "{name}");
+            for (p, l) in printed.iter().zip(&lines) {
+                assert_eq!(*p, l, "{name}");
+            }
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@
 {"k":"message","text":"verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm"}
 {"k":"message","text":"verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean"}
 {"k":"message","text":"verify: [FAIL] differential-driver — outputs differ (lens 11503 vs 11400, first diff at byte 256)"}
-{"k":"message","text":"verify: [PASS] whole-program — not configured for this target"}
+{"k":"message","text":"verify: [SKIP] whole-program — not run: not configured for this target (add [oracle.whole_program] args = [...] to harness.toml)"}
 {"k":"message","text":"verify: [PASS] sanitizers — asan+ubsan clean"}
 {"k":"message","text":"verify: u-lib RED — status demoted verified -> in-progress"}
 {"k":"result","exit":10}

@@ -32,8 +32,8 @@
 │                              ││43         7.56931807e-07f / 3,     6.00› │  37     };                                │
 │                              ││44         9.53674316e-07f / 5,     7.56› │  38                                       │
 │                              ││45         6.00777173e-07f / 5,     9.53› │  39     // `bs` (the bs_t struct) must be›│
-│                              ││Checks  ✓ same exports  ✓ allowed calls only  ✓ driver shape  ✓ same outputs as C     │
-│                              ││        ✓ whole program  ✓ sanitizers  ✓ boundary calls                               │
+│                              ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only  ✓ driver shape │
+│                              ││        ✓ same outputs as C  ✓ sanitizers  ✓ boundary calls                           │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
  Ready.
 

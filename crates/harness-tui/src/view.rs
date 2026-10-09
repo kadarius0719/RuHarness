@@ -17,7 +17,7 @@ use crate::files::{self, FileState, UnitState};
 use crate::highlight::{Class, Pieces};
 use crate::menu::MODEL_SEPARATOR;
 use crate::model::UnitView;
-use crate::narrate::{check_words, elapsed_words};
+use crate::narrate::{check_words, elapsed_words, not_run_why};
 use crate::speed;
 use crate::tree::{Row, RowKind, Selection};
 use ratatui::buffer::CellWidth;
@@ -1107,6 +1107,14 @@ fn clipped(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
         .collect()
 }
 
+/// How a check came out, for the checks strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ran {
+    Failed,
+    NotRun,
+    Passed,
+}
+
 /// The checks strip in `rows` rows: FAILED checks first, in words, so a cut
 /// strip never hides a failure, and `+N` for whatever did not fit.
 fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
@@ -1129,50 +1137,74 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
         },
     )];
-    // Failed first; checks with the same words (the whole-program samples)
-    // collapse into one chip with a count.
-    let mut grouped: Vec<(bool, String, usize)> = Vec::new();
+    // Failed first, then any check that did not run (never a pass: the
+    // CLI's rule, `narrate::not_run_why`), then the passes; checks with the
+    // same words (the whole-program samples) collapse into one chip with a
+    // count.
+    let not_run =
+        |c: &harness_core::verdict::Check| not_run_why(&c.name, c.passed, &c.detail).is_some();
+    let mut grouped: Vec<(Ran, String, usize)> = Vec::new();
     let feature_prefix = harness_core::features::CHECK_PREFIX;
     let feature_passes = v
         .checks
         .iter()
         .filter(|c| c.passed && c.name.starts_with(feature_prefix))
         .count();
-    for check in v.checks.iter().filter(|c| !c.passed).chain(
-        v.checks
-            .iter()
-            .filter(|c| c.passed && !c.name.starts_with(feature_prefix)),
-    ) {
+    let passes = |c: &&harness_core::verdict::Check| {
+        c.passed && !not_run(c) && !c.name.starts_with(feature_prefix)
+    };
+    for check in v
+        .checks
+        .iter()
+        .filter(|c| !c.passed)
+        .chain(v.checks.iter().filter(|c| not_run(c)))
+        .chain(v.checks.iter().filter(passes))
+    {
+        let ran = if !check.passed {
+            Ran::Failed
+        } else if not_run(check) {
+            Ran::NotRun
+        } else {
+            Ran::Passed
+        };
         let words = check_words(&check.name);
         match grouped
             .iter_mut()
-            .find(|(p, w, _)| *p == check.passed && *w == words)
+            .find(|(r, w, _)| *r == ran && *w == words)
         {
             Some((_, _, n)) => *n += 1,
-            None => grouped.push((check.passed, words, 1)),
+            None => grouped.push((ran, words, 1)),
         }
     }
     if feature_passes > 0 {
         let reach = features_reach_words(app, v);
-        grouped.push((true, format!("scenarios ×{feature_passes}{reach}"), 1));
+        grouped.push((
+            Ran::Passed,
+            format!("scenarios ×{feature_passes}{reach}"),
+            1,
+        ));
     }
-    for (passed, words, n) in grouped {
+    for (ran, words, n) in grouped {
         let count = if n > 1 {
             format!(" ×{n}")
         } else {
             String::new()
         };
-        chips.push((
-            display::line(&format!(
-                " {} {words}{count} ",
-                if passed { "✓" } else { "✗" }
-            )),
-            if passed {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::Red)
-            },
-        ));
+        let (text, style) = match ran {
+            Ran::Passed => (
+                format!(" ✓ {words}{count} "),
+                Style::default().fg(Color::Green),
+            ),
+            Ran::NotRun => (
+                format!(" – {words}{count} not run "),
+                Style::default().fg(Color::Yellow),
+            ),
+            Ran::Failed => (
+                format!(" ✗ {words}{count} "),
+                Style::default().fg(Color::Red),
+            ),
+        };
+        chips.push((display::line(&text), style));
     }
     let total = chips.len();
     let mut lines: Vec<Vec<Span<'static>>> = vec![Vec::new()];
@@ -3612,20 +3644,24 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
             let inner = rect.width.saturating_sub(2) as usize;
             let mut rows: Vec<Line<'static>> = Vec::new();
             for (i, c) in v.checks.iter().enumerate() {
-                let mut style = if c.passed {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::Red)
+                // A check that did not run is not run here as in `verify`.
+                let why = not_run_why(&c.name, c.passed, &c.detail);
+                let (mut style, mark) = match (&why, c.passed) {
+                    (Some(_), _) => (Style::default().fg(Color::Yellow), "–"),
+                    (None, true) => (Style::default().fg(Color::Green), "✓"),
+                    (None, false) => (Style::default().fg(Color::Red), "✗"),
                 };
                 if i == selected {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
-                let mark = if c.passed { "✓" } else { "✗" };
                 rows.extend(wrapped(
                     &format!("{mark} {} ({})", check_words(&c.name), c.name),
                     inner,
                     style,
                 ));
+                if let Some(why) = why {
+                    rows.extend(wrapped(&format!("    not run: {why}"), inner, dim()));
+                }
                 if let Some(note) = feature_check_note(app, &v.unit, &c.name, c.passed) {
                     rows.extend(wrapped(&format!("    {note}"), inner, dim()));
                 }
@@ -4017,6 +4053,28 @@ mod tests {
     /// Golden 1: 120 columns, an owned file selected: the tree with its
     /// states in words, the View's pairs side by side with cut marks, the
     /// checks in words, the two activity rows, the hint bar.
+    #[test]
+    fn the_checks_say_an_unconfigured_whole_program_check_did_not_run() {
+        let mut app = app("notrun");
+        app.select(Selection::File(LIB_C.into()));
+        let screen = text(&render(&mut app, 120, 40));
+        let strip = row_with(&screen, "Checks ");
+        assert!(strip.contains("– whole program not run"), "{strip}");
+        assert!(!screen.contains("✓ whole program"), "{screen}");
+        // The checks overlay: marked as not run, with the CLI's reason.
+        app.mode = Mode::Verdict {
+            selected: 0,
+            scroll: 0,
+        };
+        let screen = text(&render(&mut app, 160, 40));
+        let row = row_with(&screen, "(whole-program)");
+        assert!(row.contains("– whole program (whole-program)"), "{row}");
+        assert!(
+            screen.contains("not run: not configured for this target (add"),
+            "{screen}"
+        );
+    }
+
     #[test]
     fn golden_120_columns() {
         let mut app = app("g120");
