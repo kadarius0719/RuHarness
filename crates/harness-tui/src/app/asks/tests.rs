@@ -1803,3 +1803,31 @@ fn migrate_gate_quit_asked_and_unseen() {
     assert_eq!(b.on_key(ctrl_c, Instant::now()), Command::None);
     assert!(matches!(&b.mode, Mode::Dialog(c) if c.purpose == Purpose::Quit));
 }
+
+/// Decision 3 of the steps (d)+(e) check: an act's outcome line never
+/// counts an unconfigured whole-program check among the passes.
+#[test]
+fn an_outcome_line_counts_a_check_that_did_not_run_apart() {
+    let mut c = Collected::default();
+    for (name, passed, detail) in [
+        ("symbol-set", true, "ok"),
+        ("differential-driver", false, "outputs differ"),
+        (
+            "whole-program",
+            true,
+            harness_oracle::WHOLE_PROGRAM_NOT_CONFIGURED,
+        ),
+    ] {
+        c.on_event(&Event::Check {
+            unit: "u".into(),
+            name: name.into(),
+            passed,
+            detail: detail.into(),
+        });
+    }
+    assert_eq!(
+        checks_count_words(&c),
+        ", 1 of 3 checks passed, 1 not run (whole-program: not configured for this target \
+         (add [oracle.whole_program] args = [...] to harness.toml))"
+    );
+}

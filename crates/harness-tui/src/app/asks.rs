@@ -76,6 +76,8 @@ pub struct Collected {
     pub failed: Vec<String>,
     /// Every check.
     pub checks: usize,
+    /// The checks that did not run (recorded as passed): name, why.
+    pub not_run: Vec<(String, String)>,
     /// Its messages (the last few kept).
     pub messages: Vec<String>,
     /// The last turn it started.
@@ -94,8 +96,16 @@ impl Collected {
                 self.attempt = Some(id.clone());
                 self.outcome = Some(outcome.clone());
             }
-            Event::Check { name, passed, .. } => {
+            Event::Check {
+                name,
+                passed,
+                detail,
+                ..
+            } => {
                 self.checks += 1;
+                if let Some(why) = crate::narrate::not_run_why(name, *passed, detail) {
+                    self.not_run.push((name.clone(), why));
+                }
                 if !passed {
                     self.failed.push(name.clone());
                 }
@@ -1936,6 +1946,26 @@ fn outcome_word(o: &Owed) -> &'static str {
     }
 }
 
+/// ", 6 of 7 checks passed, 1 not run (whole-program: …)" for an act's
+/// outcome line: a check that did not run is never counted as passed (the
+/// CLI's rule, [`crate::narrate::not_run_why`]). Empty with no checks.
+fn checks_count_words(c: &Collected) -> String {
+    if c.checks == 0 {
+        return String::new();
+    }
+    let skipped = crate::narrate::not_run_words(&c.not_run);
+    format!(
+        ", {} of {} checks passed{}",
+        c.checks - c.failed.len() - c.not_run.len(),
+        c.checks,
+        if skipped.is_empty() {
+            skipped
+        } else {
+            format!(", {skipped}")
+        }
+    )
+}
+
 /// The message the chat reads as the act's result (§3.3): who ran it, then
 /// the outcome, every ledger- or CLI-derived string fenced, filled item by
 /// item to at most [`MAX_OUTCOME_BYTES`] (whole items dropped, `omitted`
@@ -2021,15 +2051,7 @@ fn outcome_message(o: &Owed, failed_read: Option<&str>) -> (String, String, T) {
         body["omitted"] = json!(omitted);
     }
     let text = format!("{who}: {}", fence::ordered_text(&body));
-    let checks = if c.checks > 0 {
-        format!(
-            ", {} of {} checks passed",
-            c.checks - c.failed.len(),
-            c.checks
-        )
-    } else {
-        String::new()
-    };
+    let checks = checks_count_words(c);
     let (line, tone) = match word {
         "green" => (format!("✓ {} — GREEN{checks}", o.label), T::Good),
         "red" => (format!("✗ {} — RED{checks}", o.label), T::Bad),

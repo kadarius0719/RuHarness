@@ -22,8 +22,8 @@
 │                              ││34         7.56931807e-07f / 2047,  6.00› │  28     } else {                          │
 │                              ││35         9.53674316e-07f / 4095,  7.56› │  29         core::slice::from_raw_parts(s›│
 │                              ││36         6.00777173e-07f / 4095,  9.53› │  30     };                                │
-│                              ││Checks  ✓ same exports  ✓ allowed calls only  ✓ driver shape  ✓ same outputs as C     │
-│                              ││        ✓ whole program  ✓ sanitizers  ✓ boundary calls                               │
+│                              ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only  ✓ driver shape │
+│                              ││        ✓ same outputs as C  ✓ sanitizers  ✓ boundary calls                           │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
  Ready.
 

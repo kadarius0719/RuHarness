@@ -22,8 +22,8 @@
 │                      ││33         6.00777173e-07f / 1023,  9.53674316e-07f /›│
 │                      ││34         7.56931807e-07f / 2047,  6.00777173e-07f /›│
 │                      ││35         9.53674316e-07f / 4095,  7.56931807e-07f /›│
-│                      ││Checks  ✓ same exports  ✓ allowed calls only          │
-│                      ││        ✓ driver shape  ✓ same outputs as C +3        │
+│                      ││Checks  – whole program not run  ✓ same exports       │
+│                      ││        ✓ allowed calls only  ✓ driver shape +3       │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
  Ready.
 
