@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.10)
+project(fixture C)
+add_compile_definitions(USE_FAST)
+include_directories(include)
+add_executable(main src/main.c src/decode.c src/crc_a.c)

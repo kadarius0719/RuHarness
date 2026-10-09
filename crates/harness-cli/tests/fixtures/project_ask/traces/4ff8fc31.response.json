@@ -1,0 +1,6 @@
+{
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "stop_reason": "end_turn",
+  "text": "{\"name\":\"make\",\"from\":\"make\",\"flags\":[{\"flag\":\"-DUSE_FAST\",\"cites\":[\"Makefile:2\",\"CMakeLists.txt:3\"]},{\"flag\":\"-Iinclude\",\"cites\":[\"Makefile:2\"]},{\"flag\":\"-std=c99\",\"cites\":[\"Makefile:2\"]}],\"assumptions\":[\"The Makefile's default target is the build that counts.\"]}"
+}
