@@ -298,6 +298,46 @@ fn accepting_an_id_again_keeps_its_ledger() {
     );
 }
 
+/// A folder holding one of the configuration's `system_headers` reaches
+/// the tool as `-idirafter<dir>`, as the map compiled it, and leaves the
+/// file's own include folders.
+#[test]
+fn a_system_header_folder_becomes_an_idirafter_flag() {
+    let tmp = Tmp::new("idirafter");
+    tmp.write("compat/rh_config.h", "#define RH_CFG 1\n");
+    tmp.write(
+        "src/main.c",
+        "#include <rh_config.h>\nint main(void) { return RH_CFG - 1; }\n",
+    );
+    harness_core::adopt::testing::adopt(&tmp.0);
+    tmp.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"plain\"\nfrom = \"stated\"\nflags = []\n\
+         system_headers = [\"rh_config.h\"]\n",
+    );
+    map(&tmp);
+    let m = map_json(&tmp.0);
+    let main = m["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "src/main.c")
+        .unwrap();
+    assert_eq!(
+        main["include_dirs"],
+        serde_json::json!(["compat"]),
+        "{main}"
+    );
+    let run = accept(&tmp, "t-main", &[]);
+    assert_eq!(run.code, 0, "{}", run.all());
+    let c = config(&tmp.tool("t-main"));
+    let list = c.target.file_list().unwrap();
+    assert!(list.files[0].include_dirs.is_empty(), "{:?}", list.files);
+    assert_eq!(list.configuration.flags, ["-idiraftercompat"]);
+    let run = harness(&["scan", "--target", tmp.arg(), "--tool", "t-main"]);
+    assert_eq!(run.code, 0, "{}", run.all());
+}
+
 /// A library: compiled, never linked; no program, its id as `name`.
 #[test]
 fn a_library_is_accepted_with_its_id_as_name() {
