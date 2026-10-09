@@ -133,6 +133,16 @@ change at the switch points below.
    leaves no `-MD` list, so that failure cannot drop outside names (§6 says so); `Adoption::
    describe` prints "nothing to adopt" when `--adopt` states a shipped config. Then (d), (e),
    (f), (g).
+   **Steps (d) and (e) are BEING BUILT** (launched 2026-10-08 from 56f22cd, two Opus builders at
+   medium): `worktree-agent-af3124cf1d53803ad` — (d) `harness project ask` (harness-llm
+   projectask.rs like triage.rs, the CLI's `Ask` arm, the reply contracts, the reply file,
+   `config.proposed.toml`, traces under `migration/map/traces/`, replay fixtures committed under
+   crates/harness-cli/tests/fixtures/project_ask/); `worktree-agent-a48e5fe3a0be4fa99` — (e)
+   `harness project accept` (projectmap/accept.rs, the re-link, the picks, the `harness.toml`
+   writer, the library case, the accepted-id wiring, the "what changed" report, the cockpit's
+   three acts and the notice shown). Merge each when green (both add an arm to the `Project`
+   subcommand: Accept before Ask), full gates, bench replay, DECISIONS; a check round over (d)+(e);
+   then (f) docs and (g).
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
    toolchain line — folder-form `inputs` stay untouched.
