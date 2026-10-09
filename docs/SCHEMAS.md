@@ -34,6 +34,25 @@ is the normative spec; code implements it. Reviewed by an adversarial design pan
   frontend: the linkage name for external symbols; `<repo-relative-file>::<name>`
   for internal (static) symbols. Refs carry the canonical id when `resolved`, the
   raw source name otherwise.
+- **The hand-off envelope.** Under the `external` provider every command that asks a model
+  (`gen-driver`, `migrate`, `observe`, `project ask`) writes `<key>.request.json` and stops
+  awaiting `<key>.response.json` beside it. That response file always holds this envelope,
+  with the model's reply — exactly the text the command's own contract asks for (a driver, two
+  Rust files, a JSON array, …) — as the JSON string `text`:
+
+  ```json
+  {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}
+  ```
+
+  The token counts are 0 for an answer written by hand (an attempt records them as unknown);
+  `stop_reason` is `end_turn` for a whole reply. With `jq`, from a reply saved in
+  `answer.txt`: `jq -Rs '{text: ., input_tokens: 0, output_tokens: 0, stop_reason:
+  "end_turn"}' answer.txt > "$RESP"`. A response file that is not the envelope (the bare
+  reply, a missing field, not JSON) is refused in one sentence naming the file: "the response
+  file must hold the envelope {…}: write the model's reply as its "text"", followed by what
+  the reader stumbled on. Every awaiting line names the envelope. The model's name is part of
+  the request's key: name who answers with `--model` on the run that writes the request,
+  never after (a later `--model` writes a new request).
 
 ## facts.jsonl (committed, canonical; scanner-output-only)
 
@@ -190,6 +209,11 @@ Human stdout is NOT a contract — machine consumers read the ledger files.
 - `harness state status [--target DIR]` — the staleness detector: recomputes file
   hashes vs facts.jsonl, unit `source_hash` vs tree, verdict input digests vs tree;
   prints per-unit fresh/verified-but-stale/contradiction.
+- `--tool ID` beside `--target` on each of these (and every other subcommand that opens a
+  target): the mapped tool `migration/tools/<ID>/` to open — see "Finding a target: `--target`
+  and `--tool`". Without it, a project whose only target is one mapped tool opens that tool,
+  and `state status` then starts "status: reading tool <id>, the project's only mapped tool
+  (its ledger is migration/tools/<id>)".
 
 Exit codes: `0` ok/green · `1` harness error (including stale-plan refusal) ·
 `2` usage error (clap's own) · `10` oracle red. Pinned by integration test. On
@@ -642,7 +666,8 @@ Committed evidence per attempt (source only; `attempts/**/target/` is gitignored
 For each file: the path alone on a line, a column-0 ` ```rust ` fence, the ENTIRE
 file, a closing fence; then a final line `RUHARNESS_END_OF_OUTPUT`. Exactly
 `src/logic.rs` and `src/ffi.rs` are accepted (exact allowlist match; last duplicate
-wins). `<blocked>reason</blocked>` instead of code = outcome `blocked`. Truncation
+wins). Under `external` the whole reply is the `text` of the hand-off envelope (Global
+rules). `<blocked>reason</blocked>` instead of code = outcome `blocked`. Truncation
 (stop kind MaxTokens, `output_tokens >= max_tokens - 8`, or EOF inside a block) →
 nothing is written, outcome `truncated`. Leading `<think>…</think>` spans are
 stripped.
@@ -706,7 +731,10 @@ min_kill_ratio = 0.6                  # range 0.5..=1.0 (recorded as permille)
 ```
 Without `[oracle.whole_program]` the verdict carries one `whole-program` check,
 passed, detail `not configured for this target` (migration note: zopfli gained
-`args = ["-c"]`; its verdict is unchanged).
+`args = ["-c"]`; its verdict is unchanged). The verdict keeps those bytes, but a check that
+did not run is never a PASS on the screen: `verify` and `promote` print it as `[SKIP]
+whole-program — not run: not configured for this target (add [oracle.whole_program] args =
+[...] to harness.toml)`. The `check` event keeps `passed: true`.
 
 ## Oracle checks added to every `verify` (c-abi-differential)
 
@@ -837,7 +865,12 @@ repairs; external/replay/live semantics; `--retry` samples; replay verification)
   (golden test). `Turn.kind` is OPEN, display-only: `translate | generate | repair`.
 - **Emission**: the path `driver.c` alone on a line, a ```c fence (```C or an
   untagged fence with the path label tolerated), the entire file, closing fence,
-  final line `RUHARNESS_END_OF_OUTPUT`; or `<blocked>reason</blocked>`.
+  final line `RUHARNESS_END_OF_OUTPUT`; or `<blocked>reason</blocked>`. Under
+  `external` the reply is written as the `text` of the hand-off envelope (Global rules).
+- **The screen**: before each candidate's validation, "gen-driver: checking the driver
+  against the original C (it is built and run several times; this can take a minute) …";
+  before the in-place re-validation of a promoted driver, "gen-driver: checking it once
+  more where it now lives …".
 - **Turn results** from the first failed validation check: `driver-build` → `build`;
   `driver-shape`/`symbols-called` → `check`; `determinism`/`opt-levels`/
   `sanitizers`/`mutation` → `oracle`; a timed-out run → `crash-timeout`.
@@ -1607,6 +1640,58 @@ one-time trust question is asked again in each checkout.
 | `<suite>/.ruharness-adopted` (gitignored) | the same, when the suite has no well-formed token yet |
 | `migration/.gitignore` | `project map`, or the first command that creates a ledger — once, never over an existing one |
 
+## `migration/map/config.toml` (hand-written; the person's statement of the build)
+
+How the project is built, as the map should compile it (docs/PROJECT-MAP-DESIGN.md §3.2).
+Without this file the map compiles under a **guess** (no flags) and `project accept` refuses
+every program until a configuration is stated. The file is the person's: no command writes
+it (`project ask --build` writes a proposal beside it, `config.proposed.toml`, to copy from).
+Three lines are enough:
+
+```toml
+[[configuration]]
+name = "make"
+from = "make"
+flags = ["-O3", "-Isrc/include"]
+```
+
+- **`[[configuration]]`**: one entry per way the project is built, written with double
+  brackets (it is a list). With one entry it is the one used; with several, `project map
+  --configuration NAME` picks one (without it the map is refused, naming them). No other key
+  may stand at the top of the file.
+- **`name`** (required): a word of letters, digits, `_`, `-`, `.` (at most 64), unique in the
+  file. It is shown on every screen and copied into each accepted tool's `harness.toml`.
+- **`from`** (required): what the configuration stands for, one of `make` (the project's
+  Makefile), `meson`, `cmake`, `compile_commands` (a `compile_commands.json` the map finds:
+  each file then compiles with its own entry's flags, and `flags` only adds to them) or
+  `stated` (the person's own statement, with no build file behind it). Write `stated` when you
+  wrote the flags yourself rather than copying them from a build; another word is refused
+  naming the words allowed.
+- **`flags`** (required; `flags = []` states "no flags"): in order, each one argument in its
+  joined form and checked by the flag grammar ("The file-list form", below): `-I`, `-iquote`,
+  `-isystem`, `-idirafter` and `-include` paths written relative to the project's top folder
+  (`-Isrc/include`, never `-I../include` nor `-I src/include` with a space) and inside it,
+  `-D`/`-U` with a C identifier, `-std=`, `-pthread`, a short list of `-f` flags, and `-O0`…`-O3`
+  (recorded, never applied). Warning and tuning flags (`-W`, `-Wall`, `-funroll-loops`), link
+  flags (`-l…`, `-L…`, `-Wl,…`) and anything else are refused: leave them out, they do not
+  change which files make up a program. A refused flag is named in the refusal, with why.
+- **`system_headers`** (optional): header names the project means the system's own
+  (`unistd.h`, `sys/types.h`), for a project that ships a file of the same name: a folder
+  holding one of these names is searched after the system's (`-idirafter`), in the map and in
+  each accepted tool.
+- **Unknown keys are refused** (a typo must not pass silently), as are a file reached through a
+  link out of the project, one over 1 MiB, one that is not UTF-8, and two entries with one
+  name. Each refusal is one sentence that starts with the file's path and says what to fix.
+- **A file that came with the project is only proposed.** When `config.toml` still has the
+  bytes it had when this computer first saw the project (a download that ships one), the map
+  shows it as "it came with the project, so it is proposed", its `source` stays `guessed`, and
+  `accept` refuses until the person states it: `harness project map --adopt`, or any edit of
+  their own (another hash). See "The project map file", `configuration.proposed`.
+
+The configuration's digest (`{flags, from, name, system_headers}`) is part of the map's
+`inputs_hash`: changing the file changes every accepted tool's "what changed" line on the
+next map.
+
 ## `harness project map` (docs/PROJECT-MAP-DESIGN.md §3.3, §3.6, §3.8, §5 step b)
 
 `harness project map --target DIR [--configuration NAME] [--json] [--adopt]
@@ -1912,6 +1997,8 @@ again"); it takes the project lock `migration/map/.lock` for the whole run. With
 there is no `[llm]` section: the provider and model default to the hand-off's own
 (`external`, `claude-sonnet-5`, 8192 tokens). Exit 0 with the answers shown and written; 1
 refused or awaiting; 2 usage (`--build` with `--programs`, an id that is not `t-…`).
+Under `external`, each reply below is written as the `text` of the hand-off envelope
+(Global rules); pass `--model` naming who answers on the run that writes the request.
 
 - **The questions** (no `--build`): refused while `configuration.source` is `guessed` unless
   `--allow-guessed` ("the configuration is a guess, so the questions may be wrong: state it in

@@ -267,9 +267,10 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
     Ok(0)
 }
 
-/// The progress line printed before each driver check: the check builds
-/// and runs the driver several times (tens of seconds on a real project).
-pub(crate) fn checking_line() -> &'static str {
+/// The progress line printed before each candidate's check: the check
+/// builds and runs the driver several times (tens of seconds on a real
+/// project).
+fn checking_line() -> &'static str {
     "gen-driver: checking the driver against the original C (it is built and run several \
      times; this can take a minute) …"
 }
@@ -296,7 +297,7 @@ fn promote_driver(
         }
         Ok(())
     };
-    out(checking_line().to_string());
+    out("gen-driver: checking it once more where it now lives …".to_string());
     let validation: Result<DriverValidation, _> = harness_oracle::validate_driver(ctx, unit, dest);
     match validation {
         Ok(v) if v.green => {

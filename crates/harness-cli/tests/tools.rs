@@ -470,10 +470,14 @@ fn gen_driver_names_the_envelope_and_says_while_it_checks() {
     let r = harness(&args);
     assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
     assert!(
-        r.stderr.contains(
-            "as the envelope {\"text\": <the reply>, \"input_tokens\": 0, \"output_tokens\": 0, \
-             \"stop_reason\": \"end_turn\"} (the model's reply as its \"text\"), then re-run \
-             with --model naming who answers (this run records the answer as `"
+        r.stderr.contains(&format!(
+            "as the envelope {{\"text\": <the reply>, \"input_tokens\": 0, \"output_tokens\": \
+             0, \"stop_reason\": \"end_turn\"}} (the model's reply as its \"text\"), then \
+             re-run: harness gen-driver {unit} --target="
+        )) && r.stderr.contains(
+            "(the answer is recorded as `claude-sonnet-5`'s; if another model or a person \
+             answers, first run it with --model naming who answers: that writes the request \
+             to answer)"
         ),
         "{}",
         r.stderr

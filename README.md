@@ -180,7 +180,8 @@ names, then run the same command again.
 
 | Flag | Meaning |
 |---|---|
-| `--target DIR` | Which project to work on (the folder containing `harness.toml`). Always `targets/zopfli` here. |
+| `--target DIR` | Which project to work on (the folder containing `harness.toml`, or a mapped C project). Always `targets/zopfli` here. |
+| `--tool ID` | On a mapped project (next section): which accepted tool to work on, as `harness project map` names it (`t-lzg`). Left out, the project's only tool is used; with two or more, the command asks you to pick. |
 | `u001-katajainen` | The *unit* — one piece of the plan. Ids are listed by `harness state status`. |
 | `--provider NAME` | Which AI backend to use: `external` (file hand-off, the default), `replay`, `anthropic` (needs `ANTHROPIC_API_KEY`), or a profile from your providers file such as `ollama-openai`. |
 | `--model NAME` | The model name sent to that backend. |
@@ -195,6 +196,65 @@ names, then run the same command again.
 
 Exit codes, for scripting: `0` success/green · `1` the harness refused or errored ·
 `2` bad command line · `10` the oracle said red.
+
+## Start from your own C project
+
+`targets/zopfli` comes with a hand-written `harness.toml`. Your own C project has none:
+the harness first **maps** it, you say how it is built, and you **accept** one of its
+programs as a *tool* — a `harness.toml` the harness writes for you under
+`migration/tools/<id>/`. Everything after that is the usual scan, plan, driver, migrate
+and verify, each told which tool with `--tool`. `harness project --help` prints the same
+order. docs/TESTING-GUIDE.md Part 12 walks it on liblzg, with every screen;
+docs/TUTORIAL.md "Mapping a whole C project" explains the words.
+
+Run every command from inside the project's folder (or add `--target <folder>`):
+
+1. **Map it.** `harness project map` lists each program (a `.c` file with its own
+   `main()`), the files it needs, the files programs share, and the *held choices*: places
+   where two files define the same functions and linking cannot tell which one is meant.
+   It changes none of your files; it writes `migration/map/project-map.json`.
+2. **Say how it is built.** The first map compiles under a *guess* (no flags), so its
+   screen tells you to state the configuration. Write `migration/map/config.toml` — three
+   lines are enough:
+
+   ```toml
+   [[configuration]]
+   name = "make"
+   from = "make"
+   flags = ["-O3", "-Isrc/include"]
+   ```
+
+   Take the flags from the project's build files: `-I` folders written from the project's
+   top (`-Isrc/include`, joined, no space), `-D` defines, `-O` levels. Leave out warning and
+   tuning flags (`-W`, `-Wall`, `-funroll-loops`): the harness refuses flags it does not
+   pass to a compiler. docs/SCHEMAS.md "`migration/map/config.toml`" lists every field. Or
+   let a model propose one: `harness project ask --build` writes
+   `migration/map/config.proposed.toml` for you to copy from.
+3. **Map again**: `harness project map`. Its screen now shows your configuration.
+4. **Optionally ask for advice**: `harness project ask` asks a model which file to keep
+   in each held choice. Its answer is advice only; you still decide.
+5. **Accept a program as a tool**: `harness project accept t-lzg`. When the program holds
+   a choice, name the file to keep: `--keep d1=d1.2` (the set, then the definer's index or
+   path; repeat for each set). `--run-name NAME` sets the file name the program runs as
+   (default: its `.c` file's name). It writes `migration/tools/t-lzg/harness.toml`; read it
+   with `git diff`.
+6. **Work on the tool**, naming it each time:
+
+   ```bash
+   harness scan --tool t-lzg
+   harness plan --tool t-lzg
+   harness gen-driver u-version --tool t-lzg
+   harness migrate u-version --tool t-lzg
+   harness verify u-version --tool t-lzg
+   ```
+
+   `scan` and `plan` each end with the next command to run. An accepted tool has no
+   whole-program check until you give the program's arguments: add
+   `[oracle.whole_program]` with `args = ["-9"]` (for example) to its `harness.toml`;
+   until then `verify` shows that check as `[SKIP] … not run`.
+
+When the project changes later, `harness project map` names each accepted tool that
+changed and how; `harness state status --tool t-lzg` then starts with the same notice.
 
 ## Command reference
 
@@ -512,6 +572,21 @@ about whether perf's launcher needs building.
     "ruharness": {
       "command": "harness-mcp",
       "args": ["--target", "targets/zopfli"]
+    }
+  }
+}
+```
+
+On a mapped project (see "Start from your own C project"), also name the tool the chat
+works on; `harness_status`'s `note` then carries the "project changed" notice when the
+project moved on since the tool was accepted:
+
+```json
+{
+  "mcpServers": {
+    "ruharness": {
+      "command": "harness-mcp",
+      "args": ["--target", ".", "--tool", "t-lzg"]
     }
   }
 }

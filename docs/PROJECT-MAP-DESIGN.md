@@ -1126,6 +1126,22 @@ enforced.
 
 ## 9. What changed, and why
 
+**After the check of steps (d) and (e), the person's side** (2026-10-08,
+docs/reviews/2026-10-08-map-steps-d-e-check.md, its triage, fix pass H): a newcomer reached a
+verified unit on liblzg and zopfli from the docs and the screens alone, and the walk showed where
+the words ran out. So: a check that did not run is never a PASS on the screen — `verify` prints an
+unconfigured whole-program check as "not run", with the line to add, while the recorded verdict
+keeps its bytes; every hand-off response is one envelope (`text` holding the reply), stated once
+in SCHEMAS' global rules, named on every awaiting line, and a file that is not it is refused saying
+what to write; the awaiting lines of `gen-driver` and `migrate` say whose name the answer is
+recorded under and that `--model` names who answers before the reply is written (the model is part
+of the request's key); `harness project --help` gives the order, `scan` and `plan` end with the
+next command, `gen-driver` says while it checks a driver, `state status` names the only tool it
+picked, and harness-mcp's status `note` carries the "project changed" notice. Step (f)'s docs:
+README "Start from your own C project", the tutorial's "Mapping a whole C project", the testing
+guide's Part 12 (liblzg by map, every command run on a copy), and SCHEMAS'
+`migration/map/config.toml` section.
+
 **After the review of steps (a) and (c)** (2026-10-08, docs/reviews/2026-10-08-map-steps-a-c-review.md,
 its triage): one include rule in one place with the configuration's path flags in the compiler's
 order (`-iquote` for quoted includes only; each `-include` file the first include of every listed

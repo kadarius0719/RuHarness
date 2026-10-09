@@ -980,26 +980,28 @@ pub(crate) fn hint(ctx: &TargetContext, cmd: &str) -> String {
 }
 
 /// The awaiting line of an `external` hand-off (`gen-driver`, `migrate`,
-/// `observe`): where the response goes, the envelope it is written in
+/// `observe`): where the reply goes, the envelope it is written in
 /// (docs/SCHEMAS.md "Global rules") and the command to run again. With
-/// `model` (the commands that take `--model`), it also says to name who
-/// answers, since the answer is recorded under that model's name.
+/// `model` (the commands that take `--model`), it also says whose answer is
+/// recorded and how to name another: the model is part of the request's
+/// key, so `--model` is given before the reply is written, never after.
 pub(crate) fn handoff_line(
     cmd: &str,
     traces: &std::path::Path,
     resume: &str,
     model: Option<&str>,
 ) -> String {
-    let rerun = match model {
+    let who = match model {
         Some(m) => format!(
-            "re-run with --model naming who answers (this run records the answer as `{}`)",
+            " (the answer is recorded as `{}`'s; if another model or a person answers, first \
+             run it with --model naming who answers: that writes the request to answer)",
             harness_core::text::safe_line(m)
         ),
-        None => "re-run".to_string(),
+        None => String::new(),
     };
     format!(
         "{cmd}: external provider mode — write the reply beside its request under {} as the \
-         envelope {} (the model's reply as its \"text\"), then {rerun}: {resume}",
+         envelope {} (the model's reply as its \"text\"), then re-run: {resume}{who}",
         traces.display(),
         harness_llm::adapters::ENVELOPE
     )

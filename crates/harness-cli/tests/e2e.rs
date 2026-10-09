@@ -292,7 +292,8 @@ fn full_pipeline_on_zopfli() {
     assert!(
         r.stderr.contains(&format!("as the envelope {ENVELOPE}"))
             && r.stderr.contains(
-                "then re-run with --model naming who answers (this run records the answer as `"
+                "'s; if another model or a person answers, first run it with --model naming \
+                 who answers: that writes the request to answer)"
             ),
         "{}",
         r.stderr
