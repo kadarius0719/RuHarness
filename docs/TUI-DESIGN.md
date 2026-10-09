@@ -134,7 +134,7 @@ The screen is the friendly wrapper's (docs/COCKPIT-WRAPPER-DESIGN.md §1–§9, 
 │  ▾ Units (1)                 ││Checks  ✓ same exports  ✓ allowed calls only  ✓ driver shape  …   │
 │    ▸ ✓ u-lib         migrated││        ✓ whole program  ✓ sanitizers  ✓ boundary calls          │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────┘
- Ready. Last: Re-check u-lib — GREEN — all 7 checks passed (41 s)                     [Details c]
+ Ready. Last: Re-check u-lib — GREEN — 6 checks passed, 1 not run (whole-program: …) (41 s) [Details c]
  plan: no changes
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
 ```
