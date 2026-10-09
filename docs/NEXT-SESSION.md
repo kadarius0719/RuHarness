@@ -170,7 +170,14 @@ change at the switch points below.
    whole-workspace tests and the bench replay run on 91ec836, and a docs builder re-runs Part 12
    on the merged binary to make every quoted screen match G's exact words. Then: push, fast-forward
    main, DECISIONS; (g) — record the first accepted tool's features before its first unit moves;
-   the person's own cold-start run. Leftovers named by G: the ask prompt still asks for fields
+   the person's own cold-start run. **The docs reconciliation is MERGED** (Part 12 re-run on the
+   merged binary; README, TUTORIAL and TESTING-GUIDE now quote the real screens; SCHEMAS needed
+   nothing). Four wording items it judged wrong in the code, for a wording pass: the config.toml
+   refusal calls `-c` "not one the harness passes" (the harness adds `-c` itself: say so); ask's
+   "in t-benchmark, t-unlzg that choice linked" is followed by "nothing was built or linked"
+   (say "linked when the map was made"); the what-changed line repeats "changed since it was
+   accepted" twice; the envelope refusal's bracketed detail says "expected a string" for a bare
+   array. Leftovers named by G: the ask prompt still asks for fields
    "in this order" (kept so recorded trace keys stay; nothing checks the order); `accept` link-
    checks every program again (as long as a map). A test in view.rs pins a made-up "all 8 checks
    passed" idle line (details golden); harmless.
