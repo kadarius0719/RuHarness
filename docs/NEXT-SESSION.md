@@ -1,3 +1,51 @@
+# Next session — kickoff (from 2026-10-08, late)
+
+Resume RuHarness on `main` (7767a1b, everything below merged and pushed; 1 646 tests, fmt and
+clippy clean, `bench check --replay` green). Models and effort as in CLAUDE.md.
+
+**Where things stand, in plain words.** The project map is built end to end: `harness project
+map` reads a whole C project (programs, closures, duplicates, libraries, the configuration from
+`migration/map/config.toml` or `compile_commands.json` as a proposal), `project ask` puts the open
+choices to a model through the `external` hand-off, `project accept <id>` writes a tool under
+`migration/tools/<id>/` that every command, the cockpit and harness-mcp open with `--tool`. Three
+review rounds (docs/reviews/2026-10-08-map-*.md) and eight fix passes closed what they found. The
+evidence: a newcomer with no sight of the design reached a verified Rust unit on liblzg and on
+zopfli from a cold start by the docs alone; the zopfli tool accepted from the map is byte-identical
+to the hand-written target. The docs (README "Start from your own C project", TUTORIAL "Mapping a
+whole C project", TESTING-GUIDE Part 12 "liblzg by map", SCHEMAS' map, ask, accept and
+`config.toml` sections) quote the real screens. DECISIONS' last three entries hold the story.
+
+**The person's standing question (2026-10-08): how close to a usable beta?** The session's
+answer: the code is about two-thirds of one; the evidence is one cold-start walk by an agent.
+Proof before more building (the person's own rule).
+
+**The work, in order:**
+1. **The person's own cold-start run** on a real project (liblzg or lz4 from
+   `~/code/ruharness-test-downloads/`, never installed), following only README and the testing
+   guide's Part 12, past one unit — ideally to several promoted units — with every stumble
+   written down. That run decides what comes next. Step (g) of the map (record the first accepted
+   tool's features before its first unit moves) happens inside it.
+2. **A wording pass** (small, Opus medium): the four items the docs builder judged wrong (below),
+   the ask prompt's "in this order" (keep or drop with the trace keys re-recorded), `accept`
+   link-checking every program again, the earlier passes' leftovers (below).
+3. **Then the briefing's M5**, or the direction the map opens (design §3.12), as the person decides
+   after the run.
+
+**Once per checkout** (the tokens are no longer committed): `harness state status --target
+targets/zopfli --adopt`; the bench adopts its suite by itself (`bench check … --adopt`).
+
+**Environment:** as before; test downloads only in `~/code/ruharness-test-downloads/`; the
+binaries from a worktree's `target/debug`. Known flakes under load: `chat::tests::
+an_exited_leaders_pipes_are_read_first`, `golden_dialog_before_and_after_arming`, chat_e2e's
+`a_deaf_or_stopped_runtime_is_ended_on_quit` and `a_request_is_reviewed_run_and_answered`,
+`the_ready_line_invites_a_click_only_when_one_answers` — rerun one alone before calling it a
+failure. Many `worktree-agent-*` branches and worktrees from this session remain (all merged);
+they can be cleaned.
+
+---
+
+# The session's trail (2026-10-08), kept for the detail
+
 # Next session — kickoff (from 2026-10-08)
 
 Resume RuHarness on `main` (everything below merged and pushed). Models and effort as in CLAUDE.md:
