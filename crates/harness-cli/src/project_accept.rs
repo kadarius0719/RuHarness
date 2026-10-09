@@ -193,10 +193,11 @@ fn closing_line(p: &accept::Prepared, target: &std::path::Path) -> String {
     }
     let quoted = report::shell_quote(&target.to_string_lossy());
     format!(
-        "project accept: wrote {} ({what}; configuration {}, {flags}{again}); review it with \
-         `git diff`, then scan it: `harness scan --target {quoted} --tool {}`",
+        "project accept: wrote {} ({what}; configuration {}, {flags}{again}); read it with \
+         `cat {}`, then scan it: `harness scan --target {quoted} --tool {}`",
         p.rel,
         safe_line(&p.shape.name),
+        p.rel,
         p.id
     )
 }

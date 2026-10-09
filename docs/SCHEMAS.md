@@ -2048,7 +2048,7 @@ The acceptance is the written file, reviewed with `git diff`; there is no separa
 closing line: "project accept: wrote migration/tools/<id>/harness.toml (<n> file(s), linked
 with <libs>, run as <name>; configuration <name>, flags …[; its ledger (plan, units, verdicts)
 is kept][; kept from the harness.toml there: oracle.whole_program, llm.model, … (its own
-comments are not carried over)]); review it with `git diff`, then scan it: `harness scan
+comments are not carried over)]); read it with `cat <path>`, then scan it: `harness scan
 --target <DIR> --tool <id>`" — what was kept is named only when something was (an `[llm]` key
 equal to what a first accept writes is not named).
 

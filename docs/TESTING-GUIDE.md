@@ -5811,7 +5811,7 @@ harness project accept t-unlzg --keep d1=d1.2
 project accept t-unlzg: keeping `src/lib/decode.c` over `src/extra/lzgmini.c` for `LZG_Decode, LZG_DecodedSize`
   src/extra/lzgmini.c: alternative not kept
 project accept t-unlzg: the whole-program check is off until you fill in [oracle.whole_program] in migration/tools/t-unlzg/harness.toml (a commented example is there)
-project accept: wrote migration/tools/t-unlzg/harness.toml (3 file(s), linked, run as unlzg; configuration make, flags -O3 -Isrc/include); review it with `git diff`, then scan it: `harness scan --target . --tool t-unlzg`
+project accept: wrote migration/tools/t-unlzg/harness.toml (3 file(s), linked, run as unlzg; configuration make, flags -O3 -Isrc/include); read it with `cat migration/tools/t-unlzg/harness.toml`, then scan it: `harness scan --target . --tool t-unlzg`
 ```
 
 **Run.** Accept the compressor. It holds no choice, so it needs no `--keep`.
@@ -5824,7 +5824,7 @@ harness project accept t-lzg
 
 ```text
 project accept t-lzg: the whole-program check is off until you fill in [oracle.whole_program] in migration/tools/t-lzg/harness.toml (a commented example is there)
-project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; configuration make, flags -O3 -Isrc/include); review it with `git diff`, then scan it: `harness scan --target . --tool t-lzg`
+project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; configuration make, flags -O3 -Isrc/include); read it with `cat migration/tools/t-lzg/harness.toml`, then scan it: `harness scan --target . --tool t-lzg`
 ```
 
 "The whole-program check is off" is not something to do now: you switch it on in Step 12.14.
@@ -5839,7 +5839,7 @@ cat migration/tools/t-lzg/harness.toml
 
 ```text
 # Written by `harness project accept t-lzg` from migration/map/project-map.json.
-# Review it with `git diff`. Accepting t-lzg again rewrites [target] and what the map
+# Read it as written (`git diff` shows changes once it is committed). Accepting t-lzg again rewrites [target] and what the map
 # decides of [oracle], and keeps every other key you add (not its comments).
 schema_version = 2
 
@@ -6423,7 +6423,7 @@ harness project accept t-lzg
 **You should see.**
 
 ```text
-project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; configuration make, flags -O3 -Isrc/include; its ledger (plan, units, verdicts) is kept; kept from the harness.toml there: oracle.whole_program (its own comments are not carried over)); review it with `git diff`, then scan it: `harness scan --target . --tool t-lzg`
+project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; configuration make, flags -O3 -Isrc/include; its ledger (plan, units, verdicts) is kept; kept from the harness.toml there: oracle.whole_program (its own comments are not carried over)); read it with `cat migration/tools/t-lzg/harness.toml`, then scan it: `harness scan --target . --tool t-lzg`
 ```
 
 **What it means.** Accepting again rewrites only what the map decides (the files, folders, configuration, picks, run name and the map it came from) and keeps what you added, such as Step 12.14's `[oracle.whole_program]`: the line names what was kept. `git diff migration/tools/t-lzg/harness.toml` shows the change.

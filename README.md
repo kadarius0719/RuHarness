@@ -223,8 +223,7 @@ AI"). The guide's Step 12.4 answers it. The advice decides nothing.
 
 **5. Accept a program:** `harness project accept t-lzg`. *You should see* `project accept: wrote
 migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; …)`. Read it with
-`cat migration/tools/t-lzg/harness.toml` (the message says `git diff`, which shows nothing for a
-new file). A program with a held choice is refused, `error: duplicate set d1 of t-unlzg (…) is not
+`cat migration/tools/t-lzg/harness.toml`, as the message says. A program with a held choice is refused, `error: duplicate set d1 of t-unlzg (…) is not
 settled`, until you name the file to keep: `harness project accept t-unlzg --keep d1=d1.2`.
 
 **6. Work on the tool**, naming it each time: `harness scan --tool t-lzg` (*you should see*

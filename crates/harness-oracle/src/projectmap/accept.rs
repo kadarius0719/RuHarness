@@ -1157,7 +1157,7 @@ pub fn render(owned: &Owned<'_>, existing: Option<&toml::Table>) -> Rendered {
     let shape = owned.shape;
     let mut t = format!(
         "# Written by `harness project accept {id}` from {}.\n\
-         # Review it with `git diff`. Accepting {id} again rewrites [target] and what the map\n\
+         # Read it as written (`git diff` shows changes once it is committed). Accepting {id} again rewrites [target] and what the map\n\
          # decides of [oracle], and keeps every other key you add (not its comments).\n\
          schema_version = 2\n",
         mapfile::MAP_FILE,
