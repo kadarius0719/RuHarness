@@ -4,7 +4,7 @@ This guide is a tutorial and a test plan at once. You take **liblzg**, a small r
 
 You need no programming experience: you open Terminal, paste, and compare. No step needs a cloud API key. Two steps (in Parts 4 and 6) use your Claude subscription through Claude Code; every other step runs on your Mac with no AI.
 
-Written for RuHarness at commit `c3a85d2` (2026-10-08; the program prints `harness 0.1.0`), on a Mac with an Apple chip (Step 0.2 shows how to check). Where the outputs come from: Parts 0–2 were walked through again on 2026-10-09 at commit `129174c` (the same program as `c3a85d2`) on the author's Mac, an Apple M3 with macOS 26.5, Apple clang 21.0.0 and Rust 1.94.1. Parts 3–10 were walked end to end on 2026-10-07, with both translations done through the cockpit's chat; Part 11 on 2026-10-07; Part 12's screens were checked against the program on 2026-10-08. Every output shown is what those runs printed, or the text says what varies.
+Written for RuHarness at commit `c3a85d2` (2026-10-08; the program prints `harness 0.1.0`), on a Mac with an Apple chip (Step 0.2 shows how to check), and walked on the author's Mac, an Apple M3 with macOS 26.5, Apple clang 21.0.0 and Rust 1.94.1. Parts 0–2 were walked again on 2026-10-09 at commit `129174c` (the same program as `c3a85d2`); on the same day Part 3, Parts 5–8 and Plan B were run again, with a Rust translation written by hand wherever a model's was needed, Part 11's output shapes were checked, and Part 12 was run in full. The cockpit screens of Parts 4 and 6 come from a walk-through on 2026-10-07, when both translations were done through the cockpit's chat, and Parts 9–10 were recorded that same day. Every output shown is what those runs printed, or the text says what varies.
 
 ---
 
@@ -39,7 +39,7 @@ Two rules:
 1. **Copy a Run box whole.** Each box labelled **Run.** holds one command. Copy all of it, paste it into Terminal, and press Return. Never type what is in a **You should see.** box: that is what your Mac prints back.
 2. **Wait for the prompt.** Terminal is ready for the next command when the line ending in `%` comes back. Do not paste the next box before that.
 
-A few steps in the cockpit (Parts 9, 11 and 12) are labelled **Do.** instead of **Run.**: Do. means press the keys named, one at a time, in the cockpit window; nothing is pasted.
+Some steps are labelled **Do.** instead of **Run.**: there is nothing to paste into Terminal. Do. means do by hand what the box says, one thing at a time: press the keys it names in the cockpit window (Parts 4, 6, 9, 11 and 12), make a change in the `nano` editor (Part 5), or open a second window and type into Claude Code (Plan B).
 
 Every step has the same four labels: **Run.**, **You should see.**, **What it means.**, **If you do not see that.** Every part starts with the question it answers and ends with the answer, a checkpoint, and a way to start the part again. Sections called **For the curious** are optional. In output boxes, text in angle brackets, such as `<you>`, stands for something that is different on your Mac; the line under the box says what.
 
@@ -6812,10 +6812,10 @@ docs/TUTORIAL.md "Mapping a whole C project" covers the same ground for a projec
 
 A few messages and documents in this version of RuHarness are out of date. The steps above point here when you meet one of them.
 
-1. The README and the older tutorial say to expect "eight PASS lines" when verifying zopfli. zopfli now has a features file, so the correct number is 16 (Part 0's check on zopfli).
-2. When `migrate` refuses a unit that has no driver, the message ends with `generating drivers is a later milestone`. Driver generation already exists: it is `harness gen-driver`, which you use in Part 3 (and Part 7 shows the message).
-3. The chat's first line may add a note in brackets naming the Claude Code version the cockpit was tested with. A newer Claude Code works; the note is harmless (Part 4).
-4. Some reference docs show the `[oracle] allowlist` without `nm`. All four tools are required, as Part 1's `harness.toml` has them.
+1. The README and the older tutorial say to expect "eight PASS lines" when verifying zopfli. zopfli now has a features file, so the correct number is 16 (Step 0.22).
+2. When `migrate` refuses a unit that has no driver, the message ends with `generating drivers is a later milestone`. Driver generation already exists: it is `harness gen-driver`, which you use in Part 3 (Step 3.1); Step 7.1 shows the message.
+3. The chat's first line may add a note in brackets naming the Claude Code version the cockpit was tested with. A newer Claude Code works; the note is harmless (Step 4.5).
+4. Some reference docs show the `[oracle] allowlist` without `nm`. All four tools are required, as the `harness.toml` of Step 1.12 has them.
 
 ---
 
@@ -6830,21 +6830,21 @@ In Part 12 the paths and the flag differ from Parts 1–11: where a row says `ta
 | You see | What it means | Do this |
 |---|---|---|
 | `error: awaiting response: …response.json`, with exit code 1 | **Normal.** The harness has written a question for a model and is waiting for the answer file it names. | Go on to the next step: it shows how to write the answer. |
-| `command not found: harness` | `~/.cargo/bin` is not on your PATH in this window. | Open a new Terminal window and try again; if it is still missing, redo Part 0's install step. |
+| `command not found: harness` | `~/.cargo/bin` is not on your PATH in this window. | Open a new Terminal window and try again; if it is still missing, redo Step 0.19 (build and install). |
 | `error: unrecognized subcommand 'project'` (or `'perf'`) | Your installed RuHarness is older than the part you are on. | Update and reinstall: Part 10, "After updating RuHarness". |
 | ``ledger is locked by another harness command (pid <number>, `<command>`, since <time>); wait for it or stop it`` | Another harness command, perhaps the cockpit in another window, is writing to the same ledger. | Quit the other cockpit (or wait for the other command), then try again. |
 | `exit=130` | You pressed Ctrl-C. | Run the same command again. |
-| `git commit` says `Please tell me who you are` | git does not know your name. | Do Part 0's step that sets your git name and email. |
+| `git commit` says `Please tell me who you are` | git does not know your name. | Do Step 0.7, which sets your git name and email. |
 
 ### Getting ready (Parts 0–2)
 
 | You see | What it means | Do this |
 |---|---|---|
-| ``error: …: this folder already holds migration results made elsewhere (… units, … verified): to trust them here, add `--adopt` once`` | The harness asks once before it trusts records it did not make on this Mac (they came with a download or another copy). | Run the same command again with `--adopt` added at the end (Part 0's check on zopfli shows it). |
+| ``error: …: this folder already holds migration results made elsewhere (… units, … verified): to trust them here, add `--adopt` once`` | The harness asks once before it trusts records it did not make on this Mac (they came with a download or another copy). | Run the same command again with `--adopt` added at the end (Step 0.21 shows it). |
 | `error: io error at targets/lzg: No such file or directory (os error 2): …` | You are in the wrong folder, or `--target` has a typo. | Run `cd ~/code/RuHarness`, then the command again. |
-| `error: io error at /Users/<you>/code/RuHarness/targets/lzg/harness.toml: No such file or directory …` | The folder exists but `harness.toml` is missing. | Redo Part 1's step that writes `harness.toml`. |
-| `error: parse error in …/harness.toml: …` | There is a typo in `harness.toml`. | Write it again with Part 1's `cat >` box (it overwrites). |
-| ``oracle kind `c-abi-differential` needs `nm` on the [oracle] allowlist in harness.toml (required: cc, cargo, rustc, nm)`` | `nm` is missing from `allowlist`. | Write `harness.toml` again with Part 1's box, which has all four. |
+| `error: io error at /Users/<you>/code/RuHarness/targets/lzg/harness.toml: No such file or directory …` | The folder exists but `harness.toml` is missing. | Redo Step 1.12, which writes `harness.toml`. |
+| `error: parse error in …/harness.toml: …` | There is a typo in `harness.toml`. | Write it again with the `cat >` box of Step 1.12 (it overwrites). |
+| ``oracle kind `c-abi-differential` needs `nm` on the [oracle] allowlist in harness.toml (required: cc, cargo, rustc, nm)`` | `nm` is missing from `allowlist`. | Write `harness.toml` again with the box of Step 1.12, which has all four. |
 | ``error: facts.jsonl is stale: <number> file(s) changed on disk; run `harness scan` first`` | A C file changed after the scan. | `harness scan --target targets/lzg` (Part 12: `harness scan --tool t-lzg`), then `harness plan` the same way. |
 | ``unit `u-…` is stale: source changed since planning …`` | The unit's C changed after planning. | `git checkout targets/lzg/src` if you did not mean to change the C; otherwise scan and plan as in the row above. |
 | `features: features need a program with one main()` | An extra file with `main` was copied into `src/lzg`. | Remove that file (only `lzg.c` may have `main`), then scan and plan again. |
@@ -6856,9 +6856,9 @@ In Part 12 the paths and the flag differ from Parts 1–11: where a row says `ta
 | `awaiting response:` again after you answered | The answer file has the wrong name, or you changed `--model` (which changes the question's key). | Run the command again with the same `--model` word as the first time. If it still waits, run `ls targets/lzg/migration/units/u-checksum/driver-traces/` (Part 12: `ls migration/tools/t-lzg/units/u-version/driver-traces/`): every `.request.json` needs a `.response.json` with the same `<key>`. |
 | `error: parse error in …response.json: the response file must hold the envelope {"text": <the reply>, …}: write the model's reply as its "text" …` | The answer file holds the bare reply: every hand-off answer is wrapped in the envelope. | Run the `jq` line of the step you are on again; it overwrites the file. |
 | `gen-driver` asks again, and its attempt record shows `generate -> format` | The answer was not in the expected layout. | Run "Check the start of your answer file" below, then answer the new request the same way. |
-| `gen-driver` ends RED (exit 10) | The driver failed validation on every turn. | Run "List why a driver failed" below. (A `driver-build` failure often means Part 1's include edit is missing.) |
+| `gen-driver` ends RED (exit 10) | The driver failed validation on every turn. | Run "List why a driver failed" below. (A `driver-build` failure often means the include edit of Step 1.5 is missing.) |
 | `error: mutation: <number> site(s) but none of the <number> sampled mutant(s) compiled — a harness limitation …` | The harness could not build its planted bugs. This is not your driver's fault. | Follow "If the harness cannot build its planted bugs" below. |
-| `migrate` refuses: `… there is no [unit.oracle] kind …` | The unit has no validated driver yet. | Run `harness gen-driver` for the unit first (Part 3). See also Known quirks, item 2. |
+| `migrate` refuses: `… there is no [unit.oracle] kind …` | The unit has no validated driver yet. | Run `harness gen-driver` for the unit first (Part 3, from Step 3.1). See also Known quirks, item 2. |
 | `migrate` refuses: ``… its generated driver's validation is `failed` …`` (or `stale`, or `missing`) | The driver's validation is not a fresh GREEN. | `harness gen-driver u-checksum --target targets/lzg --model guide-written` (for u-version, change the name; Part 12: `harness gen-driver u-version --tool t-lzg --model guide-written`). |
 
 ### The chat (Part 4)
