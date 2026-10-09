@@ -150,26 +150,30 @@ change at the switch points below.
    command); `accept` maps the whole project again to check its digests (as long as a map).
    **The check round over (d)+(e) is DONE and TRIAGED** (docs/reviews/2026-10-08-map-steps-d-e-check.md:
    correctness, security, and a newcomer's cold start that reached a verified unit on liblzg and
-   on zopfli by the docs alone; fourteen decisions). **RUNNING NOW (launched 2026-10-08 from
-   cb74d43, two Opus builders at medium):** fix pass G the map/ask/accept
-   (`worktree-agent-?` — accept recomputes from the fresh map and never takes a choice from the
-   map file, re-accept keeps hand-added sections, the closing line while guessed, ask's "not
-   tried" wording, the cockpit's acts following the open question, library ids following the
-   files, "what changed" recorded per tool in the map file and read by the notice, byte caps on
-   slices, re-validated reply items, config.toml error wording, the missing tests) and fix pass H
-   the person's side + step (f) docs (verify's "[SKIP] … not run" with verdict bytes unchanged,
-   the hand-off envelope stated once and refused plainly, the awaiting lines, project --help's
-   order, scan/plan next steps, gen-driver's progress line, harness-mcp's notice, README's "Start
-   from your own C project", the tutorial's chapter, the testing guide's Part 12 "liblzg by map",
-   SCHEMAS' config.toml section). **Fix pass H is MERGED** (lint clean; the workspace tests were
-   running at the time of writing); its docs quote by meaning the map's closing line under a
-   guess, the config.toml error words, re-accept keeping `[oracle.whole_program]`, the cockpit's
-   Ask under a guess, the "what changed" and notice wording — all G's: reconcile README, TUTORIAL,
-   TESTING-GUIDE Steps 12.2/12.3/12.10/12.11 and the troubleshooting rows with G's exact words at
-   G's merge. A small builder makes the cockpit's narrator show the unrun whole-program check as
-   not run (its fixtures too). Then: G's merge, full gates, bench replay, DECISIONS, fast-forward
-   main; then (g) — record the first accepted tool's features before its first unit moves — and
-   the person's own cold-start run.
+   on zopfli by the docs alone; fourteen decisions). **Fix passes G, H and the cockpit's narrator
+   pass are MERGED** (91ec836, lint clean): G — accept recomputes everything from the fresh map
+   and refuses when the map file disagrees, re-accept keeps hand-added sections, the closing line
+   under a guess shows config.toml's lines, ask's "the map did not link these choices (too many to
+   try)", the cockpit's acts follow the open question (Ask runs --build under a guess; the
+   pre-terminal project mode now also opens when tools exist, leading with "Open <id> — <path>"),
+   library ids follow their files, the map file records `accepted_tools: [{id, changed, says}]`
+   read by `ledger::project_changed_notice` (state status, cockpit, harness-mcp), slice and
+   request byte caps with a one-pass definition search, kept reply items re-validated, repeated
+   keys and mark-only names refused, config.toml refusals all at once with the joined-`-I` hint,
+   `accept` checks `migration/tools` is a real folder before any lock; H — verify's "[SKIP]
+   whole-program — not run: …" with verdict bytes unchanged, the envelope stated once and refused
+   plainly, the awaiting lines with the `--model` note, project --help's order, scan/plan next
+   steps, gen-driver's progress line, state status naming the only tool, harness-mcp's note,
+   README "Start from your own C project", TUTORIAL "Mapping a whole C project", TESTING-GUIDE
+   Part 12 "liblzg by map", SCHEMAS' config.toml section; the narrator pass — the cockpit counts
+   an unrun check as "not run" (fixtures and goldens re-rendered). At the time of writing the
+   whole-workspace tests and the bench replay run on 91ec836, and a docs builder re-runs Part 12
+   on the merged binary to make every quoted screen match G's exact words. Then: push, fast-forward
+   main, DECISIONS; (g) — record the first accepted tool's features before its first unit moves;
+   the person's own cold-start run. Leftovers named by G: the ask prompt still asks for fields
+   "in this order" (kept so recorded trace keys stay; nothing checks the order); `accept` link-
+   checks every program again (as long as a map). A test in view.rs pins a made-up "all 8 checks
+   passed" idle line (details golden); harmless.
    Decided in part 2: a v2 unit verdict's `inputs` does not record the configuration's flags; a
    flag change reaches the verdict through the v2 program digest (which hashes the flags), not a
    toolchain line — folder-form `inputs` stay untouched.
