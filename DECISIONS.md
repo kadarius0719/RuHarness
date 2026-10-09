@@ -3100,3 +3100,34 @@ instead of reusing the map's; status builds a resolver per unit without caching 
 driver validation, perf, bench, promote, gen-driver and `read_sources` still hash the facts'
 closure (the safe direction); about seventy recursive walks remain in harness-scan's lint,
 interface and mutate modules; the map profile's read allow-list (§8).
+
+## 2026-10-08 — The map's steps (d) and (e) built; the check round over them
+
+**Built and merged** (0682103): `harness project ask` — the model step through the `external`
+hand-off like every other model call, `--build` proposing a configuration from the build files
+into `config.proposed.toml`, the held duplicate sets and named programs as questions with strict
+reply contracts, the reply file bound to the map's digests, traces under `migration/map/traces/`,
+replay fixtures committed so CI needs no model; `harness project accept` — re-maps and compares
+the digests, applies the person's picks, links again, writes the tool's `harness.toml` in the
+file-list form with the configuration's own copy (`system_headers` as `-idirafter`), the guessed
+link arguments, the run name, the map stamp and the picks; a library accepted without a link; an
+accepted id kept across maps; a later map reporting what changed per tool; the cockpit's project
+mode with the three dialogs (Map the project, Ask, Accept a program) over the same commands.
+
+**The proof the design asked for:** zopfli mapped on a copy without its root `harness.toml`,
+`config.toml` stating `flags = []`, accepted as `t-zopfli_bin --run-name zopfli` (the id keeps the
+`_` of `zopfli_bin.c`): `scan --tool` writes `facts.jsonl` byte-identical to the committed one,
+every unit's `source_hash` equals the committed plan's, and u001 verifies green. Three checkers
+re-verified it.
+
+**The check round** (docs/reviews/2026-10-08-map-steps-d-e-check.md): correctness, security and a
+newcomer's cold start by the docs alone, which reached a verified unit on liblzg and on zopfli.
+Nothing high. The findings that mattered: `accept` took a set's "settled by linking" choice from
+the map file; re-accepting dropped sections the person had added; the map's closing line sent a
+newcomer to `accept` before the build was stated and nothing showed `config.toml`'s shape;
+`verify` printed an unrun check as a pass; the hand-off envelope was written down only in the
+testing guide; `ask` called an untried choice "did not link". Fourteen decisions in the triage;
+fix passes G (the map, ask and accept) and H (the person's side and step (f)'s docs) build them.
+
+**Gates on 0682103.** fmt, clippy, 1 624 tests green; `bench check --suite targets/tractor
+--replay --jobs 6 --adopt`: 198 reproduce, 2 expected divergences, 0 problems, no regression.
