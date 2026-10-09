@@ -1289,6 +1289,16 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
         lines.extend(wrapped(&format!("Next step: {step}"), width, bold()));
         lines.push(Line::from(""));
     }
+    // A mapped tool's "project changed" notice (docs/PROJECT-MAP-DESIGN.md
+    // §3.7): a notice, never staleness.
+    if let Some(n) = &app.snapshot.project_notice {
+        lines.extend(wrapped(
+            &format!("Project: {n}"),
+            width,
+            Style::default().fg(Color::Yellow),
+        ));
+        lines.push(Line::from(""));
+    }
     match &app.snapshot.facts_state {
         None => lines.extend(wrapped("Nothing is scanned yet.", width, dim())),
         Some(s) => {
@@ -2715,6 +2725,10 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
             ),
             dim(),
         ));
+    }
+    // Last: a mapped tool's "project changed" notice stays in sight.
+    if let Some(n) = &app.snapshot.project_notice {
+        return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), dim()));
     }
     Line::from("")
 }
@@ -8044,6 +8058,72 @@ mod tests {
             .collect();
         assert!(said.contains("1 file scanned"), "{said}");
         assert!(!said.contains("1 files"), "{said}");
+    }
+
+    /// An accepted tool whose map digests differ from the project map's
+    /// shows the "project changed" notice: on the project summary and in
+    /// the notice row (docs/PROJECT-MAP-DESIGN.md §3.7).
+    #[test]
+    fn the_project_changed_notice_is_shown() {
+        use crate::testutil::{file_list_tool, LZG_TOOL};
+        let dir = file_list_tool("view-project-notice");
+        let config = dir
+            .0
+            .join("migration/tools")
+            .join(LZG_TOOL)
+            .join("harness.toml");
+        let stamped = std::fs::read_to_string(&config).unwrap().replace(
+            "configuration = {",
+            &format!(
+                "map = {{ root_hash = \"blake3:{}\", inputs_hash = \"blake3:{}\" }}\n\
+                 configuration = {{",
+                "a".repeat(64),
+                "b".repeat(64)
+            ),
+        );
+        std::fs::write(&config, stamped).unwrap();
+        std::fs::create_dir_all(dir.0.join("migration/map")).unwrap();
+        std::fs::write(
+            dir.0.join("migration/map/project-map.json"),
+            format!(
+                "{{\"root_hash\": \"blake3:{}\", \"inputs_hash\": \"blake3:{}\"}}",
+                "c".repeat(64),
+                "b".repeat(64)
+            ),
+        )
+        .unwrap();
+        let read = crate::load::read_tool(&dir.0, Some(LZG_TOOL)).unwrap();
+        let mut app = App::new(
+            crate::app::Config {
+                target: dir.0.clone(),
+                tool: Some(LZG_TOOL.into()),
+                harness: Some(PathBuf::from(crate::app::tests::HARNESS)),
+                allow_unsandboxed: false,
+                layout: LayoutMode::Auto,
+                providers: vec!["external".into()],
+            },
+            read,
+        );
+        const SAYS: &str = "the project changed since this tool was accepted: run `harness \
+                            project map`, then `accept` again";
+        assert_eq!(app.snapshot.project_notice.as_deref(), Some(SAYS));
+        let mut links = Vec::new();
+        let said: String = summary(&app, 400, &mut links)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(said.contains(&format!("Project: {SAYS}")), "{said}");
+        let row: String = notice_row(&app, 400)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(row, format!(" {SAYS}"));
+        let screen = text(&render(&mut app, 200, 40));
+        assert!(
+            screen.contains("the project changed since this tool was accepted"),
+            "{screen}"
+        );
     }
 
     /// In a project of tools the screen names the tool open, on the title

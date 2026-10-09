@@ -369,8 +369,11 @@ impl<'a> CcLinker<'a> {
     }
 }
 
-impl Linker for CcLinker<'_> {
-    fn link(&mut self, files: &[&FileFacts], unresolved: &[String]) -> Result<Linked, Error> {
+impl CcLinker<'_> {
+    /// The outside libraries a link of files needing `unresolved` takes
+    /// ([`guess_libs`], zlib asked of this system once): what `project
+    /// accept` writes as the tool's `extra_link_args`.
+    pub fn libraries(&mut self, unresolved: &[String]) -> Result<Vec<String>, Error> {
         let zlib = if unresolved
             .iter()
             .any(|s| s.starts_with("deflate") || s.starts_with("inflate"))
@@ -379,10 +382,16 @@ impl Linker for CcLinker<'_> {
         } else {
             false
         };
-        let libs: Vec<String> = guess_libs(unresolved, zlib, self.apple)
+        Ok(guess_libs(unresolved, zlib, self.apple)
             .into_iter()
             .map(str::to_string)
-            .collect();
+            .collect())
+    }
+}
+
+impl Linker for CcLinker<'_> {
+    fn link(&mut self, files: &[&FileFacts], unresolved: &[String]) -> Result<Linked, Error> {
+        let libs = self.libraries(unresolved)?;
         let mut objects = Vec::new();
         let mut not_compiled = Vec::new();
         for f in files {

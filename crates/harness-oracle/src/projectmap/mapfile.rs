@@ -535,13 +535,13 @@ pub fn analyze(map: &mut FolderMap) -> Result<Option<Analysis>, Error> {
     if !map.closures_possible() {
         return Ok(None);
     }
+    // A program (or library) at the path of an accepted tool keeps its id.
+    let accepted = accepted_ids(&map.root, &map.files);
     let input = Input {
         files: &map.files,
         parser: &map.parser,
         walk_issues: &map.walk_issues,
-        // Accepted tools keep their ids once `project accept` writes them
-        // (step e); none are read yet.
-        accepted: &[],
+        accepted: &accepted,
     };
     let setup = LinkSetup {
         walked: map.files.iter().map(|f| f.path.as_str()).collect(),
@@ -559,6 +559,304 @@ pub fn analyze(map: &mut FolderMap) -> Result<Option<Analysis>, Error> {
         });
     }
     Ok(analysis)
+}
+
+/// The largest mapped tool's `harness.toml` the map reads.
+pub const MAX_TOOL_CONFIG_BYTES: u64 = 1 << 20;
+
+/// The mapped tool `id`'s `harness.toml` under `root`, read without
+/// following a link and without checking its paths (a file of the tool may
+/// be gone: that is what the map reports): `None` when it is missing, a
+/// link, over [`MAX_TOOL_CONFIG_BYTES`] or not a config this harness reads.
+pub fn tool_config(root: &Path, id: &str) -> Option<harness_core::config::TargetConfig> {
+    let path = harness_core::config::tool_dir(root, id).join(harness_core::config::CONFIG_FILE);
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > MAX_TOOL_CONFIG_BYTES {
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    let table: toml::Table = text.parse().ok()?;
+    harness_core::config::TargetConfig::from_table(table).ok()
+}
+
+/// `(path, id)` for each accepted tool (§3.3: a program at the path of an
+/// accepted tool keeps that tool's id across maps): a `t-` tool's listed
+/// files that are `main` programs in `files`, every listed file of an `l-`
+/// tool (a library's id follows its first file). Tools in id order.
+pub fn accepted_ids(root: &Path, files: &[super::FileFacts]) -> Vec<(String, String)> {
+    let mains: BTreeSet<&str> = files
+        .iter()
+        .filter(|f| {
+            f.kind == FileKind::C
+                && f.compiled == Some(Compiled::Ok)
+                && f.defined
+                    .iter()
+                    .any(|d| d.name == "main" && d.kind == "function")
+        })
+        .map(|f| f.path.as_str())
+        .collect();
+    let mut pairs = Vec::new();
+    for id in harness_core::config::mapped_tools(root) {
+        let Some(config) = tool_config(root, &id) else {
+            continue;
+        };
+        let Some(list) = config.target.file_list() else {
+            continue;
+        };
+        for f in &list.files {
+            if id.starts_with("l-") || mains.contains(f.path.as_str()) {
+                pairs.push((f.path.clone(), id.clone()));
+            }
+        }
+    }
+    pairs
+}
+
+/// What changed for one accepted tool since it was accepted
+/// (docs/PROJECT-MAP-DESIGN.md §3.6), in words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolChange {
+    /// The tool's id.
+    pub id: String,
+    /// One sentence each: its closure, its configuration, its link.
+    pub what: Vec<String>,
+}
+
+fn words(items: &[String]) -> String {
+    items
+        .iter()
+        .map(|s| harness_core::text::safe_line(s))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn bare(h: &str) -> &str {
+    h.strip_prefix(harness_core::hash::HASH_PREFIX).unwrap_or(h)
+}
+
+/// For each accepted tool (a `harness.toml` with `map`) whose map digests
+/// differ from `file`'s: what changed — its closure (files it now needs or
+/// no longer needs, include folders), its configuration, a duplicate set
+/// open again, a program gone, a tool that no longer links. A hand-written
+/// tool (no `map`) and a tool whose digests match get nothing.
+pub fn what_changed(map: &FolderMap, file: &MapFile) -> Vec<ToolChange> {
+    let mut out = Vec::new();
+    for id in harness_core::config::mapped_tools(&map.root) {
+        let Some(config) = tool_config(&map.root, &id) else {
+            out.push(ToolChange {
+                id: id.clone(),
+                what: vec!["its harness.toml could not be read, so nothing is compared".into()],
+            });
+            continue;
+        };
+        let Some(list) = config.target.file_list() else {
+            continue;
+        };
+        let Some(stamp) = &list.map else {
+            continue;
+        };
+        if bare(&stamp.root_hash) == bare(&file.root_hash)
+            && bare(&stamp.inputs_hash) == bare(&file.inputs_hash)
+        {
+            continue;
+        }
+        let mut what = Vec::new();
+        let input = Input {
+            files: &map.files,
+            parser: &map.parser,
+            walk_issues: &map.walk_issues,
+            accepted: &[],
+        };
+        let expected: Option<Vec<String>> = if id.starts_with("t-") {
+            match file.programs.iter().find(|p| p.id == id) {
+                None => {
+                    what.push(
+                        "its program is no longer in the map (its file is gone, or no longer \
+                         defines main)"
+                            .to_string(),
+                    );
+                    None
+                }
+                Some(p) => {
+                    let picks: Vec<(Vec<String>, String)> = list
+                        .picks
+                        .iter()
+                        .map(|k| (k.definers.clone(), k.keep.clone()))
+                        .collect();
+                    match closure::chosen_closure(&input, &p.path, &picks) {
+                        None => {
+                            what.push(format!(
+                                "{} is no longer a main program",
+                                harness_core::text::safe_line(&p.path)
+                            ));
+                            None
+                        }
+                        Some(chosen) => {
+                            for open in &chosen.open {
+                                what.push(format!(
+                                    "a duplicate set is open that its picks do not settle ({} \
+                                     each define {})",
+                                    words(&open.definers),
+                                    words(&open.symbols)
+                                ));
+                            }
+                            Some(chosen.files)
+                        }
+                    }
+                }
+            }
+        } else {
+            match file.libraries.iter().find(|l| l.id == id) {
+                None => {
+                    what.push("it is no longer a library in the map".to_string());
+                    None
+                }
+                Some(l) => Some(l.files.clone()),
+            }
+        };
+        if let Some(files) = expected {
+            match super::accept::shape(map, &files) {
+                Err(why) => what.push(why),
+                Ok(shape) => {
+                    let listed: BTreeMap<&str, &[String]> = list
+                        .files
+                        .iter()
+                        .map(|f| (f.path.as_str(), f.include_dirs.as_slice()))
+                        .collect();
+                    let now: BTreeMap<&str, &[String]> = shape
+                        .files
+                        .iter()
+                        .map(|(p, d)| (p.as_str(), d.as_slice()))
+                        .collect();
+                    let added: Vec<String> = now
+                        .keys()
+                        .filter(|p| !listed.contains_key(*p))
+                        .map(|p| p.to_string())
+                        .collect();
+                    let removed: Vec<String> = listed
+                        .keys()
+                        .filter(|p| !now.contains_key(*p))
+                        .map(|p| p.to_string())
+                        .collect();
+                    let moved: Vec<String> = now
+                        .iter()
+                        .filter(|(p, d)| listed.get(*p).is_some_and(|l| l != *d))
+                        .map(|(p, _)| p.to_string())
+                        .collect();
+                    if !added.is_empty() {
+                        what.push(format!("closure changed: it now needs {}", words(&added)));
+                    }
+                    if !removed.is_empty() {
+                        what.push(format!(
+                            "closure changed: it no longer needs {}",
+                            words(&removed)
+                        ));
+                    }
+                    if !moved.is_empty() {
+                        what.push(format!(
+                            "closure changed: the include folders of {} are different",
+                            words(&moved)
+                        ));
+                    }
+                    let was = &list.configuration;
+                    if was.name != shape.name || was.from != shape.from || was.flags != shape.flags
+                    {
+                        let say = |name: &str, from, flags: &[String]| {
+                            format!(
+                                "{}, from {}, flags {}",
+                                harness_core::text::safe_line(name),
+                                super::accept::from_word(from),
+                                if flags.is_empty() {
+                                    "none".to_string()
+                                } else {
+                                    words(flags)
+                                }
+                            )
+                        };
+                        what.push(format!(
+                            "configuration changed: it was {}, the map's is {}",
+                            say(&was.name, was.from, &was.flags),
+                            say(&shape.name, shape.from, &shape.flags)
+                        ));
+                    }
+                }
+            }
+        }
+        let linked = file
+            .closures
+            .iter()
+            .find(|c| c.program == id)
+            .and_then(|c| c.linked.as_ref());
+        if let Some(LinkedRec::Failed {
+            missing, doubled, ..
+        }) = linked
+        {
+            let mut why = Vec::new();
+            if !missing.is_empty() {
+                why.push(format!("missing {}", words(missing)));
+            }
+            if !doubled.is_empty() {
+                why.push(format!("defined twice {}", words(doubled)));
+            }
+            what.push(format!(
+                "it no longer links{}",
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", why.join("; "))
+                }
+            ));
+        }
+        if what.is_empty() {
+            what.push(format!(
+                "its files changed since it was accepted (same closure, same configuration{})",
+                match linked {
+                    Some(LinkedRec::Ok(_)) => ", it still links",
+                    // A held program is linked by `accept`, under its picks.
+                    _ if id.starts_with("t-") =>
+                        "; the map does not link it while a choice is held",
+                    _ => "",
+                }
+            ));
+        }
+        out.push(ToolChange { id, what });
+    }
+    out
+}
+
+/// The program paths of the map file under `root` as it stands (read
+/// before a new map replaces it): `None` when there is none or it cannot be
+/// read.
+pub fn previous_programs(root: &Path) -> Option<Vec<(String, String)>> {
+    #[derive(serde::Deserialize)]
+    struct Program {
+        id: String,
+        path: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Programs {
+        #[serde(default)]
+        programs: Vec<Program>,
+    }
+    let path = root.join(MAP_FILE);
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > MAX_MAP_BYTES as u64 {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    let p: Programs = serde_json::from_slice(&bytes).ok()?;
+    Some(p.programs.into_iter().map(|p| (p.id, p.path)).collect())
+}
+
+/// The programs of `file` whose path no program of the map before it had:
+/// `(id, path)`.
+pub fn new_programs(file: &MapFile, before: &[(String, String)]) -> Vec<(String, String)> {
+    let had: BTreeSet<&str> = before.iter().map(|(_, p)| p.as_str()).collect();
+    file.programs
+        .iter()
+        .filter(|p| !had.contains(p.path.as_str()))
+        .map(|p| (p.id.clone(), p.path.clone()))
+        .collect()
 }
 
 /// The largest map file written (§3.10): past it the map is a limit hit.
@@ -647,7 +945,8 @@ pub fn inputs_hash(configuration_digest: &str, toolchain: &ToolchainRec) -> Stri
     harness_core::hash::bytes_hash(&json)
 }
 
-fn toolchain_rec(t: &Toolchain) -> ToolchainRec {
+/// The map's `toolchain` record.
+pub fn toolchain_rec(t: &Toolchain) -> ToolchainRec {
     ToolchainRec {
         cc: t.cc.clone(),
         target: t.target.clone(),
@@ -722,6 +1021,32 @@ fn settled(map: &FolderMap, flags: &[String], a: &super::Ambiguous) -> bool {
             }
         })
     })
+}
+
+/// The ambiguous includes of `files` (and their headers') the configuration
+/// does not settle, sorted: each file read with its own flags (a `.h` with
+/// the configuration's).
+pub fn unsettled_ambiguous(map: &FolderMap, files: &[String]) -> Vec<AmbiguousRec> {
+    let by_path: BTreeMap<&str, &super::FileFacts> =
+        map.files.iter().map(|f| (f.path.as_str(), f)).collect();
+    let mut unsettled: BTreeSet<AmbiguousRec> = BTreeSet::new();
+    for p in files {
+        if let Some(f) = by_path.get(p.as_str()) {
+            let flags = if f.kind == FileKind::C {
+                &f.flags
+            } else {
+                &map.configuration.flags
+            };
+            for a in f.ambiguous.iter().filter(|a| !settled(map, flags, a)) {
+                unsettled.insert(AmbiguousRec {
+                    header: a.header.clone(),
+                    candidates: a.candidates.clone(),
+                    used: a.used.clone(),
+                });
+            }
+        }
+    }
+    unsettled.into_iter().collect()
 }
 
 /// The map file for `map` and its analysis (`None` past a cap: the file
@@ -1018,23 +1343,7 @@ fn closure_rec(
     } else {
         (None, per_file)
     };
-    let mut unsettled: BTreeSet<AmbiguousRec> = BTreeSet::new();
-    for p in &c.files {
-        if let Some(f) = by_path.get(p.as_str()) {
-            let flags = if f.kind == FileKind::C {
-                &f.flags
-            } else {
-                &map.configuration.flags
-            };
-            for a in f.ambiguous.iter().filter(|a| !settled(map, flags, a)) {
-                unsettled.insert(AmbiguousRec {
-                    header: a.header.clone(),
-                    candidates: a.candidates.clone(),
-                    used: a.used.clone(),
-                });
-            }
-        }
-    }
+    let unsettled = unsettled_ambiguous(map, &c.files);
     let mut incomplete_why: Vec<IncompleteRec> = c
         .incomplete_why
         .iter()
@@ -1103,7 +1412,7 @@ fn closure_rec(
         collisions,
         strong_over_weak,
         included_as_text,
-        ambiguous_unsettled: unsettled.into_iter().collect(),
+        ambiguous_unsettled: unsettled,
         linked: c.linked.as_ref().map(|l| match l {
             Linked::Ok => LinkedRec::Ok("ok"),
             Linked::Failed {

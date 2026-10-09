@@ -948,6 +948,50 @@ fn run(
     Ok(())
 }
 
+/// A ledger made elsewhere is asked about before the terminal is taken
+/// (docs/PROJECT-MAP-DESIGN.md §3.7): the same question as the CLI's
+/// `--adopt`; away from a terminal it is refused in the cockpit's own
+/// words. `Some(code)` when the cockpit stops here.
+fn adoption_gate(target: &Path, tool: Option<&str>) -> Option<ExitCode> {
+    use std::io::IsTerminal;
+    let e = harness_core::adopt::check(target).err()?;
+    let harness_core::Error::NotAdopted {
+        root,
+        units,
+        verified,
+    } = &e
+    else {
+        match e {
+            // The sentence names the folder itself.
+            harness_core::Error::ForeignMigration { .. } => eprintln!("harness-tui: {e}"),
+            _ => eprintln!("harness-tui: {} is unreadable: {e}", target.display()),
+        }
+        return Some(ExitCode::from(1));
+    };
+    if !std::io::stdin().is_terminal() {
+        eprintln!(
+            "harness-tui: {}",
+            e.words_for(harness_core::adopt::Way::Cockpit)
+        );
+        return Some(ExitCode::from(1));
+    }
+    let asked = harness_tui::adoption::ask(
+        target,
+        tool,
+        &harness_core::adopt::made_elsewhere(root, *units, *verified),
+        &mut std::io::stdin().lock(),
+        &mut std::io::stderr(),
+    );
+    match asked {
+        Ok(true) => None,
+        Ok(false) => Some(ExitCode::from(1)),
+        Err(why) => {
+            eprintln!("harness-tui: {why}");
+            Some(ExitCode::from(1))
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(args) => args,
@@ -970,6 +1014,54 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // A project with no target yet (no harness.toml, no mapped tool): the
+    // project mode, in a terminal — Map the project, then Ask and Accept a
+    // program, each a dialog over the `harness project` command
+    // (docs/PROJECT-MAP-DESIGN.md §3.7). Once a tool exists it is opened
+    // below as on any target.
+    if harness_tui::project::applies(&target, args.tool.as_deref()) && {
+        use std::io::IsTerminal;
+        std::io::stdin().is_terminal()
+    } {
+        if let Some(code) = adoption_gate(&target, None) {
+            return code;
+        }
+        let harness = match resolve_harness(args.harness.clone()) {
+            Ok(Some(h)) => h,
+            Ok(None) => {
+                eprintln!(
+                    "harness-tui: no `harness` binary found (PATH, or --harness <path>), so the \
+                     project cannot be mapped from here: run `harness project map --target {}`",
+                    harness_core::runtime_view::shell_quote(&target.to_string_lossy())
+                );
+                return ExitCode::from(1);
+            }
+            Err(why) => {
+                eprintln!("harness-tui: {why}");
+                return ExitCode::from(2);
+            }
+        };
+        let mut exec = |argv: &[String]| -> Result<i32, String> {
+            std::process::Command::new(&harness)
+                .args(argv)
+                .status()
+                .map(|s| s.code().unwrap_or(1))
+                .map_err(|e| format!("{}: {e}", harness.display()))
+        };
+        match harness_tui::project::run(
+            &target,
+            &mut std::io::stdin().lock(),
+            &mut std::io::stderr(),
+            &mut exec,
+        ) {
+            Ok(true) => {}
+            Ok(false) => return ExitCode::SUCCESS,
+            Err(why) => {
+                eprintln!("harness-tui: {why}");
+                return ExitCode::from(1);
+            }
+        }
+    }
     // The target: `--tool`, else the root's harness.toml, else the
     // project's only mapped tool; several are listed for the person to pick
     // in a terminal (docs/PROJECT-MAP-DESIGN.md §3.7).
@@ -994,46 +1086,9 @@ fn main() -> ExitCode {
         }
     };
     // A ledger made elsewhere is asked about first, before the terminal is
-    // taken (docs/PROJECT-MAP-DESIGN.md §3.7): the same question as the
-    // CLI's `--adopt`; away from a terminal it is refused in the cockpit's
-    // own words.
-    if let Err(e) = harness_core::adopt::check(&target) {
-        use std::io::IsTerminal;
-        let harness_core::Error::NotAdopted {
-            root,
-            units,
-            verified,
-        } = &e
-        else {
-            match e {
-                // The sentence names the folder itself.
-                harness_core::Error::ForeignMigration { .. } => eprintln!("harness-tui: {e}"),
-                _ => eprintln!("harness-tui: {} is unreadable: {e}", target.display()),
-            }
-            return ExitCode::from(1);
-        };
-        if !std::io::stdin().is_terminal() {
-            eprintln!(
-                "harness-tui: {}",
-                e.words_for(harness_core::adopt::Way::Cockpit)
-            );
-            return ExitCode::from(1);
-        }
-        let asked = harness_tui::adoption::ask(
-            &target,
-            tool.as_deref(),
-            &harness_core::adopt::made_elsewhere(root, *units, *verified),
-            &mut std::io::stdin().lock(),
-            &mut std::io::stderr(),
-        );
-        match asked {
-            Ok(true) => {}
-            Ok(false) => return ExitCode::from(1),
-            Err(why) => {
-                eprintln!("harness-tui: {why}");
-                return ExitCode::from(1);
-            }
-        }
+    // taken (docs/PROJECT-MAP-DESIGN.md §3.7).
+    if let Some(code) = adoption_gate(&target, tool.as_deref()) {
+        return code;
     }
     // The first read runs here, before the terminal is taken: a target the
     // preflight refuses is refused in words.
