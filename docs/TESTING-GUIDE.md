@@ -3990,19 +3990,22 @@ set aside in src/extra: 1 javascript file(s), not read
 set aside in src/extra: 1 lua file(s), not read
 set aside in src/extra: 1 pascal file(s), not read
 skipped folder: migration (the harness's own files)
+project map: wrote migration/map/project-map.json and migration/.gitignore (3 program(s), 0 libraries; the project's own files were not changed); the configuration is a guess, so nothing can be accepted yet: next, state the build in migration/map/config.toml, for example
+  [[configuration]]
+  name = "make"
+  from = "make"
+  flags = []  # the -I and -D flags the build passes, each joined, like "-Isrc/include"
+then run `harness project map` again (or have a model propose one: `harness project ask --build`)
 ```
-
-and a last line starting `project map: wrote migration/map/project-map.json and
-migration/.gitignore (3 program(s), 0 libraries; the project's own files were not changed)`,
-which ends with the next step.
 
 **What just happened.** The harness compiled every `.c` file (in the sandbox, changing none
 of them), read which functions each defines and needs, and followed the needs from each
 `main()`. Read it top down:
 
 - **`configuration: a guess`**: nothing told the harness how liblzg is built, so it compiled
-  with no flags. That is the first thing to fix (next step). The last line of the screen says
-  so too, and shows the three lines to write.
+  with no flags. That is the first thing to fix (next step). The closing lines of the screen
+  say so too: nothing can be accepted yet, and they show the lines to write, with the flags
+  left for you to fill in.
 - **Three programs.** `t-lzg` (the compressor, 4 files) links: every function it calls is
   defined exactly once. `t-unlzg` and `t-benchmark` both need `LZG_Decode`, which two files
   define: the library's `src/lib/decode.c` and the mini decoder `src/extra/lzgmini.c`. That
@@ -4088,18 +4091,26 @@ harness project map
 **You should see** the same screen, with its second line now:
 
 ```text
-configuration: make, from make (stated in config.toml), flags -O3, -Isrc/include
+configuration: make, from make (stated in config.toml), flags -O3, -Isrc/include; -O3 is recorded only, never applied (every compile keeps the harness's own)
 ```
 
-and a last line that now names `harness project accept <id>` as the next step, says the held
-choice d1 is yours (named with `--keep`), and that `harness project ask` advises.
+and its last line now names the next step:
 
-**If it looks different.** If the map refuses your file, its message names the file and the
-line, or the flag and why. Two common ones: you pasted a flag the harness does not pass (such
-as `-funroll-loops` or `-Wall`; remove it), or a path with a space or outside the project
-(`-I src/include`, `-I../include`; write `-Isrc/include`). A line like `unknown field` or
-`expected a sequence` means the table header is not exactly `[[configuration]]` with two
-brackets each side.
+```text
+project map: wrote migration/map/project-map.json (3 program(s), 0 libraries; the project's own files were not changed); next, make a program or library a tool with `harness project accept <id>`; the held choices (d1) are yours to make: name the file to keep with --keep <set>=<index or path> (`harness project ask` advises)
+```
+
+**If it looks different.** If the map refuses your file, its message starts with the file's
+path and names every flag it refuses at once, with why. Had you pasted the Makefile's flags
+as they are (`"-c", "-O3", "-funroll-loops", "-W", "-Wall"`) with `"-I src/include"` and
+`"-I../include"`, it would say (exit 1):
+
+```text
+error: migration/map/config.toml: the flag `-c` is not one the harness passes to a compiler; remove it (the flags allowed are listed in docs/SCHEMAS.md, "harness.toml, file-list form"); `-I src/include` has a blank after -I: write it joined, like -Isrc/include; the flag `-I../include` names a path outside the project or under migration/; name a folder inside the project, relative to its root; `-funroll-loops`, `-W`, `-Wall` are warning or tuning flags the harness does not pass: drop them, the map does not need them
+```
+
+A message with `line 1: invalid type: map, expected a sequence` (or `unknown field`) means
+the table header is not exactly `[[configuration]]` with two brackets each side.
 
 ---
 
@@ -4120,11 +4131,15 @@ harness project ask --model by-hand
 
 ```text
 project ask: asking external (by-hand) about 1 item(s) in 1 call(s): d1
+project ask: d1.1 src/extra/lzgmini.c: the slice stops at 120 lines or 16 KiB, before the definitions end
+project ask: d1.2 src/lib/decode.c: the slice stops at 120 lines or 16 KiB, before the definitions end
 awaiting response: /Users/<you>/lzg-map/migration/map/traces/<key>.response.json
+project ask: external provider mode — write each response beside its request under migration/map/traces as {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}, then re-run (the answer is recorded as `by-hand`'s; if another model or a person answers, first run it with --model naming who answers: that writes the request to answer): harness project ask --target=. --provider=external --model=by-hand
+error: awaiting response: /Users/<you>/lzg-map/migration/map/traces/<key>.response.json
 ```
 
-then a line saying where to write the answer, in which envelope, and the command to run again,
-and `error: awaiting response: …` with exit code 1.
+with exit code 1. The two "slice" lines say the question shows the model only the start of
+each file's definitions (at most 120 lines or 16 KiB of each); that is expected.
 
 **Run.** Point `REQ` at the question and `RESP` at the answer file to write.
 
@@ -4156,6 +4171,8 @@ harness project ask --model by-hand
 
 ```text
 project ask: asking external (by-hand) about 1 item(s) in 1 call(s): d1
+project ask: d1.1 src/extra/lzgmini.c: the slice stops at 120 lines or 16 KiB, before the definitions end
+project ask: d1.2 src/lib/decode.c: the slice stops at 120 lines or 16 KiB, before the definitions end
 d1 (LZG_Decode, LZG_DecodedSize; held by t-benchmark, t-unlzg): the model's advice (by-hand): keep d1.2 src/lib/decode.c, reason alternative-implementation; in t-benchmark, t-unlzg that choice linked
 project ask: the model's words above are labels and advice only: nothing was built or linked, and the choice of each held set stays yours (`harness project accept` never reads the reply)
 project ask: wrote migration/map/project-map.reply.json (1 answer(s) this run, under this map's digests)
@@ -4200,6 +4217,7 @@ harness project accept t-unlzg --keep d1=d1.2
 ```text
 project accept t-unlzg: keeping `src/lib/decode.c` over `src/extra/lzgmini.c` for `LZG_Decode, LZG_DecodedSize`
   src/extra/lzgmini.c: alternative not kept
+project accept t-unlzg: the whole-program check is off until you fill in [oracle.whole_program] in migration/tools/t-unlzg/harness.toml (a commented example is there)
 project accept: wrote migration/tools/t-unlzg/harness.toml (3 file(s), linked, run as unlzg; configuration make, flags -O3 -Isrc/include); review it with `git diff`, then scan it: `harness scan --target . --tool t-unlzg`
 ```
 
@@ -4215,6 +4233,7 @@ harness project accept t-lzg
 **You should see.**
 
 ```text
+project accept t-lzg: the whole-program check is off until you fill in [oracle.whole_program] in migration/tools/t-lzg/harness.toml (a commented example is there)
 project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; configuration make, flags -O3 -Isrc/include); review it with `git diff`, then scan it: `harness scan --target . --tool t-lzg`
 ```
 
@@ -4227,7 +4246,8 @@ cat migration/tools/t-lzg/harness.toml
 **You should see** a comment saying which command wrote it, then `schema_version = 2` and a
 `[target]` with `name = "lzg"`, the four files (`lzg.c` with `include_dirs = ["src/include"]`),
 your configuration, and a `map = { root_hash = …, inputs_hash = … }` line tying it to this
-map; then `[oracle]` and `[llm]`. This file **is** the acceptance: you never write it by hand.
+map; then `[oracle]` with the commented example `# [oracle.whole_program]` (Step 12.9 fills it
+in), and `[llm]`. This file **is** the acceptance: you never write it by hand.
 
 **Run.** Commit the map, your configuration and both tools.
 
@@ -4542,11 +4562,19 @@ echo '/* a comment added for the guide */' >> src/lib/version.c
 harness project map
 ```
 
-**You should see** the usual screen, and near its end a line starting `accepted tool t-lzg
-changed since it was accepted:`, saying what changed (here: the project's files, nothing else)
-and ending ``accept it again with `harness project accept t-lzg` ``. `t-unlzg` gets a line too:
-the map compares every accepted tool with the new map. For a tool none of whose own files
-changed, the line says so and there is nothing to do.
+**You should see** the usual screen, and just before its last line these three:
+
+```text
+accepted tool t-lzg changed since it was accepted: its own files changed since it was accepted (src/lib/version.c); its closure, configuration and link are the same: scan it to read them (`harness scan --tool t-lzg`); accepting it again only clears this note
+accepted tool t-unlzg: a file elsewhere in the project changed; nothing to do for this tool
+programs not accepted as tools: t-benchmark (src/tools/benchmark.c); accept one with `harness project accept <id>`
+```
+
+The map compares every accepted tool with the new map. `t-lzg`'s own file changed, but not
+which files it needs, its configuration or its link: the change is in its C, which a scan
+reads. `t-unlzg` does not use `version.c`, so there is nothing to do for it. Had the change
+altered what `t-lzg` needs or how it links, the line would say so and end ``accept it again
+with `harness project accept t-lzg` ``.
 
 **Run.**
 
@@ -4554,23 +4582,33 @@ changed, the line says so and there is nothing to do.
 harness state status --tool t-lzg
 ```
 
-**You should see** a first line starting `status: the project changed since this tool was
-accepted`, then ``status: facts STALE — run `harness scan --tool t-lzg` (6 files, 1 stale vs
-tree)`` and the units. `u-version` reads `[verified] plan=SOURCE-STALE verdict=green (STALE:
-source) << CONTRADICTION`: its C changed after it was verified, so its verdict no longer
-describes today's file. The steps below settle it.
+**You should see** the map's own sentence as the first line:
 
-**Run.** Accept it again.
+```text
+status: its own files changed since it was accepted (src/lib/version.c); its closure, configuration and link are the same: scan it to read them (`harness scan --tool t-lzg`); accepting it again only clears this note
+```
+
+then ``status: facts STALE — run `harness scan --tool t-lzg` (6 files, 1 stale vs tree)`` and
+the units. `u-version` reads `[verified] plan=SOURCE-STALE verdict=green (STALE: source)  <<
+CONTRADICTION: status and verdict evidence disagree`: its C changed after it was verified, so
+its verdict no longer describes today's file. The steps below settle it.
+
+**Run.** Accept it again, to clear the note.
 
 ```bash
 harness project accept t-lzg
 ```
 
-**You should see** `project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked,
-…; its ledger (plan, units, verdicts) is kept)` and the scan to run next. Accepting again
-rewrites only what the map decides (the files, folders, configuration, picks and run name) and
-keeps what you added, such as the `[oracle.whole_program]` section of Step 12.9: the closing
-line names what was kept, and `git diff migration/tools/t-lzg/harness.toml` shows the change.
+**You should see.**
+
+```text
+project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; configuration make, flags -O3 -Isrc/include; its ledger (plan, units, verdicts) is kept; kept from the harness.toml there: oracle.whole_program (its own comments are not carried over)); review it with `git diff`, then scan it: `harness scan --target . --tool t-lzg`
+```
+
+Accepting again rewrites only what the map decides (the files, folders, configuration, picks,
+run name and the map it came from) and keeps what you added, such as the
+`[oracle.whole_program]` section of Step 12.9: the closing line names what was kept, and
+`git diff migration/tools/t-lzg/harness.toml` shows the change.
 
 **Run.** Then the usual after any change to the C: scan, plan, and verify again.
 
@@ -4626,7 +4664,7 @@ Type a number (1-1) and Enter; anything else leaves:
 writes:
 
 ```text
-Map the project: find its programs and libraries, the files each one needs, what they share, and whether each program links.
+Map the project: find its programs and libraries, the files each one needs, what they share, and whether each program links (its code is compiled and linked in the sandbox, never run).
   It runs: harness project map --target /Users/<you>/lzg-cockpit
   It takes: a few seconds for a small project, minutes for a large one (at most 30 minutes).
   It writes: migration/map/project-map.json (and migration/.gitignore the first time); the project's own files are not changed.
@@ -4653,6 +4691,9 @@ The three acts:
   (program)`, …), then for a program with a held choice asks `t-unlzg holds the choice d1:
   linking cannot tell its files apart, so keep which one?` with the files listed, then shows the
   command (`harness project accept t-unlzg --target … --keep d1=d1.2`) and runs it on `y`.
+  While the configuration is a guess it lists nothing and says instead: `Accept needs a stated
+  configuration, and this map's is a guess (or came with the project): write it in
+  migration/map/config.toml, or Ask for a proposal, then map again.`
 
 **Do.** Type anything other than a number and press `Enter` to leave. To accept from here,
 first write `~/lzg-cockpit/migration/map/config.toml` as in Step 12.3 (from another Terminal
@@ -4720,7 +4761,7 @@ A few messages and documents in this version of RuHarness are out of date. The s
 | Part 12: ``error: --keep d1=decode.c names no definer of d1: its definers are d1.1 src/extra/lzgmini.c, d1.2 src/lib/decode.c`` | The value after `d1=` must be one of the listed indexes or the whole path. | `--keep d1=d1.2` or `--keep d1=src/lib/decode.c`. |
 | Part 12: `… duplicate set d1 of t-unlzg … is not settled: pick its definer yourself with --keep d1=<index or path> …` | The program holds a choice only you can make. | Add `--keep d1=d1.2` (Step 12.5). |
 | `error: parse error in …response.json: the response file must hold the envelope {"text": <the reply>, …}: write the model's reply as its "text" …` | The answer file holds the bare reply (or a field is missing): every hand-off answer is wrapped in the envelope. | Write it again with the `jq` line of the step you are on (Steps 3.3, 12.4, 12.7, 12.8); it overwrites the file. |
-| Part 12: the map refuses `migration/map/config.toml`, naming a flag | The flag is not one the harness passes to a compiler (`-Wall`, `-funroll-loops`), or a path is outside the project or has a space (`-I../include`, `-I src/include`). | Remove warning and tuning flags; write paths from the project's top folder, joined: `-Isrc/include` (Step 12.3). |
+| Part 12: `error: migration/map/config.toml: …`, naming flags (``… are warning or tuning flags the harness does not pass: drop them …``, ``… has a blank after -I: write it joined, like -Isrc/include``) | A flag is not one the harness passes to a compiler (`-c`, `-Wall`, `-funroll-loops`), or a path is outside the project or has a space (`-I../include`, `-I src/include`). Every refused flag is named at once. | Remove warning and tuning flags; write paths from the project's top folder, joined: `-Isrc/include` (Step 12.3). |
 | Part 12: `verify: [SKIP] whole-program — not run: …` | The tool has no `[oracle.whole_program]` section yet, so the whole program was not run. It is not a failure. | Add the program's arguments to the tool's `harness.toml` (Step 12.9). |
 
 ### Check the start of your answer file

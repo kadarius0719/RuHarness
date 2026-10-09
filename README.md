@@ -214,8 +214,9 @@ Run every command from inside the project's folder (or add `--target <folder>`):
    where two files define the same functions and linking cannot tell which one is meant.
    It changes none of your files; it writes `migration/map/project-map.json`.
 2. **Say how it is built.** The first map compiles under a *guess* (no flags), so its
-   screen tells you to state the configuration. Write `migration/map/config.toml` — three
-   lines are enough:
+   closing lines say nothing can be accepted yet and show the lines to write, with
+   `flags = []` for you to fill in. Write `migration/map/config.toml` — three lines are
+   enough:
 
    ```toml
    [[configuration]]
@@ -249,12 +250,15 @@ Run every command from inside the project's folder (or add `--target <folder>`):
    ```
 
    `scan` and `plan` each end with the next command to run. An accepted tool has no
-   whole-program check until you give the program's arguments: add
-   `[oracle.whole_program]` with `args = ["-9"]` (for example) to its `harness.toml`;
-   until then `verify` shows that check as `[SKIP] … not run`.
+   whole-program check until you give the program's arguments (`accept` says so, and leaves
+   a commented example in the file): add `[oracle.whole_program]` with `args = ["-9"]` (for
+   example) to its `harness.toml`; until then `verify` shows that check as `[SKIP] … not
+   run`. Accepting the tool again keeps that section and names what it kept.
 
 When the project changes later, `harness project map` names each accepted tool that
-changed and how; `harness state status --tool t-lzg` then starts with the same notice.
+changed and how — when only the tool's own C changed, it says to scan it; when what it needs
+or how it links changed, to accept it again — and `harness state status --tool t-lzg` then
+starts with the same sentence.
 
 ## Command reference
 

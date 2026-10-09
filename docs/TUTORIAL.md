@@ -460,7 +460,9 @@ when every option links.
   exactly as the example project keeps its own under `migration/`.
 
 **Accepting again.** When the project changes, the map says which tools changed and how,
-and the tool's status starts with the same notice. Accepting the tool again rewrites the
+and the tool's status starts with the same sentence. When only the tool's own C changed, it
+says to scan the tool (accepting it again then only clears the note); when what the tool
+needs or how it links changed, it says to accept it again. Accepting the tool again rewrites the
 parts of its `harness.toml` that the map decides — the files, the include folders, the
 configuration, the picks, the run name, the libraries it links with — and keeps the rest:
 its ledger, and what you added yourself, such as an `[oracle.whole_program]` section or a
@@ -468,8 +470,9 @@ its ledger, and what you added yourself, such as an `[oracle.whole_program]` sec
 on.
 
 **The whole-program check.** An accepted tool does not know how its program is run, so
-it has no whole-program check at first, and `verify` shows that check as `[SKIP] … not run`
-rather than as passed. Add the program's arguments to the tool's `harness.toml` to turn it
+it has no whole-program check at first: `accept` says so and leaves a commented example in
+the tool's `harness.toml`, and `verify` shows that check as `[SKIP] … not run` rather than as
+passed. Add the program's arguments to the tool's `harness.toml` to turn it
 on, for example:
 
 ```toml
@@ -487,6 +490,8 @@ how long it takes and what it writes, and runs only when you type `y`:
   answer is shown beside the choice, labelled as the model's.
 - **Accept a program** — pick the program, then for each held choice the file to keep;
   it runs `harness project accept` and opens the new tool, with a Next step to scan it.
+  While the configuration is a guess it picks nothing and says "Accept needs a stated
+  configuration …": write `config.toml` (or Ask for a proposal), then map again.
   Files outside the tool are shown greyed with `⊖`.
 
 ## Your first migration, step by step
