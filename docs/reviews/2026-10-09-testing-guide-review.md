@@ -946,3 +946,270 @@ appendix; Parts 9–12 and the closing sections), each running every command on 
 pasting the real lines (the parts that need Claude keep the recorded outputs and are restructured
 only), then one reader who has not seen the old guide reads the whole new one as a non-technical
 person and runs Parts 0–3 and 12A.
+
+
+---
+
+# The fresh-eyes read of the rewritten guide (2026-10-09)
+
+A reader who had not seen the old guide or the reviews followed the new one as a non-programmer, ran Parts 0–3 and experiment 12A on fresh copies, and read the rest on paper. Every screen matched and they always knew what to do next; nothing stopped them. Their 21 findings are fixed in the pass that follows.
+
+# Fresh-eyes walk of docs/TESTING-GUIDE.md (7,022 lines, about 51,000 words)
+
+I read the guide from line 1 to line 7022 as someone who has never programmed. I ran Part 0's
+safe steps, Parts 1, 2 and 3, and experiment 12A, following only the guide's words. I read
+Parts 4–11, Plan B, 12B and 12C on paper.
+
+How I stood in for a real Mac, so you can weigh the results:
+- `~` was a scratch "home" folder. `~/code/RuHarness` was a copy of this worktree with its own
+  fresh git history. `~/code/liblzg-upstream` was a copy of the local liblzg download. I did not
+  run Step 0.8's clone, Step 0.17's pull or Step 1.2's clone (no downloads).
+- Step 0.19 built into the scratch folder (`cargo install --offline --root <scratch>`), not
+  into `~/.cargo/bin`.
+- `RUHARNESS_ADOPTED` pointed at a scratch file for every run.
+- Git inside the scratch copies worked; nothing was refused.
+- I set the git name in the scratch copy's own settings, not with `--global`.
+- Claude Code was not started (Step 0.15 skipped). No model was called.
+
+## Run log (step → matched the guide's "You should see"? → knew what to do next?)
+
+Part 0
+- 0.1 Terminal: already open → n/a → yes
+- 0.2 `arm64` → matched → yes
+- 0.3 Xcode path (the second form) → matched → yes
+- 0.4 `Apple clang version 21.0.0 …`, four lines → matched → yes (noted it for 0.23)
+- 0.5 nm and sandbox-exec → matched → yes
+- 0.6 `git version 2.50.1 (Apple Git-155)` → matched → yes
+- 0.7 printed nothing (no name set) → the table's row covered it → yes
+- 0.8 not run (no download)
+- 0.9 rustup's three lines and `~/.cargo/bin/cargo` → matched → yes
+- 0.10 `stable-aarch64-apple-darwin (overridden by …)` → matched → yes
+- 0.11 `rustc 1.94.1` → matched → yes
+- 0.12 `jq-1.8.1` → matched → yes
+- 0.13 `2.1.293 (Claude Code)` → matched → yes
+- 0.14 `ANTHROPIC_BASE_URL` above `check done` → did not match, but the sentence above the box
+  says why (I was inside another app's terminal) → yes
+- 0.15 skipped, as the guide allows
+- 0.16 clean (the branch name differs because this is a worktree) → matched in substance → yes
+- 0.17 not run (no download)
+- 0.18 `ok` → matched → yes
+- 0.19 three builds → `Installed package …` lines matched; about 33 s and then seconds → yes
+- 0.20 three paths and `harness 0.1.0` → matched (scratch path) → yes
+- 0.21 `--adopt` → matched line for line → yes
+- 0.22 16 `[PASS]` lines, GREEN, `exit=0`, 12.4 s (author: 13) → matched → yes
+- 0.23 `0` → matched → yes
+
+Part 1
+- Before: `cd` and `mkdir` → matched → yes
+- 1.1 `Switched to a new branch 'practice-lzg'` → matched → yes
+- 1.2 checkout (on the local copy) gave `HEAD is now at 182b56c …`, and the log line → matched → yes
+- 1.3 both listings → matched → yes
+- 1.4 seven names → matched → yes
+- 1.5 `31:#include "lzg.h" /* altered … */` → matched → yes
+- 1.6 `checked`, only `lzg.c`, `none`, total 1592 → all matched → yes
+- 1.7 nothing printed, then `exit=0` → matched → yes
+- 1.8 version, usage, `exit=0`, the complaint, `exit=0`, `Input file is empty.` → matched → yes
+- 1.9 `30014`, `808`, `same` → matched → yes
+- 1.10 `0000000b: 0c72 8052 …` (and the 16-byte header under "For the curious") → matched → yes
+- 1.11 last line of VENDORED.md → matched → yes
+- 1.12 `max_tokens = 8192` → matched → yes
+- 1.13 `10 files changed`, ten create lines, clean status → matched → yes
+
+Part 2
+- Before: `Already on 'practice-lzg'` → matched → yes
+- 2.1 `7 files, 20 symbols, 47 refs`, 20 functions with the four named → matched → yes
+- 2.2 `facts fresh` and `no plan` → matched → yes
+- 2.3 13 findings, `13 false`, the `checksum.c:46` line → matched → yes
+- 2.4 five units, then `no changes (5 units)` → matched → yes
+- 2.5 the u-checksum block, `source_hash` too; commit `4 files changed` → matched → yes
+- 2.6 the ten id/depends_on lines → matched → yes
+
+Part 3
+- 3.1 three lines; key `aaa26e46`, the same as the author's → matched → yes (the expected
+  `error:` was announced)
+- 3.2 `exit=1` → matched → yes
+- 3.3 REQ path → matched → yes
+- 3.4 system text and the five section names → matched → yes
+- 3.5 `43` → matched → yes
+- 3.6 RESP path → matched → yes
+- 3.7 nothing printed → matched → yes
+- 3.8 three lines → matched → yes
+- 3.9 the five GREEN lines, `exit=0`, 12.9 s (author: 12.5) → matched → yes
+- 3.10 seven PASS lines, the same as the author's (mutation 12/13) → matched → yes
+- 3.11 the five `[unit.oracle]` lines → matched → yes
+- 3.12 `8 files changed, 280 insertions`, seven create lines → matched → yes
+
+Part 12A
+- Before: `project --help` first line and the six-line order; `ls` of tools → matched → yes
+- 12.1 rsync, ls, mkdir, cd, git init/add/commit, a one-line log → matched → yes
+- 12.2 map took 0.95 s (author: about 1); the screen matched line for line apart from the
+  path; `?? migration/` → matched → yes
+- 12.3 config file; second and last lines after the second map → matched → yes
+- 12.4 six lines with exit 1 (key `d9e8ca06`), RESP, the answer, the advice lines on the
+  second run → matched → yes
+- 12.5 the refusal (exit 1), both accepts, the harness.toml (only the blake3 codes differ, as
+  the guide says), the commit and the log → matched → yes
+
+I reached the end of Part 3 and the end of 12A. Every screen matched. I always knew the next
+move.
+
+## Findings
+
+### Stops me
+
+1. **Lines 677–721 and 830, Step 0.21 run a second time.** A second run prints one different
+   line: `adopt: … is already trusted on this computer; nothing deleted`. It does not print the
+   two `adopt:` lines. That happens if I come back, or if this Mac trusted zopfli before. The
+   table has no row for it. Its "anything else" row sends me to Troubleshooting, which has no
+   row either, and the checkpoint on line 830 then fails. **Fix:** add a row: "already trusted
+   … nothing deleted: this Mac trusted it before; go on". Let the checkpoint accept either.
+2. **Lines 6936–6988, Troubleshooting, "If the harness cannot build its planted bugs".** I am
+   asked to find the `u-checksum` block in `plan.toml` with nano and paste five lines in the
+   right place. Nothing tells me how to find the block. There is no "You should see", no
+   check afterwards, and no row for a broken file. On this path I would be stuck. **Fix:** say
+   "press Ctrl-W, type `id = "u-checksum"`, press Return". Then check with Step 3.11's `grep`,
+   and reuse Step 2.5's "if it prints parse error, `git checkout` the plan" advice.
+
+### Slows me
+
+3. **Lines 5535 and 5608 against Steps 12.17–12.23.** "Every command from here to the end of
+   12C runs from inside this folder [`~/lzg-map`]" and "If you close it, run `cd ~/lzg-map`".
+   But Step 12.21 moves into `~/lzg-cockpit`. **Fix:** say "to the end of Step 12.16", and
+   name both folders in the line about closing the window.
+4. **Line 5: "Two steps (in Parts 4 and 6) use your Claude subscription."** It is two parts:
+   Steps 4.5–4.12 and 6.10–6.14, plus Plan B. I counted steps and got confused. **Fix:** "Two
+   parts (4 and 6)".
+5. **Line 29: "Altogether it takes about 4 hours".** The table adds up to 4 h 10 min–5 h
+   10 min. **Fix:** "4 to 5 hours".
+6. **Check counts with no bridge.** Part 3 has "seven checks" (line 2434), Part 4 "all 8
+   checks" (lines 2763 and 2769), Part 0 "16 `[PASS]`" and Parts 8–9 "11". Part 4 uses "8"
+   before Part 5 says what they are. I wondered where the seven had gone. **Fix:** one
+   sentence at Step 4.8: "these 8 are the judge's checks, listed in Part 5, not the seven
+   checks of the driver in Part 3".
+7. **Steps that do more than one thing.**
+   - Cockpit steps with several key presses in one **Do.** and one "You should see" at the
+     end: 4.3 (line 2657), 4.9 (2790), 6.11 (3871), 6.12 (3889), 6.13 (3905–3910), 9.8
+     (4697), 9.17 (4802, five presses, then a quit tacked on at 4814), 11.6 (5439–5451, five
+     separate Do's), 12.22 (6668) and 12.23 (6688–6723). 12.20 also ends with a trailing quit
+     (6627) after its "If you do not see that".
+   - Run steps that hold several acts: 11.3 (see the refusal, write the draft, save it), 12.1
+     (eight boxes), 12.5 (refusal, two accepts, read, commit) and 12.9 (verify, add, verify,
+     commit).
+   - 12.7 packs into one step the same nine moves that Part 3 spread over 3.1–3.9.
+   - **Fix:** one key or act per step, or a "You should see" after each **Do.**. Give 12.7 the
+     granularity of Part 3.
+8. **Line 39 ("Copy a Run box whole") against lines 242–254 (Step 0.7).** The first box I
+   must change is Step 0.7's: your own name. The guide does not say how to change a pasted
+   line before pressing Return. The same goes for 8.4's swapped arguments and the u-version
+   versions of Plan B (3938). **Fix:** a third rule in "How to read this guide": "a few boxes
+   say 'with your own …': paste, move with the arrow keys, change the words, then press
+   Return".
+9. **Troubleshooting is hard to find.**
+   - It starts on line 6822 of 7022 and is named 32 times as "at the end of the guide".
+   - There is no contents list, and the "What you will do" table (lines 13–27) stops at
+     Part 12.
+   - Named rows such as "gen-driver ends RED" or "List why a driver failed" need a search.
+   - **Fix:** add "Known quirks", "Troubleshooting" and "What to try next" rows, with links, to
+     the table at the top. Make every "see Troubleshooting" a link to its subsection.
+10. **Lines 5079 and 5135–5157, the `.gitignore` conflict help in Part 10.** It belongs to the
+    old guide's step that added lines to `.gitignore`. Line 1672 says that step is gone, so a
+    new reader wonders when this could happen. **Fix:** drop it, or say it applies only if you
+    followed an older version of this guide.
+11. **Line 5322, the run counts in Step 11.4.** "About 17 runs of the C alone, then 30 timed
+    runs for each unit" does not square with line 5200 ("15 times each by default") or with
+    "15 runs" in the output. **Fix:** "15 timed runs of each side (and two first runs of the C
+    to check it ends the same way); the C and the Rust take turns, so 30 runs per unit".
+12. **Words used before they are explained, or never explained** (line of first use, then
+    where it is explained):
+    - "commit": line 7, explained on 80.
+    - "cockpit": lines 7 and 19, explained on 433 and 628.
+    - "target": line 16 and Part 1's title (871), explained on 920.
+    - "API key" / "cloud API key": lines 5 and 451, never explained.
+    - "model": lines 853, 1536 and 2070, never said plainly (for example "the AI behind
+      Claude").
+    - "heredoc>": line 95, explained on 1448.
+    - "function": line 195, explained on 915.
+    - "clang": lines 7, 165 and 791, never tied to `cc`.
+    - "ABI": lines 2221 and 2227, explained on 2582.
+    - "lint": lines 737 and 2446, explained on 3249.
+    - "KiB": line 3252, explained on 4571.
+    - "differential": line 1875, the check name on 3227, `c-abi-differential` on 2474; never
+      explained.
+    - "backticks": lines 2334, 3070 and 6142, never explained.
+    - "pseudo-random": line 2295, never explained.
+    - "cores": line 5447, never explained.
+    - "lens": line 3429, never explained.
+    - the `◐` mark: line 4955; Part 4's mark table shows only `◇` and `✓`.
+    - **Fix:** a short gloss at first use; "API key", "model" and "backtick" belong in the
+      opening word table.
+
+### Polish
+
+13. **Lines 1–56, the opening.** About 1,000 words, roughly 88 lines at 100 columns: two and a
+    half screens. Line 7 (about 140 words of commits, dates and compiler versions) is the
+    heaviest part and the source of the "commit" problem in finding 12. **Fix:** keep one
+    sentence and move the rest to an "About this edition" note at the end. The opening then
+    fits on two screens.
+14. **Run-on headers.** Lines 2064–2066, and the same three lines in Parts 4–12 (2558, 2924,
+    3179, 3602, 4056, 4134, 4580, 4854, 5186, 5522, 5581, 6016, 6388), have no blank lines
+    between them. They render as one long paragraph, unlike Parts 0–2. **Fix:** blank lines.
+15. **Lines 882–923 and 1688–1720.** The "Before you start" bullet list is broken by Run boxes
+    in the middle ("Where.", then boxes, then more bullets). **Fix:** put the boxes after the
+    bullets.
+16. **Lines 2966 and 3709.** "Both lines print nothing" sits above three boxes, and the third
+    prints. **Fix:** "The first two print nothing".
+17. **Lines 5565 and 5733 against 5754.** "Three lines you write" against "exactly the four
+    lines". **Fix:** "three settings under a heading line".
+18. **Line 1747.** "Sorted by file and then by name" is not quite true: in `encode.c` the
+    public functions come before the internal ones. **Fix:** "by file, public ones first".
+19. **Line 1583.** "`git checkout targets/lzg` can undo any later experiment". It does not
+    remove new files the harness makes; Part 4's restart needs four `rm` lines. **Fix:** "puts
+    back any file you saved".
+20. **Line 5473.** The "configured automatically" hint cannot appear after Step 0.7. Drop it.
+21. **Line 2567.** Missing full stop.
+
+## The whole, judged
+
+- **Can I hold each part's question?** Yes. Every part opens with one plain question and
+  closes with an Answer that repeats it. 12A, 12B and 12C each have their own question, and
+  Part 6's "no, not for u-version" is the best lesson in the guide.
+- **Words explained before use:** mostly. The exceptions are in finding 12.
+- **Steps doing more than one thing:** the cockpit steps and the second half of Part 12
+  (finding 7). Parts 0–3 are clean.
+- **Every expected `error:` announced?** Yes: 3.1, 6.1, 7.1, B.1, 11.3, 12.4, 12.5's refusal,
+  12.6, 12.7 and 12.8 all say so before the box.
+- **Does every "If you do not see that" say what to do?** Every step has one; I checked
+  mechanically. The gap is a real output that no table names (finding 1).
+- **Times labelled as the author's?** Yes, consistently ("on the author's Mac", with dates).
+  My times agreed: 0.22 took 12.4 s against 13, 3.9 took 12.9 s against 12.5, 12.2 took 0.95 s
+  against about 1. Only the totals (findings 4 and 5) are off.
+- **Untrue, misleading or contradictory?**
+  - Step references: every "Step N.N" names a step that exists, and the ones I sampled point
+    where they claim.
+  - Contradictions: findings 3, 4, 5, 11, 16 and 17.
+- **Troubleshooting findable?** Only by scrolling or searching (finding 9).
+- **Opening on two screens?** Not quite (finding 13).
+- **Length.** 7,022 lines is longer than it needs to be.
+  - Part 9's sixteen one-key steps (lines 4613–4828) could be a six-step tour.
+  - The `cd` and `git switch` boxes with full labels repeat in Parts 2–11; define them once as
+    "every time you start a part".
+  - Part 10's update sequence (4959–5107) repeats Steps 0.16–0.19.
+  - 12C's cockpit half (12.17–12.23) re-does 12A and could be marked optional.
+  - It is shorter than it needs to be in two places: 12.7–12.8, which are dense next to
+    Part 3, and the nano path in finding 2.
+
+## What was good
+
+- Every output I ran matched, byte for byte where it claimed to: counts, hashes, keys and
+  timings. Even the hand-off key `aaa26e46` was the same on a different path. That makes the
+  guide trustworthy as a test plan.
+- Expected stops are announced in bold before the box ("meant to stop with the word
+  `error`"), so the first `error:` never scared me.
+- "What it means" connects the dots. 808 bytes in Step 1.9 comes back as the whole-program
+  number in Part 5. Bytes 11–14 from `xxd` come back as "first diff at byte 11" in Step 5.7.
+- Part 3 splits the hand-off into one-act steps, each with a check (`echo "$REQ"`, `head` of
+  the answer). It is the model for the rest.
+- Each part ends with an Answer, a Checkpoint and a restart recipe. "For the curious" keeps the
+  detail out of the way.
+- Part 12A works as an experiment. The refusal of `accept t-unlzg` without `--keep` shows the
+  rule before you follow it.
