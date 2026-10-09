@@ -1,10 +1,10 @@
 # Testing guide: migrate a real C library with RuHarness, from zero
 
-This guide is both a tutorial and a test plan. You take **liblzg**, a small real-world compression library written in C, and use RuHarness to move two of its pieces to safe Rust. For every step it tells you what to type, what you should see, why you are doing it, and what the harness just did. If what you see matches, that part of RuHarness works. If it does not match, the step tells you what to do.
+This guide is a tutorial and a test plan at once. You take **liblzg**, a small real program written in the C language that makes files smaller, and use RuHarness to move two of its pieces to Rust, a newer language that rules out a whole family of memory mistakes. Every step says what to type, what you should see, and what it means. If what you see matches, that part of RuHarness works. If it does not, the step says what to do.
 
-You run every step yourself, and none of them needs a cloud API key. The two translation steps use your Claude subscription through Claude Code. Every other step runs on your Mac with no AI.
+You need no programming experience: you open Terminal, paste, and compare. No step needs a cloud API key. Two steps (in Parts 4 and 6) use your Claude subscription through Claude Code; every other step runs on your Mac with no AI.
 
-Written for RuHarness at commit `a154870` (the program itself reports `harness 0.1.0`), on macOS with Apple Silicon, September 2026. Step 0.7 makes sure your copy is at that commit or a newer one. Parts 0–10 were walked through end to end on liblzg on 2026-10-07, with both translations done through the cockpit's chat: every output shown in them is what that run printed (or names what varies).
+Written for RuHarness at commit `c3a85d2` (2026-10-08; the program prints `harness 0.1.0`), on a Mac with an Apple chip (Step 0.2 shows how to check). Where the outputs come from: Parts 0–2 were walked through again on 2026-10-09 at commit `129174c` (the same program as `c3a85d2`) on the author's Mac, an Apple M3 with macOS 26.5, Apple clang 21.0.0 and Rust 1.94.1. Parts 3–10 were walked end to end on 2026-10-07, with both translations done through the cockpit's chat; Part 11 on 2026-10-07; Part 12's screens were checked against the program on 2026-10-08. Every output shown is what those runs printed, or the text says what varies.
 
 ---
 
@@ -12,7 +12,7 @@ Written for RuHarness at commit `a154870` (the program itself reports `harness 0
 
 | Part | What happens | Time | Uses Claude? |
 |---|---|---|---|
-| 0 | Install the tools, update RuHarness, and check that it works on its built-in example | 30–60 min (mostly waiting for builds) | no |
+| 0 | Check the tools, get RuHarness, build it, and try it on its built-in example | 30–60 min (mostly waiting for installs and builds) | no |
 | 1 | Download liblzg at a fixed version, try it by hand, and set it up as a target | 20 min | no |
 | 2 | Let the harness read the C, flag risky patterns, and plan the migration | 10 min | no |
 | 3 | Give the first piece (`u-checksum`) its test program, which is called a driver | 15 min | no |
@@ -24,117 +24,99 @@ Written for RuHarness at commit `a154870` (the program itself reports `harness 0
 | 9 | Tour the cockpit on the finished project | 15 min | no |
 | 10 | Check the status, and pick up again another day | 5 min | no |
 | 11 | Measure the speed of the Rust against the C (macOS) | 15–20 min (mostly waiting) | no |
-| 12 | Start again from the whole liblzg download: let the harness map it and write the target for you | 30 min | no |
+| 12 | Start again from the whole liblzg download: let the harness map it and write the target for you, in three short experiments | about an hour | no |
 
-Altogether this takes about 3–4 hours, and you do not have to finish in one sitting. Part 10 shows how to pick up where you left off.
+The times are for someone doing this for the first time. Altogether it takes about 4 hours, and you do not have to finish in one sitting: Part 10 shows how to pick up where you left off.
 
-When you finish, the folder `targets/lzg` inside RuHarness holds a C program in which two pieces are Rust, both proven to behave like the C they replaced. It also holds a record of everything that happened.
+When you finish, the folder `targets/lzg` inside RuHarness holds a C program in which two pieces are Rust, both proven to behave like the C they replaced, and a record of everything that happened.
 
 ---
 
 ## How to read this guide
 
-- **Labels.** Every command box has a **Run.** label in front of it, and every output box has a **You should see.** label. Copy a Run box whole, paste it into Terminal, and press Return. Wait for the prompt to come back before you start the next box. Do not type the contents of a "You should see" box.
-- **Each Run box holds one command.** The exception is a box that begins with `cat > somefile <<'EOF'` (or `cat >>`). That box is one command that writes a file, and everything down to the line `EOF` is the content of that file. Copy it whole. While it pastes, zsh puts `heredoc>` at the start of each line; that is normal. When the paste is finished the prompt comes back and nothing else is printed.
-  - If the paste stops and you are left at a `heredoc>` prompt, the `EOF` line did not arrive. Type `EOF` and press Return, then paste the whole box again. It overwrites the file, so nothing is harmed.
-- **`#` in boxes.** No box starts a shell line with a `#` comment, because zsh does not treat a typed `#` as a comment. Inside a `cat > … <<'EOF'` box, lines that start with `#` (such as `#include`) are file content, and that is fine.
-- **Where to run commands.** Unless a step says otherwise, run commands from your RuHarness folder. The guide assumes that is `~/code/RuHarness`. If your folder is somewhere else, use your path wherever you see `~/code/RuHarness`.
-- **Angle brackets.** A command box never contains a placeholder in angle brackets. You will see `>` and `<` in a few commands, and those are real shell symbols: `>` sends a command's output into a file, and `<` feeds a file into a command. In output boxes, text in angle brackets is a placeholder for something that changes from machine to machine:
+Two rules:
 
-  | Placeholder | What it stands for |
-  |---|---|
-  | `<you>` | your Mac user name |
-  | `<key>` | 8 characters, using the digits 0–9 and the letters a–f |
-  | `<12hex>` | 12 such characters |
-  | `<8hex>` | 8 such characters |
-  | `<4hex>` | 4 such characters |
-  | `<hash>` | the 7-character code git gives each commit |
-  | `<number>` | a number that varies; the text says whether the exact value matters |
-  | `<model>` | the name of the model Claude Code uses, as the chat shows it when it starts |
-  | `<time>` | how long something took, such as `41 s` |
-  | `<line>` | a line number in a file |
-  | `<category>`, `<count>` | a kind of finding and how many there are (Step 2.3) |
-  | `<64 characters>` | a long fingerprint made of 0–9 and a–f |
+1. **Copy a Run box whole.** Each box labelled **Run.** holds one command. Copy all of it, paste it into Terminal, and press Return. Never type what is in a **You should see.** box: that is what your Mac prints back.
+2. **Wait for the prompt.** Terminal is ready for the next command when the line ending in `%` comes back. Do not paste the next box before that.
 
-- **Ids.** A translation attempt is named `a-` followed by 12 characters (`a-<12hex>`). A driver attempt is named `d-<12hex>`. The cockpit usually shows only the first four characters, as `a-<4hex>`. The chat's "Continues" line shows the first eight followed by `…`. A retry of the same request keeps the same id and adds `.r2` (then `.r3`, and so on), for example `a-<12hex>.r2`. Commands accept it exactly as shown.
-- **The long dash `—`** in the harness's messages is part of the message.
-- **Exit codes.** Every `harness` command finishes with a number that says how it went:
+A few steps in the cockpit (Parts 9, 11 and 12) are labelled **Do.** instead of **Run.**: Do. means press the keys named, one at a time, in the cockpit window; nothing is pasted.
 
-  | Code | Meaning |
-  |---|---|
-  | `0` | success, or GREEN |
-  | `1` | the harness refused or hit an error; the message says why |
-  | `2` | the command was typed wrong |
-  | `10` | the judge said RED |
-  | `130` | you stopped it with Ctrl-C, and the harness stopped everything it had started; run the same command again |
+Every step has the same four labels: **Run.**, **You should see.**, **What it means.**, **If you do not see that.** Every part starts with the question it answers and ends with the answer, a checkpoint, and a way to start the part again. Sections called **For the curious** are optional. In output boxes, text in angle brackets, such as `<you>`, stands for something that is different on your Mac; the line under the box says what.
 
-  Some steps have you run `echo "exit=$?"` to print that number. It has to be the **very next** command after the one you are checking.
-- **Steps marked "Uses your Claude subscription"** send work to Claude. No other step uses AI.
-
----
-
-## Words you will meet
-
-These eight words come up throughout the guide:
+## Three words you will meet everywhere
 
 | Word | Plain meaning |
 |---|---|
-| **Unit** | One piece of the C program that moves to Rust as a whole. Here each unit is one `.c` file, named `u-` plus the file name: `u-checksum` is `checksum.c`. |
-| **Oracle** | The judge. It builds a small test program twice, once with the original C unit and once with the Rust, and checks that both print the same bytes. It also runs other checks, such as running the whole program and running memory-error checkers. |
-| **Verdict** | The oracle's recorded result for a unit. It lists every check and whether it passed, plus fingerprints of exactly the code that was tested. **GREEN** means every check passed. **RED** means at least one failed. |
-| **Ledger** | The folder `targets/lzg/migration/`, where the harness keeps every record: the scan, the plan, the drivers, the attempts, the verdicts and the features. It is plain text, and you commit it to git. |
-| **Promote** (the cockpit calls it **Accept**) | Your decision to make a GREEN attempt the unit's official Rust. The harness runs all the checks again after the swap. |
-| **Scenario** | One run of the whole program with fixed arguments, belonging to a **feature**. A feature is something a person does with the program, such as "compress a file". |
-| **Cockpit** | `harness-tui`, a full-screen view with a file tree, a detail view and a chat pane. Every action goes through a menu and a confirm dialog. |
-| **Hand-off** | The point where the harness stops and waits for an answer from a model. It writes the question to a `….request.json` file and waits for a matching `….response.json`. The cockpit's chat can answer these for you, or you can write the answer file yourself. |
+| **Unit** | One piece of the C program that moves to Rust as a whole. Here each unit is one file of C, named `u-` plus the file name: `u-checksum` is the file `checksum.c`. |
+| **Judge** | The part of RuHarness that decides whether the Rust really behaves like the C it replaces: it runs both and compares what they print, byte for byte. The harness's own messages and files call it the **oracle**. |
+| **Driver** | A small test program the judge uses for one unit. It calls the unit with fixed inputs and prints every result, once with the C and once with the Rust. |
 
-These words appear less often:
-
-| Word | Plain meaning |
-|---|---|
-| **Target** | The C project being migrated. Here it is the folder `targets/lzg`. |
-| **Leaf unit** | A unit whose C calls nothing in the project's other `.c` files, only functions from the standard C library. In this version of RuHarness, only leaf units can be migrated. |
-| **Driver** | A small C test program for one unit. It calls the unit's functions with fixed inputs and prints every result. |
-| **Check** | One test the oracle runs. It ends in PASS or FAIL. |
-| **Attempt** | One try at translating a unit. It stays on record whether it went GREEN or RED. |
-| **Candidate** | The code one attempt produced, kept in that attempt's folder (`attempts/a-.../candidate/`). It becomes the unit's real crate only when you Accept (promote) it. |
-| **Safe Rust** | Rust that the compiler fully checks for memory mistakes, meaning it has no `unsafe` blocks. RuHarness keeps all of a unit's logic in safe Rust and uses `unsafe` only in a thin wrapper. |
-| **Crate** | A Rust package: a folder that holds a `Cargo.toml` and a `src/` folder. |
-| **C ABI** | The rules for calling a compiled function by its name. "Behind the same C ABI" means the Rust offers the same function names and argument types, so the C program cannot tell whether it is calling C or Rust. |
-| **FFI wrapper (`ffi.rs`)** | The small Rust file that lets C call the Rust. |
-| **stdout / stderr** | A program's normal output, and its channel for messages and errors. Both appear on your screen, but `>` sends only stdout into a file. |
-| **Symbol** | A named function in compiled code. A **public** one can be called from other `.c` files. A **static** one (the harness calls it `internal`) is private to its own file. |
-| **Hex** | Base 16: the digits 0–9 plus a–f. Two hex digits make one byte. |
-| **Fingerprint (`blake3:…`)** | A code computed from a file's bytes. If any byte of the file changes, the code changes. |
-| **Sanitizers (asan, ubsan)** | Compiler modes that stop a program when it makes a memory error or does something the C language leaves undefined. |
-| **Mutant** | A copy of the C with one small bug planted on purpose. It is used to test the test. |
-| **Fresh / stale** | Fresh means a record matches today's files. Stale means something has changed since the record was made. |
-| **Provider** | Whoever answers the model's questions. In this guide it is always `external`, which means a file hand-off. |
-| **JSON / TOML** | Text formats for structured data. A `.jsonl` file holds one JSON record per line. |
-| **PATH** | The list of folders your shell searches when you type a program's name. |
-| **Token** | A piece of a word, which is how models measure text. 8192 tokens is at most a few thousand lines of reply. |
+Every other word is explained where it first appears.
 
 ---
 
-## Part 0 — Prepare your Mac
+## Part 0 — Get your Mac ready
+
+**The question.** Does my Mac have every tool RuHarness needs, and does RuHarness work on the example it comes with?
+
+**You will know the answer when** the judge's last line in Step 0.22 ends in `GREEN — status set to verified` and the next command prints `exit=0`.
+
+**Takes** 30–60 minutes the first time, mostly waiting for installs and builds. On the author's Mac, with the tools already installed, the whole part took about 5 minutes. **Uses Claude:** no. (Steps 0.13–0.15 only check that Claude Code is ready for Part 4.)
+
+### Before you start
+
+- **Where.** Anywhere. A new Terminal window starts in your **home folder**, the folder named after your Mac user name. This guide writes it as `~`, so `~/code/RuHarness` means the folder `RuHarness` inside the folder `code` inside your home folder.
+- **What must be true.** Your Mac is connected to the internet, and you know your Mac password (installing tools asks for it). For Parts 4 and 6 only: a paid Claude plan that includes Claude Code.
+- **What to keep open.** One Terminal window for the whole part.
+- **The steps.** 0.1–0.2 Terminal and your Mac's chip. 0.3–0.5 Apple's tools. 0.6–0.7 git. 0.8 get RuHarness. 0.9–0.11 Rust. 0.12 jq. 0.13–0.15 Claude Code. 0.16–0.18 bring RuHarness up to date. 0.19–0.20 build and install it. 0.21–0.23 try it on its example.
+- **New words in this part.**
+
+| Word | Plain meaning |
+|---|---|
+| Terminal | The Mac app where you type commands. |
+| Command | One line of text that tells the Mac to do something. You paste it into Terminal and press Return. |
+| Prompt | The text at the start of Terminal's line, ending in `%`. It means Terminal is waiting for your next command. |
+| Compiler | A program that turns **source code**, the text a programmer writes, into a program the Mac can run. Turning a whole project into a runnable program is called **building** it. |
+| git | A tool that keeps every saved version of a project's files. A project kept by git is a **repository**. One saved version is a **commit**, named by a code made of the digits 0–9 and the letters a–f (its **hash**; the short form has 7 characters, such as `c3a85d2`). A **branch** is a named line of commits, such as `main`. |
+| Rust | The language the translated pieces are written in. RuHarness itself is written in Rust too. |
 
 ### Step 0.1 — Open Terminal
 
-**Why.** You type every step below into Terminal.
+**Run.** Open Finder, go to Applications → Utilities, and open **Terminal**. Make the window large, with the green button at its top left or with Window → Zoom. Part 4 needs a wide window.
 
-**Run.** Open Finder, go to Applications → Utilities, and open **Terminal**. Make the window large, either with the green button at its top left or with Window → Zoom. Part 4 needs a wide window.
+**You should see.** A window with a line ending in `%`.
 
-**You should see.** A window with a line ending in `%`. That line is the zsh prompt, waiting for a command.
+**What it means.** Terminal is open and waiting for a command.
 
-**What just happened.** Nothing yet.
+**If you do not see that.**
 
-**If it looks different.** If the line ends in `$`, your shell is bash. The commands in this guide still work.
+| You see | Do this |
+|---|---|
+| a line ending in `$` | Your Terminal uses a different shell (the program that reads your commands), called bash. Every command in this guide still works. One small difference: where this guide shows `heredoc>` (Part 1), bash shows `>`. |
 
----
+### Step 0.2 — Check your Mac's chip
 
-### Step 0.2 — Apple's command-line developer tools
+**Run.**
 
-**Why.** RuHarness compiles C with `cc`, lists the functions in compiled files with `nm`, and uses `sandbox-exec` to confine everything it runs. The first two come with Apple's Command Line Tools. The third is part of macOS.
+```bash
+uname -m
+```
+
+**You should see.**
+
+```text
+arm64
+```
+
+**What it means.** Your Mac has an Apple chip (M1, M2, M3 or later), like the Mac this guide was walked on. You can see the same thing in the Apple menu → About This Mac, on the line "Chip: Apple M…".
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `x86_64` | Your Mac has an Intel chip. Carry on. This guide was not walked on an Intel Mac; the one difference you should meet is in Step 0.10, where the name reads `x86_64` instead of `aarch64`. If anything else differs, note the step and see Troubleshooting at the end of the guide. |
+
+### Step 0.3 — Check Apple's developer tools
 
 **Run.**
 
@@ -152,7 +134,16 @@ xcode-select -p
 /Applications/Xcode.app/Contents/Developer
 ```
 
-**If it looks different.** If you see `xcode-select: error: unable to get active developer directory`, run the command below. It prints `xcode-select: note: install requested for command line developer tools` and opens a window. Click **Install**, wait for it to finish (often 5–15 minutes), and then run `xcode-select -p` again.
+The author's Mac printed the second one.
+
+**What it means.** Apple's **Command Line Tools** are installed. They are a free package from Apple that holds the C compiler, git and the other build tools RuHarness uses. The second line means the full Xcode app is installed, which includes them.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `xcode-select: error: unable to get active developer directory` | Run the box below. It prints `xcode-select: note: install requested for command line developer tools` and opens a window. Click **Install** and wait for it to finish (often 5–15 minutes). Then run `xcode-select -p` again. |
+| anything else | See Troubleshooting at the end of the guide. |
 
 **Run** (only if needed).
 
@@ -160,55 +151,57 @@ xcode-select -p
 xcode-select --install
 ```
 
-**Run.** Check the C compiler.
+### Step 0.4 — Check the C compiler
+
+**Run.**
 
 ```bash
 cc --version
 ```
 
-**You should see** a first line like the one below. Your version may be newer.
+**You should see** four lines. The first is like the one below (your version may be newer), and the others start with `Target:`, `Thread model:` and `InstalledDir:`.
 
 ```text
 Apple clang version 21.0.0 (clang-2100.1.1.101)
 ```
 
-**If it looks different.**
-- If it says you have not agreed to the Xcode license, run `sudo xcodebuild -license accept`. It asks for your Mac password. Then run `cc --version` again.
-- If it says `xcrun: error: invalid active developer path`, run `xcode-select --install` as described above.
+Write down your first line: Step 0.23 compares it.
 
-**Run.** Check `nm`.
+**What it means.** `cc` is the C compiler. RuHarness uses it to build the C program, before and after a piece of it moves to Rust.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| a message that you have not agreed to the Xcode license | Run `sudo xcodebuild -license accept`. It asks for your Mac password; nothing appears while you type it, which is normal. Then run `cc --version` again. |
+| `xcrun: error: invalid active developer path` | Do Step 0.3's install, then run `cc --version` again. |
+| anything else | See Troubleshooting at the end of the guide. |
+
+### Step 0.5 — Check two system tools
+
+**Run.**
 
 ```bash
-which nm
+ls /usr/bin/nm /usr/bin/sandbox-exec
 ```
 
 **You should see.**
 
 ```text
 /usr/bin/nm
-```
-
-**Run.** Check the sandbox tool.
-
-```bash
-ls /usr/bin/sandbox-exec
-```
-
-**You should see.**
-
-```text
 /usr/bin/sandbox-exec
 ```
 
-**What just happened.** You confirmed that the three system tools the harness needs are present. Nothing was changed.
+**What it means.** Both tools are there. `nm` lists the names inside a built program; the judge uses it to check that the Rust offers exactly the same function names as the C. `sandbox-exec` is part of macOS: RuHarness runs every program it builds inside a **sandbox**, a fenced-off space where that program cannot read or change your other files.
 
-**If it looks different.** If `sandbox-exec` is missing, you are not on macOS. The harness would then refuse to run model-written code unless you add `--allow-unsandboxed`. This guide assumes you are on a Mac.
+**If you do not see that.**
 
----
+| You see | Do this |
+|---|---|
+| `ls: /usr/bin/nm: No such file or directory` | Do Step 0.3's install, then run this box again. |
+| `ls: /usr/bin/sandbox-exec: No such file or directory` | You are not on macOS. This guide needs a Mac. |
 
-### Step 0.3 — git
-
-**Why.** You download liblzg with git. You also commit after each stage, so that one command can undo any experiment.
+### Step 0.6 — Check git
 
 **Run.**
 
@@ -222,15 +215,31 @@ git --version
 git version 2.50.1 (Apple Git-155)
 ```
 
-**If it looks different.** git comes with the Command Line Tools, so repeat Step 0.2.
+**What it means.** git is installed; it came with Step 0.3's tools. You use it to download RuHarness and liblzg, and to save your progress after each part, so that one command can undo an experiment.
 
-**Run.** Check that git knows your name, which commits need.
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `command not found: git` | Do Step 0.3, then run this box again. |
+
+### Step 0.7 — Tell git your name
+
+**Run.**
 
 ```bash
 git config user.name
 ```
 
-**You should see** your name. If the command prints nothing, run the next two boxes, using your own name and email.
+**You should see** your name.
+
+**What it means.** git writes this name into every commit you make.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| nothing; the prompt comes straight back | git does not know your name yet. Run the two boxes below, with your own name and email in place of the examples. Each prints nothing. Then run `git config user.name` again: it now prints your name. |
 
 **Run** (only if needed).
 
@@ -244,15 +253,41 @@ git config --global user.name "Your Name"
 git config --global user.email "you@example.com"
 ```
 
-**You should see** nothing. The prompt comes back.
+### Step 0.8 — Get RuHarness
 
-**What just happened.** git now signs your commits with that name and email. The setting is stored in `~/.gitconfig`.
+**Run.** This makes the folder `~/code` (if it is not there yet) and prints its full name.
 
----
+```bash
+mkdir -p ~/code && ls -d ~/code
+```
 
-### Step 0.4 — Rust
+**You should see.**
 
-**Why.** The harness is written in Rust, and it builds every translated unit with `cargo`. It expects Rust to live in the standard folders `~/.cargo` and `~/.rustup`, because its sandbox lets tools read only those folders inside your home folder.
+```text
+/Users/<you>/code
+```
+
+`<you>` is your Mac user name.
+
+**Run.** This downloads RuHarness into `~/code/RuHarness`.
+
+```bash
+git clone https://github.com/kadarius0719/RuHarness.git ~/code/RuHarness
+```
+
+**You should see** `Cloning into '/Users/<you>/code/RuHarness'...`, then lines starting with `remote:`, `Receiving objects` and `Resolving deltas`, and then the prompt. It can take a few minutes.
+
+**What it means.** A copy of RuHarness, with its whole history, is now in `~/code/RuHarness`. Downloading a repository this way is called **cloning** it.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `fatal: destination path '/Users/<you>/code/RuHarness' already exists and is not an empty directory.` | You already have RuHarness there (from an earlier try). Keep it and go on to Step 0.9: Steps 0.16–0.18 bring it up to date. |
+| git asks `Username for 'https://github.com':` | Press Ctrl-C to stop. The repository is not open to you yet: ask the person who sent you this guide for access, then run this box again. |
+| you keep RuHarness in another folder | That works too: wherever this guide writes `~/code/RuHarness`, use your folder instead. |
+
+### Step 0.9 — Check Rust
 
 **Run.**
 
@@ -260,13 +295,34 @@ git config --global user.email "you@example.com"
 rustup --version
 ```
 
-**You should see** something like:
+**You should see** something like this (your versions may be newer):
 
 ```text
 rustup 1.29.0 (28d1352db 2026-03-05)
+info: This is the version for the rustup toolchain manager, not the rustc compiler.
+info: the currently active `rustc` version is `rustc 1.94.1 (e408947bf 2026-03-25)`
 ```
 
-**If it looks different.** If you get `command not found: rustup`, install Rust with the official installer below. It shows a menu whose first choice is `1) Proceed with standard installation (default - just press enter)`. Press Return to take it. It ends with `Rust is installed now. Great!`.
+**Run.** Check where Rust's build tool lives.
+
+```bash
+which cargo
+```
+
+**You should see.**
+
+```text
+/Users/<you>/.cargo/bin/cargo
+```
+
+**What it means.** `rustup` is the program that installs and updates Rust; its two `info:` lines only explain what it printed. `cargo` is Rust's build tool. It sits in `~/.cargo`, the standard place, which matters because RuHarness's sandbox lets the tools it runs read only that folder and `~/.rustup` inside your home folder.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `command not found: rustup` | Install Rust with the official installer: run the first box below. It shows a menu whose first choice is `1) Proceed with standard installation (default - just press enter)`; press Return. It ends with `Rust is installed now. Great!`. Then run the second box, which loads Rust into this window (new windows load it by themselves) and prints nothing. Then run `rustup --version` again. |
+| `which cargo` prints `/opt/homebrew/bin/cargo` or `/usr/local/bin/cargo` | Your Rust came from Homebrew (a popular installer for command-line tools). RuHarness needs the official installer's Rust. Run `brew uninstall rust`, then the two boxes below, then open a new Terminal window and run `which cargo` again. |
 
 **Run** (only if needed).
 
@@ -274,18 +330,24 @@ rustup 1.29.0 (28d1352db 2026-03-05)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-**Run** (only if needed). This loads Rust into the current Terminal window. New windows load it by themselves.
+**Run** (only if needed).
 
 ```bash
 source "$HOME/.cargo/env"
 ```
 
-**You should see** nothing.
+### Step 0.10 — See which Rust RuHarness uses
 
-**Run.** Go to your RuHarness folder and ask which Rust it will use.
+**Run.** This moves Terminal into the RuHarness folder and prints where you are.
 
 ```bash
-cd ~/code/RuHarness
+cd ~/code/RuHarness && pwd
+```
+
+**You should see.**
+
+```text
+/Users/<you>/code/RuHarness
 ```
 
 **Run.**
@@ -300,7 +362,19 @@ rustup show active-toolchain
 stable-aarch64-apple-darwin (overridden by '/Users/<you>/code/RuHarness/rust-toolchain.toml')
 ```
 
-The first time, rustup may download the stable toolchain before it prints this. That is normal.
+The first time, rustup may first print lines starting with `info:` while it downloads the newest stable Rust. That is normal; it is finished when the line above appears and the prompt comes back.
+
+**What it means.** Inside the RuHarness folder, a small file named `rust-toolchain.toml` chooses which Rust is used: the current stable one. "overridden by" is not a warning; it names that file. Everything under `targets/`, including the liblzg target you make in Part 1, uses the same choice.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `cd: no such file or directory: /Users/<you>/code/RuHarness` | RuHarness is not there yet: do Step 0.8. |
+| `stable-x86_64-apple-darwin (overridden by …)` | Correct for an Intel Mac (Step 0.2). Carry on. |
+| a line without `(overridden by …)` | You are not inside the RuHarness folder. Run the `cd` box again, then this box. |
+
+### Step 0.11 — Check Rust's version
 
 **Run.**
 
@@ -314,15 +388,17 @@ rustc --version
 rustc 1.94.1 (e408947bf 2026-03-25)
 ```
 
-**What just happened.** The file `rust-toolchain.toml` at the top of the RuHarness folder pins the `stable` Rust channel. Everything under `targets/`, including the liblzg target you are about to create, uses that same pin.
+Write it down: Step 0.23 compares it.
 
-**If it looks different.** If the version is older than 1.90, run `rustup update stable`.
+**What it means.** `rustc` is the Rust compiler. RuHarness needs 1.90 or newer.
 
----
+**If you do not see that.**
 
-### Step 0.5 — jq
+| You see | Do this |
+|---|---|
+| a version older than 1.90 | Run `rustup update stable`, then this box again. |
 
-**Why.** `jq` reads and writes JSON files. You use it to write answers to hand-offs and to read the harness's records.
+### Step 0.12 — Check jq
 
 **Run.**
 
@@ -330,21 +406,17 @@ rustc 1.94.1 (e408947bf 2026-03-25)
 jq --version
 ```
 
-**You should see** version 1.6 or newer, for example:
+**You should see** version 1.6 or newer, for example `jq-1.8.1` (some Macs show `jq-1.7.1-apple`).
 
-```text
-jq-1.7.1-apple
-```
+**What it means.** `jq` reads and writes **JSON** files, a common text format for records made of named values. Many of the harness's records are JSON; you use jq to read them and, from Part 3, to write answers.
 
-**What just happened.** You confirmed that jq is installed. Nothing was changed.
+**If you do not see that.**
 
-**If it looks different.** Recent macOS versions include jq. If yours does not and you use Homebrew, run `brew install jq`.
+| You see | Do this |
+|---|---|
+| `command not found: jq` | If you use Homebrew, run `brew install jq`. If you do not, install Homebrew first with the one command on its home page, https://brew.sh, and then run `brew install jq`. You need jq from Part 2 on. |
 
----
-
-### Step 0.6 — Claude Code (for Parts 4 and 6)
-
-**Why.** The cockpit's chat pane runs your own `claude` program (Claude Code), signed in with your Claude subscription. That is how translations happen without an API key.
+### Step 0.13 — Check Claude Code
 
 **Run.**
 
@@ -355,45 +427,61 @@ claude --version
 **You should see** something like:
 
 ```text
-2.1.285 (Claude Code)
+2.1.293 (Claude Code)
 ```
 
-**If it looks different.** If you get `command not found: claude`, install Claude Code by following Anthropic's setup instructions (the native installer is `curl -fsSL https://claude.ai/install.sh | bash`). Then open a new Terminal window.
+**What it means.** Claude Code is Anthropic's program for working with Claude in a terminal. In Parts 4 and 6, the cockpit (RuHarness's full-screen view) runs it to translate C to Rust under your Claude subscription, so no API key is needed.
 
-**Run.** Check that the chat will use your subscription and not an API key or another paid route. This command prints only the names of such settings, never their values. Run it in a plain Terminal window: inside another app's terminal (for example Claude Code's desktop app), that app's own settings show here.
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `command not found: claude` | Install Claude Code with Anthropic's installer, the box below. Then open a new Terminal window, run `cd ~/code/RuHarness`, and run `claude --version` again. Parts 1–3 do not need Claude Code, so you may also carry on and come back before Part 4. |
+
+**Run** (only if needed).
 
 ```bash
-env | grep -E '^(ANTHROPIC_|CLAUDE_CODE_USE_)' | cut -d= -f1
+curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-**You should see** nothing.
+### Step 0.14 — Check that the chat will use your subscription
 
-**If it looks different.** If a name is printed (for example `ANTHROPIC_API_KEY`), the chat would pass that setting to Claude Code, which could then bill a key instead of your subscription. To remove it, first find the file that sets it.
+Run this in the plain Terminal app. Inside another app's terminal (for example Claude Code's desktop app), that app's own settings show up here.
 
-**Run** (only if needed). This prints only file names.
+**Run.** This prints the names (never the values) of any settings that would make Claude Code use an API key or another paid route, then `check done`.
 
 ```bash
-grep -l -E 'ANTHROPIC_|CLAUDE_CODE_USE_' ~/.zshrc ~/.zprofile ~/.zshenv ~/.bash_profile 2>/dev/null
+env | grep -E '^(ANTHROPIC_|CLAUDE_CODE_USE_)' | cut -d= -f1; echo "check done"
 ```
 
-**Run** (only if needed). Open the file it printed with nano. For example, if it printed `/Users/<you>/.zshrc`:
+**You should see** only:
 
-```bash
-nano -w ~/.zshrc
+```text
+check done
 ```
 
-On a Mac, the `nano` command opens an editor called pico. The keys in this guide work in it, and `-w` stops it from splitting long lines. Move the cursor to the line that sets the name (for example the one that starts with `export ANTHROPIC_API_KEY=`) and press Ctrl-K to delete it. Save with Ctrl-O and then Return, and leave with Ctrl-X. Then open a new Terminal window and run the `env` check above again. If `grep` printed no file name, the setting comes from somewhere else; ask for help before Part 4.
+**What it means.** Nothing in your Terminal would make Claude Code bill a key instead of your subscription.
 
-**Run.** If you have never used Claude Code on this Mac, sign in once, starting from a harmless folder:
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| a name above `check done`, such as `ANTHROPIC_API_KEY` | A start-up file of your Terminal sets it, and Claude Code could then bill that key. Parts 1–3 do not use Claude: carry on. Before Part 4, ask the person who sent you this guide to help you remove that setting. ("For the curious" at the end of this part shows how it is done.) |
+
+### Step 0.15 — Sign in to Claude Code once
+
+Skip this step if you have used Claude Code on this Mac before.
+
+**Run.** This makes a scratch folder, `~/lzg-practice`, moves Terminal into it, and prints where you are. Claude Code is started from a harmless folder like this one.
 
 ```bash
-mkdir -p ~/lzg-practice
+mkdir -p ~/lzg-practice && cd ~/lzg-practice && pwd
 ```
 
-**Run.**
+**You should see.**
 
-```bash
-cd ~/lzg-practice
+```text
+/Users/<you>/lzg-practice
 ```
 
 **Run.**
@@ -402,28 +490,28 @@ cd ~/lzg-practice
 claude
 ```
 
-**You should see** Claude Code start. It may ask whether you trust the files in this folder; choose **Yes**. If it asks you to sign in, follow its steps and choose your Claude subscription. When you reach its prompt, type `/exit` and press Return.
+**You should see** Claude Code start. It may ask whether you trust the files in this folder: choose **Yes**. If it asks you to sign in, follow its steps and choose your Claude subscription. When you reach its prompt, type `/exit` and press Return. The `%` prompt comes back.
 
-**What just happened.** Claude Code is signed in. The cockpit's chat will use this sign-in.
+**What it means.** Claude Code is signed in. The cockpit's chat will use this sign-in in Part 4.
 
----
+**If you do not see that.**
 
-### Step 0.7 — Update RuHarness, then build and install it
+| You see | Do this |
+|---|---|
+| it asks for an API key or a Console account | Go back and choose the option to sign in with your Claude account (your subscription) instead. |
 
-**Why.** There are two reasons for this step.
-
-1. Every expected output in this guide was taken from RuHarness at commit `a154870`. Your copy has to be at that commit or a newer one, otherwise what you see may not match the guide. The version number cannot tell you this, because every commit prints `harness 0.1.0`.
-2. This step installs three programs into `~/.cargo/bin`:
-   - `harness`, the command-line tool;
-   - `harness-tui`, the cockpit;
-   - `harness-mcp`, the connector the cockpit's chat reads the project through.
-
-   The cockpit runs whichever `harness` it finds first on your PATH (here `~/.cargo/bin/harness`), and the chat uses the `harness-mcp` that sits next to `harness-tui`. Installing all three into `~/.cargo/bin` keeps them in step with each other.
+### Step 0.16 — Check that your copy of RuHarness holds no changes of yours
 
 **Run.**
 
 ```bash
-cd ~/code/RuHarness
+cd ~/code/RuHarness && pwd
+```
+
+**You should see.**
+
+```text
+/Users/<you>/code/RuHarness
 ```
 
 **Run.**
@@ -432,19 +520,27 @@ cd ~/code/RuHarness
 git status
 ```
 
-**You should see** something like:
+**You should see**, right after a fresh clone:
 
 ```text
 On branch main
-Your branch is behind 'origin/main' by 4 commits, and can be fast-forwarded.
-  (use "git pull" to update your local branch)
+Your branch is up to date with 'origin/main'.
 
 nothing to commit, working tree clean
 ```
 
-The number of commits may be different, or the message may say `Your branch is up to date with 'origin/main'.`. Either is fine; the pull below takes care of it. What matters is the last line, `nothing to commit, working tree clean`.
+If you cloned some time ago, the second line may instead say `Your branch is behind 'origin/main' by <number> commits, and can be fast-forwarded.`, followed by `(use "git pull" to update your local branch)`. That is fine: Step 0.17 takes care of it. What matters is the last line, `nothing to commit, working tree clean`.
 
-**If it looks different.** If git lists changed or untracked files, stop here and commit them or set them aside before you go on. If you are on another branch, the next command switches you to `main`.
+**What it means.** No files of yours would be mixed into the update. (`origin/main` is the `main` branch on GitHub, where you cloned from.)
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| lines with `modified:` or `Untracked files:` | Files in this folder changed since the download, perhaps in an earlier try of this guide. If you are not sure they are only from that, stop and ask the person who sent you this guide. If you are, set them aside with `git stash push -u -m "before the testing guide"`; it prints `Saved working directory and index state On main: before the testing guide`, and `git stash pop` brings them back later. |
+| `On branch practice-lzg` (or another name) | Fine: Step 0.17 switches to `main`. |
+
+### Step 0.17 — Bring RuHarness up to date
 
 **Run.**
 
@@ -452,30 +548,31 @@ The number of commits may be different, or the message may say `Your branch is u
 git switch main
 ```
 
-**You should see** `Already on 'main'` or `Switched to branch 'main'`. A line about being behind `origin/main` may follow.
+**You should see** `Already on 'main'` or `Switched to branch 'main'`. A line about `origin/main` may follow.
 
-**Run.** This fetches and applies the newest RuHarness.
+**Run.** This fetches and applies the newest RuHarness from GitHub.
 
 ```bash
 git pull --ff-only
 ```
 
-**You should see** either `Already up to date.` or `Updating <hash>..<hash>`, then `Fast-forward`, then a list of changed files and a summary line such as `<number> files changed, …`.
+**You should see** either `Already up to date.`, or `Updating <hash>..<hash>`, then `Fast-forward`, then a list of changed files and a summary line such as `<number> files changed, …`. `<hash>` is the 7-character name of a commit.
 
-**If it looks different.** `fatal: Not possible to fast-forward, aborting.` means your `main` has commits that are not on GitHub. Ask for help before going further.
+**What it means.** Your copy now matches the newest RuHarness. `--ff-only` means "only move forward to the newer commits; never mix in anything else".
 
-**Run.** Check which commit you now have.
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `fatal: Not possible to fast-forward, aborting.` | Your `main` has commits that are not on GitHub. Stop here and ask the person who sent you this guide. |
+| `error: Your local changes to the following files would be overwritten` | Do Step 0.16's first row, then run this box again. |
+
+### Step 0.18 — Check that your copy is new enough
+
+**Run.** This prints `ok` if your copy includes commit `c3a85d2`, the one this guide was written for, and nothing otherwise.
 
 ```bash
-git rev-parse --short HEAD
-```
-
-**You should see** `a154870`, or a different code if RuHarness has moved on since this guide was written.
-
-**Run.** Check that your copy includes the guide's commit.
-
-```bash
-git merge-base --is-ancestor a154870 HEAD && echo ok
+git merge-base --is-ancestor c3a85d2 HEAD && echo ok
 ```
 
 **You should see.**
@@ -484,20 +581,30 @@ git merge-base --is-ancestor a154870 HEAD && echo ok
 ok
 ```
 
-**If it looks different.** If nothing is printed, your copy does not include commit `a154870`. Run `git pull --ff-only` again, and check that `git status` says `On branch main`.
+**What it means.** Every output in this guide applies to your copy. (The version number cannot tell you this: every commit prints `harness 0.1.0`.)
 
-**Run.** This builds the command-line tool. Each of the three builds takes a few minutes the first time.
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| nothing; the prompt comes straight back | Run `git status` and check it says `On branch main`, then run Step 0.17 again and this box again. If it still prints nothing, ask the person who sent you this guide. |
+
+### Step 0.19 — Build and install the three programs
+
+**Run.** This builds the command-line tool.
 
 ```bash
 cargo install --locked --path crates/harness-cli
 ```
 
-**You should see** many `Compiling …` lines, ending with:
+**You should see** many lines starting with `Compiling`. The first time, lines starting with `Downloading` or `Downloaded` come first: cargo fetches the Rust libraries (ready-made code, called **crates**) RuHarness is built from, which needs the internet. It ends with:
 
 ```text
   Installing /Users/<you>/.cargo/bin/harness
    Installed package `harness-cli v0.1.0 (/Users/<you>/code/RuHarness/crates/harness-cli)` (executable `harness`)
 ```
+
+It is finished when the prompt comes back. On the author's Mac the three builds together took under two minutes; a Mac building for the first time can take several minutes for each.
 
 **Run.** This builds the cockpit.
 
@@ -514,6 +621,22 @@ cargo install --locked --path crates/harness-mcp
 ```
 
 **You should see** a last line ending in `` (executable `harness-mcp`) ``.
+
+**What it means.** cargo built three programs from the source you just brought up to date, and copied them into `~/.cargo/bin`:
+
+- `harness`, the command-line tool you use in most steps;
+- `harness-tui`, the cockpit, a full-screen view you meet in Part 4;
+- `harness-mcp`, the connector through which the cockpit's chat reads the project.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `Replacing …` and `Replaced package …` instead of `Installing` and `Installed` | Fine: you had installed them before, and the new ones replace them. |
+| a message that the lock file needs updating | Run the same command again without `--locked`. |
+| anything else | Run Step 0.17 again, then this step again. If it still fails, see Troubleshooting at the end of the guide. |
+
+### Step 0.20 — Check that Terminal finds the programs
 
 **Run.**
 
@@ -541,31 +664,35 @@ harness --version
 harness 0.1.0
 ```
 
-**What just happened.** Your RuHarness folder now holds commit `a154870` or newer. Cargo compiled the three programs from that source and copied them into `~/.cargo/bin`, which the Rust installer put on your PATH.
+**What it means.** When you type `harness`, Terminal runs the program you just built. Terminal looks for programs in a list of folders called the **PATH**; the Rust installer put `~/.cargo/bin` on it.
 
-**If it looks different.**
-- If you installed these programs before, the last lines say `Replacing …` and `Replaced package …` instead of `Installing` and `Installed`. That is fine.
-- If `cargo install --locked` stops with a message that the lock file needs updating, run the same command without `--locked`.
-- If `which` finds nothing, run `source "$HOME/.cargo/env"` or open a new Terminal window.
-- Whenever you update RuHarness later, run these three install commands again (Part 10 lists the exact sequence). If you skip that, the cockpit keeps using the old `harness`.
+**If you do not see that.**
 
----
+| You see | Do this |
+|---|---|
+| `harness not found` (or the same for the other two) | Run `source "$HOME/.cargo/env"`, or open a new Terminal window and run `cd ~/code/RuHarness`. Then run these boxes again. If it is still missing, redo Step 0.19. |
 
-### Step 0.8 — Smoke test on the built-in example (zopfli)
+Whenever you update RuHarness later, run Step 0.19 again (Part 10 lists the exact sequence). If you skip that, the cockpit keeps using the old `harness`.
 
-**Why.** Before adding anything new, you confirm that the harness works on the example that ships with RuHarness. zopfli is Google's gzip compressor, and one of its units, `u001-katajainen`, is already in Rust. That unit's name was chosen by hand; units that the planner names are `u-` plus the file name, as you will see for liblzg.
+### Step 0.21 — Let this Mac trust the example's records
 
-**Run.**
+RuHarness comes with an example: **zopfli**, Google's compression program, in `targets/zopfli`. One of its units, `u001-katajainen`, is already in Rust, with a GREEN verdict. A **verdict** is the judge's recorded result for a unit: **GREEN** means every check passed, **RED** means at least one failed. zopfli's records live in `targets/zopfli/migration/`, its **ledger**: the folder where the harness keeps everything it does for a project.
+
+The judge builds and runs the code a ledger holds. So the first time RuHarness meets a ledger that was made on another computer, it asks once before trusting it, and you answer by adding `--adopt` to the command.
+
+**Run.** `state status` is the harness's "where am I?" command, and `--target targets/zopfli` tells it which project to look at.
 
 ```bash
-harness state status --target targets/zopfli
+harness state status --target targets/zopfli --adopt
 ```
 
-**You should see** exactly this:
+**You should see** these lines:
 
 ```text
+adopt: /Users/<you>/code/RuHarness/targets/zopfli is now trusted on this computer (11 units, 1 verified)
+adopt: 1 verified unit came with it, marked "made elsewhere" until you run `harness verify <unit> --target targets/zopfli` here (`harness state status --target targets/zopfli` lists them)
 status: facts fresh (26 files, 0 stale vs tree)
-status: u001-katajainen [verified] plan=fresh verdict=green (fresh) features=current
+status: u001-katajainen [verified] plan=fresh verdict=green (fresh) features=current made-elsewhere
 status:   attempts: 3 (3 bound to current source) [a-82a651aef9fa:openai-compat:truncated, a-d6b377fb9257:anthropic:truncated, a-ef81857896e5:external:green]
 status: u-cache [pending] plan=fresh verdict=no verdict
 status: u-hash [pending] plan=fresh verdict=no verdict
@@ -577,19 +704,31 @@ status: u-util [pending] plan=fresh verdict=no verdict
 status: u-zlib_container [pending] plan=fresh verdict=no verdict
 status: u-zopfli_lib [pending] plan=fresh verdict=no verdict
 status: u-zopfli_bin [pending] plan=fresh verdict=no verdict
+status: 1 verdict (u001-katajainen) was made elsewhere, before you adopted this folder; run `harness verify u001-katajainen --target targets/zopfli` to make it here
 ```
 
-How to read it: `[verified]` is the unit's status. `plan=fresh` means its C has not changed since planning. `verdict=green (fresh)` means its last judgement passed and still matches the code. `features=current` means that judgement included zopfli's feature runs. The attempts line is zopfli's history: two early tries through other kinds of model connection (`openai-compat` and `anthropic`, used with a small test model) whose replies were cut off (`truncated`), and one answered through the file hand-off (`external`) that went GREEN. You do not need those other connections. Step 5.3 and Part 10 explain every status word.
+The `<unit>` on the second line is the harness's own wording, not something to fill in. Look for three things: the two `adopt:` lines at the top, the `u001-katajainen [verified]` line ending in `made-elsewhere`, and the last line, which asks you to run `harness verify`. The ten `[pending]` units belong to zopfli's own plan; ignore them.
 
-There are 11 units. Only `u001-katajainen` is `[verified]`. The other 10 are `[pending]` and belong to zopfli's own plan, so you can ignore them.
+**What it means.** This Mac now trusts zopfli's records. The one unit that came verified is marked "made elsewhere" until the judge re-runs it here, which is the next step. The harness writes its trust down in `~/Library/Application Support/ruharness/adopted.toml`, so it asks only once for each copy of RuHarness.
 
-**Run.** Now run the judge on that unit. This takes one to a few minutes.
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| ``error: /Users/<you>/code/RuHarness/targets/zopfli: this folder already holds migration results made elsewhere (11 units, 1 verified): to trust them here, add `--adopt` once`` | `--adopt` was left out. Paste the box again, whole. |
+| `error: unexpected argument '--adopt' found` | Your `harness` is older than this guide. Redo Steps 0.17–0.19. |
+| ``error: targets/zopfli is not a harness target …`` | You are not in the RuHarness folder. Run `cd ~/code/RuHarness`, then this box again. |
+| anything else | See Troubleshooting at the end of the guide. |
+
+### Step 0.22 — Run the judge on the example
+
+**Run.**
 
 ```bash
 harness verify u001-katajainen --target targets/zopfli
 ```
 
-**You should see** 16 `[PASS]` lines and GREEN. These numbers come from zopfli's committed record and should match exactly:
+**You should see** 16 lines with `[PASS]` and, last, `GREEN`. These lines come from zopfli's committed records and should match exactly:
 
 ```text
 verify: running your 8 feature scenarios after the other checks
@@ -612,9 +751,9 @@ verify: [PASS] feature:no-file/missing — exit 0; stdout empty; stderr 29 bytes
 verify: u001-katajainen GREEN — status set to verified
 ```
 
-Some older RuHarness docs say "eight PASS lines" here (see Known quirks, item 1). 16 is correct.
+You do not need to compare every line by eye. Check two things: no line says `[FAIL]`, and the last line is `verify: u001-katajainen GREEN — status set to verified`. The long dash `—` is part of the harness's messages. It is finished when the prompt comes back: after 13 seconds on the author's Mac; allow a minute or more on a first run.
 
-**Run.**
+**Run.** This prints how the last command ended. It has to be the very next command after the one you are checking.
 
 ```bash
 echo "exit=$?"
@@ -626,65 +765,164 @@ echo "exit=$?"
 exit=0
 ```
 
-**Run.** Before you check git, compare two versions. zopfli's record was made with `rustc 1.94.1` and `Apple clang version 21.0.0 (clang-2100.1.1.101)`. Compare those with the versions you saw in Steps 0.2 and 0.4.
+**What it means.** The judge rebuilt zopfli's Rust unit, ran it against the original C inside the sandbox, and every check passed: the Rust offers the same function names, asks for nothing more than the C did, prints the same bytes as the C for the driver and for the whole program on three sample files, runs clean under memory checkers, and gives the same results for zopfli's 8 **features** (runs of the whole program with fixed options, such as compressing a text file). That answers this part's question: RuHarness works on your Mac.
+
+Every `harness` command ends with a number, its **exit code**, that says how it went. `echo "exit=$?"` prints it:
+
+| Code | Meaning |
+|---|---|
+| `0` | success, or GREEN |
+| `1` | the harness refused or stopped with an error; the message says why. From Part 3 on it also means "waiting for an answer", and the step says so before you run it. |
+| `2` | the command was typed wrong |
+| `10` | the judge said RED |
+| `130` | you stopped it with Ctrl-C, and the harness stopped everything it had started; run the same command again |
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| a `[FAIL]` line, `RED`, and then `exit=10` | Note which check failed, then see Troubleshooting at the end of the guide. |
+| the "made elsewhere … add `--adopt` once" error | Do Step 0.21, then this step again. |
+| `exit=130` | You pressed Ctrl-C. Run the `verify` box again. |
+| anything else | See Troubleshooting at the end of the guide. |
+
+### Step 0.23 — Check that the example's records did not change
+
+zopfli's records were made with `rustc 1.94.1` and `Apple clang version 21.0.0 (clang-2100.1.1.101)`. Compare those with what you wrote down in Steps 0.4 and 0.11.
+
+**Run.** This counts the files under `targets/zopfli` that now differ from the saved version.
 
 ```bash
-git status --short targets/zopfli
+git status --short targets/zopfli | wc -l
 ```
 
-**You should see** nothing at all, **if** your versions match the ones above. Verdicts contain no timestamps, so a re-run with the same tools rewrites exactly the same bytes.
+**You should see**, if your two versions match the ones above:
 
-**What just happened.** The harness built zopfli's Rust unit, ran it against the C in the sandbox, and rewrote the unit's verdict files. With the same tools, their contents did not change.
+```text
+       0
+```
 
-**If it looks different.**
-- If `git status` lists changed `oracle-latest.json`, `oracle-latest.md` or `oracle-last-green.json` files, your Rust or clang version differs from the recorded one. The verdict records tool versions, so the files changed. This is harmless. Undo it with the command below.
-- For anything else, see Troubleshooting at the end of the guide.
+`wc` puts spaces in front of the number.
 
-**Run** (only if `git status` listed files).
+**What it means.** The judge rewrote its record files, and with the same tools their bytes came out identical: verdicts hold no times or dates. Repeating a check gives the same record.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| a number such as `3`, and your versions differ from the ones above | Harmless: the records name the tool versions, so they changed. Put them back with the box below; it prints `Updated <number> paths from the index`. Then run this step's box again: it prints `0`. |
+| a number other than `0`, and your versions match | Run `git status --short targets/zopfli` to see the file names, then see Troubleshooting at the end of the guide. |
+
+**Run** (only if needed).
 
 ```bash
 git checkout targets/zopfli
 ```
 
-**You should see** `Updated <number> paths from the index`.
+### Answer
 
-### Checkpoint — the app is working if…
+Does my Mac have every tool, and does RuHarness work on its example? Yes, if Step 0.22 ended in `GREEN — status set to verified` and `exit=0`.
 
-- [ ] `git merge-base --is-ancestor a154870 HEAD && echo ok` printed `ok`.
-- [ ] `harness --version` prints `harness 0.1.0`.
-- [ ] `which` finds `harness`, `harness-tui` and `harness-mcp` in `~/.cargo/bin`.
-- [ ] `harness verify u001-katajainen --target targets/zopfli` printed 16 `[PASS]` lines, then `GREEN` and `exit=0`.
+### Checkpoint
+
+- [ ] Step 0.18 printed `ok`.
+- [ ] Step 0.20 printed three paths in `/Users/<you>/.cargo/bin` and `harness 0.1.0`.
+- [ ] Step 0.21 printed two `adopt:` lines.
+- [ ] Step 0.22 printed 16 `[PASS]` lines, `verify: u001-katajainen GREEN — status set to verified`, then `exit=0`.
+- [ ] Step 0.23 printed `0` (after the optional `git checkout`).
+
+### If you need to start this part again
+
+Every step in this part can be run again as it is; nothing breaks by running it twice. The only thing to put back is the example's records, if Step 0.23 counted changed files:
+
+**Run.**
+
+```bash
+cd ~/code/RuHarness && git checkout targets/zopfli
+```
+
+**You should see** `Updated <number> paths from the index` (or `Updated 0 paths from the index` if nothing had changed).
+
+### For the curious (optional)
+
+- **Why the standard Rust folders.** The sandbox lets the tools RuHarness runs read only `~/.cargo` and `~/.rustup` inside your home folder, so a Rust installed anywhere else cannot build the translated units.
+- **On other systems.** Without `sandbox-exec` (that is, not on macOS), the harness refuses to run model-written code unless you add `--allow-unsandboxed`. This guide assumes a Mac.
+- **`source "$HOME/.cargo/env"`** reads Rust's small settings file into the current window, which puts `~/.cargo/bin` on its PATH. New windows do it by themselves.
+- **The three programs together.** The cockpit runs whichever `harness` it finds first on your PATH (here `~/.cargo/bin/harness`), and its chat uses the `harness-mcp` that sits next to `harness-tui`. Installing all three into `~/.cargo/bin` keeps them in step with each other.
+- **Reading the status lines.** `[verified]` is the unit's status. `plan=fresh` means its C has not changed since it was planned. `verdict=green (fresh)` means its last judgement passed and still matches the code. `features=current` means that judgement included zopfli's feature runs. `made-elsewhere` disappears after Step 0.22: run `harness state status --target targets/zopfli` and the unit's line ends in `features=current`. Step 5.3 and Part 10 explain every status word.
+- **The attempts line** is zopfli's history. An **attempt** is one try at translating a unit, named `a-` plus 12 characters. Two early tries went through other kinds of model connection (`openai-compat` and `anthropic`, used with a small test model) and their replies were cut off (`truncated`); one was answered through the file hand-off (`external`) and went GREEN. You do not need the other connections.
+- **The unit's name.** `u001-katajainen` was chosen by hand. Units the harness's planner names are `u-` plus the file name, as you will see for liblzg. Some older RuHarness documents say to expect "eight PASS lines" here (Known quirks, item 1); 16 is correct.
+- **Removing an API-key setting (Step 0.14).** This prints only the names of the start-up files that set one:
+
+  ```bash
+  grep -l -E 'ANTHROPIC_|CLAUDE_CODE_USE_' ~/.zshrc ~/.zprofile ~/.zshenv ~/.bash_profile 2>/dev/null
+  ```
+
+  To open one of them, for example `~/.zshrc`, in a text editor inside Terminal:
+
+  ```bash
+  nano -w ~/.zshrc
+  ```
+
+  On a Mac, `nano` opens an editor called pico, and `-w` stops it from splitting long lines. Move the cursor to the line that sets the name (for example the one that starts with `export ANTHROPIC_API_KEY=`) and press Ctrl-K to delete it. Save with Ctrl-O and then Return, and leave with Ctrl-X. Then open a new Terminal window and run Step 0.14 again. If `grep` printed no file name, the setting comes from somewhere else.
 
 ---
 
 ## Part 1 — Get liblzg and turn it into a target
 
-**About liblzg.** liblzg is a small LZ77 compression library by Marcus Geelnard, released under the zlib license. You use version 1.0.10, which has not changed since 2018. The project comes with three small programs: `lzg`, `unlzg` and `benchmark`. You use only `lzg`, which compresses a file and writes the result to stdout. liblzg suits a first migration because:
+**The question.** Do I have liblzg at the right version, does it build and behave the same on every run, and is it set up where the harness can find it?
 
-- it builds with one plain `cc` command;
-- once you leave out `unlzg` and `benchmark`, the program has exactly one `main()`;
-- it always exits with code 0, and its output never changes between runs;
-- its smallest piece is a checksum function whose result is written into **every** compressed file. A mistake in the Rust translation of that piece therefore shows up in the program's real output.
+**You will know the answer when** Step 1.9 prints `808` and `same`, and Step 1.13 saves 10 files and `git status` says `nothing to commit, working tree clean`.
 
-### Step 1.1 — Make a scratch folder and start a practice branch
+**Takes** about 20 minutes. **Uses Claude:** no.
 
-**Why.**
-- You build test copies of liblzg and write draft files in a scratch folder outside the repository, so they never end up in git.
-- Your practice commits go on a git branch of their own, so your `main` branch stays clean. At the end you can keep the branch or delete it.
+### Before you start
 
-**Run.**
-
-```bash
-mkdir -p ~/lzg-practice
-```
-
-**You should see** nothing. Running it twice is harmless.
+- **What must be true.** Part 0's checkpoint is ticked.
+- **What to keep open.** One Terminal window. Most commands in this part name files relative to the RuHarness folder, so they work only from inside it. If you open a new window, run the first box below again.
+- **Where.**
 
 **Run.**
 
 ```bash
-cd ~/code/RuHarness
+cd ~/code/RuHarness && pwd
 ```
+
+**You should see.**
+
+```text
+/Users/<you>/code/RuHarness
+```
+
+**Run.** This makes your scratch folder (Step 0.15 may already have made it; running it again is harmless) and prints its name. You build test copies of liblzg there, outside RuHarness, so they never end up in git.
+
+```bash
+mkdir -p ~/lzg-practice && ls -d ~/lzg-practice
+```
+
+**You should see.**
+
+```text
+/Users/<you>/lzg-practice
+```
+
+- **About liblzg.** liblzg is a small compression library by Marcus Geelnard. You use version 1.0.10, which has not changed since 2018. It comes with three small programs, `lzg`, `unlzg` and `benchmark`; you use only `lzg`, which compresses a file. It is about 1,600 lines, builds with one command, and gives the same output on every run, which makes it a good first migration.
+- **The steps.** 1.1 start a practice branch. 1.2 download liblzg. 1.3 look at it. 1.4 copy seven files. 1.5 one edit. 1.6 check the files. 1.7 build the program. 1.8 does it run? 1.9 is its output the same every time? 1.10 where is the checksum? 1.11–1.12 write two short files. 1.13 save.
+- **New words in this part.**
+
+| Word | Plain meaning |
+|---|---|
+| Function | A named piece of code that does one job, such as computing a checksum. A program is made of functions that call each other. |
+| Library | A collection of ready-made functions that programs use. liblzg is a compression library: its functions make data smaller and restore it. |
+| `.c` file, header | C source code comes in two kinds of file. A `.c` file holds functions. A **header** (`.h` file) lists functions and settings that several `.c` files share; a `.c` file pulls one in with a line starting `#include`. |
+| `main()` | The function a program starts in. A program has exactly one. |
+| Checksum | A number computed from a piece of data and stored next to it, so that whoever reads the data later can tell whether it was damaged. liblzg writes one into every compressed file. |
+| Target | The C project being migrated. Here it is the folder `targets/lzg`. |
+| Flag | An option given to a command, starting with `-`, such as `-9` ("compress as much as you can"). |
+| stdout, stderr | A program's two output channels: its normal output (stdout), and its messages and errors (stderr). Both appear on your screen. |
+| Exit code | The number a program ends with: 0 usually means "went well". `echo "exit=$?"` prints it, and must be the very next command. |
+
+### Step 1.1 — Start a practice branch
 
 **Run.**
 
@@ -698,41 +936,28 @@ git switch -c practice-lzg
 Switched to a new branch 'practice-lzg'
 ```
 
-**What just happened.** The scratch folder `~/lzg-practice` exists (Step 0.6 may already have made it). git created a branch named `practice-lzg` from your up-to-date `main` and moved you onto it.
+**What it means.** git made a branch named `practice-lzg` from your up-to-date `main` and moved you onto it. Your practice commits go there, so `main` stays clean. At the end you can keep the branch or delete it.
 
-**If it looks different.** If git says the branch already exists (from an earlier try), run `git switch practice-lzg` instead.
+**If you do not see that.**
 
----
+| You see | Do this |
+|---|---|
+| `fatal: a branch named 'practice-lzg' already exists` | An earlier try left it behind. To start clean, do "If you need to start this part again" at the end of this part, then this step. |
+| anything else | Run the `cd` box in "Before you start", then this box again. |
 
 ### Step 1.2 — Download liblzg at a fixed version
 
-**Why.** You work on an exact, known version of the C, so your results can be repeated and every expected output in this guide applies to you. liblzg has no version tags, so you pin it by its commit id. Its home is GitLab. The original GitHub repository was archived in 2023 and still holds the same commit.
+You work on one exact, known version of the C, so that your results can be repeated and every output in this guide applies to you. liblzg's home is GitLab, another site like GitHub.
 
-**Run.** This downloads the source into a folder next to RuHarness, not inside it.
+**Run.** This downloads liblzg into a folder next to RuHarness, not inside it.
 
 ```bash
 git clone https://gitlab.com/mbitsnbites/liblzg.git ~/code/liblzg-upstream
 ```
 
-**You should see.**
+**You should see** `Cloning into '/Users/<you>/code/liblzg-upstream'...`, followed by a few lines starting with `remote:`, `Receiving objects` and `Resolving deltas`, and then the prompt.
 
-```text
-Cloning into '/Users/<you>/code/liblzg-upstream'...
-```
-
-followed by a few `remote:` and `Receiving objects` lines.
-
-**If it looks different.**
-- If gitlab.com fails, use the GitHub copy (the box below).
-- If git says `destination path … already exists and is not an empty directory`, an earlier try left a partial folder behind. Remove it with `rm -rf ~/code/liblzg-upstream`. It holds only that failed download, and removing it cannot be undone. Then run the clone again.
-
-**Run** (only if GitLab failed).
-
-```bash
-git clone https://github.com/mbitsnbites/liblzg.git ~/code/liblzg-upstream
-```
-
-**Run.** Move to the pinned commit.
+**Run.** This moves your copy to the fixed version. liblzg has no version labels, so you name the version by its commit's full hash.
 
 ```bash
 git -C ~/code/liblzg-upstream checkout --detach 182b56cb36843720f38eff2ec30db1deac4e85bd
@@ -744,7 +969,7 @@ git -C ~/code/liblzg-upstream checkout --detach 182b56cb36843720f38eff2ec30db1de
 HEAD is now at 182b56c Bump version to 1.0.10
 ```
 
-**Run.** Confirm the commit.
+**Run.** Confirm the version.
 
 ```bash
 git -C ~/code/liblzg-upstream log -1 --format='%H %ad %s' --date=short
@@ -756,13 +981,23 @@ git -C ~/code/liblzg-upstream log -1 --format='%H %ad %s' --date=short
 182b56cb36843720f38eff2ec30db1deac4e85bd 2018-11-29 Bump version to 1.0.10
 ```
 
-**What just happened.** You now have liblzg's full history, and your copy points exactly at version 1.0.10.
+**What it means.** You have liblzg's full history in `~/code/liblzg-upstream`, and your copy points exactly at version 1.0.10.
 
----
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| the clone fails with `fatal: unable to access 'https://gitlab.com/…'` | Use the GitHub copy instead: run the box below, then go on with the `checkout` box. |
+| `fatal: destination path '/Users/<you>/code/liblzg-upstream' already exists and is not an empty directory.` | An earlier try downloaded it already. Go on with the `checkout` box. If that box fails too, remove the folder with `rm -rf ~/code/liblzg-upstream` (it holds only the download; removing it cannot be undone), then run the clone box again. |
+| anything else | Remove the folder as in the row above and start this step again. |
+
+**Run** (only if GitLab failed).
+
+```bash
+git clone https://github.com/mbitsnbites/liblzg.git ~/code/liblzg-upstream
+```
 
 ### Step 1.3 — Look at what you downloaded
-
-**Why.** The C you need is spread over three of upstream's folders: `src/lib`, `src/include` and `src/tools`. A fourth folder, `src/extra`, holds a stand-alone mini decoder in several languages, which you do not need. The harness needs one flat folder, so you need to know which files to take.
 
 **Run.**
 
@@ -770,7 +1005,7 @@ git -C ~/code/liblzg-upstream log -1 --format='%H %ad %s' --date=short
 ls ~/code/liblzg-upstream ~/code/liblzg-upstream/src
 ```
 
-**You should see** these entries (the spacing may differ):
+**You should see** these names. Their spacing, line breaks and order on screen depend on the width of your window; check that the names appear.
 
 ```text
 /Users/<you>/code/liblzg-upstream:
@@ -786,7 +1021,7 @@ Makefile	extra		include		lib		tools
 ls ~/code/liblzg-upstream/src/lib ~/code/liblzg-upstream/src/include ~/code/liblzg-upstream/src/tools
 ```
 
-**You should see.**
+**You should see** these names:
 
 ```text
 /Users/<you>/code/liblzg-upstream/src/include:
@@ -799,7 +1034,7 @@ Makefile	TODO.txt	checksum.c	decode.c	encode.c	internal.h	version.c
 Makefile	benchmark.c	lzg.c	unlzg.c
 ```
 
-**What just happened.** You looked at the files without changing anything. This is what you will take:
+**What it means.** The C you need is spread over three folders: `src/lib`, `src/include` and `src/tools`. The harness needs it in one folder, so the next step copies these files:
 
 | File | Take it? | Why |
 |---|---|---|
@@ -811,14 +1046,15 @@ Makefile	benchmark.c	lzg.c	unlzg.c
 | `src/tools/unlzg.c`, `src/tools/benchmark.c` | **no** | each has its own `main()`, and the harness needs exactly one |
 | `src/extra/`, `doc/`, `README.txt`, `build-src.sh`, `TODO.txt`, the Makefiles | no | not C source of this program |
 
----
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `ls: …: No such file or directory` | The download did not finish. Do Step 1.2 again. |
 
 ### Step 1.4 — Create the target folder and copy seven files
 
-**Why.**
-- The harness treats **every top-level `.c` file** in one folder, called the `source_dir`, as the whole program, and compiles them all together with one `cc` command.
-- All the headers have to be inside that folder too.
-- `harness.toml` goes in the target's root folder, and the C goes in a subfolder, `src/lzg`.
+These commands name `targets/lzg` relative to the RuHarness folder. If you opened a new window, run the `cd` box in "Before you start" first.
 
 **Run.**
 
@@ -838,13 +1074,13 @@ cp ~/code/liblzg-upstream/src/lib/checksum.c ~/code/liblzg-upstream/src/lib/deco
 cp ~/code/liblzg-upstream/src/include/lzg.h ~/code/liblzg-upstream/src/tools/lzg.c targets/lzg/src/lzg/
 ```
 
-**Run.** The license goes in the target's root folder, outside `src/lzg`.
+**Run.** The license goes in the target's top folder, outside `src/lzg`.
 
 ```bash
 cp ~/code/liblzg-upstream/LICENSE.txt targets/lzg/LICENSE.txt
 ```
 
-**You should see** nothing after each of these four commands.
+**You should see** nothing after each of these four commands. The next box shows that they worked.
 
 **Run.**
 
@@ -852,13 +1088,13 @@ cp ~/code/liblzg-upstream/LICENSE.txt targets/lzg/LICENSE.txt
 ls targets/lzg/src/lzg
 ```
 
-**You should see.**
+**You should see** these seven names (spacing and line breaks may differ):
 
 ```text
 checksum.c	decode.c	encode.c	internal.h	lzg.c		lzg.h		version.c
 ```
 
-**What just happened.** You laid out the target:
+**What it means.** You laid out the target:
 
 ```text
 targets/lzg/
@@ -868,21 +1104,27 @@ targets/lzg/
     internal.h  lzg.h
 ```
 
-The folder sits under RuHarness's `targets/` folder on purpose. Folders there use the Rust pin from Step 0.4, and they are kept out of RuHarness's own Rust build.
+The harness treats every `.c` file in one folder, called the **source_dir**, as the whole program, and builds them all together. The headers have to be in that folder too. Its own settings file goes in the target's top folder (Step 1.12), and the C goes in a subfolder, `src/lzg`.
 
----
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `cp: /Users/<you>/code/liblzg-upstream/…: No such file or directory` | The download is missing or incomplete: do Step 1.2, then this step from the start. |
+| `cp: targets/lzg/src/lzg/…: No such file or directory` or `ls: targets/lzg/src/lzg: No such file or directory` | You are not in the RuHarness folder. Run the `cd` box in "Before you start", then this step from the start. |
+| anything else | Do "If you need to start this part again" at the end of this part. |
 
 ### Step 1.5 — Make the one required edit
 
-**Why.** `internal.h` includes `"../include/lzg.h"`, a path that points outside `src/lzg`. The harness follows only headers inside the `source_dir`. If that line stays as it is, the build fails and the scan never records `lzg.h`. You change it to `"lzg.h"`, which is now in the same folder. The zlib license asks that altered source be marked, so the new line carries a short comment.
+`internal.h` pulls in `lzg.h` with the line `#include "../include/lzg.h"`, a path that points outside `src/lzg`. The harness follows only headers inside the source_dir, so with that line the build would fail. You change it to `"lzg.h"`, which is now in the same folder. liblzg's license (the zlib license) asks that changed files be marked, so the new line carries a short comment.
 
-**Run.**
+**Run.** `sed` is a tool that edits text; this changes that one line in place.
 
 ```bash
 sed -i '' 's|#include "../include/lzg.h"|#include "lzg.h" /* altered for RuHarness: upstream path was ../include/lzg.h */|' targets/lzg/src/lzg/internal.h
 ```
 
-**You should see** nothing.
+**You should see** nothing. The next box shows the result.
 
 **Run.**
 
@@ -890,35 +1132,38 @@ sed -i '' 's|#include "../include/lzg.h"|#include "lzg.h" /* altered for RuHarne
 grep -n '#include' targets/lzg/src/lzg/internal.h
 ```
 
-**You should see** exactly one line. The line number does not matter.
+**You should see** exactly one line:
 
 ```text
-<line>:#include "lzg.h" /* altered for RuHarness: upstream path was ../include/lzg.h */
+31:#include "lzg.h" /* altered for RuHarness: upstream path was ../include/lzg.h */
 ```
 
-**What just happened.** `sed` rewrote that one line in place. Nothing else in the file changed.
+**What it means.** That one line now points at the header in the same folder. Nothing else in the file changed. (`grep` prints the lines of a file that contain some text; `-n` puts the line number in front.)
 
-**If it looks different.** If `grep` still shows `#include "../include/lzg.h"`, the `sed` command was not pasted whole. Copy it again.
+**If you do not see that.**
 
----
+| You see | Do this |
+|---|---|
+| `31:#include "../include/lzg.h"` | The `sed` box was not pasted whole. Paste it again, then run the `grep` box again. |
+| `grep: targets/lzg/src/lzg/internal.h: No such file or directory` | You are not in the RuHarness folder, or Step 1.4 did not finish. Run the `cd` box in "Before you start", then Step 1.4. |
 
-### Step 1.6 — Sanity checks
+### Step 1.6 — Check the files
 
-**Why.** Three things would break the harness later, and each takes a second to check now:
+Three things would break the harness later, and each takes a second to check now.
 
-- a file that is not valid UTF-8 text makes `harness scan` fail;
-- a second `main()` breaks the whole-program check and the features;
-- a leftover `"../` include points outside the folder.
-
-**Run.** Check that every file is valid UTF-8.
+**Run.** Check that every file is valid UTF-8, the standard way to store text as bytes; a file that is not makes the harness's first step fail. The `> /dev/null` part throws the checker's output away (`>` sends a command's output into a file, and `/dev/null` is a file that discards everything), so only problems and the final `checked` are printed.
 
 ```bash
-for f in targets/lzg/src/lzg/*; do iconv -f UTF-8 -t UTF-8 "$f" > /dev/null || echo "NOT UTF-8: $f"; done
+for f in targets/lzg/src/lzg/*; do iconv -f UTF-8 -t UTF-8 "$f" > /dev/null || echo "NOT UTF-8: $f"; done; echo "checked"
 ```
 
-**You should see** nothing.
+**You should see** only:
 
-**Run.** Check that exactly one file has `main`.
+```text
+checked
+```
+
+**Run.** Check that exactly one file holds `main()`. A second one would break the checks that run the whole program.
 
 ```bash
 grep -l 'int main' targets/lzg/src/lzg/*.c
@@ -930,13 +1175,19 @@ grep -l 'int main' targets/lzg/src/lzg/*.c
 targets/lzg/src/lzg/lzg.c
 ```
 
-**Run.** Check for includes that point outside the folder.
+**Run.** Check that no include points outside the folder. It prints `none` when there is none.
 
 ```bash
-grep -n '"\.\./' targets/lzg/src/lzg/*
+grep -n '"\.\./' targets/lzg/src/lzg/* || echo "none"
 ```
 
-**You should see** nothing. The comment you added in Step 1.5 does not match, because it has no quote mark before `../`.
+**You should see.**
+
+```text
+none
+```
+
+The comment you added in Step 1.5 does not count, because it has no quote mark before `../`.
 
 **Run.** See how big the program is.
 
@@ -944,32 +1195,40 @@ grep -n '"\.\./' targets/lzg/src/lzg/*
 wc -l targets/lzg/src/lzg/*
 ```
 
-**You should see** seven line counts and a total of about 1,590 lines. The individual counts are close to: `checksum.c` 79, `decode.c` 251, `encode.c` 616, `internal.h` 70, `lzg.c` 210, `lzg.h` 327, `version.c` 39. About half of `checksum.c` is comments (the license, then a description of the algorithm); the function itself is about 30 lines.
+**You should see** the number of lines in each file, and a total of 1592:
 
-**What just happened.** Nothing was changed. You confirmed the program's shape.
+```text
+      79 targets/lzg/src/lzg/checksum.c
+     251 targets/lzg/src/lzg/decode.c
+     616 targets/lzg/src/lzg/encode.c
+      70 targets/lzg/src/lzg/internal.h
+     210 targets/lzg/src/lzg/lzg.c
+     327 targets/lzg/src/lzg/lzg.h
+      39 targets/lzg/src/lzg/version.c
+    1592 total
+```
 
-**If it looks different.** A `NOT UTF-8:` line, a second file with `main`, or a `"../` line means a wrong file was copied. Compare with Step 1.4.
+About half of `checksum.c` is comments (the license, then a description of the method); the function itself is about 30 lines.
 
----
+**What it means.** Nothing was changed. The seven files are readable text, there is one `main()`, and every include stays inside the folder.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| a `NOT UTF-8:` line, a second file with `main`, a line with `"../`, or other line counts | A wrong file was copied. Do "If you need to start this part again" at the end of this part. |
 
 ### Step 1.7 — Build the program by hand, the way the harness will
 
-**Why.** The harness builds the whole program with `cc -ffp-contract=off -O2 -w -I<source_dir> -o <out> <every .c>`. What those flags mean:
+The harness builds the whole program with one `cc` command over every `.c` file in the source_dir. If this hand build works, the harness's will too.
 
-- `-O2` turns on optimisation.
-- `-ffp-contract=off` keeps floating-point maths exactly as written, so that C and Rust can match bit for bit.
-- `-w` hides warnings.
-- `-I…` tells the compiler which folder to search for headers.
-
-The only things `harness.toml` can add to that command are libraries (`[oracle] extra_link_args`, for example `-lm`) and extra header folders inside `source_dir` (`[target] include_dirs`). liblzg needs neither. If this hand build works, the harness's build will too.
-
-**Run.** Build the original C program into your scratch folder, which is outside the repository.
+**Run.** This builds the original C program as `~/lzg-practice/lzg`, in your scratch folder.
 
 ```bash
 cc -ffp-contract=off -O2 -w -Itargets/lzg/src/lzg -o ~/lzg-practice/lzg targets/lzg/src/lzg/checksum.c targets/lzg/src/lzg/decode.c targets/lzg/src/lzg/encode.c targets/lzg/src/lzg/lzg.c targets/lzg/src/lzg/version.c
 ```
 
-**You should see** nothing.
+**You should see** nothing. It is finished when the prompt comes back, within a few seconds.
 
 **Run.**
 
@@ -983,24 +1242,21 @@ echo "exit=$?"
 exit=0
 ```
 
-**What just happened.** You built the original C program as `~/lzg-practice/lzg`. The `-I…` flag is what lets `lzg.c`'s line `#include <lzg.h>` find the header.
+**What it means.** The compiler read the five `.c` files (and the headers they include) and wrote one runnable program. The `-I…` flag tells it which folder to search for headers; "For the curious" explains the other flags.
 
-**If it looks different.**
-- A message like `'../include/lzg.h' file not found` means the edit in Step 1.5 did not take effect.
-- `ld: open() failed, errno=2 (No such file or directory) for '/Users/<you>/lzg-practice/lzg'` means the scratch folder is missing. Run `mkdir -p ~/lzg-practice` and build again.
+**If you do not see that.**
 
----
+| You see | Do this |
+|---|---|
+| `'../include/lzg.h' file not found` | The edit in Step 1.5 did not take effect. Do Step 1.5, then this step. |
+| `ld: open() failed, errno=2 (No such file or directory) for '/Users/<you>/lzg-practice/lzg'` | The scratch folder is missing. Run the `mkdir` box in "Before you start", then this step. |
+| anything else | Do "If you need to start this part again" at the end of this part. |
 
-### Step 1.8 — Try the program by hand
+### Step 1.8 — Does the program run?
 
-**Why.** Before any tool touches the program, you find out what it does. The harness will later compare exactly these behaviours between the C and the Rust, so this is your "expected output". You confirm four things:
+Before any tool touches the program, you find out what it does. The judge will later compare exactly these behaviours between the C and the Rust.
 
-1. it prints to stdout or stderr;
-2. it exits with code 0;
-3. it gives the same bytes on every run;
-4. the checksum really is part of its output.
-
-**Run.** Show the version.
+**Run.** Ask it for its version.
 
 ```bash
 ~/lzg-practice/lzg -V
@@ -1012,13 +1268,13 @@ exit=0
 LZG library version 1.0.10
 ```
 
-**Run.** Run it with no arguments.
+**Run.** Run it without naming a file. It answers with its usage text, a short help, on stderr; that is what it is meant to do.
 
 ```bash
 ~/lzg-practice/lzg
 ```
 
-**You should see** the usage text. It goes to stderr, but on screen it looks the same as stdout.
+**You should see.**
 
 ```text
 Usage: /Users/<you>/lzg-practice/lzg [options] infile [outfile]
@@ -1045,7 +1301,7 @@ echo "exit=$?"
 exit=0
 ```
 
-**Run.** Name a file that does not exist.
+**Run.** Name a file that does not exist. This is meant to print a complaint.
 
 ```bash
 ~/lzg-practice/lzg -9 nosuchfile
@@ -1069,18 +1325,10 @@ echo "exit=$?"
 exit=0
 ```
 
-**Run.** Make an empty file.
+**Run.** Make an empty file and give it to the program; it is meant to say the file is empty.
 
 ```bash
-touch ~/lzg-practice/empty.bin
-```
-
-**You should see** nothing.
-
-**Run.** Compress the empty file.
-
-```bash
-~/lzg-practice/lzg -9 ~/lzg-practice/empty.bin
+touch ~/lzg-practice/empty.bin && ~/lzg-practice/lzg -9 ~/lzg-practice/empty.bin
 ```
 
 **You should see.**
@@ -1089,33 +1337,44 @@ touch ~/lzg-practice/empty.bin
 Input file is empty.
 ```
 
-**Run.** Now make **the same text file that the harness uses** for its whole-program check. It is one pangram line repeated 349 times, 30014 bytes in total.
+**What it means.** The program runs, and it always ends with exit code 0, even when it complains. Its help and complaints go to stderr.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `no such file or directory: /Users/<you>/lzg-practice/lzg` | The build did not happen. Do Step 1.7. |
+| another version than `1.0.10` | The wrong version was downloaded. Do Step 1.2's `checkout` box, then Steps 1.4–1.7 again. |
+
+### Step 1.9 — Is its output the same every time?
+
+**Run.** Make **the same text file that the harness uses** for its whole-program check: one sentence repeated 349 times.
 
 ```bash
 yes 'the quick brown fox jumps over the lazy dog; pack my box with five dozen liquor jugs.' | head -n 349 > ~/lzg-practice/sample_text.txt
 ```
 
-**You should see** nothing.
+**You should see** nothing. The next box counts its bytes.
 
-**Run.**
+**Run.** `wc -c` counts bytes, and `<` feeds a file into a command.
 
 ```bash
 wc -c < ~/lzg-practice/sample_text.txt
 ```
 
-**You should see** this. `wc` pads the number with spaces on the left.
+**You should see** this; `wc` pads the number with spaces on the left.
 
 ```text
    30014
 ```
 
-**Run.** Compress it. `-9` means best compression. No output file is named, so the result goes to stdout, and the `>` sends stdout into a file.
+**Run.** Compress it with `-9`, best compression. No output file is named, so the result goes to stdout, and `>` sends it into the file `text.lzg`.
 
 ```bash
 ~/lzg-practice/lzg -9 ~/lzg-practice/sample_text.txt > ~/lzg-practice/text.lzg
 ```
 
-**You should see** nothing.
+**You should see** nothing. The next box measures the result.
 
 **Run.**
 
@@ -1123,53 +1382,13 @@ wc -c < ~/lzg-practice/sample_text.txt
 wc -c < ~/lzg-practice/text.lzg
 ```
 
-**You should see** this. `wc` pads the number with spaces on the left.
+**You should see.**
 
 ```text
      808
 ```
 
-808 bytes is far below 30014, because the text repeats: a 16-byte header, the first line stored nearly as it is, and about 236 short instructions that each say "copy 128 bytes from 86 bytes back". If you see another number, the copy or the edit in Steps 1.4–1.5 went wrong.
-
 **Remember 808.** It is the same on every Mac for this version of liblzg, and in Parts 5 and 8 the harness has to report exactly this number for the text sample.
-
-**Run.** Look at the 16-byte header of the compressed file.
-
-```bash
-xxd -l 16 ~/lzg-practice/text.lzg
-```
-
-**You should see.**
-
-```text
-00000000: 4c5a 4700 0075 3e00 0003 180c 7280 5201  LZG..u>.....r.R.
-```
-
-On the right, `xxd` shows the same bytes as text, with a dot for each byte that is not a printable letter.
-
-Here is the header byte by byte, counting from 0:
-
-| Bytes | Here | Meaning |
-|---|---|---|
-| 0–2 | `4c 5a 47` | the letters `LZG` |
-| 3–6 | `00 00 75 3e` | the original size: hex 753e is 30014 |
-| 7–10 | `00 00 03 18` | the compressed size without the header: hex 318 is 792, which is 808 minus 16 |
-| 11–14 | `0c 72 80 52` | **the checksum**, computed by `checksum.c` over the compressed data. This is the output of the unit you will translate first. |
-| 15 | `01` | method 1, meaning compressed (0 would mean stored as it is) |
-
-**Run.** Show only the checksum bytes.
-
-```bash
-xxd -s 11 -l 4 ~/lzg-practice/text.lzg
-```
-
-**You should see** the four checksum bytes, starting at byte 11 (hex `b`):
-
-```text
-0000000b: 0c72 8052                                .r.R
-```
-
-If the Rust translation of the checksum were wrong, these four bytes would change. That is what makes this a real end-to-end test.
 
 **Run.** Compress the same file a second time.
 
@@ -1177,9 +1396,9 @@ If the Rust translation of the checksum were wrong, these four bytes would chang
 ~/lzg-practice/lzg -9 ~/lzg-practice/sample_text.txt > ~/lzg-practice/text2.lzg
 ```
 
-**You should see** nothing.
+**You should see** nothing. The next box compares the two results.
 
-**Run.** Compare the two results.
+**Run.** `cmp` compares two files byte by byte and says nothing when they are equal; `&& echo same` then prints `same`.
 
 ```bash
 cmp ~/lzg-practice/text.lzg ~/lzg-practice/text2.lzg && echo same
@@ -1191,46 +1410,44 @@ cmp ~/lzg-practice/text.lzg ~/lzg-practice/text2.lzg && echo same
 same
 ```
 
-**Run.** Make some random data, which cannot be compressed.
+**What it means.** The program's output is identical on every run. The judge depends on that: it can only compare the C and the Rust byte for byte if the C itself never varies. 30014 bytes shrink to 808 because the text repeats.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| another number than `30014` | The `yes` box was not pasted whole. Paste it again. |
+| another number than `808`, or `cmp` reports `differ` | The copy or the edit in Steps 1.4–1.5 went wrong. Run `rm -rf targets/lzg` (it holds only what you made in this part, and removing it cannot be undone), then redo Steps 1.4–1.7 and this step. |
+
+### Step 1.10 — Where is the checksum? (optional)
+
+**Run.** `xxd` shows a file's bytes as **hex**: base 16, the digits 0–9 plus a–f, two digits per byte. This shows 4 bytes, starting at byte 11 (counting from 0).
 
 ```bash
-head -c 16384 /dev/urandom > ~/lzg-practice/rand.bin
-```
-
-**You should see** nothing.
-
-**Run.**
-
-```bash
-~/lzg-practice/lzg -9 ~/lzg-practice/rand.bin | wc -c
+xxd -s 11 -l 4 ~/lzg-practice/text.lzg
 ```
 
 **You should see.**
 
 ```text
-   16400
+0000000b: 0c72 8052                                .r.R
 ```
 
-lzg stores data it cannot shrink as it is, behind the 16-byte header: 16384 + 16 = 16400. It still computes the checksum, over all 16384 bytes.
+`0000000b` is 11 in hex. On the right, `xxd` shows the same bytes as text, with a dot for each byte that is not a printable letter.
 
-**What just happened.** You learned how the program behaves:
+**What it means.** Every compressed file starts with a 16-byte header, and its bytes 11–14 hold the checksum, `0c 72 80 52` here, computed by `checksum.c`, the unit you will translate first. If the Rust translation of the checksum were wrong, these four bytes would change, and so would the program's real output.
 
-- it always exits with 0;
-- the compressed result and the `-V` version line go to stdout, and every other message (usage, errors, `-v` progress) goes to stderr;
-- the output is identical on every run;
-- the checksum sits in bytes 11–14 of every compressed file.
+**If you do not see that.**
 
-Those are exactly the properties the harness's whole-program check needs.
+| You see | Do this |
+|---|---|
+| other bytes | Step 1.9 did not print 808. Do that step's last row. |
 
-**If it looks different.** If `cmp` reports a difference, stop. The harness cannot compare a program whose output changes between runs. liblzg's output does not change, so a difference points to a copying mistake in Steps 1.4–1.5.
+### Step 1.11 — Write down where the code came from
 
----
+The next box is one command that writes a file: everything from its first line down to the line `EOF` is the file's content. Copy it whole. While it pastes, each line starts with `heredoc>` (bash shows `>`); that is normal. The lines starting with `#` inside it are a heading in the file, not commands.
 
-### Step 1.9 — Record where the code came from
-
-**Why.** In six months, you or someone else will want to know which version this is and what was changed. The zlib license also asks that changes be marked.
-
-**Run.** This is one command. Paste all of it, down to and including the line `EOF`.
+**Run.**
 
 ```bash
 cat > targets/lzg/VENDORED.md <<'EOF'
@@ -1252,24 +1469,34 @@ Altered: src/lzg/internal.h, one line: `#include "../include/lzg.h"` became `#in
 EOF
 ```
 
-**You should see** `heredoc>` at the start of each line while it pastes, and then the prompt again.
+**You should see** `heredoc>` lines while it pastes, then the prompt, and nothing else. The next box checks that the whole file arrived.
 
-**What just happened.** You created `targets/lzg/VENDORED.md`. The harness does not read this file; it is for people.
+**Run.** `tail -n 1` prints a file's last line.
 
-**If it looks different.** If you are left at a `heredoc>` prompt, type `EOF` and press Return, then paste the whole box again.
+```bash
+tail -n 1 targets/lzg/VENDORED.md
+```
 
----
+**You should see.**
 
-### Step 1.10 — Write `harness.toml`
+```text
+(marked with a comment in the file), so that every header sits inside source_dir. Nothing else changed.
+```
 
-**Why.** `harness.toml` is how the harness recognises a target folder. It says:
+**What it means.** `targets/lzg/VENDORED.md` records which version you copied, from where, and what you changed. "Vendored" means copied into your own project. The harness does not read this file; it is for people, and the zlib license asks that changes be marked.
 
-- where the C is;
-- which tools the judge may run;
-- how to run the whole program;
-- how model work is requested.
+**If you do not see that.**
 
-**Run.** Again, this is one command down to `EOF`.
+| You see | Do this |
+|---|---|
+| you are left at a `heredoc>` prompt | The `EOF` line did not arrive. Type `EOF` and press Return, then paste the whole box again. It overwrites the file, so nothing is harmed. |
+| another last line | The paste was cut. Paste the whole box again. |
+
+### Step 1.12 — Write `harness.toml`
+
+`harness.toml` is how the harness recognises a target folder. It is written in **TOML**, a simple format for settings files: section names in square brackets, and lines of `name = value`.
+
+**Run.** Again one command down to `EOF`; copy it whole.
 
 ```bash
 cat > targets/lzg/harness.toml <<'EOF'
@@ -1292,57 +1519,38 @@ max_tokens = 8192
 EOF
 ```
 
-**You should see** `heredoc>` lines while it pastes, and then the prompt again.
-
-**What just happened.** Here is the file line by line:
-
-| Line | What it means |
-|---|---|
-| `schema_version = 1` | The file-format version. Required. |
-| `[target]` | Starts the section that describes the C project. |
-| `name = "lzg"` | The project's name. It is also the name the program runs under when features run, so keep it short and plain (letters, digits, `.`, `_`, `-`). |
-| `source_dir = "src/lzg"` | The folder that holds the C, relative to `targets/lzg`. It has to be a subfolder, never the target's root folder, because the harness writes its own files under `migration/` and those must never be scanned as C. |
-| `[oracle]` | Starts the section with the judge's settings. |
-| `allowlist = [...]` | The only programs the judge may run. It needs all four: `cc` compiles C, `cargo` and `rustc` build Rust, and `nm` lists the functions a compiled file contains. |
-| (no `extra_link_args`) | liblzg needs no extra libraries. |
-| `[oracle.whole_program]` | Turns on the whole-program check. The judge builds the entire `lzg` program twice, once all in C and once with the unit's Rust inside. It runs both on three sample files and compares exit code, stdout and stderr byte for byte. |
-| `args = ["-9"]` | The flags passed before the sample file, so each run is `lzg -9 <sample>`, just like your hand run in Step 1.8. Only flags are allowed (up to 4), never paths. The harness adds the sample path itself. |
-| `[llm]` | Starts the section on how model work is requested. |
-| `provider = "external"` | Use the file hand-off, which needs no API key. Every model question is written to a file and waits for an answer, which the cockpit's chat or you supply. |
-| `model = "my-claude-code"` | Only a label that is written into the records, so it should name whoever really answers. A command can override it with `--model`. |
-| `max_tokens = 8192` | The size limit requested for each model reply. |
-
-**If it looks different.** If you are left at a `heredoc>` prompt, type `EOF` and press Return, then paste the whole box again.
-
----
-
-### Step 1.11 — Tell git what to ignore, and commit
-
-**Why.** The harness writes scratch builds, a lock file and some large logs into the ledger, and none of them belong in git. The repository's `.gitignore` names those paths only for zopfli (and RuHarness's own test project), so you add the same lines for lzg. Then you commit, so that `git checkout targets/lzg` can undo any later experiment.
-
-**Run.** This is one command down to `EOF`. The `>>` adds the lines to the end of the file instead of replacing it.
-
-```bash
-cat >> .gitignore <<'EOF'
-/targets/lzg/migration/build/
-/targets/lzg/migration/.lock
-/targets/lzg/migration/observer/traces/
-/targets/lzg/migration/units/*/traces/
-/targets/lzg/migration/units/*/attempts/*/candidate/target/
-/targets/lzg/migration/units/*/.promote-*/
-/targets/lzg/migration/units/*/.*.prev/
-EOF
-```
-
-**You should see** `heredoc>` lines while it pastes, and then the prompt again.
+**You should see** `heredoc>` lines while it pastes, then the prompt. The next box checks the file's end.
 
 **Run.**
 
 ```bash
-git add .gitignore targets/lzg
+tail -n 1 targets/lzg/harness.toml
 ```
 
-**You should see** nothing.
+**You should see.**
+
+```text
+max_tokens = 8192
+```
+
+**What it means.** In plain words the file says: the C is in `src/lzg`; the judge may run only `cc`, `cargo`, `rustc` and `nm`; the judge also runs the whole program as `lzg -9 <sample>`, just like your hand run in Step 1.9, and compares C against Rust; and questions for a model go through a **hand-off**: the harness writes the question into a file and waits until an answer file appears next to it, which the cockpit's chat or you supply. "For the curious" goes through it line by line.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| you are left at a `heredoc>` prompt | Type `EOF` and press Return, then paste the whole box again. |
+| another last line | The paste was cut. Paste the whole box again. |
+
+### Step 1.13 — Save your starting point
+
+**Run.** This tells git to include everything in `targets/lzg` in the next commit.
+
+```bash
+git add targets/lzg
+```
+
+**You should see** nothing. The next box makes the commit and prints a summary.
 
 **Run.**
 
@@ -1350,36 +1558,145 @@ git add .gitignore targets/lzg
 git commit -m "Add liblzg 1.0.10 (182b56c) as a practice target"
 ```
 
-**You should see** a summary like the one below, followed by one `create mode 100644 …` line per new file:
+**You should see** a summary like this, followed by one `create mode 100644 …` line per new file:
 
 ```text
 [practice-lzg <hash>] Add liblzg 1.0.10 (182b56c) as a practice target
- 11 files changed, <number> insertions(+)
+ 10 files changed, <number> insertions(+)
 ```
 
-The 11 files are the seven sources, the license, `VENDORED.md`, `harness.toml` and `.gitignore`.
+The 10 files are the seven sources, `LICENSE.txt`, `VENDORED.md` and `harness.toml`. `<number>` is the count of lines added; it does not matter.
 
-**What just happened.** Your starting point is saved. Each unit's Rust build folder, `target/`, is already ignored by an existing rule.
+**Run.**
 
-**If it looks different.** If `git commit` says `Please tell me who you are`, do Step 0.3 and then run the commit again.
+```bash
+git status
+```
 
-### Checkpoint — the app is working if…
+**You should see.**
 
-- [ ] `targets/lzg/src/lzg` holds exactly seven files, and only `lzg.c` has `main`.
-- [ ] The hand build printed `exit=0`.
-- [ ] `lzg -V` printed `LZG library version 1.0.10`.
-- [ ] Two runs on the text sample printed `same`.
-- [ ] The compressed text was 808 bytes.
-- [ ] `git status` says `nothing to commit, working tree clean`.
+```text
+On branch practice-lzg
+nothing to commit, working tree clean
+```
+
+**What it means.** Your starting point is saved on the practice branch. From now on, `git checkout targets/lzg` can undo any later experiment. You do not need to tell git which scratch files to leave out: the first time the harness writes its records (Part 2), it writes its own list of them.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `Please tell me who you are` | Do Step 0.7, then run the `git commit` box again. |
+| `git status` lists other files | Run `git add targets/lzg` and the `git commit` box again. If the files are outside `targets/lzg`, see Troubleshooting at the end of the guide. |
+
+### Answer
+
+Do I have liblzg at the right version, does it behave the same on every run, and is it set up for the harness? Yes: Step 1.2 confirmed version 1.0.10, Step 1.9 printed `808` and `same`, and Step 1.13 saved the target with a clean `git status`.
+
+### Checkpoint
+
+- [ ] Step 1.4 listed seven files, and Step 1.6 found `main` only in `targets/lzg/src/lzg/lzg.c`.
+- [ ] Step 1.7 printed `exit=0`.
+- [ ] Step 1.8: `~/lzg-practice/lzg -V` printed `LZG library version 1.0.10`.
+- [ ] Step 1.9 printed `808` and `same`.
+- [ ] Step 1.13 printed `10 files changed`, and `git status` said `nothing to commit, working tree clean`.
+
+### If you need to start this part again
+
+This puts RuHarness back to the end of Part 0: it removes the practice branch and the target, and keeps the download in `~/code/liblzg-upstream` (Step 1.2 can reuse it).
+
+**Run.**
+
+```bash
+cd ~/code/RuHarness && git switch main
+```
+
+**You should see** `Switched to branch 'main'` (or `Already on 'main'`).
+
+**Run.** This removes the target folder; it cannot be undone.
+
+```bash
+rm -rf targets/lzg && ls targets
+```
+
+**You should see** the remaining folders, without `lzg`:
+
+```text
+tractor	zopfli
+```
+
+**Run.** This deletes the practice branch and its commits; it cannot be undone.
+
+```bash
+git branch -D practice-lzg
+```
+
+**You should see** `Deleted branch practice-lzg (was <hash>).` (or `error: branch 'practice-lzg' not found.` if Step 1.1 never ran). Then start again at Step 1.1.
+
+### For the curious (optional)
+
+- **Why liblzg.** It builds with one plain `cc` command; once `unlzg` and `benchmark` are left out, the program has exactly one `main()`; it always exits with code 0 and its output never changes between runs; and its smallest piece is a checksum function whose result is written into every compressed file, so a mistake in the Rust translation of that piece shows up in the program's real output. It uses LZ77, a classic method that replaces repeated text with "copy so many bytes from so far back". It is released under the zlib license, which allows copying and changing it as long as changes are marked. Its original GitHub repository was archived (made read-only) in 2023 and still holds the same commit.
+- **Why under `targets/`.** Folders there use RuHarness's Rust choice from Step 0.10, and they are kept out of RuHarness's own Rust build.
+- **The build flags (Step 1.7).** The harness builds with `cc -ffp-contract=off -O2 -w -I<source_dir> -o <out> <every .c>`. `-O2` turns on optimisation (making the program faster). `-ffp-contract=off` keeps arithmetic on fractional numbers exactly as written, so C and Rust can match bit for bit. `-w` hides warnings. `-I…` names the folder to search for headers; it is what lets `lzg.c`'s line `#include <lzg.h>` find the header. The only things `harness.toml` can add to that command are libraries (`[oracle] extra_link_args`, for example `-lm`) and extra header folders inside the source_dir (`[target] include_dirs`). liblzg needs neither.
+- **Which output goes where (Step 1.8).** The compressed result and the `-V` line go to stdout; the usage text, the errors and the `-v` progress go to stderr. On screen they look the same; the judge records them separately.
+- **Why 808 bytes.** A 16-byte header, the first sentence stored nearly as it is, and about 236 short instructions that each say "copy 128 bytes from 86 bytes back".
+- **The whole header.** Run `xxd -l 16 ~/lzg-practice/text.lzg`; it prints `00000000: 4c5a 4700 0075 3e00 0003 180c 7280 5201  LZG..u>.....r.R.`. Byte by byte, counting from 0:
+
+  | Bytes | Here | Meaning |
+  |---|---|---|
+  | 0–2 | `4c 5a 47` | the letters `LZG` |
+  | 3–6 | `00 00 75 3e` | the original size: hex 753e is 30014 |
+  | 7–10 | `00 00 03 18` | the compressed size without the header: hex 318 is 792, which is 808 minus 16 |
+  | 11–14 | `0c 72 80 52` | the checksum, computed by `checksum.c` over the compressed data |
+  | 15 | `01` | method 1, meaning compressed (0 would mean stored as it is) |
+
+- **Data that cannot be compressed.** `head -c 16384 /dev/urandom > ~/lzg-practice/rand.bin` makes 16384 random bytes; `~/lzg-practice/lzg -9 ~/lzg-practice/rand.bin | wc -c` then prints `16400`. lzg stores data it cannot shrink as it is, behind the 16-byte header, and still computes the checksum over all of it.
+- **`harness.toml`, line by line.**
+
+  | Line | What it means |
+  |---|---|
+  | `schema_version = 1` | The file-format version. Required. |
+  | `[target]` | Starts the section that describes the C project. |
+  | `name = "lzg"` | The project's name. It is also the name the program runs under when features run, so keep it short and plain (letters, digits, `.`, `_`, `-`). |
+  | `source_dir = "src/lzg"` | The folder that holds the C, relative to `targets/lzg`. It has to be a subfolder, never the target's top folder, because the harness writes its own files under `migration/` and those must never be read as C. |
+  | `[oracle]` | Starts the section with the judge's settings. |
+  | `allowlist = [...]` | The only programs the judge may run. It needs all four: `cc` builds C, `cargo` and `rustc` build Rust, and `nm` lists the functions a built file contains. |
+  | (no `extra_link_args`) | liblzg needs no extra libraries. |
+  | `[oracle.whole_program]` | Turns on the whole-program check. The judge builds the entire `lzg` program twice, once all in C and once with the unit's Rust inside. It runs both on three sample files and compares exit code, stdout and stderr byte for byte. |
+  | `args = ["-9"]` | The flags passed before the sample file, so each run is `lzg -9 <sample>`. Only flags are allowed (up to 4), never paths; the harness adds the sample path itself. |
+  | `[llm]` | Starts the section on how model work is requested. |
+  | `provider = "external"` | Use the file hand-off, which needs no API key. |
+  | `model = "my-claude-code"` | Only a label written into the records, so it should name whoever really answers. A command can override it with `--model`. |
+  | `max_tokens = 8192` | The size limit asked for each model reply. Models measure text in **tokens**, pieces of words; 8192 tokens is at most a few thousand lines. |
+
+- **An older version of this guide** had a step that added seven lines for `targets/lzg` to RuHarness's `.gitignore` (git's list of files to leave out). The harness now writes `targets/lzg/migration/.gitignore` itself the first time it creates the ledger, so those lines are no longer needed.
 
 ---
 
 ## Part 2 — Let the harness read the C and make a plan
 
-**Run.** Make sure you are in the RuHarness folder on your practice branch.
+**The question.** What did the harness find in the C, and which pieces can move to Rust first?
+
+**You will know the answer when** Step 2.6 shows two units with `depends_on = []`: `u-checksum` and `u-version`.
+
+**Takes** about 10 minutes; every harness command here finishes within a second or two on the author's Mac. **Uses Claude:** no.
+
+### Before you start
+
+- **What must be true.** Part 1's checkpoint is ticked.
+- **What to keep open.** One Terminal window.
+- **Where.**
+
+**Run.**
 
 ```bash
-cd ~/code/RuHarness
+cd ~/code/RuHarness && pwd
+```
+
+**You should see.**
+
+```text
+/Users/<you>/code/RuHarness
 ```
 
 **Run.**
@@ -1390,9 +1707,21 @@ git switch practice-lzg
 
 **You should see** `Already on 'practice-lzg'` (or `Switched to branch 'practice-lzg'` if you were on another branch).
 
-### Step 2.1 — Scan
+- **New words in this part.**
 
-**Why.** First the harness reads every `.c` and `.h` file and records the facts: which files there are, which functions each one defines, and which functions each one calls. Everything after this builds on those facts.
+| Word | Plain meaning |
+|---|---|
+| Ledger | The folder `targets/lzg/migration/`, where the harness keeps every record for this target. It is plain text, and you save it with git. |
+| Facts | What the harness's first step records about the C: which files there are, which functions each defines, and which functions each calls. |
+| Symbol | The harness's word for a named function. A **public** one can be called from other `.c` files. A **static** one, which the harness calls `internal`, is private to its own file. |
+| Signature | A function's first line: its name, what it takes and what it gives back. |
+| Plan | The harness's proposal of units and of the order to move them in. |
+| Fingerprint, hash | A code computed from a file's bytes. If any byte changes, the code changes. The harness writes them as `blake3:` and 64 characters. |
+| Leaf unit | A unit whose C calls nothing in the project's other `.c` files. In this version of RuHarness only leaf units can be migrated. |
+
+### Step 2.1 — Scan the C
+
+The harness reads every `.c` and `.h` file and records the facts. Everything after this builds on them.
 
 **Run.**
 
@@ -1403,21 +1732,19 @@ harness scan --target targets/lzg
 **You should see.**
 
 ```text
-scan: 7 files, <number> symbols, <number> refs -> /Users/<you>/code/RuHarness/targets/lzg/migration/facts.jsonl
+scan: 7 files, 20 symbols, 47 refs -> /Users/<you>/code/RuHarness/targets/lzg/migration/facts.jsonl
 scan: next, cut the code into units: `harness plan --target targets/lzg`
 ```
 
-"Symbols" are functions, and "refs" are calls from one function to another. Those two numbers do not matter here; `7 files` does.
+"Symbols" are functions, and "refs" are calls from one function to another. What matters is `7 files`.
 
-**What just happened.** The harness created the ledger folder `targets/lzg/migration/` and wrote `facts.jsonl` into it. Each line of that file is one fact.
-
-**Run.** List the functions the scan found.
+**Run.** List the functions the scan found. This only reads.
 
 ```bash
 jq -r 'select(.k=="symbol") | "\(.file)  \(.visibility)  \(.signature)"' targets/lzg/migration/facts.jsonl
 ```
 
-**You should see** one line per function, sorted by file and then by name. Among them are these four, in this order:
+**You should see** 20 lines, one per function, sorted by file and then by name. Look for these four, in this order:
 
 ```text
 src/lzg/checksum.c  public  lzg_uint32_t _LZG_CalcChecksum(const unsigned char *data, lzg_uint32_t size)
@@ -1426,26 +1753,19 @@ src/lzg/version.c  public  lzg_uint32_t LZG_Version(void)
 src/lzg/version.c  public  const char* LZG_VersionString(void)
 ```
 
-The other lines are:
+**What it means.** The harness created the ledger folder `targets/lzg/migration/` and wrote its facts into `facts.jsonl`, a file with one JSON record per line. The first line above is the one function of your first unit: it takes data and its size, and returns the checksum.
 
-- the public functions of `decode.c` and `encode.c`;
-- the `internal` (static) helpers of `encode.c`;
-- `ShowProgress` and `ShowUsage` in `lzg.c`, just before `main`. They show as `public` because upstream does not mark them `static`.
+**If you do not see that.**
 
-The spacing inside each signature may differ slightly from what is shown here.
-
-**If it looks different.**
-- `error: io error at targets/lzg: No such file or directory (os error 2): No such file or directory (os error 2)` means you are not in `~/code/RuHarness`, or `--target` has a typo. Run `cd ~/code/RuHarness` and try again.
-- `error: io error at /Users/<you>/code/RuHarness/targets/lzg/harness.toml: No such file or directory …` means the folder exists but `harness.toml` is missing. Redo Step 1.10.
-- `error: parse error in …/harness.toml: …` means there is a typo in the file. Compare it with Step 1.10.
-
----
+| You see | Do this |
+|---|---|
+| `error: targets/lzg is not a harness target (no harness.toml, and no mapped tool under migration/tools/); point --target at a folder that holds a harness.toml` | Run the `cd` box in "Before you start", then `ls targets/lzg/harness.toml`. If that says `No such file or directory`, redo Step 1.12. Then run the scan again. |
+| ``error: parse error in /Users/<you>/code/RuHarness/targets/lzg/harness.toml: line <line>, column <number>: …`` | There is a typo in `harness.toml` at that line (`<line>` and `<number>` say where). Redo Step 1.12; it overwrites the file. |
+| anything else | Do "If you need to start this part again" at the end of this part. |
 
 ### Step 2.2 — Check the state
 
-**Why.** `harness state status` is your "where am I?" command. It never changes anything, so you can run it at any time.
-
-**Run.**
+**Run.** `harness state status` is your "where am I?" command. It never changes anything, so you can run it at any time.
 
 ```bash
 harness state status --target targets/lzg
@@ -1455,27 +1775,31 @@ harness state status --target targets/lzg
 
 ```text
 status: facts fresh (7 files, 0 stale vs tree)
-status: no plan — run `harness plan`
+status: no plan — run `harness plan --target targets/lzg`
 ```
 
-**What just happened.** "fresh" means the facts match the files on disk. If you edited a C file now, the first line would say `` STALE — run `harness scan` `` instead.
+**What it means.** "fresh" means the facts match the files on disk. There is no plan yet: that is Step 2.4. If you edited a C file now, the first line would say ``facts STALE — run `harness scan --target targets/lzg` `` instead.
 
-**If it looks different.** `` status: no facts — run `harness scan` `` means Step 2.1 did not finish. Run it again.
+**If you do not see that.**
 
----
+| You see | Do this |
+|---|---|
+| ``status: no facts — run `harness scan --target targets/lzg` `` | Step 2.1 did not finish. Run it again. |
+| anything else | Do "If you need to start this part again" at the end of this part. |
 
-### Step 2.3 — Find hazards
+### Step 2.3 — Find hazards (optional)
 
-**Why.** Some C patterns are risky to translate: macros, function pointers, memory handed from one side to the other, global variables, threads and signals. The detectors flag them, so you know where the risk is before you choose what to migrate. This step is optional (migration works without it), but it teaches you to read C the way a translator does.
+Some C patterns are risky to translate. The harness's detectors flag them, so you know where the risk is before you choose what to migrate. Migration works without this step, but it teaches you to read C the way a translator does.
 
 Words in this step:
 
 | Word | Plain meaning |
 |---|---|
 | Macro | A `#define` that the compiler pastes in as text before compiling. |
-| Function pointer | A variable that holds a function, so which code runs is decided while the program runs. |
+| Function pointer | A variable that holds a function, so which code runs is decided while the program runs. Examples here: a **callback** (a function the library calls back to report progress) and a **sort comparator** (a function that tells a sorting routine which of two items comes first). |
+| `malloc` / `free` | How C asks for memory and gives it back. Memory handed from one side to the other is a classic source of mistakes. |
 | Global variable | A variable shared by the whole program. |
-| Thread | A second path of execution running at the same time. |
+| Thread | A second path of the program running at the same time. |
 | Signal / `setjmp` | Ways a C program's normal flow is interrupted or jumped out of. |
 | Severity | `info`, `low`, `medium` or `high`: how much care the translation needs. It does not stop anything by itself. |
 | Blocker | A finding serious enough that a person has to decide how to handle the unit before it is migrated. |
@@ -1486,7 +1810,7 @@ Words in this step:
 harness detect --target targets/lzg
 ```
 
-**You should see** a summary line, then one line per kind of finding:
+**You should see.**
 
 ```text
 detect: 13 finding(s) -> /Users/<you>/code/RuHarness/targets/lzg/migration/observer/findings.jsonl
@@ -1497,37 +1821,41 @@ detect:   macro-function-like: 7
 detect:   macro-statement-body: 1
 ```
 
-These are the kinds you are likely to see:
+**Run.** Count how many findings are blockers. This only reads.
 
-- `function-pointer-arg` and `function-pointer-decl`, for the progress callback and the sort comparator in `encode.c` and `lzg.h`;
-- `macro-statement-body` or `macro-function-like`, for macros such as `CHECKSUM_OP` in `checksum.c`;
-- `alloc-ownership`, for memory allocated with `malloc` and released with `free`.
+```bash
+jq -r 'select(.k=="finding") | .blocker' targets/lzg/migration/observer/findings.jsonl | sort | uniq -c
+```
 
-**Run.** List each finding with its file.
+**You should see.**
+
+```text
+  13 false
+```
+
+**Run.** List each finding with its file and line. This only reads.
 
 ```bash
 jq -r 'select(.k=="finding") | "\(.file):\(.span[0])  \(.category)  severity=\(.severity)  blocker=\(.blocker)"' targets/lzg/migration/observer/findings.jsonl
 ```
 
-**You should see** one line per finding. This step passes if every line ends in `blocker=false` and `src/lzg/checksum.c` has exactly the one line shown, for the `CHECKSUM_OP` macro:
+**You should see** 13 lines. `src/lzg/checksum.c` has exactly one, for its `CHECKSUM_OP` macro:
 
 ```text
-src/lzg/checksum.c:<line>  macro-statement-body  severity=medium  blocker=false
+src/lzg/checksum.c:46  macro-statement-body  severity=medium  blocker=false
 ```
 
-That finding is advice, not a problem.
+**What it means.** All 13 findings are advice; none is a blocker. The two function-pointer kinds are the progress callback and the sort comparator in `encode.c` and `lzg.h`; the macro kinds include `CHECKSUM_OP` in `checksum.c`; `alloc-ownership` marks the `malloc` and `free` calls. A blocker (for example `setjmp`, signals or threads) would mean a unit needs a person to decide; liblzg has none. The findings are in `migration/observer/findings.jsonl`.
 
-**What just happened.** The harness wrote `migration/observer/findings.jsonl`. A "blocker" finding (for example `setjmp`, signals or threads) would mean a unit needs a human to handle it. liblzg has no blockers.
+**If you do not see that.**
 
-A later, optional command, `harness observe`, asks a model to confirm or dismiss each finding. It is described under "What to try next".
-
-**If it looks different.** If you see `blocker=true` anywhere, a file that is not part of liblzg was copied. Compare with Step 1.4.
-
----
+| You see | Do this |
+|---|---|
+| `blocker=true` anywhere, or a count other than `13 false` | A file that is not part of liblzg was copied. Compare `ls targets/lzg/src/lzg` with Step 1.4; if it differs, do "If you need to start this part again" at the end of Part 1. |
 
 ### Step 2.4 — Make the plan
 
-**Why.** The planner groups the files into units and works out a safe order to move them in, in which a unit that calls another always comes after it.
+The planner groups the files into units and works out a safe order to move them in: a unit that calls another always comes after it.
 
 **Run.**
 
@@ -1547,19 +1875,9 @@ plan: execution order: u-checksum -> u-decode -> u-encode -> u-version -> u-lzg
 plan: next, write the first unit's differential driver: `harness gen-driver u-checksum --target targets/lzg`
 ```
 
-The last line is a suggestion: the next step for the first unit in that order. This guide gives `u-checksum` its driver in Part 3.
+The last line suggests the next step for the first unit; this guide does it in Part 3.
 
-**What just happened.** The harness wrote `migration/plan.toml`, with one `[[unit]]` block for each `.c` file that defines at least one public function. Every unit starts as `pending`.
-
-This is how the order is chosen. At each step, the planner takes the alphabetically first unit whose dependencies are already in the list:
-
-1. `u-checksum` and `u-version` depend on nothing. `u-checksum` sorts first, so it goes first.
-2. Placing `u-checksum` makes `u-decode` and `u-encode` ready too, and both sort before `u-version`.
-3. `u-lzg` needs `u-encode` and `u-version`, so it comes last.
-
-This is a safe order, not a to-do list: only `u-checksum` and `u-version` can actually be migrated (Step 2.6).
-
-**Run.** Run the planner again to see that the plan is stable.
+**Run.** Run the planner again, to see that the plan is stable.
 
 ```bash
 harness plan --target targets/lzg
@@ -1573,28 +1891,33 @@ plan: execution order: u-checksum -> u-decode -> u-encode -> u-version -> u-lzg
 plan: next, write the first unit's differential driver: `harness gen-driver u-checksum --target targets/lzg`
 ```
 
-**If it looks different.** A different number of units, or a different order, means the files in `src/lzg` differ from Step 1.4. Run `ls targets/lzg/src/lzg` and compare.
+**What it means.** The harness wrote `migration/plan.toml`, with one unit for each `.c` file that defines at least one public function. Every unit starts as `pending`. The order is a safe order, not a to-do list: Step 2.6 shows which units can actually move.
 
----
+**If you do not see that.**
 
-### Step 2.5 — Read and approve the plan
+| You see | Do this |
+|---|---|
+| a different number of units, or a different order | The files in `src/lzg` differ from Step 1.4. Run `ls targets/lzg/src/lzg` and compare; if they differ, do "If you need to start this part again" at the end of Part 1. |
+| anything else | Do "If you need to start this part again" at the end of this part. |
 
-**Why.** The plan is a proposal. "Approving" it means reading it and agreeing before any translation starts. RuHarness has no approve command: you read the file, optionally fill in the two note fields, and commit it. The planner never overwrites `status`, your comments, or the two note fields `test_strategy` and `done_criteria`.
+### Step 2.5 — Read the plan and save it
 
-**Run.**
+The plan is a proposal. RuHarness has no "approve" command: you approve the plan by reading it and saving it with git.
+
+**Run.** This only reads.
 
 ```bash
 cat targets/lzg/migration/plan.toml
 ```
 
-**You should see** `schema_version = 1` and `target = "lzg"`, followed by five blocks. The first looks like this (the fingerprint will differ, and the exact interface text may too):
+**You should see** `schema_version = 1` and `target = "lzg"`, then five blocks, one per unit. The first is:
 
 ```text
 [[unit]]
 id = "u-checksum"
 status = "pending"
 files = ["src/lzg/checksum.c"]
-source_hash = "blake3:<64 characters>"
+source_hash = "blake3:7e9fdcdda97b5650b9ae68edc942bb733226b9d5431ce3f8c9ee4165f5831187"
 symbols = ["_LZG_CalcChecksum"]
 interface = ["lzg_uint32_t _LZG_CalcChecksum(const unsigned char *data, lzg_uint32_t size)"]
 depends_on = []
@@ -1602,34 +1925,15 @@ test_strategy = ""
 done_criteria = ""
 ```
 
-**What just happened.** Nothing changed; you read the plan. Here is what each field means:
+The `source_hash` is the fingerprint of `checksum.c` and the headers it includes; it is the same on any Mac with the same files.
 
-| Field | Meaning | Who writes it |
-|---|---|---|
-| `id` | the unit's name | planner |
-| `status` | `pending`, then `verified` (or `in-progress` if a verified unit later fails) | harness |
-| `files` | the `.c` file or files in the unit | planner |
-| `source_hash` | a fingerprint of the unit's C and the headers it includes, so the harness knows when the C changes | planner |
-| `symbols` | the public functions the Rust must provide, with exactly these names | planner |
-| `interface` | the C signatures of those functions | planner |
-| `depends_on` | other units whose functions this one calls | planner |
-| `test_strategy`, `done_criteria` | your notes | you |
-
-**Optional: fill in the notes.**
-
-**Run** (optional). `-w` keeps long lines in one piece.
-
-```bash
-nano -w targets/lzg/migration/plan.toml
-```
-
-In nano, fill in the two note fields of `u-checksum`, for example `test_strategy = "differential driver over many sizes and byte patterns + whole program + sanitizers"`. Save with Ctrl-O and then Return, and leave with Ctrl-X.
-
-**Run.** Commit the scan, the findings and the plan.
+**Run.**
 
 ```bash
 git add targets/lzg
 ```
+
+**You should see** nothing. The next box makes the commit.
 
 **Run.**
 
@@ -1637,23 +1941,42 @@ git add targets/lzg
 git commit -m "lzg: scan, hazards and plan"
 ```
 
-**You should see** `[practice-lzg <hash>] lzg: scan, hazards and plan`, then `3 files changed, <number> insertions(+)` and three `create mode` lines.
+**You should see** a summary and four `create mode` lines:
 
-**If it looks different.**
-- If a block says `status = "blocked"`, a file that was there at the first plan has disappeared since. Run `ls targets/lzg/src/lzg` and compare with Step 1.4.
-- If a later command says `error: parse error in …/plan.toml: …`, your edit broke the file, for example by splitting a long line in two. Before Part 3 has finished, the simplest repair is to make the plan again: run `rm targets/lzg/migration/plan.toml`, then `harness plan --target targets/lzg`. You should see the five `added (pending)` lines of Step 2.4 again. Only your notes are lost; try the edit again. (Later in the guide, once a good plan has been committed, `git checkout targets/lzg/migration/plan.toml` is the way to undo a bad edit.)
+```text
+[practice-lzg <hash>] lzg: scan, hazards and plan
+ 4 files changed, <number> insertions(+)
+ create mode 100644 targets/lzg/migration/.gitignore
+ create mode 100644 targets/lzg/migration/facts.jsonl
+ create mode 100644 targets/lzg/migration/observer/findings.jsonl
+ create mode 100644 targets/lzg/migration/plan.toml
+```
 
----
+**What it means.** The scan, the findings and the plan are saved. The fourth file, `migration/.gitignore`, is the harness's own list of scratch files for git to leave out (build folders, a lock file, large logs); the harness wrote it when it created the ledger. Each field of the plan is explained in "For the curious".
 
-### Step 2.6 — Choose the first unit
+**If you do not see that.**
 
-**Why.** In this version of RuHarness, **only a leaf unit can be migrated**, meaning a unit with `depends_on = []`. The reasons:
+| You see | Do this |
+|---|---|
+| `3 files changed`, without the `.gitignore` line | Your harness is older than this guide. Do Steps 0.17–0.19, then "If you need to start this part again". |
+| a block says `status = "blocked"` | A file that was there at the first plan has disappeared since. Run `ls targets/lzg/src/lzg` and compare with Step 1.4. |
+| anything else | Do "If you need to start this part again" at the end of this part. |
 
-- When the judge tests a unit, it links the test program with only that unit's own C file (or only its Rust), and nothing else.
-- The Rust translation is not allowed to call C.
-- So a unit that calls another unit's functions could never be linked, or tested, on its own.
+**Optional: write notes into the plan.** Each unit has two note fields, `test_strategy` and `done_criteria`, that are yours; the planner never overwrites them, nor `status` or your comments. To fill them in, open the plan in a text editor inside Terminal. `-w` keeps long lines in one piece.
 
-**Run.**
+**Run** (optional).
+
+```bash
+nano -w targets/lzg/migration/plan.toml
+```
+
+Fill in the two note fields of `u-checksum`, for example `test_strategy = "differential driver over many sizes and byte patterns + whole program + sanitizers"`. Save with Ctrl-O and then Return, and leave with Ctrl-X. Then run `harness state status --target targets/lzg`: if it prints `error: parse error in …/plan.toml: …`, your edit broke the file (for example by splitting a line); put the saved plan back with `git checkout targets/lzg/migration/plan.toml` and try again. If it prints the status lines, save the notes with `git add targets/lzg` and `git commit -m "lzg: notes in the plan"`.
+
+### Step 2.6 — Find the units that can move first
+
+In this version of RuHarness, **only a leaf unit can be migrated**: a unit with `depends_on = []`.
+
+**Run.** This only reads.
 
 ```bash
 grep -E '^id|^depends_on' targets/lzg/migration/plan.toml
@@ -1674,23 +1997,65 @@ id = "u-lzg"
 depends_on = ["u-encode", "u-version"]
 ```
 
-**What just happened.** You found the two leaf units, `u-checksum` and `u-version`. You start with **`u-checksum`** because:
+**What it means.** Two units call no other unit: `u-checksum` and `u-version`. You start with **`u-checksum`**: it is one small function over a piece of data and its length; it calls nothing at all, not even C's standard functions; it keeps nothing between calls; and its result is written into bytes 11–14 of every compressed file, so the whole-program check really runs the Rust. `u-decode` and `u-encode` call `checksum.c`'s function, and `u-lzg` holds `main`; Part 7 explains why those three stay in C.
 
-- it is one small function over a byte buffer and a length;
-- it calls nothing at all, not even the C library;
-- it has no global variables and no structs;
-- its result is written into bytes 11–14 of **every** compressed file, so the whole-program check really runs the Rust.
+**If you do not see that.**
 
-`u-decode` and `u-encode` call `_LZG_CalcChecksum` in `checksum.c`, and `u-lzg` holds `main`. Part 7 explains why those three stay in C.
+| You see | Do this |
+|---|---|
+| `u-version` shows a dependency | The files differ from upstream. Compare with Steps 1.4 and 1.5; if they differ, do "If you need to start this part again" at the end of Part 1. |
+| `No such file or directory` | Step 2.4 did not run. Do it, then this step. |
 
-**If it looks different.** If `u-version` shows a dependency, the files differ from upstream. Compare with Steps 1.4 and 1.5.
+### Answer
 
-### Checkpoint — the app is working if…
+What did the harness find, and which pieces can move first? It found 7 files, 20 functions and 13 hazard findings, none of them a blocker (Steps 2.1 and 2.3), and planned five units. Two of them, `u-checksum` and `u-version`, depend on nothing and can move to Rust (Step 2.6).
 
-- [ ] `harness scan` reported `7 files`.
-- [ ] `harness state status` said `facts fresh (7 files, 0 stale vs tree)`.
-- [ ] `harness plan` listed five units in the order shown, and running it again said `no changes (5 units)`.
-- [ ] `u-checksum` and `u-version` have `depends_on = []`.
+### Checkpoint
+
+- [ ] Step 2.1 printed `7 files, 20 symbols, 47 refs`.
+- [ ] Step 2.2 printed `facts fresh (7 files, 0 stale vs tree)`.
+- [ ] Step 2.4 listed five units in the order shown, and running it again said `no changes (5 units)`.
+- [ ] Step 2.5's commit printed `4 files changed`.
+- [ ] Step 2.6 showed `depends_on = []` for `u-checksum` and `u-version`.
+
+### If you need to start this part again
+
+This puts the target back to the end of Part 1 by removing the ledger. The scan and the plan come out the same every time, so nothing is lost but your notes.
+
+**Run.** This removes the ledger folder; it cannot be undone.
+
+```bash
+cd ~/code/RuHarness && rm -rf targets/lzg/migration && ls targets/lzg
+```
+
+**You should see.**
+
+```text
+LICENSE.txt	VENDORED.md	harness.toml	src
+```
+
+Then start again at Step 2.1. If you had already made Step 2.5's commit, that commit now prints `nothing to commit, working tree clean`, because the new files are identical to the saved ones; that is fine.
+
+### For the curious (optional)
+
+- **The other functions in Step 2.1's list** are the public functions of `decode.c` and `encode.c`; the `internal` (static) helpers of `encode.c`; and `ShowProgress` and `ShowUsage` in `lzg.c`, just before `main`, which show as `public` because liblzg does not mark them `static`.
+- **How the order is chosen.** At each step the planner takes the alphabetically first unit whose dependencies are already placed. `u-checksum` and `u-version` depend on nothing, and `u-checksum` sorts first. Placing it makes `u-decode` and `u-encode` ready too, and both sort before `u-version`. `u-lzg` needs `u-encode` and `u-version`, so it comes last.
+- **Why only leaf units.** When the judge tests a unit, it links the test program with only that unit's own C file (or only its Rust), and nothing else (**linking** is the last part of building, where every function a file calls must be found). The Rust translation is not allowed to call C. So a unit that calls another unit's functions could never be linked, or tested, on its own.
+- **The plan's fields.**
+
+  | Field | Meaning | Who writes it |
+  |---|---|---|
+  | `id` | the unit's name | planner |
+  | `status` | `pending`, then `verified` (or `in-progress` if a verified unit later fails) | harness |
+  | `files` | the `.c` file or files in the unit | planner |
+  | `source_hash` | a fingerprint of the unit's C and the headers it includes, so the harness knows when the C changes | planner |
+  | `symbols` | the public functions the Rust must provide, with exactly these names | planner |
+  | `interface` | the C signatures of those functions | planner |
+  | `depends_on` | other units whose functions this one calls | planner |
+  | `test_strategy`, `done_criteria` | your notes | you |
+
+- **A changed C file.** If you change a C file after planning, `harness state status` says ``facts STALE — run `harness scan --target targets/lzg` (7 files, 1 stale vs tree)`` and marks that unit `plan=SOURCE-STALE`; putting the file back makes both fresh again.
+- **A later, optional command**, `harness observe`, asks a model to confirm or dismiss each hazard finding. It is described under "What to try next".
 
 ---
 
