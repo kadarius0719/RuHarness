@@ -19,6 +19,15 @@ whole C project", TESTING-GUIDE Part 12 "liblzg by map", SCHEMAS' map, ask, acce
 answer: the code is about two-thirds of one; the evidence is one cold-start walk by an agent.
 Proof before more building (the person's own rule).
 
+**In progress (2026-10-09): the testing guide rewritten for a non-technical reader.** The person
+asked for it to read like a well-designed experiment. Two reviews and the decisions are in
+docs/reviews/2026-10-09-testing-guide-review.md; three Opus writers rewrite the guide in parallel
+(`worktree-agent-a39ec25fdcb8f049c` the opening through Part 2; `…af6c564ef8d4894ce` Parts 3–8;
+`…ad7121d09fa4da7f8` Parts 9 to the end), each running every command on a fresh copy. Then merge
+(by line range), one fresh non-technical reader over the whole new guide running Parts 0–3 and 12A,
+a fix pass, commit, push. The rewrite comes before the person's run below, since the run follows
+the guide.
+
 **The work, in order:**
 1. **The person's own cold-start run** on a real project (liblzg or lz4 from
    `~/code/ruharness-test-downloads/`, never installed), following only README and the testing
