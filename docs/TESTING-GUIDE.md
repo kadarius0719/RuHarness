@@ -3725,13 +3725,32 @@ git commit -m "lzg: features, map, and re-verified units"
 
 ## Part 9 — Tour the cockpit on the finished project
 
-**Run.** Make sure you are in the RuHarness folder on your practice branch.
+**The question.** Does the cockpit show the same truth as the command line?
+**You will know the answer when** the cockpit's own re-check of `u-checksum` ends `GREEN — all 11 checks passed` (Step 9.14) and `git status` still shows nothing changed (Step 9.18).
+**Takes** about 15 minutes. **Uses Claude:** no.
+
+### Before you start
+
+- Part 8's checkpoint is ticked: both `u-checksum` and `u-version` are verified, and you have three features.
+- Make the Terminal window as wide as your screen, as in Part 4.
+- In this part most steps say **Do.**: press the key shown, in the cockpit. Nothing is pasted. You press **one key at a time**. If you press a key and end up somewhere you do not recognise, press `Esc` once or twice: it takes you back to the list on the left.
+- New words in this part:
+
+| Word | Plain meaning |
+|---|---|
+| **Files** | The list on the left of the cockpit: the project, its folders and files, then the groups `Units`, `Features` and `Speed`. The highlighted row is the one you have **selected**. |
+| **View** | The large area on the right. It shows details of the selected row. |
+| `✓` | Migrated: this piece is Rust now. `✓2/5` means 2 of 5 units. |
+| `◇` | Planned: the unit is still C. |
+| `◉` / `◌` | For a feature: it runs some Rust (`◉`), or only C (`◌`). |
+
+**Run.** Go to the RuHarness folder.
 
 ```bash
 cd ~/code/RuHarness
 ```
 
-**Run.**
+**Run.** Make sure you are on the practice branch.
 
 ```bash
 git switch practice-lzg
@@ -3739,7 +3758,7 @@ git switch practice-lzg
 
 **You should see** `Already on 'practice-lzg'` (or `Switched to branch 'practice-lzg'` if you were on another branch).
 
-**Why.** The cockpit shows the same ledger you built from the command line, and it is the friendlier way to explore it day to day.
+### Step 9.1 — Open the cockpit
 
 **Run.**
 
@@ -3747,49 +3766,269 @@ git switch practice-lzg
 harness-tui --target targets/lzg
 ```
 
-Walk through the items below. Symbols and words are given the way the cockpit shows them; exact counts may differ. If you used Plan B for a unit, it shows `✓ migrated` rather than `✓ migrated (asked in chat)`.
+**You should see** the screen change to the cockpit: the Files list on the left, with `lzg` as its first row, and the View on the right.
 
-1. **The project row (`lzg`).**
-   - Its right edge shows a summary like `✓2/5`: 2 of the 5 C files are now Rust. The other 3 cannot be migrated in this version (Part 7).
-   - The View shows the summary: files scanned, the units by state, and a features line such as `Features: 3 — …`.
-2. **A file.** Open `src/`, then `lzg/`, then select `checksum.c`. It shows `✓ migrated (asked in chat)`. Press `→` to see its function `_LZG_CalcChecksum()`. The View shows the C next to the Rust, under a header like `C  _LZG_CalcChecksum (checksum.c:<line>)  ⇄ Rust  …`.
-3. **Headers.** `internal.h` and `lzg.h` show `· header`.
-4. **A unit screen.** Open `Units (5)` and select `u-checksum`.
-   - The View shows `✓ u-checksum migrated (asked in chat) · status verified`, and a line about the crate that ends `verdict green, fresh`.
-   - A cyan line says how many of your features run this unit.
-   - At the bottom there is a row of checks, similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3 (1 run this unit)`.
-5. **Show the checks.** Press `v`. Move through the checks with `↑↓` and read each one's detail. Press `Esc` to close.
-6. **Re-check from the cockpit.** With `u-checksum` selected, press `Enter` and choose **Re-check with the oracle**. The dialog says what it will write and shows the command, `… verify u-checksum --target=…`. Wait for `ready`, then press `→` and `Enter`. The activity line says `Running the oracle…` and then `Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)`.
-7. **Details.** Press `c` to see the exact command and every event it reported. Press `c` or `Esc` to close.
-8. **A unit that no feature reaches.** Select `u-decode`. It shows `◇ planned`, and the View should say something like `None of your features runs this unit's functions, so their checks pass whatever its Rust does.`
-9. **Features.** Open `Features (3)` and select each feature.
-   - `compress` runs code in 3 units (checksum, encode and lzg), and 1 of them is Rust. It shows a mark like `◉ holds so far · 1 of 3 units`, where "holds so far" means every check of that Rust against this feature has passed.
-   - `version` looks the same, with `u-version` as its Rust unit.
-   - `no-file` reaches only C, shown as `◌ all C`.
-10. **Help.** Press `?` to see every key and the meaning of every symbol. Any key closes it.
-11. **Quit** with `q`. If you did not use the chat this time, the cockpit quits at once. Otherwise it asks `Quit the cockpit?`; wait a moment, then press `q` again.
+**What it means.** The cockpit has read the same ledger (`targets/lzg/migration/`) that your commands wrote.
 
-**What just happened.** Only item 6 changed anything: it rewrote `u-checksum`'s verdict files with the same content, so `git status --short` still prints nothing.
+**If you do not see that.**
 
-**If it looks different.** If the cockpit does not show a change you made on the command line, press `g` to re-read the project.
+| You see | Do this |
+|---|---|
+| `command not found: harness-tui` | Open a new Terminal window, run `cd ~/code/RuHarness`, and run the box again. If it is still missing, redo Part 0's install step. |
+| `error: io error at targets/lzg …` | You are not in `~/code/RuHarness`. Run the `cd` box above, then this box again. |
+| anything else | See "The cockpit" in Troubleshooting. |
 
-### Checkpoint — the app is working if…
+### Step 9.2 — Open the help first
 
-- [ ] The tree shows `u-checksum` and `u-version` as migrated, and the other three units as planned.
-- [ ] Re-check in the cockpit ended GREEN, with all checks passed.
-- [ ] The Features group lists your three features.
+**Do.** Press `?`.
+
+**You should see** a list of every key and of every symbol the cockpit uses (`✓`, `◇`, `◉`, `◌` and more), each with its meaning.
+
+**What it means.** Whenever a symbol in this part is unclear, `?` explains it.
+
+**If you do not see that.** If nothing happened, the cockpit may have been busy loading: wait a second and press `?` again.
+
+**Do.** Press any key to close the help.
+
+### Step 9.3 — Read the project row
+
+**Do.** Press `↑` until the first row, `lzg`, is highlighted. (It usually is already.)
+
+**You should see** at the right edge of that row a summary like `✓2/5`: 2 of the 5 units are Rust now. The View shows a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
+
+**What it means.** The other 3 units stay in C in this version of RuHarness (Part 7 explains why).
+
+**If you do not see that.** `✓1/5` means one unit is no longer counted as migrated: quit (`q`) and run `harness state status --target targets/lzg` as in Step 10.4.
+
+### Step 9.4 — Open the `src/` folder
+
+**Do.** Press `↓` until `src/` is highlighted, then press `→`.
+
+**You should see** `lzg/` appear, indented, under `src/`.
+
+**What it means.** `→` opens a folder; `←` closes it again.
+
+**If you do not see that.** If the View scrolled instead, the cockpit's attention had moved to the View. Press `Esc`, then try again.
+
+### Step 9.5 — Open the `lzg/` folder
+
+**Do.** Press `↓` to highlight `lzg/`, then press `→`.
+
+**You should see** the five C files and the two headers. `checksum.c` and `version.c` are marked migrated; `internal.h` and `lzg.h` show `· header`.
+
+**What it means.** A header (`.h`) is a file of declarations that the `.c` files share. It is never migrated by itself, so the cockpit just marks it.
+
+**If you do not see that.** As in Step 9.4.
+
+### Step 9.6 — Select `checksum.c`
+
+**Do.** Press `↓` until `checksum.c` is highlighted.
+
+**You should see** `✓ migrated (asked in chat)` on its row. (If you used the appendix's Plan B for it, the row says `✓ migrated`.)
+
+**What it means.** This file's code now runs as Rust in the program.
+
+**If you do not see that.** `◇ planned` means the unit is not migrated: quit and check `harness state status --target targets/lzg` (Step 10.4).
+
+### Step 9.7 — See the C next to the Rust
+
+**Do.** Press `→` to open `checksum.c`, then `↓` once to select its function `_LZG_CalcChecksum()`.
+
+**You should see** the View show the C next to the Rust, under a header like `C  _LZG_CalcChecksum (checksum.c:<line>)  ⇄ Rust  …`.
+
+**What it means.** This is the same function in both languages, side by side; the judge has proven they print the same results.
+
+**If you do not see that.** Press `Esc`, select `checksum.c` again, and repeat this step.
+
+### Step 9.8 — Open the units
+
+**Do.** Press `←` until `lzg` is highlighted again, then press `↓` until `Units (5)` is highlighted, then press `→`.
+
+**You should see** the five units listed under it: `u-checksum`, `u-decode`, `u-encode`, `u-version`, `u-lzg`.
+
+**What it means.** These are the five pieces Part 2 planned.
+
+**If you do not see that.** If you cannot find `Units (5)`, it is below the folders: keep pressing `↓`.
+
+### Step 9.9 — Select `u-checksum`
+
+**Do.** Press `↓` to highlight `u-checksum`.
+
+**You should see** in the View:
+
+- `✓ u-checksum migrated (asked in chat) · status verified`;
+- a line about the crate that ends `verdict green, fresh`;
+- a cyan line saying how many of your features run this unit (the colour depends on your Terminal's theme);
+- at the bottom, a row of checks similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3 (1 run this unit)`.
+
+**What it means.** This is the same verdict `harness verify` printed in Part 5, in short form.
+
+**If you do not see that.** `verdict green, STALE` means something changed since the last verify: Step 9.14's re-check refreshes it.
+
+### Step 9.10 — Show the checks
+
+**Do.** Press `v`.
+
+**You should see** the list of checks, one per line. Press `↑` and `↓` to move through them; each one's detail shows below.
+
+**What it means.** Each line is one test the judge ran; the detail says what it compared.
+
+**If you do not see that.** Make sure `u-checksum` is highlighted (Step 9.9), then press `v` again.
+
+### Step 9.11 — Close the checks
+
+**Do.** Press `Esc`.
+
+**You should see** the unit's View again, as in Step 9.9.
+
+**What it means.** `Esc` always steps back one level.
+
+**If you do not see that.** Press `Esc` once more.
+
+### Step 9.12 — Open the menu for `u-checksum`
+
+**Do.** With `u-checksum` highlighted, press `Enter`.
+
+**You should see** a menu of actions for this unit, one of them **Re-check with the oracle**.
+
+**What it means.** Every action in the cockpit starts from a menu like this one.
+
+**If you do not see that.** A greyed-out item cannot run now; choose it anyway and the reason appears at the bottom.
+
+### Step 9.13 — Choose Re-check
+
+**Do.** Press `↓` until **Re-check with the oracle** is highlighted, then press `Enter`.
+
+**You should see** a dialog that says what it will write and shows the command, `… verify u-checksum --target=…`. After a moment the dialog says `ready`.
+
+**What it means.** The cockpit always shows the exact command before it runs it. It is the same `harness verify` you ran in Part 5.
+
+**If you do not see that.** If `ready` never appears, the dialog wants you to read to its end: press `↓` until it does, or make the window larger.
+
+### Step 9.14 — Run the re-check
+
+**Do.** Press `→`, then `Enter`.
+
+**You should see** the activity line at the bottom say `Running the oracle…`, and, once the same checks as Part 5's `harness verify` have run:
+
+```text
+Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
+```
+
+**What it means.** This answers the question: the cockpit ran the judge itself and got the same GREEN verdict the command line got.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `RED` | Quit, run `harness verify u-checksum --target targets/lzg`, and read its `[FAIL]` lines; see "Verify" in Troubleshooting. |
+| `Re-check u-…: open u-… (or its crate) first …` | Select `u-checksum` again (Step 9.9) and repeat Steps 9.12–9.14. |
+| anything else | Press `c` (next step) to see the full output, then see "The cockpit" in Troubleshooting. |
+
+### Step 9.15 — See exactly what ran
+
+**Do.** Press `c`.
+
+**You should see** the exact command and every event it reported. Press `c` or `Esc` to close it.
+
+**What it means.** Nothing in the cockpit is hidden: this is the same output the command would print in Terminal.
+
+**If you do not see that.** Press `Esc`, then `c` again.
+
+### Step 9.16 — Look at a unit that no feature reaches
+
+**Do.** Press `↑` to highlight `u-decode`.
+
+**You should see** `◇ planned`, and the View says something like `None of your features runs this unit's functions, so their checks pass whatever its Rust does.`
+
+**What it means.** The cockpit warns you before you migrate a unit your features would not test (Part 8 found this).
+
+**If you do not see that.** Check that you highlighted `u-decode`, not `u-encode`.
+
+### Step 9.17 — Look at your features
+
+**Do.** Press `←` until `Units (5)` is highlighted, press `←` once more to close it, then press `↓` until `Features (3)` is highlighted, and press `→`. Then press `↓` to select each feature in turn.
+
+**You should see:**
+
+- `compress`: it runs code in 3 units (checksum, encode and lzg), and 1 of them is Rust. It shows a mark like `◉ holds so far · 1 of 3 units`. "Holds so far" means every check of that Rust against this feature has passed.
+- `version`: the same, with `u-version` as its Rust unit.
+- `no-file`: it reaches only C, shown as `◌ all C`.
+
+**What it means.** This is Part 8's feature map, shown per feature.
+
+**If you do not see that.** If `Features` is missing, Part 8's `harness features map` was not run: see Part 8.
+
+**Do.** Quit with `q`. If you did not use the chat this time, the cockpit quits at once. Otherwise it asks `Quit the cockpit?`; wait a moment, then press `q` again.
+
+### Step 9.18 — Check that nothing changed
+
+**Run.** This counts the files git sees as changed.
+
+```bash
+git status --short | grep -c .
+```
+
+**You should see** `0`.
+
+**What it means.** Only Step 9.14 wrote anything: it rewrote `u-checksum`'s verdict files with the same content, so git sees no change.
+
+**If you do not see that.** A number above 0: run `git status --short` to see which files. Changed `oracle-latest.*` files mean your Rust or clang version changed since the verdict; commit them (`git add targets/lzg`, then `git commit -m "lzg: re-checked"`).
+
+### Answer
+
+Does the cockpit show the same truth as the command line? Yes: its re-check in Step 9.14 ended `GREEN — all 11 checks passed`, and Step 9.18 showed that nothing in the ledger changed.
+
+### Checkpoint — the cockpit is working if…
+
+- [ ] The Files list showed `u-checksum` and `u-version` as migrated, and the other three units as `◇ planned`.
+- [ ] Step 9.14 ended `Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed`.
+- [ ] The `Features (3)` group listed `compress`, `version` and `no-file`.
+- [ ] Step 9.18 printed `0`.
+
+### If you need to start this part again
+
+Quit the cockpit with `q`, then start again at Step 9.1. If Step 9.18 showed changes you do not want, run `git checkout targets/lzg` to put the ledger back.
+
+### For the curious (optional)
+
+- If the cockpit does not show a change you made on the command line while it was open, press `g`: it reads the project again.
+- `Tab` moves between the Files list and the View; `←` from the View goes back to Files.
 
 ---
 
 ## Part 10 — Check the status and resume later
 
-### Where am I?
+**The question.** Where did I stop, and how do I carry on — today, another day, or after updating RuHarness?
+**You will know the answer when** `harness state status` prints one line per unit and you know what each word on it asks you to do (Step 10.4).
+**Takes** about 5 minutes; updating RuHarness adds a few minutes of building. **Uses Claude:** no.
 
-**Run** these whenever you come back.
+### Before you start
+
+- Where: any new Terminal window. This part is the first thing to do whenever you come back.
+- New words in this part:
+
+| Word | Plain meaning |
+|---|---|
+| **Branch** | A named line of work in git. Your work is on `practice-lzg`; RuHarness itself is on `main`. |
+| **Merge** | Bringing the changes from one branch into another. |
+| **Conflict** | A merge that git cannot finish alone, because both branches changed the same lines. |
+
+### Step 10.1 — Go to the RuHarness folder
+
+**Run.**
 
 ```bash
 cd ~/code/RuHarness
 ```
+
+**You should see** the prompt again, with nothing printed.
+
+**What it means.** Every command in this part runs from here.
+
+**If you do not see that.** `cd: no such file or directory`: your RuHarness folder is elsewhere; use your own path.
+
+### Step 10.2 — Switch to your practice branch
 
 **Run.**
 
@@ -3799,13 +4038,25 @@ git switch practice-lzg
 
 **You should see** `Already on 'practice-lzg'` or `Switched to branch 'practice-lzg'`.
 
-**Run.**
+**What it means.** You are on the branch that holds your work.
+
+**If you do not see that.** `error: Your local changes … would be overwritten`: run `git status --short` to see which files, then commit them (`git add targets/lzg`, then `git commit -m "lzg: work in progress"`) and run this box again.
+
+### Step 10.3 — Check that everything is saved
+
+**Run.** This counts the files that are changed but not committed.
 
 ```bash
-git status --short
+git status --short | grep -c .
 ```
 
-**You should see** nothing, if you committed at the end of your last session.
+**You should see** `0`, if you committed at the end of your last session.
+
+**What it means.** All your work is saved in git.
+
+**If you do not see that.** A number above 0: run `git status --short` to see the files, and commit them as in Step 10.2.
+
+### Step 10.4 — Ask the harness where you are
 
 **Run.**
 
@@ -3813,7 +4064,7 @@ git status --short
 harness state status --target targets/lzg
 ```
 
-**You should see**, at the end of this guide:
+**You should see**, at the end of Parts 0–9 (from the author's run on 2026-10-07):
 
 ```text
 status: facts fresh (7 files, 0 stale vs tree)
@@ -3826,21 +4077,200 @@ status:   attempts: 1 (1 bound to current source) [a-<12hex>:external:green]
 status: u-lzg [pending] plan=fresh verdict=no verdict
 ```
 
-### What the status words mean, and what to do
+**What it means.** The first line says whether the scan still matches the C files. Then each unit has one line: its status in brackets, whether its plan and verdict are fresh, and whether the verdict included your features. Lines that are all `fresh`, `green` and `current` need nothing.
 
-In the commands below, change `u-checksum` to `u-version` when it is `u-version` that the status line names.
+**If you do not see that.** Find the words on your screen in this table and do what it says. In the commands, change `u-checksum` to `u-version` when it is `u-version` that the line names.
 
 | You see | It means | Do this |
 |---|---|---|
-| `` facts STALE — run `harness scan` `` | A C file changed since the scan. | `harness scan --target targets/lzg`, then `harness plan --target targets/lzg`, then review `git diff targets/lzg/migration/plan.toml` |
-| `plan=SOURCE-STALE` | This unit's C changed since planning. | The same as the row above, then re-verify the unit. |
+| `` facts STALE — run `harness scan` `` | A C file changed since the scan. | `harness scan --target targets/lzg`, then `harness plan --target targets/lzg`, then read `git diff targets/lzg/migration/plan.toml`. |
+| `plan=SOURCE-STALE` | This unit's C changed since planning. | The same as the row above, then `harness verify u-checksum --target targets/lzg`. |
 | `verdict=green (STALE: rust-crate)` (or `source`, `driver`) | Something the verdict tested has changed since. | `harness verify u-checksum --target targets/lzg` |
-| `<< CONTRADICTION: status and verdict evidence disagree` | The status says verified, but there is no fresh GREEN verdict (or the other way round). | Re-verify the unit. |
-| `features=behind(…)` | The verdict was not made with your current features. | Re-verify the unit. |
-| `<< promotion of … interrupted — the next writing command recovers it` | An Accept was cut off, for example by closing the window. | Run any writing command, such as `harness verify u-checksum --target targets/lzg`. It first prints a `recover: …` line. |
-| `attempts: … :in-progress` | An attempt stopped at a hand-off. | See below. |
+| `<< CONTRADICTION: status and verdict evidence disagree` | The status says verified, but there is no fresh GREEN verdict (or the other way round). | `harness verify u-checksum --target targets/lzg` |
+| `features=behind(…)` | The verdict was not made with your current features. | `harness verify u-checksum --target targets/lzg` (the words in brackets are explained under "For the curious"). |
+| `<< promotion of … interrupted — the next writing command recovers it` | An Accept was cut off, for example by closing the window. | `harness verify u-checksum --target targets/lzg`. It first prints a `recover: …` line. |
+| `attempts: … :in-progress` | An attempt stopped at a hand-off. | See "If an attempt is paused at a hand-off" below. |
+| `made-elsewhere` | The results came from another computer or copy. | `harness verify u-checksum --target targets/lzg`. If the status command itself was refused, see "Getting ready" in Troubleshooting. |
 
-The words inside `features=behind(…)` say why. There can be one or several, separated by commas:
+### If an attempt is paused at a hand-off
+
+A **hand-off** is the point where the harness has written a question into a `….request.json` file and waits for an answer file next to it. The question is still there when you come back.
+
+- **A command-line hand-off** (`gen-driver`, or the appendix's Plan B): answer it exactly as in Part 3, from the step that sets `REQ` to the step that runs the command again. You must run the `REQ=` and `RESP=` lines again, because a new Terminal window has forgotten them. Then run the **same** command with the **same** `--model` word: the attempt carries on where it stopped.
+- **A chat hand-off:** the conversation is not saved when you quit, but the attempt is.
+  1. Run `harness-tui --target targets/lzg`.
+  2. Ask the chat `Migrate u-checksum` again, and confirm as in Part 4.
+  3. The chat continues the paused attempt: its `Continues a-<8hex>…` line starts with the same characters as the paused attempt's row `◐ a-<4hex>` under `u-checksum` in Files. If a new id appears instead, the model changed; the old attempt stays on record as `in-progress`, which is harmless.
+
+`Please retry u-checksum` is only for an attempt that has already finished.
+
+### After updating RuHarness
+
+Do these steps whenever RuHarness has changed (someone tells you, or a later part needs a newer command). Otherwise you keep testing the old program. The order is: save your work, update `main`, reinstall the three programs, then bring your branch up to date.
+
+### Step 10.5 — Make sure nothing is left unsaved
+
+**Run.**
+
+```bash
+git status --short | grep -c .
+```
+
+**You should see** `0`.
+
+**What it means.** `git switch main` in the next step refuses to run while there are uncommitted changes; now it will not.
+
+**If you do not see that.** Commit first: `git add targets/lzg`, then `git commit -m "lzg: work in progress"`, then this box again.
+
+### Step 10.6 — Switch to `main`
+
+**Run.**
+
+```bash
+git switch main
+```
+
+**You should see** `Switched to branch 'main'` and possibly a line `Your branch is up to date with 'origin/main'.`
+
+**What it means.** You are now on RuHarness's own branch, ready to update it.
+
+**If you do not see that.** `error: Your local changes …`: go back to Step 10.5.
+
+### Step 10.7 — Download the new RuHarness source
+
+**Run.**
+
+```bash
+git pull --ff-only
+```
+
+**You should see** `Updating <hash>..<hash>` and a list of changed files, or `Already up to date.`
+
+**What it means.** Your copy of RuHarness now matches the newest one.
+
+**If you do not see that.** `fatal: Not possible to fast-forward`: someone changed `main` in your copy by hand. Stop here and ask for help (see "When you ask someone for help").
+
+### Step 10.8 — Reinstall `harness`
+
+**Run.**
+
+```bash
+cargo install --locked --path crates/harness-cli
+```
+
+**You should see** many `Compiling …` lines, then, after about a minute and a half on the author's Mac (2026-10-09; give it up to a few minutes), a last line that starts `Installed package` or `Replaced package` and names `harness-cli` and the executable `harness`. It is finished when the `%` prompt comes back.
+
+**What it means.** The newest `harness` program is now the one your Terminal runs.
+
+**If you do not see that.** A last line starting `error:`: copy the whole output and see "When you ask someone for help".
+
+### Step 10.9 — Reinstall `harness-tui`
+
+**Run.**
+
+```bash
+cargo install --locked --path crates/harness-tui
+```
+
+**You should see** the same kind of output, ending `Installed package` or `Replaced package` and naming `harness-tui`. Quicker than Step 10.8: most of the building is already done.
+
+**What it means.** The cockpit is updated too.
+
+**If you do not see that.** As in Step 10.8.
+
+### Step 10.10 — Reinstall `harness-mcp`
+
+**Run.**
+
+```bash
+cargo install --locked --path crates/harness-mcp
+```
+
+**You should see** the same kind of output, ending `Installed package` or `Replaced package` and naming `harness-mcp`. Quicker than Step 10.8, too.
+
+**What it means.** The chat's helper program is updated too. The cockpit's chat needs it to match `harness`.
+
+**If you do not see that.** As in Step 10.8.
+
+### Step 10.11 — Go back to your practice branch
+
+**Run.**
+
+```bash
+git switch practice-lzg
+```
+
+**You should see** `Switched to branch 'practice-lzg'`.
+
+**What it means.** You are back on your work, which still has the old RuHarness source in it.
+
+**If you do not see that.** As in Step 10.2.
+
+### Step 10.12 — Bring the new source onto your branch
+
+**Run.** `--no-edit` accepts git's standard merge message without opening an editor.
+
+```bash
+git merge --no-edit main
+```
+
+**You should see** `Merge made by the 'ort' strategy.` followed by a list of files, or `Already up to date.`
+
+**What it means.** Your branch now has the new RuHarness source and keeps all your work.
+
+**If you do not see that.** If you see `CONFLICT`, the safest thing is to undo the merge and ask for help. **Run** (only if you see `CONFLICT`). This puts everything back as it was before Step 10.12:
+
+```bash
+git merge --abort
+```
+
+If the conflict is only in `.gitignore` (the message says `CONFLICT (content): Merge conflict in .gitignore`) and you would like to fix it yourself, see "Fixing a `.gitignore` conflict yourself" under "For the curious" instead.
+
+### Step 10.13 — Check the status after the update
+
+**Run.**
+
+```bash
+harness state status --target targets/lzg
+```
+
+**You should see** the same lines as Step 10.4. After an update of RuHarness, verdicts may instead read `verdict=green (STALE: …)`.
+
+**What it means.** The status is read with the new program. A verdict made by the older one may need a fresh run.
+
+**If you do not see that.** If a verdict shows `STALE`, re-verify both units.
+
+**Run** (only if a verdict shows `STALE`).
+
+```bash
+harness verify u-checksum --target targets/lzg
+```
+
+**Run** (only if a verdict shows `STALE`).
+
+```bash
+harness verify u-version --target targets/lzg
+```
+
+**You should see** each end with `GREEN — status set to verified`. If one ends RED, see "Verify" in Troubleshooting.
+
+### Answer
+
+Where did I stop? Step 10.4's status lines say it, unit by unit, and its table says what to do about any word that is not `fresh`, `green` or `current`.
+
+### Checkpoint
+
+- [ ] Step 10.3 printed `0`.
+- [ ] Step 10.4 printed one status line per unit, and you know what each word means.
+- [ ] If you updated: Steps 10.8–10.10 each ended `Installed package` or `Replaced package`, and Step 10.12 said `Merge made by the 'ort' strategy.` or `Already up to date.`
+
+### If you need to start this part again
+
+Nothing in Steps 10.1–10.4 changes anything: run them again. If the update stopped half way, run `git switch practice-lzg` and start again at Step 10.5.
+
+### For the curious (optional)
+
+**What the words inside `features=behind(…)` mean.** There can be one or several, separated by commas. The fix for all of them is to re-verify the unit; for `invalid`, fix the features file first, and for `skipped`, first do what the `verify: skipped` line says.
 
 | Word | Meaning |
 |---|---|
@@ -3850,77 +4280,9 @@ The words inside `features=behind(…)` say why. There can be one or several, se
 | `program` | The program's C changed since the verdict. |
 | `skipped` | Some scenarios were skipped at that verify (see its `verify: skipped` lines). |
 
-The fix for all of them is to re-verify the unit. For `invalid`, fix the features file first. For `skipped`, first do what the `verify: skipped` line says.
-
-### Picking up a paused hand-off
-
-- **Command-line hand-offs** (gen-driver, or Plan B): the request file is still there. Answer it, then run the **same** command again with the same `--model`. The attempt carries on where it stopped. Remember to run the `REQ=` and `RESP=` lines again in your new Terminal window.
-- **Chat hand-offs:** the conversation is not saved when you quit, but the attempt is.
-  1. Run `harness-tui --target targets/lzg`.
-  2. Ask the chat `Migrate u-checksum` again, and confirm as in Step 4.4.
-  3. The paused attempt carries on where it stopped. You can tell because the attempt the chat continues (`Continues a-<8hex>…`, and at the end `Continue a-<4hex>`) starts with the same characters as the paused attempt's row `◐ a-<4hex>` under `u-checksum` in Files. If a new id appears instead, the model changed; the old attempt stays on record as `in-progress`, which is harmless.
-
-  `--chat-model` is a cockpit option that picks the chat's model; this guide never uses it. `Please retry u-checksum` is only for an attempt that has already finished.
-
-### After updating RuHarness
-
-Update on `main`, reinstall, then bring your practice branch up to date. Otherwise you keep testing the old code. The switch, pull and install commands print the same things as in Step 0.7.
-
-**Run.** First check that nothing is left uncommitted. `git switch main` refuses to run while there are uncommitted changes.
-
-```bash
-git status --short
-```
-
-**You should see** nothing. If files are listed, commit them first (`git add targets/lzg`, then `git commit -m "lzg: work in progress"`).
+**Fixing a `.gitignore` conflict yourself.** This is real text editing; skip it and use `git merge --abort` if you are unsure. Both branches added lines at the end of `.gitignore`.
 
 **Run.**
-
-```bash
-git switch main
-```
-
-**Run.**
-
-```bash
-git pull --ff-only
-```
-
-**Run.**
-
-```bash
-cargo install --locked --path crates/harness-cli
-```
-
-**Run.**
-
-```bash
-cargo install --locked --path crates/harness-tui
-```
-
-**Run.**
-
-```bash
-cargo install --locked --path crates/harness-mcp
-```
-
-**Run.**
-
-```bash
-git switch practice-lzg
-```
-
-**Run.** This brings the new RuHarness source onto your practice branch. `--no-edit` accepts git's standard merge message without opening an editor.
-
-```bash
-git merge --no-edit main
-```
-
-**You should see** `Merge made by the 'ort' strategy.` followed by a list of files, or `Already up to date.`.
-
-**If it looks different.** `CONFLICT (content): Merge conflict in .gitignore` means both sides added lines at the end of that file.
-
-**Run** (only if needed).
 
 ```bash
 nano -w .gitignore
@@ -3928,29 +4290,23 @@ nano -w .gitignore
 
 Delete the three lines that start with `<<<<<<<`, `=======` and `>>>>>>>` (Ctrl-K deletes the line the cursor is on), and keep both groups of lines. Save with Ctrl-O and then Return, and leave with Ctrl-X.
 
-**Run** (only if needed).
+**Run.**
 
 ```bash
 git add .gitignore
 ```
 
-**Run** (only if needed).
+**Run.**
 
 ```bash
 git commit --no-edit
 ```
 
-For a conflict in any other file, run `git merge --abort` and ask for help.
+**You should see** `[practice-lzg <hash>] Merge branch 'main' into practice-lzg`. For a conflict in any other file, run `git merge --abort` and ask for help.
 
-**Run.**
+**`--chat-model`** is a cockpit option that picks the chat's model; this guide never uses it.
 
-```bash
-harness state status --target targets/lzg
-```
-
-If the verdicts show `STALE`, re-verify the units.
-
-### What the ledger looks like now
+**What the ledger looks like now.**
 
 ```text
 targets/lzg/
@@ -3960,7 +4316,7 @@ targets/lzg/
     facts.jsonl                          what the scan found
     plan.toml                            the units, their status, and oracle tables
     observer/findings.jsonl              the hazard findings
-    features/features.toml, map.json     your features and their map
+    features/features.toml, map.json     your features and the feature map
     units/u-checksum/
       driver.c, driver-validation.json   the validated test program
       driver-attempts/, driver-traces/   how the driver was obtained
@@ -3975,7 +4331,27 @@ targets/lzg/
 
 ## Part 11 — Speed: is the Rust as fast as the C?
 
-**Run.** Make sure you are in the RuHarness folder on your practice branch.
+**The question.** Is the program with your Rust in it as fast as the original C?
+**You will know the answer when** `harness perf run` prints, for each unit and workload, a line such as `about as fast as the C (within 2 %)` (Step 11.4).
+**Takes** 15–20 minutes, mostly waiting. **Uses Claude:** no. macOS only, for now.
+
+### Before you start
+
+- Part 9's checkpoint is ticked: both units are verified, with fresh verdicts.
+- Keep the computer quiet while Step 11.4 measures: other work makes the numbers noisier.
+- New words in this part:
+
+| Word | Plain meaning |
+|---|---|
+| **perf** | The harness's speed check. The oracle checks that the Rust does the same thing as the C; perf checks whether it does it as fast. It never changes a verdict: a slower unit is still a correct one, and you decide whether the difference matters. |
+| **Workload** | One run of the whole program the way it is really used: your own options and, if you like, one input file of yours inside the target. |
+| **The C alone / the program as it stands** | perf runs each workload as the original C, then with each verified unit's Rust swapped in on its own, then with every verified unit together ("the program as it stands"). The C and the Rust take turns, 15 times each by default. |
+| **CPU time** | How long the computer's processor worked on the run. It varies a little from run to run, which is why perf repeats each run and says how sure it is. |
+| **Instructions** | How many basic steps the processor carried out. It varies much less than time. |
+
+Your numbers will not match anyone else's: they belong to your computer, on this day. In the outputs below these placeholders stand for your own numbers: `<n.nn>` (a decimal number, such as `0.34`), `<nnn>` (a whole number, such as `169`) and `<n.nn>e<n>` (a large number written short: `3.26e9` means 3 260 000 000).
+
+**Run.** Go to the RuHarness folder.
 
 ```bash
 cd ~/code/RuHarness
@@ -3989,20 +4365,23 @@ git switch practice-lzg
 
 **You should see** `Already on 'practice-lzg'` (or `Switched to branch 'practice-lzg'` if you were on another branch).
 
-**Before you start.** Part 11 needs a RuHarness with `harness perf` (run `harness perf --help`; if it says `unrecognized subcommand`, update RuHarness and reinstall it as Part 10's *After updating RuHarness* shows).
+### Step 11.1 — Check that your RuHarness has perf
 
-**The idea.** The oracle checks that the Rust does the same thing as the C. **perf** checks whether it does it as fast. It never changes a verdict: a slower unit is still a correct one, and you decide whether the difference matters.
+**Run.**
 
-- A **workload** is one run of the whole program the way it is really used: your own options and, if you like, one input file of yours inside the target.
-- perf runs each workload as the original C ("the C alone"), then with each verified unit's Rust swapped in on its own, then with every verified unit together ("the program as it stands"). The C and the Rust take turns, 15 times each by default.
-- It says which was faster and by how much, or plainly that it cannot tell. It also compares what the program prints and how it ends on your workloads — something the oracle's checks never run.
-- perf runs on macOS only, for now. On Linux every `harness perf run` stops with `perf runs on macOS only for now — the Linux launcher is not built yet`.
+```bash
+harness perf --help
+```
 
-Your numbers will not match anyone else's: they belong to your computer, on this day. In the outputs below, `<n.nn>` stands for a number of your own.
+**You should see** a first line that starts `The C against the Rust in use, on the person's workloads`, and a list of commands: `run`, `init`, `save`, `show`.
 
-### Step 11.1 — Make a big input file
+**What it means.** Your installed `harness` can measure speed.
 
-**Why.** A run has to be long enough to time: half a second or more of the C's CPU time, or at least a billion instructions (a run under both reads `too short to time`). The harness's sample files are far too small for that, so you make a bigger one by repeating liblzg's own sources. The command gives the same bytes every time you run it, so you do not need to commit the file.
+**If you do not see that.** `error: unrecognized subcommand 'perf'`: your RuHarness is older than this part. Update and reinstall it as Part 10's "After updating RuHarness" shows (Steps 10.5–10.13), then run this box again.
+
+### Step 11.2 — Make a big input file
+
+The harness's sample files are far too small to time (a run that short reads `too short to time`), so you make a bigger one by repeating liblzg's own sources. The command gives the same bytes every time you run it, so you do not need to commit the file.
 
 **Run.**
 
@@ -4022,13 +4401,15 @@ for i in $(seq 1 900); do cat targets/lzg/src/lzg/*.c; done > targets/lzg/bench/
 ls -lh targets/lzg/bench/big.txt
 ```
 
-**You should see** a file of about 30 to 35 MB.
+**You should see** one line ending in a size of about 30 to 35 MB (the `M` after the number), then `targets/lzg/bench/big.txt`.
 
-**What just happened.** `bench/big.txt` is 900 copies of the target's own C files, one after another. It sits in the target's root folder, outside `src/lzg`, so the scan and the plan never see it.
+**What it means.** `bench/big.txt` is 900 copies of the target's own C files, one after another. It sits in the target's root folder, outside `src/lzg`, so the scan and the plan never see it.
 
-### Step 11.2 — Write the workloads file
+**If you do not see that.** `No such file or directory`: you are not in `~/code/RuHarness`. Run `cd ~/code/RuHarness` and the three boxes again. A size near 0: the `for` line was cut while pasting; paste it again.
 
-**Run.** With no workloads file, measuring is refused by name.
+### Step 11.3 — Write the workloads file
+
+**Run.** With no workloads file, measuring is refused by name. This step is **meant to stop with an error**.
 
 ```bash
 harness perf run --target targets/lzg; echo "exit=$?"
@@ -4074,22 +4455,19 @@ perf: saved migration/perf/workloads.toml
 exit=0
 ```
 
-**What just happened.** The rules of this file:
+**What it means.** Two workloads: `best` compresses the big file with `-9` (smallest output, slowest), `fast` with `-1`. `{input}` stands for the input file.
 
-| Part | Rule |
+**If you do not see that.**
+
+| You see | Do this |
 |---|---|
-| `id` | Lowercase letters, digits and `-`, at most 24, starting with a letter or digit; unique. |
-| `args` | Up to 8 of the program's own options. `{input}` stands for the input file, once, as an argument of its own. |
-| `input` | A file inside the target, written relative to `targets/lzg`: a real file (not a link), at most 64 MiB, not under `migration/` or `.git`, and no part of its path starting with `.` or `-`. |
-| `runs` | How many times each side runs, 5 to 31. Left out, it is 15. |
+| `error: migration/perf/workloads.toml changed since the edit started; nothing was saved` | A workloads file is already there from an earlier try. Edit it in the cockpit instead: select the **Speed** row, press `Enter`, choose **Edit the workloads file**; the cockpit saves it for you. |
+| `error: migration/perf/workloads.toml line …, column …: …` | The draft has a mistake at that line. Paste the `cat >` box again (it overwrites), then the save box. |
+| anything else | See "Speed" in Troubleshooting. |
 
-A mistake is refused with its line and column, for example `error: migration/perf/workloads.toml line 4, column 6: workload[0]: id "Best" is not allowed — 1 to 24 of a-z, 0-9 and -, starting with a letter or digit`. `harness perf init --target targets/lzg` writes a starter file with these rules as comments, if you would rather start from that.
+### Step 11.4 — Measure
 
-**If it looks different.** If it says `changed since the edit started`, a workloads file is already there (from an earlier try). Edit it in the cockpit instead: select the **Speed** row, press `Enter`, choose **Edit the workloads file**, and the cockpit saves it for you.
-
-### Step 11.3 — Measure
-
-**Why.** Both your verified units are measured, alone and together. It takes a minute or two (the cockpit's estimate says about 3 minutes): per workload about 17 runs of the C alone, then 30 timed runs for each unit and 30 for the program as it stands (the C and the Rust taking turns). Keep the computer quiet while it runs: other work makes the numbers noisier.
+Both your verified units are measured, alone and together: per workload about 17 runs of the C alone, then 30 timed runs for each unit and 30 for the program as it stands (the C and the Rust taking turns). On the author's Mac a run like this takes about a minute; it is finished when `exit=0` appears. Keep the computer quiet meanwhile.
 
 **Run.**
 
@@ -4097,7 +4475,13 @@ A mistake is refused with its line and column, for example `error: migration/per
 harness perf run --target targets/lzg; echo "exit=$?"
 ```
 
-**You should see**, as it goes (shortened here):
+**You should see** many lines scroll past. Look for three things:
+
+1. the first line, `perf: building the C program…`;
+2. for each unit and workload, a line with its answer, such as `perf: u-checksum on best — about as fast as the C (within 2 %)`;
+3. the last two lines, `perf: measured 8 rows, 0 too short, 0 behave differently — wrote migration/perf …` and `exit=0`.
+
+The whole screen, shortened (`…` stands for lines left out):
 
 ```text
 perf: building the C program…
@@ -4121,7 +4505,7 @@ exit=0
 
 The first time, it also says `building the launcher…`: perf builds its own small timing program into `~/Library/Caches/ruharness/perf`, once (about 5 seconds).
 
-**What just happened.** For each workload perf wrote a row for the C alone, one for each unit and one for the program as it stands: 8 rows. What the answers mean:
+**What it means.** This answers the question. For each workload perf wrote a row for the C alone, one for each unit and one for the program as it stands: 8 rows. The answers:
 
 | Answer | Meaning |
 |---|---|
@@ -4132,23 +4516,33 @@ The first time, it also says `building the launcher…`: perf builds its own sma
 | `too short to time` | The C ran too briefly. It says how many times bigger the input should be. |
 | `behaves differently` | The Rust printed or ended differently from the C on this workload. The oracle never ran this workload, so only perf can find this. Both outputs are kept in `migration/build/.perf-out/`. |
 
-**If it looks different.**
+**If you do not see that.**
 
-- `too short to time` on a workload: the message says how many times bigger the input should be. Run Step 11.1 again with a larger number (for example `seq 1 2700` for three times as big), use the same number in Step 11.4, and measure again.
-- `perf: the other rows on best are not run — the C failed there`: the original C crashed, timed out, printed too much or was stopped on that workload (the line above it says which), so perf has nothing to compare the Rust against there. Check the workload's options and input.
-- `perf: one unit measured (u-checksum) — u-version left out: verify it first — the program as it stands needs two`: that unit's verdict is no longer fresh. Re-check it in the cockpit (or run `harness verify u-version --target targets/lzg`), then measure again.
-- `error: the program's C changed since the scan: scan the project first, then measure`: run `harness scan --target targets/lzg`, and try again.
-- `error:` naming a command that holds the writer lock: another harness command is running on this target. Wait for it, and try again.
+| You see | Do this |
+|---|---|
+| `too short to time` on a workload | Run Step 11.2's `for` line again with a larger number (for example `seq 1 2700` for three times as big), use the same number in Step 11.5, and measure again. |
+| `perf: the other rows on best are not run — the C failed there` | The original C crashed, timed out, printed too much or was stopped on that workload (the line above says which). Check the workload's options and input in Step 11.3. |
+| `perf: one unit measured (u-checksum) — u-version left out: verify it first — the program as it stands needs two` | Run `harness verify u-version --target targets/lzg`, then measure again. |
+| `error: the program's C changed since the scan: scan the project first, then measure` | Run `harness scan --target targets/lzg`, then measure again. |
+| `error: … ledger is locked by another harness command …` | Another harness command is running, maybe the cockpit in another window. Quit it, then measure again. |
+| `perf runs on macOS only for now — the Linux launcher is not built yet` | perf needs a Mac. Skip this part. |
 
-### Step 11.4 — Read them again, and watch one go out of date
+### Step 11.5 — Read the answers again, and watch one go out of date
 
-**Run.** `perf show` rebuilds every row's words from the stored numbers. It builds nothing and writes nothing in the target. Besides asking perf's launcher which computer this is, the only things it runs are `cc --version` and `rustc -V`, inside the sandbox, to see whether your compilers changed since the rows were measured (`--no-check` skips both checks).
+**Run.** This only reads: it builds nothing and writes nothing in the target.
 
 ```bash
 harness perf show --target targets/lzg
 ```
 
-**You should see** the same rows as at the end of Step 11.3, grouped differently: the C on each workload first, then the program as it stands, then each unit.
+**You should see** every row of Step 11.4 again, each with its words, grouped: the C on each workload first, then the program as it stands, then each unit. A unit's row looks like this:
+
+```text
+perf: u-checksum on best — about as fast as the C (within 2 %)
+      CPU about <n.nn> s → about <n.nn> s (from the estimate)
+      · about the same instructions (within 1.5 %)
+      · about the same memory (within 5 %) · 15 runs each
+```
 
 **Run.** Change the input.
 
@@ -4156,31 +4550,33 @@ harness perf show --target targets/lzg
 echo "one more line" >> targets/lzg/bench/big.txt
 ```
 
-**Run.**
+**Run.** This only reads.
 
 ```bash
 harness perf show --target targets/lzg --no-check | head -4
 ```
 
-**You should see** the C's first row ending `· out of date: your workload changed`.
+**You should see** four lines; the third ends `15 runs · out of date: your workload changed`.
 
-**Run.** Make the input again, exactly as Step 11.1 made it.
+**Run.** Make the input again, exactly as Step 11.2 made it.
 
 ```bash
 for i in $(seq 1 900); do cat targets/lzg/src/lzg/*.c; done > targets/lzg/bench/big.txt
 ```
 
-**Run.**
+**Run.** This only reads.
 
 ```bash
 harness perf show --target targets/lzg | grep -c 'out of date'
 ```
 
-**You should see** `0`: the same bytes, so every row is current again.
+**You should see** `0`.
 
-**What just happened.** Every row records what it measured: the workload (its options and its input's bytes), the C, each unit's Rust, the way it measured, and the computer. When one of them changes, the row says which, and it stays on record until you measure again. Measuring again replaces a row.
+**What it means.** Every row records what it measured: the workload (its options and its input's bytes), the C, each unit's Rust, the way it measured, and the computer. When one of them changes, the row says which, and it stays on record until you measure again. The same bytes again make every row current.
 
-### Step 11.5 — Speed in the cockpit
+**If you do not see that.** A number above 0 at the end: the `for` line was not exactly the one from Step 11.2 (for example another number after `seq 1`). Run Step 11.2's `for` line again as it is there.
+
+### Step 11.6 — Speed in the cockpit
 
 **Run.**
 
@@ -4188,16 +4584,27 @@ harness perf show --target targets/lzg | grep -c 'out of date'
 harness-tui --target targets/lzg
 ```
 
-1. **The Speed row** is below Features in the tree, labelled `Speed (2 of 2)`: both verified units are measured.
-2. **The Speed view.** Select it. It starts with the computer and the Rust compiler the rows were measured with (a row's full sentence also names the C compiler), then `The original C`, `As it stands (2 units)` and each unit, worst first, each workload with its short answer. Press `Tab` to move into the view, then `↓` onto a row: its full sentence shows below the list, with the computer and compilers that row was measured with.
-3. **A unit.** Select `u-checksum`. Below its verdict lines it shows `Speed: <answer> on <workload>`, and on the next line its range (when the answer has one), `parallel` when the program uses several cores, and how many of the workloads say the same. If a row is slower, a `Next:` line says what you could do about it.
-4. **The actions.** Back on the Speed row, press `Enter`: **Edit the workloads file**, **Measure speed** and **Measure the program as it stands**. The two Measure dialogs say how many runs they make, about how long they take, and what they write; the Edit dialog says nano opens a private copy and the cockpit checks it before saving. Press `Esc` to close it without running anything.
-5. **Help.** Press `?` and scroll to **Speed** for the words and what they mean.
-6. **Quit** with `q`.
+**Do.** Press `↓` until the **Speed** row, below Features, is highlighted.
 
-### Step 11.6 — Commit the results
+**You should see** it labelled `Speed (2 of 2)`: both verified units are measured. The View starts with the computer and the Rust compiler the rows were measured with, then `The original C`, `As it stands (2 units)` and each unit, worst first, each workload with its short answer.
 
-**Why.** The rows are plain JSON in `migration/perf/`. Committing them keeps a history, so you can see how a change to a unit's Rust moved its speed. The big input is not committed: Step 11.1's command makes the same bytes again.
+**Do.** Press `Tab` to move into the View, then `↓` onto a row: its full sentence shows below the list. Press `Esc` to go back to Files.
+
+**Do.** Select `u-checksum` under `Units (5)` (as in Steps 9.8–9.9).
+
+**You should see** below its verdict lines `Speed: <answer> on <workload>`, and on the next line its range (when the answer has one), `parallel` when the program uses several cores, and how many of the workloads say the same. If a row is slower, a `Next:` line says what you could do about it.
+
+**Do.** Go back to the Speed row and press `Enter`.
+
+**You should see** three actions: **Edit the workloads file**, **Measure speed** and **Measure the program as it stands**. Press `Esc` to close the menu without running anything. Then press `?` and scroll to **Speed** for the words and what they mean. Quit with `q`.
+
+**What it means.** The cockpit shows the same rows as `perf show`, and can measure and edit the workloads for you.
+
+**If you do not see that.** `Speed (1 of 2)` means one unit's verdict is no longer fresh: quit, re-verify it (Step 10.13), and measure again (Step 11.4).
+
+### Step 11.7 — Commit the results
+
+The rows are plain JSON in `migration/perf/`. Committing them keeps a history, so you can see how a change to a unit's Rust moved its speed. The big input is not committed: Step 11.2's command makes the same bytes again.
 
 **Run.**
 
@@ -4211,7 +4618,7 @@ git add targets/lzg/migration/perf
 git commit -m "lzg: workloads and the first speed measurement"
 ```
 
-**You should see** a line like `[practice-lzg <7hex>] lzg: workloads and the first speed measurement`, then `4 files changed`. (A hint that your name and email were "configured automatically" may come first; it is harmless.)
+**You should see** a line like `[practice-lzg <hash>] lzg: workloads and the first speed measurement`, then `4 files changed`. (A hint that your name and email were "configured automatically" may come first; it is harmless.)
 
 **Run.**
 
@@ -4221,49 +4628,110 @@ git status --short
 
 **You should see** `?? targets/lzg/bench/`: the input you chose not to commit.
 
+**What it means.** The measurements are saved; only the big input file, which you can make again, is left out.
+
+**If you do not see that.** `Please tell me who you are`: git does not know your name yet; do Part 0's step that sets your git name and email, then commit again.
+
+### Answer
+
+Is the program with your Rust as fast as the C? Step 11.4's answer lines say it, one per unit and workload, in the words of its table.
+
 ### Checkpoint — Speed is working if…
 
-- [ ] `harness perf run` ended `exit=0` and wrote rows for the C alone, both units and the program as it stands.
-- [ ] `perf show` printed the same rows, and said `out of date: your workload changed` after you changed the input.
-- [ ] The cockpit's Speed row says `Speed (2 of 2)`, and `u-checksum` shows a `Speed:` line.
+- [ ] Step 11.4 ended `perf: measured 8 rows, 0 too short, 0 behave differently …` and `exit=0`.
+- [ ] Step 11.5 printed `15 runs · out of date: your workload changed` after you changed the input, and `0` after you made it again.
+- [ ] The cockpit's Speed row said `Speed (2 of 2)`, and `u-checksum` showed a `Speed:` line.
+
+### If you need to start this part again
+
+Run `git checkout targets/lzg` to put the committed files back, then start again at Step 11.2. If Step 11.3 then says `changed since the edit started`, the workloads file is already there and you can go straight to Step 11.4.
+
+### For the curious (optional)
+
+**The rules of the workloads file.**
+
+| Part | Rule |
+|---|---|
+| `id` | Lowercase letters, digits and `-`, at most 24, starting with a letter or digit; unique. |
+| `args` | Up to 8 of the program's own options. `{input}` stands for the input file, once, as an argument of its own. |
+| `input` | A file inside the target, written relative to `targets/lzg`: a real file (not a link), at most 64 MiB, not under `migration/` or `.git`, and no part of its path starting with `.` or `-`. |
+| `runs` | How many times each side runs, 5 to 31. Left out, it is 15. |
+
+A mistake is refused with its line and column, for example `error: migration/perf/workloads.toml line 4, column 6: workload[0]: id "Best" is not allowed — 1 to 24 of a-z, 0-9 and -, starting with a letter or digit`. `harness perf init --target targets/lzg` writes a starter file with these rules as comments.
+
+**What `perf show` runs.** Besides asking perf's launcher which computer this is, it runs only `cc --version` and `rustc -V`, inside the sandbox, to see whether your compilers changed since the rows were measured. `--no-check` skips both.
+
+**How long a run must be.** perf wants half a second or more of the C's CPU time, or at least a billion instructions.
 
 ---
 
 ## Part 12 — liblzg by map: let the harness find the program
 
-In Part 1 you picked seven files by hand, copied them into one folder, edited an include line
-and wrote `harness.toml` yourself. With your own projects you will not want to do that. This
-part starts again from the **whole** liblzg download, untouched, and lets the harness do the
-picking:
+**The question.** Your own project will not be laid out like Part 1's folder. Can the harness find the program inside an untouched download and set it up for you?
+**You will know the answer when** the harness has written a `harness.toml` for liblzg's compressor by itself (Step 12.5), and a unit of it has been migrated and verified (Step 12.9).
+**Takes** about an hour, most of it reading; every command finishes in a few seconds (1 to 3 seconds each on the author's Mac, 2026-10-09). **Uses Claude:** no. You answer the two questions the harness asks a model yourself, with text this guide gives you.
 
-1. **Map** the project: the harness finds each program (each `.c` file with its own `main()`)
-   and every file it needs.
-2. **State the configuration**: you tell it how the project is built, in a three-line file.
-3. **Accept** a program: the harness writes the target file (`harness.toml`) for you.
-4. Then scan, plan, driver, translation and verify work as before, with `--tool` naming the
-   program.
+In Part 1 you picked seven files by hand, copied them into one folder, edited an include line and wrote `harness.toml` yourself. With your own projects you will not want to do that. This part starts again from the **whole** liblzg download, untouched, and lets the harness do the picking. It has three experiments:
 
-You need Part 0 (the tools) and Step 1.2 (the download in `~/code/liblzg-upstream`). Parts 2–11
-are not needed: this part writes its own driver and its own translation, by hand, with no AI.
-docs/TUTORIAL.md "Mapping a whole C project" explains the words used here.
+- **12A — Find and accept** (Steps 12.1–12.5): which programs are in liblzg, and can I make one my target?
+- **12B — Migrate one unit of the tool** (Steps 12.6–12.9): does everything from Parts 3–6 work the same on it?
+- **12C — When the project changes, and the cockpit way** (Steps 12.10–12.23): if I edit the C, does the harness notice, and what do I do?
 
-**New words in this part.**
+### Before you start
 
-| Word | Plain meaning |
-|---|---|
-| **Map** | The harness's picture of a whole C project: its programs, the files each needs, the files they share, and what links. It lives in `migration/map/`. |
-| **Program** | A `.c` file with its own `main()`, plus every file it needs. The map names it `t-` plus the file name: `t-lzg` is `src/tools/lzg.c`. |
-| **Held choice** (duplicate set) | Two files that define the same functions, where linking cannot tell which one a program means. The map names the set `d1` and its files `d1.1`, `d1.2`. You choose. |
-| **Configuration** | How the project is built: a name, what it comes from (`make`), and the flags that matter (`-I` folders, `-D` defines). |
-| **Tool** | A program you accepted. Its `harness.toml`, written by the harness, lives in `migration/tools/<id>/`, beside the tool's own ledger. |
+- **What must already be true.** Part 0 is done (the tools are installed) and Part 1's download of liblzg is in `~/code/liblzg-upstream`. Parts 2–11 are not needed, but Parts 3 and 6 help: they show how a hand-off is answered and why whole-program runs miss `u-version`. This part explains both again where they come up.
+- **What to keep open.** Use **one Terminal window** for the whole part. From Step 12.1 on you work inside the folder `~/lzg-map`, and Steps 12.4, 12.7 and 12.8 store two names, `REQ` and `RESP`, that exist only in that window. If you close it, run `cd ~/lzg-map` first in the new one, and redo the `REQ=` and `RESP=` lines of the step you are on.
+- **No `--target` in this part.** In Parts 1–11 every command named its folder with `--target targets/lzg`. Here you run commands from inside the project's folder, and a command without `--target` works on the folder you are in.
+
+**Run.** Check that your RuHarness has the map commands.
+
+```bash
+harness project --help
+```
+
+**You should see** a first line `A whole C project: which files make up its programs (docs/PROJECT-MAP-DESIGN.md)`, then `Usage: harness project [OPTIONS] <COMMAND>` and the commands `map`, `accept` and `ask`. At the end, a list headed `The order, from a C project with no harness.toml:` gives this part's order in six lines.
+
+**If you do not see that.** `error: unrecognized subcommand 'project'`: your RuHarness is older than this part. Update and reinstall it as Part 10's "After updating RuHarness" shows (Steps 10.5–10.13), then run this box again.
+
+**Run.** Check that the download is there.
+
+```bash
+ls ~/code/liblzg-upstream/src/tools
+```
+
+**You should see** `Makefile`, `benchmark.c`, `lzg.c` and `unlzg.c` (on one line or several).
+
+**If you do not see that.** `No such file or directory`: do Part 1's download step first.
+
+### The picture, in words
+
+Read this once before any command; each idea comes back in the steps.
+
+- **A download is a box of `.c` files.** Some of them start a program: they hold **`main()`**, the place where a program begins when you run it. liblzg has three: `lzg` (compress), `unlzg` (decompress) and `benchmark` (timing).
+- **A program needs other files.** **Building** means turning `.c` files into a program you can run: the **compiler** turns each `.c` file into machine code, and **linking** is the last part, where every function a file asks for must be found in exactly one file. The **project map** (in this part simply "the map") lists, for each program, the files it needs, and whether they link. It is a different thing from Part 8's feature map.
+- **Sometimes two files offer the same function.** In liblzg the library's decoder (`src/lib/decode.c`) and a small stand-alone decoder (`src/extra/lzgmini.c`) both offer `LZG_Decode`. Both would work, so the harness will not guess: it **holds the choice**, names it `d1`, and you pick one of its files, `d1.1` or `d1.2`.
+- **The harness also needs to know how the project is normally built**: above all, which folders to search for **header** files (`.h` files of shared declarations). A `.c` file says `#include "lzg.h"`, and a **flag** given to the compiler, `-I` followed by a folder, says where to look. That is the **configuration**: three lines you write.
+- **When you accept a program**, the harness writes the `harness.toml` you wrote by hand in Part 1. An accepted program is called a **tool**. Its `harness.toml` and its own ledger live in `migration/tools/t-lzg/`, and from then on you name it with `--tool t-lzg` where Parts 1–11 used `--target targets/lzg`.
+
+**Four kinds of names** appear on the screens:
+
+| Name | What it is | Example |
+|---|---|---|
+| `t-…` | a program (and, once accepted, a tool): `t-` plus the file that holds its `main()` | `t-lzg` is `src/tools/lzg.c` |
+| `u-…` | a unit, as in Parts 2–8 | `u-version` is `version.c` |
+| `d1`, `d1.1`, `d1.2` | a held choice, and the files it chooses between | `d1.2` is `src/lib/decode.c` |
+| `p1`, `p2`, `p3` | a program's row number on the map's screen | `p2 t-lzg` |
 
 ---
 
-### Step 12.1 — Copy the download into its own folder
+### 12A — Find and accept
 
-**Why.** The map writes only inside the project's `migration/` folder, but you will also
-change a file on purpose in Step 12.9. A copy keeps the download clean. Making the copy a git
-repository lets you read every file the harness writes with `git diff`.
+**The question.** Which programs are in liblzg, and can I make one of them my target?
+**You will know the answer when** `migration/tools/t-lzg/harness.toml` and `migration/tools/t-unlzg/harness.toml` exist, written by the harness (Step 12.5).
+
+#### Step 12.1 — Copy the download into its own folder
+
+The map writes only inside the project's `migration/` folder, but you will change a file on purpose in 12C. A copy keeps the download clean. Making the copy a git repository (a folder whose history git keeps) lets you read every file the harness writes with `git diff`.
 
 **Run.** This copies every file except liblzg's own git history.
 
@@ -4271,7 +4739,13 @@ repository lets you read every file the harness writes with `git diff`.
 rsync -a --exclude .git ~/code/liblzg-upstream/ ~/lzg-map/
 ```
 
-**You should see** nothing.
+**Run.** Check the copy.
+
+```bash
+ls ~/lzg-map/src
+```
+
+**You should see** `Makefile`, `extra`, `include`, `lib` and `tools`.
 
 **Run.** The scratch folder for your draft files (harmless if it exists).
 
@@ -4279,7 +4753,7 @@ rsync -a --exclude .git ~/code/liblzg-upstream/ ~/lzg-map/
 mkdir -p ~/lzg-practice
 ```
 
-**Run.** Every command from here on runs from inside this folder.
+**Run.** Go into the copy. Every command from here to the end of 12C runs from inside this folder.
 
 ```bash
 cd ~/lzg-map
@@ -4303,15 +4777,25 @@ git add -A
 git commit -q -m "liblzg 1.0.10 as downloaded"
 ```
 
-**You should see** nothing from these three. (If git asks who you are, see Step 0.3.)
+These three print nothing. **Run** this to check them:
 
-**What just happened.** `~/lzg-map` holds the whole liblzg project: three programs in
-`src/tools`, the library in `src/lib`, the header in `src/include`, a mini decoder in
-`src/extra` and four Makefiles. No `harness.toml` anywhere.
+```bash
+git log --oneline
+```
 
----
+**You should see** one line: `<hash> liblzg 1.0.10 as downloaded`.
 
-### Step 12.2 — Map it
+**What it means.** `~/lzg-map` holds the whole liblzg project: three programs in `src/tools`, the library in `src/lib`, the header in `src/include`, a mini decoder in `src/extra` and four Makefiles (the files that tell the `make` program how to build). There is no `harness.toml` anywhere.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `rsync: … No such file or directory` | The download is missing: do Part 1's download step, then this step again. |
+| `Please tell me who you are` (from `git commit`) | git does not know your name yet: do Part 0's step that sets your git name and email, then run the `git commit` box again. |
+| `git log` shows more than one line | `~/lzg-map` already existed from an earlier try. Start this part again (see "If you need to start this part again" at the end of Part 12). |
+
+#### Step 12.2 — Map it
 
 **Run.**
 
@@ -4319,7 +4803,13 @@ git commit -q -m "liblzg 1.0.10 as downloaded"
 harness project map
 ```
 
-**You should see** (in about 2 seconds) this screen. The long lines wrap in your window.
+**You should see**, after a few seconds (about 1 second on the author's Mac), a long screen; the long lines wrap in your window. Look for three lines:
+
+1. `programs: 3`
+2. under `p2 t-lzg`, the line `link check: linked`
+3. `duplicate set d1 (LZG_Decode): held, linking cannot tell d1.1 src/extra/lzgmini.c from d1.2 src/lib/decode.c apart, so the choice is yours` (under `p1 t-benchmark`; `p3 t-unlzg` has the same line, naming `LZG_DecodedSize` too)
+
+The rest is explained under "For the curious" at the end of Part 12. The whole screen, for reference (run again on 2026-10-09):
 
 ```text
 project map of /Users/<you>/lzg-map: compiled with Apple clang version <number> (arm64-apple-darwin<number>); the harness's own flags on every compile: -O2 -ffp-contract=off
@@ -4354,6 +4844,7 @@ set aside in src/extra: 2 assembly file(s), not read
 set aside in src/extra: 1 javascript file(s), not read
 set aside in src/extra: 1 lua file(s), not read
 set aside in src/extra: 1 pascal file(s), not read
+skipped folder: .git (a dot-folder, 0 C files)
 skipped folder: migration (the harness's own files)
 project map: wrote migration/map/project-map.json and migration/.gitignore (3 program(s), 0 libraries; the project's own files were not changed); the configuration is a guess, so nothing can be accepted yet: next, state the build in migration/map/config.toml, for example
   [[configuration]]
@@ -4362,26 +4853,6 @@ project map: wrote migration/map/project-map.json and migration/.gitignore (3 pr
   flags = []  # the -I and -D flags the build passes, each joined, like "-Isrc/include"
 then run `harness project map` again (or have a model propose one: `harness project ask --build`)
 ```
-
-**What just happened.** The harness compiled every `.c` file (in the sandbox, changing none
-of them), read which functions each defines and needs, and followed the needs from each
-`main()`. Read it top down:
-
-- **`configuration: a guess`**: nothing told the harness how liblzg is built, so it compiled
-  with no flags. That is the first thing to fix (next step). The closing lines of the screen
-  say so too: nothing can be accepted yet, and they show the lines to write, with the flags
-  left for you to fill in.
-- **Three programs.** `t-lzg` (the compressor, 4 files) links: every function it calls is
-  defined exactly once. `t-unlzg` and `t-benchmark` both need `LZG_Decode`, which two files
-  define: the library's `src/lib/decode.c` and the mini decoder `src/extra/lzgmini.c`. That
-  is the **held choice d1**: both would link, so the harness cannot tell which is meant, and
-  it never guesses. You choose in Step 12.5.
-- **What the link check proves** is said once: "linked" means each needed function is defined
-  exactly once, not that the right file was kept, nor that the program runs. That is why d1
-  stays your choice even though both files would link.
-- **Shared files**: `checksum.c` and `encode.c` are needed by two programs.
-- **Set aside**: the JavaScript, Lua, Pascal and assembly versions of the mini decoder are not
-  C; they are counted and left alone.
 
 **Run.** See what the map wrote.
 
@@ -4395,39 +4866,19 @@ git status --short
 ?? migration/
 ```
 
-**If it looks different.** `error: no sandbox is available on this platform …` means you are
-not on macOS: see Part 0.
+**What it means.** The harness compiled every `.c` file (in the sandbox, a locked-down area where a program may not change your files, so none were changed), read which functions each file offers and needs, and followed the needs from each `main()`. It found three programs. The compressor `t-lzg` links: every function it calls is found exactly once. `t-unlzg` and `t-benchmark` both need `LZG_Decode`, which two files offer: that is the held choice `d1`, yours to make in Step 12.5. The second line, `configuration: a guess`, says nothing has told it how liblzg is built yet; the closing lines say so too, and show the three lines to write next. Its only new folder is `migration/`.
 
----
+**If you do not see that.**
 
-### Step 12.3 — State the configuration
+| You see | Do this |
+|---|---|
+| `error: no sandbox is available on this platform …` | You are not on macOS: this guide needs a Mac (Part 0). |
+| no `skipped folder: .git` line | You skipped the `git init` of Step 12.1. Harmless; continue. |
+| `programs: 3` missing, or other numbers | You are not in `~/lzg-map`, or the copy is incomplete. Run `cd ~/lzg-map` and this box again; if it still differs, start this part again. |
 
-**Why.** The map compiled under a guess. A guess may hide the errors that matter (a missing
-include folder makes a file fail to compile, and its functions then look missing), so the
-harness accepts no program until you say how the project is built.
+#### Step 12.3 — State the configuration
 
-**Run.** Look at liblzg's own compile flags.
-
-```bash
-grep -h '^CFLAGS' src/lib/Makefile src/tools/Makefile
-```
-
-**You should see.**
-
-```text
-CFLAGS = -c -O3 -funroll-loops -W -Wall
-CFLAGS = -c -O3 -W -Wall -I../include
-```
-
-**What to keep.** Only flags that change **which code** is compiled matter here:
-
-- `-I../include` matters: it is how `lzg.c` finds `lzg.h`. The Makefile runs from
-  `src/tools`, but the harness reads every path from the project's top folder, so it becomes
-  `-Isrc/include` (joined, no space after `-I`).
-- `-O3` is fine: the harness records it and keeps its own optimisation level.
-- `-c` is how a Makefile says "compile only": the harness does that itself. Leave it out.
-- `-W`, `-Wall` (warnings) and `-funroll-loops` (a speed setting) do not change which code is
-  compiled. The harness refuses flags it does not pass to a compiler, so leave them out.
+The map compiled under a guess, and a guess may hide the errors that matter (a missing include folder makes a file fail to compile, and its functions then look missing). So the harness accepts no program until you say how the project is built. For liblzg the answer is: the header folder is `src/include`, and the Makefiles ask for `-O3`. Your three lines are below; why exactly these flags is explained under "For the curious".
 
 **Run.** Write the configuration. This is one command down to `EOF`.
 
@@ -4442,10 +4893,13 @@ EOF
 
 **You should see** `heredoc>` lines while it pastes, and then the prompt again.
 
-The three lines: `name` is any short word for this way of building; `from = "make"` says the
-flags come from the project's Makefiles (write `stated` instead when you made them up
-yourself); `flags` are the flags, each in quotes. docs/SCHEMAS.md
-"`migration/map/config.toml`" lists every field.
+**Run.** Check the file.
+
+```bash
+cat migration/map/config.toml
+```
+
+**You should see** exactly the four lines between `<<'EOF'` and `EOF` above.
 
 **Run.** Map again.
 
@@ -4465,34 +4919,31 @@ and its last line now names the next step:
 project map: wrote migration/map/project-map.json (3 program(s), 0 libraries; the project's own files were not changed); next, make a program or library a tool with `harness project accept <id>`; the held choices (d1) are yours to make: name the file to keep with --keep <set>=<index or path> (`harness project ask` advises)
 ```
 
-**If it looks different.** If the map refuses your file, its message starts with the file's
-path and names every flag it refuses at once, with why. Had you pasted the Makefile's flags
-as they are (`"-c", "-O3", "-funroll-loops", "-W", "-Wall"`) with `"-I src/include"` and
-`"-I../include"`, it would say (exit 1):
+**What it means.** The configuration is now stated, not guessed, so programs can be accepted. The three lines: `name` is any short word for this way of building; `from = "make"` says the flags come from the project's Makefiles (write `stated` instead when you made them up yourself); `flags` are the flags, each in quotes.
 
-```text
-error: migration/map/config.toml: the flag `-c` is added by the harness itself: remove it; `-I src/include` has a blank after -I: write it joined, like -Isrc/include; the flag `-I../include` names a path outside the project or under migration/; name a folder inside the project, relative to its root; `-funroll-loops`, `-W`, `-Wall` are warning or tuning flags the harness does not pass: drop them, the map does not need them
-```
+**If you do not see that.**
 
-A message with `line 1: invalid type: map, expected a sequence` (or `unknown field`) means
-the table header is not exactly `[[configuration]]` with two brackets each side.
+| You see | Do this |
+|---|---|
+| `error: migration/map/config.toml: …` naming flags | A flag is one the harness refuses; the message names every one and why (an example is under "For the curious"). Paste the `cat >` box again exactly as it is; it overwrites the file. |
+| `line 1: invalid type: map, expected a sequence` (or `unknown field`) | The first line is not exactly `[[configuration]]`, with two brackets each side. Paste the `cat >` box again. |
+| `cat: migration/map/config.toml: No such file or directory` | You are not in `~/lzg-map`: run `cd ~/lzg-map`, then this step again. |
 
----
+#### Step 12.4 — Ask for advice on the held choice (optional, no AI)
 
-### Step 12.4 — Ask for advice on the held choice (optional, no AI)
+`harness project ask` puts the held choice — both files' facts and the start of each definition — to a model and keeps its answer as **advice**. The answer never decides anything: Step 12.5's `--keep` does. Here you answer it yourself, to see how a hand-off works.
 
-**Why.** `harness project ask` sends the held choice — both files' facts and the start of each
-definition — to a model and keeps its answer as **advice**. Here you answer it yourself, to see
-how a hand-off is answered. The answer never decides anything: Step 12.5's `--keep` does.
+**How a hand-off works, again.** The harness writes its question into a `….request.json` file and stops, printing `error: awaiting response:` with the name of the answer file it waits for. You write that answer file, run the same command again, and the harness reads your answer and carries on.
 
-**Run.** `--model by-hand` records who answers. Give it on this first run: the model's name is
-part of the question's key, so changing it later asks a new question.
+This step is **meant to stop with `error: awaiting response`**. That is how a hand-off looks; it is not a failure.
+
+**Run.** `--model by-hand` records who answers. Use the same word both times you run this command.
 
 ```bash
 harness project ask --model by-hand
 ```
 
-**You should see.**
+**You should see**, with exit code 1:
 
 ```text
 project ask: asking external (by-hand) about 1 item(s) in 1 call(s): d1
@@ -4503,30 +4954,53 @@ project ask: external provider mode — write each response beside its request u
 error: awaiting response: /Users/<you>/lzg-map/migration/map/traces/<key>.response.json
 ```
 
-with exit code 1. The two "slice" lines say the question shows the model only the start of
-each file's definitions (at most 120 lines or 16 KiB of each); that is expected.
+The two "slice" lines say the question shows the model only the start of each file's definitions (at most 120 lines or 16 KiB of each); that is expected. The re-run command the harness prints is longer than this guide's; both work, use the guide's.
 
-**Run.** Point `REQ` at the question and `RESP` at the answer file to write.
+**Run.** Remember where the question is: this stores its file name under the name `REQ`.
 
 ```bash
 REQ=$(ls -t migration/map/traces/*.request.json | head -n 1)
 ```
 
-**Run.**
+**Run.** Name the answer file `RESP`: the same name, ending `.response.json`.
 
 ```bash
 RESP="${REQ%.request.json}.response.json"
 ```
 
-**Run.** Write the answer. A reply is a JSON array (the request's own "Output contract" says
-so); every hand-off response wraps the reply in the same **envelope**, as its `"text"`:
-`{"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}`.
+**Run.** Check it.
+
+```bash
+echo "$RESP"
+```
+
+**You should see** `migration/map/traces/<key>.response.json`, with the same `<key>` as the `awaiting response:` line.
+
+The question asks for a short list, one entry per held choice: which file to keep (`d1.1`, `d1.2`, or `undecided`) and one of **three reasons**:
+
+| Reason | Meaning |
+|---|---|
+| `platform` | The two files serve different platforms or builds. |
+| `alternative-implementation` | They are interchangeable versions of the same thing. |
+| `cannot-tell` | The facts do not tell. |
+
+For liblzg the right advice is: keep `d1.2` (the library's decoder), because the mini decoder is an `alternative-implementation`. Every hand-off answer is wrapped in the same **envelope**, `{"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}`, with the reply as its `"text"`.
+
+**Run.** Write the answer in its envelope.
 
 ```bash
 jq -n --arg t '[{"item":"d1","keep":"d1.2","reason":"alternative-implementation"}]' '{text: $t, input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' > "$RESP"
 ```
 
-**Run.** Ask again.
+**Run.** Check the answer.
+
+```bash
+jq -r .text "$RESP"
+```
+
+**You should see** `[{"item":"d1","keep":"d1.2","reason":"alternative-implementation"}]`.
+
+**Run.** Ask again, with the same `--model`.
 
 ```bash
 harness project ask --model by-hand
@@ -4543,23 +5017,21 @@ project ask: the model's words above are labels and advice only: nothing was bui
 project ask: wrote migration/map/project-map.reply.json (1 answer(s) this run, under this map's digests)
 ```
 
-**If it looks different.** If you write the bare array into the file without the envelope, the
-harness refuses it, naming the file:
+**What it means.** The advice is recorded beside the map. It is only advice: the harness also checked that the advised choice links, and it still leaves the choice to you.
 
-```text
-error: parse error in /Users/<you>/lzg-map/migration/map/traces/<key>.response.json: the response file must hold the envelope {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}: write the model's reply as its "text" (the file holds a JSON array, not the envelope object)
-```
+**If you do not see that.**
 
-Run the `jq` line above again: it overwrites the file.
+| You see | Do this |
+|---|---|
+| a new `awaiting response:` line after you answered | You used another `--model` word the second time. Run the box again with `--model by-hand`. |
+| `error: parse error in …response.json: the response file must hold the envelope …` (after the three `project ask:` lines) | The file holds the bare list without the envelope. Run the `jq -n` box again: it overwrites the file. |
+| an empty line from `echo "$RESP"` | You are not in `~/lzg-map`, or the window was closed. Run `cd ~/lzg-map`, then the `REQ=` and `RESP=` boxes again. |
 
----
+#### Step 12.5 — Accept two programs as tools
 
-### Step 12.5 — Accept two programs as tools
+Accepting a program checks that the map still matches the files, links the program once more with your picks, and writes its `harness.toml` under `migration/tools/<id>/`.
 
-**Why.** Accepting a program checks that the map still matches the files, links the program
-once more with your picks, and writes its `harness.toml` under `migration/tools/<id>/`.
-
-**Run.** Try `t-unlzg` without a pick first.
+**Run.** Try `t-unlzg` without a pick first. This box is **meant to be refused**: it shows that the choice is yours.
 
 ```bash
 harness project accept t-unlzg
@@ -4586,9 +5058,6 @@ project accept t-unlzg: the whole-program check is off until you fill in [oracle
 project accept: wrote migration/tools/t-unlzg/harness.toml (3 file(s), linked, run as unlzg; configuration make, flags -O3 -Isrc/include); review it with `git diff`, then scan it: `harness scan --target . --tool t-unlzg`
 ```
 
-`--keep d1=src/lib/decode.c` (the path) does the same. `--keep d1=decode.c` is refused: it
-names no definer of d1, and the message lists the two that exist.
-
 **Run.** Accept the compressor. It holds no choice, so it needs no `--keep`.
 
 ```bash
@@ -4602,17 +5071,51 @@ project accept t-lzg: the whole-program check is off until you fill in [oracle.w
 project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; configuration make, flags -O3 -Isrc/include); review it with `git diff`, then scan it: `harness scan --target . --tool t-lzg`
 ```
 
+"The whole-program check is off" is not something to do now: you switch it on in Step 12.9.
+
 **Run.** Read what it wrote.
 
 ```bash
 cat migration/tools/t-lzg/harness.toml
 ```
 
-**You should see** a comment saying which command wrote it, then `schema_version = 2` and a
-`[target]` with `name = "lzg"`, the four files (`lzg.c` with `include_dirs = ["src/include"]`),
-your configuration, and a `map = { root_hash = …, inputs_hash = … }` line tying it to this
-map; then `[oracle]` with the commented example `# [oracle.whole_program]` (Step 12.9 fills it
-in), and `[llm]`. This file **is** the acceptance: you never write it by hand.
+**You should see** a file whose first line is ``# Written by `harness project accept t-lzg` from migration/map/project-map.json.`` Two parts are worth spotting: under `[target]`, `name = "lzg"` and the four files, with `src/tools/lzg.c` getting `include_dirs = ["src/include"]`; and near the end the commented lines `# [oracle.whole_program]` and `# args = ["-c"]`, the example Step 12.9 replaces. The whole file, as written on 2026-10-09 (your two `blake3:` codes differ):
+
+```text
+# Written by `harness project accept t-lzg` from migration/map/project-map.json.
+# Review it with `git diff`. Accepting t-lzg again rewrites [target] and what the map
+# decides of [oracle], and keeps every other key you add (not its comments).
+schema_version = 2
+
+[target]
+name = "lzg"
+files = [
+  { path = "src/lib/checksum.c", include_dirs = [] },
+  { path = "src/lib/encode.c", include_dirs = [] },
+  { path = "src/lib/version.c", include_dirs = [] },
+  { path = "src/tools/lzg.c", include_dirs = ["src/include"] },
+]
+configuration = { name = "make", from = "make", flags = ["-O3", "-Isrc/include"] }
+map = { root_hash = "blake3:<64 characters>", inputs_hash = "blake3:<64 characters>" }
+
+[oracle]
+allowlist = ["cc", "cargo", "rustc", "nm"]
+
+# The whole-program check is off until this is filled in: verify then runs the C
+# program and its Rust port with these arguments on the same samples and compares
+# what they print. Flags only (at most 4); the sample's path is added last.
+# [oracle.whole_program]
+# args = ["-c"]
+
+[llm]
+provider = "external"
+max_tokens = 16384
+# Who answers the hand-offs, recorded with every attempt (when left out, `claude-sonnet-5`):
+# name them, for example the model you answer with, or yourself.
+# model = "my-claude-code"
+```
+
+This file **is** the acceptance: you never write it by hand. The `map = …` line ties it to this map, by fingerprints of the files it was made from.
 
 **Run.** Commit the map, your configuration and both tools.
 
@@ -4626,11 +5129,51 @@ git add -A
 git commit -q -m "map liblzg; accept t-lzg and t-unlzg"
 ```
 
+That prints nothing. **Run** this to check it:
+
+```bash
+git log --oneline -1
+```
+
+**You should see** `<hash> map liblzg; accept t-lzg and t-unlzg`.
+
+**What it means.** liblzg's compressor and decompressor are now tools the harness can migrate, set up without a single hand-picked file.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `error: the configuration is a guess, and a tool is built under a stated one: …` | Step 12.3 is missing: do it, then this step again. |
+| ``error: --keep d1=decode.c names no definer of d1: …`` | After `d1=` write `d1.2` or the whole path `src/lib/decode.c`. |
+
+#### Answer to 12A
+
+Which programs are in liblzg, and can I make one my target? Three: `t-lzg`, `t-unlzg` and `t-benchmark` (Step 12.2). Yes: Step 12.5 wrote `harness.toml` for `t-lzg` and, with your pick `--keep d1=d1.2`, for `t-unlzg`.
+
+#### Checkpoint 12A
+
+- [ ] Step 12.2 printed `programs: 3`, `link check: linked` under `t-lzg`, and held `d1`.
+- [ ] After Step 12.3, the second line read `configuration: make, from make (stated in config.toml), …`.
+- [ ] `harness project accept t-unlzg --keep d1=d1.2` and `harness project accept t-lzg` each ended `project accept: wrote migration/tools/…/harness.toml`.
+- [ ] `git log --oneline -1` printed `… map liblzg; accept t-lzg and t-unlzg`.
+
 ---
 
-### Step 12.6 — Scan and plan the compressor
+### 12B — Migrate one unit of the tool
 
-**Run.** Try a scan without saying which tool.
+**The question.** Does everything from Parts 3–6 — scan, plan, driver, translation, verify — work the same on an accepted tool?
+**You will know the answer when** `harness verify u-version --tool t-lzg` ends `u-version GREEN — status set to verified` with eight checks (Step 12.9).
+
+Two things differ from Parts 3–6, and both are on purpose:
+
+- Every command names the tool with `--tool t-lzg`, and its records go to the tool's own ledger, `migration/tools/t-lzg/`, which works exactly like `targets/lzg/migration/` in Parts 2–11.
+- There is **no Accept step**. In Part 4 the cockpit asked you before making a GREEN attempt the unit's Rust. On the command line, `harness migrate` does that by itself when the attempt is GREEN, and checks it again afterwards: its last line says `promoted and verified`.
+
+You write both answers yourself again, as in 12A: a driver (the test program for one unit) and a translation.
+
+#### Step 12.6 — Scan and plan the compressor
+
+**Run.** Try a scan without saying which tool. This box is **meant to be refused**.
 
 ```bash
 harness scan
@@ -4674,21 +5217,26 @@ plan: execution order: u-checksum -> u-encode -> u-version -> u-lzg
 plan: next, write the first unit's differential driver: `harness gen-driver u-checksum --tool t-lzg`
 ```
 
-**What just happened.** The tool's ledger is `migration/tools/t-lzg/`, exactly like
-`targets/lzg/migration/` in Parts 2–11. There is no `u-decode`: the compressor does not use the
-decoder. This part takes `u-version`, the smallest unit, instead of the suggested `u-checksum`.
+**What it means.** The harness read the tool's C and cut it into four units, as Part 2 did for `targets/lzg`. There is no `u-decode`: the compressor does not use the decoder. This part takes `u-version`, the smallest unit, instead of the suggested `u-checksum`.
 
----
+**If you do not see that.**
 
-### Step 12.7 — The driver for `u-version`
+| You see | Do this |
+|---|---|
+| ``error: … is not a harness target …`` | You are not in `~/lzg-map`: run `cd ~/lzg-map`, then this step again. |
+| `error: unexpected argument '--tool'` | Your RuHarness is older than this part: update it (Part 10, Steps 10.5–10.13). |
 
-**Run.** Ask for the driver; `--model guide-written` labels your answer honestly.
+#### Step 12.7 — The driver for `u-version`
+
+This step is **meant to stop with `error: awaiting response`** the first time: the harness asks for a driver and waits for your answer file.
+
+**Run.** Ask for the driver; `--model guide-written` labels your answer honestly. Use the same word both times.
 
 ```bash
 harness gen-driver u-version --tool t-lzg --model guide-written
 ```
 
-**You should see.**
+**You should see** (exit 1):
 
 ```text
 awaiting response: /Users/<you>/lzg-map/migration/tools/t-lzg/units/u-version/driver-traces/<key>.response.json
@@ -4696,7 +5244,7 @@ gen-driver: external provider mode — write the reply beside its request under 
 error: awaiting response: /Users/<you>/lzg-map/migration/tools/t-lzg/units/u-version/driver-traces/<key>.response.json
 ```
 
-**Run.** Write the driver (the same one as Step 6.1). This is one command down to `EOF`.
+**Run.** Write the driver into your scratch folder (the same one as Part 6). This is one command down to `EOF`.
 
 ```bash
 cat > ~/lzg-practice/version-driver.c <<'EOF'
@@ -4719,31 +5267,47 @@ int main(void)
 EOF
 ```
 
-**Run.**
+**Run.** Remember where the question is.
 
 ```bash
 REQ=$(ls -t migration/tools/t-lzg/units/u-version/driver-traces/*.request.json | head -n 1)
 ```
 
-**Run.**
+**Run.** Name the answer file.
 
 ```bash
 RESP="${REQ%.request.json}.response.json"
 ```
 
-**Run.** The reply is the driver in its layout (Step 3.3), wrapped in the envelope.
+**Run.** Check it.
+
+```bash
+echo "$RESP"
+```
+
+**You should see** `migration/tools/t-lzg/units/u-version/driver-traces/<key>.response.json`, with the `<key>` of the `awaiting response:` line.
+
+**Run.** Put the driver into the answer file: its file name `driver.c`, the C between two lines of three backticks, an end marker, all wrapped in the envelope.
 
 ````bash
 jq -n --rawfile d ~/lzg-practice/version-driver.c '{text: ("driver.c\n```c\n" + $d + "```\nRUHARNESS_END_OF_OUTPUT\n"), input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' > "$RESP"
 ````
 
-**Run.**
+**Run.** Check the start of the answer.
+
+```bash
+jq -r .text "$RESP" | head -n 3
+```
+
+**You should see** exactly three lines: `driver.c`, then three backticks and `c`, then `#include <stdio.h>`.
+
+**Run.** The same command as before, so the harness reads your answer.
 
 ```bash
 harness gen-driver u-version --tool t-lzg --model guide-written
 ```
 
-**You should see** (the two "checking" lines each stand for a wait of several seconds):
+**You should see**, after a few seconds (about 3 on the author's Mac):
 
 ```text
 gen-driver: checking the driver against the original C (it is built and run several times; this can take a minute) …
@@ -4753,12 +5317,19 @@ gen-driver: checking it once more where it now lives …
 gen-driver: promoted migration/tools/t-lzg/units/u-version/driver.c and recorded /Users/<you>/lzg-map/migration/tools/t-lzg/units/u-version/driver-validation.json
 ```
 
----
+**What it means.** The harness checked your driver against the original C and made it `u-version`'s test, in the tool's ledger.
 
-### Step 12.8 — Translate `u-version` by hand
+**If you do not see that.**
 
-**Why.** Part 6 had the chat translate this unit. Here you are the model: the two Rust files
-below are a whole, correct translation, and the oracle judges them like any model's reply.
+| You see | Do this |
+|---|---|
+| a new `awaiting response:` line after you answered | You changed the `--model` word, or the answer file has the wrong name. Redo this step from the `REQ=` box, with `--model guide-written` both times. |
+| `jq -r .text` printed something else | The `jq -n` line was cut while pasting. Paste it again; it overwrites. |
+| `-> RED` | See "gen-driver ends RED" in Troubleshooting, with the paths of Part 12 shown there. |
+
+#### Step 12.8 — Translate `u-version` by hand
+
+Part 6 had the chat translate this unit. Here you are the model: the two Rust files below are a whole, correct translation, and the oracle judges them like any model's reply. This step is **meant to stop with `error: awaiting response`** the first time.
 
 **Run.**
 
@@ -4766,12 +5337,9 @@ below are a whole, correct translation, and the oracle judges them like any mode
 harness migrate u-version --tool t-lzg --model guide-written
 ```
 
-**You should see** `awaiting response: …/units/u-version/traces/<key>.response.json`, the
-`migrate: external provider mode — write the reply beside its request under … as the envelope
-{…}` line, and `error: awaiting response: …`.
+**You should see** (exit 1) three lines: `awaiting response: …/units/u-version/traces/<key>.response.json`, a long line starting `migrate: external provider mode — write the reply beside its request under …`, and `error: awaiting response: …`.
 
-**Run.** Write the reply: the two files in the layout the request's "OUTPUT FORMAT" asks for.
-This is one command down to `EOF`.
+**Run.** Write the reply: the two files in the layout the request asks for (each file's name, then its Rust between backtick lines, then the end marker). This is one command down to `EOF`.
 
 ````bash
 cat > ~/lzg-practice/version-answer.txt <<'EOF'
@@ -4803,7 +5371,7 @@ RUHARNESS_END_OF_OUTPUT
 EOF
 ````
 
-**Run.**
+**Run.** Remember where the question is (a different folder from Step 12.7: `traces`, not `driver-traces`).
 
 ```bash
 REQ=$(ls -t migration/tools/t-lzg/units/u-version/traces/*.request.json | head -n 1)
@@ -4815,19 +5383,35 @@ REQ=$(ls -t migration/tools/t-lzg/units/u-version/traces/*.request.json | head -
 RESP="${REQ%.request.json}.response.json"
 ```
 
+**Run.** Check it.
+
+```bash
+echo "$RESP"
+```
+
+**You should see** `migration/tools/t-lzg/units/u-version/traces/<key>.response.json`.
+
 **Run.** `jq -Rs` reads the whole file as one text and puts it in the envelope.
 
 ```bash
 jq -Rs '{text: ., input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' ~/lzg-practice/version-answer.txt > "$RESP"
 ```
 
-**Run.**
+**Run.** Check the start of the answer.
+
+```bash
+jq -r .text "$RESP" | head -n 2
+```
+
+**You should see** `src/logic.rs`, then three backticks and `rust`.
+
+**Run.** The same command again.
 
 ```bash
 harness migrate u-version --tool t-lzg --model guide-written
 ```
 
-**You should see.**
+**You should see**, after a few seconds:
 
 ```text
 migrate: turn 1 translate -> green (tokens in/out: ?/?)
@@ -4835,11 +5419,17 @@ migrate: u-version attempt a-<12hex> via `external` (external) model `guide-writ
 migrate: u-version promoted and verified — status set to verified
 ```
 
-`?/?` means the token counts are unknown: nobody counted tokens for an answer written by hand.
+**What it means.** The judge found your Rust behaves exactly like the C, and `migrate` made it the unit's Rust (no Accept step: see the start of 12B). `?/?` means the token counts are unknown: nobody counted tokens for an answer written by hand.
 
----
+**If you do not see that.**
 
-### Step 12.9 — Verify, then turn on the whole-program check
+| You see | Do this |
+|---|---|
+| a new `awaiting response:` line | As in Step 12.7: same `--model` word both times; redo from the `REQ=` box. |
+| `-> RED` | The answer file was changed while pasting. Paste the `cat >` box again, then redo from the `REQ=` box. |
+| `migrate` refuses: `… its generated driver's validation is …` | Step 12.7 did not end GREEN: redo it. |
+
+#### Step 12.9 — Verify, then turn on the whole-program check
 
 **Run.**
 
@@ -4859,12 +5449,9 @@ verify: [PASS] sanitizers — asan+ubsan clean
 verify: u-version GREEN — status set to verified
 ```
 
-**What just happened.** Five checks ran and passed. The whole-program check did **not** run: an
-accepted tool does not know how its program is used, so nobody has told the harness what
-arguments to give `lzg`. Part 6 had three whole-program checks because `targets/lzg/harness.toml`
-says `args = ["-9"]`. Give the tool the same.
+Five checks ran and passed. The whole-program check did **not** run (`SKIP` is not a failure): an accepted tool does not know how its program is used, so nobody has told the harness what arguments to give `lzg`. Part 6 had three whole-program checks because `targets/lzg/harness.toml` says `args = ["-9"]`. Give the tool the same.
 
-**Run.** Add the program's arguments to the tool's file. This is one command down to `EOF`.
+**Run.** Add the program's arguments to the end of the tool's file. Note the **two arrows `>>`**: this adds to the end of the file. With one arrow (`>`) it would replace the whole `harness.toml` the harness wrote. This is one command down to `EOF`.
 
 ```bash
 cat >> migration/tools/t-lzg/harness.toml <<'EOF'
@@ -4873,6 +5460,14 @@ cat >> migration/tools/t-lzg/harness.toml <<'EOF'
 args = ["-9"]
 EOF
 ```
+
+**Run.** Check the end of the file.
+
+```bash
+tail -n 3 migration/tools/t-lzg/harness.toml
+```
+
+**You should see** an empty line, `[oracle.whole_program]` and `args = ["-9"]`.
 
 **Run.**
 
@@ -4894,9 +5489,17 @@ verify: [PASS] sanitizers — asan+ubsan clean
 verify: u-version GREEN — status set to verified
 ```
 
-As Step 6.3 explains, these runs compress files, so they never call the version functions.
+**What it means.** This answers 12B: the whole chain works the same on a tool. The three whole-program runs compress files, so, as Part 6 found, they never call the version functions; the `differential-driver` check is the one that tests `u-version`.
 
-**Run.**
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `error: parse error in …/harness.toml: …` | The file was damaged (perhaps one arrow instead of two). Run `git checkout migration/tools/t-lzg/harness.toml`, then the `cat >>` box again. |
+| still `[SKIP] whole-program` | The `cat >>` box did not run. Run it, then `tail` and verify again. |
+| a `[FAIL]` line | See "Verify" in Troubleshooting, with the Part 12 paths shown there. |
+
+**Run.** Save the work.
 
 ```bash
 git add -A
@@ -4908,18 +5511,54 @@ git add -A
 git commit -q -m "t-lzg: u-version translated and verified"
 ```
 
+**Run.** Check it.
+
+```bash
+git log --oneline -1
+```
+
+**You should see** `<hash> t-lzg: u-version translated and verified`.
+
+#### Answer to 12B
+
+Does everything from Parts 3–6 work the same on an accepted tool? Yes: scan, plan, a driver, a translation and verify all ran with `--tool t-lzg`, and Step 12.9 ended `u-version GREEN` with eight checks.
+
+#### Checkpoint 12B
+
+- [ ] Step 12.7 ended `-> GREEN` and `promoted migration/tools/t-lzg/units/u-version/driver.c …`.
+- [ ] Step 12.8 ended `u-version promoted and verified — status set to verified`.
+- [ ] Step 12.9 showed `[SKIP] whole-program` first, and eight checks after you added `[oracle.whole_program]`.
+
 ---
 
-### Step 12.10 — When the project changes
+### 12C — When the project changes, and the cockpit way
 
-**Why.** A tool was accepted from one map of one set of files. When the files change, the next
-map says which tools changed and what to do.
+**The question.** If I edit the C, does the harness notice, and what do I do? And can I do the same from the cockpit?
+**You will know the answer when** the map names `t-lzg` as changed (Step 12.11), and after a scan, plan and verify the unit is GREEN again (Step 12.16).
 
-**Run.** Change a file of `t-lzg` (a comment only).
+A tool was accepted from one map of one set of files. When the files change, the next map says which tools changed and what to do.
+
+#### Step 12.10 — Change one file of the compressor
+
+**Run.** Add a comment (a note the compiler ignores) to the end of `version.c`.
 
 ```bash
 echo '/* a comment added for the guide */' >> src/lib/version.c
 ```
+
+**Run.** Check it.
+
+```bash
+tail -n 2 src/lib/version.c
+```
+
+**You should see** `}` and then `/* a comment added for the guide */`.
+
+**What it means.** One C file of `t-lzg` changed. The program does exactly the same as before, but the harness cannot know that without looking.
+
+**If you do not see that.** `No such file or directory`: run `cd ~/lzg-map`, then this step again.
+
+#### Step 12.11 — Map again and find the tool's line
 
 **Run.**
 
@@ -4927,7 +5566,7 @@ echo '/* a comment added for the guide */' >> src/lib/version.c
 harness project map
 ```
 
-**You should see** the usual screen, and just before its last line these three:
+**You should see** the usual screen. Look for its line starting `accepted tool t-lzg:`, near the end, just before the last line. These three lines come there:
 
 ```text
 accepted tool t-lzg: its own files changed since it was accepted (src/lib/version.c); its closure, configuration and link are the same: scan it to read them (`harness scan --tool t-lzg`); accepting it again only clears this note
@@ -4935,11 +5574,11 @@ accepted tool t-unlzg: a file elsewhere in the project changed; nothing to do fo
 programs not accepted as tools: t-benchmark (src/tools/benchmark.c); accept one with `harness project accept <id>`
 ```
 
-The map compares every accepted tool with the new map. `t-lzg`'s own file changed, but not
-which files it needs, its configuration or its link: the change is in its C, which a scan
-reads. `t-unlzg` does not use `version.c`, so there is nothing to do for it. Had the change
-altered what `t-lzg` needs or how it links, the line would say so and end ``accept it again
-with `harness project accept t-lzg` ``.
+**What it means.** The harness noticed. `t-lzg`'s own file changed, but not which files it needs (its "closure"), its configuration or its link: the change is in its C, which a scan reads. `t-unlzg` does not use `version.c`, so there is nothing to do for it.
+
+**If you do not see that.** No `accepted tool` lines: Step 12.10's change did not happen; redo it. Had the change altered what `t-lzg` needs or how it links, the line would say so and end ``accept it again with `harness project accept t-lzg` ``.
+
+#### Step 12.12 — Read the tool's status
 
 **Run.**
 
@@ -4947,18 +5586,27 @@ with `harness project accept t-lzg` ``.
 harness state status --tool t-lzg
 ```
 
-**You should see** the map's own sentence as the first line:
+**You should see.**
 
 ```text
 status: its own files changed since it was accepted (src/lib/version.c); its closure, configuration and link are the same: scan it to read them (`harness scan --tool t-lzg`); accepting it again only clears this note
+status: facts STALE — run `harness scan --tool t-lzg` (6 files, 1 stale vs tree)
+status: u-checksum [pending] plan=fresh verdict=no verdict
+status: u-encode [pending] plan=fresh verdict=no verdict
+status: u-version [verified] plan=SOURCE-STALE verdict=green (STALE: source)  << CONTRADICTION: status and verdict evidence disagree
+status:   attempts: 1 (0 bound to current source) [a-<12hex>:external:green]
+status: u-lzg [pending] plan=fresh verdict=no verdict
 ```
 
-then ``status: facts STALE — run `harness scan --tool t-lzg` (6 files, 1 stale vs tree)`` and
-the units. `u-version` reads `[verified] plan=SOURCE-STALE verdict=green (STALE: source)  <<
-CONTRADICTION: status and verdict evidence disagree`: its C changed after it was verified, so
-its verdict no longer describes today's file. The steps below settle it.
+**What it means.** The first line is the map's note. `u-version`'s C changed after it was verified, so its verdict no longer describes today's file: the status says `SOURCE-STALE` and `CONTRADICTION` (Part 10's table explains both). The next four steps settle it.
 
-**Run.** Accept it again, to clear the note.
+**If you do not see that.** If `u-version` still reads `verdict=green (fresh)`, the change went into another file: check Step 12.10.
+
+#### Step 12.13 — Accept the tool again
+
+Accepting again records that you have seen the change: the tool's `harness.toml` then points at today's map, and the note leaves the status.
+
+**Run.**
 
 ```bash
 harness project accept t-lzg
@@ -4970,16 +5618,30 @@ harness project accept t-lzg
 project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; configuration make, flags -O3 -Isrc/include; its ledger (plan, units, verdicts) is kept; kept from the harness.toml there: oracle.whole_program (its own comments are not carried over)); review it with `git diff`, then scan it: `harness scan --target . --tool t-lzg`
 ```
 
-Accepting again rewrites only what the map decides (the files, folders, configuration, picks,
-run name and the map it came from) and keeps what you added, such as the
-`[oracle.whole_program]` section of Step 12.9: the closing line names what was kept, and
-`git diff migration/tools/t-lzg/harness.toml` shows the change.
+**What it means.** Accepting again rewrites only what the map decides (the files, folders, configuration, picks, run name and the map it came from) and keeps what you added, such as Step 12.9's `[oracle.whole_program]`: the line names what was kept. `git diff migration/tools/t-lzg/harness.toml` shows the change.
 
-**Run.** Then the usual after any change to the C: scan, plan, and verify again.
+**If you do not see that.** If `oracle.whole_program` is not named as kept, run `tail -n 3 migration/tools/t-lzg/harness.toml`; if `args = ["-9"]` is missing, do Step 12.9's `cat >>` box again.
+
+#### Step 12.14 — Scan the tool
+
+**Run.**
 
 ```bash
 harness scan --tool t-lzg
 ```
+
+**You should see.**
+
+```text
+scan: 6 files, 18 symbols, 42 refs -> /Users/<you>/lzg-map/migration/tools/t-lzg/facts.jsonl
+scan: next, cut the code into units: `harness plan --tool t-lzg`
+```
+
+**What it means.** The harness has read the changed C. A comment adds no functions, so the counts are the same as in Step 12.6.
+
+**If you do not see that.** As in Step 12.6.
+
+#### Step 12.15 — Plan it
 
 **Run.**
 
@@ -4987,7 +5649,19 @@ harness scan --tool t-lzg
 harness plan --tool t-lzg
 ```
 
-**You should see** `plan: unit u-version: source changed (hash updated)` among its lines.
+**You should see.**
+
+```text
+plan: unit u-version: source changed (hash updated)
+plan: execution order: u-checksum -> u-encode -> u-version -> u-lzg
+plan: next, write the first unit's differential driver: `harness gen-driver u-checksum --tool t-lzg`
+```
+
+**What it means.** The plan records `u-version`'s new fingerprint ("hash"): its C is now the C of today.
+
+**If you do not see that.** No `source changed` line: the scan of Step 12.14 did not run. Run it, then this step.
+
+#### Step 12.16 — Verify `u-version` again
 
 **Run.**
 
@@ -4995,20 +5669,41 @@ harness plan --tool t-lzg
 harness verify u-version --tool t-lzg
 ```
 
-**You should see** `verify: u-version GREEN — status set to verified` at the end.
+**You should see** the eight checks of Step 12.9, ending:
 
----
+```text
+verify: u-version GREEN — status set to verified
+```
 
-### Step 12.11 — The cockpit on a project with no tool yet
+**What it means.** This answers the first half of 12C: the harness noticed the change (Step 12.11), and scan, plan and verify brought the unit back to a fresh GREEN. Running `harness state status --tool t-lzg` now shows `facts fresh` and `verdict=green (fresh)` again.
 
-**Why.** Everything above can be done from the cockpit. It opens a project without a target in
-its own small mode: a list of acts, each a dialog that shows the exact command first.
+**If you do not see that.** A `[FAIL]` line: the change in Step 12.10 was more than a comment. Run `git checkout src/lib/version.c` to put the file back, then Steps 12.14–12.16 again.
 
-**Run.** Make a fresh copy, then open the cockpit on it.
+#### Step 12.17 — Make a second copy for the cockpit
+
+The rest of 12C does 12A again from the cockpit, on a new copy, so you can compare.
+
+**Run.**
 
 ```bash
 rsync -a --exclude .git ~/code/liblzg-upstream/ ~/lzg-cockpit/
 ```
+
+**Run.** Check it.
+
+```bash
+ls ~/lzg-cockpit/src
+```
+
+**You should see** `Makefile`, `extra`, `include`, `lib` and `tools`.
+
+**What it means.** A fresh, untouched copy of liblzg, with no map yet.
+
+**If you do not see that.** As in Step 12.1.
+
+#### Step 12.18 — Open the cockpit on it
+
+**Be ready for a different-looking cockpit.** On a folder with no `harness.toml` and no tool, the cockpit is **not** the full-screen view of Parts 4 and 9: it is a short **numbered text menu**. You type a number and press Return; anything else leaves. In the next steps, **Do.** means type what is shown and press Return.
 
 **Run.**
 
@@ -5025,8 +5720,15 @@ harness-tui: /Users/<you>/lzg-cockpit holds no harness.toml and no tool yet: it 
 Type a number (1-1) and Enter; anything else leaves:
 ```
 
-**Do.** Type `1` and press `Enter`. The dialog says what it runs, how long it takes and what it
-writes:
+**What it means.** The cockpit has recognised a C project to map and offers the one act that makes sense first.
+
+**If you do not see that.** `… is not a harness target …`: the cockpit was started without a real Terminal (for example from a script). Run the box in a Terminal window.
+
+#### Step 12.19 — Map from the cockpit
+
+**Do.** Type `1` and press Return.
+
+**You should see** a dialog that says what it runs, how long it takes and what it writes:
 
 ```text
 Map the project: find its programs and libraries, the files each one needs, what they share, and whether each program links (its code is compiled and linked in the sandbox, never run).
@@ -5036,45 +5738,221 @@ Map the project: find its programs and libraries, the files each one needs, what
 Run it? Type y and Enter; anything else goes back:
 ```
 
-**Do.** Type `y` and press `Enter`. The map's screen of Step 12.2 scrolls past, then:
+**Do.** Type `y` and press Return.
+
+**You should see** the map's screen of Step 12.2 scroll past (without the `.git` line: this copy has no git), then `harness project map --target /Users/<you>/lzg-cockpit ended with exit 0`, then the menu again, now longer:
 
 ```text
+harness-tui: /Users/<you>/lzg-cockpit holds no harness.toml and no tool yet: it is a C project to map.
   The map shows 3 program(s) and 0 libraries.
   Its configuration is a guess: a program is accepted under a stated one (write it in migration/map/config.toml, or Ask for a proposal).
   1. Map the project again
   2. Ask a model for advice
   3. Accept a program
+Type a number (1-3) and Enter; anything else leaves:
 ```
 
-The three acts:
+**What it means.** The cockpit ran exactly Step 12.2's command. The three acts: **Map the project again** (the same dialog); **Ask a model for advice** (while the configuration is a guess, it asks for a proposed configuration, `harness project ask --build`; once you stated one, which file to keep in each held choice; its dialog says it stops at the hand-off and prints the command that resumes); **Accept a program**.
 
-- **Map the project again** — the same dialog as above.
-- **Ask a model for advice** — while the configuration is a guess, it asks for a proposed
-  configuration (`harness project ask --build`); once you stated one, which file to keep in each
-  held choice. Its dialog says it stops at the hand-off and prints the command that resumes.
-- **Accept a program** — lists the programs (`1. t-benchmark — src/tools/benchmark.c
-  (program)`, …), then for a program with a held choice asks `t-unlzg holds the choice d1:
-  linking cannot tell its files apart, so keep which one?` with the files listed, then shows the
-  command (`harness project accept t-unlzg --target … --keep d1=d1.2`) and runs it on `y`.
-  While the configuration is a guess it lists nothing and says instead: `Accept needs a stated
-  configuration, and this map's is a guess (or came with the project): write it in
-  migration/map/config.toml, or Ask for a proposal, then map again.`
+**If you do not see that.** If the menu still says `No map yet.`, the map failed: read the lines above the menu, and see "The project map" in Troubleshooting.
 
-**Do.** Type anything other than a number and press `Enter` to leave. To accept from here,
-first write `~/lzg-cockpit/migration/map/config.toml` as in Step 12.3 (from another Terminal
-window), then choose **Map the project again**, then **Accept a program**. After an accept the
-cockpit opens the new tool, with `Next step: Nothing is scanned yet — press Enter and choose Scan
-the project`; the project's files that are not part of the tool are greyed with `⊖`.
+#### Step 12.20 — See why Accept waits
 
-### Checkpoint — the map is working if…
+**Do.** Type `3` and press Return.
 
-- [ ] `harness project map` on the untouched download listed 3 programs and held d1.
-- [ ] After `config.toml`, the screen said `configuration: make, from make (stated in config.toml)`.
-- [ ] `accept t-unlzg --keep d1=d1.2` and `accept t-lzg` each wrote a `harness.toml`.
-- [ ] `verify u-version --tool t-lzg` showed `[SKIP] whole-program` first, and eight checks after
-      you added `[oracle.whole_program]`.
-- [ ] After changing `version.c`, the map named `t-lzg` as changed, and `state status` began with
-      the notice.
+**You should see.**
+
+```text
+Accept needs a stated configuration, and this map's is a guess (or came with the project): write it in migration/map/config.toml, or Ask for a proposal, then map again.
+```
+
+and the menu again.
+
+**What it means.** The cockpit keeps the same rule as Step 12.3: no accept under a guess.
+
+**If you do not see that.** If it lists programs instead, a `config.toml` is already there from an earlier try; continue at Step 12.22.
+
+**Do.** Type `q` and press Return to leave. The cockpit says `nothing run; start the cockpit again to map the project`.
+
+#### Step 12.21 — Write the configuration for the second copy
+
+**Run.** First go into the second copy, so the file lands there.
+
+```bash
+cd ~/lzg-cockpit
+```
+
+**Run.** The same configuration as Step 12.3. This is one command down to `EOF`.
+
+```bash
+cat > migration/map/config.toml <<'EOF'
+[[configuration]]
+name = "make"
+from = "make"
+flags = ["-O3", "-Isrc/include"]
+EOF
+```
+
+**Run.** Check it.
+
+```bash
+cat migration/map/config.toml
+```
+
+**You should see** the four lines between `<<'EOF'` and `EOF` above.
+
+**What it means.** The second copy now states how it is built, like the first.
+
+**If you do not see that.** `No such file or directory` for `migration/map/config.toml`: Step 12.19's map did not run, so there is no `migration/map` folder. Do Steps 12.18–12.19 again.
+
+#### Step 12.22 — Map again from the cockpit
+
+**Run.**
+
+```bash
+harness-tui --target ~/lzg-cockpit
+```
+
+**Do.** Type `1`, Return, then `y`, Return.
+
+**You should see** the map's screen with `configuration: make, from make (stated in config.toml), …` as its second line, then the menu, now with `Its configuration: make.`:
+
+```text
+harness-tui: /Users/<you>/lzg-cockpit holds no harness.toml and no tool yet: it is a C project to map.
+  The map shows 3 program(s) and 0 libraries.
+  Its configuration: make.
+  1. Map the project again
+  2. Ask a model for advice
+  3. Accept a program
+Type a number (1-3) and Enter; anything else leaves:
+```
+
+**What it means.** As in Step 12.3: programs can now be accepted.
+
+**If you do not see that.** `Its configuration is a guess` still: the file of Step 12.21 is missing or in the wrong folder. Leave (`q`), and redo Step 12.21.
+
+#### Step 12.23 — Accept a program from the cockpit
+
+**Do.** Type `3`, Return.
+
+**You should see.**
+
+```text
+Which one?
+  1. t-benchmark — src/tools/benchmark.c (program)
+  2. t-lzg — src/tools/lzg.c (program)
+  3. t-unlzg — src/tools/unlzg.c (program)
+Type its number (1-3) and Enter; anything else goes back:
+```
+
+**Do.** Type `3`, Return (for `t-unlzg`, the one with a held choice).
+
+**You should see.**
+
+```text
+t-unlzg holds the choice d1: linking cannot tell its files apart, so keep which one?
+  1. d1.1 src/extra/lzgmini.c
+  2. d1.2 src/lib/decode.c
+Type its number (1-2) and Enter; anything else goes back:
+```
+
+**Do.** Type `2`, Return.
+
+**You should see** the dialog, with the exact command:
+
+```text
+Accept a program: check the map still matches the project, apply your picks, link the program once more and write it as a tool you can scan, plan and migrate.
+  It runs: harness project accept t-unlzg --target /Users/<you>/lzg-cockpit --keep d1=d1.2
+  It takes: about as long as the map (it maps and link-checks the project again to check the map still says what it finds), then one more link.
+  It writes: migration/tools/<id>/harness.toml only (an id accepted before keeps its ledger and what you added to that file).
+Run it? Type y and Enter; anything else goes back:
+```
+
+**Do.** Type `y`, Return.
+
+**You should see** (from the author's run) the full-screen cockpit open on the new tool, with `Next step: Nothing is scanned yet — press Enter and choose Scan the project`. The project's files that are not part of the tool are greyed out and marked `⊖`. Quit with `q`.
+
+**What it means.** This answers the second half of 12C: the cockpit does the same as Steps 12.2–12.5, through dialogs that show each command before running it.
+
+**If you do not see that.** If you typed something else by mistake, the menu comes back: start this step again.
+
+#### Answer to 12C
+
+If I edit the C, does the harness notice? Yes: the map named `t-lzg` as changed (Step 12.11) and the status showed the stale verdict (Step 12.12). What do I do? Accept again, scan, plan and verify (Steps 12.13–12.16), which ended GREEN. And the cockpit does the same through a numbered menu (Steps 12.18–12.23).
+
+### Checkpoint — Part 12
+
+- [ ] Step 12.2 printed `programs: 3` and held `d1`; after Step 12.3 the screen said `configuration: make, from make (stated in config.toml)`.
+- [ ] Step 12.5's two accepts each wrote a `harness.toml`.
+- [ ] Step 12.9 showed `[SKIP] whole-program` first, and eight checks after you added `[oracle.whole_program]`.
+- [ ] After changing `version.c`, the map named `t-lzg` as changed, and `state status` began with the note (Steps 12.11–12.12).
+- [ ] Step 12.16 ended `verify: u-version GREEN — status set to verified`.
+- [ ] Step 12.23's dialog showed `harness project accept t-unlzg --target … --keep d1=d1.2`.
+
+### If you need to start this part again
+
+The two copies are only for this part, so you can delete them and start again at Step 12.1. Deleting cannot be undone; check that you type the names exactly.
+
+**Run.**
+
+```bash
+rm -rf ~/lzg-map ~/lzg-cockpit
+```
+
+To start only 12B or 12C again instead, go back to the last commit in `~/lzg-map`: `cd ~/lzg-map`, then `git reset --hard`, which throws away every change since that commit.
+
+### For the curious (optional)
+
+**The map's screen, top down.**
+
+- **`configuration: a guess`**: nothing told the harness how liblzg is built, so it compiled with no flags.
+- **Each program** (`p1`, `p2`, `p3`): the file with its `main()`, then `files:` (the `.c` files it needs), `outside symbols:` (functions it uses from outside the project, such as `printf` from the C library; "compiler or runtime names" are helpers the compiler adds), `guessed libraries:` (extra libraries it seems to need: none here), `link check:` and, for a held choice, `incomplete:` and `duplicate set d1`.
+- **What the link check proves** is said once: "linked" means each needed function is defined exactly once, not that the right file was kept, nor that the program runs. That is why d1 stays your choice even though both files would link.
+- **Shared files**: `checksum.c` and `encode.c` are needed by two programs.
+- **Defined in two programs' files that never meet**: `ShowProgress` and `ShowUsage` exist in both `benchmark.c` and `lzg.c`, but no program uses both files, so nothing needs choosing: listed, never asked.
+- **Set aside**: the JavaScript, Lua, Pascal and assembly versions of the mini decoder are not C; they are counted and left alone.
+- **Skipped folder**: `.git` (git's own records; a "dot-folder" is one whose name starts with a dot) and `migration` (the harness's own files) are never read.
+
+**Why these flags (Step 12.3).** **Run** this to see liblzg's own compile flags (from inside `~/lzg-map`):
+
+```bash
+grep -h '^CFLAGS' src/lib/Makefile src/tools/Makefile
+```
+
+**You should see.**
+
+```text
+CFLAGS = -c -O3 -funroll-loops -W -Wall
+CFLAGS = -c -O3 -W -Wall -I../include
+```
+
+Only flags that change **which code** is compiled matter here:
+
+- `-I../include` matters: it is how `lzg.c` finds `lzg.h`. The Makefile runs from `src/tools`, but the harness reads every path from the project's top folder, so it becomes `-Isrc/include` (joined, no space after `-I`).
+- `-O3` (an optimisation level) is fine: the harness records it and keeps its own optimisation level.
+- `-c` is how a Makefile says "compile only": the harness does that itself. Leave it out.
+- `-W`, `-Wall` (warnings) and `-funroll-loops` (a speed setting) do not change which code is compiled. The harness refuses flags it does not pass to a compiler, so leave them out.
+- `-D` flags (not used by liblzg) define names the C code can test; they would matter, and belong in `flags`.
+
+Had you pasted the Makefile's flags as they are (`"-c", "-O3", "-funroll-loops", "-W", "-Wall"`) with `"-I src/include"` and `"-I../include"`, the map would refuse the file, naming every flag at once (exit 1; run again on 2026-10-09):
+
+```text
+error: migration/map/config.toml: the flag `-c` is added by the harness itself: remove it; `-I src/include` has a blank after -I: write it joined, like -Isrc/include; the flag `-I../include` names a path outside the project or under migration/; name a folder inside the project, relative to its root; `-funroll-loops`, `-W`, `-Wall` are warning or tuning flags the harness does not pass: drop them, the map does not need them
+```
+
+For your own project, `harness project ask --build` asks a model to propose `config.toml` from the build files. docs/SCHEMAS.md "`migration/map/config.toml`" lists every field.
+
+**Other ways to write a pick.** `--keep d1=src/lib/decode.c` (the path) does the same as `--keep d1=d1.2`. `--keep d1=decode.c` is refused: it names no definer of d1, and the message lists the two that exist.
+
+**The bare-list mistake (Step 12.4).** If you write the list into the answer file without the envelope, the harness refuses it after its three `project ask:` lines, naming the file (run again on 2026-10-09):
+
+```text
+error: parse error in /Users/<you>/lzg-map/migration/map/traces/<key>.response.json: the response file must hold the envelope {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}: write the model's reply as its "text" (the file holds a JSON array, not the envelope object)
+```
+
+**The `--model` word and the key.** The model's name is part of the question's key (`<key>`), so a different `--model` word asks a new question instead of reading your answer.
+
+docs/TUTORIAL.md "Mapping a whole C project" covers the same ground for a project of your own.
 
 ---
 
@@ -5082,56 +5960,110 @@ the project`; the project's files that are not part of the tool are greyed with 
 
 A few messages and documents in this version of RuHarness are out of date. The steps above point here when you meet one of them.
 
-1. The README and the older tutorial say to expect "eight PASS lines" when verifying zopfli. zopfli now has a features file, so the correct number is 16 (Step 0.8).
+1. The README and the older tutorial say to expect "eight PASS lines" when verifying zopfli. zopfli now has a features file, so the correct number is 16 (Part 0's check on zopfli).
 2. When `migrate` refuses a unit that has no driver, the message ends with `generating drivers is a later milestone`. Driver generation already exists: it is `harness gen-driver`, which you use in Part 3 (and Part 7 shows the message).
-3. The chat's first line may add a note in brackets naming the Claude Code version the cockpit was tested with. A newer Claude Code works; the note is harmless (Step 4.3).
-4. Some reference docs show the `[oracle] allowlist` without `nm`. All four tools are required, as in Step 1.10.
+3. The chat's first line may add a note in brackets naming the Claude Code version the cockpit was tested with. A newer Claude Code works; the note is harmless (Part 4).
+4. Some reference docs show the `[oracle] allowlist` without `nm`. All four tools are required, as Part 1's `harness.toml` has them.
 
 ---
 
 ## Troubleshooting
 
-| You see | What it means | What to do |
+Find where you are, then the line you see. Each row says one thing to do; when that does not help, see "When you ask someone for help" at the end.
+
+In Part 12 the paths and the flag differ from Parts 1–11: where a row says `targets/lzg/migration/…` and `--target targets/lzg`, Part 12 uses `migration/tools/t-lzg/…` and `--tool t-lzg`, run from inside `~/lzg-map`. Rows that differ show both.
+
+### Anywhere
+
+| You see | What it means | Do this |
 |---|---|---|
-| `command not found: harness` | `~/.cargo/bin` is not on your PATH in this window. | Run `source "$HOME/.cargo/env"`, or open a new Terminal window. If it is still missing, redo Step 0.7. |
-| `error: io error at targets/lzg: No such file or directory (os error 2): …` | You are in the wrong folder, or `--target` has a typo. | `cd ~/code/RuHarness` and check the path. |
-| `error: io error at /Users/<you>/code/RuHarness/targets/lzg/harness.toml: No such file or directory …` | The folder exists but `harness.toml` is missing. | Redo Step 1.10. |
-| `error: parse error in …/harness.toml: …` | There is a typo in `harness.toml`. | Compare it with Step 1.10. |
-| ``oracle kind `c-abi-differential` needs `nm` on the [oracle] allowlist in harness.toml (required: cc, cargo, rustc, nm)`` | `nm` is missing from `allowlist`. | Add it (Step 1.10). |
-| ``error: facts.jsonl is stale: <number> file(s) changed on disk; run `harness scan` first`` | A C file changed after the scan. | `harness scan --target targets/lzg`, then `harness plan --target targets/lzg`. |
-| ``unit `u-…` is stale: source changed since planning …`` | The unit's C changed after planning. | Scan, plan, look at `git diff`, then try again. If you did not mean to change the C, `git checkout targets/lzg/src` puts it back. |
-| ``ledger is locked by another harness command (pid <number>, `<command>`, since <time>); wait for it or stop it`` | Another command, perhaps the cockpit in another window, is writing to the ledger. | Wait for it to finish, or quit the other cockpit. |
-| `gen-driver` prints `awaiting response:` again after you answered | The response file has the wrong name, or you changed `--model`, which changes the key. | Use the same `--model` both times. Run `ls targets/lzg/migration/units/u-checksum/driver-traces/`: every `.request.json` needs a matching `.response.json`. For u-version, change `u-checksum` to `u-version`. |
-| `gen-driver` asks again, and its attempt record shows `generate -> format` | The answer was not in the expected layout. | Run "Check the start of your answer file" below. A follow-up request is waiting; answer it the same way (Step 3.2 `REQ=` line, then Step 3.3 from `RESP=` on). |
-| `gen-driver` ends RED (exit 10) | The driver failed validation on every turn. | Run "List why a driver failed" below. A `driver-build` failure often means the include edit (Step 1.5) is missing. |
-| `error: mutation: <number> site(s) but none of the <number> sampled mutant(s) compiled — a harness limitation …` | The harness could not build its planted bugs. This is not your driver's fault. | See "If the harness cannot build its planted bugs" below. |
-| `migrate` refuses: `… there is no [unit.oracle] kind …` | The unit has no validated driver yet. | Run `harness gen-driver` for the unit first (Part 3). See also Known quirks, item 2. |
-| `migrate` refuses: ``… its generated driver's validation is `failed` …`` (or `stale`, or `missing`) | The driver's validation is not a fresh GREEN. | `harness gen-driver u-checksum --target targets/lzg --model guide-written` (for u-version, change the name). |
-| Chat: ``claude is not signed in: run `claude` in a terminal and sign in, then send again`` | Claude Code is not signed in. | Do exactly that. |
-| Chat: `The chat is unavailable…` / `harness-mcp not found` | The chat's helper program is missing. | `cargo install --locked --path crates/harness-mcp`, then restart the cockpit. |
-| Chat: `… — the chat is off` | A safety check at start-up turned the chat off, for example because of an unexpected Claude Code setting. | Read the words shown. Plan B works without the chat. |
-| Cockpit: `Paused: a BLIND hand-off — only the audited protocol (targets/tractor/handoff-tools) may answer it; an answer written by hand is recorded as pipeline output.` | A cockpit command (not the chat) stopped at a model hand-off. This should not happen from the menus. `targets/tractor` is RuHarness's own test project, so ignore that path. "Recorded as pipeline output" only means the attempt is labelled as a command-line run. | Quit the cockpit and finish the translation on the command line with Plan B. |
-| Cockpit: a menu item is greyed out | It cannot run right now. | Choose it anyway: the reason appears at the bottom of the menu. |
-| Cockpit: a dialog never says `ready` | It is waiting for you to scroll to its end, or the window is too small. | Press `↓` until you reach the end, or make the window larger. |
-| Cockpit: `Re-check u-…: open u-… (or its crate) first …` | Re-check runs only on code that is on the screen. | Select the unit's row first. |
-| Cockpit: a second `q` does nothing | The quit dialog ignores keys until it has settled. | Wait a moment, then press `q` again. |
-| `verify` ends RED unexpectedly (exit 10) | A check failed. | Read the `[FAIL]` lines. For `differential-driver`, compare the first lines of both outputs as in Step 5.5 (`head -n 2 targets/lzg/migration/build/u-checksum/drv_c.out` and the same for `drv_rs.out`). |
-| `verify: skipped <feature>/<scenario>: …` | The C itself could not run that scenario reliably, for example because its output differs between runs. | The line says what to do. A skip never blocks your work. |
-| `features: features need a program with one main()` | An extra file with `main` was copied into `src/lzg`. | Remove it (only `lzg.c` may have `main`), then scan and plan again. |
-| `git commit` says `Please tell me who you are` | git does not know your name. | Step 0.3. |
-| `git status` shows changed `oracle-latest.*` files after a plain re-verify | Your Rust or clang version changed since the verdict was recorded. | That is expected after a tool update. Commit the new verdicts. |
+| `error: awaiting response: …response.json`, with exit code 1 | **Normal.** The harness has written a question for a model and is waiting for the answer file it names. | Go on to the next step: it shows how to write the answer. |
+| `command not found: harness` | `~/.cargo/bin` is not on your PATH in this window. | Open a new Terminal window and try again; if it is still missing, redo Part 0's install step. |
+| `error: unrecognized subcommand 'project'` (or `'perf'`) | Your installed RuHarness is older than the part you are on. | Update and reinstall: Part 10, "After updating RuHarness". |
+| ``ledger is locked by another harness command (pid <number>, `<command>`, since <time>); wait for it or stop it`` | Another harness command, perhaps the cockpit in another window, is writing to the same ledger. | Quit the other cockpit (or wait for the other command), then try again. |
 | `exit=130` | You pressed Ctrl-C. | Run the same command again. |
-| Part 12: `error: the configuration is a guess, and a tool is built under a stated one: …` (from `project accept`), or `the configuration is a guess, so the questions may be wrong: …` (from `project ask`) | Nothing has said how the project is built yet, so the map compiled with no flags. | Write `migration/map/config.toml` (Step 12.3), run `harness project map` again, then accept. `harness project ask --build` asks a model to propose the file instead. |
-| Part 12: `… has 2 mapped tools and no harness.toml of its own; pick one with --tool (t-lzg, t-unlzg)` | The project has several accepted tools, and the command does not know which one you mean. | Add `--tool t-lzg` (or the tool you mean) to the command. |
-| Part 12: ``error: --keep d1=decode.c names no definer of d1: its definers are d1.1 src/extra/lzgmini.c, d1.2 src/lib/decode.c`` | The value after `d1=` must be one of the listed indexes or the whole path. | `--keep d1=d1.2` or `--keep d1=src/lib/decode.c`. |
-| Part 12: `… duplicate set d1 of t-unlzg … is not settled: pick its definer yourself with --keep d1=<index or path> …` | The program holds a choice only you can make. | Add `--keep d1=d1.2` (Step 12.5). |
-| `error: parse error in …response.json: the response file must hold the envelope {"text": <the reply>, …}: write the model's reply as its "text" …` | The answer file holds the bare reply (or a field is missing): every hand-off answer is wrapped in the envelope. | Write it again with the `jq` line of the step you are on (Steps 3.3, 12.4, 12.7, 12.8); it overwrites the file. |
-| Part 12: `error: migration/map/config.toml: …`, naming flags (``… are warning or tuning flags the harness does not pass: drop them …``, ``… has a blank after -I: write it joined, like -Isrc/include``) | A flag is one the harness adds itself (`-c`), or one it does not pass to a compiler (`-Wall`, `-funroll-loops`), or a path is outside the project or has a space (`-I../include`, `-I src/include`). Every refused flag is named at once. | Remove warning and tuning flags; write paths from the project's top folder, joined: `-Isrc/include` (Step 12.3). |
-| Part 12: `verify: [SKIP] whole-program — not run: …` | The tool has no `[oracle.whole_program]` section yet, so the whole program was not run. It is not a failure. | Add the program's arguments to the tool's `harness.toml` (Step 12.9). |
+| `git commit` says `Please tell me who you are` | git does not know your name. | Do Part 0's step that sets your git name and email. |
+
+### Getting ready (Parts 0–2)
+
+| You see | What it means | Do this |
+|---|---|---|
+| ``error: …: this folder already holds migration results made elsewhere (… units, … verified): to trust them here, add `--adopt` once`` | The harness asks once before it trusts records it did not make on this Mac (they came with a download or another copy). | Run the same command again with `--adopt` added at the end (Part 0's check on zopfli shows it). |
+| `error: io error at targets/lzg: No such file or directory (os error 2): …` | You are in the wrong folder, or `--target` has a typo. | Run `cd ~/code/RuHarness`, then the command again. |
+| `error: io error at /Users/<you>/code/RuHarness/targets/lzg/harness.toml: No such file or directory …` | The folder exists but `harness.toml` is missing. | Redo Part 1's step that writes `harness.toml`. |
+| `error: parse error in …/harness.toml: …` | There is a typo in `harness.toml`. | Write it again with Part 1's `cat >` box (it overwrites). |
+| ``oracle kind `c-abi-differential` needs `nm` on the [oracle] allowlist in harness.toml (required: cc, cargo, rustc, nm)`` | `nm` is missing from `allowlist`. | Write `harness.toml` again with Part 1's box, which has all four. |
+| ``error: facts.jsonl is stale: <number> file(s) changed on disk; run `harness scan` first`` | A C file changed after the scan. | `harness scan --target targets/lzg` (Part 12: `harness scan --tool t-lzg`), then `harness plan` the same way. |
+| ``unit `u-…` is stale: source changed since planning …`` | The unit's C changed after planning. | `git checkout targets/lzg/src` if you did not mean to change the C; otherwise scan and plan as in the row above. |
+| `features: features need a program with one main()` | An extra file with `main` was copied into `src/lzg`. | Remove that file (only `lzg.c` may have `main`), then scan and plan again. |
+
+### Answering a hand-off (Parts 3, 6, 12 and Plan B)
+
+| You see | What it means | Do this |
+|---|---|---|
+| `awaiting response:` again after you answered | The answer file has the wrong name, or you changed `--model` (which changes the question's key). | Run the command again with the same `--model` word as the first time. If it still waits, run `ls targets/lzg/migration/units/u-checksum/driver-traces/` (Part 12: `ls migration/tools/t-lzg/units/u-version/driver-traces/`): every `.request.json` needs a `.response.json` with the same `<key>`. |
+| `error: parse error in …response.json: the response file must hold the envelope {"text": <the reply>, …}: write the model's reply as its "text" …` | The answer file holds the bare reply: every hand-off answer is wrapped in the envelope. | Run the `jq` line of the step you are on again; it overwrites the file. |
+| `gen-driver` asks again, and its attempt record shows `generate -> format` | The answer was not in the expected layout. | Run "Check the start of your answer file" below, then answer the new request the same way. |
+| `gen-driver` ends RED (exit 10) | The driver failed validation on every turn. | Run "List why a driver failed" below. (A `driver-build` failure often means Part 1's include edit is missing.) |
+| `error: mutation: <number> site(s) but none of the <number> sampled mutant(s) compiled — a harness limitation …` | The harness could not build its planted bugs. This is not your driver's fault. | Follow "If the harness cannot build its planted bugs" below. |
+| `migrate` refuses: `… there is no [unit.oracle] kind …` | The unit has no validated driver yet. | Run `harness gen-driver` for the unit first (Part 3). See also Known quirks, item 2. |
+| `migrate` refuses: ``… its generated driver's validation is `failed` …`` (or `stale`, or `missing`) | The driver's validation is not a fresh GREEN. | `harness gen-driver u-checksum --target targets/lzg --model guide-written` (for u-version, change the name; Part 12: `harness gen-driver u-version --tool t-lzg --model guide-written`). |
+
+### The chat (Part 4)
+
+| You see | What it means | Do this |
+|---|---|---|
+| ``claude is not signed in: run `claude` in a terminal and sign in, then send again`` | Claude Code is not signed in. | Do exactly that. |
+| `The chat is unavailable…` / `harness-mcp not found` | The chat's helper program is missing. | `cargo install --locked --path crates/harness-mcp`, then restart the cockpit. |
+| `… — the chat is off` | A safety check at start-up turned the chat off, for example because of an unexpected Claude Code setting. | Use the appendix's Plan B, which works without the chat. |
+
+### The cockpit (Parts 4, 9, 11)
+
+| You see | What it means | Do this |
+|---|---|---|
+| You pressed a key and do not know where you are | The cockpit's attention moved to another area or a dialog. | Press `Esc` (once or twice) to go back to the Files list. |
+| A menu item is greyed out | It cannot run right now. | Choose it anyway: the reason appears at the bottom of the menu. |
+| A dialog never says `ready` | It is waiting for you to scroll to its end, or the window is too small. | Press `↓` until you reach the end. |
+| `Re-check u-…: open u-… (or its crate) first …` | Re-check runs only on code that is on the screen. | Select the unit's row first. |
+| A second `q` does nothing | The quit dialog ignores keys until it has settled. | Wait a moment, then press `q` again. |
+| `Paused: a BLIND hand-off — only the audited protocol (targets/tractor/handoff-tools) may answer it; …` | A cockpit command (not the chat) stopped at a model hand-off; this should not happen from the menus. `targets/tractor` is RuHarness's own test project, so ignore that path. | Quit the cockpit and finish the translation on the command line with the appendix's Plan B. |
+| The cockpit does not show a change you made on the command line | It read the project before your change. | Press `g` to read the project again. |
+
+### Verify (Parts 5, 6, 8, 10, 12)
+
+| You see | What it means | Do this |
+|---|---|---|
+| `verify` ends RED unexpectedly (exit 10) | A check failed. | Read the `[FAIL]` lines. For `differential-driver`, compare the first lines of both outputs: `head -n 2 targets/lzg/migration/build/u-checksum/drv_c.out` and the same for `drv_rs.out` (Part 12: `migration/tools/t-lzg/build/u-version/drv_c.out`). |
+| `verify: skipped <feature>/<scenario>: …` | The C itself could not run that scenario reliably, for example because its output differs between runs. | Do what the line says. A skip never blocks your work. |
+| `verify: [SKIP] whole-program — not run: …` | The tool has no `[oracle.whole_program]` section yet. It is not a failure. | Add the program's arguments to the tool's `harness.toml` (Step 12.9). |
+| `git status` shows changed `oracle-latest.*` files after a plain re-verify | Your Rust or clang version changed since the verdict was recorded. | Commit the new verdicts. |
+
+### Speed (Part 11)
+
+| You see | What it means | Do this |
+|---|---|---|
+| `error: write your workloads file first — harness perf init gives a starter` | There is no workloads file yet. | Do Step 11.3. |
+| `error: migration/perf/workloads.toml changed since the edit started; nothing was saved` | A workloads file is already there. | Edit it in the cockpit: Speed row, `Enter`, **Edit the workloads file**. |
+| `too short to time` | The C ran too briefly to time. | Make the input bigger (Step 11.4's table). |
+| `error: the program's C changed since the scan: scan the project first, then measure` | A C file changed since the scan. | `harness scan --target targets/lzg`, then measure again. |
+| `perf: one unit measured (…) — … left out: verify it first …` | That unit's verdict is not fresh. | `harness verify` that unit, then measure again. |
+| `perf: the other rows on best are not run — the C failed there` | The original C failed on that workload. | Check the workload's options and input (Step 11.3). |
+| `perf runs on macOS only for now — the Linux launcher is not built yet` | perf needs a Mac. | Skip Part 11. |
+
+### The project map (Part 12)
+
+| You see | What it means | Do this |
+|---|---|---|
+| `error: the configuration is a guess, and a tool is built under a stated one: …` (from `project accept`), or `the configuration is a guess, so the questions may be wrong: …` (from `project ask`) | Nothing has said how the project is built yet, so the map compiled with no flags. | Do Step 12.3 (write `config.toml`, map again), then accept. |
+| `… has 2 mapped tools and no harness.toml of its own; pick one with --tool (t-lzg, t-unlzg)` | The command does not know which tool you mean. | Add `--tool t-lzg` (or the tool you mean). |
+| ``error: --keep d1=decode.c names no definer of d1: its definers are d1.1 src/extra/lzgmini.c, d1.2 src/lib/decode.c`` | The value after `d1=` must be one of the listed indexes or the whole path. | Use `--keep d1=d1.2`. |
+| `… duplicate set d1 of t-unlzg … is not settled: pick its definer yourself with --keep d1=<index or path> …` | The program holds a choice only you can make. | Add `--keep d1=d1.2` (Step 12.5). |
+| `error: migration/map/config.toml: …`, naming flags | A flag is one the harness adds itself (`-c`), one it does not pass (`-Wall`, `-funroll-loops`), or a path outside the project or with a space (`-I../include`, `-I src/include`). | Paste Step 12.3's `cat >` box again exactly; "For the curious" at the end of Part 12 explains each flag. |
+| ``error: /Users/<you> is not a harness target …`` | You are not inside the project's folder. | `cd ~/lzg-map`, then the command again. |
 
 ### Check the start of your answer file
 
-Use this after Step 3.3's `RESP=` line, in the same Terminal window:
+**Run** this after the `RESP=` line, in the same Terminal window:
 
 ```bash
 jq -r .text "$RESP" | head -n 3
@@ -5141,7 +6073,7 @@ It has to print `driver.c`, then a line made of three backticks and `c`, then th
 
 ### List why a driver failed
 
-For u-version, change `u-checksum` to `u-version`:
+**Run** this; for u-version, change `u-checksum` to `u-version` (Part 12: the path starts `migration/tools/t-lzg/units/u-version/`):
 
 ```bash
 jq -r '.checks[] | "\(.name): \(.passed) - \(.detail)"' targets/lzg/migration/units/u-checksum/driver-attempts/d-*/validation.json
@@ -5201,18 +6133,20 @@ rust_crate = "u_checksum_rs"
 replaces = ["src/lzg/checksum.c"]
 ```
 
-For u-version, the three values are `migration/units/u-version/driver.c`, `u_version_rs` and `["src/lzg/version.c"]`. Save with Ctrl-O and Return, leave with Ctrl-X, and continue with Part 4 (or Step 6.2).
+For u-version, the three values are `migration/units/u-version/driver.c`, `u_version_rs` and `["src/lzg/version.c"]`. Save with Ctrl-O and Return, leave with Ctrl-X, and continue with Part 4 (or Part 6).
 
 ### When you ask someone for help
+
+Ask the person who gave you this guide. For a problem in RuHarness itself, its author takes reports on the RuHarness repository's Issues page on GitHub (`github.com/kadarius0719/RuHarness/issues`), if you have access to it.
 
 Include:
 
 - the exact command;
 - its full output;
 - the `echo "exit=$?"` number;
-- the output of `harness state status --target targets/lzg`.
+- the output of `harness state status --target targets/lzg` (Part 12: `harness state status --tool t-lzg`, from inside `~/lzg-map`).
 
-In the cockpit, `c` shows the command and everything it reported.
+In the cockpit, `c` shows the command and everything it reported: copy that too.
 
 ---
 
@@ -5225,7 +6159,7 @@ In the cockpit, `c` shows the command and everything it reported.
    - `small-memory/text`, with `-s`;
    - `verbose/text`, with `-v`. It prints progress lines that end in a carriage return on stderr; they compare fine but look odd;
    - `usage/no-args`, with no `args` at all. In it, the program's path appears as `$PROGDIR/lzg` on both sides.
-2. **Break `u-version` on purpose.** Change `1.0.10` in its Rust and re-verify. Only `differential-driver` and `feature:version/flag` should fail, which proves the scenario is doing its job. Undo with `git checkout targets/lzg`.
+2. **Break `u-version` on purpose.** Change `1.0.10` in its Rust, in `targets/lzg/migration/units/u-version/u_version_rs/src/logic.rs` (`nano -w` opens it), and re-verify. Only `differential-driver` and `feature:version/flag` should fail, which proves the scenario is doing its job. Undo with `git checkout targets/lzg`.
 3. **Hand edit.** In the cockpit, select `u-checksum`'s crate, press `Enter` and choose **Hand edit**. Your change is judged like a model's and recorded as a human attempt. It is never accepted automatically.
 4. **Modify with a note, or Retry.** Ask the chat something like `Please modify the last u-checksum attempt: keep the loop unrolled by 8`, or `Please retry u-checksum`. Then compare attempts with `d`.
 5. **Let Claude write a driver.** Run `harness gen-driver u-checksum --target targets/lzg --model my-claude-code`. The different `--model` starts a new attempt; the same `--model` would reuse the finished one. Answer its hand-off the way Plan B does (the answer layout is `driver.c` and a C block), then compare the mutation line in `migration/units/u-checksum/driver-attempts/d-*/validation.json` with the guide's driver. The new driver is only recorded: the harness prints `gen-driver: green attempt recorded; not promoted (unit already has a generated driver — pass --promote to replace it; a verified unit's verdict then goes stale until re-verified)`. Adding `--promote` would replace the guide's driver and leave `u-checksum`'s verdict out of date until you re-verify.
@@ -5233,4 +6167,4 @@ In the cockpit, `c` shows the command and everything it reported.
 7. **The summary for AI assistants.** `harness sync-runtime --target targets/lzg` writes a managed block into `targets/lzg/AGENTS.md`. It also adds the line `@AGENTS.md` to `targets/lzg/CLAUDE.md` (creating that file if needed), so Claude Code picks the block up.
 8. **The machine-readable stream.** `harness --json verify u-checksum --target targets/lzg` prints the same run as JSON events, one per line.
 9. **A second library.** heatshrink (https://github.com/atomicobject/heatshrink, tag `v0.4.1`, ISC license) has two leaf units, an encoder and a decoder, plus a command-line tool. It is harder, because each unit works on a struct and allocates memory. Its top folder also holds three test programs (`test_heatshrink_*.c`, each with its own `main`, plus `greatest.h`). Copy only `heatshrink.c`, `heatshrink_encoder.c/.h`, `heatshrink_decoder.c/.h`, `heatshrink_common.h` and `heatshrink_config.h` into your `source_dir`.
-10. **Finish with the branch.** You can keep `practice-lzg` as a reference, or return to `main` with `git switch main`. Deleting the branch (`git branch -D practice-lzg`) or the scratch folders (`~/lzg-practice`, `~/code/liblzg-upstream`) cannot be undone, so only do that when you are sure.
+10. **Finish with the branch.** You can keep `practice-lzg` as a reference, or return to `main` with `git switch main`. Deleting the branch (`git branch -D practice-lzg`) or the scratch folders (`~/lzg-practice`, `~/code/liblzg-upstream`, and Part 12's `~/lzg-map` and `~/lzg-cockpit`) cannot be undone, so only do that when you are sure.
