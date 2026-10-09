@@ -625,7 +625,9 @@ fn hardening_on_zopfli() {
         .ends_with(".response.json"));
     assert_eq!(find(&evs, "error").unwrap()["kind"], "awaiting");
     assert!(
-        r.stderr.contains("supply the response file(s)"),
+        r.stderr
+            .contains("observe: external provider mode — write the reply beside its request")
+            && r.stderr.contains("as the envelope {\"text\": <the reply>"),
         "{}",
         r.stderr
     );

@@ -417,6 +417,78 @@ same computer, and perf says which was faster and by how much — or honestly th
 Numbers are of one computer at one time; commit `migration/perf/` with your work to keep a
 history. Speed runs on macOS for now.
 
+## Mapping a whole C project
+
+The example project comes with a `harness.toml` someone wrote by hand: it says which C files
+to translate and how to build them. A C project you download has none. RuHarness can make it
+for you, one program at a time. The README's "Start from your own C project" lists the
+commands; docs/TESTING-GUIDE.md Part 12 walks them on a real project. This chapter explains
+what you will read on the way.
+
+**The words.**
+
+- A **program** is a `.c` file with its own `main()`, plus every file it needs: the files
+  that define the functions it calls, and the files those call in turn. The map names each
+  program with an id such as `t-lzg` (from its file `lzg.c`).
+- A **shared file** is one that several programs need, such as a library's `checksum.c`.
+  Each program you accept gets its own copy of the work on it.
+- A **held choice** (a "duplicate set", named `d1`, `d2`, …) is a place where two files
+  define the same functions, for example a full decoder and a small one. A program can use
+  only one. When the map cannot tell which one is meant, it holds the choice for you, lists
+  the files as `d1.1`, `d1.2`, … and waits. You choose; a model may advise, but never
+  chooses.
+- A **configuration** is how the project is built: its name, what it comes from (`make`,
+  `cmake`, …) and the compiler flags that matter (`-I` folders, `-D` defines). You write
+  it in `migration/map/config.toml`. Until you do, the map compiles under a guess with no
+  flags, and nothing can be accepted yet: a guess may hide the very errors that matter.
+
+**Why "it links" does not prove the right file.** For each program the map tries to link
+its files together. "Linked" means every function the program calls is defined exactly
+once. It does not mean the program is the one the project ships, that the file kept in a
+held choice is the right one (both a full and a small decoder link), or that your
+configuration matches the project's own build. That is why a held choice stays yours even
+when every option links.
+
+**Where things live.**
+
+- `migration/map/` is the map's folder: `config.toml` (yours), `project-map.json` (the
+  map), `project-map.reply.json` and `config.proposed.toml` (a model's advice, if you
+  asked) and `traces/` (the requests and answers of that advice).
+- `migration/tools/<id>/` is one accepted tool. Its `harness.toml` is the acceptance
+  itself: the program's files, the configuration, your picks and the map it came from.
+  Beside it lives the tool's own ledger — its facts, plan, units, drivers and verdicts —
+  exactly as the example project keeps its own under `migration/`.
+
+**Accepting again.** When the project changes, the map says which tools changed and how,
+and the tool's status starts with the same notice. Accepting the tool again rewrites the
+parts of its `harness.toml` that the map decides — the files, the include folders, the
+configuration, the picks, the run name, the libraries it links with — and keeps the rest:
+its ledger, and what you added yourself, such as an `[oracle.whole_program]` section or a
+`model`. The closing line says what was kept. Read the change with `git diff` before you go
+on.
+
+**The whole-program check.** An accepted tool does not know how its program is run, so
+it has no whole-program check at first, and `verify` shows that check as `[SKIP] … not run`
+rather than as passed. Add the program's arguments to the tool's `harness.toml` to turn it
+on, for example:
+
+```toml
+[oracle.whole_program]
+args = ["-9"]
+```
+
+**In the cockpit.** Opened on a project folder with no tool yet, the cockpit offers the
+project's acts instead of the usual tree, each as a dialog that shows the exact command,
+how long it takes and what it writes, and runs only when you type `y`:
+
+- **Map the project** (again) — runs `harness project map` and shows its screen.
+- **Ask a model for advice** — while the configuration is a guess, it asks for a proposed
+  configuration; once it is stated, it asks which file to keep in each held choice. The
+  answer is shown beside the choice, labelled as the model's.
+- **Accept a program** — pick the program, then for each held choice the file to keep;
+  it runs `harness project accept` and opens the new tool, with a Next step to scan it.
+  Files outside the tool are shown greyed with `⊖`.
+
 ## Your first migration, step by step
 
 This walk-through migrates one unit through the chat, from asking to accepting. It takes a few minutes, most of it waiting for the model and the oracle. The example uses a practice copy of the zopfli project in which the unit `u001-katajainen` has been reset to planned (in the project itself it is already migrated). In your own project, any unit marked `◇` (planned) or `✗` (failing) works the same way.

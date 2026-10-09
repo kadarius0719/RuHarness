@@ -158,6 +158,32 @@ const MAX_WHOLE_PROGRAM_ARGS: usize = 4;
 /// The `[unit.oracle] kind` string handled by [`CAbiDifferential`].
 pub const C_ABI_DIFFERENTIAL_KIND: &str = "c-abi-differential";
 
+/// The recorded detail of a whole-program check that did not run because
+/// the target configures none (`passed: true`, as recorded since M4: the
+/// verdict's bytes never change for the screen's sake).
+pub const WHOLE_PROGRAM_NOT_CONFIGURED: &str = "not configured for this target";
+
+/// One check as `verify` (and `promote`) print it on the screen, after the
+/// command's own `verify: ` prefix: `[PASS] name — detail` or `[FAIL] …`.
+/// A whole-program check that was not configured is `[SKIP] … not run`,
+/// with how to turn it on: a check that did not run is never a PASS on the
+/// screen. The recorded verdict is untouched.
+pub fn check_screen_line(check: &Check) -> String {
+    if check.name == "whole-program" && check.passed && check.detail == WHOLE_PROGRAM_NOT_CONFIGURED
+    {
+        return format!(
+            "[SKIP] whole-program — not run: {WHOLE_PROGRAM_NOT_CONFIGURED} (add \
+             [oracle.whole_program] args = [...] to harness.toml)"
+        );
+    }
+    format!(
+        "[{}] {} — {}",
+        if check.passed { "PASS" } else { "FAIL" },
+        check.name,
+        check.detail
+    )
+}
+
 /// The C-ABI differential oracle.
 ///
 /// Kind-owned unit parameters (in `[unit.oracle]`):
@@ -1099,7 +1125,7 @@ impl CAbiDifferential {
             None => checks.push(Check {
                 name: "whole-program".into(),
                 passed: true,
-                detail: "not configured for this target".into(),
+                detail: WHOLE_PROGRAM_NOT_CONFIGURED.into(),
             }),
             Some(args) => {
                 let (wp_checks, built) =
@@ -2013,6 +2039,30 @@ pub(crate) fn path_str(p: &Path) -> Result<&str, Error> {
 mod tests {
     use super::*;
     use harness_core::TargetContext;
+
+    /// An unconfigured whole-program check reads "not run" on the screen,
+    /// never PASS; every other check keeps its PASS/FAIL line.
+    #[test]
+    fn an_unconfigured_whole_program_check_is_shown_as_not_run() {
+        let check = |name: &str, passed: bool, detail: &str| Check {
+            name: name.into(),
+            passed,
+            detail: detail.into(),
+        };
+        assert_eq!(
+            check_screen_line(&check("whole-program", true, WHOLE_PROGRAM_NOT_CONFIGURED)),
+            "[SKIP] whole-program — not run: not configured for this target (add \
+             [oracle.whole_program] args = [...] to harness.toml)"
+        );
+        assert_eq!(
+            check_screen_line(&check("whole-program", true, "3 sample(s) identical")),
+            "[PASS] whole-program — 3 sample(s) identical"
+        );
+        assert_eq!(
+            check_screen_line(&check("symbol-set", false, "missing f")),
+            "[FAIL] symbol-set — missing f"
+        );
+    }
 
     /// Fix check O3: without the sandbox a candidate run can rewrite the
     /// all-C program (here, with a copy of itself: the check would compare

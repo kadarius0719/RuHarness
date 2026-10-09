@@ -517,6 +517,27 @@ impl TraceAdapter {
     }
 }
 
+/// The shape every hand-off response file holds (docs/SCHEMAS.md "Global
+/// rules"): the model's reply as `text`, inside this envelope. Named on
+/// every awaiting line and in the refusal of a file that is not it.
+pub const ENVELOPE: &str =
+    r#"{"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}"#;
+
+/// Read a response file's bytes as the [`ENVELOPE`]. A file that is not
+/// the envelope (a bare reply, a missing field, not JSON) is refused with
+/// one sentence saying what to write, and what the reader stumbled on.
+pub fn parse_response(path: &Path, bytes: &[u8]) -> Result<CompletionResponse, Error> {
+    serde_json::from_slice(bytes).map_err(|e| {
+        Error::parse(
+            path,
+            format!(
+                "the response file must hold the envelope {ENVELOPE}: write the model's reply \
+                 as its \"text\" (read: {e})"
+            ),
+        )
+    })
+}
+
 fn write_pretty<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), Error> {
     let mut text = serde_json::to_string_pretty(value)
         .map_err(|e| Error::Invariant(format!("serialize trace {}: {e}", path.display())))?;
@@ -539,8 +560,7 @@ impl ProviderAdapter for TraceAdapter {
         // regular file (the traces are target-owned, §R4 CR-11).
         if std::fs::symlink_metadata(&response_path).is_ok() {
             let bytes = harness_core::ledger::read_regular(&response_path, MAX_TRACE_BYTES)?;
-            return serde_json::from_slice(&bytes)
-                .map_err(|e| Error::parse(&response_path, e.to_string()));
+            return parse_response(&response_path, &bytes);
         }
         if self.external {
             if let Some(answer) = &self.answer {
@@ -867,6 +887,41 @@ mod tests {
         let mut other = req();
         other.user.push('!');
         assert_ne!(a, TraceAdapter::request_key(&other).unwrap());
+    }
+
+    /// A response file that is not the envelope — the bare reply a person
+    /// writes first, or a missing field — is refused naming the envelope
+    /// and what to do; the envelope itself is read.
+    #[test]
+    fn a_response_that_is_not_the_envelope_is_refused_naming_it() {
+        let dir = temp_dir("envelope");
+        let adapter = TraceAdapter::new(&dir, true);
+        let request = req();
+        assert!(adapter.complete(&request).is_err()); // awaiting
+        let response_path = TraceAdapter::response_path(&dir, &request).unwrap();
+        for bad in [
+            r#"[{"item": "d1", "keep": "d1.2"}]"#,
+            r#"{"text": "[]"}"#,
+            "not json",
+        ] {
+            std::fs::write(&response_path, bad).unwrap();
+            let err = adapter.complete(&request).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!(
+                    "the response file must hold the envelope {ENVELOPE}: write the model's \
+                     reply as its \"text\""
+                )),
+                "{bad}: {err}"
+            );
+            assert!(err.contains(&response_path.display().to_string()), "{err}");
+        }
+        std::fs::write(
+            &response_path,
+            r#"{"text": "[]", "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}"#,
+        )
+        .unwrap();
+        assert_eq!(adapter.complete(&request).unwrap().text, "[]");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

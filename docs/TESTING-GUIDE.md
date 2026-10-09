@@ -24,6 +24,7 @@ Written for RuHarness at commit `a154870` (the program itself reports `harness 0
 | 9 | Tour the cockpit on the finished project | 15 min | no |
 | 10 | Check the status, and pick up again another day | 5 min | no |
 | 11 | Measure the speed of the Rust against the C (macOS) | 15–20 min (mostly waiting) | no |
+| 12 | Start again from the whole liblzg download: let the harness map it and write the target for you | 30 min | no |
 
 Altogether this takes about 3–4 hours, and you do not have to finish in one sitting. Part 10 shows how to pick up where you left off.
 
@@ -1403,6 +1404,7 @@ harness scan --target targets/lzg
 
 ```text
 scan: 7 files, <number> symbols, <number> refs -> /Users/<you>/code/RuHarness/targets/lzg/migration/facts.jsonl
+scan: next, cut the code into units: `harness plan --target targets/lzg`
 ```
 
 "Symbols" are functions, and "refs" are calls from one function to another. Those two numbers do not matter here; `7 files` does.
@@ -1542,7 +1544,10 @@ plan: unit u-encode: added (pending)
 plan: unit u-version: added (pending)
 plan: unit u-lzg: added (pending)
 plan: execution order: u-checksum -> u-decode -> u-encode -> u-version -> u-lzg
+plan: next, write the first unit's differential driver: `harness gen-driver u-checksum --target targets/lzg`
 ```
+
+The last line is a suggestion: the next step for the first unit in that order. This guide gives `u-checksum` its driver in Part 3.
 
 **What just happened.** The harness wrote `migration/plan.toml`, with one `[[unit]]` block for each `.c` file that defines at least one public function. Every unit starts as `pending`.
 
@@ -1565,6 +1570,7 @@ harness plan --target targets/lzg
 ```text
 plan: no changes (5 units)
 plan: execution order: u-checksum -> u-decode -> u-encode -> u-version -> u-lzg
+plan: next, write the first unit's differential driver: `harness gen-driver u-checksum --target targets/lzg`
 ```
 
 **If it looks different.** A different number of units, or a different order, means the files in `src/lzg` differ from Step 1.4. Run `ls targets/lzg/src/lzg` and compare.
@@ -1731,7 +1737,7 @@ harness gen-driver u-checksum --target targets/lzg --model guide-written
 
 ```text
 awaiting response: /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-checksum/driver-traces/<key>.response.json
-gen-driver: external provider mode — supply the response file under /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-checksum/driver-traces and re-run
+gen-driver: external provider mode — write the reply beside its request under /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-checksum/driver-traces as the envelope {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"} (the model's reply as its "text"), then re-run: harness gen-driver u-checksum --target=targets/lzg --model=guide-written (the answer is recorded as `guide-written`'s; if another model or a person answers, first run it with --model naming who answers: that writes the request to answer)
 error: awaiting response: /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-checksum/driver-traces/<key>.response.json
 ```
 
@@ -1948,8 +1954,10 @@ harness gen-driver u-checksum --target targets/lzg --model guide-written
 **You should see.**
 
 ```text
+gen-driver: checking the driver against the original C (it is built and run several times; this can take a minute) …
 gen-driver: turn 1 generate -> green
 gen-driver: u-checksum attempt d-<12hex> via `external` (external) model `guide-written` -> GREEN
+gen-driver: checking it once more where it now lives …
 gen-driver: promoted migration/units/u-checksum/driver.c and recorded /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-checksum/driver-validation.json
 ```
 
@@ -2321,7 +2329,7 @@ harness migrate u-checksum --target targets/lzg --model my-claude-code --no-prom
 
 ```text
 awaiting response: /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-checksum/traces/<key>.response.json
-migrate: external provider mode — supply the response file under /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-checksum/traces and re-run: harness migrate u-checksum --target=targets/lzg --model=my-claude-code --no-promote
+migrate: external provider mode — write the reply beside its request under /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-checksum/traces as the envelope {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"} (the model's reply as its "text"), then re-run: harness migrate u-checksum --target=targets/lzg --model=my-claude-code --no-promote (the answer is recorded as `my-claude-code`'s; if another model or a person answers, first run it with --model naming who answers: that writes the request to answer)
 error: awaiting response: /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-checksum/traces/<key>.response.json
 ```
 
@@ -2872,8 +2880,10 @@ harness gen-driver u-version --target targets/lzg --model guide-written
 **You should see.**
 
 ```text
+gen-driver: checking the driver against the original C (it is built and run several times; this can take a minute) …
 gen-driver: turn 1 generate -> green
 gen-driver: u-version attempt d-<12hex> via `external` (external) model `guide-written` -> GREEN
+gen-driver: checking it once more where it now lives …
 gen-driver: promoted migration/units/u-version/driver.c and recorded /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-version/driver-validation.json
 ```
 
@@ -3854,6 +3864,814 @@ git status --short
 
 ---
 
+## Part 12 — liblzg by map: let the harness find the program
+
+In Part 1 you picked seven files by hand, copied them into one folder, edited an include line
+and wrote `harness.toml` yourself. With your own projects you will not want to do that. This
+part starts again from the **whole** liblzg download, untouched, and lets the harness do the
+picking:
+
+1. **Map** the project: the harness finds each program (each `.c` file with its own `main()`)
+   and every file it needs.
+2. **State the configuration**: you tell it how the project is built, in a three-line file.
+3. **Accept** a program: the harness writes the target file (`harness.toml`) for you.
+4. Then scan, plan, driver, translation and verify work as before, with `--tool` naming the
+   program.
+
+You need Part 0 (the tools) and Step 1.2 (the download in `~/code/liblzg-upstream`). Parts 2–11
+are not needed: this part writes its own driver and its own translation, by hand, with no AI.
+docs/TUTORIAL.md "Mapping a whole C project" explains the words used here.
+
+**New words in this part.**
+
+| Word | Plain meaning |
+|---|---|
+| **Map** | The harness's picture of a whole C project: its programs, the files each needs, the files they share, and what links. It lives in `migration/map/`. |
+| **Program** | A `.c` file with its own `main()`, plus every file it needs. The map names it `t-` plus the file name: `t-lzg` is `src/tools/lzg.c`. |
+| **Held choice** (duplicate set) | Two files that define the same functions, where linking cannot tell which one a program means. The map names the set `d1` and its files `d1.1`, `d1.2`. You choose. |
+| **Configuration** | How the project is built: a name, what it comes from (`make`), and the flags that matter (`-I` folders, `-D` defines). |
+| **Tool** | A program you accepted. Its `harness.toml`, written by the harness, lives in `migration/tools/<id>/`, beside the tool's own ledger. |
+
+---
+
+### Step 12.1 — Copy the download into its own folder
+
+**Why.** The map writes only inside the project's `migration/` folder, but you will also
+change a file on purpose in Step 12.9. A copy keeps the download clean. Making the copy a git
+repository lets you read every file the harness writes with `git diff`.
+
+**Run.** This copies every file except liblzg's own git history.
+
+```bash
+rsync -a --exclude .git ~/code/liblzg-upstream/ ~/lzg-map/
+```
+
+**You should see** nothing.
+
+**Run.** The scratch folder for your draft files (harmless if it exists).
+
+```bash
+mkdir -p ~/lzg-practice
+```
+
+**Run.** Every command from here on runs from inside this folder.
+
+```bash
+cd ~/lzg-map
+```
+
+**Run.**
+
+```bash
+git init -q
+```
+
+**Run.**
+
+```bash
+git add -A
+```
+
+**Run.**
+
+```bash
+git commit -q -m "liblzg 1.0.10 as downloaded"
+```
+
+**You should see** nothing from these three. (If git asks who you are, see Step 0.3.)
+
+**What just happened.** `~/lzg-map` holds the whole liblzg project: three programs in
+`src/tools`, the library in `src/lib`, the header in `src/include`, a mini decoder in
+`src/extra` and four Makefiles. No `harness.toml` anywhere.
+
+---
+
+### Step 12.2 — Map it
+
+**Run.**
+
+```bash
+harness project map
+```
+
+**You should see** (in about 2 seconds) this screen. The long lines wrap in your window.
+
+```text
+project map of /Users/<you>/lzg-map: compiled with Apple clang version <number> (arm64-apple-darwin<number>); the harness's own flags on every compile: -O2 -ffp-contract=off
+configuration: a guess (no migration/map/config.toml), flags none; failed compiles are expected until that file states the build
+  build files: doc/Makefile, src/Makefile, src/lib/Makefile, src/tools/Makefile
+programs: 3
+  p1 t-benchmark — src/tools/benchmark.c (main; kind guess from its folder: tool)
+      files: src/lib/ checksum.c, encode.c; src/tools/ benchmark.c
+      outside symbols: bzero, fclose, fflush, fopen, fprintf, fread, free, fseek, ftell, fwrite, gettimeofday, malloc, memcpy, qsort, strcmp, and 4 compiler or runtime names; guessed libraries: none
+      link check: not linked while d1 is open
+      incomplete: a duplicate set is still open (LZG_Decode)
+      duplicate set d1 (LZG_Decode): held, linking cannot tell d1.1 src/extra/lzgmini.c from d1.2 src/lib/decode.c apart, so the choice is yours
+      the project's build (doc/Makefile, src/Makefile, src/lib/Makefile, src/tools/Makefile) may link more than these files; the map never runs it
+  p2 t-lzg — src/tools/lzg.c (main; kind guess from its folder: tool)
+      files: src/lib/ checksum.c, encode.c, version.c; src/tools/ lzg.c
+      outside symbols: bzero, fclose, fflush, fopen, fprintf, fread, free, fseek, ftell, fwrite, malloc, memcpy, printf, qsort, and 4 compiler or runtime names; guessed libraries: none
+      link check: linked
+      the project's build (doc/Makefile, src/Makefile, src/lib/Makefile, src/tools/Makefile) may link more than these files; the map never runs it
+  p3 t-unlzg — src/tools/unlzg.c (main; kind guess from its folder: tool)
+      files: src/tools/ unlzg.c
+      outside symbols: fclose, fopen, fprintf, fread, free, fseek, ftell, fwrite, malloc, and 2 compiler or runtime names; guessed libraries: none
+      link check: not linked while d1 is open
+      incomplete: a duplicate set is still open (LZG_Decode, LZG_DecodedSize)
+      duplicate set d1 (LZG_Decode, LZG_DecodedSize): held, linking cannot tell d1.1 src/extra/lzgmini.c from d1.2 src/lib/decode.c apart, so the choice is yours
+      the project's build (doc/Makefile, src/Makefile, src/lib/Makefile, src/tools/Makefile) may link more than these files; the map never runs it
+what the link check proves: each linked program's files, with this configuration and the guessed libraries, define every symbol it needs exactly once; it does not prove the program is a tool rather than a test, that the right file was kept when several link, that this is the configuration the project's own build uses, or that the program runs
+shared file: src/lib/checksum.c (in t-benchmark, t-lzg)
+shared file: src/lib/encode.c (in t-benchmark, t-lzg)
+defined in two programs' files that never meet (listed, never asked): ShowProgress in src/tools/benchmark.c, src/tools/lzg.c
+defined in two programs' files that never meet (listed, never asked): ShowUsage in src/tools/benchmark.c, src/tools/lzg.c
+set aside in src/extra: 2 assembly file(s), not read
+set aside in src/extra: 1 javascript file(s), not read
+set aside in src/extra: 1 lua file(s), not read
+set aside in src/extra: 1 pascal file(s), not read
+skipped folder: migration (the harness's own files)
+```
+
+and a last line starting `project map: wrote migration/map/project-map.json and
+migration/.gitignore (3 program(s), 0 libraries; the project's own files were not changed)`,
+which ends with the next step.
+
+**What just happened.** The harness compiled every `.c` file (in the sandbox, changing none
+of them), read which functions each defines and needs, and followed the needs from each
+`main()`. Read it top down:
+
+- **`configuration: a guess`**: nothing told the harness how liblzg is built, so it compiled
+  with no flags. That is the first thing to fix (next step). The last line of the screen says
+  so too, and shows the three lines to write.
+- **Three programs.** `t-lzg` (the compressor, 4 files) links: every function it calls is
+  defined exactly once. `t-unlzg` and `t-benchmark` both need `LZG_Decode`, which two files
+  define: the library's `src/lib/decode.c` and the mini decoder `src/extra/lzgmini.c`. That
+  is the **held choice d1**: both would link, so the harness cannot tell which is meant, and
+  it never guesses. You choose in Step 12.5.
+- **What the link check proves** is said once: "linked" means each needed function is defined
+  exactly once, not that the right file was kept, nor that the program runs. That is why d1
+  stays your choice even though both files would link.
+- **Shared files**: `checksum.c` and `encode.c` are needed by two programs.
+- **Set aside**: the JavaScript, Lua, Pascal and assembly versions of the mini decoder are not
+  C; they are counted and left alone.
+
+**Run.** See what the map wrote.
+
+```bash
+git status --short
+```
+
+**You should see.**
+
+```text
+?? migration/
+```
+
+**If it looks different.** `error: no sandbox is available on this platform …` means you are
+not on macOS: see Part 0.
+
+---
+
+### Step 12.3 — State the configuration
+
+**Why.** The map compiled under a guess. A guess may hide the errors that matter (a missing
+include folder makes a file fail to compile, and its functions then look missing), so the
+harness accepts no program until you say how the project is built.
+
+**Run.** Look at liblzg's own compile flags.
+
+```bash
+grep -h '^CFLAGS' src/lib/Makefile src/tools/Makefile
+```
+
+**You should see.**
+
+```text
+CFLAGS = -c -O3 -funroll-loops -W -Wall
+CFLAGS = -c -O3 -W -Wall -I../include
+```
+
+**What to keep.** Only flags that change **which code** is compiled matter here:
+
+- `-I../include` matters: it is how `lzg.c` finds `lzg.h`. The Makefile runs from
+  `src/tools`, but the harness reads every path from the project's top folder, so it becomes
+  `-Isrc/include` (joined, no space after `-I`).
+- `-O3` is fine: the harness records it and keeps its own optimisation level.
+- `-c` is how a Makefile says "compile only": the harness does that itself. Leave it out.
+- `-W`, `-Wall` (warnings) and `-funroll-loops` (a speed setting) do not change which code is
+  compiled. The harness refuses flags it does not pass to a compiler, so leave them out.
+
+**Run.** Write the configuration. This is one command down to `EOF`.
+
+```bash
+cat > migration/map/config.toml <<'EOF'
+[[configuration]]
+name = "make"
+from = "make"
+flags = ["-O3", "-Isrc/include"]
+EOF
+```
+
+**You should see** `heredoc>` lines while it pastes, and then the prompt again.
+
+The three lines: `name` is any short word for this way of building; `from = "make"` says the
+flags come from the project's Makefiles (write `stated` instead when you made them up
+yourself); `flags` are the flags, each in quotes. docs/SCHEMAS.md
+"`migration/map/config.toml`" lists every field.
+
+**Run.** Map again.
+
+```bash
+harness project map
+```
+
+**You should see** the same screen, with its second line now:
+
+```text
+configuration: make, from make (stated in config.toml), flags -O3, -Isrc/include
+```
+
+and a last line that now names `harness project accept <id>` as the next step, says the held
+choice d1 is yours (named with `--keep`), and that `harness project ask` advises.
+
+**If it looks different.** If the map refuses your file, its message names the file and the
+line, or the flag and why. Two common ones: you pasted a flag the harness does not pass (such
+as `-funroll-loops` or `-Wall`; remove it), or a path with a space or outside the project
+(`-I src/include`, `-I../include`; write `-Isrc/include`). A line like `unknown field` or
+`expected a sequence` means the table header is not exactly `[[configuration]]` with two
+brackets each side.
+
+---
+
+### Step 12.4 — Ask for advice on the held choice (optional, no AI)
+
+**Why.** `harness project ask` sends the held choice — both files' facts and the start of each
+definition — to a model and keeps its answer as **advice**. Here you answer it yourself, to see
+how a hand-off is answered. The answer never decides anything: Step 12.5's `--keep` does.
+
+**Run.** `--model by-hand` records who answers. Give it on this first run: the model's name is
+part of the question's key, so changing it later asks a new question.
+
+```bash
+harness project ask --model by-hand
+```
+
+**You should see.**
+
+```text
+project ask: asking external (by-hand) about 1 item(s) in 1 call(s): d1
+awaiting response: /Users/<you>/lzg-map/migration/map/traces/<key>.response.json
+```
+
+then a line saying where to write the answer, in which envelope, and the command to run again,
+and `error: awaiting response: …` with exit code 1.
+
+**Run.** Point `REQ` at the question and `RESP` at the answer file to write.
+
+```bash
+REQ=$(ls -t migration/map/traces/*.request.json | head -n 1)
+```
+
+**Run.**
+
+```bash
+RESP="${REQ%.request.json}.response.json"
+```
+
+**Run.** Write the answer. A reply is a JSON array (the request's own "Output contract" says
+so); every hand-off response wraps the reply in the same **envelope**, as its `"text"`:
+`{"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}`.
+
+```bash
+jq -n --arg t '[{"item":"d1","keep":"d1.2","reason":"alternative-implementation"}]' '{text: $t, input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' > "$RESP"
+```
+
+**Run.** Ask again.
+
+```bash
+harness project ask --model by-hand
+```
+
+**You should see.**
+
+```text
+project ask: asking external (by-hand) about 1 item(s) in 1 call(s): d1
+d1 (LZG_Decode, LZG_DecodedSize; held by t-benchmark, t-unlzg): the model's advice (by-hand): keep d1.2 src/lib/decode.c, reason alternative-implementation; in t-benchmark, t-unlzg that choice linked
+project ask: the model's words above are labels and advice only: nothing was built or linked, and the choice of each held set stays yours (`harness project accept` never reads the reply)
+project ask: wrote migration/map/project-map.reply.json (1 answer(s) this run, under this map's digests)
+```
+
+**If it looks different.** If you write the bare array into the file without the envelope, the
+harness refuses it, naming the file:
+
+```text
+error: parse error in /Users/<you>/lzg-map/migration/map/traces/<key>.response.json: the response file must hold the envelope {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"}: write the model's reply as its "text" (read: invalid type: map, expected a string at line 1 column 1)
+```
+
+Run the `jq` line above again: it overwrites the file.
+
+---
+
+### Step 12.5 — Accept two programs as tools
+
+**Why.** Accepting a program checks that the map still matches the files, links the program
+once more with your picks, and writes its `harness.toml` under `migration/tools/<id>/`.
+
+**Run.** Try `t-unlzg` without a pick first.
+
+```bash
+harness project accept t-unlzg
+```
+
+**You should see** (exit 1):
+
+```text
+error: duplicate set d1 of t-unlzg (LZG_Decode, LZG_DecodedSize) is not settled: pick its definer yourself with --keep d1=<index or path> (its definers: d1.1 src/extra/lzgmini.c, d1.2 src/lib/decode.c)
+```
+
+**Run.** Keep the library's decoder, by its index.
+
+```bash
+harness project accept t-unlzg --keep d1=d1.2
+```
+
+**You should see.**
+
+```text
+project accept t-unlzg: keeping `src/lib/decode.c` over `src/extra/lzgmini.c` for `LZG_Decode, LZG_DecodedSize`
+  src/extra/lzgmini.c: alternative not kept
+project accept: wrote migration/tools/t-unlzg/harness.toml (3 file(s), linked, run as unlzg; configuration make, flags -O3 -Isrc/include); review it with `git diff`, then scan it: `harness scan --target . --tool t-unlzg`
+```
+
+`--keep d1=src/lib/decode.c` (the path) does the same. `--keep d1=decode.c` is refused: it
+names no definer of d1, and the message lists the two that exist.
+
+**Run.** Accept the compressor. It holds no choice, so it needs no `--keep`.
+
+```bash
+harness project accept t-lzg
+```
+
+**You should see.**
+
+```text
+project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked, run as lzg; configuration make, flags -O3 -Isrc/include); review it with `git diff`, then scan it: `harness scan --target . --tool t-lzg`
+```
+
+**Run.** Read what it wrote.
+
+```bash
+cat migration/tools/t-lzg/harness.toml
+```
+
+**You should see** a comment saying which command wrote it, then `schema_version = 2` and a
+`[target]` with `name = "lzg"`, the four files (`lzg.c` with `include_dirs = ["src/include"]`),
+your configuration, and a `map = { root_hash = …, inputs_hash = … }` line tying it to this
+map; then `[oracle]` and `[llm]`. This file **is** the acceptance: you never write it by hand.
+
+**Run.** Commit the map, your configuration and both tools.
+
+```bash
+git add -A
+```
+
+**Run.**
+
+```bash
+git commit -q -m "map liblzg; accept t-lzg and t-unlzg"
+```
+
+---
+
+### Step 12.6 — Scan and plan the compressor
+
+**Run.** Try a scan without saying which tool.
+
+```bash
+harness scan
+```
+
+**You should see** (exit 1):
+
+```text
+error: /Users/<you>/lzg-map has 2 mapped tools and no harness.toml of its own; pick one with --tool (t-lzg, t-unlzg)
+```
+
+**Run.**
+
+```bash
+harness scan --tool t-lzg
+```
+
+**You should see.**
+
+```text
+scan: 6 files, 18 symbols, 42 refs -> /Users/<you>/lzg-map/migration/tools/t-lzg/facts.jsonl
+scan: next, cut the code into units: `harness plan --tool t-lzg`
+```
+
+Six files: the tool's four `.c` files and the two headers they include.
+
+**Run.**
+
+```bash
+harness plan --tool t-lzg
+```
+
+**You should see.**
+
+```text
+plan: unit u-checksum: added (pending)
+plan: unit u-encode: added (pending)
+plan: unit u-version: added (pending)
+plan: unit u-lzg: added (pending)
+plan: execution order: u-checksum -> u-encode -> u-version -> u-lzg
+plan: next, write the first unit's differential driver: `harness gen-driver u-checksum --tool t-lzg`
+```
+
+**What just happened.** The tool's ledger is `migration/tools/t-lzg/`, exactly like
+`targets/lzg/migration/` in Parts 2–11. There is no `u-decode`: the compressor does not use the
+decoder. This part takes `u-version`, the smallest unit, instead of the suggested `u-checksum`.
+
+---
+
+### Step 12.7 — The driver for `u-version`
+
+**Run.** Ask for the driver; `--model guide-written` labels your answer honestly.
+
+```bash
+harness gen-driver u-version --tool t-lzg --model guide-written
+```
+
+**You should see.**
+
+```text
+awaiting response: /Users/<you>/lzg-map/migration/tools/t-lzg/units/u-version/driver-traces/<key>.response.json
+gen-driver: external provider mode — write the reply beside its request under /Users/<you>/lzg-map/migration/tools/t-lzg/units/u-version/driver-traces as the envelope {"text": <the reply>, "input_tokens": 0, "output_tokens": 0, "stop_reason": "end_turn"} (the model's reply as its "text"), then re-run: harness gen-driver u-version --target=. --tool=t-lzg --model=guide-written (the answer is recorded as `guide-written`'s; if another model or a person answers, first run it with --model naming who answers: that writes the request to answer)
+error: awaiting response: /Users/<you>/lzg-map/migration/tools/t-lzg/units/u-version/driver-traces/<key>.response.json
+```
+
+**Run.** Write the driver (the same one as Step 6.1). This is one command down to `EOF`.
+
+```bash
+cat > ~/lzg-practice/version-driver.c <<'EOF'
+#include <stdio.h>
+#include <string.h>
+#include "internal.h"
+
+int main(void)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        unsigned int num = LZG_Version();
+        const char *str = LZG_VersionString();
+        printf("call %d LZG_Version=%08x\n", i, num);
+        printf("call %d LZG_VersionString=\"%s\" length=%u\n", i, str, (unsigned int)strlen(str));
+    }
+    return 0;
+}
+EOF
+```
+
+**Run.**
+
+```bash
+REQ=$(ls -t migration/tools/t-lzg/units/u-version/driver-traces/*.request.json | head -n 1)
+```
+
+**Run.**
+
+```bash
+RESP="${REQ%.request.json}.response.json"
+```
+
+**Run.** The reply is the driver in its layout (Step 3.3), wrapped in the envelope.
+
+````bash
+jq -n --rawfile d ~/lzg-practice/version-driver.c '{text: ("driver.c\n```c\n" + $d + "```\nRUHARNESS_END_OF_OUTPUT\n"), input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' > "$RESP"
+````
+
+**Run.**
+
+```bash
+harness gen-driver u-version --tool t-lzg --model guide-written
+```
+
+**You should see** (the two "checking" lines each stand for a wait of several seconds):
+
+```text
+gen-driver: checking the driver against the original C (it is built and run several times; this can take a minute) …
+gen-driver: turn 1 generate -> green
+gen-driver: u-version attempt d-<12hex> via `external` (external) model `guide-written` -> GREEN
+gen-driver: checking it once more where it now lives …
+gen-driver: promoted migration/tools/t-lzg/units/u-version/driver.c and recorded /Users/<you>/lzg-map/migration/tools/t-lzg/units/u-version/driver-validation.json
+```
+
+---
+
+### Step 12.8 — Translate `u-version` by hand
+
+**Why.** Part 6 had the chat translate this unit. Here you are the model: the two Rust files
+below are a whole, correct translation, and the oracle judges them like any model's reply.
+
+**Run.**
+
+```bash
+harness migrate u-version --tool t-lzg --model guide-written
+```
+
+**You should see** `awaiting response: …/units/u-version/traces/<key>.response.json`, the
+`migrate: external provider mode — write the reply beside its request under … as the envelope
+{…}` line, and `error: awaiting response: …`.
+
+**Run.** Write the reply: the two files in the layout the request's "OUTPUT FORMAT" asks for.
+This is one command down to `EOF`.
+
+````bash
+cat > ~/lzg-practice/version-answer.txt <<'EOF'
+src/logic.rs
+```rust
+/// The library's version number, as `LZG_VERNUM`.
+pub fn version() -> u32 {
+    0x0100_000a
+}
+
+/// The library's version text with its closing zero byte, as `LZG_VERSION`.
+pub fn version_string() -> &'static [u8] {
+    b"1.0.10\0"
+}
+```
+src/ffi.rs
+```rust
+#[no_mangle]
+pub unsafe extern "C" fn LZG_Version() -> u32 {
+    crate::logic::version()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn LZG_VersionString() -> *const u8 {
+    crate::logic::version_string().as_ptr()
+}
+```
+RUHARNESS_END_OF_OUTPUT
+EOF
+````
+
+**Run.**
+
+```bash
+REQ=$(ls -t migration/tools/t-lzg/units/u-version/traces/*.request.json | head -n 1)
+```
+
+**Run.**
+
+```bash
+RESP="${REQ%.request.json}.response.json"
+```
+
+**Run.** `jq -Rs` reads the whole file as one text and puts it in the envelope.
+
+```bash
+jq -Rs '{text: ., input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' ~/lzg-practice/version-answer.txt > "$RESP"
+```
+
+**Run.**
+
+```bash
+harness migrate u-version --tool t-lzg --model guide-written
+```
+
+**You should see.**
+
+```text
+migrate: turn 1 translate -> green (tokens in/out: ?/?)
+migrate: u-version attempt a-<12hex> via `external` (external) model `guide-written` -> GREEN
+migrate: u-version promoted and verified — status set to verified
+```
+
+`?/?` means the token counts are unknown: nobody counted tokens for an answer written by hand.
+
+---
+
+### Step 12.9 — Verify, then turn on the whole-program check
+
+**Run.**
+
+```bash
+harness verify u-version --tool t-lzg
+```
+
+**You should see.**
+
+```text
+verify: [PASS] symbol-set — 2 exported symbol(s) match the unit's symbols exactly
+verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm
+verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean
+verify: [PASS] differential-driver — 284 bytes identical
+verify: [SKIP] whole-program — not run: not configured for this target (add [oracle.whole_program] args = [...] to harness.toml)
+verify: [PASS] sanitizers — asan+ubsan clean
+verify: u-version GREEN — status set to verified
+```
+
+**What just happened.** Five checks ran and passed. The whole-program check did **not** run: an
+accepted tool does not know how its program is used, so nobody has told the harness what
+arguments to give `lzg`. Part 6 had three whole-program checks because `targets/lzg/harness.toml`
+says `args = ["-9"]`. Give the tool the same.
+
+**Run.** Add the program's arguments to the tool's file. This is one command down to `EOF`.
+
+```bash
+cat >> migration/tools/t-lzg/harness.toml <<'EOF'
+
+[oracle.whole_program]
+args = ["-9"]
+EOF
+```
+
+**Run.**
+
+```bash
+harness verify u-version --tool t-lzg
+```
+
+**You should see** eight checks:
+
+```text
+verify: [PASS] symbol-set — 2 exported symbol(s) match the unit's symbols exactly
+verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm
+verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean
+verify: [PASS] differential-driver — 284 bytes identical
+verify: [PASS] whole-program:sample_text.txt — 808 bytes identical
+verify: [PASS] whole-program:sample_rand.bin — 16400 bytes identical
+verify: [PASS] whole-program:sample_empty — 0 bytes identical (stderr: 21 bytes identical)
+verify: [PASS] sanitizers — asan+ubsan clean
+verify: u-version GREEN — status set to verified
+```
+
+As Step 6.3 explains, these runs compress files, so they never call the version functions.
+
+**Run.**
+
+```bash
+git add -A
+```
+
+**Run.**
+
+```bash
+git commit -q -m "t-lzg: u-version translated and verified"
+```
+
+---
+
+### Step 12.10 — When the project changes
+
+**Why.** A tool was accepted from one map of one set of files. When the files change, the next
+map says which tools changed and what to do.
+
+**Run.** Change a file of `t-lzg` (a comment only).
+
+```bash
+echo '/* a comment added for the guide */' >> src/lib/version.c
+```
+
+**Run.**
+
+```bash
+harness project map
+```
+
+**You should see** the usual screen, and near its end a line starting `accepted tool t-lzg
+changed since it was accepted:`, saying what changed (here: the project's files, nothing else)
+and ending ``accept it again with `harness project accept t-lzg` ``. `t-unlzg` gets a line too:
+the map compares every accepted tool with the new map. For a tool none of whose own files
+changed, the line says so and there is nothing to do.
+
+**Run.**
+
+```bash
+harness state status --tool t-lzg
+```
+
+**You should see** a first line starting `status: the project changed since this tool was
+accepted`, then ``status: facts STALE — run `harness scan --tool t-lzg` (6 files, 1 stale vs
+tree)`` and the units. `u-version` reads `[verified] plan=SOURCE-STALE verdict=green (STALE:
+source) << CONTRADICTION`: its C changed after it was verified, so its verdict no longer
+describes today's file. The steps below settle it.
+
+**Run.** Accept it again.
+
+```bash
+harness project accept t-lzg
+```
+
+**You should see** `project accept: wrote migration/tools/t-lzg/harness.toml (4 file(s), linked,
+…; its ledger (plan, units, verdicts) is kept)` and the scan to run next. Accepting again
+rewrites only what the map decides (the files, folders, configuration, picks and run name) and
+keeps what you added, such as the `[oracle.whole_program]` section of Step 12.9: the closing
+line names what was kept, and `git diff migration/tools/t-lzg/harness.toml` shows the change.
+
+**Run.** Then the usual after any change to the C: scan, plan, and verify again.
+
+```bash
+harness scan --tool t-lzg
+```
+
+**Run.**
+
+```bash
+harness plan --tool t-lzg
+```
+
+**You should see** `plan: unit u-version: source changed (hash updated)` among its lines.
+
+**Run.**
+
+```bash
+harness verify u-version --tool t-lzg
+```
+
+**You should see** `verify: u-version GREEN — status set to verified` at the end.
+
+---
+
+### Step 12.11 — The cockpit on a project with no tool yet
+
+**Why.** Everything above can be done from the cockpit. It opens a project without a target in
+its own small mode: a list of acts, each a dialog that shows the exact command first.
+
+**Run.** Make a fresh copy, then open the cockpit on it.
+
+```bash
+rsync -a --exclude .git ~/code/liblzg-upstream/ ~/lzg-cockpit/
+```
+
+**Run.**
+
+```bash
+harness-tui --target ~/lzg-cockpit
+```
+
+**You should see.**
+
+```text
+harness-tui: /Users/<you>/lzg-cockpit holds no harness.toml and no tool yet: it is a C project to map.
+  No map yet.
+  1. Map the project
+Type a number (1-1) and Enter; anything else leaves:
+```
+
+**Do.** Type `1` and press `Enter`. The dialog says what it runs, how long it takes and what it
+writes:
+
+```text
+Map the project: find its programs and libraries, the files each one needs, what they share, and whether each program links.
+  It runs: harness project map --target /Users/<you>/lzg-cockpit
+  It takes: a few seconds for a small project, minutes for a large one (at most 30 minutes).
+  It writes: migration/map/project-map.json (and migration/.gitignore the first time); the project's own files are not changed.
+Run it? Type y and Enter; anything else goes back:
+```
+
+**Do.** Type `y` and press `Enter`. The map's screen of Step 12.2 scrolls past, then:
+
+```text
+  The map shows 3 program(s) and 0 libraries.
+  Its configuration is a guess: a program is accepted under a stated one (write it in migration/map/config.toml, or Ask for a proposal).
+  1. Map the project again
+  2. Ask a model for advice
+  3. Accept a program
+```
+
+The three acts:
+
+- **Map the project again** — the same dialog as above.
+- **Ask a model for advice** — while the configuration is a guess, it asks for a proposed
+  configuration (`harness project ask --build`); once you stated one, which file to keep in each
+  held choice. Its dialog says it stops at the hand-off and prints the command that resumes.
+- **Accept a program** — lists the programs (`1. t-benchmark — src/tools/benchmark.c
+  (program)`, …), then for a program with a held choice asks `t-unlzg holds the choice d1:
+  linking cannot tell its files apart, so keep which one?` with the files listed, then shows the
+  command (`harness project accept t-unlzg --target … --keep d1=d1.2`) and runs it on `y`.
+
+**Do.** Type anything other than a number and press `Enter` to leave. To accept from here,
+first write `~/lzg-cockpit/migration/map/config.toml` as in Step 12.3 (from another Terminal
+window), then choose **Map the project again**, then **Accept a program**. After an accept the
+cockpit opens the new tool, with `Next step: Nothing is scanned yet — press Enter and choose Scan
+the project`; the project's files that are not part of the tool are greyed with `⊖`.
+
+### Checkpoint — the map is working if…
+
+- [ ] `harness project map` on the untouched download listed 3 programs and held d1.
+- [ ] After `config.toml`, the screen said `configuration: make, from make (stated in config.toml)`.
+- [ ] `accept t-unlzg --keep d1=d1.2` and `accept t-lzg` each wrote a `harness.toml`.
+- [ ] `verify u-version --tool t-lzg` showed `[SKIP] whole-program` first, and eight checks after
+      you added `[oracle.whole_program]`.
+- [ ] After changing `version.c`, the map named `t-lzg` as changed, and `state status` began with
+      the notice.
+
+---
+
 ## Known quirks in this version
 
 A few messages and documents in this version of RuHarness are out of date. The steps above point here when you meet one of them.
@@ -3897,6 +4715,13 @@ A few messages and documents in this version of RuHarness are out of date. The s
 | `git commit` says `Please tell me who you are` | git does not know your name. | Step 0.3. |
 | `git status` shows changed `oracle-latest.*` files after a plain re-verify | Your Rust or clang version changed since the verdict was recorded. | That is expected after a tool update. Commit the new verdicts. |
 | `exit=130` | You pressed Ctrl-C. | Run the same command again. |
+| Part 12: `error: the configuration is a guess, and a tool is built under a stated one: …` (from `project accept`), or `the configuration is a guess, so the questions may be wrong: …` (from `project ask`) | Nothing has said how the project is built yet, so the map compiled with no flags. | Write `migration/map/config.toml` (Step 12.3), run `harness project map` again, then accept. `harness project ask --build` asks a model to propose the file instead. |
+| Part 12: `… has 2 mapped tools and no harness.toml of its own; pick one with --tool (t-lzg, t-unlzg)` | The project has several accepted tools, and the command does not know which one you mean. | Add `--tool t-lzg` (or the tool you mean) to the command. |
+| Part 12: ``error: --keep d1=decode.c names no definer of d1: its definers are d1.1 src/extra/lzgmini.c, d1.2 src/lib/decode.c`` | The value after `d1=` must be one of the listed indexes or the whole path. | `--keep d1=d1.2` or `--keep d1=src/lib/decode.c`. |
+| Part 12: `… duplicate set d1 of t-unlzg … is not settled: pick its definer yourself with --keep d1=<index or path> …` | The program holds a choice only you can make. | Add `--keep d1=d1.2` (Step 12.5). |
+| `error: parse error in …response.json: the response file must hold the envelope {"text": <the reply>, …}: write the model's reply as its "text" …` | The answer file holds the bare reply (or a field is missing): every hand-off answer is wrapped in the envelope. | Write it again with the `jq` line of the step you are on (Steps 3.3, 12.4, 12.7, 12.8); it overwrites the file. |
+| Part 12: the map refuses `migration/map/config.toml`, naming a flag | The flag is not one the harness passes to a compiler (`-Wall`, `-funroll-loops`), or a path is outside the project or has a space (`-I../include`, `-I src/include`). | Remove warning and tuning flags; write paths from the project's top folder, joined: `-Isrc/include` (Step 12.3). |
+| Part 12: `verify: [SKIP] whole-program — not run: …` | The tool has no `[oracle.whole_program]` section yet, so the whole program was not run. It is not a failure. | Add the program's arguments to the tool's `harness.toml` (Step 12.9). |
 
 ### Check the start of your answer file
 

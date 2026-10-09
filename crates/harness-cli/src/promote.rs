@@ -343,12 +343,7 @@ pub(crate) fn promote_attempt(
             // names a stored file.
             if let Ok(v) = &other {
                 for c in &v.checks {
-                    out(format!(
-                        "promote: [{}] {} — {}",
-                        if c.passed { "PASS" } else { "FAIL" },
-                        c.name,
-                        c.detail
-                    ));
+                    out(format!("promote: {}", harness_oracle::check_screen_line(c)));
                 }
                 report::checks(&unit.id, v);
             }

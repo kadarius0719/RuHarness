@@ -380,6 +380,24 @@ fn a_file_list_tool_verifies_green_through_the_cli() {
     for check in ["differential-driver", "boundary", "feature:sum/plain"] {
         assert!(verdict.contains(check), "{check}: {verdict}");
     }
+    // No [oracle.whole_program]: the screen says the check did not run and
+    // how to turn it on; the recorded verdict keeps its passed check.
+    assert!(
+        r.stdout.contains(
+            "verify: [SKIP] whole-program — not run: not configured for this target (add \
+             [oracle.whole_program] args = [...] to harness.toml)"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("[PASS] whole-program"), "{}", r.stdout);
+    assert!(
+        verdict.contains(
+            "\"name\": \"whole-program\",\n      \"passed\": true,\n      \"detail\": \"not \
+             configured for this target\""
+        ),
+        "{verdict}"
+    );
     assert!(!root.join("migration/units").exists());
     let plan = std::fs::read_to_string(ledger.join("plan.toml")).unwrap();
     assert!(plan.contains("status = \"verified\""), "{plan}");
