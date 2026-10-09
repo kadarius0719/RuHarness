@@ -45,6 +45,8 @@ pub mod menu;
 #[cfg(feature = "tui")]
 pub mod narrate;
 #[cfg(feature = "tui")]
+pub mod project;
+#[cfg(feature = "tui")]
 pub mod termguard;
 #[cfg(feature = "tui")]
 pub mod tree;

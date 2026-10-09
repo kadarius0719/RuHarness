@@ -1600,6 +1600,7 @@ fn classify(root: &Path, stderr: &str) -> (Compiled, Option<String>) {
     (compiled, Some(line.to_string()))
 }
 
+pub mod accept;
 pub mod closure;
 pub mod ids;
 pub mod link;

@@ -511,16 +511,16 @@ fn three_mains_are_mapped_written_and_shown() {
         "shared file: lib/shared.c (in t-alpha, t-beta, t-test_shared)",
         "project map: wrote migration/map/project-map.json and migration/.gitignore (3 \
          program(s), 0 libraries; the project's own files were not changed); next, make a \
-         program or library a tool by writing migration/tools/<id>/harness.toml by hand",
+         program or library a tool with `harness project accept <id>`",
         "the held choices (d1) are yours to make",
     ] {
         assert!(run.stdout.contains(says), "{says}\n{}", run.stdout);
     }
-    // The person's choice is never suggested, and only what exists is
-    // named as a command.
+    // The person's choice is never suggested.
     assert!(!run.stdout.contains("--keep d1=d1.1"), "{}", run.stdout);
+    assert!(!run.stdout.contains("--keep d1=d1.2"), "{}", run.stdout);
     assert!(
-        !run.stdout.contains("`harness project accept <id>"),
+        run.stdout.contains("--keep <set>=<index or path>"),
         "{}",
         run.stdout
     );

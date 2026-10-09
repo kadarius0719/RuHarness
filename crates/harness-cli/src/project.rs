@@ -113,6 +113,9 @@ fn map_locked(root: &Path, configuration: Option<String>) -> Result<u8> {
         None
     };
     let (file, bytes) = mapfile::render_bounded(&mut map, analysis.as_ref())?;
+    // The programs of the map this one replaces, for the "what changed"
+    // report.
+    let before = mapfile::previous_programs(root);
     let wrote_ignore = mapfile::write_gitignore(root)?;
     mapfile::write_bytes(root, &bytes)?;
     let json = report::mode() == report::Mode::Json;
@@ -140,6 +143,7 @@ fn map_locked(root: &Path, configuration: Option<String>) -> Result<u8> {
         );
     }
     show(&map, &file, json);
+    show_changes(&map, &file, before.as_deref(), json);
     let mut wrote = mapfile::MAP_FILE.to_string();
     if wrote_ignore {
         wrote.push_str(&format!(" and {}", mapfile::GITIGNORE));
@@ -148,9 +152,54 @@ fn map_locked(root: &Path, configuration: Option<String>) -> Result<u8> {
     Ok(0)
 }
 
-/// The closing sentence (§3.6): what was written, and the next step that
-/// exists today — a tool written by hand until `accept` lands; `ask` named
-/// only when a choice is held.
+/// One accepted tool's changes, as the `--json` stream carries them.
+#[derive(Serialize)]
+struct ToolChangedEvent<'a> {
+    k: &'static str,
+    id: &'a str,
+    what: &'a [String],
+}
+
+/// The "what changed" report (§3.6): for each accepted tool whose map
+/// digests differ from this map's, what changed — and, when any tool was
+/// accepted, the programs new since the map this one replaced.
+fn show_changes(map: &FolderMap, file: &MapFile, before: Option<&[(String, String)]>, json: bool) {
+    let changes = mapfile::what_changed(map, file);
+    for c in &changes {
+        if json {
+            report::event(&ToolChangedEvent {
+                k: "project-tool-changed",
+                id: &c.id,
+                what: &c.what,
+            });
+        }
+        out(format!(
+            "accepted tool {} changed since it was accepted: {}; accept it again with `harness \
+             project accept {}`",
+            safe_line(&c.id),
+            c.what.join("; "),
+            safe_line(&c.id)
+        ));
+    }
+    let accepted = harness_core::config::mapped_tools(&map.root)
+        .iter()
+        .any(|id| mapfile::tool_config(&map.root, id).is_some());
+    if let (true, Some(before)) = (accepted, before) {
+        let new = mapfile::new_programs(file, before);
+        if !new.is_empty() {
+            out(format!(
+                "new programs since the last map: {}",
+                new.iter()
+                    .map(|(id, path)| format!("{} ({})", safe_line(id), safe_line(path)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+}
+
+/// The closing sentence (§3.6): what was written, and the next step —
+/// `harness project accept <id>`; `ask` named only when a choice is held.
 fn closing_line(wrote: &str, file: &MapFile) -> String {
     let held: Vec<String> = {
         let mut sets: Vec<String> = file
@@ -165,15 +214,15 @@ fn closing_line(wrote: &str, file: &MapFile) -> String {
     let libraries = file.libraries.len();
     let mut line = format!(
         "project map: wrote {wrote} ({} program(s), {libraries} librar{}; the project's own \
-         files were not changed); next, make a program or library a tool by writing \
-         migration/tools/<id>/harness.toml by hand (docs/SCHEMAS.md, \"Mapped tools\")",
+         files were not changed); next, make a program or library a tool with `harness \
+         project accept <id>`",
         file.programs.len(),
         if libraries == 1 { "y" } else { "ies" },
     );
     if !held.is_empty() {
         line.push_str(&format!(
-            "; the held choices ({}) are yours to make: list only the kept file there (`harness \
-             project ask` will advise and `accept` record them once they are built)",
+            "; the held choices ({}) are yours to make: name the file to keep with --keep \
+             <set>=<index or path> (`harness project ask` advises)",
             held.join(", ")
         ));
     }

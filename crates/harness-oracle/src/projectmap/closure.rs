@@ -1074,23 +1074,7 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
     };
 
     // The facts every closure's incompleteness reads.
-    let unreadable: Vec<&WalkIssue> = input
-        .walk_issues
-        .iter()
-        .filter(|w| w.why.starts_with("cannot be read"))
-        .collect();
-    let failed_parsed: Vec<(&FileFacts, &ParserFacts)> = files
-        .iter()
-        .filter(|f| {
-            f.kind == FileKind::C && f.parsed && matches!(f.compiled, Some(Compiled::Failed { .. }))
-        })
-        .filter_map(|f| input.parser.get(&f.path).map(|p| (*f, p)))
-        .collect();
-    let unread: Vec<&FileFacts> = files
-        .iter()
-        .copied()
-        .filter(|f| f.kind == FileKind::C && !f.parsed && !compiled_ok(f))
-        .collect();
+    let gaps = Gaps::new(input, files);
 
     let mut closures = Vec::new();
     let mut alternatives: BTreeSet<usize> = BTreeSet::new();
@@ -1142,37 +1126,7 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
                 },
             });
         }
-        for (f, p) in &failed_parsed {
-            let may: Vec<String> = p
-                .defines
-                .iter()
-                .filter(|s| core.outside.contains(*s))
-                .cloned()
-                .collect();
-            if !may.is_empty() {
-                why.push(Incomplete {
-                    why: IncompleteWhy::MayBeDefinedIn,
-                    path: Some(f.path.clone()),
-                    symbols: may,
-                });
-            }
-        }
-        if !core.outside.is_empty() {
-            for f in &unread {
-                why.push(Incomplete {
-                    why: IncompleteWhy::Unread,
-                    path: Some(f.path.clone()),
-                    symbols: core.outside.iter().cloned().collect(),
-                });
-            }
-        }
-        for w in &unreadable {
-            why.push(Incomplete {
-                why: IncompleteWhy::UnreadableFolder,
-                path: Some(w.path.clone()),
-                symbols: Vec::new(),
-            });
-        }
+        why.extend(gaps.why(&core.outside));
         why.sort();
         let refs = project.refs(&core.files);
         let collisions: Vec<Collision> = doubled(&refs)
@@ -1300,6 +1254,166 @@ pub fn analyze(input: &Input<'_>, mut linker: Option<&mut dyn Linker>) -> Result
         shared,
         libraries,
         included_by,
+    })
+}
+
+/// The facts every closure's incompleteness reads (§3.1 step 8): the
+/// folders the walk could not read, the `.c` files parsed but not compiled
+/// (with what the parser says they define), and the `.c` files neither
+/// parsed nor compiled.
+struct Gaps<'a> {
+    unreadable: Vec<&'a WalkIssue>,
+    failed_parsed: Vec<(&'a FileFacts, &'a ParserFacts)>,
+    unread: Vec<&'a FileFacts>,
+}
+
+impl<'a> Gaps<'a> {
+    fn new(input: &Input<'a>, files: &[&'a FileFacts]) -> Gaps<'a> {
+        Gaps {
+            unreadable: input
+                .walk_issues
+                .iter()
+                .filter(|w| w.why.starts_with("cannot be read"))
+                .collect(),
+            failed_parsed: files
+                .iter()
+                .filter(|f| {
+                    f.kind == FileKind::C
+                        && f.parsed
+                        && matches!(f.compiled, Some(Compiled::Failed { .. }))
+                })
+                .filter_map(|f| input.parser.get(&f.path).map(|p| (*f, p)))
+                .collect(),
+            unread: files
+                .iter()
+                .copied()
+                .filter(|f| f.kind == FileKind::C && !f.parsed && !compiled_ok(f))
+                .collect(),
+        }
+    }
+
+    /// The reasons a closure with these `outside` symbols is incomplete,
+    /// besides its pending sets.
+    fn why(&self, outside: &BTreeSet<String>) -> Vec<Incomplete> {
+        let mut why = Vec::new();
+        for (f, p) in &self.failed_parsed {
+            let may: Vec<String> = p
+                .defines
+                .iter()
+                .filter(|s| outside.contains(*s))
+                .cloned()
+                .collect();
+            if !may.is_empty() {
+                why.push(Incomplete {
+                    why: IncompleteWhy::MayBeDefinedIn,
+                    path: Some(f.path.clone()),
+                    symbols: may,
+                });
+            }
+        }
+        if !outside.is_empty() {
+            for f in &self.unread {
+                why.push(Incomplete {
+                    why: IncompleteWhy::Unread,
+                    path: Some(f.path.clone()),
+                    symbols: outside.iter().cloned().collect(),
+                });
+            }
+        }
+        for w in &self.unreadable {
+            why.push(Incomplete {
+                why: IncompleteWhy::UnreadableFolder,
+                path: Some(w.path.clone()),
+                symbols: Vec::new(),
+            });
+        }
+        why
+    }
+}
+
+/// A duplicate set a chosen closure still leaves open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenSet {
+    /// Its definers' paths, in path order.
+    pub definers: Vec<String>,
+    /// The closure's symbols it defines, sorted.
+    pub symbols: Vec<String>,
+}
+
+/// One `main` program's closure under the person's picks
+/// (docs/PROJECT-MAP-DESIGN.md §3.6): what `project accept` writes and
+/// links, recomputed from the file facts with each pick applied (so a file
+/// only one definer needs stays only with it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chosen {
+    /// Its files (the program's own included), sorted.
+    pub files: Vec<String>,
+    /// The duplicate sets the picks leave open, by their definers' paths.
+    pub open: Vec<OpenSet>,
+    /// Needed symbols no project file defines, sorted.
+    pub outside: Vec<String>,
+    /// Why it is incomplete besides an open set (a file that did not
+    /// compile and may define an outside symbol, an unread file, an
+    /// unreadable folder), sorted.
+    pub incomplete_why: Vec<Incomplete>,
+    /// Needs met only by another program's file: `(symbol, its file)`.
+    pub needs_from: Vec<(String, String)>,
+}
+
+/// The closure of the `main` program at `program` (its file's path) with
+/// `picks` applied — each `(definers' paths, kept path)` — or `None` when
+/// no compiled file there is a `main` program (a fuzzer, a driver, not a
+/// program). A pick naming a path the facts do not hold is ignored.
+pub fn chosen_closure(
+    input: &Input<'_>,
+    program: &str,
+    picks: &[(Vec<String>, String)],
+) -> Option<Chosen> {
+    let mut files: Vec<&FileFacts> = input.files.iter().collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files.dedup_by(|a, b| a.path == b.path);
+    let kinds = find_programs(&files);
+    let is_program: Vec<bool> = (0..files.len()).map(|i| kinds.contains_key(&i)).collect();
+    let project = Project::new(files, is_program);
+    let start = *project.by_path.get(program)?;
+    if kinds.get(&start).map(|k| k.0) != Some(ProgramKind::Main) {
+        return None;
+    }
+    let mut choices = Choices::new();
+    for (definers, keep) in picks {
+        let key: Option<SetKey> = definers
+            .iter()
+            .map(|p| project.by_path.get(p.as_str()).copied())
+            .collect();
+        let (Some(mut key), Some(&keep)) = (key, project.by_path.get(keep.as_str())) else {
+            continue;
+        };
+        key.sort_unstable();
+        key.dedup();
+        choices.insert(key, keep);
+    }
+    let core = project.closure(&BTreeSet::from([start]), &choices);
+    let gaps = Gaps::new(input, &project.files);
+    let mut incomplete_why = gaps.why(&core.outside);
+    incomplete_why.sort();
+    let path = |i: usize| project.files[i].path.clone();
+    Some(Chosen {
+        files: core.files.iter().map(|&f| path(f)).collect(),
+        open: core
+            .pending
+            .iter()
+            .map(|(key, symbols)| OpenSet {
+                definers: key.iter().map(|&f| path(f)).collect(),
+                symbols: symbols.iter().cloned().collect(),
+            })
+            .collect(),
+        outside: core.outside.iter().cloned().collect(),
+        incomplete_why,
+        needs_from: core
+            .needs_from
+            .iter()
+            .map(|(sym, p)| (sym.clone(), path(*p)))
+            .collect(),
     })
 }
 

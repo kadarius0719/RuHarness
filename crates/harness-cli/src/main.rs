@@ -11,6 +11,7 @@ mod gen_driver;
 mod hand_edit;
 mod perf;
 mod project;
+mod project_accept;
 mod promote;
 mod report;
 
@@ -121,7 +122,7 @@ impl Cmd {
                 | FeaturesCmd::Map { target, .. } => project(&target.target),
             },
             Cmd::Project {
-                cmd: ProjectCmd::Map { target, .. },
+                cmd: ProjectCmd::Map { target, .. } | ProjectCmd::Accept { target, .. },
             } => project(target),
             Cmd::Perf { cmd } => match cmd {
                 PerfCmd::Run { target, .. }
@@ -452,6 +453,28 @@ enum ProjectCmd {
         #[arg(long, value_name = "NAME")]
         configuration: Option<String>,
     },
+    /// Accept a mapped program or library as a tool: checks the map still
+    /// describes the project, links the program again and writes
+    /// migration/tools/<ID>/harness.toml (an accepted tool's ledger is kept)
+    Accept {
+        /// The program's or library's id, as `harness project map` prints it
+        #[arg(value_parser = parse_tool)]
+        id: String,
+        /// The project folder
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+        /// Your pick for a held duplicate set: d1=d1.2 (a definer's index)
+        /// or d1=<path> (its file); repeat for each set
+        #[arg(long = "keep", value_name = "SET=DEFINER")]
+        keeps: Vec<String>,
+        /// The file name features run the program as (default: the
+        /// program file's name without .c)
+        #[arg(long, value_name = "NAME")]
+        run_name: Option<String>,
+        /// Compile the project's code even though no sandbox is available
+        #[arg(long)]
+        allow_unsandboxed: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -704,6 +727,16 @@ fn run(cmd: Cmd) -> Result<u8> {
                     configuration,
                 },
         } => project::cmd_map(target, allow_unsandboxed, configuration),
+        Cmd::Project {
+            cmd:
+                ProjectCmd::Accept {
+                    id,
+                    target,
+                    keeps,
+                    run_name,
+                    allow_unsandboxed,
+                },
+        } => project_accept::cmd_accept(id, target, keeps, run_name, allow_unsandboxed),
         Cmd::Perf { cmd } => match cmd {
             PerfCmd::Run {
                 target,
