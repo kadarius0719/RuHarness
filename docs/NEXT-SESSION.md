@@ -118,9 +118,10 @@ change at the switch points below.
    reader's quadratic `<` rule fixed, the five preprocessor forms; "once per checkout").
    **Fix passes D, E and F are MERGED** (6dd80d6; one conflict in adopt.rs, both sides kept;
    the session also made the map's path-prefix table the grammar's so a stated `-idirafter`
-   compiles and settles its include, with a test). At the time of writing the whole-workspace
-   tests run on 6dd80d6; then push, fast-forward main, `bench check --suite targets/tractor
-   --replay --jobs 6 --adopt`, DECISIONS. Small leftovers named by the builders, for the next
+   compiles and settles its include, with a test). The whole workspace is green on it (1 582
+   tests, idle machine; the cockpit's chat pty test flaked once under the replay's load) and the
+   bench replay on 6dd80d6 is green (198 reproduce, 2 expected divergences, 0 problems). DECISIONS
+   holds the entry. **Main is at this state.** Small leftovers named by the builders, for the next
    pass: `mapfile::gitignore_text`'s first line says `project map` wrote it though any command's
    first ledger does now; the workloads blocker says "or Edit the workloads file" (the cockpit's
    button name) on the command line; `perf/words.rs` names `migration/build/perf-logs/…` for a
