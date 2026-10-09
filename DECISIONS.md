@@ -3036,3 +3036,67 @@ them). `bench check --suite targets/tractor --replay --jobs 6 --adopt` on c8d5f5
 merged): 198 reproduce (1 conformant, 197 drifted), 2 expected divergences, 0 problems, no
 regression — the boundary wrapper's new template and the fresh-token adoption changed nothing the
 replay scores.
+
+## 2026-10-08 — The check round over step (b) and the fix passes; fix passes D, E and F
+
+**The check round** (four Opus checkers at high; docs/reviews/2026-10-08-map-step-b-and-fix-check.md)
+closed the review of (a)+(c): every experiment re-run passed, the byte-identity claims held, all
+sixteen reverts were caught. Step (b) worked on zopfli, the benchmark, liblzg and lz4, but its
+link check compiled with the configuration's flags only (so a program whose `compile_commands.json`
+carried a needed `-D` read "did not link" with nothing missing), its time budget covered only the
+compile loop, nothing bounded memory or the map file's size, a failed compile could leak file
+existence outside the root into the map, and a `config.toml` shipped by the download counted as the
+person's statement. The triage decided thirteen points (in the bundle) and three fix passes built
+them.
+
+**Fix pass D, the map:** the link check compiles each file exactly as the map did (its own flags,
+`-idirafter` for `system_headers`), refuses objects over 64 MiB and frees each after its last link;
+a name the 64-probe budget leaves undecided is "not checked"; a need met only weakly pulls in its
+strong definer (recorded `strong_over_weak`); `system_headers` joins the configuration digest (left
+out when empty, so no digest moved); one deadline through hashing, parsing, the evidence reader,
+every compile, link and probe (`limits_hit: budget`); a file over 8 MiB is hashed over its size and
+first 8 MiB; names over 4 KiB are odd names, 64 MiB of name bytes is a limit, parser facts are kept
+only for `.c` files that did not compile, `compile_commands.json` is read into typed entries (50 000
+entries, 64 flags and 16 KiB per entry), a map over 64 MiB is a limit; a failed compile reads its
+`-MD` list and drops `at` and `header` when they name anything outside the root; a shipped
+`config.toml` is proposed (its hash recorded at first sight in the adoption file) until `--adopt` or
+the person's edit states it; the closing line names what exists; the `under` label, text-included
+`.c` files, `not_in_compile_commands`, the no-C refusal before the lock, bookkeeping flags dropped,
+numeric index order, a driver's needs in each fuzzer's link, the between-programs list from
+closures only; `-Wl,-ignore_auto_link` on Apple; ids cut to 64 minus the suffix. The session added
+the one table for path flags (the map's own lacked `-idirafter`).
+
+**Fix pass E, the person's side:** adoption records its time and a verdict older than it is marked
+"made elsewhere" in `state status`, harness-mcp's status and the cockpit until `verify` runs it here
+(a verdict carries no time of its own, so its file's modification time stands in — the weakness is
+named in the code); the adoption line says each half only when true; one helper
+(`runtime_view::command_line`) spells every hint with `--tool` when a tool is open and `--target`
+when the process was started elsewhere; harness-mcp's adoption sentence carries the tool;
+`features::invalid()` takes the ledger path so verify and promote name the tool's file; the first
+command that makes a ledger writes `migration/.gitignore`; the tree keeps a selected outside file's
+name and shows unlisted headers neutrally before a scan; the dialog names the tools' build folders;
+`cockpit-drive` passes `RUHARNESS_ADOPTED` through; fourteen sentences made one plain sentence with
+a next step; SCHEMAS' adoption paragraphs rewritten; "once per checkout".
+
+**Fix pass F, the residuals:** each unit's hashed closure is the resolver's (`sources::unit_closure`,
+used by `compute_inputs`, the planner's `source_hash` and status), so a header an ambiguous include
+lands on stales the verdict; `-idirafter` in the grammar and the resolver (after the system);
+`#import`, `#include_next`, `%:include`, a lone `\r` and a splice followed by blanks are read; a
+folder named by both `-I` and `-isystem` is searched at the `-isystem` position; the include
+reader's `<` rule keeps a running line start (a 1 MiB line in well under a second); the scanner's
+and detect's tree walks use their own stack; the mirror's per-file cap is 64 MiB; a manifest with
+`[project]` is refused; a dot-folder header the rule reaches is readable by a prompt; the
+`configuration` entry hashes resolved forms and only the unit's own files; one skip note for scan
+and detect. Benchmark case 043 (`%:include "driver.h"`) gained one include edge in its committed
+facts; no plan or verdict changed.
+
+**Gates.** fmt, clippy, the whole workspace green (one pty timing test in the cockpit's chat
+end-to-end failed under the bench replay's load and passes alone). `bench check --suite
+targets/tractor --replay --jobs 6 --adopt` on 6dd80d6: 198 reproduce (1 conformant, 197 drifted),
+2 expected divergences, 0 problems, no regression.
+
+**Left for later** (named in docs/NEXT-SESSION.md): the link check compiles its own objects
+instead of reusing the map's; status builds a resolver per unit without caching reads; attempts,
+driver validation, perf, bench, promote, gen-driver and `read_sources` still hash the facts'
+closure (the safe direction); about seventy recursive walks remain in harness-scan's lint,
+interface and mutate modules; the map profile's read allow-list (§8).
