@@ -3178,3 +3178,24 @@ hand-written target. Step (g) is a process step: after the first accepted tool, 
 features before its first unit moves. Open, in words, in docs/NEXT-SESSION.md: four wording
 items, the ask prompt's "in this order", `accept` link-checking every program again, the map
 profile's read allow-list, and the leftovers from the earlier passes.
+
+## 2026-10-09 — The testing guide rewritten for a non-technical reader
+
+The person asked whether the testing guide is so easy a non-technical person can understand it,
+written like designing experiments: clear steps, easy to follow, understandable. Two reviewers read
+it line by line as such a person and found it accurate but written for someone who already knew
+what a compiler, a build and a commit are, with three things that stopped a newcomer cold (no step
+to get RuHarness; the first check failing on the adoption question added the day before; expected
+errors never called normal where they appear). The decisions: one shape for every part (the
+question; before you start; one thing per step with Run or Do, You should see, What it means, If
+you do not see that; the answer; a checkpoint; a reset recipe; for the curious), three words up
+front and every other word explained where first used, every expected error announced before it
+appears, times and paths labelled as the author's, Part 12 as three experiments with a picture in
+words first, the troubleshooting table grouped by where you are, "the feature map" and "the
+project map" never both "the map". Three writers rewrote it in parallel running every command on
+fresh copies (two real fixes fell out: Plan B's end-marker check failed on a trailing newline, and
+the adoption step), a pass repointed the references, a reader who had never seen the old guide
+followed the new one and reached the end of Part 3 and of 12A with every screen matching, and a
+fix pass closed their 21 findings. `devtools/guide/gates.py` keeps the structure honest. The
+guide is longer (7 049 lines) by design: every step now says what you should see and what to do
+if not.

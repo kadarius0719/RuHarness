@@ -19,14 +19,20 @@ whole C project", TESTING-GUIDE Part 12 "liblzg by map", SCHEMAS' map, ask, acce
 answer: the code is about two-thirds of one; the evidence is one cold-start walk by an agent.
 Proof before more building (the person's own rule).
 
-**In progress (2026-10-09): the testing guide rewritten for a non-technical reader.** The person
-asked for it to read like a well-designed experiment. Two reviews and the decisions are in
-docs/reviews/2026-10-09-testing-guide-review.md; three Opus writers rewrite the guide in parallel
-(`worktree-agent-a39ec25fdcb8f049c` the opening through Part 2; `…af6c564ef8d4894ce` Parts 3–8;
-`…ad7121d09fa4da7f8` Parts 9 to the end), each running every command on a fresh copy. Then merge
-(by line range), one fresh non-technical reader over the whole new guide running Parts 0–3 and 12A,
-a fix pass, commit, push. The rewrite comes before the person's run below, since the run follows
-the guide.
+**Done (2026-10-09): the testing guide rewritten for a non-technical reader**, as the person asked
+("like designing experiments"). Two reviews, three parallel rewrites, a cross-reference pass, a
+fresh-eyes read by a reader who had never seen the old guide (every screen matched; they reached
+the end of Part 3 and of 12A and always knew what to do next), and a fix pass over their 21
+findings: docs/reviews/2026-10-09-testing-guide-review.md holds it all. The guide is 7 049 lines,
+13 parts, 173 steps, one shape per part (the question; before you start; one thing per step with
+Run or Do / You should see / What it means / If you do not see that; the answer; a checkpoint; a
+reset recipe; for the curious); every screen re-run on 2026-10-09 where a model was not needed;
+Part 12 is three experiments 12A/12B/12C. `devtools/guide/gates.py` checks its structure (fences,
+labels, the four parts of every step, 13 parts, every "Step N.M" names a heading):
+`python3 -I devtools/guide/gates.py docs/TESTING-GUIDE.md`. Left as judgement calls: Part 4's
+15-minute "nothing changed" limit is not measured; the cockpit screens of Parts 4 and 6 are the
+2026-10-07 recording; the guide is long (the fresh reader thought Part 9 and 12C's cockpit half
+could still be shorter).
 
 **The work, in order:**
 1. **The person's own cold-start run** on a real project (liblzg or lz4 from
