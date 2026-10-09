@@ -876,7 +876,7 @@ cd ~/code/RuHarness && git checkout targets/zopfli
 - **The three programs together.** The cockpit runs whichever `harness` it finds first on your PATH (here `~/.cargo/bin/harness`), and its chat uses the `harness-mcp` that sits next to `harness-tui`. Installing all three into `~/.cargo/bin` keeps them in step with each other.
 - **Reading the status lines.** `[verified]` is the unit's status. `plan=fresh` means its C has not changed since it was planned. `verdict=green (fresh)` means its last judgement passed and still matches the code. `features=current` means that judgement included zopfli's feature runs. `made-elsewhere` disappears after Step 0.22: run `harness state status --target targets/zopfli` and the unit's line ends in `features=current`. Step 5.3 and Part 10 explain every status word.
 - **The attempts line** is zopfli's history. An **attempt** is one try at translating a unit, named `a-` plus 12 characters. Two early tries went through other kinds of model connection (`openai-compat` and `anthropic`, used with a small test model) and their replies were cut off (`truncated`); one was answered through the file hand-off (`external`) and went GREEN. You do not need the other connections.
-- **The unit's name.** `u001-katajainen` was chosen by hand. Units the harness's planner names are `u-` plus the file name, as you will see for liblzg. Some older RuHarness documents say to expect "eight PASS lines" here ([Known quirks](#known-quirks-in-this-version), item 1); 16 is correct.
+- **The unit's name.** `u001-katajainen` was chosen by hand. Units the harness's planner names are `u-` plus the file name, as you will see for liblzg.
 - **Removing an API-key setting (Step 0.14).** **Run** this box to print only the names of the start-up files that set one:
 
   ```bash
@@ -2592,7 +2592,7 @@ git status --short
 | **Pane** | One area of the cockpit's screen: **Files** on the left, **View** on the right, **Chat** beside or under them. |
 | **Focus** | The pane your keys go to. `Tab` moves the focus to the next pane. |
 | **Fold** | A row with `▸` is closed and `▾` is open. `→` opens a row, `←` closes it. |
-| **Marks** | `◇` means planned, no attempt yet. `✓` (green) means GREEN. `◐` marks an attempt that has not finished (it stopped at a hand-off; Part 10 shows how to carry on). |
+| **Marks** | `◇` means planned, no attempt yet. `✓` (green) means GREEN. `◐` beside a unit means tried: attempts exist, none accepted. Beside one of its attempts, `◐` marks an attempt that has not finished (it stopped at a hand-off; Part 10 shows how to carry on). |
 | **Dialog** | A box over the screen that asks you to confirm. It is "ready" only after a short pause, so a key you were already pressing cannot approve anything. |
 | **Turn** | One question to the model and its answer. A migration has 1 translation turn and up to 3 **repair turns**, where the model is told which check failed and tries again. |
 | **Provider** | Whoever answers the harness's questions for a model. Here it is always `external`: the file hand-off of Part 3, where the chat writes the answer files for you. |
@@ -6782,10 +6782,9 @@ docs/TUTORIAL.md "Mapping a whole C project" covers the same ground for a projec
 
 A few messages and documents in this version of RuHarness are out of date. The steps above point here when you meet one of them.
 
-1. The README and the older tutorial say to expect "eight PASS lines" when verifying zopfli. zopfli now has a features file, so the correct number is 16 (Step 0.22).
-2. When `migrate` refuses a unit that has no driver, the message ends with `generating drivers is a later milestone`. Driver generation already exists: it is `harness gen-driver`, which you use in Part 3 (Step 3.1); Step 7.1 shows the message.
-3. The chat's first line may add a note in brackets naming the Claude Code version the cockpit was tested with. A newer Claude Code works; the note is harmless (Step 4.5).
-4. Some reference docs show the `[oracle] allowlist` without `nm`. All four tools are required, as the `harness.toml` of Step 1.12 has them.
+1. When `migrate` refuses a unit that has no driver, the message ends with `generating drivers is a later milestone`. Driver generation already exists: it is `harness gen-driver`, which you use in Part 3 (Step 3.1); Step 7.1 shows the message.
+2. The chat's first line may add a note in brackets naming the Claude Code version the cockpit was tested with. A newer Claude Code works; the note is harmless (Step 4.5).
+3. Some reference docs show the `[oracle] allowlist` without `nm`. All four tools are required, as the `harness.toml` of Step 1.12 has them.
 
 ---
 
@@ -6829,7 +6828,7 @@ In Part 12 the paths and the flag differ from Parts 1–11: where a row says `ta
 | `gen-driver` asks again, and its attempt record shows `generate -> format` | The answer was not in the expected layout. | Run ["Check the start of your answer file"](#check-the-start-of-your-answer-file) below, then answer the new request the same way. |
 | `gen-driver` ends RED (exit 10) | The driver failed validation on every turn. | Run ["List why a driver failed"](#list-why-a-driver-failed) below. (A `driver-build` failure often means the include edit of Step 1.5 is missing.) |
 | `error: mutation: <number> site(s) but none of the <number> sampled mutant(s) compiled — a harness limitation …` | The harness could not build its planted bugs. This is not your driver's fault. | Follow ["If the harness cannot build its planted bugs"](#if-the-harness-cannot-build-its-planted-bugs) below. |
-| `migrate` refuses: `… there is no [unit.oracle] kind …` | The unit has no validated driver yet. | Run `harness gen-driver` for the unit first (Part 3, from Step 3.1). See also Known quirks, item 2. |
+| `migrate` refuses: `… there is no [unit.oracle] kind …` | The unit has no validated driver yet. | Run `harness gen-driver` for the unit first (Part 3, from Step 3.1). See also Known quirks, item 1. |
 | `migrate` refuses: ``… its generated driver's validation is `failed` …`` (or `stale`, or `missing`) | The driver's validation is not a fresh GREEN. | `harness gen-driver u-checksum --target targets/lzg --model guide-written` (for u-version, change the name; Part 12: `harness gen-driver u-version --tool t-lzg --model guide-written`). |
 
 ### The chat (Part 4)
