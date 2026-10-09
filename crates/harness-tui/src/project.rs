@@ -459,8 +459,8 @@ pub fn dialog(act: &Act, map: Option<&MapView>, argv: &[String]) -> String {
             "Accept a program: check the map still matches the project, apply your picks, link \
              the program once more and write it as a tool you can scan, plan and migrate."
                 .to_string(),
-            "about as long as the map (it maps the project again to check nothing changed), \
-             then one link"
+            "about as long as the map (it maps and link-checks the project again to check the map \
+             still says what it finds), then one more link"
                 .into(),
             "migration/tools/<id>/harness.toml only (an id accepted before keeps its ledger and \
              what you added to that file)",

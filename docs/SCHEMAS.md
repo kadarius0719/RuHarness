@@ -2082,14 +2082,19 @@ refused or awaiting; 2 usage (`--build` with `--programs`, an id that is not `t-
   `[[configuration]]` entry in `config.toml`'s own form, the cites and assumptions as comments
   — and changes nothing else.
 - **Calls, traces and resume**: every call goes through `checked_complete`; a truncated or
-  refused stop is a hard error. Live: a reply that fails the contract gets one retry with the
+  refused stop is a hard error, never validated or recorded — under `external` naming the
+  response file: "the response file <path> says the reply was cut short (stop_reason
+  `max_tokens`): delete it and answer again with the whole reply and stop_reason
+  "end_turn""; under `replay` "record a live run"; live, "run `harness project ask` again". Live: a reply that fails the contract gets one retry with the
   error appended, and the validated pair is recorded under the original request's key.
   `external`: a response that fails is a hard error naming the response file, "delete it and
   answer again"; `replay`: "record a live run". The awaiting line says how to answer: "project
   ask: external provider mode — write each response beside its request under
   migration/map/traces as {"text": <the reply>, "input_tokens": 0, "output_tokens": 0,
-  "stop_reason": "end_turn"}, and re-run with --model naming whoever answers (the model you ask,
-  or yourself): <the resume command>". The traces (`<key>.request.json`,
+  "stop_reason": "end_turn"}, then re-run (the answer is recorded as `<model>`'s; if another
+  model or a person answers, first run it with --model naming who answers: that writes the
+  request to answer): <the resume command>" — the model is part of the request's key, so a
+  request written under one model is not answered under another. The traces (`<key>.request.json`,
   `<key>.response.json`) live in `migration/map/traces/` (gitignored; made when absent, a link
   refused); a response is bound to its exact question, not to a map, so a stored answer to the
   same question is read again. With several calls every call's request is written in one run;

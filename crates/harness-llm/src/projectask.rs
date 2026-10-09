@@ -1588,19 +1588,43 @@ pub fn write_reply(root: &Path, reply: &ReplyFile) -> Result<(), Error> {
 // ---------- one call ----------
 
 /// Gate a reply on its stop kind (a truncated or refused reply is never
-/// validated, retried or recorded).
-fn check_stop(provider: &ResolvedProvider, response: &CompletionResponse) -> Result<(), Error> {
+/// validated, retried or recorded). A reply read from a file names the file
+/// and the way forward: under `external`, delete it and answer again; under
+/// `replay`, record a live run. `ask` has no budget flag, so a live
+/// truncation says to run it again.
+fn check_stop(
+    provider: &ResolvedProvider,
+    request: &CompletionRequest,
+    traces: &Path,
+    response: &CompletionResponse,
+) -> Result<(), Error> {
     let name = provider.adapter.name();
     let raw = &response.stop_reason;
-    match response.stop() {
-        StopKind::EndTurn => Ok(()),
-        StopKind::MaxTokens => Err(Error::Invariant(format!(
-            "{name}: response truncated (stop_reason `{raw}`): ask again with a larger budget"
-        ))),
-        StopKind::Refusal | StopKind::Other => Err(Error::Invariant(format!(
-            "{name}: model did not complete normally (stop_reason `{raw}`)"
-        ))),
+    let what = match response.stop() {
+        StopKind::EndTurn => return Ok(()),
+        StopKind::MaxTokens => format!("the reply was cut short (stop_reason `{raw}`)"),
+        StopKind::Refusal | StopKind::Other => {
+            format!("the model did not complete normally (stop_reason `{raw}`)")
+        }
+    };
+    if provider.live {
+        return Err(Error::Invariant(format!(
+            "{name}: {what}: run `harness project ask` again; nothing was written from it"
+        )));
     }
+    let path = TraceAdapter::response_path(traces, request)?;
+    Err(Error::Invariant(if name == "external" {
+        format!(
+            "{name}: the response file {} says {what}: delete it and answer again with the whole \
+             reply and stop_reason \"end_turn\"",
+            path.display()
+        )
+    } else {
+        format!(
+            "{name}: the recorded response {} says {what}: record a live run",
+            path.display()
+        )
+    }))
 }
 
 /// One call under the contract `validate`: live, one retry with the error
@@ -1616,7 +1640,7 @@ fn call<T>(
     validate: &dyn Fn(&str) -> Result<T, String>,
 ) -> Result<T, Error> {
     let response = checked_complete(provider, request)?;
-    check_stop(provider, &response)?;
+    check_stop(provider, request, traces, &response)?;
     match validate(&response.text) {
         Ok(v) => {
             if provider.live {
@@ -1631,7 +1655,7 @@ fn call<T>(
                  following the output contract exactly.\n"
             ));
             let second = checked_complete(provider, &retry)?;
-            check_stop(provider, &second)?;
+            check_stop(provider, &retry, traces, &second)?;
             let v = validate(&second.text).map_err(|why| {
                 Error::Invariant(format!(
                     "{what}: the model's reply did not follow the contract after one retry: \

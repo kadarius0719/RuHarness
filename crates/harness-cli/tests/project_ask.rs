@@ -256,8 +256,9 @@ fn ask_is_refused_while_the_configuration_is_a_guess_unless_allowed() {
     assert!(
         run.stderr.contains(
             "as {\"text\": <the reply>, \"input_tokens\": 0, \"output_tokens\": 0, \
-             \"stop_reason\": \"end_turn\"}, and re-run with --model naming whoever answers \
-             (the model you ask, or yourself)"
+             \"stop_reason\": \"end_turn\"}, then re-run (the answer is recorded as \
+             `claude-sonnet-5`'s; if another model or a person answers, first run it with \
+             --model naming who answers: that writes the request to answer)"
         ),
         "{}",
         run.stderr
@@ -348,6 +349,35 @@ fn a_set_the_map_did_not_link_is_said_so() {
         "{}",
         run.stdout
     );
+}
+
+/// A response cut short names its file and says to answer again (`ask`
+/// has no budget flag to raise).
+#[test]
+fn a_truncated_response_names_its_file() {
+    let t = Tmp::new("truncated");
+    let run = ask(&t, &["--allow-guessed"]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    let request = t.pending().remove(0);
+    let response = t.answer(&request, SETS_REPLY);
+    let mut body: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&response).unwrap()).unwrap();
+    body["stop_reason"] = "max_tokens".into();
+    std::fs::write(&response, body.to_string()).unwrap();
+    let run = ask(&t, &["--allow-guessed"]);
+    assert_eq!(run.code, 1);
+    assert!(
+        run.stderr.contains(&format!(
+            "external: the response file {} says the reply was cut short (stop_reason \
+             `max_tokens`): delete it and answer again with the whole reply and stop_reason \
+             \"end_turn\"",
+            response.display()
+        )),
+        "{}",
+        run.stderr
+    );
+    assert!(!run.stderr.contains("larger budget"), "{}", run.stderr);
+    assert!(!t.path(REPLY).exists());
 }
 
 #[test]

@@ -142,9 +142,11 @@ pub(crate) fn cmd_ask(args: AskArgs) -> Result<u8> {
             eprintln!(
                 "project ask: external provider mode — write each response beside its request \
                  under {} as {{\"text\": <the reply>, \"input_tokens\": 0, \"output_tokens\": \
-                 0, \"stop_reason\": \"end_turn\"}}, and re-run with --model naming whoever \
-                 answers (the model you ask, or yourself): {resume}",
-                projectask::TRACES_DIR
+                 0, \"stop_reason\": \"end_turn\"}}, then re-run (the answer is recorded as \
+                 `{}`'s; if another model or a person answers, first run it with --model naming \
+                 who answers: that writes the request to answer): {resume}",
+                projectask::TRACES_DIR,
+                safe_line(&model)
             );
             report::event(&report::Awaiting {
                 k: "awaiting",
