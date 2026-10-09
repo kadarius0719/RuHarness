@@ -34,15 +34,18 @@ labels, the four parts of every step, 13 parts, every "Step N.M" names a heading
 2026-10-07 recording; the guide is long (the fresh reader thought Part 9 and 12C's cockpit half
 could still be shorter).
 
-**In progress (2026-10-09): README and TUTORIAL rewritten for a non-technical reader**, the same
-way as the guide (docs/reviews/2026-10-09-readme-tutorial-review.md: two reviews and the
-decisions; the README is the front door and owns Quick start, the tutorial owns the ideas, the
-guide owns every walk). Two Opus writers run in parallel (`worktree-agent-?` README to the
-reviewer's 13-section shape; `worktree-agent-?` the tutorial to the 16-section shape, plus two
-guide corrections: Known quirk 1 deleted, the `◐` row). Then one fresh-eyes read over README →
-tutorial → the guide's opening, a fix pass, push, main. A one-line code wording fix waits for the
-next wording pass: `accept`'s closing line says "review it with `git diff`" (nothing for a new
-file; say `cat`, or `git diff` once committed).
+**Done (2026-10-09): README and TUTORIAL rewritten for a non-technical reader**, the same way as
+the guide (docs/reviews/2026-10-09-readme-tutorial-review.md: two reviews, the decisions, the
+fresh-eyes read). The README is the front door (a plain first screen with four doors; "How it
+works, in eight points"; Quick start and "Your own C project" as experiments with the real
+screens; "Using AI"; "If something goes wrong"; then a rule and the developer reference; 641
+lines). The tutorial explains each idea once in the order the guide meets it, names the guide
+part each prepares, pictures in plain characters, a glossary recap and a reference appendix that
+matches the cockpit's help (500 lines). A reader who had never seen them followed README →
+tutorial → the guide's Part 0 → Quick start → the own-project steps: every promised screen came
+true. The three documents agree on every shared count, step number and label (16 PASS lines; exit
+codes with 130; `args = ["-9"]`; `--model guide-written` / `by-hand`; the `◐` meaning). The
+`accept` closing line now says `cat`, not `git diff`.
 
 **The work, in order:**
 1. **The person's own cold-start run** on a real project (liblzg or lz4 from

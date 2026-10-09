@@ -3199,3 +3199,22 @@ followed the new one and reached the end of Part 3 and of 12A with every screen 
 fix pass closed their 21 findings. `devtools/guide/gates.py` keeps the structure honest. The
 guide is longer (7 049 lines) by design: every step now says what you should see and what to do
 if not.
+
+## 2026-10-09 — The README and the tutorial rewritten for a non-technical reader
+
+The person asked for the same review as the guide's. Two reviewers found the README written for a
+developer reviewing the design (fifteen unexplained terms in its first twelve lines; Quick start
+failing on the trust step; an own-project outline that could not be followed; a stale benchmark
+row) and the tutorial a reference for someone who already knew what a program and a compiler
+are (the ground never explained; the hand-off described as answerable by anyone; a third of it
+walks that belong in the guide; Mermaid diagrams that only draw on GitHub). Decided: the README is
+the front door and owns Quick start; the tutorial owns the ideas, once each, in the guide's order,
+and never asks the reader to run anything; the guide owns every walk; the same words everywhere
+("judge (the files call it the oracle)", `◐` beside a unit means tried with none accepted, "the
+feature map" and "the project map", a tool is an accepted program that then plays the target's
+part). Two writers rewrote them running every command on fresh copies; a reader who had never
+seen them went README → tutorial → Part 0 → Quick start → the own-project steps with every screen
+matching; a fix pass closed their 26 findings (two untrue claims about GREEN among them: the
+memory checkers run the C side and the test program, not the Rust; on the command line `harness
+migrate` promotes a GREEN result by itself). The `accept` command's closing line and the written
+file's header now say to read the file with `cat`; `git diff` shows nothing for a new file.
