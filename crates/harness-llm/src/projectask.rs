@@ -62,6 +62,17 @@ pub const BUILD_FILE_MAX: u64 = 64 << 10;
 pub const BUILD_TOTAL_MAX: u64 = 128 << 10;
 /// Lines of duplicated definitions sent per definer.
 pub const SLICE_MAX_LINES: usize = 120;
+/// Bytes of duplicated definitions sent per definer.
+pub const SLICE_MAX_BYTES: usize = 16 << 10;
+/// A slice's line longer than this many characters is cut short (and said).
+pub const SLICE_LINE_MAX_CHARS: usize = 400;
+/// The most bytes one questions request holds (its system and user text):
+/// a batch closes before it would pass it, and an item alone over it sends
+/// fewer slices.
+pub const REQUEST_MAX_BYTES: usize = 256 << 10;
+/// How long a candidate definition is followed, in lines, before it is
+/// given up.
+const DEFINITION_MAX_LINES: usize = 4000;
 /// A source file larger than this is not read for a slice (the map's cap).
 const SOURCE_READ_MAX: u64 = 8 << 20;
 /// The largest map file read (the map's own cap).
@@ -169,6 +180,9 @@ pub struct ClosureView {
     /// Its held sets.
     #[serde(default)]
     pub questions: Vec<String>,
+    /// Its link check (`"ok"` or what failed), absent when not linked.
+    #[serde(default)]
+    pub linked: Option<serde_json::Value>,
 }
 
 /// A duplicate set in one closure.
@@ -378,6 +392,10 @@ pub struct SetLinks {
     pub program: String,
     /// The definers whose choice linked.
     pub linked: Vec<String>,
+    /// The map linked this program's choices; false when it held them
+    /// without trying (more definers or combinations than linking tries):
+    /// then `linked` says nothing.
+    pub tried: bool,
 }
 
 /// A definer asked about.
@@ -403,6 +421,9 @@ pub struct DefinerItem {
     /// Why there is no slice, when there is none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_slice: Option<&'static str>,
+    /// What of the slice was cut short, when anything was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slice_cut: Option<String>,
 }
 
 /// What `ask` (without `--build`) will ask: `programs` are the ids
@@ -414,10 +435,20 @@ pub fn open_items(
     programs: &[String],
     allow_guessed: bool,
 ) -> Result<Vec<Item>, Error> {
+    let held_any = map.closures.iter().any(|c| !c.questions.is_empty());
     if map.configuration.source == "guessed" && !allow_guessed {
+        if !held_any && programs.is_empty() {
+            return Err(Error::Invariant(
+                "the configuration is a guess, and that is the question still open: ask a model \
+                 to propose one with `harness project ask --build`, or state it yourself in \
+                 migration/map/config.toml, then run `harness project map` again"
+                    .into(),
+            ));
+        }
         return Err(Error::Invariant(
             "the configuration is a guess, so the questions may be wrong: state it in \
-             migration/map/config.toml, or pass --allow-guessed"
+             migration/map/config.toml (or ask a model to propose one with `harness project ask \
+             --build`) and map again, or pass --allow-guessed"
                 .into(),
         ));
     }
@@ -453,9 +484,13 @@ pub fn open_items(
             )));
         };
         let Some(index) = &p.index else {
+            let what = match p.kind.as_str() {
+                "fuzz" => "a fuzzer",
+                "driver" => "a fuzz driver",
+                _ => "not a main program",
+            };
             return Err(Error::Invariant(format!(
-                "`{id}` is a {} program: only a program with its own main() is asked about",
-                p.kind
+                "`{id}` is {what}: only a main program is asked about"
             )));
         };
         if asked_programs.iter().any(|a| &a.index == index) {
@@ -495,6 +530,7 @@ pub fn open_items(
                 links.push(SetLinks {
                     program: c.program.clone(),
                     linked: d.links.clone(),
+                    tried: c.linked.is_some() || c.duplicates.iter().any(|x| !x.links.is_empty()),
                 });
                 if definers.is_empty() {
                     definers = d.definers.iter().collect();
@@ -511,15 +547,16 @@ pub fn open_items(
         let mut defs = Vec::with_capacity(definers.len());
         for d in definers {
             let f = facts(&d.path)?;
-            let (slice, slice_lines, no_slice) = match read_source(root, &d.path) {
+            let (slice, slice_lines, no_slice, slice_cut) = match read_source(root, &d.path) {
                 Ok(text) => {
-                    let (slice, lines) = definition_slice(&text, &symbols, SLICE_MAX_LINES);
-                    let none = slice
+                    let s = definition_slice(&text, &symbols, SLICE_MAX_LINES);
+                    let none = s
+                        .text
                         .is_empty()
                         .then_some("no definition was found by its name");
-                    (slice, lines, none)
+                    (s.text, s.lines, none, s.cut)
                 }
-                Err(why) => (String::new(), Vec::new(), Some(why)),
+                Err(why) => (String::new(), Vec::new(), Some(why), None),
             };
             defs.push(DefinerItem {
                 index: d.index.clone(),
@@ -531,6 +568,7 @@ pub fn open_items(
                 slice_lines,
                 slice,
                 no_slice,
+                slice_cut,
             });
         }
         defs.sort_by_key(|d| index_numbers(&d.index));
@@ -544,9 +582,21 @@ pub fn open_items(
         }));
     }
     if items.is_empty() {
-        return Err(Error::Invariant(
-            "nothing is open: every program linked and every duplicate set is settled".into(),
-        ));
+        let unlinked: Vec<&str> = map
+            .closures
+            .iter()
+            .filter(|c| c.linked.as_ref().is_some_and(|l| l.as_str() != Some("ok")))
+            .map(|c| c.program.as_str())
+            .collect();
+        return Err(Error::Invariant(if unlinked.is_empty() {
+            "nothing is open: every program linked and every duplicate set is settled".into()
+        } else {
+            format!(
+                "nothing is open: no duplicate set is held, but {} did not link (see `harness \
+                 project map`); a model is not asked about that",
+                unlinked.join(", ")
+            )
+        }));
     }
     Ok(items)
 }
@@ -681,109 +731,168 @@ fn is_ident_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
-/// Byte offsets of `word` in `line` as a whole word.
-fn word_at(line: &str, word: &str) -> Vec<usize> {
-    let mut found = Vec::new();
-    let mut from = 0;
-    while let Some(at) = line[from..].find(word) {
-        let start = from + at;
-        let end = start + word.len();
-        let before = line[..start].chars().next_back().is_some_and(is_ident_char);
-        let after = line[end..].chars().next().is_some_and(is_ident_char);
-        if !before && !after {
-            found.push(end);
+/// A definition being followed from just after its name.
+struct Candidate<'s> {
+    sym: &'s str,
+    start: usize,
+    lines: usize,
+    is_function: Option<bool>,
+    parens: i64,
+    braces: i64,
+    body: bool,
+}
+
+/// What one more character does to a candidate.
+enum Step {
+    Go,
+    /// It ends on the current line.
+    End,
+    /// A declaration (a prototype) or no definition.
+    Drop,
+}
+
+impl Candidate<'_> {
+    fn feed(&mut self, c: char) -> Step {
+        if self.is_function.is_none() && !c.is_whitespace() {
+            self.is_function = Some(c == '(');
         }
-        from = end;
+        match c {
+            '(' => self.parens += 1,
+            ')' => self.parens -= 1,
+            '{' => {
+                if self.is_function == Some(true) && self.parens == 0 && !self.body {
+                    self.body = true;
+                }
+                self.braces += 1;
+            }
+            '}' => {
+                self.braces -= 1;
+                if self.body && self.braces == 0 {
+                    return Step::End;
+                }
+                if self.braces < 0 {
+                    return Step::Drop;
+                }
+            }
+            ';' if self.parens == 0 && self.braces == 0 => {
+                return if self.is_function == Some(true) {
+                    Step::Drop
+                } else {
+                    Step::End
+                };
+            }
+            _ => {}
+        }
+        Step::Go
+    }
+}
+
+/// The line ranges (0-based, inclusive) of the file-scope definitions of
+/// `symbols` in the masked `lines`, the first of each, in **one pass**: each
+/// character is read once, whatever the number of symbols or of their
+/// mentions (a line holding a name thousands of times costs no more than
+/// its length). A name at a file-scope line (not `extern`, not `typedef`)
+/// starts a candidate, followed until its body closes or its `;` (a data
+/// definition), dropped at a prototype; while one is followed, no other
+/// starts, and the scan goes on from where it ended.
+fn find_definitions<'s>(
+    lines: &[&str],
+    depth_at: &[i64],
+    symbols: &[&'s str],
+) -> Vec<(usize, usize)> {
+    let mut left: BTreeSet<&str> = symbols.iter().copied().collect();
+    let mut found = Vec::new();
+    let mut cand: Option<Candidate<'s>> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if left.is_empty() {
+            break;
+        }
+        let trimmed = line.trim_start();
+        let eligible =
+            depth_at[i] == 0 && !trimmed.starts_with("extern ") && !trimmed.starts_with("typedef ");
+        let mut chars = line.char_indices().peekable();
+        let mut prev_ident = false;
+        while let Some((at, c)) = chars.next() {
+            if let Some(cd) = cand.as_mut() {
+                match cd.feed(c) {
+                    Step::Go => {}
+                    Step::End => {
+                        found.push((cd.start, i));
+                        left.remove(cd.sym);
+                        cand = None;
+                    }
+                    Step::Drop => cand = None,
+                }
+                prev_ident = is_ident_char(c);
+                continue;
+            }
+            if !eligible || prev_ident || !is_ident_char(c) {
+                prev_ident = is_ident_char(c);
+                continue;
+            }
+            // A whole identifier: read to its end.
+            let mut end = at + c.len_utf8();
+            while let Some(&(j, d)) = chars.peek() {
+                if !is_ident_char(d) {
+                    break;
+                }
+                end = j + d.len_utf8();
+                chars.next();
+            }
+            prev_ident = true;
+            let word = &line[at..end];
+            let Some(&sym) = symbols.iter().find(|s| **s == word && left.contains(*s)) else {
+                continue;
+            };
+            // The return type on the line before (`int\nname(void)`).
+            let start = if i > 0 && trimmed.starts_with(sym) {
+                let prev = lines[i - 1].trim_end();
+                if depth_at[i - 1] == 0
+                    && !prev.trim().is_empty()
+                    && !prev.ends_with([';', '}', '{', ')'])
+                {
+                    i - 1
+                } else {
+                    i
+                }
+            } else {
+                i
+            };
+            cand = Some(Candidate {
+                sym,
+                start,
+                lines: 0,
+                is_function: None,
+                parens: 0,
+                braces: 0,
+                body: false,
+            });
+        }
+        if let Some(cd) = cand.as_mut() {
+            cd.lines += 1;
+            if cd.lines > DEFINITION_MAX_LINES {
+                cand = None;
+            }
+        }
     }
     found
 }
 
-/// The line range (0-based, inclusive) of `sym`'s definition at file scope
-/// in the masked `lines`, or `None`.
-fn find_definition(lines: &[&str], depth_at: &[i64], sym: &str) -> Option<(usize, usize)> {
-    for (i, line) in lines.iter().enumerate() {
-        if depth_at[i] != 0 {
-            continue;
-        }
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("extern ") || trimmed.starts_with("typedef ") {
-            continue;
-        }
-        for end in word_at(line, sym) {
-            if let Some(last) = definition_end(lines, i, end) {
-                // The return type on the line before (`int\nname(void)`).
-                let start = if i > 0 && trimmed.starts_with(sym) {
-                    let prev = lines[i - 1].trim_end();
-                    if depth_at[i - 1] == 0
-                        && !prev.trim().is_empty()
-                        && !prev.ends_with([';', '}', '{', ')'])
-                    {
-                        i - 1
-                    } else {
-                        i
-                    }
-                } else {
-                    i
-                };
-                return Some((start, last));
-            }
-        }
-    }
-    None
-}
-
-/// From just after the name at (`line`, `col`): the last line of its
-/// definition, or `None` for a declaration (a prototype).
-fn definition_end(lines: &[&str], line: usize, col: usize) -> Option<usize> {
-    let mut is_function = None;
-    let mut parens: i64 = 0;
-    let mut braces: i64 = 0;
-    let mut body = false;
-    for (i, text) in lines.iter().enumerate().skip(line).take(4000) {
-        let from = if i == line { col } else { 0 };
-        for c in text[from..].chars() {
-            if is_function.is_none() && !c.is_whitespace() {
-                is_function = Some(c == '(');
-            }
-            match c {
-                '(' => parens += 1,
-                ')' => parens -= 1,
-                '{' => {
-                    if is_function == Some(true) && parens == 0 && !body {
-                        body = true;
-                    }
-                    braces += 1;
-                }
-                '}' => {
-                    braces -= 1;
-                    if body && braces == 0 {
-                        return Some(i);
-                    }
-                    if braces < 0 {
-                        return None;
-                    }
-                }
-                ';' if parens == 0 && braces == 0 => {
-                    return if is_function == Some(true) {
-                        None
-                    } else {
-                        Some(i)
-                    };
-                }
-                _ => {}
-            }
-        }
-    }
-    None
+/// The duplicated definitions sent for one definer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Slice {
+    /// The lines, in file order.
+    pub text: String,
+    /// The ranges sent (1-based, inclusive).
+    pub lines: Vec<[usize; 2]>,
+    /// What was cut short, in words, when anything was.
+    pub cut: Option<String>,
 }
 
 /// The duplicated definitions of `symbols` in `text`, at most `max_lines`
-/// lines in file order, and the ranges sent (1-based, inclusive).
-pub fn definition_slice(
-    text: &str,
-    symbols: &[String],
-    max_lines: usize,
-) -> (String, Vec<[usize; 2]>) {
+/// lines and [`SLICE_MAX_BYTES`] bytes in file order, each line cut at
+/// [`SLICE_LINE_MAX_CHARS`] characters (ending with `…`), and what was cut.
+pub fn definition_slice(text: &str, symbols: &[String], max_lines: usize) -> Slice {
     let masked = mask_code(text);
     let mlines: Vec<&str> = masked.split('\n').collect();
     let olines: Vec<&str> = text.split('\n').collect();
@@ -799,10 +908,8 @@ pub fn definition_slice(
             }
         }
     }
-    let mut ranges: Vec<(usize, usize)> = symbols
-        .iter()
-        .filter_map(|s| find_definition(&mlines, &depth_at, s))
-        .collect();
+    let names: Vec<&str> = symbols.iter().map(String::as_str).collect();
+    let mut ranges = find_definitions(&mlines, &depth_at, &names);
     ranges.sort();
     // Merge overlapping ranges.
     let mut merged: Vec<(usize, usize)> = Vec::new();
@@ -812,18 +919,60 @@ pub fn definition_slice(
             _ => merged.push((s, e)),
         }
     }
-    let mut out: Vec<&str> = Vec::new();
+    let mut out: Vec<String> = Vec::new();
+    let mut bytes = 0usize;
     let mut sent: Vec<[usize; 2]> = Vec::new();
-    for (s, e) in merged {
-        let room = max_lines.saturating_sub(out.len());
-        if room == 0 {
-            break;
+    let mut long_lines = 0usize;
+    let mut stopped = false;
+    'ranges: for (s, e) in merged {
+        let e = e.min(olines.len().saturating_sub(1));
+        let mut last = None;
+        for (n, raw) in olines.iter().enumerate().take(e + 1).skip(s) {
+            if out.len() >= max_lines {
+                stopped = true;
+                break;
+            }
+            let raw = raw.trim_end_matches('\r');
+            let line: String = if raw.chars().count() > SLICE_LINE_MAX_CHARS {
+                long_lines += 1;
+                let mut l: String = raw.chars().take(SLICE_LINE_MAX_CHARS).collect();
+                l.push('…');
+                l
+            } else {
+                raw.to_string()
+            };
+            if bytes + line.len() + 1 > SLICE_MAX_BYTES {
+                stopped = true;
+                break;
+            }
+            bytes += line.len() + 1;
+            out.push(line);
+            last = Some(n);
         }
-        let e = e.min(s + room - 1).min(olines.len().saturating_sub(1));
-        out.extend(olines[s..=e].iter().map(|l| l.trim_end_matches('\r')));
-        sent.push([s + 1, e + 1]);
+        if let Some(n) = last {
+            sent.push([s + 1, n + 1]);
+        }
+        if stopped {
+            break 'ranges;
+        }
     }
-    (out.join("\n"), sent)
+    let mut cut = Vec::new();
+    if long_lines > 0 {
+        cut.push(format!(
+            "{long_lines} line(s) over {SLICE_LINE_MAX_CHARS} characters are cut short and end with …"
+        ));
+    }
+    if stopped {
+        cut.push(format!(
+            "the slice stops at {max_lines} lines or {} KiB, before the definitions end",
+            SLICE_MAX_BYTES >> 10
+        ));
+    }
+    Slice {
+        text: out.join("\n"),
+        lines: sent,
+        cut: (!cut.is_empty()).then(|| cut.join("; ")),
+    }
 }
 
 // ---------- prompts ----------
@@ -1041,11 +1190,113 @@ fn first_unsafe(value: &serde_json::Value) -> Option<char> {
     }
 }
 
-/// One line of 1 to `max` characters.
+/// A combining mark (the main combining blocks): drawn over the character
+/// before it, never a character of its own.
+fn is_mark(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0300}'..='\u{036F}'
+            | '\u{0483}'..='\u{0489}'
+            | '\u{0591}'..='\u{05BD}'
+            | '\u{05BF}'
+            | '\u{05C1}'..='\u{05C2}'
+            | '\u{05C4}'..='\u{05C5}'
+            | '\u{05C7}'
+            | '\u{0610}'..='\u{061A}'
+            | '\u{064B}'..='\u{065F}'
+            | '\u{0670}'
+            | '\u{06D6}'..='\u{06DC}'
+            | '\u{06DF}'..='\u{06E4}'
+            | '\u{06E7}'..='\u{06E8}'
+            | '\u{06EA}'..='\u{06ED}'
+            | '\u{0900}'..='\u{0903}'
+            | '\u{093A}'..='\u{094F}'
+            | '\u{0951}'..='\u{0957}'
+            | '\u{0E31}'
+            | '\u{0E34}'..='\u{0E3A}'
+            | '\u{0E47}'..='\u{0E4E}'
+            | '\u{1AB0}'..='\u{1AFF}'
+            | '\u{1DC0}'..='\u{1DFF}'
+            | '\u{20D0}'..='\u{20FF}'
+            | '\u{302A}'..='\u{302F}'
+            | '\u{3099}'..='\u{309A}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FE20}'..='\u{FE2F}'
+            | '\u{1D165}'..='\u{1D169}'
+            | '\u{1D16D}'..='\u{1D172}'
+            | '\u{E0100}'..='\u{E01EF}'
+    )
+}
+
+/// Refuse a JSON text in which one object names a key twice (a reader that
+/// keeps the last copy and a person who reads the first would disagree).
+fn no_repeated_keys(text: &str) -> Result<(), String> {
+    use serde::de::{self, MapAccess, SeqAccess, Visitor};
+    struct Checked;
+    struct Walk;
+    impl<'de> Visitor<'de> for Walk {
+        type Value = Checked;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("JSON")
+        }
+        fn visit_bool<E>(self, _: bool) -> Result<Checked, E> {
+            Ok(Checked)
+        }
+        fn visit_i64<E>(self, _: i64) -> Result<Checked, E> {
+            Ok(Checked)
+        }
+        fn visit_u64<E>(self, _: u64) -> Result<Checked, E> {
+            Ok(Checked)
+        }
+        fn visit_f64<E>(self, _: f64) -> Result<Checked, E> {
+            Ok(Checked)
+        }
+        fn visit_str<E>(self, _: &str) -> Result<Checked, E> {
+            Ok(Checked)
+        }
+        fn visit_unit<E>(self) -> Result<Checked, E> {
+            Ok(Checked)
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Checked, A::Error> {
+            while seq.next_element::<Checked>()?.is_some() {}
+            Ok(Checked)
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Checked, A::Error> {
+            let mut keys: BTreeSet<String> = BTreeSet::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if keys.contains(&key) {
+                    return Err(de::Error::custom(format!(
+                        "an object names the key {} twice",
+                        echo(&key)
+                    )));
+                }
+                map.next_value::<Checked>()?;
+                keys.insert(key);
+            }
+            Ok(Checked)
+        }
+    }
+    impl<'de> Deserialize<'de> for Checked {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Checked, D::Error> {
+            d.deserialize_any(Walk)
+        }
+    }
+    serde_json::from_str::<Checked>(text)
+        .map(|_| ())
+        .map_err(|e| format!("the reply is not JSON with each key once: {e}"))
+}
+
+/// One line of 1 to `max` characters, at least one of them a character of
+/// its own (not only combining marks).
 fn check_line(item: &str, field: &str, value: &str, max: usize) -> Result<(), String> {
     let n = value.chars().count();
     if n == 0 || value.trim().is_empty() {
         return Err(format!("item `{item}`: `{field}` is empty"));
+    }
+    if !value.chars().any(|c| !c.is_whitespace() && !is_mark(c)) {
+        return Err(format!(
+            "item `{item}`: `{field}` holds only combining marks, no character of its own"
+        ));
     }
     if n > max {
         return Err(format!(
@@ -1060,6 +1311,7 @@ fn check_line(item: &str, field: &str, value: &str, max: usize) -> Result<(), St
 pub fn validate_answers(text: &str, batch: &[Item]) -> Result<Vec<(String, Answer)>, String> {
     let value: serde_json::Value = serde_json::from_str(strip_fences(text))
         .map_err(|e| format!("the reply is not JSON: {e}"))?;
+    no_repeated_keys(strip_fences(text))?;
     let serde_json::Value::Array(elements) = value else {
         return Err("the reply is not a JSON array of answer objects".into());
     };
@@ -1267,9 +1519,62 @@ pub fn load_reply(root: &Path, map: &MapView) -> (ReplyFile, Earlier) {
         return (fresh, Earlier::OtherMap);
     }
     match serde_json::from_slice::<ReplyFile>(&bytes) {
-        Ok(file) => (file, Earlier::Merged),
+        Ok(mut file) => {
+            // The file lives in the project: each answer kept is checked
+            // again as a fresh one would be, and dropped when it fails.
+            file.items
+                .retain(|index, item| still_valid(index, item, map));
+            (file, Earlier::Merged)
+        }
         Err(_) => (fresh, Earlier::Unreadable),
     }
+}
+
+/// An answer of a reply file already there, checked against `map` as a
+/// fresh answer is: its index one the map holds, its values in their closed
+/// sets, its labels one showable line within their limits.
+fn still_valid(index: &str, item: &ReplyItem, map: &MapView) -> bool {
+    let showable = |s: &str, max: usize| {
+        !s.chars().any(unsafe_to_show) && s.chars().count() <= max && !s.trim().is_empty()
+    };
+    if !showable(&item.model, 200) || !showable(&item.provider, 200) {
+        return false;
+    }
+    if is_program_index(index) {
+        let known = map
+            .programs
+            .iter()
+            .any(|p| p.index.as_deref() == Some(index));
+        let (Some(kind), Some(name), Some(purpose)) = (&item.kind, &item.name, &item.purpose)
+        else {
+            return false;
+        };
+        return known
+            && item.keep.is_none()
+            && item.reason.is_none()
+            && PROGRAM_KINDS.contains(&kind.as_str())
+            && showable(name, NAME_MAX_CHARS)
+            && check_line(index, "name", name, NAME_MAX_CHARS).is_ok()
+            && showable(purpose, LINE_MAX_CHARS)
+            && check_line(index, "purpose", purpose, LINE_MAX_CHARS).is_ok();
+    }
+    if is_set_index(index) {
+        let (Some(keep), Some(reason)) = (&item.keep, &item.reason) else {
+            return false;
+        };
+        let definers: Vec<&str> = map
+            .closures
+            .iter()
+            .flat_map(|c| c.duplicates.iter().filter(|d| d.set == index))
+            .flat_map(|d| d.definers.iter().map(|x| x.index.as_str()))
+            .collect();
+        return item.kind.is_none()
+            && item.name.is_none()
+            && item.purpose.is_none()
+            && (keep == "undecided" || definers.contains(&keep.as_str()))
+            && SET_REASONS.contains(&reason.as_str());
+    }
+    false
 }
 
 /// Write the reply file in full (pretty JSON, a final newline, atomically).
@@ -1283,19 +1588,43 @@ pub fn write_reply(root: &Path, reply: &ReplyFile) -> Result<(), Error> {
 // ---------- one call ----------
 
 /// Gate a reply on its stop kind (a truncated or refused reply is never
-/// validated, retried or recorded).
-fn check_stop(provider: &ResolvedProvider, response: &CompletionResponse) -> Result<(), Error> {
+/// validated, retried or recorded). A reply read from a file names the file
+/// and the way forward: under `external`, delete it and answer again; under
+/// `replay`, record a live run. `ask` has no budget flag, so a live
+/// truncation says to run it again.
+fn check_stop(
+    provider: &ResolvedProvider,
+    request: &CompletionRequest,
+    traces: &Path,
+    response: &CompletionResponse,
+) -> Result<(), Error> {
     let name = provider.adapter.name();
     let raw = &response.stop_reason;
-    match response.stop() {
-        StopKind::EndTurn => Ok(()),
-        StopKind::MaxTokens => Err(Error::Invariant(format!(
-            "{name}: response truncated (stop_reason `{raw}`): ask again with a larger budget"
-        ))),
-        StopKind::Refusal | StopKind::Other => Err(Error::Invariant(format!(
-            "{name}: model did not complete normally (stop_reason `{raw}`)"
-        ))),
+    let what = match response.stop() {
+        StopKind::EndTurn => return Ok(()),
+        StopKind::MaxTokens => format!("the reply was cut short (stop_reason `{raw}`)"),
+        StopKind::Refusal | StopKind::Other => {
+            format!("the model did not complete normally (stop_reason `{raw}`)")
+        }
+    };
+    if provider.live {
+        return Err(Error::Invariant(format!(
+            "{name}: {what}: run `harness project ask` again; nothing was written from it"
+        )));
     }
+    let path = TraceAdapter::response_path(traces, request)?;
+    Err(Error::Invariant(if name == "external" {
+        format!(
+            "{name}: the response file {} says {what}: delete it and answer again with the whole \
+             reply and stop_reason \"end_turn\"",
+            path.display()
+        )
+    } else {
+        format!(
+            "{name}: the recorded response {} says {what}: record a live run",
+            path.display()
+        )
+    }))
 }
 
 /// One call under the contract `validate`: live, one retry with the error
@@ -1311,7 +1640,7 @@ fn call<T>(
     validate: &dyn Fn(&str) -> Result<T, String>,
 ) -> Result<T, Error> {
     let response = checked_complete(provider, request)?;
-    check_stop(provider, &response)?;
+    check_stop(provider, request, traces, &response)?;
     match validate(&response.text) {
         Ok(v) => {
             if provider.live {
@@ -1326,7 +1655,7 @@ fn call<T>(
                  following the output contract exactly.\n"
             ));
             let second = checked_complete(provider, &retry)?;
-            check_stop(provider, &second)?;
+            check_stop(provider, &retry, traces, &second)?;
             let v = validate(&second.text).map_err(|why| {
                 Error::Invariant(format!(
                     "{what}: the model's reply did not follow the contract after one retry: \
@@ -1371,7 +1700,46 @@ pub struct QuestionsOutcome {
     pub wrote: bool,
 }
 
-/// Ask `items` in batches of [`MAX_BATCH`], merging each batch's validated
+/// `items` in batches: at most [`MAX_BATCH`] a call, and a batch closes
+/// before its request would pass [`REQUEST_MAX_BYTES`]. An item over the
+/// bound alone sends fewer slices — its last definers' are left out, each
+/// saying so — until it fits.
+pub fn batches(items: &[Item], model: &str, max_tokens: u32) -> Result<Vec<Vec<Item>>, Error> {
+    let size = |b: &[Item]| -> Result<usize, Error> {
+        let r = questions_request(b, model, max_tokens)?;
+        Ok(r.system.len() + r.user.len())
+    };
+    let mut out: Vec<Vec<Item>> = Vec::new();
+    let mut current: Vec<Item> = Vec::new();
+    for item in items {
+        let mut item = item.clone();
+        while size(std::slice::from_ref(&item))? > REQUEST_MAX_BYTES {
+            let Item::Set(s) = &mut item else { break };
+            let Some(d) = s.definers.iter_mut().rev().find(|d| !d.slice.is_empty()) else {
+                break;
+            };
+            d.slice.clear();
+            d.slice_lines.clear();
+            d.slice_cut = None;
+            d.no_slice = Some("left out: the request would pass its size bound");
+        }
+        let mut trial = current.clone();
+        trial.push(item.clone());
+        if !current.is_empty() && (current.len() == MAX_BATCH || size(&trial)? > REQUEST_MAX_BYTES)
+        {
+            out.push(std::mem::take(&mut current));
+            current.push(item);
+        } else {
+            current = trial;
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    Ok(out)
+}
+
+/// Ask each of `batches` ([`batches`]), merging each batch's validated
 /// answers into the reply file as it validates (the caller holds the
 /// project lock). Every batch's request is written before the run reports
 /// the first pending hand-off.
@@ -1381,7 +1749,7 @@ pub fn run_questions(
     max_tokens: u32,
     root: &Path,
     map: &MapView,
-    items: &[Item],
+    batches: &[Vec<Item>],
     traces: &Path,
 ) -> Result<QuestionsOutcome, Error> {
     let (mut reply, earlier) = load_reply(root, map);
@@ -1392,7 +1760,7 @@ pub fn run_questions(
         earlier,
         wrote: false,
     };
-    for (n, batch) in items.chunks(MAX_BATCH).enumerate() {
+    for (n, batch) in batches.iter().enumerate() {
         outcome.batches += 1;
         let request = questions_request(batch, model, max_tokens)?;
         let what = format!(
@@ -1610,6 +1978,7 @@ pub fn validate_proposal(
 ) -> Result<Proposal, String> {
     let value: serde_json::Value = serde_json::from_str(strip_fences(text))
         .map_err(|e| format!("the reply is not JSON: {e}"))?;
+    no_repeated_keys(strip_fences(text))?;
     if !value.is_object() {
         return Err("the reply is not a JSON object".into());
     }
@@ -1806,6 +2175,7 @@ mod tests {
                     slice_lines: vec![],
                     slice: String::new(),
                     no_slice: None,
+                    slice_cut: None,
                 })
                 .collect(),
             links: vec![],
@@ -1883,6 +2253,20 @@ mod tests {
                 r#"[{"item":"p1","kind":"tool","name":"M","purpose":"x"},{"item":"d1","keep":"d1.1","reason":"vibes"}]"#,
                 "the reason `vibes`",
             ),
+            // A repeated key: the last copy would win in a plain reader.
+            (
+                r#"[{"item":"p1","kind":"tool","name":"M","purpose":"x"},{"item":"d1","keep":"d1.1","keep":"d1.2","reason":"platform"}]"#,
+                "an object names the key `keep` twice",
+            ),
+            (
+                r#"[{"item":"d9","item":"p1","kind":"tool","name":"M","purpose":"x"},{"item":"d1","keep":"d1.1","reason":"platform"}]"#,
+                "an object names the key `item` twice",
+            ),
+            // A name of combining marks only.
+            (
+                "[{\"item\":\"p1\",\"kind\":\"tool\",\"name\":\"\\u0301\\u0301\\u0301\",\"purpose\":\"x\"},{\"item\":\"d1\",\"keep\":\"d1.1\",\"reason\":\"platform\"}]",
+                "`name` holds only combining marks",
+            ),
         ];
         for (reply, says) in cases {
             let err = validate_answers(reply, &batch()).unwrap_err();
@@ -1929,13 +2313,112 @@ decode(void)
 int other(void) { return decode(); }
 int table[] = { 1, 2 };
 ";
-        let (slice, lines) = definition_slice(text, &["decode".into(), "table".into()], 120);
-        assert_eq!(lines, vec![[6, 11], [14, 14]], "{slice}");
-        assert!(slice.starts_with("int\ndecode(void)\n{"), "{slice}");
-        assert!(slice.ends_with("int table[] = { 1, 2 };"), "{slice}");
-        let (capped, lines) = definition_slice(text, &["decode".into()], 3);
-        assert_eq!(lines, vec![[6, 8]]);
-        assert_eq!(capped.lines().count(), 3);
+        let s = definition_slice(text, &["decode".into(), "table".into()], 120);
+        assert_eq!(s.lines, vec![[6, 11], [14, 14]], "{}", s.text);
+        assert!(s.text.starts_with("int\ndecode(void)\n{"), "{}", s.text);
+        assert!(s.text.ends_with("int table[] = { 1, 2 };"), "{}", s.text);
+        assert_eq!(s.cut, None);
+        let capped = definition_slice(text, &["decode".into()], 3);
+        assert_eq!(capped.lines, vec![[6, 8]]);
+        assert_eq!(capped.text.lines().count(), 3);
+        assert!(capped.cut.unwrap().contains("the slice stops at 3 lines"));
+    }
+
+    /// A slice is bounded in bytes and in line length, and finding the
+    /// definition reads each line once: a file-scope table naming the
+    /// symbol a hundred thousand times, then a 1 MiB comment inside the
+    /// definition, is sliced fast and small.
+    #[test]
+    fn a_slice_is_bounded_and_found_in_one_pass() {
+        let mut text = String::from("int (*table[])(void) = {");
+        text.push_str(&"f,".repeat(100_000));
+        text.push_str("0};\nint f(void)\n{\n    /* ");
+        text.push_str(&"x".repeat(1 << 20));
+        text.push_str(" */\n    return 1;\n}\n");
+        let started = std::time::Instant::now();
+        let s = definition_slice(&text, &["f".into()], SLICE_MAX_LINES);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(s.lines, vec![[2, 6]], "{:?}", s.lines);
+        assert!(s.text.len() <= SLICE_MAX_BYTES, "{}", s.text.len());
+        assert!(s.text.starts_with("int f(void)\n{\n"), "{}", &s.text[..40]);
+        let long = s.text.lines().nth(2).unwrap();
+        assert_eq!(long.chars().count(), SLICE_LINE_MAX_CHARS + 1);
+        assert!(long.ends_with('…'));
+        assert!(s.text.ends_with("}"), "{}", s.text);
+        assert_eq!(
+            s.cut.as_deref(),
+            Some("1 line(s) over 400 characters are cut short and end with …")
+        );
+        // Over the bytes: the slice stops and says so.
+        let many: String = (0..2000)
+            .map(|n| format!("    x{n} = {n};\n"))
+            .collect::<String>();
+        let big = format!("int g(void)\n{{\n{many}}}\n");
+        let s = definition_slice(&big, &["g".into()], 100_000);
+        assert!(s.text.len() <= SLICE_MAX_BYTES);
+        assert!(s.cut.unwrap().contains("16 KiB"));
+    }
+
+    /// Batches close before a request passes its byte bound; an item over
+    /// it alone sends fewer slices, each left out saying so.
+    #[test]
+    fn requests_stay_within_their_byte_bound() {
+        let big = |index: &str, n: usize| {
+            let Item::Set(mut s) = set(index, &[&format!("{index}.1"), &format!("{index}.2")])
+            else {
+                unreachable!()
+            };
+            s.definers = (1..=n)
+                .map(|k| DefinerItem {
+                    index: format!("{index}.{k}"),
+                    path: format!("src/{k}.c"),
+                    folder: "src".into(),
+                    bytes: 1,
+                    functions: 1,
+                    includes: vec![],
+                    slice_lines: vec![[1, 400]],
+                    slice: "x".repeat(SLICE_MAX_BYTES - 64),
+                    no_slice: None,
+                    slice_cut: None,
+                })
+                .collect();
+            Item::Set(s)
+        };
+        // Four sets of four full slices each: 64 KiB apiece.
+        let items: Vec<Item> = (1..=4).map(|n| big(&format!("d{n}"), 4)).collect();
+        let b = batches(&items, "m", 100).unwrap();
+        for batch in &b {
+            let r = questions_request(batch, "m", 100).unwrap();
+            assert!(r.system.len() + r.user.len() <= REQUEST_MAX_BYTES);
+        }
+        assert_eq!(b.iter().map(Vec::len).sum::<usize>(), 4);
+        assert!(b.len() >= 2, "{}", b.len());
+        // One set of twenty full slices: some are left out, saying so.
+        let b = batches(&[big("d1", 20)], "m", 100).unwrap();
+        assert_eq!(b.len(), 1);
+        let Item::Set(s) = &b[0][0] else {
+            unreachable!()
+        };
+        let left: Vec<&DefinerItem> = s.definers.iter().filter(|d| d.slice.is_empty()).collect();
+        assert!(!left.is_empty());
+        assert!(left
+            .iter()
+            .all(|d| d.no_slice == Some("left out: the request would pass its size bound")));
+        assert!(
+            s.definers[0].no_slice.is_none(),
+            "the first definers keep theirs"
+        );
+        let r = questions_request(&b[0], "m", 100).unwrap();
+        assert!(r.system.len() + r.user.len() <= REQUEST_MAX_BYTES);
+        // Eleven small items: two calls (at most ten a call).
+        let small: Vec<Item> = (1..=11)
+            .map(|n| set(&format!("d{n}"), &["a", "b"]))
+            .collect();
+        assert_eq!(batches(&small, "m", 100).unwrap().len(), 2);
     }
 
     #[test]

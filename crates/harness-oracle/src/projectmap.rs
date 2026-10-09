@@ -500,12 +500,10 @@ pub(crate) fn map_in(
     if let Some(want) = &options.configuration {
         // A name that matches nothing is refused now, not after the walk.
         if !entries.iter().any(|e| &e.name == want) {
-            config::choose(entries, Some(want), false, false, shipped)
-                .map_err(|m| Error::parse(root.join(config::CONFIG_FILE), m))?;
+            config::choose(entries, Some(want), false, false, shipped).map_err(Error::Invariant)?;
         }
     } else if entries.len() > 1 {
-        config::choose(entries, None, false, false, shipped)
-            .map_err(|m| Error::parse(root.join(config::CONFIG_FILE), m))?;
+        config::choose(entries, None, false, false, shipped).map_err(Error::Invariant)?;
     }
 
     // Step 1: the walk.
@@ -649,7 +647,7 @@ pub(crate) fn map_in(
         !evidence.flags_differ.is_empty(),
         shipped,
     )
-    .map_err(|m| Error::parse(root.join(config::CONFIG_FILE), m))?;
+    .map_err(Error::Invariant)?;
     for facts in files.iter_mut().filter(|f| f.kind == FileKind::C) {
         facts.flags = if configuration.uses_entry_flags() {
             let mut own = evidence

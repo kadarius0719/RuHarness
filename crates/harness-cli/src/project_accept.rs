@@ -40,6 +40,10 @@ struct AcceptEvent<'a> {
     run_name: &'a str,
     picks: Vec<PickEvent<'a>>,
     not_kept: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    kept: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    dropped: &'a [String],
 }
 
 /// `harness project accept <id> --target DIR [--keep …]… [--run-name NAME]`.
@@ -62,6 +66,9 @@ pub(crate) fn cmd_accept(
     adopt::check(&root)?;
     projectmap::refuse_root(&root)?;
     require_sandbox(allow_unsandboxed, "project accept")?;
+    // `migration/`, `migration/tools/` and the tool's folder are real
+    // folders before any lock file is made in them.
+    accept::check_folders(&root, &id)?;
     // The project lock, then an existing tool's ledger lock (§3.6).
     let _project = WriterLock::acquire_project(&root, "project accept")?;
     let tool_dir = hconfig::tool_dir(&root, &id);
@@ -87,6 +94,11 @@ pub(crate) fn cmd_accept(
     }
     for f in &prepared.not_kept {
         out(format!("  {}: alternative not kept", safe_line(f)));
+    }
+    for set in &prepared.dropped {
+        out(format!(
+            "project accept {id}: {set} is not reached with these picks; not recorded"
+        ));
     }
     accept::write(&root, &prepared)?;
     if json {
@@ -117,7 +129,16 @@ pub(crate) fn cmd_accept(
                 })
                 .collect(),
             not_kept: &prepared.not_kept,
+            kept: &prepared.kept,
+            dropped: &prepared.dropped,
         });
+    }
+    if prepared.whole_program_off {
+        out(format!(
+            "project accept {id}: the whole-program check is off until you fill in \
+             [oracle.whole_program] in {} (a commented example is there)",
+            prepared.rel
+        ));
     }
     out(closing_line(&prepared, &target));
     Ok(0)
@@ -155,11 +176,21 @@ fn closing_line(p: &accept::Prepared, target: &std::path::Path) -> String {
             safe_line(&p.run_name)
         )
     };
-    let again = if p.existed {
-        "; its ledger (plan, units, verdicts) is kept"
+    let mut again = if p.existed {
+        "; its ledger (plan, units, verdicts) is kept".to_string()
     } else {
-        ""
+        String::new()
     };
+    if !p.kept.is_empty() {
+        again.push_str(&format!(
+            "; kept from the harness.toml there: {} (its own comments are not carried over)",
+            p.kept
+                .iter()
+                .map(|k| safe_line(k))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     let quoted = report::shell_quote(&target.to_string_lossy());
     format!(
         "project accept: wrote {} ({what}; configuration {}, {flags}{again}); review it with \

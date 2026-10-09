@@ -403,6 +403,112 @@ fn several_configurations_need_a_name_and_the_one_named_is_shown() {
     );
 }
 
+/// `config.toml`'s refusals lead with its path relative to the project,
+/// name every refused flag in one message, name warning and tuning flags
+/// as ones to drop, and tell `-I src/include` to be written joined.
+#[test]
+fn config_toml_refusals_name_every_flag_at_once() {
+    let tmp = Tmp::new("config-words");
+    tmp.write("src/include/a.h", "int a(void);\n");
+    tmp.write("src/a.c", "#include <a.h>\nint a(void) { return 1; }\n");
+    harness_core::adopt::testing::adopt(&tmp.0);
+    tmp.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"make\"\nfrom = \"make\"\n\
+         flags = [\"-O3\", \"-funroll-loops\", \"-W\", \"-Wall\", \"-I src/include\", \
+         \"-I../include\"]\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    for says in [
+        "error: migration/map/config.toml: ",
+        "`-I src/include` has a blank after -I: write it joined, like -Isrc/include",
+        "the flag `-I../include` names a path outside the project or under migration/",
+        "`-funroll-loops`, `-W`, `-Wall` are warning or tuning flags the harness does not pass: \
+         drop them, the map does not need them",
+    ] {
+        assert!(run.stderr.contains(says), "{says}\n{}", run.stderr);
+    }
+    assert!(!run.stderr.contains("parse error in"), "{}", run.stderr);
+    assert_eq!(run.stderr.trim_end().lines().count(), 1, "{}", run.stderr);
+    // A shape error leads with the path too, and says what the shape is.
+    tmp.write(
+        "migration/map/config.toml",
+        "name = \"make\"\nfrom = \"make\"\nflags = []\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr
+            .contains("error: migration/map/config.toml: line 3: unknown field `flags`"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("one [[configuration]] table per build, with name, from and flags"),
+        "{}",
+        run.stderr
+    );
+}
+
+/// A program whose duplicate set has more definers than linking tries is
+/// held without a link: the map says it did not link these choices, never
+/// that they did not link.
+#[test]
+fn a_set_over_the_limit_is_said_not_linked() {
+    let tmp = Tmp::new("over-limit");
+    tmp.write("main.c", "int f(void);\nint main(void) { return f(); }\n");
+    for n in 1..=5 {
+        tmp.write(
+            &format!("src/f{n}.c"),
+            &format!("int f(void) {{ return {n}; }}\n"),
+        );
+    }
+    harness_core::adopt::testing::adopt(&tmp.0);
+    tmp.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"plain\"\nfrom = \"stated\"\nflags = []\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for says in [
+        "      link check: not linked: the map did not link these choices (too many to try) \
+         while d1 is open",
+        "      duplicate set d1 (f): held, the map did not link these choices (too many to \
+         try), so the choice is yours: d1.1 src/f1.c, d1.2 src/f2.c, d1.3 src/f3.c, d1.4 \
+         src/f4.c, d1.5 src/f5.c",
+    ] {
+        assert!(run.stdout.contains(says), "{says}\n{}", run.stdout);
+    }
+    assert!(
+        !run.stdout.contains("linking cannot tell"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// A folder-form ledger left in `migration/` by a harness.toml that is
+/// gone: the map says no command reads it.
+#[test]
+fn a_ledger_left_by_a_folder_form_target_is_named() {
+    let tmp = Tmp::new("old-ledger");
+    tmp.write("main.c", "int main(void) { return 0; }\n");
+    tmp.write("migration/plan.toml", "schema_version = 1\n");
+    harness_core::adopt::testing::adopt(&tmp.0);
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains(
+            "note: migration/ still holds the ledger of a folder-form target whose harness.toml \
+             is gone (its plan and units); no command reads it while the project is mapped: put \
+             that harness.toml back to use it, or move it away"
+        ),
+        "{}",
+        run.stdout
+    );
+}
+
 /// A made-up project with three `main()`s (a tool at the root, one under
 /// `tools/`, a test under `tests/`), a shared file, a duplicate both of
 /// whose definers link, and a README.
@@ -509,21 +615,22 @@ fn three_mains_are_mapped_written_and_shown() {
          lib/slow.c apart, so the choice is yours",
         "what the link check proves:",
         "shared file: lib/shared.c (in t-alpha, t-beta, t-test_shared)",
+        // A guess: the next step is to state the configuration, the lines
+        // of config.toml shown and `ask --build` named; accept is not.
         "project map: wrote migration/map/project-map.json and migration/.gitignore (3 \
-         program(s), 0 libraries; the project's own files were not changed); next, make a \
-         program or library a tool with `harness project accept <id>`",
-        "the held choices (d1) are yours to make",
+         program(s), 0 libraries; the project's own files were not changed); the configuration \
+         is a guess, so nothing can be accepted yet: next, state the build in \
+         migration/map/config.toml, for example\n  [[configuration]]\n  name = \"plain\"\n  \
+         from = \"stated\"\n  flags = []  # the -I and -D flags the build passes, each joined, \
+         like \"-Isrc/include\"\nthen run `harness project map` again (or have a model propose \
+         one: `harness project ask --build`)\n",
     ] {
         assert!(run.stdout.contains(says), "{says}\n{}", run.stdout);
     }
+    assert!(!run.stdout.contains("project accept"), "{}", run.stdout);
     // The person's choice is never suggested.
     assert!(!run.stdout.contains("--keep d1=d1.1"), "{}", run.stdout);
     assert!(!run.stdout.contains("--keep d1=d1.2"), "{}", run.stdout);
-    assert!(
-        run.stdout.contains("--keep <set>=<index or path>"),
-        "{}",
-        run.stdout
-    );
     assert_eq!(run.stdout.matches("what the link check proves").count(), 1);
     // The alternatives are not "unreached".
     assert!(!run.stdout.contains("unreached"), "{}", run.stdout);
@@ -552,6 +659,28 @@ fn three_mains_are_mapped_written_and_shown() {
         .find(|e| e["k"] == "project-link" && e["id"] == "t-alpha")
         .unwrap();
     assert_eq!(link["ok"], true);
+
+    // Stated: accept is the next step, the held choices named, none
+    // suggested.
+    harness_core::adopt::testing::adopt(&tmp.0);
+    tmp.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"plain\"\nfrom = \"stated\"\nflags = [\"-O2\"]\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for says in [
+        "project map: wrote migration/map/project-map.json (3 program(s), 0 libraries; the \
+         project's own files were not changed); next, make a program or library a tool with \
+         `harness project accept <id>`",
+        "the held choices (d1) are yours to make",
+        "--keep <set>=<index or path>",
+        // `-O` is recorded only.
+        "flags -O2; -O2 is recorded only, never applied (every compile keeps the harness's own)",
+    ] {
+        assert!(run.stdout.contains(says), "{says}\n{}", run.stdout);
+    }
+    assert!(!run.stdout.contains("--keep d1=d1.1"), "{}", run.stdout);
 }
 
 #[test]
@@ -759,15 +888,57 @@ fn state_status_says_when_the_project_changed_since_a_tool_was_accepted() {
         assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
         run.stdout
     };
-    const CHANGED: &str = "the project changed since this tool was accepted: run `harness \
-                           project map`, then `accept` again";
+    const CHANGED: &str = "its own files changed since it was accepted (lib/shared.h); its \
+                           closure, configuration and link are the same: scan it to read them \
+                           (`harness scan --tool t-alpha`); accepting it again only clears this \
+                           note";
     // The digests match: no notice.
     let out = status("t-alpha");
-    assert!(!out.contains("project changed"), "{out}");
-    // A header changes and the map is made again: the notice.
+    assert!(
+        !out.contains("changed") && !out.contains("elsewhere"),
+        "{out}"
+    );
+    // A file elsewhere changes and the map is made again: the map says
+    // there is nothing to do, and state status says nothing.
+    tmp.write(
+        "tools/beta.c",
+        "#include <stdio.h>\n#include \"../lib/shared.h\"\nint pick(int x);\n\
+         int main(void) { printf(\"%f %d\\n\", shared_root(5.0), pick(1)); return 0; }\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains(
+            "accepted tool t-alpha: a file elsewhere in the project changed; nothing to do for \
+             this tool"
+        ),
+        "{}",
+        run.stdout
+    );
+    let record = &map_json(&tmp.0)["accepted_tools"];
+    assert_eq!(
+        record,
+        &serde_json::json!([{"id": "t-alpha", "changed": "none",
+            "says": "a file elsewhere in the project changed; nothing to do for this tool"}])
+    );
+    let out = status("t-alpha");
+    assert!(
+        !out.contains("changed") && !out.contains("elsewhere"),
+        "{out}"
+    );
+    // A header it includes changes and the map is made again: the notice
+    // says the same sentence as the map, read from the map's record.
     tmp.write("lib/shared.h", "int shared_add(int a, int b);\n");
     let run = harness(&["project", "map", "--target", tmp.arg()]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains(&format!(
+            "accepted tool t-alpha changed since it was accepted: {CHANGED}"
+        )),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(map_json(&tmp.0)["accepted_tools"][0]["changed"], "files");
     let out = status("t-alpha");
     assert!(out.contains(&format!("status: {CHANGED}")), "{out}");
     let run = harness(&[
@@ -788,7 +959,23 @@ fn state_status_says_when_the_project_changed_since_a_tool_was_accepted() {
     );
     // A hand-written tool with no `map`: never a notice.
     let out = status("t-hand");
-    assert!(!out.contains("project changed"), "{out}");
+    assert!(
+        !out.contains("changed") && !out.contains("elsewhere"),
+        "{out}"
+    );
+    // A map written before the records: the general sentence.
+    let path = tmp.0.join("migration/map/project-map.json");
+    let mut m = map_json(&tmp.0);
+    m.as_object_mut().unwrap().remove("accepted_tools");
+    std::fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+    let out = status("t-alpha");
+    assert!(
+        out.contains(
+            "status: the project changed since this tool was accepted: run `harness project \
+             map`, then `accept` again"
+        ),
+        "{out}"
+    );
     // No map file: said so.
     std::fs::remove_file(tmp.0.join("migration/map/project-map.json")).unwrap();
     let out = status("t-alpha");

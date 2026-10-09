@@ -384,7 +384,7 @@ final without a model and the person still accepts (decision 2, §7).
   source text out of the map file, not out of a prompt) — programs first, then definer sets, in
   index order, at most 10 per call, one hand-off per call; a run with several batches writes every
   batch's request and exits with the first awaiting path, as triage does. The strict reply is a JSON array, one
-  object per index, in a fixed field order: `{"item": "p3", "kind": "tool | test | example |
+  object per index: `{"item": "p3", "kind": "tool | test | example |
   benchmark | other", "name": "…", "purpose": "…"}` (`name` 1–40 printable characters, `purpose`
   one line of at most 200, control characters refused, both display-only) and `{"item": "d1",
   "keep": "d1.2" | "undecided", "reason": "platform | alternative-implementation | cannot-tell"}`;

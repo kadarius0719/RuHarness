@@ -1456,6 +1456,73 @@ fn reached_through(
     reached
 }
 
+/// An accepted library keeps its id for the group holding any of its listed
+/// files (the most of them when several do; a tie goes to the group whose
+/// first file sorts first), so a new file that sorts first does not move
+/// it: `(the group's first path, id)` pairs for [`ids::assign`]. Each id
+/// goes to one group, each group keeps at most one id (the id holding the
+/// most of its files, then the smaller id).
+fn library_keeps(
+    project: &Project<'_>,
+    groups: &BTreeMap<usize, BTreeSet<usize>>,
+    accepted: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut held: BTreeMap<(&str, usize), usize> = BTreeMap::new();
+    for (path, id) in accepted.iter().filter(|(_, id)| id.starts_with("l-")) {
+        let Some(&f) = project.by_path.get(path.as_str()) else {
+            continue;
+        };
+        if let Some((&root, _)) = groups.iter().find(|(_, g)| g.contains(&f)) {
+            *held.entry((id.as_str(), root)).or_default() += 1;
+        }
+    }
+    // Most files first, then the id, then the group's first path.
+    let mut ranked: Vec<(usize, &str, usize)> = held
+        .into_iter()
+        .map(|((id, root), n)| (n, id, root))
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)).then(a.2.cmp(&b.2)));
+    let mut ids_used: BTreeSet<&str> = BTreeSet::new();
+    let mut groups_used: BTreeSet<usize> = BTreeSet::new();
+    let mut out = Vec::new();
+    for (_, id, root) in ranked {
+        if ids_used.contains(id) || groups_used.contains(&root) {
+            continue;
+        }
+        ids_used.insert(id);
+        groups_used.insert(root);
+        if let Some(&first) = groups[&root].first() {
+            out.push((project.files[first].path.clone(), id.to_string()));
+        }
+    }
+    out
+}
+
+/// The reasons a library over `files` (paths) is incomplete
+/// (docs/PROJECT-MAP-DESIGN.md §3.6): a symbol its files need that no
+/// compiled project file defines may be defined in a file that did not
+/// compile, could not be read, or lies in a folder the walk could not read
+/// — as a program's closure is incomplete for the same reasons. Sorted.
+pub fn library_gaps(input: &Input<'_>, files: &[String]) -> Vec<Incomplete> {
+    let mut all: Vec<&FileFacts> = input.files.iter().collect();
+    all.sort_by(|a, b| a.path.cmp(&b.path));
+    all.dedup_by(|a, b| a.path == b.path);
+    let kinds = find_programs(&all);
+    let is_program: Vec<bool> = (0..all.len()).map(|i| kinds.contains_key(&i)).collect();
+    let project = Project::new(all, is_program);
+    let group: BTreeSet<usize> = files
+        .iter()
+        .filter_map(|p| project.by_path.get(p.as_str()).copied())
+        .collect();
+    let outside: BTreeSet<String> = unresolved(&project.refs(&group))
+        .into_iter()
+        .filter(|sym| matches!(project.resolve(sym), Res::Outside))
+        .collect();
+    let mut why = Gaps::new(input, &project.files).why(&outside);
+    why.sort();
+    why
+}
+
 /// Group `unreached` files: two join when one needs a symbol the other
 /// alone defines (§3.1 step 9).
 fn libraries(
@@ -1493,7 +1560,7 @@ fn libraries(
         .values()
         .filter_map(|g| g.first().map(|&f| project.files[f].path.clone()))
         .collect();
-    let ids = ids::assign("l-", &firsts, accepted);
+    let ids = ids::assign("l-", &firsts, &library_keeps(project, &groups, accepted));
     let mut out: Vec<Library> = groups
         .values()
         .map(|group| {

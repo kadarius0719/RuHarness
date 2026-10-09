@@ -369,17 +369,29 @@ impl WriterLock {
 
 /// The "project changed" notice of a mapped tool (docs/PROJECT-MAP-DESIGN.md
 /// §3.7): for a tool whose `harness.toml` carries `map = {root_hash,
-/// inputs_hash}`, whether the project map's digests still match. Cheap: the
-/// map file is compared, nothing is hashed. `None` for a folder-form target,
-/// a hand-written tool with no `map`, or digests that match. A notice, never
-/// staleness.
+/// inputs_hash}`, the sentence the project map recorded for it in
+/// `accepted_tools` (`{id, changed, says}`), so `state status`, the cockpit
+/// and harness-mcp all say what `project map` said. Cheap: the map file is
+/// read, nothing is hashed. `None` for a folder-form target, a hand-written
+/// tool with no `map`, digests that match (accepted under this map), or a
+/// record whose `changed` is `none` (only a file elsewhere in the project
+/// changed). A map with no record for the tool (one written before records)
+/// gives the general sentence. A notice, never staleness.
 pub fn project_changed_notice(ctx: &crate::config::TargetContext) -> Option<String> {
     let stamp = ctx.config.target.file_list()?.map.as_ref()?;
     let path = ctx.root.join(PROJECT_MAP_FILE);
     #[derive(Deserialize)]
+    struct Record {
+        id: String,
+        changed: String,
+        says: String,
+    }
+    #[derive(Deserialize)]
     struct Digests {
         root_hash: String,
         inputs_hash: String,
+        #[serde(default)]
+        accepted_tools: Vec<Record>,
     }
     // `None`: no map file; `Some(None)`: one that cannot be read.
     let read = || -> Option<Option<Digests>> {
@@ -393,6 +405,12 @@ pub fn project_changed_notice(ctx: &crate::config::TargetContext) -> Option<Stri
     let bare = |h: &str| {
         h.strip_prefix(crate::hash::HASH_PREFIX)
             .unwrap_or(h)
+            .to_string()
+    };
+    // The map holds no record for the tool (written before records).
+    let changed_since = || {
+        "the project changed since this tool was accepted: run `harness project map`, then \
+         `accept` again"
             .to_string()
     };
     match read() {
@@ -411,11 +429,15 @@ pub fn project_changed_notice(ctx: &crate::config::TargetContext) -> Option<Stri
         {
             None
         }
-        Some(Some(_)) => Some(
-            "the project changed since this tool was accepted: run `harness project map`, then \
-             `accept` again"
-                .into(),
-        ),
+        Some(Some(d)) => match (ctx.tool.as_deref(), d.accepted_tools) {
+            (Some(id), records) => match records.into_iter().find(|r| r.id == id) {
+                Some(r) if r.changed == "none" => None,
+                // The map file lives in the project: one line, filtered.
+                Some(r) => Some(crate::text::safe_line(&r.says)),
+                None => Some(changed_since()),
+            },
+            (None, _) => Some(changed_since()),
+        },
     }
 }
 

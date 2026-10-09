@@ -144,6 +144,11 @@ pub struct ConfigFile {
     pub hash: Option<String>,
 }
 
+/// A refusal of `config.toml`, led by its path relative to the root.
+fn refused(message: impl std::fmt::Display) -> Error {
+    Error::Invariant(format!("{CONFIG_FILE}: {message}"))
+}
+
 /// Read `config.toml`'s entries (none when the file is absent), each checked:
 /// its name, its flags through the grammar with their paths resolved, its
 /// `system_headers`. A file reached through a link out of the root, too
@@ -158,25 +163,21 @@ pub fn read_entries(root: &Path) -> Result<ConfigFile, Error> {
     };
     let real = path.canonicalize().map_err(|e| Error::io(&path, e))?;
     if !real.starts_with(root) || !meta.is_file() {
-        return Err(Error::parse(
-            &path,
+        return Err(refused(
             "the configuration file is not a plain file inside the project; write it at \
              migration/map/config.toml",
         ));
     }
     if meta.len() > MAX_CONFIG_BYTES {
-        return Err(Error::parse(
-            &path,
-            format!(
-                "the configuration file is over {} KiB; keep only its [[configuration]] entries",
-                MAX_CONFIG_BYTES >> 10
-            ),
-        ));
+        return Err(refused(format!(
+            "the configuration file is over {} KiB; keep only its [[configuration]] entries",
+            MAX_CONFIG_BYTES >> 10
+        )));
     }
     let bytes = std::fs::read(&real).map_err(|e| Error::io(&path, e))?;
     let hash = harness_core::hash::bytes_hash(&bytes);
     let text = String::from_utf8(bytes)
-        .map_err(|_| Error::parse(&path, "the configuration file is not UTF-8; fix it"))?;
+        .map_err(|_| refused("the configuration file is not UTF-8; fix it"))?;
     // toml's message can quote a key holding a newline: one line, with the
     // line it stopped at.
     let shape: ConfigFileShape = toml::from_str(&text).map_err(|e| {
@@ -187,26 +188,21 @@ pub fn read_entries(root: &Path) -> Result<ConfigFile, Error> {
                 .count()
                 + 1
         });
-        Error::parse(
-            &path,
-            format!(
-                "{}{}; fix the file",
-                line.map(|l| format!("line {l}: ")).unwrap_or_default(),
-                safe_line(e.message())
-            ),
-        )
+        refused(format!(
+            "{}{}; fix the file (its shape: one [[configuration]] table per build, with name, \
+             from and flags, as docs/SCHEMAS.md shows)",
+            line.map(|l| format!("line {l}: ")).unwrap_or_default(),
+            safe_line(e.message())
+        ))
     })?;
     let mut seen = std::collections::BTreeSet::new();
     for entry in &shape.configuration {
-        check_entry(root, entry).map_err(|m| Error::parse(&path, m))?;
+        check_entry(root, entry).map_err(refused)?;
         if !seen.insert(entry.name.as_str()) {
-            return Err(Error::parse(
-                &path,
-                format!(
-                    "two [[configuration]] entries are named `{}`; give each its own name",
-                    safe_line(&entry.name)
-                ),
-            ));
+            return Err(refused(format!(
+                "two [[configuration]] entries are named `{}`; give each its own name",
+                safe_line(&entry.name)
+            )));
         }
     }
     Ok(ConfigFile {
@@ -246,22 +242,71 @@ fn check_entry(root: &Path, entry: &ConfigEntry) -> Result<(), String> {
     Ok(())
 }
 
+/// A flag the map has no use for: a warning, debug-information or tuning
+/// flag (`-Wall`, `-W`, `-w`, `-pedantic`, `-g`, `-funroll-loops`,
+/// `-march=native`, `-pipe`). It is refused like any flag outside the
+/// grammar, and named as one to drop. A flag that hands something to
+/// another tool or names a file (`-Wl,…`, `-fplugin=…`, `-fuse-ld=…`, any
+/// path) is no such flag: it keeps the grammar's own sentence.
+fn droppable(flag: &str) -> bool {
+    if flag.contains('/') || ["-Wl,", "-Wa,", "-Wp,"].iter().any(|p| flag.starts_with(p)) {
+        return false;
+    }
+    let tuning_f = flag.starts_with("-f") && !flag.contains('=');
+    ["-W", "-pedantic", "-g", "-march=", "-mtune=", "-mcpu="]
+        .iter()
+        .any(|p| flag.starts_with(p))
+        || tuning_f
+        || matches!(flag, "-w" | "-pipe")
+}
+
 /// Every flag through the grammar, and every path flag's path resolved
 /// against `root` with links followed: inside the root, outside
-/// `migration/`. `Err` names the first refused flag.
+/// `migration/`. `Err` names every refused flag in one message: a path flag
+/// written with a blank (`-I src/include`) is told to be written joined, and
+/// warning and tuning flags are named together as ones to drop.
 pub fn check_flags(root: &Path, list: &[String]) -> Result<(), String> {
+    let mut refused: Vec<String> = Vec::new();
+    let mut drop: Vec<String> = Vec::new();
     for flag in list {
-        if let Flag::Path(path) = flags::check_flag(flag)? {
-            if !resolves_inside(root, path) {
-                return Err(format!(
-                    "the flag `{}` names a path that leaves the project or reaches migration/ \
-                     through a link; name the real folder inside the project",
-                    safe_line(flag)
+        let shown = safe_line(flag);
+        if let Some((prefix, rest)) = flags::split_path_flag(flag) {
+            let joined = rest.trim_start();
+            if rest.starts_with(char::is_whitespace) && !joined.is_empty() {
+                refused.push(format!(
+                    "`{shown}` has a blank after {prefix}: write it joined, like \
+                     {prefix}{}",
+                    safe_line(joined)
                 ));
+                continue;
             }
         }
+        match flags::check_flag(flag) {
+            Err(_) if droppable(flag) => drop.push(format!("`{shown}`")),
+            Err(why) => refused.push(why),
+            Ok(Flag::Path(path)) if !resolves_inside(root, path) => refused.push(format!(
+                "the flag `{shown}` names a path that leaves the project or reaches migration/ \
+                 through a link; name the real folder inside the project"
+            )),
+            Ok(_) => {}
+        }
     }
-    Ok(())
+    if !drop.is_empty() {
+        refused.push(format!(
+            "{} {} warning or tuning flag{} the harness does not pass: drop {}, the map does \
+             not need {}",
+            drop.join(", "),
+            if drop.len() == 1 { "is a" } else { "are" },
+            if drop.len() == 1 { "" } else { "s" },
+            if drop.len() == 1 { "it" } else { "them" },
+            if drop.len() == 1 { "it" } else { "them" },
+        ));
+    }
+    if refused.is_empty() {
+        Ok(())
+    } else {
+        Err(refused.join("; "))
+    }
 }
 
 /// `rel` resolved against `root`: the deepest part that exists, links

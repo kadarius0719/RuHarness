@@ -141,8 +141,12 @@ pub(crate) fn cmd_ask(args: AskArgs) -> Result<u8> {
             eprintln!("{e:#}");
             eprintln!(
                 "project ask: external provider mode — write each response beside its request \
-                 under {} and re-run: {resume}",
-                projectask::TRACES_DIR
+                 under {} as {{\"text\": <the reply>, \"input_tokens\": 0, \"output_tokens\": \
+                 0, \"stop_reason\": \"end_turn\"}}, then re-run (the answer is recorded as \
+                 `{}`'s; if another model or a person answers, first run it with --model naming \
+                 who answers: that writes the request to answer): {resume}",
+                projectask::TRACES_DIR,
+                safe_line(&model)
             );
             report::event(&report::Awaiting {
                 k: "awaiting",
@@ -304,15 +308,38 @@ fn ask_questions(
         );
     }
     let indexes: Vec<&str> = items.iter().map(Item::index).collect();
+    let batches = projectask::batches(items, model, max_tokens)?;
     out(format!(
         "project ask: asking {} ({}) about {} item(s) in {} call(s): {}",
         safe_line(&provider.profile),
         safe_line(model),
         items.len(),
-        items.len().div_ceil(projectask::MAX_BATCH),
+        batches.len(),
         indexes.join(", ")
     ));
-    let outcome = projectask::run_questions(provider, model, max_tokens, root, map, items, traces)?;
+    for b in &batches {
+        for item in b {
+            if let Item::Set(s) = item {
+                for d in &s.definers {
+                    if let Some(cut) = &d.slice_cut {
+                        out(format!(
+                            "project ask: {} {}: {cut}",
+                            d.index,
+                            safe_line(&d.path)
+                        ));
+                    } else if let Some(why) = d.no_slice.filter(|w| w.starts_with("left out")) {
+                        out(format!(
+                            "project ask: {} {}: no slice sent ({why})",
+                            d.index,
+                            safe_line(&d.path)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let outcome =
+        projectask::run_questions(provider, model, max_tokens, root, map, &batches, traces)?;
     match outcome.earlier {
         Earlier::OtherMap if outcome.wrote => out(
             "project ask: the reply file there was for another map, so it was replaced, unread"
@@ -392,7 +419,7 @@ fn show_answer(item: &Item, answer: &Answer, model: &str, provider: &str) {
                 .collect::<Vec<_>>()
                 .join(", ");
             let holders = s.programs.join(", ");
-            let (linked_in, not_linked_in) = linked_split(s, keep);
+            let (linked_in, not_linked_in, not_tried) = linked_split(s, keep);
             let keep_path = s
                 .definers
                 .iter()
@@ -413,6 +440,12 @@ fn show_answer(item: &Item, answer: &Answer, model: &str, provider: &str) {
                         line.push_str(&format!(
                             "; in {} it did not link",
                             not_linked_in.join(", ")
+                        ));
+                    }
+                    if !not_tried.is_empty() {
+                        line.push_str(&format!(
+                            "; in {} the map did not link these choices (too many to try)",
+                            not_tried.join(", ")
                         ));
                     }
                     out(line);
@@ -449,16 +482,20 @@ fn show_answer(item: &Item, answer: &Answer, model: &str, provider: &str) {
     }
 }
 
-/// The programs holding `s` where the advised definer's choice linked, and
-/// those where it did not (the map's own link results).
-fn linked_split(s: &SetItem, keep: &str) -> (Vec<String>, Vec<String>) {
+/// The programs holding `s` where the advised definer's choice linked,
+/// those where it did not, and those where the map did not try (the map's
+/// own link results).
+fn linked_split(s: &SetItem, keep: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     if keep == "undecided" {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new());
     }
     let mut yes = Vec::new();
     let mut no = Vec::new();
+    let mut untried = Vec::new();
     for l in &s.links {
-        if l.linked.iter().any(|d| d == keep) {
+        if !l.tried {
+            untried.push(l.program.clone());
+        } else if l.linked.iter().any(|d| d == keep) {
             yes.push(l.program.clone());
         } else {
             no.push(l.program.clone());
@@ -466,7 +503,8 @@ fn linked_split(s: &SetItem, keep: &str) -> (Vec<String>, Vec<String>) {
     }
     yes.dedup();
     no.dedup();
-    (yes, no)
+    untried.dedup();
+    (yes, no, untried)
 }
 
 #[derive(Serialize)]

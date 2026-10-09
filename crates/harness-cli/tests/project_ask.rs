@@ -242,7 +242,8 @@ fn ask_is_refused_while_the_configuration_is_a_guess_unless_allowed() {
     assert!(
         run.stderr.contains(
             "the configuration is a guess, so the questions may be wrong: state it in \
-             migration/map/config.toml, or pass --allow-guessed"
+             migration/map/config.toml (or ask a model to propose one with `harness project ask \
+             --build`) and map again, or pass --allow-guessed"
         ),
         "{}",
         run.stderr
@@ -251,6 +252,17 @@ fn ask_is_refused_while_the_configuration_is_a_guess_unless_allowed() {
     let run = ask(&t, &["--allow-guessed"]);
     assert_eq!(run.code, 1);
     assert!(run.stderr.contains("awaiting response: "), "{}", run.stderr);
+    // The awaiting line names the envelope and who answers.
+    assert!(
+        run.stderr.contains(
+            "as {\"text\": <the reply>, \"input_tokens\": 0, \"output_tokens\": 0, \
+             \"stop_reason\": \"end_turn\"}, then re-run (the answer is recorded as \
+             `claude-sonnet-5`'s; if another model or a person answers, first run it with \
+             --model naming who answers: that writes the request to answer)"
+        ),
+        "{}",
+        run.stderr
+    );
     // A stated configuration needs no flag.
     let mut map = t.map();
     map["configuration"]["source"] = "stated".into();
@@ -277,6 +289,95 @@ fn ask_is_refused_with_no_open_questions_but_build_is_not() {
     );
     let run = ask(&t, &["--build"]);
     assert!(run.stderr.contains("awaiting response: "), "{}", run.stderr);
+    // Under a guess with nothing held, the open question is the build.
+    let run = ask(&t, &[]);
+    assert_eq!(run.code, 1);
+    assert!(
+        run.stderr.contains(
+            "the configuration is a guess, and that is the question still open: ask a model to \
+             propose one with `harness project ask --build`, or state it yourself in \
+             migration/map/config.toml, then run `harness project map` again"
+        ),
+        "{}",
+        run.stderr
+    );
+    // "Every program linked" only when it is true.
+    let mut map = t.map();
+    map["configuration"]["source"] = "stated".into();
+    map["closures"][2]["linked"] = serde_json::json!({"missing": ["gone"], "doubled": []});
+    t.set_map(&map);
+    let run = ask(&t, &[]);
+    assert_eq!(run.code, 1);
+    assert!(
+        run.stderr.contains(
+            "nothing is open: no duplicate set is held, but t-other did not link (see `harness \
+             project map`); a model is not asked about that"
+        ),
+        "{}",
+        run.stderr
+    );
+}
+
+/// A set the map held without linking its choices (more than it tries)
+/// is said to be so, never "it did not link".
+#[test]
+fn a_set_the_map_did_not_link_is_said_so() {
+    let t = Tmp::new("not-tried");
+    t.with_recorded();
+    let mut map = t.map();
+    for c in map["closures"].as_array_mut().unwrap() {
+        if c["program"] == "t-main" {
+            for d in c["duplicates"].as_array_mut().unwrap() {
+                d["links"] = serde_json::json!([]);
+            }
+        }
+    }
+    t.set_map(&map);
+    let run = ask(&t, &["--allow-guessed", "--provider", "replay"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains(
+            "d1 (decode; held by t-main, t-other): the model's advice (claude-sonnet-5): keep \
+             d1.2 src/mini.c, reason platform; in t-other it did not link; in t-main the map did \
+             not link these choices (too many to try)"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        !run.stdout.contains("in t-main it did not link"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// A response cut short names its file and says to answer again (`ask`
+/// has no budget flag to raise).
+#[test]
+fn a_truncated_response_names_its_file() {
+    let t = Tmp::new("truncated");
+    let run = ask(&t, &["--allow-guessed"]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    let request = t.pending().remove(0);
+    let response = t.answer(&request, SETS_REPLY);
+    let mut body: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&response).unwrap()).unwrap();
+    body["stop_reason"] = "max_tokens".into();
+    std::fs::write(&response, body.to_string()).unwrap();
+    let run = ask(&t, &["--allow-guessed"]);
+    assert_eq!(run.code, 1);
+    assert!(
+        run.stderr.contains(&format!(
+            "external: the response file {} says the reply was cut short (stop_reason \
+             `max_tokens`): delete it and answer again with the whole reply and stop_reason \
+             \"end_turn\"",
+            response.display()
+        )),
+        "{}",
+        run.stderr
+    );
+    assert!(!run.stderr.contains("larger budget"), "{}", run.stderr);
+    assert!(!t.path(REPLY).exists());
 }
 
 #[test]
@@ -387,6 +488,30 @@ fn forged_replies_are_refused_in_full_naming_the_index_and_the_rule() {
                 r#"{"item":"d1","keep":"d2.1","reason":"platform"}"#
             ),
             "item `d1`: keep `d2.1` is not one of its definers",
+        ),
+        // A key twice: a plain reader would keep the last copy, a person
+        // reading the file the first.
+        (
+            format!(
+                "[{p2},{},{d2}]",
+                r#"{"item":"d1","keep":"d1.1","keep":"d1.2","reason":"platform"}"#
+            ),
+            "an object names the key `keep` twice",
+        ),
+        (
+            format!(
+                "[{},{d1},{d2}]",
+                r#"{"item":"d9","item":"p2","kind":"tool","name":"Main","purpose":"x"}"#
+            ),
+            "an object names the key `item` twice",
+        ),
+        // A name with no character of its own.
+        (
+            format!(
+                "[{},{d1},{d2}]",
+                "{\"item\":\"p2\",\"kind\":\"tool\",\"name\":\"\\u0301\\u0301\",\"purpose\":\"x\"}"
+            ),
+            "item `p2`: `name` holds only combining marks, no character of its own",
         ),
     ];
     for (reply, says) in &cases {
@@ -596,7 +721,13 @@ fn the_reply_is_merged_when_the_map_did_not_change_the_latest_answer_winning() {
             "inputs_hash": map["inputs_hash"],
             "items": {
                 "p1": {"kind": "example", "name": "Demo", "purpose": "Shows it.", "model": "earlier", "provider": "external"},
-                "d1": {"keep": "d1.1", "reason": "platform", "model": "earlier", "provider": "external"}
+                "d1": {"keep": "d1.1", "reason": "platform", "model": "earlier", "provider": "external"},
+                // Kept answers are checked again: an index the map does not
+                // hold, a label holding a terminal code, a keep that is a
+                // path are dropped.
+                "p77": {"kind": "tool", "name": "x", "purpose": "y", "model": "m", "provider": "external"},
+                "p3": {"kind": "tool", "name": "\u{1b}[2Jx", "purpose": "y", "model": "m", "provider": "external"},
+                "d3": {"keep": "../../etc/passwd", "reason": "platform", "model": "m", "provider": "external"}
             }
         })
         .to_string(),
@@ -650,6 +781,23 @@ fn programs_are_asked_by_id() {
     );
     let run = ask(&t, &["--allow-guessed", "--programs", "l-lib"]);
     assert_eq!(run.code, 2, "{}", run.stderr);
+    // A fuzz driver has its own main(), but is no main program.
+    let mut map = t.map();
+    map["programs"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "t-driver", "path": "src/main.c", "kind": "driver", "kind_guess": "test"
+        }));
+    t.set_map(&map);
+    let run = ask(&t, &["--allow-guessed", "--programs", "t-driver"]);
+    assert_eq!(run.code, 1);
+    assert!(
+        run.stderr
+            .contains("`t-driver` is a fuzz driver: only a main program is asked about"),
+        "{}",
+        run.stderr
+    );
     // --build and --programs do not go together.
     let run = ask(&t, &["--build", "--programs", "t-main"]);
     assert_eq!(run.code, 2, "{}", run.stderr);
