@@ -1644,24 +1644,45 @@ per screen, what the link check proves and does not; then shared files, librarie
 warning for a `.c` included as text), duplicates between programs, programs that did not
 compile, unreached `.c` files, files that did not compile with their closed reason in words
 (an `#error` named as such), ambiguous includes, set-aside counts and skipped folders
-(`migration` as "the harness's own files"); then **what changed** for each accepted tool (a
-`migration/tools/<id>/harness.toml` with `map`) whose digests differ from this map's, one line
-each — "accepted tool <id> changed since it was accepted: <what>; accept it again with `harness
-project accept <id>`", where <what> is, joined by `; `: "closure changed: it now needs <files>",
-"… it no longer needs <files>", "… the include folders of <files> are different" (the closure
-recomputed with the tool's own picks), "configuration changed: it was <name, from, flags>, the
-map's is <…>", "a duplicate set is open that its picks do not settle (…)", "its program is no
-longer in the map …", "it is no longer a library in the map", "it no longer links (missing …;
-defined twice …)", or, when none of these, "its files changed since it was accepted (same
-closure, same configuration, it still links)" (for a held program: "; the map does not link it
-while a choice is held"); a hand-written tool (no `map`) and a tool whose digests match get no
-line; when any tool is accepted, "new programs since the last map: <id> (<path>), …" (programs
-whose path the map this one replaced did not have); last, one sentence saying what was written
-and the next step: `harness project accept <id>`, and — only when a set is held — that the
-held choices are the person's, named with `--keep <set>=<index or path>` (no definer is ever
-suggested) with `harness project ask` to advise. Lists on one line name at most 24 items, then
-"… and N more". Every printed project string has its control characters, newlines and tabs
-shown as `?`.
+(`migration` as "the harness's own files"); a held set the map did not link because it has
+more definers or combinations than linking tries reads "held, the map did not link these
+choices (too many to try), so the choice is yours: …" (its link check "not linked: the map did
+not link these choices (too many to try) while d1 is open"), never "did not link"; an `-O`
+level among the configuration's flags is said to be "recorded only, never applied". Then
+**what changed** for each accepted tool (a `migration/tools/<id>/harness.toml` with `map`)
+whose digests differ from this map's: its record in the map file's `accepted_tools` (below),
+one line each — "accepted tool <id> changed since it was accepted: <says>", or for `none`
+"accepted tool <id>: a file elsewhere in the project changed; nothing to do for this tool"; a
+tool whose `harness.toml` cannot be read: "…: its harness.toml could not be read, so nothing is
+compared"; while any tool exists, "programs not accepted as tools: <id> (<path>), …; accept one
+with `harness project accept <id>`" (the `main` programs that are not tools, on every map); a
+root with no `harness.toml` whose `migration/` still holds a folder-form ledger
+(`migration/plan.toml`): "note: migration/ still holds the ledger of a folder-form target whose
+harness.toml is gone (its plan and units); no command reads it while the project is mapped: put
+that harness.toml back to use it, or move it away". Last, one sentence saying what was written
+and the next step. While the configuration is a guess it names no accept: "…; the
+configuration is a guess, so nothing can be accepted yet: next, state the build in
+migration/map/config.toml, for example" and the lines `[[configuration]]`, `name = "<word>"`,
+`from = "<word>"` (`make`, `cmake` or `meson` from the build files found, else `plain` and
+`stated`) and `flags = []  # the -I and -D flags the build passes, each joined, like
+"-Isrc/include"`, then "then run `harness project map` again (or have a model propose one:
+`harness project ask --build`)"; a configuration that came with the project names `harness
+project map --adopt`; a stated one still a guess (flags that differ, a file in no
+`compile_commands.json` entry) says to state one build. Once stated: `harness project accept
+<id>`, and — only when a set is held — that the held choices are the person's, named with
+`--keep <set>=<index or path>` (no definer is ever suggested) with `harness project ask` to
+advise. Lists on one line name at most 24 items, then "… and N more". Every printed project
+string has its control characters, newlines and tabs shown as `?`.
+
+**`config.toml`'s refusals** lead with its path relative to the project
+("migration/map/config.toml: …"), name every refused flag of an entry in one message joined by
+`; `, say a path flag written with a blank (`-I src/include`) is to be written joined ("`-I
+src/include` has a blank after -I: write it joined, like -Isrc/include"), and name the warning,
+debug and tuning flags (`-W…` but `-Wl,`/`-Wa,`/`-Wp,`, `-w`, `-pedantic`, `-g…`, `-f…` without
+`=`, `-march=`/`-mtune=`/`-mcpu=`, `-pipe`, none naming a path) together as ones to drop
+("`-funroll-loops`, `-W`, `-Wall` are warning or tuning flags the harness does not pass: drop
+them, the map does not need them"); a TOML shape error adds "(its shape: one [[configuration]]
+table per build, with name, from and flags, as docs/SCHEMAS.md shows)".
 
 `--json` carries these events (and a `message` for each human line it still prints):
 
@@ -1671,7 +1692,7 @@ shown as `?`.
 | `project-build` | `configuration`, `from`, `source`, `proposed` (only when true), `flags`, `system_headers`, `digest`, `compile_commands` (its path or null), `also_found` and `not_in_compile_commands` (only when not empty), `ignored_entries`, `unfound_entries`, `build_files`, `flags_differ` (paths listed twice with other flags), `ignored_flags: [[flag, why, count]]`, `ignored_flag_count`, `set_aside: [[folder, lang, count]]`, `limits_hit` |
 | `project-program` | `id`, `path`, `kind`, `kind_guess`, `files` (its closure; empty for a driver), `outside`, `incomplete`, `held` (the indexes of its held duplicate sets) |
 | `project-link` | `id` and either `ok: true` or `missing: [sym]` with `doubled: [sym]`, and `not_checked: [sym]` and `not_compiled: [path]` when not empty — from the symbol facts and the linker's exit status, never its text |
-| `project-tool-changed` | `id`, `what: [sentence]` — one per accepted tool that changed, the same words as its line |
+| `project-tool-changed` | `id`, `changed`, `says` — one per record of `accepted_tools`, the same words as its line |
 
 Paths, header and symbol names are carried raw, escaped as every event is. Under a cap only
 `project-file` and `project-build` are sent before the refusal.
@@ -1725,7 +1746,8 @@ so the same project, configuration and toolchain give byte-identical files. Opti
                    ignored_entries, unfound_entries: [path], build_files: [path],
                    flags_differ?: [{path, flags: [[flag]]}],
                    not_in_compile_commands?: [path], also_found?: [path]},
-  limits_hit: [{limit: files | depth | symbols | budget | size, at}] }
+  limits_hit: [{limit: files | depth | symbols | budget | size, at}],
+  accepted_tools?: [{id, changed: none | files | configuration | closure | link, says}] }
 ```
 
 - **`root_hash`** is the file-set hash (Global rules, "Hashes") of every walked `.c`/`.h`,
@@ -1791,6 +1813,30 @@ so the same project, configuration and toolchain give byte-identical files. Opti
   `.c` that did not compile.
 - The ids, indexes and kinds follow docs/PROJECT-MAP-DESIGN.md §3.3 and §3.1; the link check
   and the duplicate sets §3.5.
+- **`accepted_tools`**: one record per accepted tool (a `harness.toml` with `map`) whose
+  digests differ from this map's, in id order — **what changed since it was accepted**, which
+  `state status`, the cockpit and harness-mcp's note read instead of comparing digests, so they
+  all say the same sentence. `says` begins with which digest moved ("the project's files
+  changed", "the configuration or the compiler changed", or both) and what that did to the tool,
+  joined by `; `: "closure changed: it now needs <files>", "… it no longer needs <files>", "…
+  the include folders of <files> are different" (the closure recomputed with the tool's own
+  picks), "a duplicate set is open that its picks do not settle (…)", "its program is no longer
+  in the map …", "its files are now in library <id> (<files>)" (a library whose id moved: the
+  accept command then names the new id), "it is no longer a library in the map", "configuration
+  changed: it was <name, from, flags>, the map's is <…>", "it no longer links (missing …;
+  defined twice …)", ending "accept it again with `harness project accept <id>`". `changed` is
+  the first of `closure`, `link`, `configuration` found. When only the configuration's digest or
+  the compiler moved and nothing of the tool did: `configuration`, "…, but this tool's files,
+  flags and link are the same: accept it again with `harness project accept <id>` only to
+  record that". When only the project's files moved and nothing of the tool did, its own files
+  (and the headers they include) are compared with the map it was accepted under — read from the
+  map file this one replaces, directly when that is the map it was accepted under, else through
+  that map's own record: unchanged is `none`, `says` "a file elsewhere in the project changed;
+  nothing to do for this tool"; changed is `files`, "its own files changed since it was
+  accepted (<files>); its closure, configuration and link are the same: scan it to read them
+  (`harness scan --tool <id>`); accepting it again only clears this note" (or, with no earlier
+  map to compare, "the project's files changed since it was accepted (the map it was accepted
+  under is gone, so its own files are not compared); …").
 
 ### `migration/.gitignore`
 
@@ -1802,12 +1848,15 @@ it): a two-line comment, then one name per line — `build/`, `.lock`, `traces/`
 ### The "project changed" notice
 
 For a mapped tool whose `harness.toml` carries `map = {root_hash, inputs_hash}`, `state status`
-(a line `status: …` and a `project-notice {says}` event) and the cockpit's read model
-(`Snapshot::project_notice`) compare the two digests with the map file's (a `blake3:` prefix
-on either side ignored); nothing is hashed. Digests that differ: "the project changed since
-this tool was accepted: run `harness project map`, then `accept` again". No map file: "no map
-written yet: run `harness project map` to see whether the project changed since this tool was
-accepted". A notice, never staleness: no command refuses because of it. A folder-form target
+(a line `status: …` and a `project-notice {says}` event), the cockpit's read model
+(`Snapshot::project_notice`) and harness-mcp's status note read the map file
+(`harness_core::ledger::project_changed_notice`); nothing is hashed. Digests that match (a `blake3:`
+prefix on either side ignored): nothing — the tool was accepted under this map. Digests that
+differ: the `says` of the tool's `accepted_tools` record, through `safe_line`, or nothing when
+its `changed` is `none`; a map with no record for the tool (written before the records): "the
+project changed since this tool was accepted: run `harness project map`, then `accept` again".
+No map file: "no map written yet: run `harness project map` to see whether the project changed
+since this tool was accepted". A notice, never staleness: no command refuses because of it. A folder-form target
 and a hand-written tool with no `map` get none. The notice **compares, it does not
 authenticate**: two files inside the project agreeing proves neither that anyone accepted the
 tool nor against which tree (a download can ship both, and `root_hash` can be computed from its
@@ -1827,45 +1876,64 @@ own files), so its silence means only "the digests match".
 `harness project accept <id> --target DIR [--keep d1=d1.2 | --keep d1=<path>]…
 [--run-name NAME] [--allow-unsandboxed] [--adopt]` makes the map's program or library `<id>`
 a tool: it writes `migration/tools/<id>/harness.toml` in the file-list form and nothing else.
-It takes the project lock, then an existing tool's ledger lock. It reads the map file for the
-ids and the duplicate sets' indexes the person saw, **maps the project again** under the map's
-configuration and compares `root_hash` and `inputs_hash` with the file's, applies the picks,
-recomputes the program's closure under them (a file only one definer needs stays only with
-it), and **links it again** — never reading a reply, never trusting the map's own `linked` —
-before anything is written. Exit 0 written; 1 refused (one sentence, nothing written); 2 usage
+Before any lock it checks that `migration/`, `migration/tools/` and `migration/tools/<id>/` are
+real folders where they exist ("<path> is not a folder (a link or a file), so no tool is
+written there and no lock is taken in it: move it away"); then it takes the project lock, then
+an existing tool's ledger lock. It reads the map file only to turn the person's indexes into
+paths (its ids, set indexes and definer indexes shape-checked first: "… holds an id or an index
+that is not one the map writes: run `harness project map` again"), **maps the project again**
+under the map's configuration and compares `root_hash` and `inputs_hash` with the file's, then
+**recomputes the programs, closures, duplicate sets and libraries with their link checks**, as
+`project map` does, and refuses when the map file says otherwise — its programs (id, file,
+kind), its libraries (id, files), or the program's closure files and duplicate sets (set,
+definers) ("migration/map/project-map.json does not say what mapping the project again finds
+(its programs, libraries or the files and choices of <id> differ): run `harness project map`
+again, read the screen, then accept"). **No choice, file list or program path is taken from
+the map file**: a set is settled by linking only when linking again shows exactly one choice
+links. It applies the picks, recomputes the program's closure under them (a file only one
+definer needs stays only with it), and **links it again** — never reading a reply, never
+trusting the map's own `linked` — before anything is written. Exit 0 written; 1 refused (one sentence, nothing written); 2 usage
 (an id outside `^[tl]-[a-z0-9_-]{1,64}$`).
 
 **Picks.** `--keep <set>=<value>`, repeatable: `<value>` is one of the set's definer indexes
 (`d1.2`) or a definer's path, so a pick still names the right file when a new file shifts the
 indexes. A set the map settled by linking is recorded with `by = "links"`; a person's keep
 (on a held set, or over the linking's choice — the re-link then decides) with
-`by = "person"`. Only the sets the final closure reaches are recorded. Before writing, each
-pick is printed in words — "project accept <id>: keeping `<path>` over `<path>` for
-`<symbols>`" (with " (settled by linking)" for the linking's) — and each definer not kept as
-"  <path>: alternative not kept".
+`by = "person"`. Only the sets the final closure reaches are recorded; a person's pick for a
+set the other picks do not reach is said so: "project accept <id>: d2 is not reached with these
+picks; not recorded". Before writing, each pick is printed in words — "project accept <id>:
+keeping `<path>` over `<path>` for `<symbols>`" (with " (settled by linking)" for the
+linking's) — and each definer not kept as "  <path>: alternative not kept".
 
 **Refusals** (one sentence each, in this order): a root `harness.toml` ("this project is
 already a folder-form target …: move that harness.toml away, or map a copy of the project");
 no map file ("there is no project map yet: run `harness project map` first …"); a map cut short
-at a limit; an id the map does not hold (its ids named); a fuzzer or a fuzz driver; a `--keep`
-that names no set of the program, or no definer of the set, or two definers for one set; the
-map's digests no longer matching the tree ("the project changed since the map was made (its
+at a limit; an id or index outside its shape; an id the map does not hold (its ids named); a
+fuzzer or a fuzz driver; `--run-name` for a library ("--run-name names the program a tool runs,
+and <id> is a library, which runs nothing: leave --run-name out (a library's name is its id)");
+a `--keep` that names no set of the program, or no definer of the set, or two definers for one
+set; the map's digests no longer matching the tree ("the project changed since the map was made (its
 files, its configuration or the compiler): run `harness project map` again, read the screen,
 then accept"); a configuration that came with the project ("the configuration came with the
 project: state it with `harness project map --adopt`, or write your own
-migration/map/config.toml"); a guessed configuration; a duplicate set the picks leave open
+migration/map/config.toml"); a guessed configuration; the map file not saying what mapping
+again finds (above); a duplicate set the picks leave open
 ("duplicate set d1 of <id> (<symbols>) is not settled: pick its definer yourself with --keep
 d1=<index or path> (its definers: d1.1 <path>, d1.2 <path>)"); an incomplete closure (a file
 that did not compile and may define a needed symbol, an unread file, an unreadable folder);
-for a library, a file that did not compile; an ambiguous include the configuration does not
+for a library, a file that did not compile, or an incomplete library ("the library <id> is
+incomplete (<file> did not compile and may define <symbols>): make those files compile or
+readable, map again, then accept" — a symbol its files need that no compiled file defines may
+be defined in a file that did not compile, as for a program); an ambiguous include the configuration does not
 settle; under `from = "compile_commands"`, a file no entry lists; files whose flags differ;
 the link failing ("<id> does not link with these files (missing …; defined twice …): pick
 another definer with --keep, or fix the program, map again, then accept"); a run name outside
-1–64 letters, digits, `.`, `_`, `-` (not starting with `.` or `-`); a rendered file that would
-not load.
+1–64 letters, digits, `.`, `_`, `-` (not starting with `.` or `-`); a `harness.toml` already
+there that is not a regular TOML file of at most 1 MiB (accepting again keeps what it holds,
+so it must be read); a rendered file that would not load.
 
-**What it writes** (docs/SCHEMAS.md "The file-list form"): a two-line comment naming the
-command and the map file; `schema_version = 2`; `[target]` `name` — `--run-name`, else the
+**What it writes** (docs/SCHEMAS.md "The file-list form"): a three-line comment naming the
+command and the map file and what accepting again rewrites; `schema_version = 2`; `[target]` `name` — `--run-name`, else the
 program file's name without `.c`; a library's id — `files` (the closure's `.c` files in path
 order, each with its include folders as the map recorded them), `configuration = {name, from,
 flags}` (the map's configuration's name and `from`, the flags every file of the closure
@@ -1873,32 +1941,60 @@ compiled with, then `-idirafter<dir>` for each include folder the map passed wit
 `-idirafter` because it holds one of the configuration's `system_headers` — that folder leaves
 the file's own list), `map = {root_hash, inputs_hash}` (the map's), `picks` (when any); then
 `[oracle] allowlist = ["cc", "cargo", "rustc", "nm"]` with `extra_link_args` the guessed
-outside libraries (`-lm`, `-lz`, `-lpthread`, as the link used them; none for a library), and
-`[llm] provider = "external"`, `max_tokens = 16384` — the case file `bench init` writes. A
-library is compiled by the map and never linked; its target has no program and its id as
-`name`. Accepting an id again rewrites only its `harness.toml`; its ledger (plan, units,
-verdicts) is kept. The acceptance is the written file, reviewed with `git diff`; there is no
-separate record. The closing line: "project accept: wrote migration/tools/<id>/harness.toml
-(<n> file(s), linked with <libs>, run as <name>; configuration <name>, flags …); review it with
-`git diff`, then scan it: `harness scan --target <DIR> --tool <id>`".
+outside libraries (`-lm`, `-lz`, `-lpthread`, as the link used them; none for a library); for a
+program with no whole-program check, a commented example — "# The whole-program check is off
+until this is filled in: …", `# [oracle.whole_program]`, `# args = ["-c"]` — and the sentence
+on screen "project accept <id>: the whole-program check is off until you fill in
+[oracle.whole_program] in migration/tools/<id>/harness.toml (a commented example is there)";
+and `[llm] provider = "external"`, `max_tokens = 16384` — the case file `bench init` writes —
+with, when no `model` is set, a commented `# model = "my-claude-code"` saying to name who
+answers the hand-offs. A library is compiled by the map and never linked; its target has no
+program and its id as `name`.
+
+**Accepting again** rewrites only the tool's `harness.toml`; its ledger (plan, units, verdicts)
+is kept. `accept` **owns** `schema_version`, the whole `[target]` (files and their folders,
+configuration, map stamp, picks, run name), `[oracle] extra_link_args` and the allowlist's fixed
+entries; the file there is read as a TOML table and **every other key or section is carried
+over unchanged** — `[oracle.whole_program]`, other `[oracle]` keys, the person's own allowlist
+entries (after the fixed ones), the whole `[llm]` with its stage overrides, `[driver]`, any
+other section. The person's comments are not carried over (the file's own are written again).
+The acceptance is the written file, reviewed with `git diff`; there is no separate record. The
+closing line: "project accept: wrote migration/tools/<id>/harness.toml (<n> file(s), linked
+with <libs>, run as <name>; configuration <name>, flags …[; its ledger (plan, units, verdicts)
+is kept][; kept from the harness.toml there: oracle.whole_program, llm.model, … (its own
+comments are not carried over)]); review it with `git diff`, then scan it: `harness scan
+--target <DIR> --tool <id>`" — what was kept is named only when something was (an `[llm]` key
+equal to what a first accept writes is not named).
 
 **Ids across maps.** `project map` reads every `migration/tools/<id>/harness.toml` (at most
 1 MiB, never through a link, its paths not checked): a `t-` tool's listed file that is a `main`
-program keeps `<id>`, and an `l-` tool's listed files keep theirs for the library whose first
-file they are (docs/PROJECT-MAP-DESIGN.md §3.3).
+program keeps `<id>`, and an `l-` tool keeps its id for the library holding any of its listed
+files — the one holding the most when several do — so a new file that sorts first does not
+move it (docs/PROJECT-MAP-DESIGN.md §3.3).
 
 `--json` adds `project-accept {id, path, library, replaced, files, configuration, flags,
-extra_link_args, run_name, picks: [{set, definers, keep, by}], not_kept}` after the picks'
-`message` lines.
+extra_link_args, run_name, picks: [{set, definers, keep, by}], not_kept, kept?, dropped?}`
+after the picks' `message` lines.
 
-**The cockpit** (`harness-tui`), opened on a project with no root `harness.toml` and no
-mapped tool, in a terminal, offers the project's acts before the terminal is taken: "Map the
-project" (then "Map the project again"), and after a map "Ask a model for advice" and "Accept a
-program" (the map's `main` programs and libraries, then each held choice's definers listed,
-none suggested). Each act's dialog says what it runs (the `harness project …` command line,
-the same words), how long it takes and what it writes, and runs it only on a typed `y`. The
-heading shows a shipped configuration as proposed. Once a tool exists the cockpit opens it as
-any target (several are listed to pick). harness-mcp never runs these acts.
+**The cockpit** (`harness-tui`), opened in a terminal on a project with no root `harness.toml`
+and no `--tool`, with no mapped tool yet or a map to act on, offers the project's acts before
+the terminal is taken: once tools exist, "Open <id> — <program's path>" for each first; "Map
+the project" (then "Map the project again"); and after a map "Ask a model for advice" and
+"Accept a program". The acts follow the open question: while the configuration is a guess (or
+came with the project) Ask runs `--build`, and Accept says before any picker "Accept needs a
+stated configuration, and this map's is a guess (or came with the project): write it in
+migration/map/config.toml, or Ask for a proposal, then map again." Accept lists the map's
+`main` programs and libraries, then each held choice's definers, none suggested, skipping a set
+whose `under` names no choice made so far; a reply bound to the map's digests shows its advice
+beside the definers — "The model's advice (<model>): keep d1.2, reason …  — advice only, the
+choice is yours." — each answer checked as `ask` checks one. The map file's ids, sets and
+indexes are shape-checked before anything of them is shown or put in a command (a map that
+fails says so and offers Map only), and every string shown goes through `safe_line`. Each act's
+dialog says what it runs (the `harness project …` command line, the same words), how long it
+takes (Ask: one model call for each 10 held choices) and what it writes, and runs it only on a
+typed `y`. The first tool accepted is opened; with no map, tools are opened as any target
+(several listed with their program's path when a map names it). harness-mcp never runs these
+acts.
 
 ## `harness project ask` (docs/PROJECT-MAP-DESIGN.md §3.4, §3.8, §5 step d)
 
@@ -1914,17 +2010,31 @@ there is no `[llm]` section: the provider and model default to the hand-off's ow
 refused or awaiting; 2 usage (`--build` with `--programs`, an id that is not `t-…`).
 
 - **The questions** (no `--build`): refused while `configuration.source` is `guessed` unless
-  `--allow-guessed` ("the configuration is a guess, so the questions may be wrong: state it in
-  migration/map/config.toml, or pass --allow-guessed"), and when nothing is open ("nothing is
-  open: every program linked and every duplicate set is settled"); both before anything is
-  written. The open items are the programs `--programs` names (ids joined by commas; only a
-  program with its own `index`) and then every set some closure lists in `questions`, in index
-  order (`p2` before `p10`), at most 10 a call. A program's facts are `{id, path, folder,
-  bytes, functions, includes}`; a set's `{symbols (the union over every closure holding it),
-  programs (their ids), definers: [{index, path, folder, bytes, functions, includes,
-  slice_lines, slice, no_slice?}]}`, the slice being each duplicated definition found by its
-  name at file scope (a prototype skipped), at most 120 lines per definer, read from the file
-  (8 MiB cap, never through a link).
+  `--allow-guessed` — with nothing held and no `--programs`, "the configuration is a guess, and
+  that is the question still open: ask a model to propose one with `harness project ask
+  --build`, or state it yourself in migration/map/config.toml, then run `harness project map`
+  again"; otherwise "the configuration is a guess, so the questions may be wrong: state it in
+  migration/map/config.toml (or ask a model to propose one with `harness project ask --build`)
+  and map again, or pass --allow-guessed" — and when nothing is open ("nothing is open: every
+  program linked and every duplicate set is settled", or, when a program did not link, "nothing
+  is open: no duplicate set is held, but <ids> did not link (see `harness project map`); a
+  model is not asked about that"); both before anything is written. The open items are the
+  programs `--programs` names (ids joined by commas; only a `main` program — a fuzzer or a fuzz
+  driver is refused: "`<id>` is a fuzz driver: only a main program is asked about") and then
+  every set some closure lists in `questions`, in index order (`p2` before `p10`). A program's
+  facts are `{id, path, folder, bytes, functions, includes}`; a set's `{symbols (the union over
+  every closure holding it), programs (their ids), definers: [{index, path, folder, bytes,
+  functions, includes, slice_lines, slice, no_slice?, slice_cut?}]}`, the slice being each
+  duplicated definition found by its name at file scope (a prototype skipped), read from the
+  file (8 MiB cap, never through a link). **Bounds**: a slice holds at most 120 lines and 16 KiB
+  per definer, each line cut at 400 characters (ending with `…`), and `slice_cut` says what was
+  cut ("N line(s) over 400 characters are cut short and end with …", "the slice stops at 120
+  lines or 16 KiB, before the definitions end"); the definitions are found in one pass over the
+  file, each character read once, however many times a name appears. A call holds at most 10
+  items and its request (system and user text) at most 256 KiB: a batch closes before it would
+  pass that, and an item over it alone sends fewer slices, its last definers' left out with
+  `no_slice` "left out: the request would pass its size bound". What was cut or left out is
+  printed before the calls.
 - **The request** (the trusted part holds only harness text and checked indexes): the system
   prompt is the role, the zero-authority policy and the output contract, then one line naming
   the exact delimiters `<project_facts_<nonce> item=".." trust="untrusted">` …
@@ -1938,14 +2048,21 @@ refused or awaiting; 2 usage (`--build` with `--programs`, an id that is not `t-
   "purpose":".."}` (`name` 1–40 characters, `purpose` 1–200) or `{"item":"d1","keep":
   "d1.2|undecided","reason":"platform|alternative-implementation|cannot-tell"}` (`keep` one of
   that set's own definers). Refused in full, naming the index and the rule, when it names an
-  index not asked, skips or repeats one, adds a field (unknown fields are refused), gives a
-  value outside its closed set, or holds anywhere a character `unsafe_to_show` names.
+  index not asked, skips or repeats one, adds a field (unknown fields are refused), names a key
+  twice in one object ("an object names the key `keep` twice"), gives a value outside its
+  closed set, gives a `name` or `purpose` of combining marks only ("… holds only combining
+  marks, no character of its own"), or holds anywhere a character `unsafe_to_show` names. The
+  order of the fields is not checked. A `--build` reply naming a key twice is refused the same
+  way.
 - **The reply file** `migration/map/project-map.reply.json` (gitignored), pretty JSON with a
   final newline: `{schema: "ruharness-project-map-reply", root_hash, inputs_hash, items:
   {<index>: {kind?, name?, purpose?, keep?, reason?, model, provider}}}` (`provider` is the
   profile name). A file bound to other digests is never read beyond them and is replaced; one
   that cannot be read is replaced; one bound to this map's digests is merged into, batch by
-  batch as each batch validates, the latest answer per index winning. It holds the answers
+  batch as each batch validates, the latest answer per index winning; each answer already there
+  is checked again as a fresh one would be (its index one the map holds, its values in their
+  closed sets, its labels one showable line within their limits, its model and provider
+  showable) and dropped when it fails. It holds the answers
   only — no source text. It is advice: `accept` never reads it.
 - **`--build`**: allowed at any time (a guess too, and with nothing open). Sends the
   `build_evidence.build_files` whose file name is a build file's fixed name (`Makefile`,
@@ -1968,7 +2085,11 @@ refused or awaiting; 2 usage (`--build` with `--programs`, an id that is not `t-
   refused stop is a hard error. Live: a reply that fails the contract gets one retry with the
   error appended, and the validated pair is recorded under the original request's key.
   `external`: a response that fails is a hard error naming the response file, "delete it and
-  answer again"; `replay`: "record a live run". The traces (`<key>.request.json`,
+  answer again"; `replay`: "record a live run". The awaiting line says how to answer: "project
+  ask: external provider mode — write each response beside its request under
+  migration/map/traces as {"text": <the reply>, "input_tokens": 0, "output_tokens": 0,
+  "stop_reason": "end_turn"}, and re-run with --model naming whoever answers (the model you ask,
+  or yourself): <the resume command>". The traces (`<key>.request.json`,
   `<key>.response.json`) live in `migration/map/traces/` (gitignored; made when absent, a link
   refused); a response is bound to its exact question, not to a map, so a stored answer to the
   same question is read again. With several calls every call's request is written in one run;
@@ -1979,7 +2100,8 @@ refused or awaiting; 2 usage (`--build` with `--programs`, an id that is not `t-
 - **The screen**: each answer labelled as the model's, naming the model (`p3 t-foo (path): the
   model's label (M): kind …, name "…"; purpose, in its words: …`; `d1 (symbols; held by ids):
   the model's advice (M): keep d1.2 <path>, reason …; in t-a that choice linked; in t-b it did
-  not link`, from the map's own `links`; `undecided` says the choice goes to the person and
+  not link`, from the map's own `links` — "in t-c the map did not link these choices (too many
+  to try)" for a program held without its choices linked (no `linked` and no set with `links`); `undecided` says the choice goes to the person and
   lists the definers), then once that the words are labels and advice only. Every project and
   model string is printed through `safe_line`. `--json` adds `project-answer {item, model,
   provider, program?, path?, kind?, name?, purpose?, keep?, keep_path?, reason?, linked_in?,

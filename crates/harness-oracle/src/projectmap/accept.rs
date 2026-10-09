@@ -496,11 +496,12 @@ pub fn check_folders(root: &Path, id: &str) -> Result<(), Error> {
         match std::fs::symlink_metadata(path) {
             Ok(m) if m.file_type().is_dir() => {}
             Ok(_) => {
+                let rel = path.strip_prefix(root).unwrap_or(path);
                 return Err(refuse(format!(
-                    "{} is not a folder (a link or a file), so no tool is written there: move it \
-                     away",
-                    safe_line(&path.display().to_string())
-                )))
+                    "{} is not a folder (a link or a file), so no tool is written there and no \
+                     lock is taken in it: move it away",
+                    safe_line(&rel.display().to_string())
+                )));
             }
             Err(_) => break,
         }

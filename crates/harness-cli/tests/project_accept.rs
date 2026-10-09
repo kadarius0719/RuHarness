@@ -683,6 +683,430 @@ fn a_later_map_reports_what_changed_for_each_accepted_tool() {
     );
 }
 
+/// Edit the map file in place.
+fn forge(tmp: &Tmp, edit: impl FnOnce(&mut serde_json::Value)) {
+    let path = tmp.0.join("migration/map/project-map.json");
+    let mut m = map_json(&tmp.0);
+    edit(&mut m);
+    std::fs::write(&path, serde_json::to_vec_pretty(&m).unwrap()).unwrap();
+}
+
+/// Every other refusal through the binary, each alone, one sentence,
+/// nothing written: a fuzzer and a fuzz driver, two definers for one set,
+/// a library whose needed symbol may be defined in a file that did not
+/// compile, an ambiguous include, a file in no compile_commands.json entry,
+/// flags that differ, a bad run name, a run name for a library, the map's
+/// limit, a map file whose choices, paths or ids are not the ones mapping
+/// again finds, and a `migration/tools` that is a link (refused before any
+/// lock is taken there).
+#[test]
+fn every_refusal_fires_alone_and_writes_nothing() {
+    let nothing_written = |tmp: &Tmp| {
+        assert!(
+            !tmp.0.join("migration/tools").exists(),
+            "a tool was written"
+        );
+    };
+
+    // A fuzzer, and the driver that serves two of them.
+    let tmp = Tmp::new("fuzz");
+    let fuzzer = |n: u8| {
+        format!(
+            "#include <stddef.h>\n#include <stdint.h>\n\
+             int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n) {{ return (int)n + {n}; }}\n"
+        )
+    };
+    tmp.write("fuzz/fz.c", &fuzzer(0));
+    tmp.write("fuzz/fz2.c", &fuzzer(1));
+    tmp.write(
+        "fuzz/driver.c",
+        "#include <stddef.h>\n#include <stdint.h>\n\
+         int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n);\n\
+         int main(void) { return LLVMFuzzerTestOneInput(0, 0); }\n",
+    );
+    tmp.write("app/app.c", "int main(void) { return 0; }\n");
+    tmp.stated("");
+    map(&tmp);
+    refused(
+        &accept(&tmp, "t-fz", &[]),
+        "t-fz is a fuzzer, linked only with the project's fuzz driver: accept a main program or \
+         a library",
+    );
+    refused(
+        &accept(&tmp, "t-driver", &[]),
+        "t-driver is a fuzz driver, never a tool alone: accept a main program or a library",
+    );
+    nothing_written(&tmp);
+
+    // Two definers named for one set.
+    let tmp = Tmp::new("two-keeps");
+    tmp.write("main.c", "int f(void);\nint main(void) { return f(); }\n");
+    tmp.write("a/f.c", "int f(void) { return 1; }\n");
+    tmp.write("b/f.c", "int f(void) { return 2; }\n");
+    tmp.stated("");
+    map(&tmp);
+    refused(
+        &accept(&tmp, "t-main", &["--keep", "d1=d1.1", "--keep", "d1=d1.2"]),
+        "--keep names two definers for d1 (a/f.c and b/f.c): keep one",
+    );
+    nothing_written(&tmp);
+    // The map file's choice is not taken: forged as settled by linking,
+    // the set is still held (both definers link).
+    forge(&tmp, |m| {
+        m["closures"][0]["duplicates"][0]["choice"] =
+            serde_json::json!({"keep": "d1.2", "by": "links"});
+        m["closures"][0]["questions"] = serde_json::json!([]);
+    });
+    refused(
+        &accept(&tmp, "t-main", &[]),
+        "duplicate set d1 of t-main (f) is not settled: pick its definer yourself with --keep \
+         d1=<index or path> (its definers: d1.1 a/f.c, d1.2 b/f.c)",
+    );
+    // Its definers' paths swapped: the map file no longer says what
+    // mapping again finds.
+    map(&tmp);
+    forge(&tmp, |m| {
+        let d = &mut m["closures"][0]["duplicates"][0]["definers"];
+        let first = d[0]["path"].clone();
+        d[0]["path"] = d[1]["path"].clone();
+        d[1]["path"] = first;
+    });
+    refused(
+        &accept(&tmp, "t-main", &["--keep", "d1=d1.1"]),
+        "migration/map/project-map.json does not say what mapping the project again finds (its \
+         programs, libraries or the files and choices of t-main differ): run `harness project \
+         map` again, read the screen, then accept",
+    );
+    // A program pointed at another file.
+    map(&tmp);
+    forge(&tmp, |m| {
+        m["programs"][0]["path"] = serde_json::json!("a/f.c")
+    });
+    refused(
+        &accept(&tmp, "t-main", &["--keep", "d1=d1.1"]),
+        "does not say what mapping the project again finds",
+    );
+    // An id that is no id: refused before it is printed.
+    map(&tmp);
+    forge(&tmp, |m| {
+        m["programs"][0]["id"] = serde_json::json!("t-x\nproject accept: wrote it")
+    });
+    refused(
+        &accept(&tmp, "t-nope", &[]),
+        "migration/map/project-map.json holds an id or an index that is not one the map writes: \
+         run `harness project map` again",
+    );
+    // The limit hit.
+    map(&tmp);
+    forge(&tmp, |m| {
+        m["limits_hit"] = serde_json::json!([{"limit": "files", "at": "x"}])
+    });
+    refused(
+        &accept(&tmp, "t-main", &[]),
+        "the map stopped at a limit and holds no programs",
+    );
+    nothing_written(&tmp);
+
+    // A library whose code calls into a file that did not compile.
+    let tmp = Tmp::new("lib-incomplete");
+    tmp.write(
+        "lib/crc.h",
+        "unsigned crc(unsigned x);\nunsigned crc_step(unsigned x);\n",
+    );
+    tmp.write(
+        "lib/crc.c",
+        "#include \"crc.h\"\nunsigned crc(unsigned x) { return crc_step(x) ^ 1u; }\n",
+    );
+    tmp.write(
+        "lib/step.c",
+        "#include \"crc.h\"\nunsigned crc_step(unsigned x) { return x * 31u }\n",
+    );
+    tmp.stated("");
+    map(&tmp);
+    assert_eq!(map_json(&tmp.0)["libraries"][0]["id"], "l-crc");
+    refused(
+        &accept(&tmp, "l-crc", &[]),
+        "the library l-crc is incomplete (lib/step.c did not compile and may define crc_step): \
+         make those files compile or readable, map again, then accept",
+    );
+    nothing_written(&tmp);
+
+    // An ambiguous include the configuration does not settle.
+    let tmp = Tmp::new("ambiguous");
+    tmp.write(
+        "main.c",
+        "#include \"x.h\"\n#include \"config.h\"\nint main(void) { return X + CONFIG - 2; }\n",
+    );
+    tmp.write("a/x.h", "#define X 1\n");
+    tmp.write("a/config.h", "#define CONFIG 1\n");
+    tmp.write("b/config.h", "#define CONFIG 2\n");
+    tmp.stated("");
+    map(&tmp);
+    refused(
+        &accept(&tmp, "t-main", &[]),
+        "a file of t-main includes config.h, which a/config.h and b/config.h each hold, and the \
+         configuration does not say which: settle it in migration/map/config.toml with -I or \
+         system_headers, map again, then accept",
+    );
+    nothing_written(&tmp);
+
+    // compile_commands.json: a file no entry lists, then flags that differ.
+    let tmp = Tmp::new("cc");
+    tmp.write("main.c", "int g(void);\nint main(void) { return g(); }\n");
+    tmp.write("g.c", "int g(void) { return 0; }\n");
+    let entry = |file: &str, flags: &[&str]| {
+        let mut arguments = vec!["cc"];
+        arguments.extend(flags);
+        arguments.extend(["-c", file]);
+        serde_json::json!({"directory": tmp.arg(), "file": file, "arguments": arguments})
+    };
+    tmp.write(
+        "compile_commands.json",
+        &serde_json::json!([entry("main.c", &[])]).to_string(),
+    );
+    harness_core::adopt::testing::adopt(&tmp.0);
+    tmp.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"cc\"\nfrom = \"compile_commands\"\nflags = []\n",
+    );
+    map(&tmp);
+    refused(
+        &accept(&tmp, "t-main", &[]),
+        "g.c is in no compile_commands.json entry, so its flags are a guess: regenerate \
+         compile_commands.json or state the build in migration/map/config.toml, map again, then \
+         accept",
+    );
+    tmp.write(
+        "compile_commands.json",
+        &serde_json::json!([entry("main.c", &["-DA"]), entry("g.c", &["-DB"])]).to_string(),
+    );
+    map(&tmp);
+    refused(
+        &accept(&tmp, "t-main", &[]),
+        "the files compile with different flags (main.c differs from g.c), so the configuration \
+         is still a guess: state one build in migration/map/config.toml and map again",
+    );
+    nothing_written(&tmp);
+
+    // A file name that is no run name; a run name for a library.
+    let tmp = Tmp::new("run-name");
+    tmp.write("main+x.c", "int main(void) { return 0; }\n");
+    tmp.write("lib/crc.c", "unsigned crc(unsigned x) { return x; }\n");
+    tmp.stated("");
+    map(&tmp);
+    refused(
+        &accept(&tmp, "t-main-x", &[]),
+        "`main+x` cannot be the run name (the file name features run the program as): give one \
+         with --run-name, 1 to 64 letters, digits, ., _ or -",
+    );
+    for name in ["x", "../../escape", ".hidden"] {
+        refused(
+            &accept(&tmp, "l-crc", &["--run-name", name]),
+            "--run-name names the program a tool runs, and l-crc is a library, which runs \
+             nothing: leave --run-name out (a library's name is its id)",
+        );
+    }
+    nothing_written(&tmp);
+
+    // `migration/tools` a link to a folder outside holding a tool of that
+    // id: refused before any lock, so no lock file is made out there.
+    let outside = Tmp::new("outside");
+    outside.write("t-main/harness.toml", "schema_version = 2\n");
+    std::os::unix::fs::symlink(&outside.0, tmp.0.join("migration/tools")).unwrap();
+    refused(
+        &accept(&tmp, "t-main-x", &["--run-name", "x"]),
+        "migration/tools is not a folder (a link or a file), so no tool is written there and no \
+         lock is taken in it: move it away",
+    );
+    let names: Vec<String> = std::fs::read_dir(outside.0.join("t-main"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["harness.toml"], "no lock file outside the project");
+}
+
+/// A set reached only under one choice (d2, under d1.1): kept d1.2 and a
+/// pick for d2, accept says d2 is not reached and records only d1; kept
+/// d1.1, d2 must be picked and both are recorded.
+#[test]
+fn a_nested_set_is_recorded_only_when_reached() {
+    let tmp = Tmp::new("nested");
+    tmp.write("main.c", "int f(void);\nint main(void) { return f(); }\n");
+    tmp.write("a/f.c", "int g(void);\nint f(void) { return g(); }\n");
+    tmp.write("b/f.c", "int f(void) { return 2; }\n");
+    tmp.write("c/g.c", "int g(void) { return 3; }\n");
+    tmp.write("d/g.c", "int g(void) { return 4; }\n");
+    tmp.stated("");
+    map(&tmp);
+    let m = map_json(&tmp.0);
+    assert_eq!(
+        m["closures"][0]["questions"],
+        serde_json::json!(["d1", "d2"])
+    );
+    assert_eq!(
+        m["closures"][0]["duplicates"][1]["under"],
+        serde_json::json!(["d1.1"])
+    );
+    let run = accept(&tmp, "t-main", &["--keep", "d1=d1.2", "--keep", "d2=d2.1"]);
+    assert_eq!(run.code, 0, "{}", run.all());
+    assert!(
+        run.stdout
+            .contains("project accept t-main: d2 is not reached with these picks; not recorded"),
+        "{}",
+        run.stdout
+    );
+    let list = config(&tmp.tool("t-main"))
+        .target
+        .file_list()
+        .unwrap()
+        .clone();
+    assert_eq!(list.picks.len(), 1, "{:?}", list.picks);
+    assert_eq!(list.picks[0].keep, "b/f.c");
+    assert_eq!(listed(&tmp.tool("t-main")), ["b/f.c", "main.c"]);
+    // Kept d1.1: d2 is reached and must be picked.
+    refused(
+        &accept(&tmp, "t-main", &["--keep", "d1=d1.1"]),
+        "duplicate set d2 of t-main (g) is not settled",
+    );
+    let run = accept(&tmp, "t-main", &["--keep", "d1=d1.1", "--keep", "d2=d/g.c"]);
+    assert_eq!(run.code, 0, "{}", run.all());
+    assert!(!run.stdout.contains("not reached"), "{}", run.stdout);
+    let list = config(&tmp.tool("t-main"))
+        .target
+        .file_list()
+        .unwrap()
+        .clone();
+    let kept: Vec<&str> = list.picks.iter().map(|p| p.keep.as_str()).collect();
+    assert_eq!(kept, ["a/f.c", "d/g.c"]);
+    assert_eq!(listed(&tmp.tool("t-main")), ["a/f.c", "d/g.c", "main.c"]);
+}
+
+/// Accepting again keeps what the person added to the tool's harness.toml
+/// (a whole-program check, a model, a stage override, an allowlist entry)
+/// and says so; the first accept writes the whole-program check and the
+/// model as commented examples and says the check is off.
+#[test]
+fn accepting_again_keeps_what_the_person_added() {
+    let tmp = Tmp::new("keep-added");
+    tmp.write("app/main.c", "int main(void) { return 0; }\n");
+    tmp.stated("");
+    map(&tmp);
+    let run = accept(&tmp, "t-main", &[]);
+    assert_eq!(run.code, 0, "{}", run.all());
+    assert!(
+        run.stdout.contains(
+            "project accept t-main: the whole-program check is off until you fill in \
+             [oracle.whole_program] in migration/tools/t-main/harness.toml (a commented example \
+             is there)"
+        ),
+        "{}",
+        run.stdout
+    );
+    let first = tmp.read("migration/tools/t-main/harness.toml");
+    for line in [
+        "# [oracle.whole_program]\n# args = [\"-c\"]\n",
+        "# model = \"my-claude-code\"\n",
+    ] {
+        assert!(first.contains(line), "{line}\n{first}");
+    }
+    assert!(!run.stdout.contains("kept from"), "{}", run.stdout);
+    // The person fills in the check and names who answers.
+    let added = first.replace(
+        "# [oracle.whole_program]\n# args = [\"-c\"]\n",
+        "[oracle.whole_program]\nargs = [\"-9\"]\n",
+    );
+    let added = added.replace(
+        "# model = \"my-claude-code\"\n",
+        "model = \"my-claude-code\"\n\n[llm.driver]\nmax_repairs = 2\n",
+    );
+    let added = added.replace(
+        "allowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\"]",
+        "allowlist = [\"cc\", \"cargo\", \"rustc\", \"nm\", \"rustfmt\"]",
+    );
+    std::fs::write(tmp.tool("t-main"), &added).unwrap();
+    let c = config(&tmp.tool("t-main"));
+    assert!(c.oracle.contains_key("whole_program"));
+    // Accepted again, with another run name: the run name changes, the rest
+    // is kept, and the closing line says what.
+    let run = accept(&tmp, "t-main", &["--run-name", "app"]);
+    assert_eq!(run.code, 0, "{}", run.all());
+    assert!(
+        run.stdout.contains(
+            "; kept from the harness.toml there: oracle.allowlist (rustfmt), \
+             oracle.whole_program, llm.driver, llm.model (its own comments are not carried over)"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        !run.stdout.contains("whole-program check is off"),
+        "{}",
+        run.stdout
+    );
+    let c = config(&tmp.tool("t-main"));
+    assert_eq!(c.target.name, "app");
+    assert_eq!(c.oracle["whole_program"]["args"].to_string(), "[\"-9\"]");
+    assert_eq!(c.llm.model, "my-claude-code");
+    assert_eq!(c.llm.driver.as_ref().unwrap().max_repairs, Some(2));
+    assert!(c.oracle_allowlist().contains(&"rustfmt".to_string()));
+    let again = tmp.read("migration/tools/t-main/harness.toml");
+    assert!(!again.contains("# [oracle.whole_program]"), "{again}");
+    assert!(!again.contains("# model ="), "{again}");
+    // And again: the same file (the merge is stable).
+    let run = accept(&tmp, "t-main", &["--run-name", "app"]);
+    assert_eq!(run.code, 0, "{}", run.all());
+    assert_eq!(tmp.read("migration/tools/t-main/harness.toml"), again);
+}
+
+/// An accepted library keeps its id when a new file that sorts first joins
+/// it; when its files move to another library, the "what changed" line
+/// names that library's id.
+#[test]
+fn a_library_keeps_its_id_when_a_file_joins_it() {
+    let tmp = Tmp::new("lib-id");
+    tmp.write(
+        "lib/crc.h",
+        "unsigned crc(unsigned);\nunsigned crc_step(unsigned);\nunsigned aa(unsigned);\n",
+    );
+    tmp.write(
+        "lib/crc.c",
+        "#include \"crc.h\"\nunsigned crc(unsigned x) { return crc_step(x) ^ 1u; }\n",
+    );
+    tmp.write(
+        "lib/step.c",
+        "#include \"crc.h\"\nunsigned crc_step(unsigned x) { return x * 31u; }\n",
+    );
+    tmp.stated("");
+    map(&tmp);
+    assert_eq!(accept(&tmp, "l-crc", &[]).code, 0);
+    // lib/aa.c, which crc.c now calls, sorts before crc.c.
+    tmp.write(
+        "lib/aa.c",
+        "#include \"crc.h\"\nunsigned aa(unsigned x) { return x; }\n",
+    );
+    tmp.write(
+        "lib/crc.c",
+        "#include \"crc.h\"\nunsigned crc(unsigned x) { return crc_step(aa(x)) ^ 1u; }\n",
+    );
+    let run = map(&tmp);
+    let m = map_json(&tmp.0);
+    assert_eq!(m["libraries"][0]["id"], "l-crc", "{}", run.stdout);
+    assert_eq!(
+        m["libraries"][0]["files"],
+        serde_json::json!(["lib/aa.c", "lib/crc.c", "lib/step.c"])
+    );
+    assert!(
+        run.stdout.contains(
+            "accepted tool l-crc changed since it was accepted: the project's files changed: \
+             closure changed: it now needs lib/aa.c; accept it again with `harness project \
+             accept l-crc`"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(accept(&tmp, "l-crc", &[]).code, 0);
+}
+
 /// zopfli (§4): on a copy without its root harness.toml, with a
 /// config.toml stating `flags = []`, `map` then `accept` gives a tool
 /// whose scan writes the committed facts byte for byte, whose plan keeps

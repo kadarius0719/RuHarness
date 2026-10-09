@@ -403,6 +403,112 @@ fn several_configurations_need_a_name_and_the_one_named_is_shown() {
     );
 }
 
+/// `config.toml`'s refusals lead with its path relative to the project,
+/// name every refused flag in one message, name warning and tuning flags
+/// as ones to drop, and tell `-I src/include` to be written joined.
+#[test]
+fn config_toml_refusals_name_every_flag_at_once() {
+    let tmp = Tmp::new("config-words");
+    tmp.write("src/include/a.h", "int a(void);\n");
+    tmp.write("src/a.c", "#include <a.h>\nint a(void) { return 1; }\n");
+    harness_core::adopt::testing::adopt(&tmp.0);
+    tmp.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"make\"\nfrom = \"make\"\n\
+         flags = [\"-O3\", \"-funroll-loops\", \"-W\", \"-Wall\", \"-I src/include\", \
+         \"-I../include\"]\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    for says in [
+        "error: migration/map/config.toml: ",
+        "`-I src/include` has a blank after -I: write it joined, like -Isrc/include",
+        "the flag `-I../include` names a path outside the project or under migration/",
+        "`-funroll-loops`, `-W`, `-Wall` are warning or tuning flags the harness does not pass: \
+         drop them, the map does not need them",
+    ] {
+        assert!(run.stderr.contains(says), "{says}\n{}", run.stderr);
+    }
+    assert!(!run.stderr.contains("parse error in"), "{}", run.stderr);
+    assert_eq!(run.stderr.trim_end().lines().count(), 1, "{}", run.stderr);
+    // A shape error leads with the path too, and says what the shape is.
+    tmp.write(
+        "migration/map/config.toml",
+        "name = \"make\"\nfrom = \"make\"\nflags = []\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr
+            .contains("error: migration/map/config.toml: line 3: unknown field `flags`"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("one [[configuration]] table per build, with name, from and flags"),
+        "{}",
+        run.stderr
+    );
+}
+
+/// A program whose duplicate set has more definers than linking tries is
+/// held without a link: the map says it did not link these choices, never
+/// that they did not link.
+#[test]
+fn a_set_over_the_limit_is_said_not_linked() {
+    let tmp = Tmp::new("over-limit");
+    tmp.write("main.c", "int f(void);\nint main(void) { return f(); }\n");
+    for n in 1..=5 {
+        tmp.write(
+            &format!("src/f{n}.c"),
+            &format!("int f(void) {{ return {n}; }}\n"),
+        );
+    }
+    harness_core::adopt::testing::adopt(&tmp.0);
+    tmp.write(
+        "migration/map/config.toml",
+        "[[configuration]]\nname = \"plain\"\nfrom = \"stated\"\nflags = []\n",
+    );
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for says in [
+        "      link check: not linked: the map did not link these choices (too many to try) \
+         while d1 is open",
+        "      duplicate set d1 (f): held, the map did not link these choices (too many to \
+         try), so the choice is yours: d1.1 src/f1.c, d1.2 src/f2.c, d1.3 src/f3.c, d1.4 \
+         src/f4.c, d1.5 src/f5.c",
+    ] {
+        assert!(run.stdout.contains(says), "{says}\n{}", run.stdout);
+    }
+    assert!(
+        !run.stdout.contains("linking cannot tell"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// A folder-form ledger left in `migration/` by a harness.toml that is
+/// gone: the map says no command reads it.
+#[test]
+fn a_ledger_left_by_a_folder_form_target_is_named() {
+    let tmp = Tmp::new("old-ledger");
+    tmp.write("main.c", "int main(void) { return 0; }\n");
+    tmp.write("migration/plan.toml", "schema_version = 1\n");
+    harness_core::adopt::testing::adopt(&tmp.0);
+    let run = harness(&["project", "map", "--target", tmp.arg()]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains(
+            "note: migration/ still holds the ledger of a folder-form target whose harness.toml \
+             is gone (its plan and units); no command reads it while the project is mapped: put \
+             that harness.toml back to use it, or move it away"
+        ),
+        "{}",
+        run.stdout
+    );
+}
+
 /// A made-up project with three `main()`s (a tool at the root, one under
 /// `tools/`, a test under `tests/`), a shared file, a duplicate both of
 /// whose definers link, and a README.
