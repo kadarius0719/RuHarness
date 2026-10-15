@@ -47,21 +47,22 @@ true. The three documents agree on every shared count, step number and label (16
 codes with 130; `args = ["-9"]`; `--model guide-written` / `by-hand`; the `◐` meaning). The
 `accept` closing line now says `cat`, not `git diff`.
 
-**In progress (2026-10-15): the documentation reshaped for a person in a hurry.** The person read
-the rewritten guide and judged it right for an agent and too much for a human (verbose, jargon,
-steps referring back everywhere); they want to get running and tinker fast, then read deeper pages
-per feature, with the long guide and tutorial kept as the reference ("see Part N for the details
-and troubleshooting", and for an agent helping a stuck user). Decided: `docs/FIRST-HOUR.md` (one
-page, at most 150 lines: tools, the built-in example, map liblzg, migrate one unit by hand, plant
-a bug), `docs/topics/{judge,drivers,cockpit,features,speed,map,models}.md` (each under 100 lines),
-README cut to the first screen plus four doors above its rule, the guide and tutorial unchanged as
-the reference. Three writers run in parallel; then a fresh reader in a hurry follows FIRST-HOUR on
-a fresh copy, a fix pass, push, main.
+**Done (2026-10-15): the documentation reshaped for a person in a hurry.** The person judged the
+rewritten guide right for an agent and too much for a human. Now: `docs/FIRST-HOUR.md` (150
+lines: tools, the built-in example, map liblzg, migrate `u-version` by hand, plant a bug with
+`sed` and watch the judge go red, put it back; every box run on a fresh copy; a reader in a hurry
+reached the final green in minutes with every box matching — docs/reviews/2026-10-15-first-hour-
+read.md), `docs/topics/{judge,drivers,cockpit,features,speed,map,models}.md` (each under 100
+lines, "by the end you will know…", the idea, "try it", one closing line to the reference), the
+README's first screen with four doors (get it running in an hour; move your own C program;
+understand one part; something went wrong) and the developer reference below its rule, the guide
+and tutorial unchanged as the reference. A product candidate from the reader's stumble: a
+`harness answer <unit> <file>` command that wraps a file into the hand-off's envelope, so the two
+four-line answer boxes become one short line each (not built; decide with the person).
 
 **The work, in order:**
-1. **The person's own cold-start run** on a real project (liblzg or lz4 from
-   `~/code/ruharness-test-downloads/`, never installed), following only README and the testing
-   guide's Part 12, past one unit — ideally to several promoted units — with every stumble
+1. **The person's own cold-start run**: docs/FIRST-HOUR.md as written (liblzg), then lz4 by
+   README's "Move your own C program" door alone, past one unit — ideally to several promoted units — with every stumble
    written down. That run decides what comes next. Step (g) of the map (record the first accepted
    tool's features before its first unit moves) happens inside it.
 2. **The wording pass is DONE** (c3a85d2, fast-forwarded; its eight sentences and the tests and

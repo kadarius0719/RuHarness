@@ -3218,3 +3218,19 @@ matching; a fix pass closed their 26 findings (two untrue claims about GREEN amo
 memory checkers run the C side and the test program, not the Rust; on the command line `harness
 migrate` promotes a GREEN result by itself). The `accept` command's closing line and the written
 file's header now say to read the file with `cat`; `git diff` shows nothing for a new file.
+
+## 2026-10-15 — The documentation reshaped for a person in a hurry
+
+The person read the rewritten testing guide and judged it right for passing to an agent and too
+much for a human: verbose, jargon, steps referring back everywhere; as a user they want to get up
+and running and tinker as quickly as possible, then read deeper pages per feature, with the long
+guide kept for reference and for an agent helping a stuck user. Decided and built: one page,
+docs/FIRST-HOUR.md (at most 150 lines, one sentence per box, the one thing to look for, no
+cross-references until its last three lines: tools, the built-in example, map liblzg, migrate one
+unit by hand, plant a bug and watch the judge catch it); seven topic pages under docs/topics/ (each
+under 100 lines); the README cut to its first screen and four doors; the guide and tutorial
+unchanged as the reference. Every box was run on fresh copies; a reader in a hurry followed the
+page with every box matching, and their stumbles (an editor step, the folder after a break, two
+long answer lines) were fixed with `sed`, a `cd` at the start of every later box, and the lines
+split. The lesson, kept in memory: write the fast path first; never make the reference the first
+thing a person meets.
