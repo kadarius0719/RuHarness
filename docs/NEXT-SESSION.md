@@ -47,6 +47,17 @@ true. The three documents agree on every shared count, step number and label (16
 codes with 130; `args = ["-9"]`; `--model guide-written` / `by-hand`; the `◐` meaning). The
 `accept` closing line now says `cat`, not `git diff`.
 
+**In progress (2026-10-15): the documentation reshaped for a person in a hurry.** The person read
+the rewritten guide and judged it right for an agent and too much for a human (verbose, jargon,
+steps referring back everywhere); they want to get running and tinker fast, then read deeper pages
+per feature, with the long guide and tutorial kept as the reference ("see Part N for the details
+and troubleshooting", and for an agent helping a stuck user). Decided: `docs/FIRST-HOUR.md` (one
+page, at most 150 lines: tools, the built-in example, map liblzg, migrate one unit by hand, plant
+a bug), `docs/topics/{judge,drivers,cockpit,features,speed,map,models}.md` (each under 100 lines),
+README cut to the first screen plus four doors above its rule, the guide and tutorial unchanged as
+the reference. Three writers run in parallel; then a fresh reader in a hurry follows FIRST-HOUR on
+a fresh copy, a fix pass, push, main.
+
 **The work, in order:**
 1. **The person's own cold-start run** on a real project (liblzg or lz4 from
    `~/code/ruharness-test-downloads/`, never installed), following only README and the testing
