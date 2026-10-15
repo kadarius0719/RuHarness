@@ -18,6 +18,8 @@ right.
 
 - **Get it running in an hour** → [docs/FIRST-HOUR.md](docs/FIRST-HOUR.md): the tools, the
   built-in example, mapping liblzg, migrating one unit, planting a bug.
+- **Move your own C program** → [docs/topics/map.md](docs/topics/map.md): point the harness at a
+  C project of yours, accept a program, work on it.
 - **Understand one part** → [docs/topics/](docs/topics/), seven short pages:
   - [judge.md](docs/topics/judge.md): how the judge decides GREEN or RED
   - [drivers.md](docs/topics/drivers.md): the small test programs the judge runs
@@ -26,10 +28,11 @@ right.
   - [speed.md](docs/topics/speed.md): timing the Rust against the C
   - [map.md](docs/topics/map.md): mapping your own C project
   - [models.md](docs/topics/models.md): who writes the Rust, and how to hand it a question
-- **The full walk and troubleshooting** → [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md). This
-  and the tutorial are the reference: read them when a screen does not match, or you want every
-  detail.
-- **The ideas in full** → [docs/TUTORIAL.md](docs/TUTORIAL.md).
+- **Something went wrong** → the exit-code table [just below](#if-something-goes-wrong) and
+  [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md)'s [Troubleshooting](docs/TESTING-GUIDE.md#troubleshooting).
+
+The full walk with every screen is [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md); the ideas in
+full are [docs/TUTORIAL.md](docs/TUTORIAL.md).
 
 ## If something goes wrong
 
