@@ -127,8 +127,8 @@ outside tools). It reads the ledger as data and poses labelled review acts (`har
 `harness_unit`, `harness_steer`, `harness_request`, `harness_answer`, `harness_retry`,
 `harness_promote`), each a spawned `harness --json …` under the writer lock, sandbox and oracle. It
 records steer attempts only, never a fresh translation, and refuses every pending blind hand-off.
-Protocol and design: [docs/MCP-DESIGN.md](docs/MCP-DESIGN.md). Install it as in Quick start, and
-adopt the target first (Quick start step 2, or the cockpit's question): it refuses a ledger made
+Protocol and design: [docs/MCP-DESIGN.md](docs/MCP-DESIGN.md). Install it as in docs/FIRST-HOUR.md, and
+adopt the target first (the `--adopt` step there, or the cockpit's question): it refuses a ledger made
 elsewhere and never adopts. In the project's `.mcp.json`; on a mapped project, add the tool:
 
 ```json
