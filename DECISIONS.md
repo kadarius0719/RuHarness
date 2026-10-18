@@ -3342,3 +3342,28 @@ is now four doors, and docs/FIRST-HOUR.md owns the first run.
 **A product idea from the reader's stumble, not built:** a `harness answer <unit> <file>` command
 that wraps a plain file into the hand-off's answer envelope, so FIRST-HOUR's two four-line answer
 boxes become one short line each. To decide with the person.
+
+## 2026-10-18 — The documentation cleaned up: three kinds of document, three files removed
+
+The person asked for a review of every document: what is stale, what can go, what can be
+consolidated, what needs updating. Two surveys and the plan are in
+docs/reviews/2026-10-18-docs-cleanup-plan.md. Decided: every document is one of three kinds, said
+in a new docs/README.md — current (what the program is today), history (written before the thing
+was built, kept for the reasoning, with a dated status line at its top saying when it was built and
+where the truth lives), or a record (the review bundles, never edited). Design documents keep
+their names and places because the code's comments cite them about 500 times and the help screens
+name them. Removed, after their only unique content was carried over: docs/NEXT-WEEK-PLAN.md (the
+week of 2026-10-07, every step done, its log the 2026-10-03 entry here), docs/FEATURES-PROGRESS.md
+(its "known gaps" paragraph now ends FEATURES-DESIGN §R5), docs/PROJECT-MAP-ROADMAP.md (its Part 2,
+the fuller C–Rust boundary, now ends PROJECT-MAP-DESIGN §8). Updated: CLAUDE.md points at
+NEXT-SESSION's kickoff and docs/README.md and names its own effort switch points; AGENT-BRIEFING
+lost a pasted kickoff, names `facts.jsonl` and `plan.toml`, gives the milestones a status, marks
+what was never built, and gains §18 on how sessions work; NEXT-SESSION is one kickoff (83 lines)
+with its only-here facts saved in this file (the wording pass, the beta answer, the `harness
+answer` idea); this file gained an index of its entries; SCHEMAS, README's reference half, the
+tutorial, the tractor and devtools READMEs and every design got the corrections the surveys listed
+(PERF-DESIGN's Linux text marked as a plan; the chat and cockpit designs marked built; MCP-DESIGN's
+`--tool` and adoption refusal; SCHEMAS' heading the code's refusal cites, and the harness-added
+flags' own sentence). Two code comments in projectmap/accept.rs still name SCHEMAS' old heading
+"The file-list form"; a note under the renamed heading keeps them findable (a one-line code change
+for the next wording pass).
