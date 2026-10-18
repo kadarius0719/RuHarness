@@ -2804,7 +2804,7 @@ at 75 % of the weekly limit and merge once the security fix and the high finding
 
 **Recorded, not decided:** the project map — real project layouts, several programs, a
 deterministic walk with link closures, a model binning only the ambiguous part, the harness
-checking its answer, and an interactive picture of the map (docs/PROJECT-MAP-ROADMAP.md,
+checking its answer, and an interactive picture of the map (docs/PROJECT-MAP-ROADMAP.md, removed 2026-10-18 — its Part 2 lives in docs/PROJECT-MAP-DESIGN.md §8 —
 -INVESTIGATION.md, -DESIGN.md draft 0). To design next, weighed against M5.
 
 ## 2026-10-07 — Project map: the spike on real downloads, and the person's answers to its open questions
