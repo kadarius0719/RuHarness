@@ -84,7 +84,7 @@ project, `--tool <id>`; `harness <command> --help` lists every option.
 | Flag | Meaning |
 |---|---|
 | `--adopt` | Trust a ledger made on another computer, once per checkout: deletes its build folders, writes a fresh token; its verdicts show "made elsewhere" until verified here. |
-| `--target DIR`, `--tool ID` | The project; on a mapped project, which accepted tool. With two or more tools and no `--tool`, the command asks you to pick. |
+| `--target DIR`, `--tool ID` | The project; on a mapped project, which accepted tool. With two or more tools and no `--tool`, the command refuses (exit 1) and names them: "… pick one with --tool (t-a, t-b)"; the cockpit lists them for you to pick. |
 | `--provider NAME` | `external` (file hand-off, the default), `replay`, `anthropic` (`ANTHROPIC_API_KEY`), or a profile from `$RUHARNESS_PROVIDERS`. A target's `harness.toml` can only name a profile; endpoints and keys live in your file. |
 | `--model NAME` | The model sent to the provider; with `external`, who answers (recorded). |
 | `--retry` | Records a new sample; finished attempts are never overwritten. |
@@ -96,8 +96,10 @@ project, `--tool <id>`; `harness <command> --help` lists every option.
 | `--json` | Global: stdout becomes newline-delimited `ruharness-events` (docs/SCHEMAS.md "CLI hardening"); human logs stay on stderr. |
 
 Exit codes as above; for `migrate`, `10` also means blocked, truncated or format. Machine consumers
-read the ledger, not stdout. Writing commands hold a writer lock on `migration/.lock`; a second
-writer fails fast naming the holder. Ctrl-C kills every live sandboxed process group and the
+read the ledger, not stdout. Writing commands hold a writer lock on the target's ledger
+(`migration/.lock`, or `migration/tools/<id>/.lock` for a mapped tool; `project map`, `project
+accept` and `sync-runtime` take the project lock `migration/map/.lock` first); a second writer fails
+fast naming the holder. Ctrl-C kills every live sandboxed process group and the
 harness dies by the signal. Target and model code builds and runs under `sandbox-exec` (no network,
 no reads of your home folder, writes confined to the build folder, scrubbed environment, timeouts),
 and the symbol-set check rejects a candidate exporting more than the unit's symbols or a pre-main
@@ -117,7 +119,10 @@ on PATH, else next to the cockpit), `--provider NAME` (repeatable, default `exte
 never chooses it), `--allow-unsandboxed`, `--layout split|stacked`, `--no-mouse`, `--no-chat`,
 `--chat-runtime PATH` (the `claude` to run), `--harness-mcp PATH` (default next to the cockpit,
 else on PATH), `--chat-model NAME`. `cargo build` at the root skips it (`cargo build -p
-harness-tui`); reinstall it with harness-cli, as it uses the `harness` first on your PATH.
+harness-tui`). Install the three programs (`harness`, `harness-tui`, `harness-mcp`) with the three
+`cargo install --locked --path crates/…` lines of the testing guide's Step 0.19
+([docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md), Part 0); reinstall the cockpit whenever you
+reinstall harness-cli, as it uses the `harness` first on your PATH.
 
 The chat's safety rule: the chat is your own Claude Code, reading the project through
 `harness-mcp --cockpit`, with no tool that writes. Every act it wants waits until you review it in
@@ -130,8 +135,8 @@ outside tools). It reads the ledger as data and poses labelled review acts (`har
 `harness_unit`, `harness_steer`, `harness_request`, `harness_answer`, `harness_retry`,
 `harness_promote`), each a spawned `harness --json …` under the writer lock, sandbox and oracle. It
 records steer attempts only, never a fresh translation, and refuses every pending blind hand-off.
-Protocol and design: [docs/MCP-DESIGN.md](docs/MCP-DESIGN.md). Install it as in docs/FIRST-HOUR.md, and
-adopt the target first (the `--adopt` step there, or the cockpit's question): it refuses a ledger made
+Protocol and design: [docs/MCP-DESIGN.md](docs/MCP-DESIGN.md). Install it with the testing guide's Step 0.19
+(`cargo install --locked --path crates/harness-mcp`), and adopt the target first (the `--adopt` step there, or the cockpit's question): it refuses a ledger made
 elsewhere and never adopts. In the project's `.mcp.json`; on a mapped project, add the tool:
 
 ```json
@@ -198,9 +203,9 @@ devtools/               scripts for testing RuHarness itself: cockpit driver, ma
 docs/                   FIRST-HOUR.md (the one-hour start), topics/ (seven short pages),
                         SCHEMAS.md (normative ledger schemas), TESTING-GUIDE.md, TUTORIAL.md,
                         AGENT-BRIEFING.md; designs: TUI, CHAT-PANE, MCP, CLI-HARDENING, FEATURES,
-                        FEATURES-PROBE-REDESIGN, PERF, PROJECT-MAP (+ -INVESTIGATION, -ROADMAP),
-                        ORACLE-HARDENING, REPLAY, M4, COCKPIT-WRAPPER; FEATURES-PROGRESS.md,
-                        NEXT-SESSION.md, NEXT-WEEK-PLAN.md; reviews/
+                        FEATURES-PROBE-REDESIGN, PERF, PROJECT-MAP (+ -INVESTIGATION),
+                        ORACLE-HARDENING, REPLAY, M4, COCKPIT-WRAPPER; NEXT-SESSION.md; reviews/;
+                        README.md (what every document is for, current or history)
 providers.example.toml  example provider profiles (user-level; never read from a target)
 targets/tractor/        TRACTOR B01 suite: suite.toml, corpus.lock, cases/, heldout/, scores.json,
                         handoff-tools/
@@ -210,7 +215,8 @@ DECISIONS.md            engineering log: spikes, decisions, milestone handoffs
 
 Unit crates under `targets/` are not workspace members: the oracle builds them via
 `--manifest-path`, so a broken unit never bricks the harness's own build. Stable Rust (pinned in
-`rust-toolchain.toml`) and a C compiler with ASan/UBSan. CI (GitHub Actions, macOS + Ubuntu):
+`rust-toolchain.toml`) and a C compiler with ASan/UBSan. CI (GitHub Actions, macOS + Ubuntu; the Ubuntu job has
+been red since 2026-09-17, DECISIONS.md 2026-10-03):
 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`
 (including an end-to-end migrate-and-verify of u001 in a temp copy), `cargo deny`; `Cargo.lock` is
 committed. Every dependency is justified in DECISIONS.md ([docs/AGENT-BRIEFING.md](docs/AGENT-BRIEFING.md)

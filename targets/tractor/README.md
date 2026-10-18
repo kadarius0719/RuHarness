@@ -34,9 +34,12 @@ dependencies. Cargo later verifies every vendored file against the committed
 ```bash
 cd targets/tractor/heldout && CARGO_HOME=$(mktemp -d) cargo vendor --locked ../.scorer-vendor
 ```
-Then (offline, sandboxed):
+Then (offline, sandboxed). On a fresh clone or a new worktree, the first `bench` command that
+runs the suite must carry `--adopt` once: `status`, `score` and `check` check the suite root
+first and refuse a suite whose ledgers were made on another computer until it is adopted
+(docs/SCHEMAS.md "Adoption of a ledger made elsewhere"):
 ```bash
-harness bench status --suite targets/tractor
+harness bench status --adopt --suite targets/tractor
 ```
 ```bash
 harness bench score --suite targets/tractor

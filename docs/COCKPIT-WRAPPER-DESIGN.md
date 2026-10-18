@@ -1,8 +1,14 @@
 # The cockpit as a friendly wrapper — design
 
-Status: DESIGN, reviewed (2026-09-24). **Build A is built (2026-09-25)**; its code review is
+**Now (2026-10-18):** Built 2026-09-25 (Build A) and 2026-09-27 (Build B); governs the
+cockpit's screen, menu and dialogs with docs/SCHEMAS.md and the cockpit's Help (which the code
+keeps); the chat is docs/CHAT-PANE-DESIGN.md's, built 2026-09-28; later menu items (Map the
+features, Edit the workloads, Measure speed, Map the project, Ask a model, Accept as a tool) are
+in their own designs; kept current.
+
+Design status: DESIGN, reviewed (2026-09-24). **Build A is built (2026-09-25)**; its code review is
 in DECISIONS.md. **Build B (the mouse) is built (2026-09-27)**; its review and three fix passes
-are §R6–§R8, which govern §7 where they differ. The chat pane (§10) is next.
+are §R6–§R8, which govern §7 where they differ. The chat pane (§10) is built since (2026-09-28).
 
 This design implements docs/TUI-DESIGN.md §9, "Suggested order" 1: the user's direction,
 recorded in DECISIONS.md "Direction change (user)". It went through two review rounds:
@@ -58,7 +64,8 @@ chosen action goes through four steps:
 - **Build B** is the mouse.
 
 **Not in this milestone:**
-- The chat pane. §10 reserves its screen space and nothing more.
+- The chat pane. §10 reserved its screen space and nothing more; it was built later, in its
+  own design (docs/CHAT-PANE-DESIGN.md).
 - Any model-driven action the cockpit does not have today: a fresh migration, driver
   generation, triage.
 - A findings view, an idle watcher, a find filter, and a guided "record an outside edit" flow.
@@ -109,7 +116,8 @@ The mock below is 120 columns wide:
 **Below 80 columns** one pane shows at a time, Files or View; `Tab` switches between them.
 Activity and the hint bar stay. `--layout split|stacked` keeps its meaning for the pairs.
 
-**Chat.** The right side is reserved at 150 columns or more (§10). Nothing is drawn there.
+**Chat.** The right side was reserved at 150 columns or more (§10). The chat is built since;
+where and how it is drawn is docs/CHAT-PANE-DESIGN.md's.
 
 **Focus.** The focused pane has a bold border and a reversed title.
 
@@ -321,7 +329,7 @@ Each argv follows `harness --json`, and `--target=<root>` is always attached.
 | crate, attempt | **Hand edit** (`e`) — TUI-DESIGN §4 |
 | attempt | **Accept** (`a`), worded "Replace u-…'s verified crate with a-…" when `--replace` applies · **Compare with the promoted attempt** (`d`, when TUI-DESIGN §3 enables it). Then, under the model separator: **Modify with a note** (`m`), **Retry** (`r`), **Resume** (`R`) |
 | project; the kept edit's unit, crate and attempts | **Continue my kept hand edit (u-…)** (`E`) · **Discard my kept hand edit** (opens the override dialog focused on Keep) |
-| project; a unit that is planned, tried or failing | greyed **Migrate — ask in chat**: "model work happens in chat, which is not built yet; see Help (`?`) for today's route" |
+| project; a unit that is planned, tried or failing | **Migrate — ask in chat**: puts the request in the chat's input (CHAT-PANE-DESIGN); greyed only when the chat is off (`--no-chat`), cannot start, or holds a draft. **Ask in chat…** focuses the chat |
 | any, while a command runs | **Cancel the running command** (`x`) |
 
 ### 4.3 The cockpit's own gates
@@ -606,18 +614,10 @@ Help opens with three lines:
 A target without `harness.toml` is refused at start, in words: "<dir> is not a harness target
 (no harness.toml); start with `--target <target dir>`". This replaces today's raw io error.
 
-## 10. The chat pane (later)
+## 10. The chat pane
 
-At 150 columns or more, the right side is reserved. This design decides none of the following;
-they are the chat spike's questions (TUI-DESIGN §9):
-- how chat's acts reach the activity panel and the cockpit's confirmation;
-- how a chat-requested act is labelled (the requester label, MCP-DESIGN §7);
-- where chat sits in the focus order.
-
-Until then, the greyed "Migrate — ask in chat" items point to Help, which gives today's routes:
-- `harness migrate <unit>` — the blind hand-off, or a live provider — for a fresh translation;
-- harness-mcp, in a separate Claude Code session, for steer attempts (README);
-- `harness override <unit> <dir>` to record an outside edit as a hand edit.
+Built 2026-09-28 in its own design: docs/CHAT-PANE-DESIGN.md, which governs the chat's place on
+the screen, its acts, their labels and the focus order. This section only reserved the space.
 
 ## 11. Engine reuse: what changes in the code
 

@@ -1,6 +1,11 @@
 # harness-tui — the review cockpit
 
-Status: IMPLEMENTED (2026-09-24); harness-mcp, which reuses this crate's library, is built
+**Now (2026-10-18):** Built 2026-09-24; the screen is docs/COCKPIT-WRAPPER-DESIGN.md's, the
+chat is docs/CHAT-PANE-DESIGN.md's, the CLI half of §5 is docs/SCHEMAS.md "Review acts"; §2
+(the read model) and §4 (the acts' commands, gates, the child process and signals) still
+describe the engine; kept for the reasoning.
+
+Design status: IMPLEMENTED (2026-09-24); harness-mcp, which reuses this crate's library, is built
 too (docs/MCP-DESIGN.md). **§9 records the new direction** (a user-friendly wrapper
 with an arrow-key file tree, deterministic actions on Enter and a chat pane inside); its first
 step — the keyboard-complete navigator, docs/COCKPIT-WRAPPER-DESIGN.md Build A — is BUILT
@@ -22,9 +27,10 @@ the running command at the bottom. Three acts: **Accept** (promote a green attem
 reviewed), and a **labelled hand edit** (a human attempt, judged like any other and never
 counted as the pipeline's). Everything else is reading.
 
-Not a chat client (today chat runs in a separate Claude Code session through `harness-mcp` —
-built, docs/MCP-DESIGN.md — which reuses this crate's library: the read model, the events
-reader and the child process; §9 moves chat into the cockpit), not an editor (a hand edit happens in
+Not a chat client (when this was written, chat ran in a separate Claude Code session through
+`harness-mcp`, docs/MCP-DESIGN.md, which reuses this crate's library: the read model, the
+events reader and the child process; since 2026-09-28 the chat is inside the cockpit,
+docs/CHAT-PANE-DESIGN.md), not an editor (a hand edit happens in
 `$EDITOR` and comes back through `harness override`), not a second writer: **every write is
 a spawned `harness --json` command**; the TUI never touches the ledger and never takes the
 writer lock; the ledger is re-read — it is the truth — when a spawned command has been
@@ -369,7 +375,9 @@ and quits.
 
 ## 9. Direction (2026-09-24, from the user): a user-friendly wrapper, with chat inside
 
-Not built — recorded to steer the next designs. It supersedes parts of §0 and §3: what is
+**Built since, in two later designs:** the wrapper (docs/COCKPIT-WRAPPER-DESIGN.md, 2026-09-25
+and 09-27) and the chat inside the cockpit (docs/CHAT-PANE-DESIGN.md, 2026-09-28); they govern.
+The text below is the direction as recorded on 2026-09-24, kept for the reasoning. It supersedes parts of §0 and §3: what is
 built (steps 1–4) stays, and becomes the engine room of a friendlier front end.
 
 **Who it is for.** People who do not navigate with vim-style keys. If the cockpit only suits
@@ -426,8 +434,8 @@ agent runtime (the chat embeds an existing one); no new crates without the usual
 **Suggested order** (each: design → adversarial review → build → review → verify the fixes):
 1. The wrapper UX design: file tree, panes, menus / action list on `Enter`, mouse, wording,
    plain-language progress and results; then build it on today's engine.
-2. harness-mcp's requester label for chat-requested migrations (the server itself is built:
-   docs/MCP-DESIGN.md, six tools, steer attempts only).
+2. harness-mcp's requester label for chat-requested migrations (the server was then built with
+   six tools, steer attempts only; it has seven tools and a cockpit mode now, docs/MCP-DESIGN.md).
 3. The chat pane (after its spike), plus the "migrate this" skill.
 
 **Open questions for the UX design review:** mouse support (crossterm already carries it —

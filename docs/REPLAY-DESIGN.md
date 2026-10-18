@@ -1,6 +1,11 @@
 # Evidence-first replay and the prompt lock — design
 
-Status: **approved direction (user, 2026-09-23); reviewed (4 lenses, all sound-with-fixes).
+**Now (2026-10-18):** Built 2026-09-23; the reference is docs/SCHEMAS.md (verification is
+evidence-first, `superseded.jsonl`); read §R and §C first: §1–§11 describe the replay this
+replaced and name things that were cut (`harness supersede` does not exist, a person writes the
+line in `superseded.jsonl`; `PROMPT_EDITION` is not in the code); kept for the reasoning.
+
+Design status: **approved direction (user, 2026-09-23); reviewed (4 lenses, all sound-with-fixes).
 §R below is AUTHORITATIVE and supersedes §1–§11 where they conflict.**
 Background and the ranked alternatives: DECISIONS.md "PROPOSAL … prompt edits vs
 recorded-trace replay".

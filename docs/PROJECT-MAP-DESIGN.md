@@ -1,14 +1,20 @@
 # Real project layouts: the project map (design, revision 2.2)
 
-Status: **revision 2.2 — 2026-10-08; the person's decisions taken (§7); revision 2 re-checked by three
+**Now (2026-10-18):** Built 2026-10-08, steps (a)–(f), complete; governs with docs/SCHEMAS.md
+(the contracts: `config.toml`, the map file, `accept`, `ask`, mapped tools, `--tool`, adoption)
+and `harness project --help`, which points here; still open on purpose: the interactive picture
+(§3.11), model advice (§3.12) and §8, which now also holds the fuller C–Rust boundary; kept
+current.
+
+Design status: **revision 2.2 — 2026-10-08; the person's decisions taken (§7); revision 2 re-checked by three
 readers and corrected in place as 2.1, then read once more and corrected as 2.2
 (docs/reviews/2026-10-08-project-map-rev2-check.md holds both rounds); ready to build in §5's order.** Draft 0 (2026-10-02) was reviewed from four lenses with every
 finding verified (docs/reviews/2026-10-07-project-map-design-review.md, the triage at its end);
 revision 1 answered that review and was checked by five readers (docs/reviews/2026-10-08-project-
 map-rev1-check.md: four lenses against the code and the spike, one for the document as a whole);
 revision 2 answered that check, and revision 2.1 answers its re-check. §9 says what changed and why, in plain
-words. Part 2 of the roadmap
-note (a fuller C–Rust boundary) stays out of scope: this design gets a real project to the point
+words. The fuller C–Rust boundary (§8, "The fuller C–Rust boundary"; first written as Part 2
+of a roadmap note of 2026-10-01) stays out of scope: this design gets a real project to the point
 where today's harness can take over, one program at a time.
 
 **Words used here.** A **program** is any file in the project that defines a `main` (or a fuzz
@@ -19,8 +25,8 @@ group of files no program reaches; a **configuration** is one named build and it
 
 ## 1. What it is, in plain words
 
-Today the harness migrates one folder of one program, and the person gathers that folder by hand.
-The goal here is the whole project: `harness project map` looks at a whole C project — every folder
+Before the map, the harness migrated one folder of one program, and the person gathered that
+folder by hand. The goal here is the whole project: `harness project map` looks at a whole C project — every folder
 — and works out, without a model, which files make up each program it builds, which files several
 programs share, which are tests, examples or fuzzers, and which it could not make sense of. It
 writes that as the project map, shows it, and stops. The project's **configuration** — which build
@@ -680,8 +686,8 @@ real folders, with the rest of the project greyed as "not part of this tool".
   are still written; a ledger made elsewhere not adopted; the project's own `migration/`; no sandbox;
   a root that is or holds the home folder); 2 usage. Output lines filter newlines and tabs in every
   project string (a file name can hold a newline; the review gate must not be forged); `--json`
-  escapes every character `unsafe_to_show` names as `\uXXXX` (today's comment that serde does so is
-  wrong; a small fix of its own, with SCHEMAS' sentence).
+  escapes every character `unsafe_to_show` names as `\uXXXX` (the old comment that serde does so was
+  wrong; fixed in step (a), with SCHEMAS' sentence).
 - `harness project ask --target DIR [--build | --programs IDS] [--provider P] [--model M]
   [--allow-guessed]` — §3.4; builds nothing and needs no sandbox; exits 1 with the `awaiting` event
   and the resume command; writes `config.proposed.toml` (with `--build`) or
@@ -843,11 +849,11 @@ the facts, the model proposes with reasons, the harness checks what it can, the 
    units cross. Reading the call graph a model can propose better cuts: "these three files are one
    subsystem; migrate them together so the seam has four calls instead of forty", or "this struct
    crosses the seam; move the seam one level out." The harness checks a proposed unit still links as
-   one; the person accepts. This is Part 2 of the roadmap note made concrete, and it is where
+   one; the person accepts. This is the fuller C–Rust boundary (§8) made concrete, and it is where
    migration pain concentrates.
 
 Open for later: which of the two comes first (the order is cheaper and builds on the plan; the seam
-is more valuable and needs Part 2 of the roadmap note).
+is more valuable and needs the fuller C–Rust boundary, §8).
 
 Where a model stays out: deciding what is *correct* (the oracle, the link check, the differential
 runs — deterministic, always), and anything that writes state unchecked.
@@ -1051,8 +1057,8 @@ unit moves (the cockpit shows "Features (none yet)" until then).
 - **A project with its own `migration/` folder** cannot be mapped in place; the person moves or
   renames it, or maps a copy. Revisit if it is common.
 - **A shared library is migrated once per tool** that uses it: two targets, two copies of the unit's
-  Rust and two verdicts. One Rust library per program, and non-leaf units, are Part 2 of the roadmap
-  note.
+  Rust and two verdicts. One Rust library per program, and non-leaf units, are the fuller C–Rust
+  boundary (§8).
 - **Outside libraries** are guessed from symbols; a wrong guess fails the link and is said. When a
   link fails on outside symbols and the project holds set-aside assembly or prebuilt files, the
   failure says "this project has set-aside files in X"; the map cannot read what they define.
@@ -1123,6 +1129,32 @@ enforced.
 - Linux: the map once a Linux sandbox exists; the `objsyms` extension is written for ELF too.
 - The map profile's reads as an allow-list (the root, the fresh and work folders, the toolchain,
   `/usr`, `/System`, `/dev`), which closes the file-existence channel of §6.
+
+### The fuller C–Rust boundary
+
+Written 2026-10-01 as Part 2 of a roadmap note (the note's Part 1 became this design; the note
+itself is gone, git keeps it). Not designed yet; it matters once real projects are mapped and
+their programs share code. Today only leaf units migrate (C that calls nothing else in the
+project, so Rust never calls back into C), and each migrated unit is its own Rust staticlib that
+the C program links in place of the unit's C. Migrating a project with several tools makes the
+boundary harder:
+
+1. **Shared code in several programs**: a `lib/` unit's Rust links into every tool that uses it,
+   and the judge must check each tool, not one.
+2. **Calls both ways**: real code is mostly non-leaf; Rust must call C that has not moved yet
+   (Rust-to-C declarations kept in sync as units move; the plan's order matters more).
+3. **Several Rust units in one program**: each unit is its own staticlib with its own copy of
+   Rust's standard library; linking two can clash. The speed work already names these
+   (mixed panic runtimes; does not link: `no-std`, `two-no-std`, `lto`, `two-lto`). At scale:
+   one combined Rust library per program.
+4. **Shared data and memory**: structs both sides read (`#[repr(C)]`, exact layout), globals,
+   memory allocated on one side and freed on the other, callbacks (function pointers), `errno`,
+   varargs.
+5. **The end state**: when all of a program's units are Rust, drop the C-facing wrapper layer
+   and leave a plain Rust program, not Rust posing as C forever.
+
+The seam advice of §3.12 is where this would start: a model proposes better cuts, the harness
+checks each still links as one, the person accepts.
 
 ## 9. What changed, and why
 

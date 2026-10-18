@@ -1,6 +1,11 @@
 # CLI hardening — the milestone before the review cockpit
 
-Status: IMPLEMENTED (2026-09-24; §R holds the resolutions of the 15 confirmed design-review
+**Now (2026-10-18):** Built 2026-09-24; the reference is docs/SCHEMAS.md "CLI hardening";
+kept for the reasoning (why `flock`, why the open protocol). Small facts have moved since: the
+workspace `rust-version` is 1.90, the speed launcher's compiler check is a second
+`Command::new` site, and §6's open questions are all settled.
+
+Design status: IMPLEMENTED (2026-09-24; §R holds the resolutions of the 15 confirmed design-review
 findings and the 11 confirmed code-review findings — the text below is the design as built). Sources and rejected
 alternatives: DECISIONS.md "TUI track: §15 research spike" and "CLI hardening: design review".
 

@@ -1,12 +1,16 @@
 # The cockpit's chat pane — design
 
-Status: DESIGN, reviewed and revised three times (2026-09-27). The adversarial review: four
+**Now (2026-10-18):** Built 2026-09-28 (the label, Build C, 2026-09-27; the pane, Build D,
+2026-09-28); governs with docs/SCHEMAS.md (the requester label) and the cockpit's Help; where
+§R4–§R8 differ from the text below, they and the code govern; kept current.
+
+Design status: DESIGN, reviewed and revised three times (2026-09-27). The adversarial review: four
 lenses, 87 findings, four verifiers (two per finding) — 0 refuted (§R). The check of the
 revision: three checkers — two re-checked every §R row, one hunted new problems — 71
 findings, the highest found by all three (§R2). A scoped check of the second revision: 18
 (§R3). Build C (the label) is built, code-reviewed (§R4) and fixed in three passes (§R5,
 §R6) — the changes it made to §4 are in §R3–§R6; above all, answers now travel on the CLI's
-stdin, never in a file. Build D (the pane) is next. Every resolution is in the text below.
+stdin, never in a file. Build D (the pane) is built (2026-09-28); §R7 is its code review. Every resolution is in the text below.
 Implements docs/TUI-DESIGN.md §9 ("a chat pane on the side, like Copilot") and
 docs/COCKPIT-WRAPPER-DESIGN.md §10. Sources:
 - the §15 spike (DECISIONS.md "Chat pane: §15 spike"), and a second live check of this
@@ -78,6 +82,8 @@ neither the model nor the model setting.
 
 - `<json>`: `{"mcpServers":{"harness":{"command":"<canonical harness-mcp>","args":
   ["--cockpit","--target","<canonical root>"]}}}` — harness-mcp in cockpit mode (§4.4).
+  On a mapped project the cockpit adds `"--tool","<id>"` after the root: the chat's server
+  works on the same mapped tool as the cockpit (docs/PROJECT-MAP-DESIGN.md §3.7).
 - `--tools ""`: no built-in tool — no file, shell, web, task or skill tool. The chat reaches the
   target only through harness-mcp's reads: preflighted, bounded, fenced.
 - `--restricted --setting-sources ""`, `--strict-mcp-config`, `--permission-mode default`: no

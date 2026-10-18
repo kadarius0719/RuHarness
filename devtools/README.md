@@ -12,6 +12,9 @@ with a small VT interpreter into `<dir>/screen.txt`, and takes commands from the
 Each screen line is followed by `<<Y:…| G:…| I:…| D:…>>` marks: yellow, green, reverse video (the
 highlighted row) and grey (a disabled item).
 
+The example's `targets/lzg` exists only after Part 1 of docs/TESTING-GUIDE.md has made it; use
+any target folder you have.
+
     mkdir -p /tmp/s1
     cd <repo>; PATH="$PWD/target/debug:$PATH" python3 -I devtools/cockpit-drive/cockpit.py /tmp/s1 50 160 -- harness-tui --target targets/lzg   # in the background
     python3 -I devtools/cockpit-drive/k.py /tmp/s1 --until "Ready." --plain             # the first screen
@@ -34,3 +37,14 @@ duplicate definitions. Compiles only — runs nothing from the project — but w
 reads whatever the account can; run it on downloads you trust enough to compile unconfined.
 
     python3 -I devtools/project-map/closure.py <project> <scratch dir> [-DNAME ...] > map.json
+
+## guide/gates.py — the testing guide's structure check
+
+Used for the 2026-10-09 rewrite of docs/TESTING-GUIDE.md and after every edit to it. Checks one
+Markdown file: every code fence opens and closes; every box has a label above it ("**Run**",
+"**Do**", "You should see", …); every `### Step N.M` has its Run/Do, "You should see", "What it
+means" and "If you do not see that" parts; the guide has 13 `## Part` headings; every "Step N.M"
+reference names a step that exists; every `(#anchor)` link names a heading. Prints
+`ALL GATES PASS 0`, or what failed.
+
+    python3 -I devtools/guide/gates.py docs/TESTING-GUIDE.md

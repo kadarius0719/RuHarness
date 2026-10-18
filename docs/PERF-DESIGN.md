@@ -1,6 +1,13 @@
 # C-vs-Rust performance baselines (design)
 
-Status: **revision 5 — after the check of revision 4 (f7a4905); its check (no high finding) answered by §10's build notes — to be built** (2026-10-01).
+**Now (2026-10-18):** Built, reviewed and fixed in four passes; merged 2026-10-03. Governs with
+docs/SCHEMAS.md "C-vs-Rust speed" (which says this document governs) and `harness perf --help`,
+which points here; kept current. **Linux: not built.** `perf run` runs on macOS only and refuses
+Linux in the program's words, "perf runs on macOS only for now — the Linux launcher is not built
+yet". Every Linux passage below (about 25, mostly in §3.3) is a plan, unchecked, not a
+description of the program.
+
+Design status: **revision 5 — after the check of revision 4 (f7a4905); its check (no high finding) answered by §10's build notes — to be built** (2026-10-01).
 History: the draft (0b64bba) had an adversarial review (4 lenses, 49 findings, 46 confirmed by two
 verifiers); revision 1 (00f2e23) answered them; its check gave 118 changes (scratchpad
 `perf/rev2-changes.md`, cited [c12]); revision 2 (cd1f79b) took them; its check gave 35 new
@@ -281,7 +288,8 @@ instruction margin covers); the start-up is named on the rows it can explain (§
 `crates/harness-oracle/src/perf/{perfrun,perfgo}.c`, embedded with `include_str!`; a version
 constant `PERF_LAUNCHER` in `harness-core`, pinned to the sources by a test. The launcher is the one
 harness-built binary that runs unsandboxed; the program runs only inside the sandbox. On a platform
-other than macOS and Linux, `perf run` refuses by name [c44]. Linux mechanisms below are from
+other than macOS, `perf run` refuses by name [c44]: Linux is refused too, because its launcher is
+not built (see the note at the top); the Linux text below is the plan for it. Linux mechanisms below are from
 documentation and **unchecked here** [c111].
 
 `perfrun run PROFILE PERFGO DEADLINE PROGRAM NAME ARGS…` and `perfrun facts`:
@@ -794,10 +802,11 @@ c79]. Stale facts: `perf run` refuses ("scan first").
 - **The MCP reads** export per unit, and for the As-it-stands heading and the C alone, a Speed fact
   of closed values and numbers [n35, m27, p27]: the row's **answer**, computed by the same
   `harness-core` words, from a closed set (about-as-fast, slower, faster, probably-slower,
-  probably-faster, close-call-slower, close-call-faster, cant-tell-busy, cant-tell-slow-cores,
+  probably-faster, close-call-slower, close-call-faster, cant-tell-slow-cores,
   cant-tell-estimate, cant-tell-too-few, no-clear-difference, short-run, too-short, and the §3.7
   outcomes), the workload id, `platform_metrics`, `short`, `runs`, the shift and interval **only when
-  the answer is not a can't-tell kind**, `current` with reasons from a closed set, and
+  the answer is not a can't-tell kind** (the built list is
+`harness-core`'s `perf/words.rs`, which governs; a busy computer is never an answer, only a detail), `current` with reasons from a closed set, and
   `environment_checked: false` (computer and compilers); for the C alone: CPU time, memory and the
   outcome. Ranked by the worst order above; fenced as the features facts are. Without facts the
   speed head says `program_checked: false` and the C-alone and as-it-stands rows' `current` is
@@ -922,7 +931,7 @@ process that outlived a build. No new dependency; `unsafe` Rust stays forbidden 
 ## 5. Order of work [c108–c110]
 
 Each step committed green: (b) `harness-core`: the workloads and results files and their strict
-readers, `PERF_LAUNCHER`, `PERF_RUN_LOCK`, `perf-recipe-1`, the words, short forms and worst order,
+readers, `PERF_LAUNCHER`, `PERF_RUN_LOCK`, `perf-recipe-1` (`perf-recipe-2` since note 31), the words, short forms and worst order,
 `promotion_marker` made public, the cockpit's interrupted-Accept words; (c) the shared build
 refactors (`whole_cc_into`, objects once, the `replaces` helper, the `.perf` and `.perf-out` helpers,
 slots, hashes, the archive reader); (a) the launcher, trampoline, cache (compiler through root-owned

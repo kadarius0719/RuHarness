@@ -1,6 +1,12 @@
 # harness-mcp — the harness as MCP tools for an agent runtime
 
-Status: IMPLEMENTED (2026-09-24; §R holds the resolutions of the 20 confirmed findings of the
+**Now (2026-10-18):** Built 2026-09-24, amended 2026-09-27 (the requester label, §R5) and
+2026-09-28 (`--cockpit`, §R6); since then it takes `--tool ID` for a mapped project, refuses a
+ledger made on another computer (`not-adopted`), and its reads carry `features` and `speed`
+(§1, §3). Governs with docs/SCHEMAS.md (the requester label, the speed fields, the adoption
+refusal) and `harness-mcp --help`; the only full statement of the tool contract; kept current.
+
+Design status: IMPLEMENTED (2026-09-24; §R holds the resolutions of the 20 confirmed findings of the
 adversarial design review, §R2 those of the 33 confirmed findings of the code review, §R3 those
 of the verification of that fix pass — the text below is the design as built, including the fix
 pass's one new tool, `harness_answer`). 2026-09-27: the requester label (docs/CHAT-PANE-DESIGN.md
@@ -56,6 +62,8 @@ Server flags — written by a human in `.mcp.json`, never settable by a tool arg
 | flag | meaning |
 |---|---|
 | `--target DIR` | the default target (required) |
+| `--tool ID` | the default target's mapped tool (`migration/tools/<ID>/`, docs/PROJECT-MAP-DESIGN.md §3.7); without it, the root's own `harness.toml`, else the project's only mapped tool; a project with two or more tools and neither is refused with the command line's words and exit code 1 ("… pick one with --tool (…)") |
+| `--cockpit` | the cockpit's chat server (§R6): only with `--target` and `--tool` |
 | `--target-root DIR` (repeatable) | other targets a call may name: only directories strictly inside one of these |
 | `--harness PATH` | the binary acts spawn (default: `harness` on PATH, else next to this binary) |
 | `--provider NAME` (repeatable) | the provider profiles steer attempts may use; default: `external` only; a steer call without `provider` gets `external` when listed, and is refused when it is not (a live profile is never chosen for the caller) |
@@ -115,6 +123,19 @@ path must lie strictly inside a `--target-root`, must not be `/`, `$HOME` or an 
 `$HOME`, and must hold a `harness.toml` — else a refusal before anything is read or spawned.
 The spawned argv carries the canonical path (`--target=<canonical>`), never the caller's
 spelling.
+
+**Adoption.** Before any read, a target whose ledger was made on another computer (a copy, a
+clone) is refused with kind `not-adopted`: "<root>: this folder already holds migration results
+made elsewhere (…): ask the person to adopt it (`harness state status --adopt --target <root>
+[--tool <id>]`, or the cockpit's question); an agent never adopts". harness-mcp never adopts;
+the person does (docs/SCHEMAS.md "Adoption of a ledger made elsewhere").
+
+**Features and speed** (added with docs/FEATURES-DESIGN.md §9 and docs/PERF-DESIGN.md §3.11):
+each unit's report carries `features` when a features file exists (`"current"`, or the closed
+reasons its coverage is behind) and `made_elsewhere: true` for a verdict from before adoption;
+`harness_status` carries the target's `tool` (null for a folder target) and a `speed` head, and
+each unit its worst Speed row as `speed`; `harness_unit` carries all the unit's Speed rows as
+`speed`. Speed rows are closed values and numbers only (docs/SCHEMAS.md "C-vs-Rust speed").
 
 | tool | args | does |
 |---|---|---|
@@ -252,8 +273,9 @@ target a chat agent works in (a shell can write any file).
 
 ## 7. Later (not v1)
 
-MCP `resources` for the ledger files; a fresh-translate tool for live providers (blind by
-construction) once a ledger label records the requester; an async run-id shape for clients
+MCP `resources` for the ledger files; a fresh-translate tool for standalone use with live
+providers (blind by construction) — the label that records the requester exists now (§R5), and
+the cockpit's server has `harness_migrate`, which only asks the cockpit (§R6); an async run-id shape for clients
 that send no progress token; bounded reads in harness-core itself (§R TRUST-4) for the CLI's
 `state status` and the cockpit too.
 

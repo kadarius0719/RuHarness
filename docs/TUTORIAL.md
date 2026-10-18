@@ -80,7 +80,7 @@ targets/zopfli/              the target: the C project
 
 *Prepares the guide's [Part 2](TESTING-GUIDE.md#part-2--let-the-harness-read-the-c-and-make-a-plan), and [Part 7](TESTING-GUIDE.md#part-7--why-the-other-three-units-stay-in-c).*
 
-A project goes through six steps, the same six the README draws: scan, plan, driver, migrate, verify, accept. Two of them ask an AI model to write something: the driver and the Rust. The others are ordinary code that gives the same answer every time, so the facts the AI works from, and the judge that checks it, cannot be talked into anything.
+A project goes through six steps, the same six the testing guide walks in its Parts 2 to 5: scan, plan, driver, migrate, verify, accept. Two of them ask an AI model to write something: the driver and the Rust. The others are ordinary code that gives the same answer every time, so the facts the AI works from, and the judge that checks it, cannot be talked into anything.
 
 1. **Scan** reads every C file and writes down what it contains (the **facts**): each function, and which file uses which. The harness calls a named function a **symbol**: a **public** one can be called from other files, an **internal** one is private to its own file.
 2. **Plan** splits the program into units and orders them so each unit moves after the units it depends on.
@@ -244,7 +244,7 @@ For anything in the right column the chat tells you which menu item to use. A re
 
 **What keeps you safe.** Nothing is accepted without you. The chat has no tool that writes a file or runs a command. Model-written code runs in the sandbox, and the dialog says so if the cockpit was started without it (`--allow-unsandboxed`). Every attempt, verdict and hand-off is on record in plain text. Quitting the cockpit stops the chat and any command it started.
 
-**Claude Code in its own window.** A small connector, `harness-mcp`, lets a separate Claude Code session read the project's records, ask for attempts steered from earlier ones, and accept a GREEN attempt (with your permission in Claude Code); that stand-alone route never starts a fresh translation. Inside the cockpit, the chat can ask for a fresh Migrate. The README shows how to set the connector up.
+**Claude Code in its own window.** A small connector, `harness-mcp`, lets a separate Claude Code session read the project's records, ask for attempts steered from earlier ones, and accept a GREEN attempt (with your permission in Claude Code); that stand-alone route never starts a fresh translation. Inside the cockpit, the chat can ask for a fresh Migrate. The README's harness-mcp section shows the `.mcp.json` that sets the connector up; the testing guide's Step 0.19 installs it.
 
 ## 10. Features: what a person notices
 
@@ -398,7 +398,7 @@ Each word in a sentence, with the section that explains it.
 
 ## 16. Appendix: reference
 
-**The commands** that `harness --help` lists. Every one takes `--target <folder>` (the target; it defaults to the folder you are in), and on a mapped project `--tool <id>` (the tool to open). `--adopt` trusts a ledger made elsewhere, once (section 3); `--json` prints machine-readable events.
+**The commands** that `harness --help` lists. Every one takes `--target <folder>` (the target; it defaults to the folder you are in; `bench` takes `--suite <folder>` instead), and on a mapped project `--tool <id>` (the tool to open; `project map` takes none, it reads the whole project). `--adopt` trusts a ledger made elsewhere, once (section 3); `--json` prints machine-readable events.
 
 | Command | What it does |
 |---|---|

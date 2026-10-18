@@ -1,9 +1,14 @@
 # Features: what a user does with the program, mapped to the code and checked — design
 
-Status: DESIGN, revised four times (2026-09-29): the adversarial review (four lenses, 84
+**Now (2026-10-18):** Built 2026-09-29 (every step), then fixed in seven passes; governs with
+docs/SCHEMAS.md (which says this document governs) and `harness features --help`, which points
+here; §5.3–§5.4 are replaced by docs/FEATURES-PROBE-REDESIGN.md (built 2026-09-30); kept
+current.
+
+Design status: DESIGN, revised four times (2026-09-29): the adversarial review (four lenses, 84
 findings, §R), the check of that revision (three checkers, 58, §R2), a scoped check of the
 second revision (two checkers, 37, §R3), and a scoped check of the third (one checker, 11 —
-no high, five medium, each resolved locally as proposed, §R4). Step 1 (core) is built; §R3
+no high, five medium, each resolved locally as proposed, §R4). Every step is built; §R3
 and §R4 say what they changed there.
 
 This implements the user's direction recorded 2026-09-23 ("feature workflows": user-facing
@@ -252,6 +257,11 @@ and in the map (§5.2):
   same program, not even itself: coverage stays `program` ("the C changed since the scan: Scan
   the project, then Re-check") until a scan (review O2). The oracle takes it **before** it
   builds anything, the map before its builds (review O6, M10).
+- **A mapped tool** (the file-list form, docs/SCHEMAS.md "harness.toml, file-list form") has no
+  `source_dir`: wherever this section and §5 say "every top-level `.c` of `source_dir`", read
+  "the tool's listed files", each with its own include folders; its program digest hashes a v2
+  record of them and its configuration (docs/PROJECT-MAP-DESIGN.md §3.7, "The program digest
+  and staleness").
 
 Both are computed **once per read** — once per `verify`, once per `Snapshot::load`, once per
 `state status` — never per unit; nothing is hashed without a features file. A file several
@@ -589,6 +599,9 @@ harness features map [--target DIR] [--allow-unsandboxed] [--json]
   record gets nothing — the facts do not know it either.
 
 ### 5.4 The probe runtime (harness-owned C)
+
+> **Superseded (2026-09-30)** by docs/FEATURES-PROBE-REDESIGN.md §3.6, the compiler-guided
+> probe's runtime. The text below is the first design, kept for the reasoning.
 
 `fnprobe.h` (declarations only: `extern unsigned char __ruharness_seen[];` and the function)
 and `fnprobe.c`, embedded with `include_str!` like the boundary check's runtime, with the id
@@ -1353,6 +1366,14 @@ changed.
 | M9 — errors anywhere in a body, or a `#` in a comment, left a function unwatched | the head only; a line that starts with `#` |
 | T1 — the program digest outside the read budget | counted by the preflight, each file once, at most 50 000 files |
 | T2 — escape bytes from a hostile file on the terminal | unknown keys quoted; every human CLI line and error shown with control characters as `?` |
+
+**Known gaps, judged acceptable** (carried over from the features progress log, now removed):
+Next-step rule 6 has no project-menu Re-check item (a project-level Re-check would be refused:
+it needs the unit on screen); migrate turns do not print skip messages (the verdict carries
+them); the pty test covers Map only (the edit flow is tested at the app level); the O6/M10
+digest-before-build orderings have no test; the probe's reopen after a failed write can drop
+notes silently if the reopen fails; `SOURCE_DATE_EPOCH=0` is not recorded in a verdict's
+evidence; `naked` given only on an earlier declaration fails the probed build loudly.
 
 **The check of the fix pass** (two checkers on 71d9e1a) found M7 not fixed (the facts-based
 check could never fire), O3 partial (with the whole-program check configured the C program's

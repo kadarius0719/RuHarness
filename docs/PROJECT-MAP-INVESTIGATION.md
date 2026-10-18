@@ -1,7 +1,14 @@
 # Investigation: can a project's tools be found mechanically?
 
-Date 2026-10-02. A throwaway experiment for docs/PROJECT-MAP-ROADMAP.md, Part 1. Nothing in
-RuHarness was changed; the script is `scratchpad/pmap/closure.py` (session 17c366c0) — about 40
+**Now (2026-10-18):** Spike record, 2026-10-02 and 2026-10-07; the design it fed is
+docs/PROJECT-MAP-DESIGN.md (built 2026-10-08), and DECISIONS.md 2026-10-07 holds the person's
+answers; kept for the reasoning and the measurements the design quotes. The script is
+`devtools/project-map/closure.py` now; liblzg has since been downloaded, into
+`~/code/ruharness-test-downloads/`.
+
+Date 2026-10-02. A throwaway experiment for the first part of a roadmap note of 2026-10-01 (that
+part became docs/PROJECT-MAP-DESIGN.md; the note is gone, its second part is the design's §8).
+Nothing in RuHarness was changed; the script was then `scratchpad/pmap/closure.py` (session 17c366c0) — about 40
 lines: compile each `.c` to an object, read what it defines and needs with `nm`, and from every
 `main()` pull in whichever file defines each needed symbol until nothing new is added.
 
@@ -19,7 +26,7 @@ lines: compile each `.c` to an object, read what it defines and needs with `nm`,
   vendored library (`lodepng/`). Its CMakeLists and Makefile both name two executables and two
   libraries. Today's `harness.toml` points at `src/zopfli` and never sees the rest. Also present
   and irrelevant: a `go/` port.
-- liblzg is not here (the testing guide downloads it). Its upstream layout, from the guide:
+- liblzg was not here then (the testing guide downloads it). Its upstream layout, from the guide:
   `src/lib/` (the library), `src/tools/` (three programs: `lzg`, `unlzg`, `benchmark`),
   `src/include/` (the public header). The guide has the person copy `lib/*.c`, `lzg.c` and the
   headers into one folder by hand, and drop the other two tools — exactly the work the map should

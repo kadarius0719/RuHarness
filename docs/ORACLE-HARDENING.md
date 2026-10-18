@@ -1,6 +1,12 @@
 # Oracle hardening after M4 — designs
 
-Status: **A implemented** (design review 3 lenses; code review 2 lenses; §A.R + §A.2 +
+**Now (2026-10-18):** A and B built 2026-09-23 (B calibrated the same day: `bench boundary`,
+`[unit.oracle] boundary = true`); the reference is docs/SCHEMAS.md "Oracle checks added to every
+verify" and "The boundary check"; §A.2 and §B.R govern their sections; §B.9 (what the boundary
+check does not prove) is said in full only here; kept for the reasoning. The status below is
+from before B was built.
+
+Design status: **A implemented** (design review 3 lenses; code review 2 lenses; §A.R + §A.2 +
 §A.3 authoritative; normative contract in docs/SCHEMAS.md). **B designed and adversarially
 reviewed** (§B, 2026-09-23; §B.R is AUTHORITATIVE where it amends §B; B.R-2 DECIDED by the user:
 mechanical baseline now, a model-written additive driver only as a calibration-triggered revisit).

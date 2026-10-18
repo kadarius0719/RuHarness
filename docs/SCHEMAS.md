@@ -199,7 +199,9 @@ Human stdout is NOT a contract — machine consumers read the ledger files.
   only: a folder whose name starts with a dot is skipped at any depth; a file reached through a
   link inside `source_dir` is scanned once, under its path with no link in it; a link out of
   `source_dir`, a dangling link, a link into a skipped folder and a FIFO or device are never
-  read. A folder it cannot read fails the scan.
+  read. A folder it cannot read fails the scan. A tool in the file-list form has no
+  `source_dir`: its scan reads the listed files (see "Every reader reads the file-list form",
+  under "harness.toml, file-list form").
 - `harness plan [--target DIR]` — reconcile plan.toml against facts. Refuses
   (exit 1) when facts.jsonl is stale vs the tree — run `harness scan` first — and
   validates the reconciled plan (order, deps, ids) *before* writing it to disk.
@@ -221,21 +223,11 @@ SIGINT/SIGTERM/SIGHUP the harness kills every live sandboxed process group and t
 terminates BY that signal (`code() == None`; shells report 130/143/129) — see "CLI
 hardening" below.
 
-## facts.db (deferred to M2 — design frozen on paper, no code at M1)
+## facts.db (never built)
 
-Derived, read-only, gitignored SQLite export, rebuilt drop+create by scan. NOT a
-stable data contract — the JSONL is; each rebuild writes `meta('schema_version', N)`
-so tools can detect incompatibility. Tables: `meta(key,value)`,
-`files(id,path,hash)`, `symbols(id,name,kind,file_id,visibility,signature,
-start_line,end_line)`, `refs(from_symbol,to_name,to_symbol,refkind)`. Ships with the
-first query consumer (M2 detectors or the MCP server).
-
----
-
-# M2 additions: observer surfaces (v1)
-
-Reviewed by a 3-lens adversarial design panel 2026-09-17; the id-stability,
-freshness-binding, attribution, and review-surface blockers it found are fixed below.
+Planned at M1 as a derived SQLite export of the facts for query consumers. It was never built:
+no consumer has needed it (the detectors and harness-mcp read `facts.jsonl` and the other
+ledger files directly), and no SQLite crate is in the workspace. `facts.jsonl` is the contract.
 
 ## Writer model (all observer surfaces)
 
@@ -1668,7 +1660,7 @@ flags = ["-O3", "-Isrc/include"]
   wrote the flags yourself rather than copying them from a build; another word is refused
   naming the words allowed.
 - **`flags`** (required; `flags = []` states "no flags"): in order, each one argument in its
-  joined form and checked by the flag grammar ("The file-list form", below): `-I`, `-iquote`,
+  joined form and checked by the flag grammar ("harness.toml, file-list form", below): `-I`, `-iquote`,
   `-isystem`, `-idirafter` and `-include` paths written relative to the project's top folder
   (`-Isrc/include`, never `-I../include` nor `-I src/include` with a space) and inside it,
   `-D`/`-U` with a C identifier, `-std=`, `-pthread`, a short list of `-f` flags, and `-O0`…`-O3`
@@ -2018,7 +2010,7 @@ another definer with --keep, or fix the program, map again, then accept"); a run
 there that is not a regular TOML file of at most 1 MiB (accepting again keeps what it holds,
 so it must be read); a rendered file that would not load.
 
-**What it writes** (docs/SCHEMAS.md "The file-list form"): a three-line comment naming the
+**What it writes** (docs/SCHEMAS.md "harness.toml, file-list form"): a three-line comment naming the
 command and the map file and what accepting again rewrites; `schema_version = 2`; `[target]` `name` — `--run-name`, else the
 program file's name without `.c`; a library's id — `files` (the closure's `.c` files in path
 order, each with its include folders as the map recorded them), `configuration = {name, from,
@@ -2274,7 +2266,9 @@ schema_version = 1) or a list of files (files, schema_version = 2), so keep one"
 version 1, or `source_dir` under version 2, is refused naming the version to write.
 `[oracle]`, `[llm]` and `[driver]` are the same in both forms.
 
-### The file-list form (`schema_version = 2`)
+### harness.toml, file-list form (`schema_version = 2`)
+
+(Older pointers, in the code's comments and below, call this section "The file-list form".)
 
 ```toml
 schema_version = 2
@@ -2323,8 +2317,10 @@ allowlist = ["cc", "cargo", "rustc"]
 | `-O0` … `-O3` | recorded, never applied (every compile keeps its own level) |
 
 No value may start with `@` or `-` (a compiler reads `@file` as a file of options), nor hold a
-control character. Anything else — `-B`, `-fplugin`, `-fuse-ld`, `-Xclang`, `-o`, the `-M`
-family, `-Wl`, `-x`, `-l…`, a separate-argument form — is refused by name, one sentence each:
+control character. The flags the harness adds to every compile itself — `-c`, `-o…`, `-MD`,
+`-MF…`, joined or not — have a sentence of their own: "the flag `-c` is added by the harness
+itself: remove it". Anything else — `-B`, `-fplugin`, `-fuse-ld`, `-Xclang`, the rest of the
+`-M` family, `-Wl`, `-x`, `-l…`, a separate-argument form — is refused by name, one sentence each:
 "the flag `-fuse-ld=/x` is not one the harness passes to a compiler; remove it …", "the flag
 `-I@f` has a value starting with `@` or `-`, which a compiler reads as more options; remove
 it", "the flag `-DFOO BAR` does not define a C identifier; write -DNAME or -DNAME=VALUE as one

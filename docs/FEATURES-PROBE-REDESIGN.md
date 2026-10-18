@@ -1,6 +1,12 @@
 # Features map — the compiler-guided probe (design)
 
-Status: **revision 3 — built** (2026-09-30); its code review and fix passes: §10 (where the
+**Now (2026-10-18):** Built 2026-09-30 (probe version `compiler-guided-2`); replaces
+docs/FEATURES-DESIGN.md §5.3–§5.4; the reference for the probe's rules (where a note can go,
+the same-text check, compile and remove), with docs/SCHEMAS.md "map.json" for the record and the
+code where §10 says so; governs beside FEATURES-DESIGN; the gcc path of §3.8 has never been
+proven (the Linux CI job has failed since 2026-09-17); kept current.
+
+Design status: **revision 3 — built** (2026-09-30); its code review and fix passes: §10 (where the
 built behaviour differs from the text below, §10 says so and the code governs). Decided by the person: DECISIONS.md,
 "Features map: PROPOSAL … let the compiler decide". Replaces the "Unwatched" rules and the
 probe runtime of FEATURES-DESIGN.md §5.3–§5.4; the rest of §5 stays. History: the draft

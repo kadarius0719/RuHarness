@@ -1,6 +1,11 @@
 # M4 design — TRACTOR benchmark, driver generation, scores as regression suite
 
-Status: REVIEWED 2026-09-23 by a 4-lens adversarial panel (security: **flawed**;
+**Now (2026-10-18):** Built 2026-09-23 (`gen-driver`, the `bench` commands, the driver-shape
+check); the reference is docs/SCHEMAS.md "M4 additions" and targets/tractor/README.md; §R governs,
+§0–§9 are the draft from before the review (its suite layout, `corpus/` and scores file are not
+the built ones); kept for the reasoning.
+
+Design status: REVIEWED 2026-09-23 by a 4-lens adversarial panel (security: **flawed**;
 measurement validity: **flawed**; architecture: sound-with-fixes; feasibility:
 feasible-with-fixes). §R below is authoritative where it contradicts §0–§9 (kept as the
 reviewed draft so the reasoning survives). Normative parts move into docs/SCHEMAS.md
