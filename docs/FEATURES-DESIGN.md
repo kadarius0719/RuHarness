@@ -1385,7 +1385,8 @@ refused with include words (the mirror never holds it); a FIFO named `x.c` reach
 paused (2026-09-29):** the linked-out top-level `.c` (refuse it by name before the build), the
 FIFO (only regular `.c` into the feature step and the map, never into the shared whole-program
 list, §10), a check of the fourth pass, `bench check --replay`, and the live chat tests (the
-`claude` sign-in had expired) — docs/FEATURES-PROGRESS.md.
+`claude` sign-in had expired) — the list lived in the features track's progress file of the time
+(removed 2026-10-18; git history keeps it).
 
 **The fifth pass** (2026-09-29) fixed those two first: a non-regular top-level `.c` is a
 `c-side-build-failed` skip in the feature step and refused by name in the map, with one linked
@@ -1443,3 +1444,16 @@ unchanged; the checkers' repro suites (33 tests) all refused or mapped as intend
 map unchanged; the five pragma-macro matrices, per function under 7 define sets: no function
 fails that failed under neither the sixth pass's predecessor bf75af8 (g6 121 of its 261, g8 47
 = 47, e_split 2 of 30, g7 0, g9 0) — every one left is a documented residual shape.
+
+### Known gaps, judged acceptable (after §R5)
+
+Moved here on 2026-10-18 from the features track's progress file, which was removed that day (git
+history keeps it); this paragraph was the only thing in that file not already in this design or in
+DECISIONS.md.
+
+Next-step rule 6 has no project-menu Re-check item (a project-level Re-check would be refused: it
+needs the unit on screen); migrate turns do not print skip messages (the verdict carries them); the
+pty test covers Map only (the edit flow is tested at the app level); the O6/M10 digest-before-build
+orderings have no test; the probe's reopen after a failed write can drop notes silently if the
+reopen fails; `SOURCE_DATE_EPOCH=0` is not recorded in a verdict's evidence; `naked` given only on
+an earlier declaration fails the probed build loudly.
