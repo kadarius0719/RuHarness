@@ -1367,14 +1367,6 @@ changed.
 | T1 — the program digest outside the read budget | counted by the preflight, each file once, at most 50 000 files |
 | T2 — escape bytes from a hostile file on the terminal | unknown keys quoted; every human CLI line and error shown with control characters as `?` |
 
-**Known gaps, judged acceptable** (carried over from the features progress log, now removed):
-Next-step rule 6 has no project-menu Re-check item (a project-level Re-check would be refused:
-it needs the unit on screen); migrate turns do not print skip messages (the verdict carries
-them); the pty test covers Map only (the edit flow is tested at the app level); the O6/M10
-digest-before-build orderings have no test; the probe's reopen after a failed write can drop
-notes silently if the reopen fails; `SOURCE_DATE_EPOCH=0` is not recorded in a verdict's
-evidence; `naked` given only on an earlier declaration fails the probed build loudly.
-
 **The check of the fix pass** (two checkers on 71d9e1a) found M7 not fixed (the facts-based
 check could never fire), O3 partial (with the whole-program check configured the C program's
 bytes were noted after its candidate runs), O2 partial (headers reached with `<…>`), and new

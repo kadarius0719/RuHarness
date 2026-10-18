@@ -1059,7 +1059,7 @@ None.
 The check of revision 5 (`wf_2b416222-f83`; `perf/revision5-check.json`, digest `perf/rev5-digest.md`)
 found 39 open items done, 25 in part, 6 done wrongly, and 19 new findings confirmed by two verifiers
 (none high: 4 medium, 10 low, 5 nits; cited [q1]), 3 by one, none refuted. As decided before the
-round (FEATURES-PROGRESS, DECISIONS), revision 5 is built without a further design round; each note
+round (DECISIONS), revision 5 is built without a further design round; each note
 below is a decision the build makes, each with a test, and **the notes govern where they differ from
 §1–§9**.
 
