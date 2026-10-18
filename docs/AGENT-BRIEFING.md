@@ -2,6 +2,8 @@
 
 You are an engineering agent working on a **provider-agnostic migration harness** that incrementally converts existing codebases to Rust. **The harness itself is implemented in Rust.** Read this entire briefing before doing anything. It defines the mission, the architecture, the current phase, the engineering standards, and the rules you must follow.
 
+This brief was written before the first milestone (2026-09-17) and is kept as the spec. Where the program turned out differently, the text says so in place: real names are given, and anything the brief describes that was never built is marked **(not built)**. `docs/README.md` says what every other document is for; `docs/SCHEMAS.md` is the contract for every file and command that exists.
+
 ---
 
 ## 1. Mission
@@ -16,7 +18,7 @@ Design every component so Phase 2 reuses it. The pipeline, ledger, planner, and 
 ## 2. Non-negotiable principles
 
 1. **The oracle is the product.** Models are swappable commodities; the verification machinery is the durable value. "Compiles and passes the oracle" is the *only* definition of done for a migrated unit. Never mark a unit complete on your own judgment of correctness.
-2. **State lives on disk, not in conversation.** All pipeline state is checkpointed as files in the target repo (see the ledger, §3.1). Any agent, from any provider, must be able to resume any stage cold by reading the ledger. Never rely on chat history as the source of truth. How much state is retained — and how the ledger cooperates with agent runtimes like Claude Code — is configurable via storage profiles (§14); the cold-resume contract itself is not.
+2. **State lives on disk, not in conversation.** All pipeline state is checkpointed as files in the target repo (see the ledger, §3.1). Any agent, from any provider, must be able to resume any stage cold by reading the ledger. Never rely on chat history as the source of truth. How much state is retained — and how the ledger cooperates with agent runtimes like Claude Code — was meant to be configurable via storage profiles (§14, **not built**); the cold-resume contract itself is not configurable.
 3. **Deterministic tools measure; agents interpret.** Parsing, graph construction, gotcha detection, test execution, and diffing are deterministic code. LLM passes rank, explain, plan, and write code. Do not use an LLM where a script suffices.
 4. **Provider-agnostic by construction.** The LLM sits behind a plain completion/tool-calling interface (§11.2). Harness operations are exposed as tools (MCP is the preferred surface) so any capable agent runtime can drive them. Do not couple pipeline logic to any one vendor's SDK features.
 5. **Migrate in dependency order, behind an FFI seam.** Leaf units with narrow interfaces first, strangler-fig style. The C ABI boundary is the safety net: at every point in the migration the project must build, link, and pass its tests with a mix of original C and new Rust.
@@ -28,14 +30,15 @@ Design every component so Phase 2 reuses it. The pipeline, ledger, planner, and 
 ## 3. Architecture — five components
 
 ### 3.1 Ledger (state)
-A `migration/` directory in the target repo:
-- `facts.db` — language-neutral fact model (SQLite): symbols, call/dependency graph, public API surface, side effects, concurrency usage, allocation patterns.
-- `observations.md` — ranked findings from the observer stage.
-- `plan.yaml` — ordered migration units; each has: id, symbol list, preserved C signatures, test strategy, done-criteria, status (`pending | in-progress | verified | merged`).
+A `migration/` directory in the target repo (the names as built; M1 chose plain committed files over SQLite and TOML over YAML, DECISIONS 2026-09-17):
+- `facts.jsonl` — language-neutral fact model, one JSON record per line: symbols, call/dependency graph, public API surface, side effects, concurrency usage, allocation patterns. (The brief first named this `facts.db`, a SQLite file; it was never built.)
+- `observations.md` — ranked findings from the observer stage (with the detector findings it is drawn from).
+- `plan.toml` — ordered migration units; each has: id, symbol list, preserved C signatures, test strategy, done-criteria, status (`pending | in-progress | verified | merged`). (First named `plan.yaml`.)
 - `units/<id>/` — per-unit interface contract, generated tests, agent transcripts, oracle results.
 - `DECISIONS.md` — running log of engineering choices and their rationale.
+- Added since: the person's features (`features/`), speed measurements (`perf/`), the project map (`map/`) and the tools accepted from it (`tools/<id>/`, each a ledger of its own). `docs/SCHEMAS.md` "The ledger's fixed names" is the full, current list.
 
-The JSON/YAML schemas and the SQLite schema for these files are **public contracts** (§13.4): versioned, documented, and changed only deliberately.
+The schemas for these files are **public contracts** (§13.4): versioned, documented in `docs/SCHEMAS.md`, and changed only deliberately.
 
 ### 3.2 Scanner (analysis — deterministic)
 For C: consume `compile_commands.json` for the build graph; drive parsing through a vetted binding (`clang-sys`/`clang` crate for libclang, or `tree-sitter` + `tree-sitter-c`); emit facts into the neutral schema. No LLM involvement. The neutral schema is what makes future frontends (Go, Python) pluggable — do not leak C-specific structure into it.
@@ -44,7 +47,7 @@ For C: consume `compile_commands.json` for the build graph; drive parsing throug
 Deterministic detectors flag known hazards (see gotcha taxonomy, §6). One LLM pass then reads the facts plus flagged code and writes `observations.md`: which findings are real risks, which units are traps, what ordering implications follow.
 
 ### 3.4 Planner (plan — hybrid)
-Topological sort of the dependency graph; identify leaf clusters with narrow interfaces. LLM refines this into `plan.yaml` entries with per-unit acceptance criteria. Output must be reviewable by a human in one sitting.
+Topological sort of the dependency graph; identify leaf clusters with narrow interfaces. LLM refines this into `plan.toml` entries with per-unit acceptance criteria. Output must be reviewable by a human in one sitting.
 
 ### 3.5 Executor + Oracle (execution — the loop)
 Per unit:
@@ -60,19 +63,21 @@ All build/test execution happens inside the sandbox rules of §12.2.
 
 | Stage | Output | Done when |
 |---|---|---|
-| 1. Analysis | `facts.db` | Facts round-trip: graph queries answer "what depends on X" correctly for spot-checked symbols |
+| 1. Analysis | `facts.jsonl` | Facts round-trip: graph queries answer "what depends on X" correctly for spot-checked symbols |
 | 2. Observations | `observations.md` | Every detector finding is triaged (confirmed / dismissed with reason); units ranked by risk |
-| 3. Plan | `plan.yaml` | Human has approved; every unit has signatures, test strategy, done-criteria |
+| 3. Plan | `plan.toml` | Human has approved; every unit has signatures, test strategy, done-criteria |
 | 4. Execution | Verified units | Oracle green; ledger updated; project builds mixed C/Rust at every commit |
 
-## 5. Current milestone plan (Phase 1)
+## 5. Milestone plan (Phase 1), with its status
+
+Status on 2026-10-18: M0 to M4 are done (M0, M1 and M2 on 2026-09-17, M3 on 2026-09-19, M4 on 2026-09-23); M5 is next. Built since M4, outside this list: the review cockpit (`harness-tui`, a friendly wrapper with a file tree and the mouse), the chat inside the cockpit, `harness-mcp` (the harness's tools for an agent), the person's features (scenarios checked on every verify), the C-against-Rust speed measurements, and the project map (a whole C project's programs, accepted as tools). DECISIONS.md's index has each one; the README's status table is the short version.
 
 - **M0 — end-to-end thread (do this first, keep it embarrassingly small):** one real C library (Zopfli or smaller), one leaf function, one binary: extract call graph → pick leaf → LLM produces Rust + `extern "C"` shim → link → differential test passes. No abstractions yet; this thread *is* the harness in embryo.
-- **M1 — ledger + fact schema:** generalize M0's ad-hoc state into `facts.db` and `plan.yaml`; multi-unit ordering; promote to the workspace layout of §10.1. **Includes the state-backend research spike (§14.1), completed before the schemas are frozen.**
+- **M1 — ledger + fact schema:** generalize M0's ad-hoc state into `facts.jsonl` and `plan.toml` (first planned as `facts.db` and `plan.yaml`); multi-unit ordering; promote to the workspace layout of §10.1. **Includes the state-backend research spike (§14.1), completed before the schemas are frozen.**
 - **M2 — observer:** gotcha detectors + LLM triage pass.
 - **M3 — provider adapter #2:** prove agnosticism by running the same unit migration through a second model/provider with zero code changes outside the adapter and config.
 - **M4 — benchmark:** run against the TRACTOR public test corpus; record scores; scores become the regression suite for harness changes.
-- **M5 — extension proof:** implement one detector as an *external* plugin (§13.3) and document the process in `EXTENDING.md`.
+- **M5 — extension proof:** implement one detector as an *external* plugin (§13.3) and document the process in `EXTENDING.md` (not written yet: it is this milestone's deliverable).
 - **M6+ — Phase 2 spike:** second language frontend; planner plans around feature seams; oracle = golden tests at an API boundary.
 
 ## 6. Gotcha taxonomy to encode as detectors (C, Phase 1)
@@ -94,13 +99,17 @@ Macro density and token-pasting; unions and type punning; pointer arithmetic and
 2. ≥1 complete leaf-cluster migration verified end-to-end by the oracle with zero human-written Rust.
 3. The same migration reproduced through two different LLM providers with changes confined to the provider adapter and config.
 4. A recorded score on the TRACTOR public corpus, tracked over harness iterations.
-5. A third party can add a working detector or provider adapter using only `EXTENDING.md`, without modifying core crates.
+5. A third party can add a working detector or provider adapter using only `EXTENDING.md` (M5's deliverable, not written yet), without modifying core crates.
 
 ## 9. First actions
 
-1. Read the ledger if it exists (`migration/`); resume from recorded state. If it doesn't exist, you are at M0.
-2. At M0: propose the target library, the leaf function, and the exact oracle command you will use — then build the single end-to-end binary.
-3. Record every notable choice in `migration/DECISIONS.md` (and harness-repo decisions in the harness's own `DECISIONS.md`), so future agents and humans inherit the reasoning, not just the artifacts.
+Working on the harness itself (this repository): read `CLAUDE.md`, which gives the reading order (this brief, then `docs/NEXT-SESSION.md`, then the last entries of `DECISIONS.md`). The harness repository has no `migration/` folder of its own; the targets under `targets/` have theirs.
+
+Working on a target (a C project being migrated):
+1. Read the target's ledger if it exists (`migration/`); resume from recorded state. If it doesn't exist, the target has not been started: scan it (or map it first, for a whole C project).
+2. Record every notable choice in the target's `migration/DECISIONS.md` (and harness-repo decisions in the harness's own `DECISIONS.md`), so future agents and humans inherit the reasoning, not just the artifacts.
+
+(When this brief was written, step 1 read "If it doesn't exist, you are at M0", and step 2 proposed M0's target, leaf function and oracle command. M0 is long done.)
 
 ---
 
@@ -114,7 +123,8 @@ Macro density and token-pasting; unions and type punning; pointer arithmetic and
   - `harness-llm` — provider adapters behind the `ProviderAdapter` trait.
   - `harness-oracle` — build shim, differential testing, sandbox execution.
   - `harness-cli` — the `harness` binary (thin; orchestration only).
-  - `harness-mcp` — MCP server exposing harness tools (optional feature).
+  - `harness-tui` — the review cockpit (`harness-tui` binary), and a library (its read model, events and process spawning) that harness-mcp reuses.
+  - `harness-mcp` — MCP server exposing harness tools; a crate and binary of its own (first planned as an optional feature).
 - Pin the toolchain with `rust-toolchain.toml` (stable channel). Document MSRV in the workspace manifest and CI-test it.
 - `#![forbid(unsafe_code)]` in every crate except, if ever strictly required, an isolated FFI module in `harness-scan` (libclang bindings) — and any such exception is documented in `DECISIONS.md` with the reason.
 
@@ -137,8 +147,8 @@ Macro density and token-pasting; unions and type punning; pointer arithmetic and
 A crate may be added only if it is: widely used and actively maintained; permissively licensed (MIT/Apache-2.0 compatible); minimal in transitive dependencies relative to alternatives; and solving a problem `std` does not. Prefer `std` where feasible. Every new dependency gets a one-line justification in `DECISIONS.md`.
 
 ### 11.2 Approved baseline
-- CLI: `clap` (derive). Serialization: `serde`, `serde_json`, `toml` (config), `serde_yaml` only if `plan.yaml` stays YAML — consider TOML/JSON to drop the dependency.
-- Ledger: `rusqlite` (bundled feature off; link system SQLite or justify bundling).
+- CLI: `clap` (derive). Serialization: `serde`, `serde_json`, `toml` (config), `serde_yaml` only if `plan.yaml` stays YAML — consider TOML/JSON to drop the dependency. (Not added: the plan is `plan.toml`.)
+- Ledger: `rusqlite` (bundled feature off; link system SQLite or justify bundling). (Not added: the ledger is plain files, DECISIONS 2026-09-17.)
 - Parsing: `clang-sys`/`clang`, or `tree-sitter` + grammar crates.
 - HTTP: `ureq` (+ `rustls` TLS — fitting, given the project's lineage). Errors: `thiserror`, `anyhow`. Logging: `tracing` + `tracing-subscriber`. Temp/paths: `tempfile`, `camino` if UTF-8 paths help. Diffing: `similar`. Hashing/IDs: `blake3` or `sha2` for content-addressing unit inputs.
 - Anything beyond this list requires the §11.1 justification.
@@ -173,21 +183,22 @@ The goal: a third party extends the harness **without forking core**. Three sanc
 `harness-core` defines the seams as small, documented traits:
 - `LanguageFrontend` — scan a codebase into facts.
 - `Detector` — facts + source → findings.
-- `PlannerStrategy` — facts + observations → ordered units.
+- `PlannerStrategy` — facts + observations → ordered units. **(Not built:** the planner is plain code in `harness-core` (`planner.rs`), with no trait.)
 - `ProviderAdapter` — messages (+ optional tool schema) → response; capability metadata (context size, JSON-mode support) declared, not assumed.
 - `OracleStrategy` — unit + build context → verdict with evidence.
-Built-ins implement these; users add crates to the workspace implementing the same traits and register them in one place. Keep each trait's surface minimal — adding a method later is easy; removing one is a breaking change.
+The four that exist live in `harness-core` (`traits.rs`). Built-ins implement these; users add crates to the workspace implementing the same traits and register them in one place. Keep each trait's surface minimal — adding a method later is easy; removing one is a breaking change.
 
 ### 13.2 Configuration (no-code extension)
 `harness.toml` selects and parameterizes implementations: per-stage model routing, detector enable/disable and severity overrides, oracle timeouts, sandbox settings, custom test commands. Everything a user can reasonably vary without new logic lives here, validated with helpful errors. Include a `record`/`replay` mode toggle for LLM calls so pipeline development is deterministic and cheap.
 
 ### 13.3 Subprocess plugins (run-time extension, no recompile)
+**(Not built:** M5 builds the first one, an external detector.)
 For users who won't recompile: external executables speaking a small JSON protocol over stdin/stdout (versioned envelope: `{schema_version, kind, payload}`). Phase 1 supports external **detectors** and **oracle checks**; frontends later. Plugins are declared in `harness.toml` with an explicit path (no auto-discovery from `$PATH`), run under the same sandbox rules as §12.2, and their output is validated against the schema before ingestion. **Do not use dynamic library loading (`dlopen`/`cdylib`)** — Rust has no stable ABI, and the crash/security surface isn't worth it; subprocess isolation is safer and language-agnostic.
 
 ### 13.4 Stable contracts
 The extension surface is only as good as its contracts:
-- Versioned schemas (semver) for: the fact model, `plan.yaml`, unit records, detector findings, and the plugin envelope. Breaking schema changes require a migration note.
-- `EXTENDING.md` with two worked examples: a custom detector (trait version *and* subprocess version) and a new provider adapter.
+- Versioned schemas (semver) for: the fact model, `plan.toml`, unit records, detector findings, and the plugin envelope. Breaking schema changes require a migration note.
+- `EXTENDING.md` (M5's deliverable, not written yet) with two worked examples: a custom detector (trait version *and* subprocess version) and a new provider adapter.
 - The CLI is itself a stable interface: subcommands and exit codes documented; anything scripted against `harness scan`/`plan`/`migrate`/`verify` keeps working within a major version.
 
 ## 14. State storage: research spike, profiles, and runtime integration
@@ -202,7 +213,9 @@ Before freezing the ledger schemas, survey the **current** landscape of state-pe
 Deliverable: chosen defaults plus rejected alternatives with reasons, in `DECISIONS.md`. Constraints: the spike cannot introduce dependencies outside §11 without the standard justification, and SQLite + flat files remain the default unless the spike demonstrates a compelling, recorded win.
 
 ### 14.2 Storage profiles — configurable retention, not configurable truth
-Define a **minimum resumable set** that every profile always keeps: `facts.db`, `plan.yaml`, per-unit status + interface contracts, `DECISIONS.md`, and the latest oracle verdict per unit. Storage profiles govern evidence retention *above* that floor; no configuration may drop below it, because cold-resume (§2.2) is non-negotiable.
+**Not built:** storage profiles, `[state] profile` and `harness state gc` below do not exist; `harness state` has one command, `status` (staleness of facts, plan and verdicts). The design stands for when disk use calls for it.
+
+Define a **minimum resumable set** that every profile always keeps: `facts.jsonl`, `plan.toml`, per-unit status + interface contracts, `DECISIONS.md`, and the latest oracle verdict per unit. Storage profiles govern evidence retention *above* that floor; no configuration may drop below it, because cold-resume (§2.2) is non-negotiable.
 
 Configured in `harness.toml`:
 
@@ -219,13 +232,13 @@ size_budget_mb = 500         # warn (never silently delete) when exceeded
 - **standard** (default): minimal + final artifacts per unit and full failure evidence.
 - **archival** (abundant disk): everything — full transcripts, record/replay traces of every LLM call, every attempt content-addressed. Note in docs that this doubles as an evaluation/fine-tuning dataset later, which is often worth the disk.
 
-Provide two subcommands: `harness state status` (disk usage broken down by category, budget check) and `harness state gc` (prune to the active profile's policy; refuses to touch the resumable set; dry-run by default).
+Provide two subcommands: `harness state status` (disk usage broken down by category, budget check; as built it reports staleness instead) and `harness state gc` (**not built**) (prune to the active profile's policy; refuses to touch the resumable set; dry-run by default).
 
 ### 14.3 Agent-runtime integration — derived views, single source of truth
 The ledger is the only source of truth; runtime-facing files are generated *views* of it, never peers:
-- `harness state sync-runtime` emits/refreshes a clearly-marked generated block (in `CLAUDE.md`, `AGENTS.md`, or equivalent per config) containing: current milestone, active unit, ledger paths, and the exact harness commands the agent should use. Drift between view and ledger is resolved by regeneration, never by hand-merging.
+- `harness sync-runtime` (built as a top-level command, not under `state`) emits/refreshes a clearly-marked generated block (built for `AGENTS.md`) containing: current milestone, active unit, ledger paths, and the exact harness commands the agent should use. Drift between view and ledger is resolved by regeneration, never by hand-merging.
 - Never write harness state into runtime-owned session storage, and never read runtime session files as authoritative. If a runtime "remembers" something the ledger doesn't record, it isn't true yet — record it properly or discard it.
-- Runtime selection is config-first, not sniffed: `[state.runtime] kind = "claude-code" | "generic" | "none"`.
+- Runtime selection is config-first, not sniffed: `[state.runtime] kind = "claude-code" | "generic" | "none"` (**not built**).
 
 ## 15. Research discipline (recurring, not one-off)
 
@@ -249,13 +262,15 @@ Frontier-model tokens are the scarcest resource in this project. The harness is 
 
 ### 16.2 Routing and escalation rules
 - Default tier per stage lives in config; per-unit overrides are driven by the observer's risk score — risk scoring exists precisely to spend frontier tokens on the right units.
-- **Escalate one tier only on evidence:** N failed oracle iterations at the current tier (default 2), or an explicit risk flag. Every escalation and its trigger is recorded in the unit record.
+- **Escalate one tier only on evidence** (automatic escalation **not built**: during M4 the session chose the tier at each hand-off, DECISIONS 2026-09-23): N failed oracle iterations at the current tier (default 2), or an explicit risk flag. Every escalation and its trigger is recorded in the unit record.
 - **Never escalate for deterministic failures** — linker problems, sandbox misconfiguration, schema errors are harness bugs; fix them in code, don't feed them to a bigger model.
 - **De-escalate inside repair loops:** mechanical fixes (type mismatches, missing casts, borrow-checker nudges) go to Tier 2 even when the original translation ran at Tier 3.
 - Structure prompts with a stable prefix (briefing + unit contract first, variable content last) so provider prompt-caching discounts apply where offered.
 - **Replay mode (§13.2, §14.2) is mandatory during harness development.** Debugging harness code against recorded responses spends zero live tokens; re-spending them is a policy violation, not just waste.
 
 ### 16.3 Budgets (config + ledger)
+
+**Not built:** the `[budget]` section and `harness usage` below do not exist yet (a carry-forward since M3 in DECISIONS).
 ```toml
 [budget]
 per_unit_tokens = 200_000     # placeholder — calibrate from real runs
@@ -274,56 +289,36 @@ The economy rules of §16 govern the harness at runtime; the same logic governs 
 - **Spec-first.** Design happens at high tier/effort and produces written specs (this briefing, `DECISIONS.md`, per-crate design notes). Implementation sessions execute specs at mid tier and should rarely require frontier judgment — if an implementation session keeps hitting questions the spec can't answer, that's a signal to stop and hold a short design session, not to grind expensively forward.
 - **Dogfood the ledger.** Before any session ends, write state to disk: progress, next actions, open questions, decisions made — in `DECISIONS.md` or a handoff file. Sessions are cleared aggressively and resumed cold, exactly per the §2.2 contract. Context is disposable; the ledger is not.
 - **Deterministic verification first.** Iterate against `cargo build`, `clippy`, and the test suite rather than against model judgment. A mid-tier model with a compiler loop outperforms an unfettered frontier model for implementation work — this is the oracle principle applied to the harness's own development.
-- **Scoped context.** Reference exact files and paths; never "explore the repo" when the work lives in two files. Research spikes (§15), log reading, and dependency audits run in subagents on cheap models and return summaries only — verbose content stays out of the main session.
+- **Scoped context.** Reference exact files and paths; never "explore the repo" when the work lives in two files. Research spikes (§15), log reading, and dependency audits run in subagents (on the model CLAUDE.md names for hand-offs, Opus since 2026-10-07, rather than a cheap one) and return summaries only — verbose content stays out of the main session.
 - **Terse outputs.** Diffs and edits, not restated code; findings, not narration.
 - **Effort is spend.** Maximum reasoning effort is Tier-3 spend even on a mid-tier model. Default lower; raise it only for genuinely hard design or debugging moments, and drop it back after.
+
+## 18. How sessions work here
+
+The lasting practice of the sessions that built the harness, moved here from old kickoffs (2026-10-18). The current kickoff, `docs/NEXT-SESSION.md`, holds what changes from session to session (the work, the open items, the flaky tests).
+
+**Environment (re-check; don't assume):**
+- There are no cloud API keys, so model calls go through the `external` hand-off. Answer hand-offs with plain Agent subagents, never Workflow agents, and set `--model` to the model that actually answers. Audit every batch with `targets/tractor/handoff-tools` before importing it.
+- Never download anything (a model, a C project, a crate) without asking. Test downloads live only in `~/code/ruharness-test-downloads/`: never installed, never on PATH, compiled only there or in the harness's sandboxed builds.
+- The harness binaries are not installed: put a worktree's `target/debug` first on PATH.
+- The pty and end-to-end tests (`crates/harness-tui/tests/signals.rs`, `crates/harness-mcp/tests/e2e.rs`) need the `harness` binary next to theirs, built from the current sources (`cargo test --workspace` builds it; the MCP end-to-end test refuses a stale one).
+- The live chat tests (`crates/harness-tui/tests/chat_live.rs`) run the real `claude` on haiku under the person's sign-in (plan usage): `RUHARNESS_LIVE_CHAT=1 cargo test -p harness-tui --test chat_live -- --ignored --test-threads=1`, once as is (inside Claude Code) and once with `RUHARNESS_LIVE_CHAT_HOST=plain`. Run them after any change to the chat's protocol, environment or end routine; ask the person to sign in to `claude` first if the chat says the session expired. The cockpit's chat uses the person's default Claude Code model.
+- Subagents cannot write report files here: they return findings as text, and the main session writes them into its scratchpad (one subdirectory per reviewer) for the verifiers. Review agents must not delete scratchpad files they did not create; verifiers read the reviewed commit with `git show <sha>:<path>` (or a `git archive` copy with its own `CARGO_TARGET_DIR`) so fixing can proceed meanwhile.
+- Driving the cockpit headless: `devtools/cockpit-drive` (a Python `pty.fork()` driver with a small VT interpreter; dialogs ignore keys for a moment, so wait for their own `ready:` line). SGR mouse reports are `\e[<0;COL;ROWM` (press) and `…m` (release), 1-based; the wheel is button 64/65. The interpreter does not model the alternate screen: after the cockpit exits it shows the last frame, so read the mode sequences (`?1049l`, `?1000l`) instead. No tmux here, no `timeout` (use `perl -e 'alarm N; exec @ARGV'`).
+- Mutation checks: a script that replaces one string per mutant, runs the guarding test, restores the file (keep the tree committed first; check `git status` after). A mutant that survives because a fix doubled a guard is equivalent: mutate both copies together, or write the test that tells the guards apart. A test on a synthetic future clock can pass for the wrong reason.
+- A mutation whose test hangs or is killed (out of memory) counts as killed; make such tests fail fast (a bounded wait on a channel) rather than hang. A read blocked on a FIFO cannot be released reliably: such a test needs a watchdog thread that calls `process::exit(1)` (see `a_fifo_in_the_crate_never_freezes_the_menu`). A script's timeout kills `cargo`, not the hung test binary under it: check `ps` for leftovers before rerunning.
+- A compound shell command keeps going after a failing `cargo test`: check the test result before `git commit` in the same line (or use `set -e`).
+
+**Process that works (keep it):**
+- Run a time-boxed research spike in subagents, and verify its premise by running it end to end.
+- Write the design, give it an adversarial design review from 3–4 lenses, verify every finding against the code, revise — then check the revision.
+- Implement against the reviewed spec in steps, each committed when green; then an adversarial code review whose findings are verified against the code; then verify the fix pass the same way, and check each further pass. Every review so far has found real bugs.
+- A reviewer's "only an unsandboxed process could race this" must be checked against the sandbox profile.
+- In a fix pass, add regression tests that fail without the fix, and mutation-check the rule-guarding ones with a script that reverts each fix and runs its test.
+- Real end-to-end runs find what reviews miss (a pty drive found a triple-click bug before the review did; live chat runs found the model writing its answer into the chat). A checker that runs a fix against a real corpus finds what unit tests miss.
+- Tests of a terminal UI read a rendered screen (a VT interpreter), never the raw byte stream: ratatui skips cells that already show the letter.
+- Hand off in `DECISIONS.md` (a dated entry, and its line in the index at the top) and `docs/NEXT-SESSION.md`, then commit and push to `main`.
 
 ---
 
 **Summary of your operating posture:** verify everything through the oracle, keep state on disk, keep the core small and safe, treat all external input as hostile, justify every dependency, research the current landscape before building, route every call to the cheapest capable tier, and extend through the sanctioned seams — never by widening the core.
-</pasted_content id="d005">
-
-<pasted_content id="d005">
-Next session — kickoff (2026-09-30)
-Paste the Agent Briefing first, then:
-Resume RuHarness. Read `DECISIONS.md`'s last entries and `docs/FEATURES-PROGRESS.md` "Open" — its list is this session's work, in order: collect the code review of the compiler-guided probe build (and the §8 premise re-run), fix what it confirms with tests, check each fix pass, mutation-check the named rules; then `bench check --replay`, the live chat tests, and the C-vs-Rust performance baselines design. Report to the person in plain words — no review codes (M1, N4, …). A from-zero testing guide for the person is at docs/TESTING-GUIDE.md (liblzg).
-Kickoff prompt for the next session
-Paste the full Agent Briefing (the `# Agent Briefing: Rust Migration Harness` document) first, then this:
-Resume RuHarness — finish the feature-workflow view, then the C-vs-Rust performance baselines. Everything is on `main` and pushed. The features track is built, reviewed (35 findings, 33 confirmed) and fixed in four passes, each checked; 87 mutants (86 killed, 1 equivalent); 952 tests. It paused before the check of the fourth pass. Before doing anything else:
-
-1. Read `DECISIONS.md`'s last entry (the feature-workflow view) and docs/FEATURES-PROGRESS.md — its "Open" list is this session's first work, in order: two low fixes (a top-level `.c` linked out of `source_dir`; a FIFO named `x.c`), a scoped check of the fourth pass (and a fix pass for what it finds, mutation-checked), `bench check --replay`, the live chat tests.
-2. Confirm the tree is clean and green: `git status`, `cargo test --workspace` (~952 tests; the `harness-core` ledger test `a_reader_never_makes_a_writer_fail` can fail under load and passes alone). The pty and e2e tests need the `harness` binary built from current sources (`cargo test --workspace` builds it).
-3. The live chat tests run the real `claude` on haiku under the person's sign-in: `RUHARNESS_LIVE_CHAT=1 cargo test -p harness-tui --test chat_live -- --ignored --test-threads=1`, once inside Claude Code and once with `RUHARNESS_LIVE_CHAT_HOST=plain`. Ask the person to sign in to `claude` first if the chat says the session expired.
-4. The bench check needs the gitignored `targets/tractor/.scorer-vendor/` and `.bench/` (copy with `cp -cR` from another worktree) and a quiet machine; expect `198 reproduce (1 conformant, 197 drifted), 2 expected divergence(s), 0 problem(s)` and `bench check: OK — no regression` (~29 min).
-
-Then the C-vs-Rust performance baselines (roadmap), as every track: a time-boxed §15 research spike in subagents, the design, an adversarial design review from 3–4 lenses with findings verified against the code, revised — then CHECK THE REVISION; build in steps, each committed when green; an adversarial code review, fix pass, VERIFY THE FIX PASS and each further pass; mutation checks of the named rules; DECISIONS handoff; commit, push. After it: the briefing's M5.
-Separately suggested (their own tasks): confine the oracle build sandbox's temp dirs (a per-build temp dir — Build C's check, §R5 S-NEW-1); deflake the oracle's process-group timeout test; the crate content hash skips files outside `src/`; harness-detect's walk follows symlinks out of `source_dir` (`walk::confined`); `verify`'s R6 gate; the harness-core ledger test that a fork in the same test binary can fail (`a_reader_never_makes_a_writer_fail`, seen again under load during the features track). Carry-forwards as in DECISIONS (the chat pane's accepted items: `harness_request` re-reads up to 16 MiB per call; untested by design — the hard-link fallback, the bench `(chat)` tags, a chat `.r2` replay, SAF-9's `dying` checks, a KILL that cannot be sent; the chat protocol verified with Claude Code 2.1.274 only).
-Environment (re-check; don't assume):
-
-* There are no cloud API keys, so model calls go through the `external` hand-off.
-* Answer hand-offs with plain Agent subagents, never Workflow agents.
-* Set `--model` to the model that actually answers.
-* Audit every batch with `targets/tractor/handoff-tools` before importing it.
-* Never download a model without asking.
-* The pty and e2e tests (`crates/harness-tui/tests/signals.rs`, `crates/harness-mcp/tests/e2e.rs`) need the `harness` binary next to theirs, built from the current sources (`cargo test --workspace` builds it; the MCP e2e refuses a stale one).
-* The live chat tests (`crates/harness-tui/tests/chat_live.rs`) run the real `claude` on haiku under the person's sign-in (plan usage): `RUHARNESS_LIVE_CHAT=1 cargo test -p harness-tui --test chat_live -- --ignored --test-threads=1`, once as is (inside Claude Code) and once with `RUHARNESS_LIVE_CHAT_HOST=plain`. Run them after any change to the chat's protocol, environment or end routine.
-* Subagents cannot write report files here: they return findings as text, and the main session writes them into its scratchpad (one subdirectory per reviewer) for the verifiers.
-* Review agents must not delete scratchpad files they did not create; verifiers read the reviewed commit with `git show <sha>:<path>` (or a `git archive` copy with its own CARGO_TARGET_DIR) so fixing can proceed meanwhile.
-* Driving the cockpit headless: a Python `pty.fork()` driver with a small VT interpreter; SGR mouse reports are `\e[<0;COL;ROWM` (press) and `…m` (release), 1-based; the wheel is button 64/65. The interpreter does not model the alternate screen: after the cockpit exits it shows the last frame — read the mode sequences (`?1049l`, `?1000l`) instead. No tmux here, no `timeout` (use `perl -e 'alarm N; exec @ARGV'`).
-* Mutation checks: a script that replaces one string per mutant, runs the guarding test, restores the file (keep the tree committed first; check `git status` after). A mutant that survives because a fix doubled a guard is equivalent — mutate both copies together, or write the test that tells the guards apart. A test on a synthetic future clock can pass for the wrong reason (a key clears notices older than its `now`).
-* A mutation whose test hangs or is killed (OOM) counts as killed — make such tests fail fast (a bounded wait on a channel) rather than hang. A read blocked on a FIFO cannot be released reliably: such a test needs a watchdog thread that calls `process::exit(1)` (see `a_fifo_in_the_crate_never_freezes_the_menu`). A script's timeout kills `cargo`, not the hung test binary under it — check `ps` for leftovers before rerunning.
-* A compound shell command keeps going after a failing `cargo test`: check the test result before `git commit` in the same line (or use `set -e`).
-
-Process that works (keep it):
-
-* Run a time-boxed research spike in subagents, and verify its premise by running it end to end.
-* Write the design, give it an adversarial design review from 3–4 lenses, verify every finding against the code, revise — then CHECK THE REVISION.
-* Implement against the reviewed spec, then run an adversarial code review whose findings are verified against the code — then VERIFY THE FIX PASS the same way, and check each further pass (Build A: 12 then 7 new defects; Build B: ~15 then 9, one medium found by all three checkers each time; Build C: 38, then a low-medium and a design change, then three lows).
-* A reviewer's "only an unsandboxed process could race this" must be checked against the sandbox profile (Build C: the build profile may write all of the temp dirs).
-* In the fix pass, add regression tests that fail without the fix, and mutation-check the rule-guarding ones with a script that reverts each fix and runs its test.
-* Real end-to-end tests find what reviews miss (Build B: a pty drive found the triple click before the review did; Build D: the live runs found the model writing its answer into the chat, and that a message typed mid-turn is queued, not folded).
-* Tests of a terminal UI read a rendered screen (a VT interpreter), never the raw byte stream: ratatui skips cells that already show the letter.
-* A checker that runs a fix against a real corpus finds what unit tests miss (the features track: the probe rule re-run over 294 C files — sqlite, oniguruma, tree-sitter — showed 31 ordinary functions lost; a folder with a space turned a whole check off). Each of the four fix passes' checks found real issues in the pass before it.
-* Hand off in DECISIONS.md, then commit and push to `main`.
-
-Every review so far has found real bugs. Vet every new crate before adding it. No bloat.

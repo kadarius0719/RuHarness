@@ -2,6 +2,83 @@
 
 Running log, newest last. Each entry: decision, rationale, alternatives rejected, revisit-when trigger.
 
+## Index
+
+Every entry below, oldest first, one line each: the date, the title as its heading spells it
+(search the title to jump to the entry), and what it holds. A new entry adds its line at the end.
+
+- 2026-09-17 — **M0 kickoff: research spike (§15)** — the first landscape check: zopfli archived (a stable target), tree-sitter, c2rust, the TRACTOR corpus.
+- 2026-09-17 — **M0 target: Zopfli, unit: katajainen.c** — zopfli pinned and vendored; `katajainen.c` as the first unit; the exact judge command.
+- 2026-09-17 — **M0 scope reductions (deliberate, to be lifted at M1+)** — what M0 left out on purpose (sandbox, the facts file, the workspace shape) and when to add it.
+- 2026-09-17 — **Dependencies added (§11.1 justifications)** — tree-sitter chosen over libclang for M0; no `clap` yet.
+- 2026-09-17 — **M0 complete; state at session end (§17 handoff)** — M0 done: one unit verified with zero human-written Rust; what the judge found.
+- 2026-09-17 — **M1 state-backend research spike (§14.1) — findings and decisions** — why the ledger is plain committed files: `facts.jsonl` not SQLite, `plan.toml` not `plan.yaml`.
+- 2026-09-17 — **M1 complete; verification-review findings; state at session end (§17 handoff)** — M1 done: the workspace crates, the ledger schemas frozen in SCHEMAS, zopfli's plan of 11 units.
+- 2026-09-17 — **M2 research spike (§15) — findings and decisions** — what tree-sitter can and cannot detect; how risk is scored; how the model's triage is hardened.
+- 2026-09-17 — **Risk score v1 normalization caps (normative for scoring stability)** — the fixed caps of risk score v1, summing to 100.
+- 2026-09-17 — **M2 complete; verification-review findings; state at session end (§17 handoff)** — M2 done: the detectors, the provider adapters (`anthropic`, `replay`, `external`), triage, `sync-runtime`.
+- 2026-09-19 — **M3 research spike (§15) and design decisions** — the second adapter is OpenAI-compatible Chat Completions; what the first live run taught.
+- 2026-09-19 — **M3 complete: the agnosticism proof, stated precisely; handoff (§17)** — M3 done: the second provider added with one new file; what that proves and what it does not.
+- 2026-09-23 — **M4 research spike (§15), design, and the adversarial design review** — the TRACTOR corpus pinned, the scorer, driver generation; the M4 design and its review.
+- 2026-09-23 — **M4 run protocol, incidents, and bugs the run found** — who answered the hand-offs (Sonnet drivers, Haiku translations), blindness audited, bugs the run found.
+- 2026-09-23 — **M4 code review (4 lenses) and fix pass** — M4's code review and fixes: a sandbox floor for scoring, the asm ban, slow drivers.
+- 2026-09-23 — **M4 state at session end (§17 handoff) — READ THIS FIRST (superseded; see the index)** — a mid-M4 hand-off: preliminary scores and three blind spots diagnosed (later entries close it).
+- 2026-09-23 — **M4 complete: final scores (recorded) and the regression suite demonstrated** — M4 done: the scores recorded in `scores.json`; the regression check demonstrated.
+- 2026-09-23 — **Post-M4: the stderr oracle hole, fixed and demonstrated end to end** — the judge now compares stderr as well as stdout; the prompt and an executor gap fixed.
+- 2026-09-23 — **Carry-forward closed: confinement setup failures are harness errors** — a sandbox that cannot be set up is a harness error, never evidence for a model.
+- 2026-09-23 — **Research spikes (§15) for the two remaining blind-spot classes** — the two remaining blind-spot classes: out-of-bounds C passing by luck, and the FFI boundary.
+- 2026-09-23 — **Unmarked-UB vectors: the sanitized-C scoring pass (design A, implemented)** — a vector the C fails under a sanitizer is excluded as undefined behaviour, not scored.
+- 2026-09-23 — **Session end (§17 handoff) — READ THIS FIRST (superseded; see the index)** — a session hand-off after the oracle hardening (later entries close it).
+- 2026-09-23 — **PROPOSAL (awaiting user decision): prompt edits vs recorded-trace replay** — a prompt edit orphans every recorded attempt; the options for replay put to the person.
+- 2026-09-23 — **DECIDED (user): evidence-first replay; the prompt edits it unblocked** — replay verifies recorded evidence first; the prompt edits that this unblocked.
+- 2026-09-23 — **Design B: research re-check, design, adversarial review; DECIDED (user): mechanical** — design B (the C ABI boundary check) researched, designed, reviewed; the person chose mechanical.
+- 2026-09-23 — **Design B implemented (mechanical, §B.R-2); gates green; calibration next** — design B built: the boundary runtime and its Rust half; every gate green.
+- 2026-09-23 — **Design B calibration (§B.R-10): `bench boundary` over the whole suite, zero tokens** — `bench boundary` over all 100 cases: every red a real one, none false.
+- 2026-09-23 — **Design B code review (4 lenses, 20 verified findings) and the fix pass** — design B's code review: 20 findings, all fixed with tests.
+- 2026-09-23 — **Design B calibration, re-run after the fix pass (zero tokens)** — the boundary calibration re-run after the fixes: vacuous passes now named as such.
+- 2026-09-23 — **`read_scalefactors` re-migrated on the boundary-aware oracle (the blind spot closed)** — `read_scalefactors` migrated again under the boundary check: green after three rounds.
+- 2026-09-24 — **read_scalefactors re-baselined: the blind spot is closed (hidden 16/17, blind spots 0)** — the hidden split re-baselined: 16 of 17, no blind spots left.
+- 2026-09-24 — **TUI track: §15 research spike (four time-boxed spikes, Sonnet subagents, verified against crates.io/RustSec/repos and this workspace)** — the cockpit's research: ratatui, side-by-side review, CLI hardening mechanisms, the MCP server.
+- 2026-09-24 — **CLI hardening: design and adversarial design review (15 confirmed, 0 refuted)** — the CLI hardening design reviewed: the writer lock, promote, cancellation, `--json` events.
+- 2026-09-24 — **CLI hardening IMPLEMENTED (writer lock, `promote`, cancellation, `--json` events)** — CLI hardening built: the writer lock, `harness promote`, cancellation, `--json` events.
+- 2026-09-24 — **harness-tui: design and adversarial design review (20 confirmed, 0 refuted)** — the review cockpit's design reviewed: steer and override, a hand edit never scored as the pipeline's.
+- 2026-09-24 — **review acts implemented (steer, override, provenance in core); harness-tui read model; session split** — steer, override and provenance built in harness-core; the cockpit's read model.
+- 2026-09-24 — **§R2 fix pass (steer/override/provenance), and its own review** — the step 1–2 review's fixes: provenance means authorship, steer fields bound to integrity.
+- 2026-09-24 — **harness-tui: the terminal front end (TUI-DESIGN §8 step 4)** — the cockpit's terminal front end built, reviewed and fixed twice.
+- 2026-09-24 — **harness-mcp: design and adversarial design review (20 confirmed, 1 refuted)** — harness-mcp's design reviewed: a chat-answered hand-off must never be recorded as blind.
+- 2026-09-24 — **Direction change (user): the cockpit becomes a user-friendly wrapper with chat inside** — the person's direction: the cockpit becomes a friendly wrapper (arrows, mouse, file tree, chat inside).
+- 2026-09-24 — **harness-mcp: the stdio MCP server (MCP-DESIGN, built, reviewed three times)** — harness-mcp built with zero new crates, reviewed three times; the `harness_answer` decision.
+- 2026-09-24 — **Reconciliation of the parallel sessions (harness-tui front end ∥ harness-mcp)** — two parallel sessions (cockpit front end and harness-mcp) checked against each other: nothing lost.
+- 2026-09-24 — **Cockpit wrapper: §15 spike (approachable TUIs; mouse and trees in ratatui)** — research for the wrapper: arrow/Enter/Esc keys, a hint bar, mouse and tree widgets in ratatui.
+- 2026-09-24 — **Cockpit wrapper: design, adversarial design review (46 → 13 → 1), design only** — the wrapper designed (a file tree, menus on Enter, a narrating activity panel) and reviewed.
+- 2026-09-25 — **Cockpit wrapper, Build A: built, reviewed, fix pass verified twice** — Build A, the keyboard-complete navigator: built, reviewed, fixed in three passes.
+- 2026-09-27 — **Cockpit wrapper, Build B (the mouse): built, reviewed, three fix passes** — Build B, the mouse: built, reviewed, fixed in three passes.
+- 2026-09-27 — **Chat pane: §15 spike (an embedded agent runtime; chat in ratatui)** — research for the chat: Claude Code headless spoken to directly; zero new crates for the pane.
+- 2026-09-27 — **Chat pane: the design (three reviews) and Build C (the requester label)** — the chat pane designed and reviewed three times; Build C, the requester label, built.
+- 2026-09-28 — **Chat pane, Build D (the pane): built, live-tested, reviewed, four fix passes (three checked)** — Build D, the chat pane itself: built, tested live, reviewed, fixed in four passes.
+- 2026-09-29 — **Feature-workflow view: §15 spike (what "a feature" is here); DECIDED (user): scenarios + verify** — what "a feature" is here: the person's scenarios checked on every verify (the call-path idea failed).
+- 2026-09-29 — **Feature-workflow view: built, reviewed, four fix passes (paused before the last check)** — the features track built, reviewed and fixed in four passes; paused before the last check.
+- 2026-09-30 — **C-vs-Rust performance baselines: §15 spike** — research for the speed baselines: measuring instructions, cycles and time on macOS.
+- 2026-09-30 — **Features map: PROPOSAL for review — let the compiler decide which functions the probe can watch** — proposal to let the compiler decide which functions the features probe can watch.
+- 2026-09-30 — **Features map, compiler-guided probe: the design, reviewed and checked twice; built from revision 3** — the compiler-guided probe designed, reviewed and checked twice; built from revision 3.
+- 2026-09-30 — **Compiler-guided probe: built (steps a–f), paused for its code review** — the compiler-guided probe built in six steps; paused for its code review.
+- 2026-10-01 — **Compiler-guided probe: code review closed after seven fix passes; performance design closed** — the probe's code review closed after seven fix passes; the speed design closed.
+- 2026-10-03 — **C-vs-Rust performance baselines: built, reviewed, fixed; merged to main** — the speed baselines built, reviewed, fixed and merged; why speed runs on macOS only.
+- 2026-10-07 — **Project map: the spike on real downloads, and the person's answers to its open questions** — the map's spike on lz4 and liblzg: the build's flags decide the program; the person's answers.
+- 2026-10-07 — **Speed work, fix pass 2: the twelve leftovers fixed; the liblzg walkthrough run** — speed fix pass 2: twelve leftovers fixed; the liblzg walkthrough run.
+- 2026-10-07 — **Speed work, fix passes 3 and 4: the check round's findings fixed, checked, fixed again** — speed fix passes 3 to 5, each checked; what was decided in them.
+- 2026-10-08 — **Project map: design revision 1, and the person's decisions** — the map design's revisions 1 to 2.1; the person's rule "simplicity means usability".
+- 2026-10-08 — **Project map, step (a) built: the walk, adoption, objsyms, the sandbox and work folder, the first `project map`** — map step (a): the walk, adoption of a ledger made elsewhere, objsyms, the first `project map`.
+- 2026-10-08 — **The map's step (c), parts 1 to 3, built and merged** — map step (c): mapped tools under `migration/tools/<id>/`, the file-list target, `--tool`.
+- 2026-10-08 — **The map's step (b) built; the review of steps (a) and (c) and its fix passes** — map step (b): configurations, programs, closures, link checks; the review of (a) and (c).
+- 2026-10-08 — **The check round over step (b) and the fix passes; fix passes D, E and F** — the check round over step (b) and fix passes D, E and F.
+- 2026-10-08 — **The map's steps (d) and (e) built; the check round over them** — map steps (d) `project ask` and (e) `project accept` built; zopfli accepted byte for byte.
+- 2026-10-08 — **Fix passes G and H, the cockpit's narrator, the docs of step (f): the map is complete** — accept recomputes everything from a fresh map; README, tutorial and guide quote the real screens.
+- 2026-10-08 — **The wording pass, and how close the program is to a beta** — eight sentences reworded to say what is true; the "about two-thirds of a beta" answer.
+- 2026-10-09 — **The testing guide rewritten for a non-technical reader** — one shape for every part, every step says what you should see; `devtools/guide/gates.py`.
+- 2026-10-09 — **The README and the tutorial rewritten for a non-technical reader** — which document owns what (the README's Quick start, since moved); the same words everywhere.
+- 2026-10-15 — **The documentation reshaped for a person in a hurry** — FIRST-HOUR.md, seven topic pages and a four-door README; the `harness answer` idea.
+
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
 Time-boxed landscape check (run in a cheap-tier subagent, sources verified live):
@@ -574,7 +651,7 @@ Carry-forwards from review (MINOR): confinement setup failures surface as run fa
 all-equivalent n/a is suite-wide, not per file; `interface` lines reach the trusted
 `[ABI CONTRACT]` region un-fenced (length-capped, printable) — injection hardening.
 
-## 2026-09-23 — M4 state at session end (§17 handoff) — READ THIS FIRST
+## 2026-09-23 — M4 state at session end (§17 handoff) — READ THIS FIRST (superseded; see the index)
 
 **Branch:** `claude/rust-migration-harness-02116f` (worktree), all work committed through
 93cd89b. NOT yet merged to `main` / pushed — do that after the final score lands.
@@ -800,7 +877,7 @@ released-hidden strict pass **15/17** (88.2%; scorable 18 → 17: decorrelate is
 spots **1** (read_scalefactors), vectors 83/87. Public unchanged: 70/77, 0 blind spots,
 908/950, 0 excused. The pass ran on exactly the two cases where it could change a class.
 
-## 2026-09-23 — Session end (§17 handoff) — READ THIS FIRST
+## 2026-09-23 — Session end (§17 handoff) — READ THIS FIRST (superseded; see the index)
 
 **State.** All work on `main` (fast-forwarded from branch
 `claude/rust-migration-harness-7d1c42`) and pushed at each milestone. M4 closed
@@ -2474,7 +2551,7 @@ plus every header on the include path, or is `facts-stale` exactly where a scan 
 the facts; a scenario's cwd is `run/` inside its temp dir; human CLI lines show control
 characters as `?`.
 
-**Open when paused (docs/FEATURES-PROGRESS.md "Open"):** two low items the check of pass 3
+**Open when paused (the "Open" list of the features track's progress file, removed 2026-10-18; git keeps it):** two low items the check of pass 3
 found (a top-level `.c` linked out of `source_dir`; a FIFO named `x.c`), a check of pass 4,
 `bench check --replay` (the CLI changed), the live chat tests (the `claude` sign-in had
 expired; every failure was that, said in words by the chat).
@@ -2625,7 +2702,8 @@ the runtime's merge across images and its attach byte; zopfli re-mapped with the
 per scenario and none unwatched. Found while building: the one-byte note shows no inlining window
 on clang 21 (the C99-inline link case could not be provoked); the map loader would have refused
 the new "setup did not run" reason (fixed, tested). Open: the §8 premise re-run and the code
-review (both running at the pause), fix passes, mutation checks — docs/FEATURES-PROGRESS.md.
+review (both running at the pause), fix passes, mutation checks — then tracked in the features
+track's progress file (removed 2026-10-18; git keeps it).
 
 ## 2026-10-01 — Compiler-guided probe: code review closed after seven fix passes; performance design closed
 
@@ -2719,7 +2797,7 @@ and `PERF_LAUNCHER` `perf-launcher-2` (design note 31) — because rows measured
 launcher, or judged short by either leg, must not read current. Measuring again brings a row
 back.
 
-**Deferred to the week of 2026-10-07** (docs/NEXT-WEEK-PLAN.md): the full re-check of the other
+**Deferred to the week of 2026-10-07** (that week's plan file, removed 2026-10-18 with every step done; git keeps it): the full re-check of the other
 73 findings, fix pass 2's remaining small items, the mutation checks, and the liblzg run of the
 testing guide's Part 11 (not run here: liblzg is not on this machine). The person chose to stop
 at 75 % of the weekly limit and merge once the security fix and the high findings were checked.
@@ -2755,7 +2833,7 @@ express (then: several configurations from `compile_commands.json`).
 
 ## 2026-10-07 — Speed work, fix pass 2: the twelve leftovers fixed; the liblzg walkthrough run
 
-**Fix pass 2** (docs/NEXT-WEEK-PLAN.md §2, items 2–13; item 1 was done 2026-10-03): five agents, one
+**Fix pass 2** (the week's plan, §2, items 2–13; item 1 was done 2026-10-03): five agents, one
 area each, in their own worktrees (workflow `wf_c913c6d1-af7`), every fix with a test each agent
 showed fails when the fix is undone; merged as five merge commits (7abd11d … c92f6ec), full
 workspace 1 251 tests green, fmt and clippy clean. In plain words: `perf show` without facts no
@@ -3179,6 +3257,31 @@ features before its first unit moves. Open, in words, in docs/NEXT-SESSION.md: f
 items, the ask prompt's "in this order", `accept` link-checking every program again, the map
 profile's read allow-list, and the leftovers from the earlier passes.
 
+## 2026-10-08 — The wording pass, and how close the program is to a beta
+
+**The wording pass** (c3a85d2, late on 2026-10-08, fast-forwarded to main) closed the four wording
+items the docs reconciliation had found and four small leftovers the builders had named, each
+with the tests and docs that pin the words. Eight sentences now say what is true and what to do
+next: `config.toml`'s refusal names `-c`, `-o`, `-MD` and `-MF` as flags the harness adds itself,
+to remove, not as flags it never passes; `ask` says "that choice linked when the map was made", so
+it agrees with "nothing was built or linked" on the next line; an accepted tool's what-changed line
+names the tool once and gives the record's own words, without saying "changed since it was
+accepted" twice; an answer file that is JSON but not the envelope says what it holds (a JSON array,
+an object without a "text" field), and serde's words stay only for a file that is not JSON or an
+envelope with a field missing; `migration/.gitignore`'s first line no longer says `project map`
+wrote it; the workloads blocker on the command line points at the cockpit's Edit button, and the
+cockpit keeps its own words; a mapped tool's perf log is named by the tool's own build path; and
+`--adopt` on a folder whose `config.toml` came with the project says it states that file as yours,
+not "nothing to adopt". The small items still open after it are listed in docs/NEXT-SESSION.md.
+
+**How close to a usable beta?** The person asked this on 2026-10-08. The session's answer: the code
+is about two-thirds of one. The reasons: every step of the map is built, reviewed in three rounds
+and fixed, and the zopfli tool accepted from the map is byte-identical to the hand-written target;
+but the only evidence that a newcomer can use the program is one cold-start walk by an agent
+(liblzg and zopfli, by the docs alone), not a person's own run. By the person's own rule (prove
+before planning), the next step is proof, not more building: the person's own cold-start run
+decides what comes next.
+
 ## 2026-10-09 — The testing guide rewritten for a non-technical reader
 
 The person asked whether the testing guide is so easy a non-technical person can understand it,
@@ -3233,4 +3336,9 @@ unchanged as the reference. Every box was run on fresh copies; a reader in a hur
 page with every box matching, and their stumbles (an editor step, the folder after a break, two
 long answer lines) were fixed with `sed`, a `cd` at the start of every later box, and the lines
 split. The lesson, kept in memory: write the fast path first; never make the reference the first
-thing a person meets.
+thing a person meets. This replaces 2026-10-09's rule that the README owns Quick start: the README
+is now four doors, and docs/FIRST-HOUR.md owns the first run.
+
+**A product idea from the reader's stumble, not built:** a `harness answer <unit> <file>` command
+that wraps a plain file into the hand-off's answer envelope, so FIRST-HOUR's two four-line answer
+boxes become one short line each. To decide with the person.

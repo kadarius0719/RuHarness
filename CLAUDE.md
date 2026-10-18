@@ -2,9 +2,12 @@
 
 1. Read `docs/AGENT-BRIEFING.md` whole: the mission, the architecture, the engineering standards
    and the rules. It is the brief every session works under.
-2. Then `docs/NEXT-SESSION.md`: where the last session stopped and what to do next (it points at
-   the current plan, today `docs/NEXT-WEEK-PLAN.md`, and `docs/FEATURES-PROGRESS.md` "NOW").
-3. `DECISIONS.md`'s last entries hold what was decided and why.
+2. Then `docs/NEXT-SESSION.md`, the kickoff: where the last session stopped and the work, in
+   order. It is the current plan; no other file holds one.
+3. `DECISIONS.md`'s last entries hold what was decided and why (its index at the top finds older
+   ones).
+
+`docs/README.md` says what every document is for, and whether it is current or history.
 
 Rules that are never skipped, whatever the task:
 - No cloud API keys here: model calls go through the `external` hand-off. Answer hand-offs with
@@ -20,5 +23,7 @@ Rules that are never skipped, whatever the task:
   `{model: 'opus'}` (the default inherits the main session's model), hand-off answers with
   `--model claude-opus-5-5`. Ask the person before giving any handed-off work Fable.
 - Effort: a session cannot change its own; it stops and asks the person, in one plain line, at the
-  switch points in docs/NEXT-SESSION.md (medium by default, high for design judgement). Handed-off
-  agents get their effort set on each call (medium for mechanical work, high for checkers/judges).
+  switch points: medium by default; high when the work turns to design judgement (a design, a
+  review's triage, a revision), and medium again when building resumes. The kickoff names a switch
+  point when it has one. Handed-off agents get their effort set on each call (medium for
+  mechanical work, high for checkers/judges).
