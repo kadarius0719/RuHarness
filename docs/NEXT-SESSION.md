@@ -51,6 +51,14 @@ screen (the Next step label and the recommended item), no dim, no dark grey, no 
 yellows became 18 attention, 15 bold, 3 muted, 4 plain, 1 accent. Code views lost syntax colours
 (keywords bold, comments muted). The headless driver tags the accent as `A`.
 
+## In progress (2026-10-19): sections, status and notices get their own hues; the hand-off pause
+
+The person's screenshot (a green-on-black terminal) showed nearly all text green: the terminal
+theme's plain text is the terminal's foreground. One Opus pass adds roles with their own hue in
+every theme — section (pane titles, headings), status (the Ready/Last line), notice, label — and
+fixes a bug the screenshot showed: a hand-off pause (`project ask` exit 1 with "awaiting
+response") was labelled "failed"; it must read "waiting for your answer: <file> — …".
+
 ## The work, in order
 
 1. **The person's own cold-start run.** docs/FIRST-HOUR.md as written (liblzg), then lz4 through
