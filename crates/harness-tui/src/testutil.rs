@@ -14,7 +14,7 @@ pub fn repo() -> PathBuf {
 pub const READ_SCALEFACTORS: &str =
     "targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib";
 
-fn copy(src: &Path, dst: &Path) {
+pub(crate) fn copy(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {
         let entry = entry.unwrap();

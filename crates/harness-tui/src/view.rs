@@ -665,14 +665,23 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     let room = width.saturating_sub(head);
     let word_w = width_of(&display::line(&word));
     let name_w = width_of(&display::line(&name));
-    // The word shows at the right edge when it fits; the selected row
-    // always shows it — cut first, the name keeping at least half the row
-    // (review USE-8).
-    // A state with no glyph (the fallback) shows its word always: it is its
-    // only sign (review USE-6).
+    // The word shows at the right edge, whole: the name is what gives way
+    // (cut with "…", keeping at least MIN_NAME columns) — the state word is
+    // never the one shortened (the newcomer's ten minutes, finding 13). Only
+    // when even that does not fit is the word dropped, except on the
+    // selected row (review USE-8), and for a state with no glyph (the
+    // fallback), whose word is its only sign (review USE-6).
+    // A feature's name is what tells it apart, and its mark says its state
+    // (the View says it in words): its name keeps at least half the row.
+    let min_name = if matches!(sel, Selection::Feature(_)) {
+        room / 2
+    } else {
+        MIN_NAME
+    };
+    const MIN_NAME: usize = 8;
     let show_word = !word.is_empty()
         && !internal
-        && (name_w + 2 + word_w <= room
+        && (name_w.min(min_name) + 1 + word_w <= room
             || selected
             || (glyph.is_empty() && matches!(sel, Selection::Unit(_) | Selection::File(_))));
     // A file outside the tool keeps its name whole: its mark says the
@@ -683,8 +692,21 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     let (name_text, pad, word_text) = if show_word {
         let name_keep = if name_first {
             name_w.min(room)
+        } else if selected
+            && matches!(
+                sel,
+                Selection::Unit(_)
+                    | Selection::File(_)
+                    | Selection::Function(..)
+                    | Selection::Crate(_)
+                    | Selection::Attempt(..)
+            )
+        {
+            // The selected row: the View's title names it whole, so its
+            // name gives way further (to 4 columns) before its word does.
+            name_w.min(min_name.min(room.saturating_sub(word_w + 1)).max(4))
         } else {
-            name_w.min(room / 2)
+            name_w.min(min_name)
         };
         let word_room = room.saturating_sub(name_keep + 1).max(1);
         let word_text = ellipsis(&word, word_room.min(word_w));
@@ -886,13 +908,30 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             Span::styled(format!("{} ", unit.unit.id), bold()),
             Span::raw(s.word()),
         ];
+        // One state per unit: needing attention leads, with its cause; the
+        // judge's own words sit under it (the newcomer's ten minutes,
+        // finding 7).
+        if let UnitState::Attention(cause) = &s {
+            spans.push(Span::raw(format!(": {}", cause.lead())));
+        }
         if let Some(h) = &unit.report.write_in_flight {
             spans.push(Span::styled(
                 format!(" · being written by `{}`", h.command),
                 Style::default().fg(Color::Yellow),
             ));
         }
-        lines.push(Line::from(clipped(spans, width)));
+        // Wrapped, not cut: the cause is the point of the line.
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        if width_of(&text) <= width {
+            lines.push(Line::from(spans));
+        } else {
+            let style = if matches!(s, UnitState::Attention(_)) {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+            lines.extend(wrapped(&text, width, style));
+        }
     }
     // The Next step: the unit's (or the attempt's) one action, the cause
     // first when it needs attention.
@@ -923,6 +962,16 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 text.push_str(&format!(" · {}", tags.join(" ")));
             }
             lines.extend(wrapped(&text, width, Style::default()));
+            // The tree's words under a unit, said here once (finding 17).
+            lines.extend(wrapped(
+                &format!(
+                    "An attempt is one try at this unit's Rust; {}: {}.",
+                    r.outcome,
+                    outcome_gloss(&r.outcome)
+                ),
+                width,
+                dim(),
+            ));
             if let Some(note) = &r.steer_note {
                 lines.extend(wrapped(&format!("Steer note: {note}"), width, dim()));
             }
@@ -948,24 +997,45 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 &unit.report.verdict.green,
                 unit.report.verdict.stale.is_empty(),
             ) {
-                (Some(true), true) => "verdict green, fresh".to_string(),
-                (Some(false), true) => "verdict RED".to_string(),
+                (Some(true), true) => "green, fresh".to_string(),
+                (Some(false), true) => "red".to_string(),
                 (Some(g), false) => format!(
-                    "verdict {} but out of date ({})",
+                    "{} but out of date ({})",
                     if *g { "green" } else { "red" },
                     unit.report.verdict.stale.join(", ")
                 ),
-                (None, _) => "no verdict yet".to_string(),
+                (None, _) => "none yet".to_string(),
             };
-            let mut origin = if unit.crate_dir.is_some() {
-                format!("Crate {} · {verdict}", provenance_words(unit))
-            } else {
-                "No Rust yet".to_string()
+            // A unit that needs attention has one state, said above: the
+            // judge's words sit under it as its last verdict, never beside
+            // it as a second state.
+            let attention = matches!(unit_state(app, unit), Some(UnitState::Attention(_)));
+            let mut origin = match (&unit.crate_dir, attention) {
+                (Some(_), true) => format!(
+                    "The judge's last verdict: {verdict} · crate {}",
+                    provenance_words(unit)
+                ),
+                (Some(_), false) if verdict == "none yet" => {
+                    format!("Crate {} · no verdict yet", provenance_words(unit))
+                }
+                (Some(_), false) => format!("Crate {} · verdict {verdict}", provenance_words(unit)),
+                (None, true) if verdict != "none yet" => {
+                    format!("No Rust yet · the judge's last verdict: {verdict}")
+                }
+                (None, _) => "No Rust yet".to_string(),
             };
             if let Some(marker) = coverage_marker(app, unit) {
                 origin.push_str(&format!(" · {marker}"));
             }
             lines.extend(wrapped(&origin, width, dim()));
+            if matches!(app.selection, Selection::Crate(_)) {
+                lines.extend(wrapped(
+                    "The crate is this unit's Rust in use now: what an Accept (or a hand edit) \
+                     put there, built in place of its C.",
+                    width,
+                    dim(),
+                ));
+            }
         }
     }
     if let Some(line) = unit_features_line(app, &unit.unit.id) {
@@ -994,7 +1064,28 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
 }
 
 /// The heading a unit's code sits under in its View.
-pub const CODE_FOLDED: &str = "▸ C source (→ to open)";
+/// An attempt's outcome word, in plain words (the tree shows the word).
+fn outcome_gloss(outcome: &str) -> &'static str {
+    match outcome {
+        "green" => "it passed every check",
+        "red" => "it failed a check",
+        "truncated" => "the model's answer was cut off before it was whole",
+        "format" => "the model's answer was not in the shape asked for",
+        "blocked" => "the model said it could not write it",
+        "in-progress" => "it has not finished",
+        "budget" => "it ran out of its budget",
+        "thrash" => "it stopped repeating the same fix",
+        _ => "how it ended",
+    }
+}
+
+/// While Files has the keys: how to reach it (→ in the tree stays the
+/// tree's own move — it opens the unit's row — so the heading says the way
+/// that works from there; the newcomer's ten minutes, finding 3).
+pub const CODE_FOLDED: &str = "▸ C source (Tab to the View, then Enter)";
+
+/// The same heading while the View has the keys: Enter (or →) opens it.
+pub const CODE_FOLDED_IN_VIEW: &str = "▸ C source (Enter to open)";
 
 /// A unit's View, in words first (pass 2 of the 2026-10-18 critique): its
 /// state and Next step; what it is — its exported functions and their
@@ -1077,7 +1168,7 @@ fn attempts_line(unit: &UnitView) -> String {
     let red = n - green - running;
     let mut parts = Vec::new();
     if green > 0 {
-        parts.push(format!("{green} GREEN"));
+        parts.push(format!("{green} green"));
     }
     if red > 0 {
         parts.push(format!("{red} red"));
@@ -1657,12 +1748,15 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
         }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
+        let changed = picked.iter().any(|f| f.state != FileState::New);
         for f in picked {
             let (glyph, _) = files::file_label(&app.files, &f.state);
+            // Each file's own word; what to do is said once, under the list
+            // (finding 15 of the newcomer's ten minutes).
             let word = match &f.state {
-                FileState::Missing => "missing — Scan the project again",
-                FileState::Changed => "changed — Scan the project again",
-                _ => "Scan the project",
+                FileState::Missing => " — missing",
+                FileState::Changed => " — changed",
+                _ => "",
             };
             links.push((lines.len(), Selection::File(f.path.clone())));
             lines.push(Line::from(clipped(
@@ -1670,13 +1764,20 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
                     Span::raw("  "),
                     Span::styled(format!("{glyph} "), glyph_style(glyph)),
                     Span::raw(f.path.clone()),
+                    Span::styled(word.to_string(), dim()),
                 ],
                 width,
             )));
-            for row in word_wrap(word, width.saturating_sub(4).max(8)) {
-                lines.push(Line::from(format!("    {row}")));
-            }
         }
+        lines.extend(wrapped(
+            if changed {
+                "Scan the project again to read them."
+            } else {
+                "Scan the project to read them."
+            },
+            width,
+            Style::default(),
+        ));
     }
     lines
 }
@@ -1842,7 +1943,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             lines.extend(wrapped(
                 "Speed compares the C against the Rust in use: the program runs your \
                  workloads — inputs you choose — first as the C, then with each unit's \
-                 Rust, many times each, and perf says which is faster and by how much.",
+                 Rust, many times each, and the harness says which is faster and by how much.",
                 width,
                 Style::default(),
             ));
@@ -1864,7 +1965,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
                 Style::default().fg(Color::Yellow),
             ));
             lines.extend(wrapped(
-                "Until it is fixed, perf cannot measure — verify and migrations still work.",
+                "Until it is fixed, the harness cannot measure speed — verify and migrations still work.",
                 width,
                 dim(),
             ));
@@ -1882,7 +1983,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     }
     if model.measuring {
         lines.extend(wrapped(
-            "A perf run is measuring now — rows appear as each finishes.",
+            "The harness is measuring speed now — rows appear as each finishes.",
             width,
             Style::default().fg(Color::Yellow),
         ));
@@ -2860,7 +2961,14 @@ fn draw_unit(frame: &mut Frame, app: &mut App, area: Rect, unit: &UnitView) {
     let heading_row = lines.len();
     let open = app.code_open;
     let mut heading = Line::from(Span::styled(
-        clip(if open { "▾ C source" } else { CODE_FOLDED }, width),
+        clip(
+            match (open, app.focus) {
+                (true, _) => "▾ C source",
+                (false, Focus::View) => CODE_FOLDED_IN_VIEW,
+                (false, _) => CODE_FOLDED,
+            },
+            width,
+        ),
         bold(),
     ));
     // Folded, it is the View's one row to act on: Enter there opens it.
@@ -2957,7 +3065,15 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
             let text = match (app.chat_waits_why(app.now), &app.last) {
                 (Some(why), _) => why.to_string(),
                 (None, Some(last)) => format!("Ready. Last: {last}"),
-                (None, None) if app.run.is_none() => READY_FIRST.to_string(),
+                // The how-to only where it is true: the tree has the keys
+                // (not a dialog, a menu or the chat).
+                (None, None)
+                    if app.run.is_none()
+                        && app.focus == Focus::Files
+                        && matches!(app.mode, Mode::Normal) =>
+                {
+                    READY_FIRST.to_string()
+                }
                 (None, None) => "Ready.".to_string(),
             };
             (text, Style::default())
@@ -3406,7 +3522,7 @@ const HELP_SPEED_WORDS: &[(&str, &str)] = &[
     ("about as fast", "within 2 % of the C, either way"),
     (
         "slower 6.2 % (4.1–8.3 %)",
-        "the best guess, and the range it lies in (perf is at least 95 % sure of it)",
+        "the best guess, and the range it lies in (the harness is at least 95 % sure of it)",
     ),
     (
         "probably slower",
@@ -4574,8 +4690,9 @@ mod tests {
             !narrow.contains(" Files ") && narrow.contains("u-lib"),
             "{narrow}"
         );
-        // Activity stays at every width.
-        assert!(narrow.contains("Ready —"));
+        // Activity stays at every width (the View has the keys: "Ready.",
+        // never the tree's how-to).
+        assert!(narrow.contains(" Ready.") && !narrow.contains("Ready —"));
     }
 
     /// Golden 3: a tree showing every glyph, each with its word.
@@ -5390,7 +5507,9 @@ mod tests {
         // The unit's row, left of the menu and of Help.
         let unit = (3, spot(&app, &Hit::Row(Selection::Unit("u-lib".into()))).1);
         for open in [
-            |a: &mut App| a.open_menu(),
+            |a: &mut App| {
+                a.open_menu();
+            },
             |a: &mut App| {
                 key(a, '?');
             },
@@ -6228,6 +6347,109 @@ mod tests {
     /// features run it, its attempts — and only then its code, under a
     /// folded heading that → or Enter opens.
     #[test]
+    fn a_unit_that_needs_attention_has_one_state_and_the_tree_words_are_glossed() {
+        // A verdict that came with the folder: adopted after it was made.
+        harness_core::adopt::testing::adoption_file();
+        let tmp = crate::testutil::TmpDir::new("one-state");
+        let target = tmp.0.join("case");
+        crate::testutil::copy(
+            &crate::testutil::repo().join(crate::testutil::READ_SCALEFACTORS),
+            &target,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        harness_core::adopt::adopt(&target).unwrap();
+        let target = target.canonicalize().unwrap();
+        let mut app = crate::app::tests::app_of_path(&target);
+        let id = app.snapshot.units[0].unit.id.clone();
+        app.select(Selection::Unit(id.clone()));
+        let screen = text(&render(&mut app, 160, 40));
+        // One state, with its cause, first.
+        assert!(
+            screen.contains(&format!(
+                "⚠ {id} needs attention: its verdict was made on another computer, not here yet"
+            )),
+            "{screen}"
+        );
+        // The judge's words under it, as its last verdict — never beside
+        // it as a second state.
+        assert!(
+            screen.contains("The judge's last verdict: green, fresh · crate "),
+            "{screen}"
+        );
+        assert!(!screen.contains("· verdict green"), "{screen}");
+        // One casing for the attempts' outcomes.
+        assert!(!screen.contains("GREEN,"), "{screen}");
+        // The crate and an attempt say what their tree words mean.
+        app.select(Selection::Crate(id.clone()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("The crate is this unit's Rust in use now"),
+            "{screen}"
+        );
+        let attempt = app.snapshot.units[0].attempts[0].record.clone();
+        app.select(Selection::Attempt(id.clone(), attempt.id.clone()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains(&format!(
+                "An attempt is one try at this unit's Rust; {}: {}.",
+                attempt.outcome,
+                outcome_gloss(&attempt.outcome)
+            )),
+            "{screen}"
+        );
+        assert_eq!(
+            outcome_gloss("truncated"),
+            "the model's answer was cut off before it was whole"
+        );
+    }
+
+    /// Activity's how-to line is said only while the tree has the keys:
+    /// "Ready." under a menu, a dialog or with the View focused.
+    #[test]
+    fn the_ready_line_says_the_trees_keys_only_in_the_tree() {
+        let mut app = crate::app::tests::app("ready-line");
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(row_with(&screen, "Ready").starts_with(&format!(" {READY_FIRST}")));
+        app.open_menu();
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(
+            row_with(&screen, "Ready").starts_with(" Ready."),
+            "{screen}"
+        );
+        app.mode = Mode::Normal;
+        crate::app::tests::code(&mut app, KeyCode::Tab);
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(
+            row_with(&screen, "Ready").starts_with(" Ready."),
+            "{screen}"
+        );
+    }
+
+    /// New files are listed with their own words; what to do is said once,
+    /// under the list (finding 15 of the newcomer's ten minutes).
+    #[test]
+    fn the_scan_is_named_once_under_the_new_files() {
+        let mut app = crate::app::tests::app("scan-once");
+        for n in 0..3 {
+            std::fs::write(
+                app.config.target.join(format!("test_case/src/new{n}.c")),
+                "int f(void) { return 0; }\n",
+            )
+            .unwrap();
+        }
+        assert!(app.reload(true));
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains("New (not scanned yet):"), "{screen}");
+        // Once in the Next step, once under the list — never per file.
+        assert_eq!(screen.matches("Scan the project").count(), 2, "{screen}");
+        assert!(
+            screen.contains("Scan the project to read them."),
+            "{screen}"
+        );
+    }
+
+    #[test]
     fn a_units_view_leads_with_its_summary_and_folds_its_code() {
         let mut app = app_of("targets/zopfli", "unitsum");
         app.select(Selection::Unit("u-cache".into()));
@@ -6265,8 +6487,12 @@ mod tests {
             "folded: {screen}"
         );
         // Enter in the View opens it (the heading is its one row to act on);
-        // Files' → into the View does too.
-        app.focus = Focus::View;
+        // Files' → into the View does too. The heading says the way that
+        // works from where the keys are: Tab, then Enter, as it promises.
+        crate::app::tests::code(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::View);
+        let screen = text(&render(&mut app, 80, 30));
+        assert!(screen.contains(CODE_FOLDED_IN_VIEW), "{screen}");
         assert!(hints(&app).contains(&("Enter", "open the code")));
         crate::app::tests::code(&mut app, KeyCode::Enter);
         assert!(app.code_open && matches!(app.mode, Mode::Normal));
@@ -7465,7 +7691,10 @@ mod tests {
         // records no attempt: commit, edit, verify).
         app.select(Selection::Unit("u001-katajainen".into()));
         let screen = text(&render(&mut app, 200, 50));
-        assert!(screen.contains("perf times the Rust in use."), "{screen}");
+        assert!(
+            screen.contains("The harness times the Rust in use."),
+            "{screen}"
+        );
         assert!(
             screen.contains(
                 "Next step: Its Rust is slower than the C — if speed matters here, change it as \
@@ -7543,7 +7772,10 @@ mod tests {
             ),
             "{screen}"
         );
-        assert!(!screen.contains("perf times the Rust in use"), "{screen}");
+        assert!(
+            !screen.contains("The harness times the Rust in use"),
+            "{screen}"
+        );
         let items = app.menu_items();
         let compare = items
             .iter()
@@ -8287,7 +8519,10 @@ mod tests {
         assert_eq!(big(&app).out_of_date_tokens, ["measuring"]);
         app.select(Selection::Speed);
         let screen = text(&render(&mut app, 80, 40));
-        assert!(screen.contains("A perf run is measuring now"), "{screen}");
+        assert!(
+            screen.contains("The harness is measuring speed now"),
+            "{screen}"
+        );
         // Another writer is no perf run: the input is hashed.
         std::fs::write(&lock, holder("verify u001-katajainen")).unwrap();
         let app = crate::app::tests::app_of_path(&root);

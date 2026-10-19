@@ -1,5 +1,5 @@
 ┌ Project ─────────────────────────────────────┐┌ liblzg · project, not mapped yet ────────────────────────────────────┐
-│  Map the project                             ││Next step: No map yet — press Enter and choose Map the project        │
+│  Map the project                             ││Next step: No map yet — press Enter to map the project                │
 │                                              ││                                                                      │
 │                                              ││liblzg is a C project with no harness.toml: nothing is mapped yet.    │
 │                                              ││                                                                      │

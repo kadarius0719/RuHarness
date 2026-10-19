@@ -1,14 +1,14 @@
 ┌ Files ───────────────┐┌ harness-tui-heads00-0000000000 · 0 of 13 C files in R┐
-│▾ harness-t… ✓0/13 (+…││Next step: 3 units have no Rust yet — migrate the     │
+│▾ harness… ✓0/13 (+1 …││Next step: 3 units have no Rust yet — migrate the     │
 │  ▾ Units (11)        ││first, u-cache: press Enter and choose Migrate — ask  │
 │    ▸ ✓? u001-katajai…││in chat                                               │
 │    ▸ ◇ u-cache       ││                                                      │
-│    ▸ ◇ u-hash        ││26 files scanned                                      │
-│    ▸ ◇ u-lz77        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
-│    ▸ ◇ u-tree        ││planned                                               │
+│    ▸ ◇ u-hash planned││26 files scanned                                      │
+│    ▸ ◇ u-lz77 planned││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ ◇ u-tree planned││planned                                               │
 │    ▸ ◇ u-blocksplitt…││                                                      │
 │    ▸ ◇ u-gzip_contai…││Features: 7 — 5 hold so far, 2 still all C            │
-│    ▸ ◇ u-util        ││                                                      │
+│    ▸ ◇ u-util planned││                                                      │
 │    ▸ ◇ u-zlib_contai…││                                                      │
 │    ▸ ◇ u-zopfli_lib  ││                                                      │
 │    ▸ ◇ u-zopfli_bin  ││                                                      │
@@ -21,7 +21,7 @@
 │      ◌ Show the help ││                                                      │
 │      ◌ Report a miss…││                                                      │
 │    Speed — not set up││                                                      │
-│  ▸ src/              ││                                                      │
+│  ▸ src/ ✓0/13 (+1 ✓?)││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │
 └──────────────────────┘└──────────────────────────────────────────────────────┘

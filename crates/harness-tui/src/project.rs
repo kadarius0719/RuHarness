@@ -26,7 +26,6 @@
 //! string shown goes through [`safe_line`].
 
 use harness_core::config;
-use harness_core::runtime_view::shell_quote;
 use harness_core::text::safe_line;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -43,6 +42,13 @@ const MAX_REPLY_BYTES: u64 = 16 << 20;
 const ASK_BATCH: usize = 10;
 /// The reasons a set's advice may give (harness-llm's `SET_REASONS`).
 const SET_REASONS: &[&str] = &["platform", "alternative-implementation", "cannot-tell"];
+/// The kinds a model may give a program (harness-llm's `PROGRAM_KINDS`).
+const PROGRAM_KINDS: &[&str] = &["tool", "test", "example", "benchmark", "other"];
+/// The map's guesses of a program's kind, from its folder.
+const KIND_GUESSES: &[&str] = &["tool", "test", "example", "benchmark"];
+/// A model's label name and purpose, at most (harness-llm's limits).
+const LABEL_NAME_MAX: usize = 40;
+const LABEL_LINE_MAX: usize = 200;
 /// The longest run name the cockpit passes to `--run-name`.
 pub const MAX_RUN_NAME: usize = 64;
 
@@ -132,9 +138,28 @@ pub struct Offered {
     pub state: State,
     /// Its held sets (a `main` program's), in index order.
     pub held: Vec<HeldSet>,
+    /// Its index in the map (`p1…`, a `main` program's; empty otherwise):
+    /// a model's label is keyed by it.
+    pub index: String,
 }
 
 impl Offered {
+    /// What the map knows it is, in words: "a tool, by its folder" (the
+    /// map's guess from where its file sits), "a library", "a fuzzer".
+    pub fn what(&self) -> String {
+        match self.kind.as_str() {
+            "library" => "a library".into(),
+            "fuzz" => "a fuzzer".into(),
+            "driver" => "a fuzzer driver".into(),
+            _ if self.kind_guess.is_empty() => "a program".into(),
+            _ => format!(
+                "{} {}, by its folder",
+                article(&self.kind_guess),
+                self.kind_guess
+            ),
+        }
+    }
+
     /// A `main` program or a library: what `accept` takes.
     pub fn acceptable(&self) -> bool {
         self.kind == "main" || self.kind == "library"
@@ -160,6 +185,42 @@ impl Offered {
     }
 }
 
+/// "a" or "an" before `word`.
+fn article(word: &str) -> &'static str {
+    if word.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    }
+}
+
+/// A model's label of one program, from the reply file (`harness project
+/// ask` asks what each program is).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Label {
+    /// One of `tool`, `test`, `example`, `benchmark`, `other`.
+    pub kind: String,
+    /// Its name, one short line.
+    pub name: String,
+    /// What it does, one line.
+    pub purpose: String,
+    /// The model that gave it.
+    pub model: String,
+}
+
+impl Label {
+    /// The label in words, as the model's: "“LZG compressor”, a tool (the
+    /// model's label)".
+    pub fn words(&self) -> String {
+        format!(
+            "“{}”, {} {} (the model's label)",
+            safe_line(&self.name),
+            article(&self.kind),
+            self.kind
+        )
+    }
+}
+
 /// What the view reads of the map file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MapView {
@@ -175,6 +236,10 @@ pub struct MapView {
     pub guessed: bool,
     /// The map's `root_hash` and `inputs_hash` (a reply is bound to them).
     pub digests: (String, String),
+    /// The example `config.toml` the map suggests for its build files (the
+    /// one `project map` prints): what "Write the build configuration"
+    /// starts from.
+    pub example: String,
 }
 
 impl MapView {
@@ -340,13 +405,30 @@ pub fn read_map(root: &Path) -> Result<Option<MapView>, String> {
                 };
             }
         }
+        // A `main` program's index (`p1…`); any other shape is dropped:
+        // it only keys a model's label.
+        let index = s(&p["index"]);
+        let index = if index.strip_prefix('p').is_some_and(is_number) {
+            index
+        } else {
+            String::new()
+        };
+        // The map's guess is one of its four words; anything else is not
+        // shown.
+        let kind_guess = s(&p["kind_guess"]);
+        let kind_guess = if KIND_GUESSES.contains(&kind_guess.as_str()) {
+            kind_guess
+        } else {
+            String::new()
+        };
         offered.push(Offered {
             id,
             path: s(&p["path"]),
             kind,
-            kind_guess: s(&p["kind_guess"]),
+            kind_guess,
             state,
             held,
+            index,
         });
     }
     for l in list(&v["libraries"]) {
@@ -366,9 +448,14 @@ pub fn read_map(root: &Path) -> Result<Option<MapView>, String> {
                 State::Compiles
             },
             held: Vec::new(),
+            index: String::new(),
         });
     }
     let c = &v["configuration"];
+    let build_files: Vec<String> = list(&v["build_evidence"]["build_files"])
+        .iter()
+        .map(s)
+        .collect();
     Ok(Some(MapView {
         offered,
         not_compiled: list(&v["programs_not_compiled"]).iter().map(s).collect(),
@@ -376,6 +463,9 @@ pub fn read_map(root: &Path) -> Result<Option<MapView>, String> {
         proposed: c["proposed"].as_bool().unwrap_or(false),
         guessed: c["source"].as_str() == Some("guessed"),
         digests: (s(&v["root_hash"]), s(&v["inputs_hash"])),
+        example: harness_oracle::projectmap::config::example(
+            harness_oracle::projectmap::config::example_from(&build_files),
+        ),
     }))
 }
 
@@ -416,24 +506,9 @@ impl Advice {
 /// list, its model one showable line), and dropped when it fails.
 pub fn read_advice(root: &Path, map: &MapView) -> BTreeMap<String, Advice> {
     let mut out = BTreeMap::new();
-    let path = root.join(REPLY_FILE);
-    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+    let Some(v) = read_reply(root, map) else {
         return out;
     };
-    if !meta.file_type().is_file() || meta.len() > MAX_REPLY_BYTES {
-        return out;
-    }
-    let Some(v) = std::fs::read(&path)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-    else {
-        return out;
-    };
-    if v["root_hash"].as_str() != Some(map.digests.0.as_str())
-        || v["inputs_hash"].as_str() != Some(map.digests.1.as_str())
-    {
-        return out;
-    }
     let Some(items) = v["items"].as_object() else {
         return out;
     };
@@ -463,6 +538,70 @@ pub fn read_advice(root: &Path, map: &MapView) -> BTreeMap<String, Advice> {
                     },
                 );
             }
+        }
+    }
+    out
+}
+
+/// The reply file under `root` as JSON, when it is a plain file within its
+/// size and bound to `map`'s digests.
+fn read_reply(root: &Path, map: &MapView) -> Option<serde_json::Value> {
+    let path = root.join(REPLY_FILE);
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > MAX_REPLY_BYTES {
+        return None;
+    }
+    let v = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())?;
+    (v["root_hash"].as_str() == Some(map.digests.0.as_str())
+        && v["inputs_hash"].as_str() == Some(map.digests.1.as_str()))
+    .then_some(v)
+}
+
+/// The model's labels of the map's programs, by program id, from the reply
+/// file under `root` when it is bound to `map`'s digests; each checked as
+/// `ask` checks a fresh one (its kind one of the list, its name and purpose
+/// one showable line within their limits), and dropped when it fails.
+pub fn read_labels(root: &Path, map: &MapView) -> BTreeMap<String, Label> {
+    let mut out = BTreeMap::new();
+    let Some(v) = read_reply(root, map) else {
+        return out;
+    };
+    let Some(items) = v["items"].as_object() else {
+        return out;
+    };
+    let showable = |s: &str, max: usize| {
+        !s.trim().is_empty()
+            && s.chars().count() <= max
+            && !s.chars().any(harness_core::text::unsafe_to_show)
+    };
+    for o in map.offered.iter().filter(|o| !o.index.is_empty()) {
+        let Some(item) = items.get(&o.index) else {
+            continue;
+        };
+        let (Some(kind), Some(name), Some(purpose), Some(model)) = (
+            item["kind"].as_str(),
+            item["name"].as_str(),
+            item["purpose"].as_str(),
+            item["model"].as_str(),
+        ) else {
+            continue;
+        };
+        if PROGRAM_KINDS.contains(&kind)
+            && showable(name, LABEL_NAME_MAX)
+            && showable(purpose, LABEL_LINE_MAX)
+            && showable(model, 200)
+        {
+            out.insert(
+                o.id.clone(),
+                Label {
+                    kind: kind.to_string(),
+                    name: name.to_string(),
+                    purpose: purpose.to_string(),
+                    model: model.to_string(),
+                },
+            );
         }
     }
     out
@@ -539,20 +678,10 @@ pub fn argv(
     v
 }
 
-/// `harness <argv>` as the person would type it.
-pub fn command_line(argv: &[String]) -> String {
-    let mut s = String::from("harness");
-    for a in argv {
-        s.push(' ');
-        s.push_str(&shell_quote(a));
-    }
-    s
-}
-
-/// The dialog's words for an act: what it does, then what it runs, how long
-/// it takes and what it writes — one entry per paragraph.
+/// The dialog's words for an act: what it does, how long it takes and what
+/// it writes — one entry per paragraph. The command itself is said once,
+/// whole, at the dialog's end (its "Command:" line).
 pub fn dialog(act: Act, map: Option<&MapView>, argv: &[String]) -> Vec<String> {
-    let runs = format!("It runs: {}", safe_line(&command_line(argv)));
     let build = argv.iter().any(|a| a == "--build");
     let (what, long, writes): (String, String, &str) = match act {
         Act::Map => (
@@ -608,7 +737,6 @@ pub fn dialog(act: Act, map: Option<&MapView>, argv: &[String]) -> Vec<String> {
     };
     vec![
         what,
-        runs,
         format!("It takes: {long}."),
         format!("It writes: {writes}."),
     ]
@@ -617,13 +745,13 @@ pub fn dialog(act: Act, map: Option<&MapView>, argv: &[String]) -> Vec<String> {
 /// Why Accept waits, before any picker, while the configuration is not
 /// stated.
 pub const ACCEPT_NEEDS_STATED: &str = "Accept needs a stated configuration, and this map's is a \
-     guess (or came with the project): write it in migration/map/config.toml, or Ask for a \
-     proposal, then map again";
+     guess (or came with the project): choose Write the build configuration (or Ask for a \
+     proposal), then Map the project again";
 
 /// The picker's question for one held set.
 pub fn keep_question(id: &str, set: &str) -> String {
     format!(
-        "{} holds the choice {}: linking cannot tell its files apart, so keep which one?",
+        "{} holds the choice {}: two files define the same function, so keep which one?",
         safe_line(id),
         safe_line(set)
     )
@@ -718,12 +846,13 @@ pub(crate) mod tests {
             .starts_with("proposed — it came with the project (make)"));
     }
 
-    /// The dialogs' words: what each act runs, how long it takes and what
-    /// it writes, the command line's own words.
+    /// The dialogs' words: what each act does, how long it takes and what
+    /// it writes; the command is said once, by the dialog's "Command:" line
+    /// (finding 10 of the newcomer's ten minutes: never twice).
     #[test]
     fn each_act_says_what_it_runs_how_long_and_what_it_writes() {
         let p = project("words");
-        let target = shell_quote(&p.0.to_string_lossy());
+        let target = p.0.to_string_lossy().into_owned();
         let map_argv = argv(Act::Map, &p.0, None, "", &[], None);
         assert_eq!(
             map_argv,
@@ -741,7 +870,6 @@ pub(crate) mod tests {
                  what they share, and whether each program links (its code is compiled and \
                  linked in the sandbox, never run)."
                     .to_string(),
-                format!("It runs: harness project map --target {target}"),
                 "It takes: a few seconds for a small project, minutes for a large one (at most \
                  30 minutes)."
                     .into(),
@@ -753,11 +881,12 @@ pub(crate) mod tests {
         write_map(&p.0, &map_text("stated", false));
         let map = read_map(&p.0).unwrap().unwrap();
         let ask = argv(Act::Ask, &p.0, Some(&map), "", &[], None);
+        assert_eq!(ask, ["project", "ask", "--target", target.as_str()]);
         let words = dialog(Act::Ask, Some(&map), &ask).join("\n");
+        assert!(!words.contains("It runs"), "{words}");
         for w in [
             "Ask a model which file to keep in each held choice: its answer is advice, shown \
              beside the choice when you Accept a program; you still decide.",
-            &format!("It runs: harness project ask --target {target}\n"),
             "It takes: one model call through the external hand-off (one for each 10 held \
              choices)",
             "It writes: migration/map/project-map.reply.json",
@@ -772,13 +901,23 @@ pub(crate) mod tests {
             &["d1=d1.2".into()],
             Some("unlzg2"),
         );
+        assert_eq!(
+            accept,
+            [
+                "project",
+                "accept",
+                "t-unlzg",
+                "--target",
+                target.as_str(),
+                "--keep",
+                "d1=d1.2",
+                "--run-name",
+                "unlzg2"
+            ]
+        );
         let words = dialog(Act::Accept, Some(&map), &accept).join("\n");
         for w in [
             "Accept a program: check the map still matches the project",
-            &format!(
-                "It runs: harness project accept t-unlzg --target {target} --keep d1=d1.2 \
-                 --run-name unlzg2\n"
-            ),
             "It writes: migration/tools/<id>/harness.toml only (an id accepted before keeps its \
              ledger and what you added to that file).",
         ] {
@@ -810,6 +949,7 @@ pub(crate) mod tests {
                         under: vec![],
                     })
                     .collect(),
+                index: "p1".into(),
             }],
             ..MapView::default()
         };
@@ -846,6 +986,63 @@ pub(crate) mod tests {
         for (root_hash, keep) in [("blake3:other", "d1.2"), ("blake3:aa", "d9.1")] {
             reply(root_hash, keep);
             assert!(read_advice(&p.0, &map).is_empty(), "{root_hash} {keep}");
+        }
+    }
+
+    /// What the map knows of a program, in words; a model's label, read
+    /// only when it fits the map; the example configuration the map
+    /// suggests, the one `project map` prints (finding 7 of the newcomer's
+    /// ten minutes: the rows say what each program is).
+    #[test]
+    fn a_program_says_what_the_map_and_the_model_know_of_it() {
+        let p = project("labels");
+        let text = map_text("guessed", false).replacen(
+            "\"root_hash\"",
+            "\"build_evidence\": {\"build_files\": [\"src/Makefile\"]}, \"root_hash\"",
+            1,
+        );
+        write_map(&p.0, &text);
+        let map = read_map(&p.0).unwrap().unwrap();
+        let lzg = map.get("t-lzg").unwrap();
+        assert_eq!(lzg.index, "p1");
+        assert_eq!(lzg.what(), "a tool, by its folder");
+        assert_eq!(map.get("t-fuzz").unwrap().what(), "a fuzzer");
+        assert_eq!(map.get("l-checksum").unwrap().what(), "a library");
+        assert_eq!(
+            map.example,
+            "[[configuration]]\nname = \"make\"\nfrom = \"make\"\nflags = []  # the -I and -D \
+             flags the build passes, each joined, like \"-Isrc/include\"\n"
+        );
+        // The example is a configuration the map reads.
+        assert_eq!(
+            harness_oracle::projectmap::config::check_text(&p.0, &map.example)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(read_labels(&p.0, &map).is_empty());
+        let reply = |root_hash: &str, name: &str| {
+            std::fs::write(
+                p.0.join(REPLY_FILE),
+                format!(
+                    r#"{{"root_hash": "{root_hash}", "inputs_hash": "blake3:bb", "items": {{
+                    "p1": {{"kind": "tool", "name": "{name}", "purpose": "compresses a file",
+                            "model": "claude-x", "provider": "external"}}}}}}"#
+                ),
+            )
+            .unwrap();
+        };
+        reply("blake3:aa", "LZG compressor");
+        let labels = read_labels(&p.0, &map);
+        assert_eq!(
+            labels["t-lzg"].words(),
+            "“LZG compressor”, a tool (the model's label)"
+        );
+        assert_eq!(labels.len(), 1);
+        // Bound to another map, or a name with a terminal code: not shown.
+        for (root_hash, name) in [("blake3:other", "x"), ("blake3:aa", "a\\u001b[31mb")] {
+            reply(root_hash, name);
+            assert!(read_labels(&p.0, &map).is_empty(), "{root_hash} {name}");
         }
     }
 

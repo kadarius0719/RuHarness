@@ -21,11 +21,9 @@ pub fn node_name(app: &App, sel: &Selection) -> String {
     match sel {
         Selection::MapProject if map.is_some() => "Map the project again".into(),
         Selection::MapProject => "Map the project".into(),
-        Selection::Program(id) => match map.and_then(|m| m.get(id)) {
-            Some(o) if o.kind_guess.is_empty() => format!("{id} ({})", o.noun()),
-            Some(o) => format!("{id} ({})", o.kind_guess),
-            None => id.clone(),
-        },
+        // The id alone: what it is sits on the line under it (its file, the
+        // map's guess, a model's label).
+        Selection::Program(id) => id.clone(),
         Selection::Tool(id) => format!("Open tool {}", crate::project::tool_label(map, id)),
         Selection::ProjectHome => "◂ Back to the project view".into(),
         _ => String::new(),
@@ -71,7 +69,12 @@ fn item_lines(glyph: &str, text: &str, width: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn offered_lines(o: &Offered, accepted: bool, width: usize) -> Vec<Line<'static>> {
+fn offered_lines(
+    o: &Offered,
+    accepted: bool,
+    label: Option<&crate::project::Label>,
+    width: usize,
+) -> Vec<Line<'static>> {
     let state = if accepted {
         "accepted".to_string()
     } else if o.state == State::Held {
@@ -86,17 +89,44 @@ fn offered_lines(o: &Offered, accepted: bool, width: usize) -> Vec<Line<'static>
     } else {
         o.state.words().to_string()
     };
-    let kind = if o.kind_guess.is_empty() {
-        String::new()
-    } else {
-        format!(" ({})", o.kind_guess)
-    };
+    // What the map knows it is, then the model's label when there is one.
+    let mut what = format!(" ({})", o.what());
+    if let Some(l) = label {
+        what.push_str(&format!(", {}", l.words()));
+    }
     let glyph = if accepted { "✓" } else { o.state.glyph() };
     item_lines(
         glyph,
-        &format!("{} — {}{kind}: {state}", o.id, o.path),
+        &format!("{} — {}{what}: {state}", o.id, o.path),
         width,
     )
+}
+
+/// What the states shown mean, one plain line each, for the states the
+/// list holds (the newcomer's ten minutes, finding 6).
+fn state_glosses(offered: &[&Offered], tools: &[String]) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    let mut add = |s: &'static str| {
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    };
+    for o in offered.iter().filter(|o| !tools.contains(&o.id)) {
+        match o.state {
+            State::Linked => add("linked: its files compile and link into one program."),
+            State::Held => add(
+                "held on a choice: two files define the same function; Accept asks which to \
+                 keep.",
+            ),
+            State::DidNotCompile | State::DidNotLink => add(
+                "did not compile / did not link: the build likely needs flags the configuration \
+                 does not state yet.",
+            ),
+            State::Compiles => add("compiles: a library's files compile; it is never linked."),
+            State::Incomplete | State::Fuzzer | State::Driver => {}
+        }
+    }
+    out
 }
 
 /// The counts of a group of programs by state, in words.
@@ -174,10 +204,23 @@ pub fn project_view(
         width,
         Style::default(),
     ));
+    // A configuration written since the map: said as it is, not as the
+    // map's (the newcomer's ten minutes, finding 11).
+    let configuration = if p.config_newer {
+        "migration/map/config.toml is written since this map — Map the project again to use it"
+            .to_string()
+    } else if m.guessed && !m.proposed {
+        format!(
+            "{} (the map compiled with no flags of yours)",
+            m.configuration_words()
+        )
+    } else {
+        m.configuration_words()
+    };
     lines.extend(wrapped(
-        &format!("Configuration: {}", m.configuration_words()),
+        &format!("Configuration: {configuration}"),
         width,
-        if m.unstated() {
+        if m.unstated() || p.config_newer {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default()
@@ -200,7 +243,12 @@ pub fn project_view(
     lines.extend(wrapped(&head, width, bold()));
     for o in &programs {
         links.push((lines.len(), Selection::Program(o.id.clone())));
-        lines.extend(offered_lines(o, p.tools.contains(&o.id), width));
+        lines.extend(offered_lines(
+            o,
+            p.tools.contains(&o.id),
+            p.labels.get(&o.id),
+            width,
+        ));
     }
     for path in &m.not_compiled {
         lines.extend(item_lines(
@@ -208,6 +256,9 @@ pub fn project_view(
             &format!("{path}: did not compile (it holds a main)"),
             width,
         ));
+    }
+    for gloss in state_glosses(&programs, &p.tools) {
+        lines.extend(wrapped(gloss, width, dim()));
     }
     if libraries.is_empty() {
         lines.extend(wrapped("Libraries: none", width, dim()));
@@ -223,7 +274,7 @@ pub fn project_view(
         ));
         for o in &libraries {
             links.push((lines.len(), Selection::Program(o.id.clone())));
-            lines.extend(offered_lines(o, p.tools.contains(&o.id), width));
+            lines.extend(offered_lines(o, p.tools.contains(&o.id), None, width));
         }
     }
     tools_lines(app, Some(m), width, links, &mut lines);
@@ -257,7 +308,7 @@ fn tools_lines(
         lines.extend(item_lines(
             "▸",
             &format!(
-                "{} — Enter on its row opens it",
+                "{} — press Enter on its row and choose Open tool",
                 crate::project::tool_label(map, id)
             ),
             width,
@@ -278,10 +329,7 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
     lines.extend(wrapped(&format!("── {id} ──"), width, bold()));
     let kind = match o.kind.as_str() {
         "library" => "a library (compiled, never linked)".to_string(),
-        "fuzz" => "a fuzzer".to_string(),
-        "driver" => "a fuzzer driver".to_string(),
-        _ if o.kind_guess.is_empty() => "a program".to_string(),
-        _ => format!("a program (the map guesses: {})", o.kind_guess),
+        _ => o.what(),
     };
     let accepted = app.project_tools().contains(id);
     let state = if accepted {
@@ -296,6 +344,19 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
         width,
         Style::default(),
     ));
+    if let Some(l) = app.project.as_ref().and_then(|p| p.labels.get(id)) {
+        lines.extend(wrapped(
+            &format!(
+                "The model ({}) calls it “{}” ({}): {}",
+                harness_core::text::safe_line(&l.model),
+                harness_core::text::safe_line(&l.name),
+                l.kind,
+                harness_core::text::safe_line(&l.purpose)
+            ),
+            width,
+            dim(),
+        ));
+    }
     if accepted {
         return;
     }
@@ -314,8 +375,8 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
         };
         lines.extend(wrapped(
             &format!(
-                "Choice {}{under}: linking cannot tell its files apart ({definers}); Accept \
-                 asks which to keep.",
+                "Choice {}{under}: two files define the same function, so linking cannot tell \
+                 them apart ({definers}); Accept asks which to keep.",
                 h.set
             ),
             width,

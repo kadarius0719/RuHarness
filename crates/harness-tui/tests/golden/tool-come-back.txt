@@ -1,6 +1,6 @@
 ┌ Files ───────────────────────┐┌ ◂ Back to the project view ──────────────────────────────────────────────────────────┐
 │  ◂ Back to the project view  ││Next step: The project's programs, Map, Ask and Accept are on the project view — press│
-│▾ liblzg · tool t-lzg     ✓0/2││Enter and choose Back to the project view                                             │
+│▾ liblzg · tool t-lzg     ✓0/2││Enter to go back to it                                                                │
 │  ▾ Units (2)                 ││                                                                                      │
 │    ▸ ◇ u-encode       planned││t-lzg is one tool of the project liblzg. The project view lists every program and     │
 │    ▸ ◇ u-lzg          planned││library the map found and its accepted tools; from there you map the project again,   │

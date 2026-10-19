@@ -19,6 +19,6 @@
 │                              ││About: the project                                                                                                       │
 │                              ││› Enter reviews the request — or type                                                                                    │
 └──────────────────────────────┘└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- Ready — ↑↓ to choose a row, Enter for what you can do
+ Ready.
 
  Enter review   Esc decline   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit

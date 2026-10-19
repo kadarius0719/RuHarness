@@ -1,5 +1,5 @@
 ┌ Project ─────────────────────────────────────┐┌ liblzg · project, not mapped yet ────────────────────────────────────┐
-│  Map the project                             ││Next step: No map yet — press Enter and choose Map the project        │
+│  Map the project                             ││Next step: No map yet — press Enter to map the project                │
 │                                              ││                                                                      │
 │                                              ││liblzg is a C project with no harness.toml: nothing is mapped yet.    │
 │                                              ││                                                                      │
@@ -10,7 +10,6 @@
 │                     │Map the project: find its programs and libraries, the files each one      │                     │
 │                     │needs, what they share, and whether each program links (its code is       │                     │
 │                     │compiled and linked in the sandbox, never run).                           │                     │
-│                     │It runs: harness project map --target <target>                        │                     │
 │                     │It takes: a few seconds for a small project, minutes for a large one (at  │                     │
 │                     │most 30 minutes).                                                         │                     │
 │                     │It writes: migration/map/project-map.json (and migration/.gitignore the   │                     │
@@ -24,7 +23,8 @@
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
+│                                              ││                                                                      │
 └──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
- Ready — ↑↓ to choose a row, Enter for what you can do
+ Ready.
 
  ↑↓ scroll   Esc cancel

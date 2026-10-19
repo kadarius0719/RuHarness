@@ -280,8 +280,11 @@ cannot read C: its state line and Next step; its exported functions by name, eac
 in lines of C; its files; its Rust and verdict (or "No Rust yet"); which features run it; its
 speed; its attempts in one line (how many, and how they came out: the ledger keeps no order of
 time between attempts, so the line tallies them); its checks once it has a verdict. The code
-comes last, under the heading `▸ C source (→ to open)`: `→` (from the tree, `→` into the View),
-`Enter` with the View focused, or a click on the heading opens it — C beside Rust once the unit
+comes last, under the heading `▸ C source (Tab to the View, then Enter)` — with the View
+focused, `▸ C source (Enter to open)`: the heading says the way that works from where the keys
+are, and `→` in the tree stays the tree's own move (it opens the unit's row; a second `→` goes
+into the View and opens the code). `Enter` with the View focused, `→` there, or a click on the
+heading opens it — C beside Rust once the unit
 has Rust, else the C alone, with no `~` column. Summary and code scroll as one list; `]f` `[f`
 jump between functions; the `c`, `v` and `d` overlays are unchanged. The code folds again when
 the selection changes. A file's View (a `.c` or `.h` row) keeps showing its code, as before.
@@ -677,10 +680,11 @@ and no map opens that tool, as the command line does.
 
 - **The left pane, "Project"** (48 columns at 120 or more, 36 at 80–119: its rows say a state in
   words): before a map one row, **Map the project**. After a map, the heading "Programs (n)", each
-  program a row — its id and kind guess, "t-lzg (tool)", its mark and its state in words at the
+  program a row — its id, "t-lzg", its mark and its state in words at the
   right (`✓ linked`, `⚠ held on a choice`, `✗ did not compile`, `✗ did not link`, `· incomplete`,
   `· fuzzer, not a tool`; `✓ accepted` once it is a tool) — with its file, dim, on the line under
-  it; a file holding a `main` that did not compile as a note; "Libraries (n)" likewise
+  it with what the map knows it is ("src/tools/lzg.c (a tool, by its folder)") and a model's
+  label when one fits the map; a file holding a `main` that did not compile as a note; "Libraries (n)" likewise
   (`compiles`); "Accepted tools (n)" with one row per tool, **Open tool t-lzg — src/tools/lzg.c**.
   The rows do not fold.
 - **The right pane** is titled with the folder's name and where the map stands ("liblzg · a C
@@ -694,17 +698,34 @@ and no map opens that tool, as the command line does.
   program** (or library) and **Accept it under a run name of your own…** on a program row (greyed
   with "Accept needs a stated configuration …" while the configuration is a guess; on a fuzzer,
   greyed with why), **Open tool <id>** on a tool's row (or an accepted program's), **Map the
-  project** / **Map the project again**, and, once a map exists, under the model separator, **Ask
-  for a proposal** (`--build`) or **Ask a model for advice** (the held choices).
+  project** / **Map the project again**, once a map exists **Write the build configuration (in
+  nano)** ("Edit …" once the file exists; recommended, above Ask, while the configuration is a
+  guess), and, under the model separator, **Ask for a proposal** (`--build`) or **Ask a model for
+  advice** (the held choices). A menu that would hold only the Next step's own item is skipped:
+  `Enter` does it (the Map row before a map, the tool's row back here). The model rule is one
+  everywhere: the recommended item is first, with "· uses a model" after its reason when it asks
+  one; the separator heads every other model item.
+- **Write the build configuration** (the newcomer's ten minutes, 2026-10-18, finding 1): no
+  `harness` command writes `migration/map/config.toml`, so the cockpit does, as the workloads
+  act does its file: a dialog ("Write the build configuration in nano?": what opens — the map's
+  own example, `[[configuration]]`, `name`, `from`, `flags = []` with its comment, the one `project
+  map` prints — what goes in flags, how to leave the editor, and that the person then chooses Map
+  the project again), the editor on a private draft, the draft checked on return by the map's own
+  reader (`projectmap::config::check_text`; an error offers Edit again at its line), and written
+  only while the file is still what the edit started from, never through a link. The map is then
+  read again: a configuration newer than the map makes the Next step "Map the project again".
 - **Accept** asks each held choice first, in a menu titled "Accept <id>": the question "<id> holds
-  the choice d1: linking cannot tell its files apart, so keep which one?", the model's advice
+  the choice d1: two files define the same function, so keep which one?", the model's advice
   above the items when a reply fits the map, the definers as items, none recommended; a set reached
   only under a choice not made is skipped. The run-name item then asks for the name on one line.
 - **Each act's dialog** keeps the command line's words: its title ("Map the project?", "Ask a
-  model for a proposal?", "Accept t-lzg?"), what it does, "It runs: harness project …", "It takes:
+  model for a proposal?", "Accept t-lzg?"), what it does, "It takes:
   …", "It writes: …", then the exact argv (§5.1) — run without `--json`, so the details show the
   command's own screen, indentation kept. It arms and runs as every act (§5.3). Its end says
-  "Map the project — done (2 s); c for its words" (or "ended with exit N") and reads the map
+  "Map the project — done (2 s); c for its words" (or "done, with a problem: <its first error
+  line>", or "failed (exit N): <its first error line>" — never "done" for a run that failed; when
+  the folder is then refused as made elsewhere, the adoption question opens again as a dialog and
+  the menus offer "Adopt this folder…") and reads the map
   again; the 2 s tick reads nothing here.
 - **Open tool** reads the tool as at the start (a refusal said in the notice) and shows its screen;
   the tool's tree then starts with a row **◂ Back to the project view**, whose Enter (menu: "Back

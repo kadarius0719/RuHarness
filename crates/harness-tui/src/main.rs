@@ -317,7 +317,7 @@ fn announce_kept_edits() {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let what = match [DraftKind::Features, DraftKind::Workloads]
+            let what = match DraftKind::ALL
                 .into_iter()
                 .find(|k| name.starts_with(k.prefix()))
             {

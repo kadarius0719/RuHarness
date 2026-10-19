@@ -322,7 +322,7 @@ impl SpeedModel {
             r.out_of_date.is_empty() && matches!(r.words.answer, "slower" | "probably-slower")
         }) {
             advice.next = Some(format!(
-                "perf times the Rust in use. If speed matters here — note these numbers first (or \
+                "The harness times the Rust in use. If speed matters here — note these numbers first (or \
                  commit {}/perf/): measuring again replaces them —",
                 self.ledger_rel
             ));

@@ -394,8 +394,10 @@ impl Narrator {
                 Some(sig) => format!("Stopped ({sig})"),
                 None => "Stopped".into(),
             },
+            // Never "done": a run that failed says so (the newcomer's ten
+            // minutes, finding 2).
             Ending::Other => match code {
-                Some(c) => format!("exit {c}"),
+                Some(c) => format!("failed (exit {c})"),
                 None => "ended".into(),
             },
         };

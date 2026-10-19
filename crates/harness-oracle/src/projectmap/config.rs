@@ -178,9 +178,21 @@ pub fn read_entries(root: &Path) -> Result<ConfigFile, Error> {
     let hash = harness_core::hash::bytes_hash(&bytes);
     let text = String::from_utf8(bytes)
         .map_err(|_| refused("the configuration file is not UTF-8; fix it"))?;
+    let entries = check_text(root, &text).map_err(refused)?;
+    Ok(ConfigFile {
+        entries,
+        hash: Some(hash),
+    })
+}
+
+/// `config.toml`'s text, checked as [`read_entries`] checks the file (its
+/// shape, each entry's name, flags and `system_headers`, no two entries of
+/// one name): its entries, or the refusal in one sentence (without the
+/// file's name). The cockpit checks a draft with it before writing it.
+pub fn check_text(root: &Path, text: &str) -> Result<Vec<ConfigEntry>, String> {
     // toml's message can quote a key holding a newline: one line, with the
     // line it stopped at.
-    let shape: ConfigFileShape = toml::from_str(&text).map_err(|e| {
+    let shape: ConfigFileShape = toml::from_str(text).map_err(|e| {
         let line = e.span().map(|s| {
             text.as_bytes()[..s.start.min(text.len())]
                 .iter()
@@ -188,27 +200,56 @@ pub fn read_entries(root: &Path) -> Result<ConfigFile, Error> {
                 .count()
                 + 1
         });
-        refused(format!(
+        format!(
             "{}{}; fix the file (its shape: one [[configuration]] table per build, with name, \
              from and flags, as docs/SCHEMAS.md shows)",
             line.map(|l| format!("line {l}: ")).unwrap_or_default(),
             safe_line(e.message())
-        ))
+        )
     })?;
     let mut seen = std::collections::BTreeSet::new();
     for entry in &shape.configuration {
-        check_entry(root, entry).map_err(refused)?;
+        check_entry(root, entry)?;
         if !seen.insert(entry.name.as_str()) {
-            return Err(refused(format!(
+            return Err(format!(
                 "two [[configuration]] entries are named `{}`; give each its own name",
                 safe_line(&entry.name)
-            )));
+            ));
         }
     }
-    Ok(ConfigFile {
-        entries: shape.configuration,
-        hash: Some(hash),
-    })
+    Ok(shape.configuration)
+}
+
+/// The `from` word a configuration example names for a project whose build
+/// files are `build_files` (paths relative to the root): `make` for a
+/// Makefile, `cmake`, `meson`, else `stated`.
+pub fn example_from(build_files: &[String]) -> &'static str {
+    let has = |name: &str| {
+        build_files
+            .iter()
+            .any(|f| f.rsplit('/').next() == Some(name))
+    };
+    if has("Makefile") || has("makefile") || has("GNUmakefile") {
+        "make"
+    } else if has("CMakeLists.txt") {
+        "cmake"
+    } else if has("meson.build") {
+        "meson"
+    } else {
+        "stated"
+    }
+}
+
+/// The example `config.toml` a guessed map suggests: one `[[configuration]]`
+/// with its name, its from and an empty `flags` list whose comment says what
+/// goes in it — four lines, each ending in a newline. `project map` prints
+/// it; the cockpit's "Write the build configuration" starts from it.
+pub fn example(from: &str) -> String {
+    let name = if from == "stated" { "plain" } else { from };
+    format!(
+        "[[configuration]]\nname = \"{name}\"\nfrom = \"{from}\"\nflags = []  # the -I and -D \
+         flags the build passes, each joined, like \"-Isrc/include\"\n"
+    )
 }
 
 /// One entry's checks.

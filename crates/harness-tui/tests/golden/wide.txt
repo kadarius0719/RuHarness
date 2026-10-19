@@ -1,5 +1,5 @@
 ┌ Files ───────────────────────┐┌ test_case/src/lib.c · migrated (u-lib) ──────────────────────────────────────────────┐
-│▾ harness-tui-g000-0000000000 ││✓ u-lib migrated                                                                      │
+│▾ harness-tui-g000-00000… ✓1/1││✓ u-lib migrated                                                                      │
 │  ▾ Units (1)                 ││Next step: In Rust and checked — nothing to do                                        │
 │    ▸ ✓ u-lib         migrated││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
 │    Features (none yet)       ││Internal: get_bits() (compared through the unit's exported functions)                 │

@@ -2,18 +2,18 @@
 │▾ harness-tui-unitsum…││◇ u-cache planned                                     │
 │  ▾ Units (11)        ││Next step: No Rust yet — ask the chat to migrate it (a│
 │    ▸ ✓? u001-katajai…││model writes the Rust, the judge checks it, you accept│
-│    ▸ ◇ u-cache plann…││it)                                                   │
-│    ▸ ◇ u-hash        ││                                                      │
-│    ▸ ◇ u-lz77        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
-│    ▸ ◇ u-tree        ││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+│    ▸ ◇ u-cac… planned││it)                                                   │
+│    ▸ ◇ u-hash planned││                                                      │
+│    ▸ ◇ u-lz77 planned││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│    ▸ ◇ u-tree planned││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
 │    ▸ ◇ u-blocksplitt…││lines), ZopfliMaxCachedSublen (11 lines),             │
 │    ▸ ◇ u-gzip_contai…││ZopfliSublenToCache (32 lines)                        │
-│    ▸ ◇ u-util        ││Its C: 1 file — src/zopfli/cache.c                    │
+│    ▸ ◇ u-util planned││Its C: 1 file — src/zopfli/cache.c                    │
 │    ▸ ◇ u-zlib_contai…││No Rust yet                                           │
 │    ▸ ◇ u-zopfli_lib  ││5 of your features run it · still C — see Features    │
 │    ▸ ◇ u-zopfli_bin  ││Attempts: none yet                                    │
 │  ▾ Features (7)      ││                                                      │
-│      ◉ Compress to g…││▸ C source (→ to open)                                │
+│      ◉ Compress to g…││▸ C source (Tab to the View, then Enter)              │
 │      ◉ Compress to z…││                                                      │
 │      ◉ Compress to r…││                                                      │
 │      ◉ Say what it d…││                                                      │
@@ -21,7 +21,7 @@
 │      ◌ Show the help ││                                                      │
 │      ◌ Report a miss…││                                                      │
 │    Speed — not set up││                                                      │
-│  ▸ src/              ││                                                      │
+│  ▸ src/ ✓0/13 (+1 ✓?)││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │
 └──────────────────────┘└──────────────────────────────────────────────────────┘

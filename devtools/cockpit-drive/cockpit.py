@@ -12,8 +12,9 @@ Usage: python3 -I cockpit.py <workdir> <rows> <cols> -- <argv...>
     quit               end the driver (sends nothing)
 - Appends every event to <workdir>/log.txt; the raw bytes to <workdir>/raw.bin.
 The child's environment is plain (HOME PATH USER LOGNAME SHELL LANG TMPDIR + TERM, and
-RUHARNESS_ADOPTED when set, so a checker's scratch adoption file is the one used),
-as from a plain Terminal window.
+RUHARNESS_ADOPTED when set, so a checker's scratch adoption file is the one used; EDITOR
+and VISUAL when set, so a scripted editor can stand in for the person's), as from a plain
+Terminal window.
 """
 import codecs
 import fcntl
@@ -37,9 +38,10 @@ KEYS = {
 }
 
 # RUHARNESS_ADOPTED passes through: a checker who points it at a scratch
-# file never adopts into the person's own adoption file.
+# file never adopts into the person's own adoption file. EDITOR and VISUAL
+# too: a person's terminal has them, and a script can play the editor.
 env = {k: os.environ[k] for k in ("HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR",
-                                  "RUHARNESS_ADOPTED")
+                                  "RUHARNESS_ADOPTED", "EDITOR", "VISUAL")
        if k in os.environ}
 env["TERM"] = "xterm-256color"
 

@@ -252,14 +252,18 @@ fn closing_line(wrote: &str, file: &MapFile) -> String {
         );
     }
     if c.name == projectmap::config::GUESSED_NAME {
-        let from = example_from(file);
-        let name = if from == "stated" { "plain" } else { from };
+        // The example is the one the cockpit's "Write the build
+        // configuration" starts from: one text for both.
+        let example: String = projectmap::config::example(projectmap::config::example_from(
+            &file.build_evidence.build_files,
+        ))
+        .lines()
+        .map(|l| format!("  {l}\n"))
+        .collect();
         return format!(
             "{head}; the configuration is a guess, so nothing can be accepted yet: next, state \
-             the build in {}, for example\n  [[configuration]]\n  name = \"{name}\"\n  from = \
-             \"{from}\"\n  flags = []  # the -I and -D flags the build passes, each joined, \
-             like \"-Isrc/include\"\nthen run `harness project map` again (or have a model \
-             propose one: `harness project ask --build`)",
+             the build in {}, for example\n{example}then run `harness project map` again (or \
+             have a model propose one: `harness project ask --build`)",
             projectmap::config::CONFIG_FILE
         );
     }
@@ -282,26 +286,6 @@ fn closing_line(wrote: &str, file: &MapFile) -> String {
         ));
     }
     line
-}
-
-/// The `from` word the closing line's example names: the build the walk
-/// found (`make` for a Makefile, `cmake`, `meson`), else `stated`.
-fn example_from(file: &MapFile) -> &'static str {
-    let has = |name: &str| {
-        file.build_evidence
-            .build_files
-            .iter()
-            .any(|f| f.rsplit('/').next() == Some(name))
-    };
-    if has("Makefile") || has("makefile") || has("GNUmakefile") {
-        "make"
-    } else if has("CMakeLists.txt") {
-        "cmake"
-    } else if has("meson.build") {
-        "meson"
-    } else {
-        "stated"
-    }
 }
 
 // ---------- the `--json` events ----------

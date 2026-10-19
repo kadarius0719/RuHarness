@@ -102,7 +102,7 @@ impl App {
             u.unit.status,
             harness_core::UnitStatus::Verified | harness_core::UnitStatus::Merged
         ) {
-            return "perf measures a verified unit's Rust — accept an attempt first".into();
+            return "Speed measures a verified unit's Rust — accept an attempt first".into();
         }
         match crate::speed::left_out_today(u) {
             Some("accept-interrupted") => format!(

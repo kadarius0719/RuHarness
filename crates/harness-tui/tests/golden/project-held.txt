@@ -1,33 +1,33 @@
 ┌ Project ─────────────────────────────────────┐┌ liblzg · project, 4 programs found ──────────────────────────────────┐
 │Programs (4)                                  ││Next step: t-unlzg holds a choice — press Enter on it and choose      │
-│    ✓ t-lzg (tool)                      linked││Accept this program to pick which file to keep                        │
-│      tools/lzg.c                             ││                                                                      │
-│    ⚠ t-unlzg (tool)          held on a choice││liblzg is a C project with no harness.toml; the cockpit shows its map.│
-│      tools/unlzg.c                           ││Configuration: stated (make)                                          │
-│    · t-fuzz (test)         fuzzer, not a tool││                                                                      │
-│      fuzz/f.c                                ││Programs (4): 1 linked · 1 held on a choice · 1 fuzzer, not a tool · 1│
+│    ✓ t-lzg                             linked││Accept this program to pick which file to keep                        │
+│      tools/lzg.c (a tool, by its folder)     ││                                                                      │
+│    ⚠ t-unlzg                 held on a choice││liblzg is a C project with no harness.toml; the cockpit shows its map.│
+│      tools/unlzg.c (a tool, by its folder)   ││Configuration: stated (make)                                          │
+│    · t-fuzz                fuzzer, not a tool││                                                                      │
+│      fuzz/f.c (a fuzzer)                     ││Programs (4): 1 linked · 1 held on a choice · 1 fuzzer, not a tool · 1│
 │    tools/broken.c — did not compile          ││did not compile                                                       │
-│Libraries (2)                                 ││  ✓ t-lzg — tools/lzg.c (tool): linked                                │
-│    ✓ l-checksum (library)            compiles││  ⚠ t-unlzg — tools/unlzg.c (tool): held on a choice (d1, d2)         │
-│      src/checksum.c                          ││  · t-fuzz — fuzz/f.c (test): fuzzer, not a tool                      │
-│    ✗ l-bad (library)          did not compile││  ✗ tools/broken.c: did not compile (it holds a main)                 │
-│      src/bad.c                               ││Libraries (2): 1 compiles · 1 did not compile                         │
-│                                              ││  ✓ l-checksum — src/checksum.c: compiles                             │
-│                                              ││  ✗ l-bad — src/bad.c: did not compile                                │
+│Libraries (2)                                 ││  ✓ t-lzg — tools/lzg.c (a tool, by its folder): linked               │
+│    ✓ l-checksum                      compiles││  ⚠ t-unlzg — tools/unlzg.c (a tool, by its folder): held on a choice │
+│      src/checksum.c (a library)              ││    (d1, d2)                                                          │
+│    ✗ l-bad                    did not compile││  · t-fuzz — fuzz/f.c (a fuzzer): fuzzer, not a tool                  │
+│      src/bad.c (a library)                   ││  ✗ tools/broken.c: did not compile (it holds a main)                 │
+│                                              ││linked: its files compile and link into one program.                  │
+│                                              ││held on a choice: two files define the same function; Accept asks     │
+│                                              ││which to keep.                                                        │
+│                                              ││Libraries (2): 1 compiles · 1 did not compile                         │
+│                                              ││  ✓ l-checksum — src/checksum.c (a library): compiles                 │
+│                                              ││  ✗ l-bad — src/bad.c (a library): did not compile                    │
 │                                              ││Accepted tools: none yet                                              │
 │                                              ││                                                                      │
 │                                              ││── t-unlzg ──                                                         │
-│                                              ││tools/unlzg.c: a program (the map guesses: tool) — held on a choice.  │
-│                                              ││Choice d1: linking cannot tell its files apart (d1.1 src/decode.c,    │
-│                                              ││d1.2 src/mini.c); Accept asks which to keep.                          │
+│                                              ││tools/unlzg.c: a tool, by its folder — held on a choice.              │
+│                                              ││Choice d1: two files define the same function, so linking cannot tell │
+│                                              ││them apart (d1.1 src/decode.c, d1.2 src/mini.c); Accept asks which to │
+│                                              ││keep.                                                                 │
 │                                              ││The model's advice (claude-x): keep d1.2, reason                      │
 │                                              ││alternative-implementation — advice only, the choice is yours.        │
-│                                              ││Choice d2 (asked only when you keep d1.1): linking cannot tell its    │
-│                                              ││files apart (d2.1 src/check_a.c, d2.2 src/check_b.c); Accept asks     │
-│                                              ││which to keep.                                                        │
-│                                              ││                                                                      │
-│                                              ││                                                                      │
-│                                              ││                                                                      │
+│                                              ││Choice d2 (asked only when you keep d1.1): two files define the same  │
 └──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
  Ready — ↑↓ to choose a row, Enter for what you can do
 

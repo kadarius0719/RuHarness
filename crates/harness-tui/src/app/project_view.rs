@@ -34,6 +34,13 @@ pub struct ProjectState {
     pub chat_wanted: bool,
     /// Accept's picker, while it asks.
     pub pick: Option<Pick>,
+    /// The model's labels of the map's programs, by id.
+    pub labels: BTreeMap<String, project::Label>,
+    /// `migration/map/config.toml` was written after the map was made: the
+    /// map does not use it yet (Map the project again does).
+    pub config_newer: bool,
+    /// The tool an Accept just made, until it is opened: the Next step.
+    pub just_accepted: Option<String>,
 }
 
 /// Accept's picker in progress: the held sets answered so far.
@@ -55,9 +62,22 @@ impl ProjectState {
     /// The project at `root` as it stands: its map, its tools, the advice.
     pub fn read(root: &Path) -> ProjectState {
         let map = project::read_map(root);
-        let advice = match &map {
-            Ok(Some(m)) => project::read_advice(root, m),
-            _ => BTreeMap::new(),
+        let (advice, labels) = match &map {
+            Ok(Some(m)) => (project::read_advice(root, m), project::read_labels(root, m)),
+            _ => (BTreeMap::new(), BTreeMap::new()),
+        };
+        let modified = |rel: &str| {
+            std::fs::symlink_metadata(root.join(rel))
+                .ok()
+                .filter(|m| m.file_type().is_file())
+                .and_then(|m| m.modified().ok())
+        };
+        let config_newer = match (
+            modified(super::features_edit::CONFIG_FILE),
+            modified(project::MAP_FILE),
+        ) {
+            (Some(config), Some(map)) => config > map,
+            _ => false,
         };
         ProjectState {
             shown: true,
@@ -66,6 +86,9 @@ impl ProjectState {
             advice,
             chat_wanted: false,
             pick: None,
+            labels,
+            config_newer,
+            just_accepted: None,
         }
     }
 
@@ -92,6 +115,17 @@ fn detail(path: &str) -> Row {
         expandable: false,
         open: false,
     }
+}
+
+/// A program's lines under its row, dim: its file and what the map knows
+/// it is ("src/tools/lzg.c (a tool, by its folder)"), then the model's
+/// label when a model has answered.
+fn program_details(o: &Offered, label: Option<&project::Label>) -> Vec<Row> {
+    let mut rows = vec![detail(&format!("{} ({})", o.path, o.what()))];
+    if let Some(l) = label {
+        rows.push(detail(&l.words()));
+    }
+    rows
 }
 
 fn node(depth: usize, sel: Selection) -> Row {
@@ -167,7 +201,16 @@ impl App {
         p.map = fresh.map;
         p.tools = fresh.tools;
         p.advice = fresh.advice;
+        p.labels = fresh.labels;
+        p.config_newer = fresh.config_newer;
         p.pick = None;
+        // The tool just accepted stays the Next step while it is a tool.
+        if p.just_accepted
+            .as_ref()
+            .is_some_and(|id| !p.tools.contains(id))
+        {
+            p.just_accepted = None;
+        }
         self.rebuild_rows();
         if crate::tree::row_of(&self.rows, &self.selection).is_none() {
             self.select_first_project_row();
@@ -204,7 +247,7 @@ impl App {
             )));
             for o in programs {
                 rows.push(node(1, Selection::Program(o.id.clone())));
-                rows.push(detail(&o.path));
+                rows.extend(program_details(o, p.labels.get(&o.id)));
             }
             for path in &m.not_compiled {
                 rows.push(Row {
@@ -220,7 +263,7 @@ impl App {
                 rows.push(heading(format!("Libraries ({})", libraries.len())));
                 for o in libraries {
                     rows.push(node(1, Selection::Program(o.id.clone())));
-                    rows.push(detail(&o.path));
+                    rows.extend(program_details(o, p.labels.get(&o.id)));
                 }
             }
         }
@@ -239,37 +282,72 @@ impl App {
     pub fn project_next(&self) -> Option<Advice> {
         let p = self.project.as_ref()?;
         let say = |text: String, action: Option<Action>| Some(Advice { text, action });
+        // A command was refused because the results were made elsewhere:
+        // nothing else runs until the folder is adopted.
+        if self.not_adopted.is_some() {
+            return say(
+                "this folder's results were made elsewhere and are not trusted here yet — press \
+                 Enter and choose Adopt this folder"
+                    .into(),
+                Some(Action::Adopt),
+            );
+        }
         let m = match &p.map {
             Err(_) => {
                 return say(
-                    "the map could not be read — press Enter and choose Map the project again"
-                        .into(),
+                    "the map could not be read — press Enter to map the project again".into(),
                     Some(Action::Project(project::Act::Map)),
                 )
             }
             Ok(None) => {
                 return say(
-                    "No map yet — press Enter and choose Map the project".into(),
+                    "No map yet — press Enter to map the project".into(),
                     Some(Action::Project(project::Act::Map)),
                 )
             }
             Ok(Some(m)) => m,
         };
+        // Right after an Accept, the new tool first, before any other
+        // program's held choice.
+        if let Some(id) = &p.just_accepted {
+            return say(
+                format!(
+                    "{} is accepted — open it and scan it: press Enter on its row and choose \
+                     Open tool {}",
+                    safe_line(id),
+                    safe_line(id)
+                ),
+                Some(Action::OpenTool(id.clone())),
+            );
+        }
+        // A configuration written since the map: the map does not use it
+        // until it is made again.
+        if p.config_newer {
+            return say(
+                "migration/map/config.toml is written but this map was made before it — press \
+                 Enter and choose Map the project again to use it"
+                    .into(),
+                Some(Action::Project(project::Act::Map)),
+            );
+        }
+        let write = self.build_config_label();
         if m.proposed {
             return say(
-                "the configuration came with the project and is only proposed — state it with \
-                 `harness project map --adopt`, or write migration/map/config.toml, then choose \
-                 Map the project again"
-                    .into(),
+                format!(
+                    "the configuration came with the project and is only proposed — state it \
+                     with `harness project map --adopt`, or press Enter and choose {write}, then \
+                     Map the project again"
+                ),
                 Some(Action::Project(project::Act::Map)),
             );
         }
         if m.guessed {
             return say(
-                "the configuration is a guess — state the build in migration/map/config.toml \
-                 and choose Map the project again, or press Enter and choose Ask for a proposal"
-                    .into(),
-                Some(Action::Project(project::Act::Ask)),
+                format!(
+                    "the configuration is a guess — press Enter and choose {write} (or Ask for \
+                     a proposal), then Map the project again"
+                ),
+                Some(Action::WriteBuildConfig),
             );
         }
         let open = |o: &&Offered| o.acceptable() && !p.tools.contains(&o.id);
@@ -317,7 +395,8 @@ impl App {
         if let Some(id) = p.tools.first() {
             return say(
                 format!(
-                    "{} is accepted — press Enter on Open tool {} to scan, plan and migrate it",
+                    "{} is accepted — press Enter on its row and choose Open tool {} to scan, \
+                     plan and migrate it",
                     safe_line(id),
                     safe_line(id)
                 ),
@@ -325,11 +404,31 @@ impl App {
             );
         }
         say(
-            "no program links yet — state the build's flags in migration/map/config.toml and \
-             choose Map the project again"
-                .into(),
-            Some(Action::Project(project::Act::Map)),
+            format!(
+                "no program links yet — press Enter and choose {write} to state the build's \
+                 flags, then Map the project again"
+            ),
+            Some(Action::WriteBuildConfig),
         )
+    }
+
+    /// The build configuration act's words: "Write the build configuration"
+    /// while there is no `migration/map/config.toml`, else "Edit the build
+    /// configuration"; "Continue my build configuration draft" while one is
+    /// kept.
+    pub fn build_config_label(&self) -> String {
+        let kind = super::features_edit::DraftKind::BuildConfig;
+        if self.draft(kind).is_some() {
+            return kind.continue_words();
+        }
+        let exists =
+            std::fs::symlink_metadata(self.config.target.join(super::features_edit::CONFIG_FILE))
+                .is_ok();
+        if exists {
+            "Edit the build configuration".into()
+        } else {
+            "Write the build configuration".into()
+        }
     }
 
     /// A Project view row's Next step (the menu's recommended item).
@@ -338,10 +437,19 @@ impl App {
         match sel {
             Selection::ProjectHome => say(
                 "the project's programs, Map, Ask and Accept are on the project view — press \
-                 Enter and choose Back to the project view"
+                 Enter to go back to it"
                     .into(),
                 Some(Action::BackToProject),
             ),
+            // The tool just accepted: the project's own Next step names it.
+            Selection::Tool(id)
+                if self
+                    .project
+                    .as_ref()
+                    .is_some_and(|p| p.just_accepted.as_ref() == Some(id)) =>
+            {
+                self.project_next()
+            }
             Selection::Tool(id) => say(
                 format!("open tool {} to scan, plan and migrate it", safe_line(id)),
                 Some(Action::OpenTool(id.clone())),
@@ -391,12 +499,13 @@ impl App {
                     ),
                     State::DidNotCompile | State::DidNotLink | State::Incomplete => say(
                         format!(
-                            "{} {} — state the build's flags in migration/map/config.toml and \
-                             choose Map the project again",
+                            "{} {} — choose {} to state the build's flags, then Map the \
+                             project again",
                             safe_line(id),
-                            o.state.words()
+                            o.state.words(),
+                            self.build_config_label()
                         ),
-                        Some(Action::Project(project::Act::Map)),
+                        Some(Action::WriteBuildConfig),
                     ),
                     State::Fuzzer | State::Driver => say(
                         "a fuzzer is not accepted as a tool: it is linked only with the \
@@ -411,11 +520,17 @@ impl App {
     }
 
     /// The menu on a Project view row (or a tool's row back to it): the
-    /// row's own items, then Map and Ask; the recommended one first.
-    pub(crate) fn open_project_menu(&mut self) {
+    /// row's own items, then Map and Ask; the recommended one first. A menu
+    /// that would hold only the Next step's own item is not shown: the item
+    /// is chosen at once (its dialog opens), so one choice is one Enter.
+    pub(crate) fn open_project_menu(&mut self) -> super::Command {
         let mut items = self.project_menu_items();
         let advice = self.project_row_advice(&self.selection);
         let reason = crate::menu::recommend(&mut items, advice.as_ref());
+        if let ([only], Some(_)) = (items.as_slice(), &reason) {
+            let only = only.clone();
+            return self.choose(&only);
+        }
         self.mode = Mode::Menu(Menu {
             items,
             focus: 0,
@@ -424,6 +539,7 @@ impl App {
             title: None,
             note: Vec::new(),
         });
+        super::Command::None
     }
 
     /// The items of the selected Project view row.
@@ -492,6 +608,40 @@ impl App {
             }
             _ => {}
         }
+        // The build configuration, once a map exists (it names the example
+        // to start from): the person's editor on migration/map/config.toml.
+        if map.is_some() {
+            let kind = super::features_edit::DraftKind::BuildConfig;
+            let label = self.build_config_label();
+            let mut it = if self.draft(kind).is_some() {
+                item(label, Action::WriteBuildConfig, None)
+            } else {
+                let name = super::features_edit::editor_name(&self.features_editor());
+                item(
+                    format!("{label} (in {name})"),
+                    Action::WriteBuildConfig,
+                    None,
+                )
+            };
+            if self.running {
+                it.greyed = Some("a command is running (one at a time)".into());
+            }
+            items.push(it);
+            if self.draft(kind).is_some() {
+                items.push(item(
+                    "Discard my build configuration draft",
+                    Action::DiscardBuildConfigDraft,
+                    None,
+                ));
+            }
+        }
+        if self.not_adopted.is_some() {
+            let mut it = item("Adopt this folder…", Action::Adopt, None);
+            if self.running {
+                it.greyed = Some("a command is running (one at a time)".into());
+            }
+            items.push(it);
+        }
         let mut it = item(
             if map.is_some() {
                 "Map the project again"
@@ -530,7 +680,10 @@ impl App {
         if !self.kept_edits.is_empty() {
             return Some("a hand edit is kept — record or discard it first (E)".into());
         }
-        if self.features_draft.is_some() || self.workloads_draft.is_some() {
+        if self.features_draft.is_some()
+            || self.workloads_draft.is_some()
+            || self.config_draft.is_some()
+        {
             return Some("a draft is kept — save or discard it first".into());
         }
         if !self.awaiting.is_empty() {
@@ -703,8 +856,13 @@ impl App {
         if let Some(p) = project.as_mut() {
             p.shown = false;
             p.pick = None;
+            // Opened: no longer the Next step.
+            if p.just_accepted.as_ref() == Some(&id) {
+                p.just_accepted = None;
+            }
         }
         next.project = project;
+        next.not_adopted = self.not_adopted.take();
         std::mem::swap(&mut next.chat, &mut self.chat);
         next.chat.tool = Some(id.clone());
         next.chat_on = chat_wanted;
