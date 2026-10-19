@@ -99,6 +99,10 @@ impl App {
             Selection::Features => self.features_advice(),
             Selection::Feature(id) => self.feature_advice(id),
             Selection::Speed => self.speed_advice(),
+            Selection::MapProject
+            | Selection::Program(_)
+            | Selection::Tool(_)
+            | Selection::ProjectHome => self.project_row_advice(sel),
         }
     }
 

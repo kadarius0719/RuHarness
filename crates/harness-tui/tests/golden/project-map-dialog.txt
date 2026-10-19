@@ -1,0 +1,30 @@
+┌ Project ─────────────────────────────────────┐┌ liblzg · project, not mapped yet ────────────────────────────────────┐
+│  Map the project                             ││Next step: No map yet — press Enter and choose Map the project        │
+│                                              ││                                                                      │
+│                                              ││liblzg is a C project with no harness.toml: nothing is mapped yet.    │
+│                                              ││                                                                      │
+│                                              ││Mapping finds its programs and libraries, the files each one needs,   │
+│                                              ││what they share, and whether each program links. It compiles in the   │
+│                                              ││sandbox, runs nothing, and writes only under migration/.              │
+│                     ┌ Map the project? ────────────────────────────────────────────────────────┐                     │
+│                     │Map the project: find its programs and libraries, the files each one      │                     │
+│                     │needs, what they share, and whether each program links (its code is       │                     │
+│                     │compiled and linked in the sandbox, never run).                           │                     │
+│                     │It runs: harness project map --target <target>                        │                     │
+│                     │It takes: a few seconds for a small project, minutes for a large one (at  │                     │
+│                     │most 30 minutes).                                                         │                     │
+│                     │It writes: migration/map/project-map.json (and migration/.gitignore the   │                     │
+│                     │first time); the project's own files are not changed.                     │                     │
+│                     │                                                                          │                     │
+│                     │Command: /opt/ruharness/bin/harness project map --target <target>     │                     │
+│                     │ reading…                                                                 │                     │
+│                     │ [ Cancel  Esc ] [ Run  y ]                                               │                     │
+│                     └──────────────────────────────────────────────────────────────────────────┘                     │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+└──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
+ Ready — ↑↓ to choose a row, Enter for what you can do
+
+ ↑↓ scroll   Esc cancel

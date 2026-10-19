@@ -45,6 +45,15 @@ pub enum Selection {
     Feature(String),
     /// The C-vs-Rust speed (docs/PERF-DESIGN.md §3.11).
     Speed,
+    /// The Project view's one row before a map: Map the project
+    /// (docs/PROJECT-MAP-DESIGN.md §3.7).
+    MapProject,
+    /// A program or library of the project map, by id.
+    Program(String),
+    /// An accepted tool of the project, by id: Enter opens it.
+    Tool(String),
+    /// A tool's row back to the Project view.
+    ProjectHome,
 }
 
 impl Selection {
@@ -66,6 +75,10 @@ impl Selection {
             Selection::Features => Some(Selection::Project),
             Selection::Feature(_) => Some(Selection::Features),
             Selection::Speed => Some(Selection::Project),
+            Selection::MapProject
+            | Selection::Program(_)
+            | Selection::Tool(_)
+            | Selection::ProjectHome => None,
         }
     }
 }
@@ -176,6 +189,12 @@ pub enum RowKind {
     /// A note in the tree (a walk error, a skipped entry, a truncation):
     /// never selected.
     Note(String),
+    /// A group's heading in the Project view ("Programs (3)"): never
+    /// selected.
+    Heading(String),
+    /// A line under the row above, dim (a program's file in the Project
+    /// view): never selected.
+    Detail(String),
 }
 
 /// One row of the flattened tree.
@@ -196,7 +215,7 @@ impl Row {
     pub fn selection(&self) -> Option<&Selection> {
         match &self.kind {
             RowKind::Node(sel) => Some(sel),
-            RowKind::Note(_) => None,
+            RowKind::Note(_) | RowKind::Heading(_) | RowKind::Detail(_) => None,
         }
     }
 }
@@ -383,6 +402,12 @@ pub fn exists(
         Selection::Features => true,
         Selection::Feature(id) => features.feature(id).is_some(),
         Selection::Speed => true,
+        // The Project view's rows and the row back to it are the App's to
+        // keep (they come from the map, not the snapshot).
+        Selection::MapProject
+        | Selection::Program(_)
+        | Selection::Tool(_)
+        | Selection::ProjectHome => true,
     }
 }
 

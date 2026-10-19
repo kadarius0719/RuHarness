@@ -128,6 +128,45 @@ pub fn read_tool(target: &Path, tool: Option<&str>) -> Result<Read, String> {
     })
 }
 
+impl Read {
+    /// Nothing read: what the Project view holds under it (a project with
+    /// no root `harness.toml` has no ledger to read; its map is read by the
+    /// Project view itself, docs/PROJECT-MAP-DESIGN.md §3.7).
+    pub fn empty(root: &Path) -> Read {
+        let name = root
+            .file_name()
+            .map_or_else(|| "project".into(), |n| n.to_string_lossy().into_owned());
+        Read {
+            snapshot: Snapshot {
+                root: root.to_path_buf(),
+                ledger_dir: root.join(harness_core::ledger::MIGRATION_DIR),
+                facts: None,
+                facts_state: None,
+                units: Vec::new(),
+                note: None,
+                features: FeatureSnapshot::None,
+                features_now: None,
+                target: harness_core::config::TargetSection {
+                    name,
+                    form: harness_core::config::Form::Folder(harness_core::config::FolderForm {
+                        source_dir: String::new(),
+                        include_dirs: Vec::new(),
+                    }),
+                },
+                program_name: String::new(),
+                perf: crate::perfread::PerfRead::default(),
+                project_notice: None,
+            },
+            walk: TreeWalk::default(),
+            holder: None,
+            migrate_model: String::new(),
+            migrate_turns: 1,
+            map: MapState::None,
+            map_now: None,
+        }
+    }
+}
+
 /// What a load produced.
 #[derive(Debug)]
 pub struct Loaded {

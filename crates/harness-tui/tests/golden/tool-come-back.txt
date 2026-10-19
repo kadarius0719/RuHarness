@@ -1,0 +1,30 @@
+┌ Files ───────────────────────┐┌ ◂ Back to the project view ──────────────────────────────────────────────────────────┐
+│  ◂ Back to the project view  ││Next step: The project's programs, Map, Ask and Accept are on the project view — press│
+│▾ liblzg · tool t-lzg     ✓0/2││Enter and choose Back to the project view                                             │
+│  ▾ Units (2)                 ││                                                                                      │
+│    ▸ ◇ u-encode       planned││t-lzg is one tool of the project liblzg. The project view lists every program and     │
+│    ▸ ◇ u-lzg          planned││library the map found and its accepted tools; from there you map the project again,   │
+│    Features (none yet)       ││ask a model, accept another program, or open another tool.                            │
+│    Speed — not set up        ││                                                                                      │
+│  ▸ src/                  ✓0/2││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
+ Ready — ↑↓ to choose a row, Enter for what you can do
+
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

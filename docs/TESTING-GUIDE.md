@@ -6515,78 +6515,85 @@ ls ~/lzg-cockpit/src
 
 #### Step 12.23 — Open the cockpit on it
 
-**Be ready for a different-looking cockpit.** On a folder with no `harness.toml` and no tool, the cockpit is **not** the full-screen view of Parts 4 and 9: it is a short **numbered text menu**. You type a number and press Return; anything else leaves. In the next steps, **Do.** means type what is shown and press Return.
-
 **Run.**
 
 ```bash
 harness-tui --target ~/lzg-cockpit
 ```
 
-**You should see.**
+**You should see** the full-screen cockpit of Parts 4 and 9, opened on its **Project view**. The left pane is titled `Project` and holds one row, `Map the project`. The right pane's title and first lines read:
 
 ```text
-harness-tui: /Users/<you>/lzg-cockpit holds no harness.toml and no tool yet: it is a C project to map.
-  No map yet.
-  1. Map the project
-Type a number (1-1) and Enter; anything else leaves:
+lzg-cockpit · project, not mapped yet
+Next step: No map yet — press Enter and choose Map the project
+
+lzg-cockpit is a C project with no harness.toml: nothing is mapped yet.
 ```
 
-**What it means.** The cockpit has recognised a C project to map and offers the one act that makes sense first.
+**What it means.** On a folder with no `harness.toml` the cockpit shows the project itself: what the map found on the left (nothing yet), the project in words on the right, and the one act that makes sense first. It names the folder, never its full path.
 
 **If you do not see that.** `… is not a harness target …`: the cockpit was started without a real Terminal (for example from a script). Run the box in a Terminal window.
 
 #### Step 12.24 — Map from the cockpit
 
-**Do.** Type `1` and press Return.
+**Do.** One key at a time:
 
-**You should see** a dialog that says what it runs, how long it takes and what it writes:
+1. Press `Enter`. **You should see** a small menu titled `Map the project` with one item, `Map the project`, and under it, in green, `↳ recommended: No map yet`.
+2. Press `Enter` again. **You should see** a dialog titled `Map the project?` that says what it runs, how long it takes and what it writes (the path is your own):
+
+   ```text
+   Map the project: find its programs and libraries, the files each one needs, what they share, and whether each program links (its code is compiled and linked in the sandbox, never run).
+   It runs: harness project map --target /Users/<you>/lzg-cockpit
+   It takes: a few seconds for a small project, minutes for a large one (at most 30 minutes).
+   It writes: migration/map/project-map.json (and migration/.gitignore the first time); the project's own files are not changed.
+   ```
+
+   then `Command:` and the exact command, and at the bottom `[ Cancel  Esc ] [ Run  y ]`.
+3. Wait until the dialog's last line reads `ready: → then Enter, or y`, then press `y`. **You should see** the activity line count the seconds, then `Ready. Last: Map the project — done (1 s); c for its words`.
+
+**You should see** the left pane list what the map found:
 
 ```text
-Map the project: find its programs and libraries, the files each one needs, what they share, and whether each program links (its code is compiled and linked in the sandbox, never run).
-  It runs: harness project map --target /Users/<you>/lzg-cockpit
-  It takes: a few seconds for a small project, minutes for a large one (at most 30 minutes).
-  It writes: migration/map/project-map.json (and migration/.gitignore the first time); the project's own files are not changed.
-Run it? Type y and Enter; anything else goes back:
+Programs (3)
+    ⚠ t-benchmark (tool)      held on a choice
+      src/tools/benchmark.c
+    ✓ t-lzg (tool)                      linked
+      src/tools/lzg.c
+    ⚠ t-unlzg (tool)          held on a choice
+      src/tools/unlzg.c
 ```
 
-**Do.** Type `y` and press Return.
-
-**You should see** the map's screen of Step 12.2 scroll past (without the `.git` line: this copy has no git), then `harness project map --target /Users/<you>/lzg-cockpit ended with exit 0`, then the menu again, now longer:
+and the right pane begin:
 
 ```text
-harness-tui: /Users/<you>/lzg-cockpit holds no harness.toml and no tool yet: it is a C project to map.
-  The map shows 3 program(s) and 0 libraries.
-  Its configuration is a guess: a program is accepted under a stated one (write it in migration/map/config.toml, or Ask for a proposal).
-  1. Map the project again
-  2. Ask a model for advice
-  3. Accept a program
-Type a number (1-3) and Enter; anything else leaves:
+Next step: The configuration is a guess — state the build in migration/map/config.toml and choose Map the project again, or press Enter and choose Ask for a proposal
+
+lzg-cockpit is a C project with no harness.toml; the cockpit shows its map.
+Configuration: a guess — no migration/map/config.toml states the build yet
 ```
 
-**What it means.** The cockpit ran exactly Step 12.2's command. The three acts: **Map the project again** (the same dialog); **Ask a model for advice** (while the configuration is a guess, it asks for a proposed configuration, `harness project ask --build`; once you stated one, which file to keep in each held choice; its dialog says it stops at the hand-off and prints the command that resumes); **Accept a program**.
+**Do.** Press `c`. **You should see** the activity details: the map's own screen of Step 12.2 (without the `.git` line: this copy has no git), ending `exit 0`. Press `c` again to close them.
 
-**If you do not see that.** If the menu still says `No map yet.`, the map failed: read the lines above the menu, and see ["The project map" in Troubleshooting](#the-project-map-part-12).
+**What it means.** The cockpit ran exactly Step 12.2's command, through the same kind of dialog as every other act, then read the map again. On a narrower window a row's state word may not fit beside its name; its mark (`⚠`, `✓`) still shows, and the right pane says every state in words.
+
+**If you do not see that.** If the left pane still shows only `Map the project`, the map failed: press `c` to read its words, and see ["The project map" in Troubleshooting](#the-project-map-part-12).
 
 #### Step 12.25 — See why Accept waits
 
-**Do.** Type `3` and press Return.
+**Do.** One key at a time:
 
-**You should see.**
+1. Press `Enter` (the first program, `t-benchmark`, is selected). **You should see** a menu whose first item is `Ask for a proposal` with `↳ recommended: the configuration is a guess · uses a model`, then `Accept this program — Accept needs a stated configuration, …` in grey, `Accept it under a run name of your own…` in grey, and `Map the project again`.
+2. Press `↓` once (to `Accept this program`), then `Enter`. **You should see**, at the bottom of the menu:
 
-```text
-Accept needs a stated configuration, and this map's is a guess (or came with the project): write it in migration/map/config.toml, or Ask for a proposal, then map again.
-```
+   ```text
+   Why not: Accept needs a stated configuration, and this map's is a guess (or came with the project): write it in migration/map/config.toml, or Ask for a proposal, then map again
+   ```
 
-and the menu again.
+3. Press `Esc` to close the menu, then `q` to leave. **You should see** your Terminal prompt again.
 
-**Do.** Type `q` and press Return to leave.
+**What it means.** The cockpit keeps the same rule as Step 12.3: no accept under a guess. A greyed item always says why when you choose it.
 
-**You should see** the cockpit say `nothing run; start the cockpit again to map the project`, and then your Terminal prompt.
-
-**What it means.** The cockpit keeps the same rule as Step 12.3: no accept under a guess.
-
-**If you do not see that.** If `3` lists programs instead, a `config.toml` is already there from an earlier try: type `q`, Return, and continue at Step 12.27.
+**If you do not see that.** If `Accept this program` is not grey and opens a list of files or a dialog, a `config.toml` is already there from an earlier try: press `Esc` until the menu closes, then `q`, and continue at Step 12.27.
 
 #### Step 12.26 — Write the configuration for the second copy
 
@@ -6631,80 +6638,73 @@ cat migration/map/config.toml
 harness-tui --target ~/lzg-cockpit
 ```
 
-**Do.** Type `1` and press Return.
+**You should see** the Project view of Step 12.24 again, still saying `Configuration: a guess …`: the map has not been run since you wrote the file.
 
-**You should see** the dialog of Step 12.24, ending `Run it? Type y and Enter; anything else goes back:`.
+**Do.** One key at a time:
 
-**Do.** Type `y` and press Return.
+1. Press `Enter`. **You should see** the menu of Step 12.25.
+2. Press `↓` three times (to `Map the project again`), then `Enter`. **You should see** the dialog of Step 12.24, titled `Map the project again?`.
+3. Wait for `ready: → then Enter, or y`, then press `y`.
 
-**You should see** the map's screen with `configuration: make, from make (stated in config.toml), …` as its second line, then the menu, now with `Its configuration: make.`:
+**You should see** the right pane now begin:
 
 ```text
-harness-tui: /Users/<you>/lzg-cockpit holds no harness.toml and no tool yet: it is a C project to map.
-  The map shows 3 program(s) and 0 libraries.
-  Its configuration: make.
-  1. Map the project again
-  2. Ask a model for advice
-  3. Accept a program
-Type a number (1-3) and Enter; anything else leaves:
+Next step: t-benchmark holds a choice — press Enter on it and choose Accept this program to pick which file to keep
+
+lzg-cockpit is a C project with no harness.toml; the cockpit shows its map.
+Configuration: stated (make)
 ```
 
-**What it means.** As in Step 12.3: programs can now be accepted.
+**What it means.** As in Step 12.3: programs can now be accepted. Press `c` to see the map's own screen, with `configuration: make, from make (stated in config.toml), …` as its second line; `c` again closes it.
 
-**If you do not see that.** `Its configuration is a guess` still: the file of Step 12.26 is missing or in the wrong folder. Leave (`q`), and redo Step 12.26.
+**If you do not see that.** `Configuration: a guess` still: the file of Step 12.26 is missing or in the wrong folder. Leave (`q`), and redo Step 12.26.
 
 #### Step 12.28 — Accept a program from the cockpit
 
-**Do.** Type `3`, Return.
+**Do.** One key at a time:
 
-**You should see.**
+1. Press `↓` twice, to the row `t-unlzg (tool)`, the one with a held choice. **You should see** the right pane end with `── t-unlzg ──` and `Choice d1: linking cannot tell its files apart (d1.1 src/extra/lzgmini.c, d1.2 src/lib/decode.c); Accept asks which to keep.`
+2. Press `Enter`. **You should see** a menu whose first item is `Accept this program`, with `↳ recommended: t-unlzg holds a choice`.
+3. Press `Enter`. **You should see** a menu titled `Accept t-unlzg`:
 
-```text
-Which one?
-  1. t-benchmark — src/tools/benchmark.c (program)
-  2. t-lzg — src/tools/lzg.c (program)
-  3. t-unlzg — src/tools/unlzg.c (program)
-Type its number (1-3) and Enter; anything else goes back:
-```
+   ```text
+   t-unlzg holds the choice d1: linking cannot tell its files apart, so keep which one?
 
-**Do.** Type `3`, Return (for `t-unlzg`, the one with a held choice).
+     d1.1 src/extra/lzgmini.c
+     d1.2 src/lib/decode.c
+   ```
 
-**You should see.**
+4. Press `↓` (to `d1.2 src/lib/decode.c`), then `Enter`. **You should see** the dialog, titled `Accept t-unlzg?`, with the exact command:
 
-```text
-t-unlzg holds the choice d1: linking cannot tell its files apart, so keep which one?
-  1. d1.1 src/extra/lzgmini.c
-  2. d1.2 src/lib/decode.c
-Type its number (1-2) and Enter; anything else goes back:
-```
+   ```text
+   Accept a program: check the map still matches the project, apply your picks, link the program once more and write it as a tool you can scan, plan and migrate.
+   It runs: harness project accept t-unlzg --target /Users/<you>/lzg-cockpit --keep d1=d1.2
+   It takes: about as long as the map (it maps and link-checks the project again to check the map still says what it finds), then one more link.
+   It writes: migration/tools/<id>/harness.toml only (an id accepted before keeps its ledger and what you added to that file).
+   ```
 
-**Do.** Type `2`, Return.
+5. Wait for `ready: → then Enter, or y`, then press `y`. **You should see** `Ready. Last: Accept t-unlzg — done (1 s); c for its words`, the row `t-unlzg (tool)` now marked `✓ … accepted`, and at the end of the left pane:
 
-**You should see** the dialog, with the exact command:
+   ```text
+   Accepted tools (1)
+       Open tool t-unlzg — src/tools/unlzg.c
+   ```
 
-```text
-Accept a program: check the map still matches the project, apply your picks, link the program once more and write it as a tool you can scan, plan and migrate.
-  It runs: harness project accept t-unlzg --target /Users/<you>/lzg-cockpit --keep d1=d1.2
-  It takes: about as long as the map (it maps and link-checks the project again to check the map still says what it finds), then one more link.
-  It writes: migration/tools/<id>/harness.toml only (an id accepted before keeps its ledger and what you added to that file).
-Run it? Type y and Enter; anything else goes back:
-```
-
-**Do.** Type `y`, Return.
-
-**You should see** (from the author's run) the full-screen cockpit open on the new tool, with `Next step: Nothing is scanned yet — press Enter and choose Scan the project`. In Files, `Features` and `Speed` come first, then the project's folders and files, open (the tool has no units yet: once it has, the folders start folded and `Units` comes first). The project's files that are not part of the tool are greyed out and marked `⊖`.
+6. Press `↓` to that row, then `Enter`. **You should see** a menu whose first item is `Open tool t-unlzg`.
+7. Press `Enter`. **You should see** the tool's screen: `Next step: Nothing is scanned yet — press Enter and choose Scan the project`, and in Files, first, the row `◂ Back to the project view`. Under it come the tool, `Features` and `Speed`, then the project's folders and files, open (the tool has no units yet: once it has, the folders start folded and `Units` comes first). The project's files that are not part of the tool are greyed out and marked `⊖`.
+8. Press `↑` (to `◂ Back to the project view`), `Enter`, then `Enter` on `Back to the project view`. **You should see** the Project view again, `Open tool t-unlzg` selected.
 
 **Do.** Press `q`.
 
 **You should see** your Terminal prompt again.
 
-**What it means.** This answers the second half of 12C: the cockpit does the same as Steps 12.2–12.5, through dialogs that show each command before running it.
+**What it means.** This answers the second half of 12C: the cockpit does the same as Steps 12.2–12.5, through dialogs that show each command before running it, and keeps each accepted tool one row away.
 
-**If you do not see that.** If you typed something else by mistake, the menu comes back: start this step again.
+**If you do not see that.** If you pressed a key by mistake, `Esc` closes any menu or dialog without running anything: start this step again from 1.
 
 #### Answer to 12C
 
-If I edit the C, does the harness notice? Yes: the map named `t-lzg` as changed (Step 12.16) and the status showed the stale verdict (Step 12.17). What do I do? Accept again, scan, plan and verify (Steps 12.18–12.21), which ended GREEN. And the cockpit does the same through a numbered menu (Steps 12.23–12.28).
+If I edit the C, does the harness notice? Yes: the map named `t-lzg` as changed (Step 12.16) and the status showed the stale verdict (Step 12.17). What do I do? Accept again, scan, plan and verify (Steps 12.18–12.21), which ended GREEN. And the cockpit does the same from its Project view, through the same dialogs as everywhere else (Steps 12.23–12.28).
 
 ### Checkpoint — Part 12
 

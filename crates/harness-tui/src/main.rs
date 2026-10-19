@@ -914,6 +914,23 @@ fn run(
                 *guard(&KEPT_EDITS) = app.kept_paths();
                 let _ = std::fs::remove_dir_all(tmp);
             }
+            // An accepted tool of the project, from the Project view: read
+            // as at the start (a ledger made elsewhere refused in words),
+            // then shown, its own loader from now on.
+            Command::OpenTool(id) => {
+                match load::read_tool(&app.config.target, Some(&id)).and_then(|read| {
+                    Loader::for_tool(Some(id.clone()))
+                        .map(|l| (read, l))
+                        .map_err(|e| format!("the loader thread: {e}"))
+                }) {
+                    Ok((read, l)) => {
+                        *loader = l;
+                        whys.clear();
+                        app.open_tool(id, read);
+                    }
+                    Err(why) => app.say(format!("Open tool {id}: {why}")),
+                }
+            }
             Command::EditFeatures { file, line } => {
                 // The draft is named on any way out from now on.
                 *guard(&KEPT_EDITS) = app.kept_paths();
@@ -1014,70 +1031,23 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // A mapped project with no root harness.toml and no --tool: the project
-    // mode, in a terminal — Map the project, then Ask and Accept a program,
-    // each a dialog over the `harness project` command, and once tools
-    // exist each tool to open (docs/PROJECT-MAP-DESIGN.md §3.7). The tool
-    // picked (or the only one) is opened below as on any target.
-    let mut picked: Option<String> = None;
-    if harness_tui::project::applies(&target, args.tool.as_deref()) && {
+    // A project with no root harness.toml and no --tool — no tool yet, a
+    // map to act on, or several tools — opens on the Project view: the map's
+    // programs as rows, Map, Ask and Accept in their menus, each the
+    // cockpit's own dialog over the `harness project` command, and each
+    // accepted tool a row that opens it (docs/PROJECT-MAP-DESIGN.md §3.7).
+    // In a terminal only: away from one the folder is refused below in the
+    // command line's words, as before.
+    let project_view = harness_tui::project::applies(&target, args.tool.as_deref()) && {
         use std::io::IsTerminal;
         std::io::stdin().is_terminal()
-    } {
-        if let Some(code) = adoption_gate(&target, None) {
-            return code;
-        }
-        let harness = match resolve_harness(args.harness.clone()) {
-            Ok(Some(h)) => h,
-            Ok(None) => {
-                eprintln!(
-                    "harness-tui: no `harness` binary found (PATH, or --harness <path>), so the \
-                     project cannot be mapped from here: run `harness project map --target {}`",
-                    harness_core::runtime_view::shell_quote(&target.to_string_lossy())
-                );
-                return ExitCode::from(1);
-            }
-            Err(why) => {
-                eprintln!("harness-tui: {why}");
-                return ExitCode::from(2);
-            }
-        };
-        let mut exec = |argv: &[String]| -> Result<i32, String> {
-            std::process::Command::new(&harness)
-                .args(argv)
-                .status()
-                .map(|s| s.code().unwrap_or(1))
-                .map_err(|e| format!("{}: {e}", harness.display()))
-        };
-        match harness_tui::project::run(
-            &target,
-            &mut std::io::stdin().lock(),
-            &mut std::io::stderr(),
-            &mut exec,
-        ) {
-            Ok(harness_tui::project::Next::Open(id)) => picked = id,
-            Ok(harness_tui::project::Next::Leave) => return ExitCode::SUCCESS,
-            Err(why) => {
-                eprintln!("harness-tui: {why}");
-                return ExitCode::from(1);
-            }
-        }
-    }
-    // The target: `--tool`, else the root's harness.toml, else the
-    // project's only mapped tool; several are listed for the person to pick
-    // in a terminal (docs/PROJECT-MAP-DESIGN.md §3.7).
-    let tool = {
-        use std::io::IsTerminal;
-        let mut stdin = std::io::stdin().lock();
-        let mut stderr = std::io::stderr();
-        let ask: Option<(&mut dyn std::io::BufRead, &mut dyn std::io::Write)> =
-            if std::io::stdin().is_terminal() {
-                Some((&mut stdin, &mut stderr))
-            } else {
-                None
-            };
-        let tool = args.tool.as_deref().or(picked.as_deref());
-        match harness_tui::chooser::choose(&target, tool, ask) {
+    };
+    // The target otherwise: `--tool`, else the root's harness.toml, else the
+    // project's only mapped tool.
+    let tool = if project_view {
+        None
+    } else {
+        match harness_tui::chooser::choose(&target, args.tool.as_deref()) {
             Ok(tool) => tool,
             // Not a usage error (the id was checked with the arguments): the
             // folder names no target to open — exit 1, as the command line.
@@ -1093,12 +1063,17 @@ fn main() -> ExitCode {
         return code;
     }
     // The first read runs here, before the terminal is taken: a target the
-    // preflight refuses is refused in words.
-    let snapshot = match load::read_tool(&target, tool.as_deref()) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("harness-tui: {} is unreadable: {e}", target.display());
-            return ExitCode::from(1);
+    // preflight refuses is refused in words. The Project view reads only
+    // its map.
+    let snapshot = if project_view {
+        load::Read::empty(&target)
+    } else {
+        match load::read_tool(&target, tool.as_deref()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("harness-tui: {} is unreadable: {e}", target.display());
+                return ExitCode::from(1);
+            }
         }
     };
     // Every background re-read opens the same tool as the first read.
@@ -1121,22 +1096,29 @@ fn main() -> ExitCode {
         eprintln!("harness-tui: signals: {e}");
         return ExitCode::from(1);
     }
-    let mut app = App::new(
-        Config {
-            target,
-            harness: harness.clone(),
-            allow_unsandboxed: args.allow_unsandboxed,
-            layout: args.layout,
-            providers: args.providers,
-            tool,
-        },
-        snapshot,
-    );
+    let config = Config {
+        target,
+        harness: harness.clone(),
+        allow_unsandboxed: args.allow_unsandboxed,
+        layout: args.layout,
+        providers: args.providers,
+        tool,
+    };
+    let mut app = if project_view {
+        App::new_project(config)
+    } else {
+        let mut app = App::new(config, snapshot);
+        // A project's tool keeps a row back to the Project view.
+        if harness_tui::project::is_project(&app.config.target) {
+            app.join_project();
+        }
+        app
+    };
     if harness.is_none() {
         app.say("no `harness` binary found (PATH, or --harness <path>): read-only, acts disabled");
     }
     app.mouse = args.mouse;
-    app.chat_on = args.chat;
+    app.set_chat(args.chat);
     if args.chat {
         let bins = chat::runtime::resolve(
             args.chat_runtime.as_deref(),

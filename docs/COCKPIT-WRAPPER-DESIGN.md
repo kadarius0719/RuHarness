@@ -92,7 +92,8 @@ The mock below is 120 columns wide:
 ```
 
 **Files** is the pane on the left.
-- It is 32 columns wide at 120 terminal columns or more, and 24 at 80–119.
+- It is 32 columns wide at 120 terminal columns or more, and 24 at 80–119 (the Project view's,
+  §9.1, 48 and 36).
 - A long name ends in `…`.
 - A row shows its state word at the right edge when the word fits. The selected row always
   shows it, and the View's title repeats it.
@@ -660,8 +661,57 @@ here." A selected feature's View says its mark in words ("◉ runs Rust now: …
 C: …"). The View's title says the tree's compact counts in words ("1 needs attention · 0 of 13
 C files in Rust": files, not units).
 
-A target without `harness.toml` is refused at start, in words: "<dir> is not a harness target
-(no harness.toml); start with `--target <target dir>`". This replaces today's raw io error.
+A folder with no `harness.toml` opens, in a terminal, on the Project view (§9.1), where the first
+act is to map it. Away from a terminal, and for a `--tool <id>` that names no tool of the folder,
+it is refused at start in the command line's words ("<dir> is not a harness target (no
+harness.toml) …", "<root> has no mapped tool <id> …"), never with a raw io error.
+
+### 9.1 The Project view (pass 3 of the 2026-10-18 critique)
+
+A project with no root `harness.toml` and no `--tool` — not mapped yet, mapped, or with several
+tools — opens on the **Project view**, the same screen as a tool's: the two panes, the activity
+rows, the key bar, the help, the menus and the dialogs. Nothing is asked before the terminal is
+taken (the numbered text menu and its "Type a number" prompt are gone; only the adoption question
+of a ledger made elsewhere still comes first, as on any target). A project with exactly one tool
+and no map opens that tool, as the command line does.
+
+- **The left pane, "Project"** (48 columns at 120 or more, 36 at 80–119: its rows say a state in
+  words): before a map one row, **Map the project**. After a map, the heading "Programs (n)", each
+  program a row — its id and kind guess, "t-lzg (tool)", its mark and its state in words at the
+  right (`✓ linked`, `⚠ held on a choice`, `✗ did not compile`, `✗ did not link`, `· incomplete`,
+  `· fuzzer, not a tool`; `✓ accepted` once it is a tool) — with its file, dim, on the line under
+  it; a file holding a `main` that did not compile as a note; "Libraries (n)" likewise
+  (`compiles`); "Accepted tools (n)" with one row per tool, **Open tool t-lzg — src/tools/lzg.c**.
+  The rows do not fold.
+- **The right pane** is titled with the folder's name and where the map stands ("liblzg · a C
+  project — 3 programs found"; never the full path). It leads with the **Next step**, from the
+  same rules as pass 1: no map → Map; a guess → state the build in migration/map/config.toml or
+  Ask for a proposal; a held choice → pick it in Accept; a program ready → Accept it; a tool →
+  open it. Then the project in words: the configuration's state (a guess / proposed / stated),
+  the programs, libraries and tools in full (each a link to its row), and what the selected
+  program is — its file, kind, state, each held choice with its files and the model's advice.
+- **Enter on a row** opens the menu, the recommended item first with its reason: **Accept this
+  program** (or library) and **Accept it under a run name of your own…** on a program row (greyed
+  with "Accept needs a stated configuration …" while the configuration is a guess; on a fuzzer,
+  greyed with why), **Open tool <id>** on a tool's row (or an accepted program's), **Map the
+  project** / **Map the project again**, and, once a map exists, under the model separator, **Ask
+  for a proposal** (`--build`) or **Ask a model for advice** (the held choices).
+- **Accept** asks each held choice first, in a menu titled "Accept <id>": the question "<id> holds
+  the choice d1: linking cannot tell its files apart, so keep which one?", the model's advice
+  above the items when a reply fits the map, the definers as items, none recommended; a set reached
+  only under a choice not made is skipped. The run-name item then asks for the name on one line.
+- **Each act's dialog** keeps the command line's words: its title ("Map the project?", "Ask a
+  model for a proposal?", "Accept t-lzg?"), what it does, "It runs: harness project …", "It takes:
+  …", "It writes: …", then the exact argv (§5.1) — run without `--json`, so the details show the
+  command's own screen, indentation kept. It arms and runs as every act (§5.3). Its end says
+  "Map the project — done (2 s); c for its words" (or "ended with exit N") and reads the map
+  again; the 2 s tick reads nothing here.
+- **Open tool** reads the tool as at the start (a refusal said in the notice) and shows its screen;
+  the tool's tree then starts with a row **◂ Back to the project view**, whose Enter (menu: "Back
+  to the project view") returns, the tool just left selected. Neither move is offered while a
+  command runs, a hand edit or a draft is kept, a hand-off waits, or the chat holds a
+  conversation (each greyed with why). The chat has no pane in the Project view: it works on a
+  tool.
 
 ## 10. The chat pane
 

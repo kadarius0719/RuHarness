@@ -56,6 +56,23 @@ pub enum Action {
     DiscardWorkloadsDraft,
     /// Compare the kept outputs of a row that behaves differently.
     CompareOutputs(crate::speed::SideKey, String),
+    /// The Project view's Map or Ask: its dialog
+    /// (docs/PROJECT-MAP-DESIGN.md §3.7).
+    Project(crate::project::Act),
+    /// Accept a program or library of the map: its held choices picked
+    /// first, then (with `run_name`) a run name typed, then its dialog.
+    AcceptProgram {
+        /// The program or library.
+        id: String,
+        /// Ask for a run name of the person's.
+        run_name: bool,
+    },
+    /// Accept's picker: keep this definer (its index).
+    Keep(String),
+    /// Read an accepted tool and open it.
+    OpenTool(String),
+    /// From a tool's screen, back to the Project view.
+    BackToProject,
 }
 
 /// One menu item.
@@ -75,7 +92,7 @@ pub struct Item {
     pub pending: Option<Pending>,
 }
 
-fn item(label: impl Into<String>, action: Action, accel: Option<&'static str>) -> Item {
+pub(crate) fn item(label: impl Into<String>, action: Action, accel: Option<&'static str>) -> Item {
     Item {
         label: label.into(),
         action,

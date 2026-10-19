@@ -84,7 +84,7 @@ project, `--tool <id>`; `harness <command> --help` lists every option.
 | Flag | Meaning |
 |---|---|
 | `--adopt` | Trust a ledger made on another computer, once per checkout: deletes its build folders, writes a fresh token; its verdicts show "made elsewhere" until verified here. |
-| `--target DIR`, `--tool ID` | The project; on a mapped project, which accepted tool. With two or more tools and no `--tool`, the command refuses (exit 1) and names them: "… pick one with --tool (t-a, t-b)"; the cockpit lists them for you to pick. |
+| `--target DIR`, `--tool ID` | The project; on a mapped project, which accepted tool. With two or more tools and no `--tool`, the command refuses (exit 1) and names them: "… pick one with --tool (t-a, t-b)"; the cockpit opens on its Project view, a row to open each tool. |
 | `--provider NAME` | `external` (file hand-off, the default), `replay`, `anthropic` (`ANTHROPIC_API_KEY`), or a profile from `$RUHARNESS_PROVIDERS`. A target's `harness.toml` can only name a profile; endpoints and keys live in your file. |
 | `--model NAME` | The model sent to the provider; with `external`, who answers (recorded). |
 | `--retry` | Records a new sample; finished attempts are never overwritten. |

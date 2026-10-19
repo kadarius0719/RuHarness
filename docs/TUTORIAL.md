@@ -331,7 +331,7 @@ args = ["-9"]
 
 **When the project changes**, the map says which tools changed and how, and the tool's status starts with the same sentence. When only the tool's own C changed, it says to scan the tool; when what the tool needs or how it links changed, it says to accept it again. Accepting again rewrites the parts of the tool's `harness.toml` that the map decides (the files, the include folders, the configuration, the picks, the run name, the libraries it links with) and keeps the rest: its ledger, and what you added yourself, such as an `[oracle.whole_program]` section or a `model`. The closing line says what was kept.
 
-**In the cockpit**, a project folder with no tool yet shows the project's acts instead of the usual tree, each as a dialog that shows the exact command and runs only when you type `y`: **Map the project**, **Ask a model for advice** (for a configuration while it is a guess, then for the held choices), and **Accept a program**, which while the configuration is a guess says "Accept needs a stated configuration …". In an open tool, project files outside it are shown greyed with `⊖`.
+**In the cockpit**, a project folder with no `harness.toml` opens on its **Project view**: the same full-screen cockpit, with the map's programs as rows on the left (each with its kind guess and its state in words, such as `linked` or `held on a choice`) and the project in words on the right, its **Next step** first. Before a map there is one row, `Map the project`. `Enter` on a row opens its menu, the recommended act first: **Map the project**, **Ask for a proposal** (while the configuration is a guess; **Ask a model for advice** about the held choices once it is stated), and **Accept this program**, which while the configuration is a guess is greyed with "Accept needs a stated configuration …". Each is the cockpit's usual dialog: it shows the exact command, how long it takes and what it writes, and runs only on `y`; its output is in the details (`c`). A held choice is picked in a small menu before the dialog. Each accepted tool gets a row, `Open tool t-lzg — src/tools/lzg.c`, and the tool's screen keeps a first row, `◂ Back to the project view`. In an open tool, project files outside it are shown greyed with `⊖`.
 
 **Two maps, two questions.** RuHarness has two maps, and they answer different questions:
 
@@ -484,7 +484,8 @@ Beside an attempt row (under its unit), `✓` is GREEN, `✗` is RED, and `◐` 
 | Hand edit · Continue my kept hand edit | A unit | Edit the Rust yourself; the judge judges it. |
 | Write your features file · Map the features | Features | Section 10. |
 | Write your workloads file · Measure speed · Measure this unit's speed · Compare the outputs | Speed, or a verified unit | Section 12. |
-| Map the project · Ask a model for advice · Accept a program | A project with no tool yet | Section 13. |
+| Map the project · Ask for a proposal · Ask a model for advice · Accept this program · Open tool … | A row of the Project view (a project with no `harness.toml`) | Section 13. |
+| Back to the project view | A tool's first row, on a mapped project | The project's programs and acts again. |
 | Open unit … | The project, when its Next step names a unit | Goes to that unit. |
 | Cancel the running command · Re-read the project | Anywhere | Stop it (asked first); load the ledger again. |
 

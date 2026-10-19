@@ -2054,25 +2054,41 @@ move it (docs/PROJECT-MAP-DESIGN.md §3.3).
 extra_link_args, run_name, picks: [{set, definers, keep, by}], not_kept, kept?, dropped?}`
 after the picks' `message` lines.
 
-**The cockpit** (`harness-tui`), opened in a terminal on a project with no root `harness.toml`
-and no `--tool`, with no mapped tool yet or a map to act on, offers the project's acts before
-the terminal is taken: once tools exist, "Open <id> — <program's path>" for each first; "Map
-the project" (then "Map the project again"); and after a map "Ask a model for advice" and
-"Accept a program". The acts follow the open question: while the configuration is a guess (or
-came with the project) Ask runs `--build`, and Accept says before any picker "Accept needs a
-stated configuration, and this map's is a guess (or came with the project): write it in
-migration/map/config.toml, or Ask for a proposal, then map again." Accept lists the map's
-`main` programs and libraries, then each held choice's definers, none suggested, skipping a set
-whose `under` names no choice made so far; a reply bound to the map's digests shows its advice
-beside the definers — "The model's advice (<model>): keep d1.2, reason …  — advice only, the
-choice is yours." — each answer checked as `ask` checks one. The map file's ids, sets and
-indexes are shape-checked before anything of them is shown or put in a command (a map that
-fails says so and offers Map only), and every string shown goes through `safe_line`. Each act's
-dialog says what it runs (the `harness project …` command line, the same words), how long it
-takes (Ask: one model call for each 10 held choices) and what it writes, and runs it only on a
-typed `y`. The first tool accepted is opened; with no map, tools are opened as any target
-(several listed with their program's path when a map names it). harness-mcp never runs these
-acts.
+**The cockpit** (`harness-tui`), opened on a project with no root `harness.toml` and no
+`--tool` — no mapped tool yet, a map to act on, or several tools — opens on its **Project
+view** (pass 3 of docs/reviews/2026-10-18-cockpit-usability-critique.md): the cockpit's own
+screen, panes, key bar and dialogs. Its left pane: before a map one row, "Map the project"; after
+a map "Programs (n)" with each program as a row ("t-lzg (tool)", its state in words — linked,
+held on a choice, did not compile, did not link, incomplete, fuzzer — and its file under it), a
+file holding a `main` that did not compile as a note, "Libraries (n)" likewise ("compiles" or
+"did not compile"), and "Accepted tools (n)" with a row "Open tool <id> — <program's path>"
+each. Its right pane: the folder's name (never the full path), the configuration's state in
+words (a guess / proposed / stated), the programs, libraries and tools again in full, what the
+selected program is (its held choices, the model's advice), and a Next step: no map → Map; a
+guess → state the build in migration/map/config.toml or Ask for a proposal; a held choice → pick
+it in Accept; a program ready → Accept it; a tool → open it. `Enter` on a row opens its menu, the
+recommended item first: "Accept this program" (or "this library") and "Accept it under a run
+name of your own…", "Open tool <id>" on an accepted one, "Map the project" (then "Map the
+project again"), and once a map exists "Ask for a proposal" (`--build`, while the configuration
+is a guess or nothing is held) or "Ask a model for advice". While the configuration is a guess
+(or came with the project) Accept is greyed with "Accept needs a stated configuration, and this
+map's is a guess (or came with the project): write it in migration/map/config.toml, or Ask for a
+proposal, then map again". Accept asks each held choice first, in a menu titled "Accept <id>":
+"<id> holds the choice d1: linking cannot tell its files apart, so keep which one?", the
+definers as items, none suggested, skipping a set whose `under` names no choice made so far; a
+reply bound to the map's digests shows its advice above them — "The model's advice (<model>):
+keep d1.2, reason …  — advice only, the choice is yours." — each answer checked as `ask` checks
+one; then, for a run name, a line to type it (letters, digits, `.`, `_`, `-`, not starting with
+`-` or `.`). The map file's ids, sets and indexes are shape-checked before anything of them is
+shown or put in a command (a map that fails says so and offers Map only), and every string shown
+goes through `safe_line` and the display filter. Each act's dialog says what it runs (the
+`harness project …` command line, the same words, then the exact argv), how long it takes (Ask:
+one model call for each 10 held choices) and what it writes, and runs it only once armed, on
+`y`; the command's own words land in the activity details (`c`), and its end reads the map
+again. "Open tool" reads that tool as at the start and opens its screen, whose first row, "◂
+Back to the project view", comes back (neither while a command runs, a hand edit or a draft is
+kept, a hand-off waits or the chat holds a conversation). A project with exactly one tool and no
+map opens that tool, with the same first row. harness-mcp never runs these acts.
 
 ## `harness project ask` (docs/PROJECT-MAP-DESIGN.md §3.4, §3.8, §5 step d)
 
@@ -2243,8 +2259,8 @@ lookup order:
 2. Without `--tool`: the root's `harness.toml` (folder form, ledger `migration/`).
 3. Else, when `migration/tools/` holds exactly one tool: that tool.
 4. Else, with several tools: refused (exit 1), the tools named: "<root> has N mapped tools and
-   no harness.toml of its own; pick one with --tool (t-a, t-b)". The cockpit, in a terminal,
-   lists them for the person to pick instead; away from one it refuses with the same words.
+   no harness.toml of its own; pick one with --tool (t-a, t-b)". The cockpit opens on its
+   Project view instead, a row to open each tool.
    With no tool either, the root's missing `harness.toml` is the error, as before.
 
 A resume command (`awaiting`'s `resume`) carries `--tool=<id>` after `--target=`; the cockpit

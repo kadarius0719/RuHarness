@@ -615,6 +615,8 @@ fn the_continuation_permission_runs_waits_holds_and_ends() {
         focus: 0,
         footer: None,
         reason: None,
+        title: None,
+        note: Vec::new(),
     });
     assert_eq!(a.chat_step(quiet), Command::None);
     assert!(a.chat_waits_why(quiet).unwrap().contains("close the menu"));

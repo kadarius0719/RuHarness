@@ -15,7 +15,10 @@
 
 pub mod asks;
 pub mod features_edit;
+mod project_view;
 pub mod speed_acts;
+
+pub use project_view::{Pick, ProjectState};
 
 use crate::chat::{self, Chat};
 use crate::dialog::{Choice, Dialog, Kind, Outcome};
@@ -223,6 +226,12 @@ pub enum Act {
     /// `perf run --runs 31` on the workloads whose rows ask for it — a
     /// unit's, or (without one) the program as it stands's.
     MeasureMore,
+    /// `project map` (the Project view, docs/PROJECT-MAP-DESIGN.md §3.7).
+    ProjectMap,
+    /// `project ask`.
+    ProjectAsk,
+    /// `project accept <id>`.
+    ProjectAccept,
 }
 
 impl Act {
@@ -246,6 +255,9 @@ impl Act {
             Act::Measure => "Measure speed",
             Act::MeasureProgram => "Measure the program as it stands",
             Act::MeasureMore => "Measure again with 31 runs",
+            Act::ProjectMap => "Map the project",
+            Act::ProjectAsk => "Ask a model",
+            Act::ProjectAccept => "Accept a program",
         }
     }
 
@@ -268,7 +280,10 @@ impl Act {
             | Act::SaveWorkloads
             | Act::Measure
             | Act::MeasureProgram
-            | Act::MeasureMore => None,
+            | Act::MeasureMore
+            | Act::ProjectMap
+            | Act::ProjectAsk
+            | Act::ProjectAccept => None,
         }
     }
 
@@ -276,8 +291,19 @@ impl Act {
     pub fn model(self) -> bool {
         matches!(
             self,
-            Act::Modify | Act::Retry | Act::Resume | Act::Migrate | Act::Continue
+            Act::Modify | Act::Retry | Act::Resume | Act::Migrate | Act::Continue | Act::ProjectAsk
         )
+    }
+
+    /// One of the Project view's `harness project …` acts: its output is
+    /// the command line's words, not the event stream.
+    pub fn project(self) -> Option<crate::project::Act> {
+        match self {
+            Act::ProjectMap => Some(crate::project::Act::Map),
+            Act::ProjectAsk => Some(crate::project::Act::Ask),
+            Act::ProjectAccept => Some(crate::project::Act::Accept),
+            _ => None,
+        }
     }
 }
 
@@ -343,6 +369,9 @@ pub enum Command {
         /// The line to open at, when the editor takes `+N`.
         line: Option<u32>,
     },
+    /// Read the project's accepted tool and open it (the Project view's
+    /// "Open tool" row, docs/PROJECT-MAP-DESIGN.md §3.7).
+    OpenTool(String),
 }
 
 /// Why a read of the ledger was asked for (the requests fold, the strongest
@@ -430,6 +459,12 @@ pub struct Menu {
     /// Why the first item is recommended (the View's Next step), when it
     /// is: shown beside it.
     pub reason: Option<String>,
+    /// The menu's own title, when it is not the selection's name (Accept's
+    /// picker: "Accept t-unlzg").
+    pub title: Option<String>,
+    /// Lines above the items (Accept's picker: its question, the model's
+    /// advice).
+    pub note: Vec<String>,
 }
 
 /// An overlay or prompt.
@@ -486,6 +521,15 @@ pub enum Mode {
     Details {
         /// First row shown.
         scroll: usize,
+    },
+    /// Accept under a run name of the person's: typing it.
+    RunName {
+        /// The name so far.
+        input: String,
+        /// The program or library accepted.
+        id: String,
+        /// Its `--keep` picks.
+        keeps: Vec<String>,
     },
 }
 
@@ -859,6 +903,10 @@ pub struct App {
     /// Input was pending right after the last event was read (the loop sets
     /// it): the event is part of a burst.
     pub input_pending: bool,
+    /// The folder is a project (no root `harness.toml`): its map, its
+    /// tools, and whether the Project view is shown (docs/PROJECT-MAP-
+    /// DESIGN.md §3.7). `None` for a folder-form target.
+    pub project: Option<ProjectState>,
     last_load_error: Option<String>,
     pairs_key: Option<String>,
     pending_bracket: Option<char>,
@@ -1058,6 +1106,7 @@ impl App {
             chat_column: false,
             asks: asks::Asks::default(),
             input_pending: false,
+            project: None,
             last_load_error: None,
             pairs_key: None,
             pending_bracket: None,
@@ -1126,6 +1175,10 @@ impl App {
     /// Flatten the tree again, its default folds taken from the snapshot
     /// and the tree's height as last drawn.
     pub(crate) fn rebuild_rows(&mut self) {
+        if self.in_project_view() {
+            self.rows = self.project_rows();
+            return;
+        }
         let changed = self.expansion.set_defaults(tree::defaults(
             &self.snapshot,
             &self.files,
@@ -1143,6 +1196,18 @@ impl App {
             &self.walk,
             &self.expansion,
         );
+        // A project's tool: the row back to the Project view comes first.
+        if self.project.is_some() {
+            self.rows.insert(
+                0,
+                Row {
+                    depth: 0,
+                    kind: tree::RowKind::Node(Selection::ProjectHome),
+                    expandable: false,
+                    open: false,
+                },
+            );
+        }
     }
 
     /// Select `sel` (revealing it), re-reading the View when it changed.
@@ -1234,6 +1299,17 @@ impl App {
     /// Ask the event loop for a read of the ledger (folded with any request
     /// not yet started).
     pub fn request_load(&mut self, why: LoadWhy) {
+        // The Project view reads its map itself, at once (it is small and
+        // read whole); the 2 s tick reads nothing there.
+        if self.in_project_view() {
+            if why >= LoadWhy::Reaped {
+                self.reload_project();
+            }
+            if why == LoadWhy::Key {
+                self.notice = notice("re-read");
+            }
+            return;
+        }
         self.load_request = Some(self.load_request.map_or(why, |w| w.max(why)));
     }
 
@@ -1263,6 +1339,11 @@ impl App {
     /// read keeps the last snapshot and says why — once, until the reason
     /// changes (`g` always says it). `false` when it failed.
     pub fn on_loaded(&mut self, result: Result<Read, String>, why: LoadWhy) -> bool {
+        // A tool's read that lands once the Project view is back is dropped:
+        // opening the tool again reads it afresh.
+        if self.in_project_view() {
+            return true;
+        }
         let read = match result {
             Ok(read) => read,
             Err(e) => {
@@ -1533,6 +1614,14 @@ impl App {
                 return;
             }
             ChildMsg::Eof(_) => return,
+            // A `harness project …` command prints the command line's own
+            // words: each line as it is, its last one the step.
+            ChildMsg::Event(Event::NotJson { line }) if run.act.project().is_some() => {
+                run.narrator
+                    .on_event(&Event::NotJson { line: line.clone() });
+                push(run, Tone::Plain, line);
+                return;
+            }
             ChildMsg::Event(ev) => ev,
         };
         run.narrator.on_event(&ev);
@@ -1844,7 +1933,7 @@ impl App {
         if let Some(run) = self.run.as_mut() {
             let text = match (status.code(), &signal) {
                 (_, Some(sig)) => format!("interrupted ({sig})"),
-                (Some(code), _) if !run.saw_result => {
+                (Some(code), _) if !run.saw_result && run.act.project().is_none() => {
                     format!("exited without result (exit {code})")
                 }
                 (Some(code), _) => format!("exit {code}"),
@@ -1856,6 +1945,21 @@ impl App {
                 signal.as_deref(),
                 run.started.elapsed(),
             ));
+            // A project act's outcome is its exit and its words.
+            if run.act.project().is_some() {
+                let took = crate::narrate::elapsed_words(run.started.elapsed());
+                self.last = Some(match (status.code(), &signal) {
+                    (_, Some(sig)) => format!("{} — stopped ({sig}) ({took})", run.narrator.label),
+                    (Some(0), _) => {
+                        format!("{} — done ({took}); c for its words", run.narrator.label)
+                    }
+                    (Some(code), _) => format!(
+                        "{} — ended with exit {code} ({took}); c for its words",
+                        run.narrator.label
+                    ),
+                    (None, None) => format!("{} — ended ({took})", run.narrator.label),
+                });
+            }
             let ending = run.narrator.ending(status.code(), signal.as_deref());
             // A chat act is never offered again here: the chat asks again
             // (docs/CHAT-PANE-DESIGN.md §3.3).
@@ -2030,6 +2134,10 @@ impl App {
             chat: None,
         };
         match act {
+            // The Project view builds its own (`app::project_view`).
+            Act::ProjectMap | Act::ProjectAsk | Act::ProjectAccept => {
+                Err("a project act is built by the project view".into())
+            }
             Act::Scan | Act::Plan | Act::Detect => {
                 let sub = match act {
                     Act::Scan => "scan",
@@ -2358,6 +2466,9 @@ impl App {
         let attempt = p.attempt.clone().unwrap_or_default();
         let routing = || self.migrate_model.clone();
         let (title, mut body) = match p.act {
+            Act::ProjectMap | Act::ProjectAsk | Act::ProjectAccept => {
+                return self.project_dialog_words(p);
+            }
             Act::SaveFeatures => self.save_features_words(p),
             Act::SaveWorkloads => self.save_workloads_words(p),
             Act::Measure | Act::MeasureProgram | Act::MeasureMore => self.measure_words(
@@ -2989,6 +3100,10 @@ impl App {
     /// holder, its recommended item first and focused, with its reason.
     pub fn open_menu(&mut self) {
         self.refresh_holder();
+        if self.in_project_view() || self.selection == Selection::ProjectHome {
+            self.open_project_menu();
+            return;
+        }
         let mut items = self.menu_items();
         let advice = self.advice(&self.selection);
         let reason = menu::recommend(&mut items, advice.as_ref());
@@ -2997,6 +3112,8 @@ impl App {
             focus: 0,
             footer: None,
             reason,
+            title: None,
+            note: Vec::new(),
         });
     }
 
@@ -3151,6 +3268,32 @@ impl App {
                         self.mode = mode;
                     }
                     Err(why) => self.notice = notice(why),
+                }
+                Command::None
+            }
+            Action::Project(act) => {
+                self.ask_project(*act, "", Vec::new(), None);
+                Command::None
+            }
+            Action::AcceptProgram { id, run_name } => {
+                self.start_accept(id, *run_name);
+                Command::None
+            }
+            Action::Keep(index) => {
+                self.keep_chosen(index);
+                Command::None
+            }
+            Action::OpenTool(id) => match self.switch_refusal() {
+                Some(why) => {
+                    self.notice = notice(format!("Open tool {id}: {why}"));
+                    Command::None
+                }
+                None => Command::OpenTool(id.clone()),
+            },
+            Action::BackToProject => {
+                match self.switch_refusal() {
+                    Some(why) => self.notice = notice(format!("Back to the project view: {why}")),
+                    None => self.show_project(),
                 }
                 Command::None
             }
@@ -3382,6 +3525,10 @@ impl App {
             Mode::EditNote { input, .. } => (
                 push_bounded(input, &clean, MAX_EDIT_NOTE_BYTES),
                 MAX_EDIT_NOTE_BYTES,
+            ),
+            Mode::RunName { input, .. } => (
+                push_bounded(input, &clean, crate::project::MAX_RUN_NAME),
+                crate::project::MAX_RUN_NAME,
             ),
             _ => {
                 self.notice = notice("paste ignored outside a note");
@@ -3713,7 +3860,7 @@ impl App {
             },
             // A note being typed: its keys answer; a click never closes it
             // nor types into it (SAFE-B-8).
-            Mode::Note { .. } | Mode::EditNote { .. } => match found {
+            Mode::Note { .. } | Mode::EditNote { .. } | Mode::RunName { .. } => match found {
                 Some((rect, hit @ Hit::Hint(_))) => hold(self, rect, hit, true),
                 _ => Command::None,
             },
@@ -3960,7 +4107,9 @@ impl App {
                 m.footer = None;
                 return Command::None;
             }
-            Mode::Note { .. } | Mode::EditNote { .. } => return Command::None,
+            Mode::Note { .. } | Mode::EditNote { .. } | Mode::RunName { .. } => {
+                return Command::None
+            }
             Mode::Details { .. } if !over_overlay => {
                 self.scroll_pane(at, by);
                 return Command::None;
@@ -4282,6 +4431,42 @@ impl App {
                         keep(self, input, unit, attempt);
                     }
                     _ => keep(self, input, unit, attempt),
+                }
+                return Command::None;
+            }
+            Mode::RunName {
+                mut input,
+                id,
+                keeps,
+            } => {
+                match key.code {
+                    KeyCode::Esc => self.notice = notice(format!("Accept {id}: not run")),
+                    _ if ctrl_c => self.notice = notice(format!("Accept {id}: not run")),
+                    KeyCode::Enter if input.is_empty() => {
+                        self.ask_project(crate::project::Act::Accept, &id, keeps, None)
+                    }
+                    KeyCode::Enter if crate::project::is_run_name(&input) => {
+                        self.ask_project(crate::project::Act::Accept, &id, keeps, Some(input))
+                    }
+                    KeyCode::Enter => {
+                        self.notice = notice(format!(
+                            "a run name is letters, digits, `.`, `_` and `-`, at most {} \
+                             characters, not starting with `-` or `.`",
+                            crate::project::MAX_RUN_NAME
+                        ));
+                        self.mode = Mode::RunName { input, id, keeps };
+                    }
+                    KeyCode::Backspace => {
+                        input.pop();
+                        self.mode = Mode::RunName { input, id, keeps };
+                    }
+                    KeyCode::Char(c) if plain && !c.is_control() => {
+                        if input.len() < crate::project::MAX_RUN_NAME {
+                            input.push(c);
+                        }
+                        self.mode = Mode::RunName { input, id, keeps };
+                    }
+                    _ => self.mode = Mode::RunName { input, id, keeps },
                 }
                 return Command::None;
             }
@@ -4671,6 +4856,14 @@ impl App {
     /// The glyph and word of the node `sel` (for rows, titles and tests).
     pub fn node_label(&self, sel: &Selection) -> (&'static str, String) {
         match sel {
+            Selection::MapProject | Selection::Tool(_) | Selection::ProjectHome => {
+                ("", String::new())
+            }
+            Selection::Program(id) => match self.project_offered(id) {
+                Some(_) if self.project_tools().contains(id) => ("✓", "accepted".into()),
+                Some(o) => (o.state.glyph(), o.state.words().into()),
+                None => ("", String::new()),
+            },
             Selection::Project | Selection::Dir(_) | Selection::Units => ("", String::new()),
             Selection::Features => match &self.features.group {
                 featmap::Group::Invalid(_) => ("⚠", "error".into()),

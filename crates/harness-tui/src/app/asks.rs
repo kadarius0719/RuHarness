@@ -1397,7 +1397,7 @@ impl App {
             Mode::Dialog(_) => {
                 return Some("the chat's migration continues when you close the dialog")
             }
-            Mode::Note { .. } | Mode::EditNote { .. } => {
+            Mode::Note { .. } | Mode::EditNote { .. } | Mode::RunName { .. } => {
                 return Some("the chat's migration continues when you finish the note")
             }
             _ => {}
@@ -1740,6 +1740,10 @@ impl App {
             }
             Selection::Feature(_) => "a feature".into(),
             Selection::Speed => "the speed of the C against the Rust".into(),
+            Selection::ProjectHome => "the row back to the project view".into(),
+            Selection::MapProject | Selection::Program(_) | Selection::Tool(_) => {
+                "the project view".into()
+            }
             Selection::Unit(id) => unit_word(id),
             Selection::Crate(id) => format!("the crate of {}", unit_word(id)),
             Selection::Attempt(u, a) => {

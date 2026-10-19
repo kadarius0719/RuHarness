@@ -1,0 +1,748 @@
+//! The Project view's state and acts (docs/PROJECT-MAP-DESIGN.md §3.7; pass
+//! 3 of docs/reviews/2026-10-18-cockpit-usability-critique.md): on a project
+//! with no root `harness.toml` the cockpit opens on the project — its left
+//! pane the rows of what the map found, its right pane the project in words
+//! — with the same menus, dialogs, activity details and keys as a tool's
+//! screen. Map, Ask and Accept run `harness project …` through the cockpit's
+//! own armed dialog; Accept's held choices are picked in a menu, one per
+//! held set, first. An accepted tool opens from its row ("Open tool"), and
+//! its screen keeps a row back here.
+
+use super::{notice, os, Act, App, Config, Focus, Menu, Mode, Pending};
+use crate::menu::{item, Action, Item};
+use crate::next::Advice;
+use crate::project::{self, MapView, Offered, State};
+use crate::tree::{Row, RowKind, Selection};
+use harness_core::text::safe_line;
+use std::collections::BTreeMap;
+use std::path::Path;
+
+/// What the Project view knows of the project.
+#[derive(Debug, Clone)]
+pub struct ProjectState {
+    /// The Project view is shown (else a tool's screen is, with its row
+    /// back here).
+    pub shown: bool,
+    /// The map as last read: none yet, or why it cannot be read.
+    pub map: Result<Option<MapView>, String>,
+    /// The accepted tools, by id.
+    pub tools: Vec<String>,
+    /// The model's advice on the held sets, by set.
+    pub advice: BTreeMap<String, project::Advice>,
+    /// The chat pane is wanted on a tool's screen (the Project view has
+    /// none: the chat works on a tool).
+    pub chat_wanted: bool,
+    /// Accept's picker, while it asks.
+    pub pick: Option<Pick>,
+}
+
+/// Accept's picker in progress: the held sets answered so far.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pick {
+    /// The program or library accepted.
+    pub id: String,
+    /// The definers kept so far (indexes).
+    pub kept: Vec<String>,
+    /// The sets answered so far.
+    pub asked: Vec<String>,
+    /// The `--keep` values so far (`d1=d1.2`).
+    pub keeps: Vec<String>,
+    /// A run name of the person's is typed before the dialog.
+    pub run_name: bool,
+}
+
+impl ProjectState {
+    /// The project at `root` as it stands: its map, its tools, the advice.
+    pub fn read(root: &Path) -> ProjectState {
+        let map = project::read_map(root);
+        let advice = match &map {
+            Ok(Some(m)) => project::read_advice(root, m),
+            _ => BTreeMap::new(),
+        };
+        ProjectState {
+            shown: true,
+            map,
+            tools: harness_core::config::mapped_tools(root),
+            advice,
+            chat_wanted: false,
+            pick: None,
+        }
+    }
+
+    /// The map, when one was read.
+    pub fn map(&self) -> Option<&MapView> {
+        self.map.as_ref().ok().and_then(Option::as_ref)
+    }
+}
+
+fn heading(text: String) -> Row {
+    Row {
+        depth: 0,
+        kind: RowKind::Heading(text),
+        expandable: false,
+        open: false,
+    }
+}
+
+/// A program's file, dim, under its row.
+fn detail(path: &str) -> Row {
+    Row {
+        depth: 3,
+        kind: RowKind::Detail(safe_line(path)),
+        expandable: false,
+        open: false,
+    }
+}
+
+fn node(depth: usize, sel: Selection) -> Row {
+    Row {
+        depth,
+        kind: RowKind::Node(sel),
+        expandable: false,
+        open: false,
+    }
+}
+
+impl App {
+    /// The cockpit on the project at `config.target` (no root
+    /// `harness.toml`), opened on its Project view.
+    pub fn new_project(config: Config) -> App {
+        let read = crate::load::Read::empty(&config.target);
+        let mut app = App::new(config, read);
+        app.project = Some(ProjectState::read(&app.config.target));
+        app.selection = Selection::MapProject;
+        app.rebuild_rows();
+        app.select_first_project_row();
+        app
+    }
+
+    /// A tool's screen opened on a project (`--tool`, or its only tool):
+    /// its first row goes back to the Project view.
+    pub fn join_project(&mut self) {
+        let mut p = ProjectState::read(&self.config.target);
+        p.shown = false;
+        self.project = Some(p);
+        self.rebuild_rows();
+    }
+
+    /// The Project view is shown.
+    pub fn in_project_view(&self) -> bool {
+        self.project.as_ref().is_some_and(|p| p.shown)
+    }
+
+    /// The chat pane on or off (`--chat`): the Project view keeps it for
+    /// the tools' screens.
+    pub fn set_chat(&mut self, on: bool) {
+        match self.project.as_mut().filter(|p| p.shown) {
+            Some(p) => {
+                p.chat_wanted = on;
+                self.chat_on = false;
+            }
+            None => self.chat_on = on,
+        }
+    }
+
+    /// The map's program or library `id`.
+    pub fn project_offered(&self, id: &str) -> Option<&Offered> {
+        self.project.as_ref()?.map()?.get(id)
+    }
+
+    /// The accepted tools.
+    pub fn project_tools(&self) -> &[String] {
+        self.project.as_ref().map_or(&[], |p| p.tools.as_slice())
+    }
+
+    /// The Project view's map, when one was read.
+    pub fn project_map(&self) -> Option<&MapView> {
+        self.project.as_ref()?.map()
+    }
+
+    /// Read the map and the tools again; the selection stays when its row
+    /// does, else the first row.
+    pub fn reload_project(&mut self) {
+        let Some(p) = self.project.as_mut() else {
+            return;
+        };
+        let fresh = ProjectState::read(&self.config.target);
+        p.map = fresh.map;
+        p.tools = fresh.tools;
+        p.advice = fresh.advice;
+        p.pick = None;
+        self.rebuild_rows();
+        if crate::tree::row_of(&self.rows, &self.selection).is_none() {
+            self.select_first_project_row();
+        }
+    }
+
+    fn select_first_project_row(&mut self) {
+        if let Some(sel) = self.rows.iter().find_map(|r| r.selection().cloned()) {
+            self.selection = sel;
+        }
+        self.scroll = 0;
+        self.link = None;
+    }
+
+    /// The Project view's rows: one row "Map the project" before a map (or
+    /// when the map is unreadable or offers nothing); after a map the
+    /// programs, the libraries, then the accepted tools, each group under
+    /// its heading.
+    pub(crate) fn project_rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        let Some(p) = &self.project else {
+            return rows;
+        };
+        let map = p.map();
+        if map.is_none_or(|m| m.offered.is_empty() && m.not_compiled.is_empty()) {
+            rows.push(node(0, Selection::MapProject));
+        }
+        if let Some(m) = map {
+            let programs: Vec<&Offered> =
+                m.offered.iter().filter(|o| o.kind != "library").collect();
+            rows.push(heading(format!(
+                "Programs ({})",
+                programs.len() + m.not_compiled.len()
+            )));
+            for o in programs {
+                rows.push(node(1, Selection::Program(o.id.clone())));
+                rows.push(detail(&o.path));
+            }
+            for path in &m.not_compiled {
+                rows.push(Row {
+                    depth: 1,
+                    kind: RowKind::Note(format!("{} — did not compile", safe_line(path))),
+                    expandable: false,
+                    open: false,
+                });
+            }
+            let libraries: Vec<&Offered> =
+                m.offered.iter().filter(|o| o.kind == "library").collect();
+            if !libraries.is_empty() {
+                rows.push(heading(format!("Libraries ({})", libraries.len())));
+                for o in libraries {
+                    rows.push(node(1, Selection::Program(o.id.clone())));
+                    rows.push(detail(&o.path));
+                }
+            }
+        }
+        if !p.tools.is_empty() {
+            rows.push(heading(format!("Accepted tools ({})", p.tools.len())));
+            for id in &p.tools {
+                rows.push(node(1, Selection::Tool(id.clone())));
+            }
+        }
+        rows
+    }
+
+    /// The project's Next step, from its state: no map → Map; a guess →
+    /// state the build or Ask for a proposal; a held choice → pick it in
+    /// Accept; a program ready → Accept it; a tool → open it.
+    pub fn project_next(&self) -> Option<Advice> {
+        let p = self.project.as_ref()?;
+        let say = |text: String, action: Option<Action>| Some(Advice { text, action });
+        let m = match &p.map {
+            Err(_) => {
+                return say(
+                    "the map could not be read — press Enter and choose Map the project again"
+                        .into(),
+                    Some(Action::Project(project::Act::Map)),
+                )
+            }
+            Ok(None) => {
+                return say(
+                    "No map yet — press Enter and choose Map the project".into(),
+                    Some(Action::Project(project::Act::Map)),
+                )
+            }
+            Ok(Some(m)) => m,
+        };
+        if m.proposed {
+            return say(
+                "the configuration came with the project and is only proposed — state it with \
+                 `harness project map --adopt`, or write migration/map/config.toml, then choose \
+                 Map the project again"
+                    .into(),
+                Some(Action::Project(project::Act::Map)),
+            );
+        }
+        if m.guessed {
+            return say(
+                "the configuration is a guess — state the build in migration/map/config.toml \
+                 and choose Map the project again, or press Enter and choose Ask for a proposal"
+                    .into(),
+                Some(Action::Project(project::Act::Ask)),
+            );
+        }
+        let open = |o: &&Offered| o.acceptable() && !p.tools.contains(&o.id);
+        if let Some(o) = m
+            .offered
+            .iter()
+            .filter(open)
+            .find(|o| o.state == State::Held)
+        {
+            return say(
+                format!(
+                    "{} holds a choice — press Enter on it and choose Accept this program to \
+                     pick which file to keep",
+                    safe_line(&o.id)
+                ),
+                Some(Action::AcceptProgram {
+                    id: o.id.clone(),
+                    run_name: false,
+                }),
+            );
+        }
+        if let Some(o) = m
+            .offered
+            .iter()
+            .filter(open)
+            .find(|o| matches!(o.state, State::Linked | State::Compiles))
+        {
+            return say(
+                format!(
+                    "{} {} and is ready — press Enter on it and choose Accept this {}",
+                    safe_line(&o.id),
+                    if o.state == State::Linked {
+                        "links"
+                    } else {
+                        "compiles"
+                    },
+                    o.noun()
+                ),
+                Some(Action::AcceptProgram {
+                    id: o.id.clone(),
+                    run_name: false,
+                }),
+            );
+        }
+        if let Some(id) = p.tools.first() {
+            return say(
+                format!(
+                    "{} is accepted — press Enter on Open tool {} to scan, plan and migrate it",
+                    safe_line(id),
+                    safe_line(id)
+                ),
+                Some(Action::OpenTool(id.clone())),
+            );
+        }
+        say(
+            "no program links yet — state the build's flags in migration/map/config.toml and \
+             choose Map the project again"
+                .into(),
+            Some(Action::Project(project::Act::Map)),
+        )
+    }
+
+    /// A Project view row's Next step (the menu's recommended item).
+    pub fn project_row_advice(&self, sel: &Selection) -> Option<Advice> {
+        let say = |text: String, action: Option<Action>| Some(Advice { text, action });
+        match sel {
+            Selection::ProjectHome => say(
+                "the project's programs, Map, Ask and Accept are on the project view — press \
+                 Enter and choose Back to the project view"
+                    .into(),
+                Some(Action::BackToProject),
+            ),
+            Selection::Tool(id) => say(
+                format!("open tool {} to scan, plan and migrate it", safe_line(id)),
+                Some(Action::OpenTool(id.clone())),
+            ),
+            Selection::Program(id) => {
+                let m = self.project_map()?;
+                let o = m.get(id)?;
+                if m.unstated() {
+                    return self.project_next();
+                }
+                if self.project_tools().contains(id) {
+                    return say(
+                        format!(
+                            "{} is accepted — choose Open tool {}",
+                            safe_line(id),
+                            safe_line(id)
+                        ),
+                        Some(Action::OpenTool(id.clone())),
+                    );
+                }
+                let accept = Some(Action::AcceptProgram {
+                    id: id.clone(),
+                    run_name: false,
+                });
+                match o.state {
+                    State::Held => say(
+                        format!(
+                            "{} holds a choice — choose Accept this program to pick which file \
+                             to keep",
+                            safe_line(id)
+                        ),
+                        accept,
+                    ),
+                    State::Linked => say(
+                        format!(
+                            "{} links and is ready — choose Accept this program",
+                            safe_line(id)
+                        ),
+                        accept,
+                    ),
+                    State::Compiles => say(
+                        format!(
+                            "{} compiles and is ready — choose Accept this library",
+                            safe_line(id)
+                        ),
+                        accept,
+                    ),
+                    State::DidNotCompile | State::DidNotLink | State::Incomplete => say(
+                        format!(
+                            "{} {} — state the build's flags in migration/map/config.toml and \
+                             choose Map the project again",
+                            safe_line(id),
+                            o.state.words()
+                        ),
+                        Some(Action::Project(project::Act::Map)),
+                    ),
+                    State::Fuzzer | State::Driver => say(
+                        "a fuzzer is not accepted as a tool: it is linked only with the \
+                         project's driver"
+                            .into(),
+                        None,
+                    ),
+                }
+            }
+            _ => self.project_next(),
+        }
+    }
+
+    /// The menu on a Project view row (or a tool's row back to it): the
+    /// row's own items, then Map and Ask; the recommended one first.
+    pub(crate) fn open_project_menu(&mut self) {
+        let mut items = self.project_menu_items();
+        let advice = self.project_row_advice(&self.selection);
+        let reason = crate::menu::recommend(&mut items, advice.as_ref());
+        self.mode = Mode::Menu(Menu {
+            items,
+            focus: 0,
+            footer: None,
+            reason,
+            title: None,
+            note: Vec::new(),
+        });
+    }
+
+    /// The items of the selected Project view row.
+    pub fn project_menu_items(&self) -> Vec<Item> {
+        let sel = self.selection.clone();
+        let mut items: Vec<Item> = Vec::new();
+        if sel == Selection::ProjectHome {
+            let mut it = item("Back to the project view", Action::BackToProject, None);
+            it.greyed = self.switch_refusal();
+            items.push(it);
+            return items;
+        }
+        let busy = self.busy();
+        let map = self.project_map();
+        let switch = self.switch_refusal();
+        match &sel {
+            Selection::Tool(id) => {
+                let mut it = item(
+                    format!("Open tool {id}"),
+                    Action::OpenTool(id.clone()),
+                    None,
+                );
+                it.greyed = switch.clone();
+                items.push(it);
+            }
+            Selection::Program(id) => {
+                if self.project_tools().contains(id) {
+                    let mut it = item(
+                        format!("Open tool {id}"),
+                        Action::OpenTool(id.clone()),
+                        None,
+                    );
+                    it.greyed = switch.clone();
+                    items.push(it);
+                }
+                if let Some(o) = map.and_then(|m| m.get(id)) {
+                    let why = if !o.acceptable() {
+                        Some(
+                            "a fuzzer is not accepted as a tool: it is linked only with the \
+                             project's driver"
+                                .to_string(),
+                        )
+                    } else if map.is_some_and(MapView::unstated) {
+                        Some(project::ACCEPT_NEEDS_STATED.to_string())
+                    } else {
+                        busy.clone()
+                    };
+                    for run_name in [false, true] {
+                        let label = if run_name {
+                            "Accept it under a run name of your own…".to_string()
+                        } else {
+                            format!("Accept this {}", o.noun())
+                        };
+                        let mut it = item(
+                            label,
+                            Action::AcceptProgram {
+                                id: id.clone(),
+                                run_name,
+                            },
+                            None,
+                        );
+                        it.greyed = why.clone();
+                        items.push(it);
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut it = item(
+            if map.is_some() {
+                "Map the project again"
+            } else {
+                "Map the project"
+            },
+            Action::Project(project::Act::Map),
+            None,
+        );
+        it.greyed = busy.clone();
+        items.push(it);
+        // Ask once a map exists: its open question is the map's.
+        if map.is_some() {
+            let mut it = item(
+                if project::asks_for_build(map) {
+                    "Ask for a proposal"
+                } else {
+                    "Ask a model for advice"
+                },
+                Action::Project(project::Act::Ask),
+                None,
+            );
+            it.model = true;
+            it.greyed = busy;
+            items.push(it);
+        }
+        items
+    }
+
+    /// Why the cockpit cannot move between the Project view and a tool now,
+    /// if it cannot: what the screen holds would be lost.
+    pub fn switch_refusal(&self) -> Option<String> {
+        if self.running {
+            return Some("a command is running (one at a time)".into());
+        }
+        if !self.kept_edits.is_empty() {
+            return Some("a hand edit is kept — record or discard it first (E)".into());
+        }
+        if self.features_draft.is_some() || self.workloads_draft.is_some() {
+            return Some("a draft is kept — save or discard it first".into());
+        }
+        if !self.awaiting.is_empty() {
+            return Some("a hand-off waits for its answer here — answer it first".into());
+        }
+        if self.chat.has_conversation() {
+            return Some(
+                "the chat holds a conversation about this tool — start a new chat first".into(),
+            );
+        }
+        None
+    }
+
+    /// Accept: its held choices picked first, one menu per held set.
+    pub(crate) fn start_accept(&mut self, id: &str, run_name: bool) {
+        let Some(p) = self.project.as_mut() else {
+            return;
+        };
+        p.pick = Some(Pick {
+            id: id.to_string(),
+            run_name,
+            ..Pick::default()
+        });
+        self.pick_next();
+    }
+
+    /// The next held set's menu, or — every set answered — the run name or
+    /// the dialog.
+    fn pick_next(&mut self) {
+        let Some(pick) = self.project.as_ref().and_then(|p| p.pick.clone()) else {
+            return;
+        };
+        let Some(o) = self.project_offered(&pick.id).cloned() else {
+            self.notice = notice(format!("{} is no longer in the map", pick.id));
+            return;
+        };
+        if let Some(h) = o.next_held(&pick.kept, &pick.asked) {
+            // The definers listed, none suggested; the model's advice, when
+            // there is some, beside them.
+            let mut note = vec![project::keep_question(&o.id, &h.set)];
+            if let Some(a) = self.project.as_ref().and_then(|p| p.advice.get(&h.set)) {
+                note.push(a.words());
+            }
+            let items = h
+                .definers
+                .iter()
+                .map(|(index, path)| {
+                    item(
+                        format!("{} {}", safe_line(index), safe_line(path)),
+                        Action::Keep(index.clone()),
+                        None,
+                    )
+                })
+                .collect();
+            self.mode = Mode::Menu(Menu {
+                items,
+                focus: 0,
+                footer: None,
+                reason: None,
+                title: Some(format!("Accept {}", o.id)),
+                note,
+            });
+            return;
+        }
+        if pick.run_name {
+            self.mode = Mode::RunName {
+                input: String::new(),
+                id: pick.id,
+                keeps: pick.keeps,
+            };
+        } else {
+            self.ask_project(project::Act::Accept, &pick.id, pick.keeps, None);
+        }
+    }
+
+    /// Accept's picker: `index` kept for the set it belongs to.
+    pub(crate) fn keep_chosen(&mut self, index: &str) {
+        let Some(pick) = self.project.as_mut().and_then(|p| p.pick.as_mut()) else {
+            return;
+        };
+        let Some((set, _)) = index.split_once('.') else {
+            return;
+        };
+        pick.kept.push(index.to_string());
+        pick.asked.push(set.to_string());
+        pick.keeps.push(format!("{set}={index}"));
+        self.pick_next();
+    }
+
+    /// Open the dialog of a project act (nothing runs yet).
+    pub(crate) fn ask_project(
+        &mut self,
+        act: project::Act,
+        id: &str,
+        keeps: Vec<String>,
+        run_name: Option<String>,
+    ) {
+        let Some(harness) = self.config.harness.clone() else {
+            self.notice =
+                notice("no `harness` binary found (PATH, or --harness <path>): read-only");
+            return;
+        };
+        let words = project::argv(
+            act,
+            &self.config.target,
+            self.project_map(),
+            id,
+            &keeps,
+            run_name.as_deref(),
+        );
+        let mut argv = vec![harness.into_os_string()];
+        argv.extend(words.into_iter().map(os));
+        let (kind, label) = match act {
+            project::Act::Map => (Act::ProjectMap, "Map the project".to_string()),
+            project::Act::Ask => (Act::ProjectAsk, "Ask a model".to_string()),
+            project::Act::Accept => (Act::ProjectAccept, format!("Accept {id}")),
+        };
+        self.ask(Pending {
+            act: kind,
+            argv,
+            label,
+            unit: (!id.is_empty()).then(|| id.to_string()),
+            attempt: None,
+            cleanup: None,
+            expect_attempt: None,
+            note: None,
+            shown_digest: None,
+            chat: None,
+            stdin: None,
+        });
+    }
+
+    /// A project act's dialog: its title, then what it does, runs, takes
+    /// and writes — the command line's words (docs/PROJECT-MAP-DESIGN.md
+    /// §3.7).
+    pub(crate) fn project_dialog_words(&self, p: &Pending) -> (String, Vec<String>) {
+        let words: Vec<String> = p
+            .argv
+            .iter()
+            .skip(1)
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let map = self.project_map();
+        let act = p.act.project().unwrap_or(project::Act::Map);
+        let title = match act {
+            project::Act::Map if map.is_some() => "Map the project again?".to_string(),
+            project::Act::Map => "Map the project?".to_string(),
+            project::Act::Ask if words.iter().any(|w| w == "--build") => {
+                "Ask a model for a proposal?".to_string()
+            }
+            project::Act::Ask => "Ask a model for advice?".to_string(),
+            project::Act::Accept => format!(
+                "Accept {}?",
+                safe_line(p.unit.as_deref().unwrap_or("the program"))
+            ),
+        };
+        (title, project::dialog(act, map, &words))
+    }
+
+    /// Open the accepted tool `id` over what `read` found: the tool's
+    /// screen, with its row back to the Project view; what the activity
+    /// showed is kept.
+    pub fn open_tool(&mut self, id: String, read: crate::load::Read) {
+        let exe = std::env::current_exe().ok();
+        let mut config = self.config.clone();
+        config.tool = Some(id.clone());
+        let mut next = App::new_from(config, read, exe.as_deref());
+        let mut project = self.project.take();
+        let chat_wanted = project.as_ref().is_some_and(|p| p.chat_wanted);
+        if let Some(p) = project.as_mut() {
+            p.shown = false;
+            p.pick = None;
+        }
+        next.project = project;
+        std::mem::swap(&mut next.chat, &mut self.chat);
+        next.chat.tool = Some(id.clone());
+        next.chat_on = chat_wanted;
+        next.run = self.run.take();
+        next.last = self.last.take();
+        next.mouse = self.mouse;
+        next.now = self.now;
+        next.layout = self.layout.clone();
+        next.rebuild_rows();
+        next.refresh_view(true);
+        next.notice = notice(format!(
+            "opened tool {id} — the first row goes back to the project view"
+        ));
+        *self = next;
+    }
+
+    /// Back from a tool's screen to the Project view, the map read again.
+    pub fn show_project(&mut self) {
+        let chat_on = self.chat_on;
+        let Some(p) = self.project.as_mut() else {
+            return;
+        };
+        p.shown = true;
+        p.chat_wanted = chat_on;
+        self.chat_on = false;
+        let tool = self.config.tool.take();
+        self.focus = Focus::Files;
+        self.mode = Mode::Normal;
+        self.back.clear();
+        self.pairs.clear();
+        self.source = None;
+        self.reload_project();
+        // The tool just left is selected.
+        match tool.map(Selection::Tool) {
+            Some(sel) if crate::tree::row_of(&self.rows, &sel).is_some() => self.selection = sel,
+            _ => self.select_first_project_row(),
+        }
+        self.scroll = 0;
+        self.link = None;
+    }
+}

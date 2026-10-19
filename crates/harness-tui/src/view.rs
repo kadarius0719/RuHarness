@@ -35,12 +35,17 @@ pub const WIDE_FROM: u16 = 120;
 pub const FILES_WIDE: u16 = 32;
 /// The Files pane at 80–119 columns.
 pub const FILES_NARROW: u16 = 24;
+/// The Project view's left pane at [`WIDE_FROM`] columns or more.
+pub const PROJECT_WIDE: u16 = 48;
+/// The Project view's left pane below [`WIDE_FROM`] columns.
+pub const PROJECT_NARROW: u16 = 36;
 /// The C and the Rust sit side by side when the View is at least this wide.
 pub const SPLIT_VIEW_MIN: u16 = 78;
 /// The dialog's width (narrower terminals get what they have).
 pub const DIALOG_COLUMNS: u16 = 76;
 
 mod chat_pane;
+mod project_pane;
 pub use chat_pane::{state_word, CHAT_COLUMN_FROM, CHAT_COLUMN_MAX, VIEW_KEEPS};
 
 fn dim() -> Style {
@@ -557,6 +562,10 @@ fn node_name(app: &App, sel: &Selection) -> String {
         },
         Selection::Feature(id) => feature_row_name(app, id),
         Selection::Speed => app.speed.label(),
+        Selection::MapProject
+        | Selection::Program(_)
+        | Selection::Tool(_)
+        | Selection::ProjectHome => project_pane::node_name(app, sel),
     }
 }
 
@@ -620,6 +629,18 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
             return Line::from(Span::styled(
                 ellipsis(&format!("{indent}  {text}"), width),
                 Style::default().fg(Color::Yellow),
+            ));
+        }
+        RowKind::Heading(text) => {
+            return Line::from(Span::styled(
+                ellipsis(&format!("{indent}{text}"), width),
+                bold(),
+            ));
+        }
+        RowKind::Detail(text) => {
+            return Line::from(Span::styled(
+                ellipsis(&format!("{indent}{text}"), width),
+                dim(),
             ));
         }
         RowKind::Node(sel) => sel,
@@ -698,7 +719,12 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     };
     if matches!(
         sel,
-        Selection::Project | Selection::Units | Selection::Features | Selection::Speed
+        Selection::Project
+            | Selection::Units
+            | Selection::Features
+            | Selection::Speed
+            | Selection::MapProject
+            | Selection::ProjectHome
     ) {
         name_style = name_style.add_modifier(Modifier::BOLD);
     }
@@ -729,7 +755,9 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
 fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused =
         app.focus == Focus::Files && matches!(app.mode, Mode::Normal | Mode::Details { .. });
-    let title = if app.loading {
+    let title = if app.in_project_view() {
+        " Project ".to_string()
+    } else if app.loading {
         " Files · reading… ".to_string()
     } else {
         " Files ".to_string()
@@ -794,6 +822,9 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// The View's title: the node and its state (the selected row's word).
 fn view_title(app: &App) -> String {
+    if app.in_project_view() {
+        return project_pane::title(app);
+    }
     let sel = &app.selection;
     let name = match sel {
         Selection::File(p) | Selection::Dir(p) => p.clone(),
@@ -2681,6 +2712,8 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
     // Lists: the project summary, a directory, the units group.
     let mut links = Vec::new();
     let list = match &sel {
+        _ if app.in_project_view() => Some(project_pane::project_view(app, width, &mut links)),
+        Selection::ProjectHome => Some(project_pane::home_view(app, width)),
         Selection::Project => Some(summary(app, width, &mut links)),
         Selection::Dir(d) => Some(dir_view(app, d, width, &mut links)),
         Selection::Units => {
@@ -3005,7 +3038,12 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
         ));
     }
     // Last: a mapped tool's "project changed" notice stays in sight.
-    if let Some(n) = &app.snapshot.project_notice {
+    if let Some(n) = app
+        .snapshot
+        .project_notice
+        .as_ref()
+        .filter(|_| !app.in_project_view())
+    {
         return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), dim()));
     }
     Line::from("")
@@ -3028,7 +3066,7 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
             }
             h
         }
-        Mode::Note { .. } | Mode::EditNote { .. } => {
+        Mode::Note { .. } | Mode::EditNote { .. } | Mode::RunName { .. } => {
             vec![("Enter", "continue"), ("Esc", "cancel")]
         }
         // Opened from the chat, the details keep the chat's keys: no
@@ -3069,6 +3107,11 @@ fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     let mut h: Vec<(&'static str, &'static str)> = Vec::new();
     match app.focus {
         Focus::Chat => return chat_pane::chat_hints(app),
+        // The Project view's rows do not fold.
+        Focus::Files if app.in_project_view() => {
+            h.push(("↑↓", "move"));
+            h.push(("Enter", "actions"));
+        }
         Focus::Files => {
             h.push(("↑↓", "move"));
             h.push(("←→", "fold/open"));
@@ -3584,7 +3627,17 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                 dim(),
             ));
             for l in &run.lines {
-                lines.extend(wrapped(&l.text, width, tone(l.tone)));
+                // A line's indent is kept (a command's own screen nests its
+                // lines), each wrapped row under it.
+                let body = l.text.trim_start_matches(' ');
+                let indent = (l.text.len() - body.len()).min(width / 2);
+                let pad = " ".repeat(indent);
+                for row in word_wrap(body, width.saturating_sub(indent)) {
+                    lines.push(Line::from(Span::styled(
+                        format!("{pad}{row}"),
+                        tone(l.tone),
+                    )));
+                }
             }
             if let Some(exit) = &run.exit {
                 let t = if exit == "exit 0" {
@@ -3623,6 +3676,14 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
     let mut rows: Vec<Line<'static>> = Vec::new();
     let mut item_rows = Vec::new();
     let mut separated = false;
+    // Accept's picker: its question and the model's advice above the
+    // items.
+    for n in &m.note {
+        rows.extend(wrapped(n, inner_w, Style::default()));
+    }
+    if !m.note.is_empty() {
+        rows.push(Line::from(""));
+    }
     for (i, it) in m.items.iter().enumerate() {
         // The recommended item stays first even when it uses a model: its
         // reason says so.
@@ -3688,7 +3749,12 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         height: (rows.len() as u16 + 2).min(bottom.saturating_sub(base.y)),
         ..base
     };
-    let title = format!(" {} ", node_name(app, &app.selection));
+    let title = format!(
+        " {} ",
+        m.title
+            .clone()
+            .unwrap_or_else(|| node_name(app, &app.selection))
+    );
     overlay(
         frame,
         rect,
@@ -3889,6 +3955,38 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
     match app.mode.clone() {
         Mode::Normal => {}
+        Mode::RunName { input, id, .. } => {
+            let rect = centered(
+                area,
+                pct(area.width, 80).clamp(40, 76).min(area.width),
+                9.min(area.height),
+            );
+            let inner = rect.width.saturating_sub(2) as usize;
+            let mut rows: Vec<Line<'static>> =
+                hard_wrap(&display::line(&format!("{input}▏")), inner)
+                    .into_iter()
+                    .map(Line::from)
+                    .collect();
+            let input_rows = rows.len();
+            rows.push(Line::from(""));
+            rows.extend(wrapped(
+                "The file name features run the program as (empty: the program file's name \
+                 without .c). The command is shown before it runs.",
+                inner,
+                dim(),
+            ));
+            let at = follow_cursor(input_rows, rows.len(), rect);
+            overlay(
+                frame,
+                rect,
+                &format!(" Accept {id}: its run name "),
+                &rows,
+                at,
+                Some("Enter continue · Esc cancel"),
+                None,
+            );
+            app.hits.push((rect, Hit::Overlay));
+        }
         Mode::Menu(m) => draw_menu(frame, app, area, &m),
         Mode::Dialog(_) => draw_dialog(frame, app, area),
         Mode::Details { scroll } => {
@@ -4190,7 +4288,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The chat (docs/CHAT-PANE-DESIGN.md §5.1): a column of its own from
     // 156 columns once opened; below that the right column shows it only
     // while it has the focus, and a tab strip keeps it one click away.
-    let chat = app.chat_on;
+    let chat = app.chat_on && !app.in_project_view();
     if single {
         match app.focus {
             // The strip on whichever pane shows: the chat is one click away
@@ -4210,10 +4308,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Focus::Chat => chat_pane::draw_chat(frame, app, main, false, true),
         }
     } else {
-        let files_w = if area.width >= WIDE_FROM {
-            FILES_WIDE
-        } else {
-            FILES_NARROW
+        // The Project view's rows name a program and its state in words:
+        // its left pane is wider.
+        let files_w = match (app.in_project_view(), area.width >= WIDE_FROM) {
+            (true, true) => PROJECT_WIDE,
+            (true, false) => PROJECT_NARROW,
+            (false, true) => FILES_WIDE,
+            (false, false) => FILES_NARROW,
         };
         let column = chat && app.chat_column && area.width >= CHAT_COLUMN_FROM;
         if column {
@@ -4256,6 +4357,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 mod tests {
     use super::*;
     use crate::app::tests::{app, app_of, arm, attempt, key, LIB_C, PROVENANCE};
+
+    /// The Project view (pass 3 of the 2026-10-18 critique).
+    mod project;
     use crate::app::{Act, Command, Purpose, RunLine, RunPanel};
     use crate::files::{Cause, FileInfo, FunctionInfo, Origin};
     use crate::narrate::Narrator;

@@ -666,10 +666,19 @@ already reads unresolved names). A shared file is a unit in each tool that holds
 
 **The cockpit and harness-mcp.** The command line comes first; the cockpit runs the same three acts
 (the person's rule, §7). Opened on a project root: with a root `harness.toml` it is a folder-form
-target as today; with mapped tools and no `--tool`, it opens the only tool, or lists several for the
-person to pick (the command line does the same); with neither it offers **Map the project**, and after a map **Ask** and **Accept a program**, each a dialog
-that says what it runs, how long it takes and what it writes, and runs the `harness project` command
-— the same words as on the command line. That is the whole project mode of this design; a map
+target as today; with one mapped tool, no map and no `--tool`, it opens that tool (the command line
+does the same); otherwise — no tool yet, a map, or several tools — it opens on the **Project view**
+(pass 3 of docs/reviews/2026-10-18-cockpit-usability-critique.md, 2026-10-18): the cockpit's own
+full-screen look, its left pane the map's programs (id, kind guess, state in words, file), libraries
+and accepted tools as rows — before a map one row, **Map the project** — its right pane the project
+in words with its Next step. Enter on a row opens the menu with the recommended act first: **Map the
+project**, **Ask** (a proposal while the configuration is a guess, advice on the held choices once
+it is stated) and **Accept this program** (its held choices picked first, a run name optional), each
+the cockpit's dialog that says what it runs, how long it takes and what it writes, and runs the
+`harness project` command — the same words as on the command line; its output is in the activity
+details and the view reads the map again after it. Each accepted tool keeps a row **Open tool
+<id> — <program path>**, and the tool's screen a first row back to the Project view. That is the
+whole project mode of this design; a map
 *screen* (the picture, §3.11) and harness-mcp's read of the map are designs of their own. Once a tool
 is accepted, both work on it as on any target; the cockpit's tree shows the tool's files under their
 real folders, with the rest of the project greyed as "not part of this tool".
@@ -1036,7 +1045,8 @@ changed" notice, the project lock and the first `map`'s `.gitignore`, the caps.
 resume command, the replay fixtures.
 
 (e) **`project accept`** and the "what changed" report of a later `map`; the cockpit's three acts
-(Map the project, Ask, Accept a program) as dialogs over the same commands, and its tool chooser.
+(Map the project, Ask, Accept a program) as dialogs over the same commands, and its tool chooser
+(since 2026-10-18 the Project view: the acts in its rows' menus, a row per tool).
 
 (f) SCHEMAS (the map, `harness.toml` v2, the writer rows, the fence on the reply), the tutorial, the
 testing guide.
