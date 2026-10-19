@@ -59,6 +59,16 @@ every theme — section (pane titles, headings), status (the Ready/Last line), n
 fixes a bug the screenshot showed: a hand-off pause (`project ask` exit 1 with "awaiting
 response") was labelled "failed"; it must read "waiting for your answer: <file> — …".
 
+## Queued (2026-10-19): model work in the cockpit goes through the chat, with a sign-in walk-through
+
+The person's "Ask a model" from the Project view ran the command-line hand-off and stopped on a
+file nobody writes. Next pass, after the colour pass merges: "Ask a model" becomes "Ask in chat"
+with the question pre-typed (the chat agent answers through the harness and the cockpit runs
+`project ask` again; the command-line hand-off stays for the CLI); before any model act the
+cockpit checks Claude Code is installed and signed in, and if not shows a plain walk-through (open
+a new Terminal window, type `claude`, sign in, come back, "Check again"); the same dialog when the
+chat's process dies. The person agreed ("sounds good").
+
 ## The work, in order
 
 1. **The person's own cold-start run.** docs/FIRST-HOUR.md as written (liblzg), then lz4 through
