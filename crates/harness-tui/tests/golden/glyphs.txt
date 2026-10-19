@@ -1,49 +1,49 @@
 ┌ Files ───────────────────────┐┌ src/zopfli · 1 failing · 1 needs attention · 1 changed since the scan · 1 not scanned┐
 │▾ harness-tui-gglyph-00000000…││1 failing · 1 needs attention · 1 changed since the scan · 1 not scanned yet · 1      │
-│  ▾ src/                      ││missing · 5 of 14 C files in Rust · 1 more verified, origin not recorded              │
-│    ▾ zopfli/ ✗1 ⚠1 !1 +1 ?1 …││✓  blocksplitter.c  migrated (by hand)                                                │
-│      ▸ ✓ blocksplitter.c     ││·  blocksplitter.h  header                                                            │
-│        · blocksplitter.h     ││⚠  cache.c  needs attention                                                           │
-│      ▸ ⚠ cache.c             ││·  cache.h  header                                                                    │
-│        · cache.h       header││✓  deflate.c  migrated (by hand)                                                      │
-│      ▸ ✓ deflate.c           ││·  deflate.h  header                                                                  │
-│        · deflate.h     header││!  edited.c  changed since scan                                                       │
-│      ▸ ! edited.c            ││+  fresh.c  not scanned yet                                                           │
-│      ▸ + fresh.c             ││?  gone.c  missing                                                                    │
-│      ▸ ? gone.c       missing││✓? gzip_container.c  verified, origin not recorded                                    │
-│      ▸ ✓? gzip_container.c   ││·  gzip_container.h  header                                                           │
-│        · gzip_container.h    ││✗  hash.c  failing                                                                    │
-│      ▸ ✗ hash.c       failing││·  hash.h  header                                                                     │
-│        · hash.h        header││○  katajainen.c  not in the plan                                                      │
-│      ▸ ○ katajainen.c        ││·  katajainen.h  header                                                               │
-│        · katajainen.h  header││○  loose.c  not in the plan                                                           │
-│      ▸ ○ loose.c             ││✓  lz77.c  migrated                                                                   │
-│      ▸ ✓ lz77.c      migrated││·  lz77.h  header                                                                     │
-│        · lz77.h        header││✓  squeeze.c  migrated (by hand)                                                      │
-│      ▸ ✓ squeeze.c           ││·  squeeze.h  header                                                                  │
-│        · squeeze.h     header││–  statics.c  no exported functions                                                   │
-│      ▸ – statics.c           ││·  symbols.h  header                                                                  │
-│      ▸ · symbols.h     header││✓  tree.c  migrated (steered)                                                         │
-│      ▸ ✓ tree.c              ││·  tree.h  header                                                                     │
-│        · tree.h        header││◐  util.c  tried                                                                      │
-│      ▸ ◐ util.c         tried││·  util.h  header                                                                     │
-│        · util.h        header││◇  zlib_container.c  planned                                                          │
-│      ▸ ◇ zlib_container.c    ││·  zlib_container.h  header                                                           │
-│        · zlib_container.h    ││·  zopfli.h  header                                                                   │
-│        · zopfli.h      header││◇  zopfli_bin.c  planned                                                              │
-│      ▸ ◇ zopfli_bin.c        ││   zopfli_lib.c  in progress                                                          │
-│      ▸ zopfli_lib… in progre…││                                                                                      │
-│  ▾ Units (11)                ││                                                                                      │
-│    ▸ ⊘ u001-katajainen       ││                                                                                      │
-│    ▸ ⚠ u-cache               ││                                                                                      │
-│    ▸ ✗ u-hash         failing││                                                                                      │
-│    ▸ ✓ u-lz77        migrated││                                                                                      │
-│    ▸ ✓ u-tree                ││                                                                                      │
-│    ▸ ✓ u-blocksplitter-defla…││                                                                                      │
-│    ▸ ✓? u-gzip_container     ││                                                                                      │
-│    ▸ ◐ u-util           tried││                                                                                      │
-│    ▸ ◇ u-zlib_container      ││                                                                                      │
-│    ▸ u-zopfli_lib in progress││                                                                                      │
+│  ▾ Units (11)                ││missing · 5 of 14 C files in Rust · 1 more verified, origin not recorded              │
+│    ▸ ⊘ u001-katajainen       ││✓  blocksplitter.c  migrated (by hand)                                                │
+│    ▸ ⚠ u-cache               ││·  blocksplitter.h  header                                                            │
+│    ▸ ✗ u-hash         failing││⚠  cache.c  needs attention                                                           │
+│    ▸ ✓ u-lz77        migrated││·  cache.h  header                                                                    │
+│    ▸ ✓ u-tree                ││✓  deflate.c  migrated (by hand)                                                      │
+│    ▸ ✓ u-blocksplitter-defla…││·  deflate.h  header                                                                  │
+│    ▸ ✓? u-gzip_container     ││!  edited.c  changed since scan                                                       │
+│    ▸ ◐ u-util           tried││+  fresh.c  not scanned yet                                                           │
+│    ▸ ◇ u-zlib_container      ││?  gone.c  missing                                                                    │
+│    ▸ u-zopfli_lib in progress││✓? gzip_container.c  verified, origin not recorded                                    │
+│    ▸ ◇ u-zopfli_bin   planned││·  gzip_container.h  header                                                           │
+│  ▾ Features (7)              ││✗  hash.c  failing                                                                    │
+│      ◉ Compress to gzip      ││·  hash.h  header                                                                     │
+│      ◉ Compress to zlib      ││○  katajainen.c  not in the plan                                                      │
+│      ◉ Compress to raw defla…││·  katajainen.h  header                                                               │
+│      ◉ Say what it does      ││○  loose.c  not in the plan                                                           │
+│      ◉ Compress quickly      ││✓  lz77.c  migrated                                                                   │
+│      ◌ Show the help         ││·  lz77.h  header                                                                     │
+│      ◌ Report a missing file ││✓  squeeze.c  migrated (by hand)                                                      │
+│    Speed — not set up        ││·  squeeze.h  header                                                                  │
+│  ▾ src/                      ││–  statics.c  no exported functions                                                   │
+│    ▾ zopfli/ ✗1 ⚠1 !1 +1 ?1 …││·  symbols.h  header                                                                  │
+│      ▸ ✓ blocksplitter.c     ││✓  tree.c  migrated (steered)                                                         │
+│        · blocksplitter.h     ││·  tree.h  header                                                                     │
+│      ▸ ⚠ cache.c             ││◐  util.c  tried                                                                      │
+│        · cache.h       header││·  util.h  header                                                                     │
+│      ▸ ✓ deflate.c           ││◇  zlib_container.c  planned                                                          │
+│        · deflate.h     header││·  zlib_container.h  header                                                           │
+│      ▸ ! edited.c            ││·  zopfli.h  header                                                                   │
+│      ▸ + fresh.c             ││◇  zopfli_bin.c  planned                                                              │
+│      ▸ ? gone.c       missing││   zopfli_lib.c  in progress                                                          │
+│      ▸ ✓? gzip_container.c   ││                                                                                      │
+│        · gzip_container.h    ││                                                                                      │
+│      ▸ ✗ hash.c       failing││                                                                                      │
+│        · hash.h        header││                                                                                      │
+│      ▸ ○ katajainen.c        ││                                                                                      │
+│        · katajainen.h  header││                                                                                      │
+│      ▸ ○ loose.c             ││                                                                                      │
+│      ▸ ✓ lz77.c      migrated││                                                                                      │
+│        · lz77.h        header││                                                                                      │
+│      ▸ ✓ squeeze.c           ││                                                                                      │
+│        · squeeze.h     header││                                                                                      │
+│      ▸ – statics.c           ││                                                                                      │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
  Ready — ↑↓ to choose a row, Enter for what you can do
 

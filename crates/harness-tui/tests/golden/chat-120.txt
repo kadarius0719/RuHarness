@@ -1,14 +1,14 @@
 ┌ Files ───────────────────────┐┌ Chat — waiting for you · haiku-4-5 ───────────────────────────[New]─[?]─ View ─ Chat ┐
 │▾ harness-tui-chat-golde… ✓1/1││› Please migrate u-lib.                                                               │
-│  ▾ test_case/            ✓1/1││                                                                                      │
-│    ▾ include/                ││I will ask to migrate u-lib.                                                          │
-│        · lib.h         header││                                                                                      │
-│    ▾ src/                ✓1/1││  · read the project's status — done                                                  │
-│      ▸ ✓ lib.c       migrated││                                                                                      │
 │  ▾ Units (1)                 ││                                                                                      │
-│    ▸ ✓ u-lib         migrated││                                                                                      │
+│    ▸ ✓ u-lib         migrated││I will ask to migrate u-lib.                                                          │
 │    Features (none yet)       ││                                                                                      │
-│    Speed — not set up        ││                                                                                      │
+│    Speed — not set up        ││  · read the project's status — done                                                  │
+│  ▸ test_case/            ✓1/1││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
 │                              ││                                                                                      │
 │                              ││                                                                                      │
 │                              ││                                                                                      │

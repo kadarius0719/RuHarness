@@ -4,9 +4,15 @@
 //! layout changes; the view draws only the visible ones).
 //!
 //! From the top: the project (the root, expanded and selected at start);
-//! its directories, then files; under a file its functions in span order;
-//! after the source tree the group **Units (n)**, and under each unit its
-//! crate node, then its attempts in the defined order (TUI-DESIGN §2).
+//! the group **Units (n)**, under each unit its crate node, then its
+//! attempts in the defined order (TUI-DESIGN §2); the group **Features**;
+//! **Speed**; then the source tree — its directories, then files, under a
+//! file its functions in span order. The sections come first so that a
+//! 30-row terminal shows all three headings (pass 2 of
+//! docs/reviews/2026-10-18-cockpit-usability-critique.md): the source
+//! folder is folded by default once the project has units (its row sums up
+//! their marks), and a group whose rows would push the others off the
+//! screen starts folded ([`defaults`]).
 
 use crate::featmap::FeatureModel;
 use crate::files::{Files, TreeWalk};
@@ -62,34 +68,103 @@ impl Selection {
             Selection::Speed => Some(Selection::Project),
         }
     }
+}
 
-    /// Expanded unless folded (the project, directories, the units group),
-    /// or folded unless opened (files, units).
-    fn open_by_default(&self) -> bool {
-        matches!(
-            self,
-            Selection::Project | Selection::Dir(_) | Selection::Units | Selection::Features
-        )
+/// Which nodes start folded: what [`defaults`] decides from the snapshot
+/// and the tree's height. All open is the default (a height not known
+/// yet, a test's tree).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Defaults {
+    /// The top-level folders of the source tree (the project has units:
+    /// the Units list is where a unit is, the folders sum up their marks).
+    pub source_folded: bool,
+    /// The units group (its rows would push Features and Speed off).
+    pub units_folded: bool,
+    /// The features group (its rows would push Speed and the source
+    /// folder off).
+    pub features_folded: bool,
+}
+
+impl Defaults {
+    /// Whether `sel` is expanded unless folded (the project, directories,
+    /// the groups — each as these defaults say), or folded unless opened
+    /// (files, units).
+    fn open(&self, sel: &Selection) -> bool {
+        match sel {
+            Selection::Project => true,
+            // A nested folder opens with its parent.
+            Selection::Dir(d) => !self.source_folded || d.contains('/'),
+            Selection::Units => !self.units_folded,
+            Selection::Features => !self.features_folded,
+            _ => false,
+        }
+    }
+
+    /// Whether the default of `sel` differs between `self` and `other`.
+    fn differs(&self, other: &Defaults, sel: &Selection) -> bool {
+        self.open(sel) != other.open(sel)
+    }
+}
+
+/// The folds a tree of `height` rows starts with (0: not known yet, all
+/// open): the source folder folded when the project has units; the units
+/// group folded when its rows, with the other headings, do not fit; then
+/// the features group, likewise. The headings are the project, Units,
+/// Features, Speed and the source folder.
+pub fn defaults(
+    snapshot: &Snapshot,
+    files: &Files,
+    features: &FeatureModel,
+    height: usize,
+) -> Defaults {
+    let units = snapshot.units.len();
+    let source = usize::from(!files.files.is_empty());
+    let headings = 1 + usize::from(units > 0) + 1 + 1 + source;
+    let fits = |rows: usize| height == 0 || rows <= height;
+    let units_folded = units > 0 && !fits(headings + units);
+    let shown_units = if units_folded { 0 } else { units };
+    let features_folded = !fits(headings + shown_units + features.features.len());
+    Defaults {
+        source_folded: units > 0,
+        units_folded,
+        features_folded,
     }
 }
 
 /// Which nodes differ from their default expansion.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Expansion(BTreeSet<Selection>);
+pub struct Expansion {
+    changed: BTreeSet<Selection>,
+    defaults: Defaults,
+}
 
 impl Expansion {
     /// Whether `sel` is expanded.
     pub fn is_open(&self, sel: &Selection) -> bool {
-        sel.open_by_default() != self.0.contains(sel)
+        self.defaults.open(sel) != self.changed.contains(sel)
     }
 
     /// Open or fold `sel`.
     pub fn set(&mut self, sel: &Selection, open: bool) {
-        if open == sel.open_by_default() {
-            self.0.remove(sel);
+        if open == self.defaults.open(sel) {
+            self.changed.remove(sel);
         } else {
-            self.0.insert(sel.clone());
+            self.changed.insert(sel.clone());
         }
+    }
+
+    /// Take new defaults: a node the person opened or folded keeps how it
+    /// is; one left alone follows the new default. `true` when they
+    /// changed.
+    pub fn set_defaults(&mut self, defaults: Defaults) -> bool {
+        if defaults == self.defaults {
+            return false;
+        }
+        let old = self.defaults;
+        // A recorded change against the old default is the new default.
+        self.changed.retain(|sel| !old.differs(&defaults, sel));
+        self.defaults = defaults;
+        true
     }
 }
 
@@ -207,38 +282,7 @@ pub fn rows(
     if !open {
         return rows;
     }
-    let dirs = dirs_of(files);
-    dir_rows(&mut rows, 1, "", &dirs, files, expansion);
-    for (path, files) in &walk.skipped_folders {
-        rows.push(Row {
-            depth: 1,
-            kind: RowKind::Note(format!(
-                "skipped folder {path}: {files} C file(s), not read"
-            )),
-            expandable: false,
-            open: false,
-        });
-    }
-    for (path, why) in &walk.issues {
-        let note = match why {
-            Why::Unreadable(error) => format!("unreadable {path}: {error}"),
-            why => format!("skipped {path}: {}", why.words()),
-        };
-        rows.push(Row {
-            depth: 1,
-            kind: RowKind::Note(note),
-            expandable: false,
-            open: false,
-        });
-    }
-    if walk.truncated {
-        rows.push(Row {
-            depth: 1,
-            kind: RowKind::Note("… more files not listed (limit 20 000 files, 32 levels)".into()),
-            expandable: false,
-            open: false,
-        });
-    }
+    // The sections first: a unit is in one place, the Units list.
     if !snapshot.units.is_empty() {
         let open = expansion.is_open(&Selection::Units);
         push_node(&mut rows, 1, Selection::Units, true, open);
@@ -274,6 +318,39 @@ pub fn rows(
     }
     // Speed, always beside Features: the label says its state.
     push_node(&mut rows, 1, Selection::Speed, false, false);
+    // Then the source tree, and what its walk could not list.
+    let dirs = dirs_of(files);
+    dir_rows(&mut rows, 1, "", &dirs, files, expansion);
+    for (path, files) in &walk.skipped_folders {
+        rows.push(Row {
+            depth: 1,
+            kind: RowKind::Note(format!(
+                "skipped folder {path}: {files} C file(s), not read"
+            )),
+            expandable: false,
+            open: false,
+        });
+    }
+    for (path, why) in &walk.issues {
+        let note = match why {
+            Why::Unreadable(error) => format!("unreadable {path}: {error}"),
+            why => format!("skipped {path}: {}", why.words()),
+        };
+        rows.push(Row {
+            depth: 1,
+            kind: RowKind::Note(note),
+            expandable: false,
+            open: false,
+        });
+    }
+    if walk.truncated {
+        rows.push(Row {
+            depth: 1,
+            kind: RowKind::Note("… more files not listed (limit 20 000 files, 32 levels)".into()),
+            expandable: false,
+            open: false,
+        });
+    }
     rows
 }
 

@@ -1,14 +1,14 @@
 ┌ Files ───────────────────────┐┌ harness-tui-chat-goldens-0000000000 · 1 of 1 C file in Rust ─────────────────────────────────────────┐┌ Chat — waiting for you · haiku-4-5 ─────────────[New]─[?]─[×]┐
-│▾ harness-tui-chat-golde… ✓1/1││Next step: Every unit is in Rust and checked — measure its speed: choose Speed, at the end of the tree││› Please migrate u-lib.                                       │
-│  ▾ test_case/            ✓1/1││                                                                                                      ││                                                              │
-│    ▾ include/                ││2 files scanned                                                                                       ││I will ask to migrate u-lib.                                  │
-│        · lib.h         header││Units (1): 1 ✓ migrated                                                                               ││                                                              │
-│    ▾ src/                ✓1/1││                                                                                                      ││  · read the project's status — done                          │
-│      ▸ ✓ lib.c       migrated││                                                                                                      ││                                                              │
-│  ▾ Units (1)                 ││                                                                                                      ││                                                              │
-│    ▸ ✓ u-lib         migrated││                                                                                                      ││                                                              │
-│    Features (none yet)       ││                                                                                                      ││                                                              │
-│    Speed — not set up        ││                                                                                                      ││                                                              │
+│▾ harness-tui-chat-golde… ✓1/1││Next step: Every unit is in Rust and checked — measure its speed: choose Speed, under Features in the ││› Please migrate u-lib.                                       │
+│  ▾ Units (1)                 ││tree                                                                                                  ││                                                              │
+│    ▸ ✓ u-lib         migrated││                                                                                                      ││I will ask to migrate u-lib.                                  │
+│    Features (none yet)       ││2 files scanned                                                                                       ││                                                              │
+│    Speed — not set up        ││Units (1): 1 ✓ migrated                                                                               ││  · read the project's status — done                          │
+│  ▸ test_case/            ✓1/1││                                                                                                      ││                                                              │
+│                              ││                                                                                                      ││                                                              │
+│                              ││                                                                                                      ││                                                              │
+│                              ││                                                                                                      ││                                                              │
+│                              ││                                                                                                      ││                                                              │
 │                              ││                                                                                                      ││                                                              │
 │                              ││                                                                                                      ││                                                              │
 │                              ││                                                                                                      ││                                                              │

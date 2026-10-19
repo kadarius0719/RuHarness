@@ -780,9 +780,10 @@ mod tests {
                 "Re-read the project"
             ]
         );
+        // The source folder starts folded once the project has units.
         assert_eq!(
             at(Selection::Dir("test_case".into())),
-            ["Fold", "Re-read the project"]
+            ["Unfold", "Re-read the project"]
         );
         assert_eq!(
             at(Selection::File("test_case/src/lib.c".into())),

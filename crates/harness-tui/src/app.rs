@@ -632,6 +632,9 @@ pub enum Hit {
     Fold(Selection),
     /// A link row in the View (an index into [`App::links`]).
     Link(usize),
+    /// A unit's "C source" heading in its View: a click opens or folds
+    /// the code.
+    Code,
     /// A pane.
     Pane(Focus),
     /// A menu item.
@@ -751,6 +754,10 @@ pub struct App {
     pub scroll: usize,
     /// First View column shown (code lines).
     pub hscroll: usize,
+    /// A unit's View shows its code below its summary (folded until `→`,
+    /// `Enter` in the View, or a click on its heading; folded again when
+    /// the selection changes).
+    pub code_open: bool,
     /// The View's links (the project summary's and a directory's files, the
     /// units), as the last draw laid them out.
     pub links: Vec<Selection>,
@@ -1003,6 +1010,7 @@ impl App {
             tree_offset: 0,
             scroll: 0,
             hscroll: 0,
+            code_open: false,
             links: Vec::new(),
             link: None,
             mode: Mode::Normal,
@@ -1103,12 +1111,31 @@ impl App {
         }
     }
 
+    /// A unit's View with its code still folded under its summary.
+    pub fn code_folded(&self) -> bool {
+        matches!(self.selection, Selection::Unit(_))
+            && !self.code_open
+            && self.unit_view().is_some()
+    }
+
     /// The selected row, when it is shown.
     pub fn cursor(&self) -> Option<usize> {
         tree::row_of(&self.rows, &self.selection)
     }
 
-    fn rebuild_rows(&mut self) {
+    /// Flatten the tree again, its default folds taken from the snapshot
+    /// and the tree's height as last drawn.
+    pub(crate) fn rebuild_rows(&mut self) {
+        let changed = self.expansion.set_defaults(tree::defaults(
+            &self.snapshot,
+            &self.files,
+            &self.features,
+            self.layout.tree_page,
+        ));
+        // A new default never folds the selection away.
+        if changed {
+            tree::reveal(&mut self.expansion, &self.selection);
+        }
         self.rows = tree::rows(
             &self.snapshot,
             &self.files,
@@ -1129,6 +1156,7 @@ impl App {
         self.rebuild_rows();
         self.scroll = 0;
         self.hscroll = 0;
+        self.code_open = false;
         self.link = None;
         self.refresh_view(false);
         // A function's source opens at the function (review USE-4) — on
@@ -3321,7 +3349,7 @@ impl App {
         }
         if matches!(self.speed.group, crate::speed::Group::NoFile) {
             return say(
-                format!("{done} — measure its speed: choose Speed, at the end of the tree"),
+                format!("{done} — measure its speed: choose Speed, under Features in the tree"),
                 None,
             );
         }
@@ -3840,6 +3868,12 @@ impl App {
             }
             Some(Hit::Pane(f)) => {
                 self.move_focus(f);
+                return Command::None;
+            }
+            // A unit's code heading opens or folds its code.
+            Some(Hit::Code) => {
+                self.move_focus(Focus::View);
+                self.code_open = !self.code_open;
                 return Command::None;
             }
             _ => return Command::None,
@@ -4374,6 +4408,11 @@ impl App {
                     self.focus = Focus::Files;
                 }
             }
+            // Enter on a unit's folded code heading (the View's one row to
+            // act on) opens the code.
+            KeyCode::Enter if self.focus == Focus::View && self.code_folded() => {
+                self.code_open = true;
+            }
             KeyCode::Enter => self.open_menu(),
             KeyCode::Char('x') => {
                 if self.running {
@@ -4440,7 +4479,13 @@ impl App {
                 let row = self.cursor().and_then(|i| self.rows.get(i)).cloned();
                 match row {
                     Some(r) if r.expandable && !r.open => self.set_open(&sel, true),
-                    _ => self.focus = Focus::View,
+                    // Into the View; a unit's code opens on the way.
+                    _ => {
+                        self.focus = Focus::View;
+                        if self.code_folded() {
+                            self.code_open = true;
+                        }
+                    }
                 }
             }
             KeyCode::Esc => {
@@ -4498,6 +4543,7 @@ impl App {
                     self.hscroll = self.hscroll.saturating_sub(8);
                 }
             }
+            KeyCode::Right if self.code_folded() => self.code_open = true,
             // Never past the longest code line (review USE-14).
             KeyCode::Right => {
                 let room = self.code_cols.saturating_sub(8);
@@ -5874,14 +5920,37 @@ pub(crate) mod tests {
     fn navigation_moves_folds_jumps_and_goes_back() {
         let mut app = app("nav");
         assert_eq!(app.selection, Selection::Project);
+        // The sections first: Units, its unit, Features, Speed; then the
+        // source folder, folded (the project has units).
+        let order: Vec<Selection> = app
+            .rows
+            .iter()
+            .filter_map(|r| r.selection().cloned())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                Selection::Project,
+                Selection::Units,
+                Selection::Unit("u-lib".into()),
+                Selection::Features,
+                Selection::Speed,
+                Selection::Dir("test_case".into()),
+            ]
+        );
         code(&mut app, KeyCode::Down);
+        assert_eq!(app.selection, Selection::Units);
+        code(&mut app, KeyCode::End);
         assert_eq!(app.selection, Selection::Dir("test_case".into()));
-        // ← folds an open node, ← again goes to the parent.
+        assert!(!app.expansion.is_open(&Selection::Dir("test_case".into())));
+        // → opens a folded node, ← folds it, ← again goes to the parent.
+        code(&mut app, KeyCode::Right);
+        assert!(app.expansion.is_open(&Selection::Dir("test_case".into())));
         code(&mut app, KeyCode::Left);
         assert!(!app.expansion.is_open(&Selection::Dir("test_case".into())));
         code(&mut app, KeyCode::Left);
         assert_eq!(app.selection, Selection::Project);
-        code(&mut app, KeyCode::Down);
+        code(&mut app, KeyCode::End);
         code(&mut app, KeyCode::Right);
         assert!(app.expansion.is_open(&Selection::Dir("test_case".into())));
         // Down to lib.c, → opens it (its functions), → again into the View.
@@ -6055,8 +6124,8 @@ pub(crate) mod tests {
         let all_green = app.next_step().unwrap();
         assert_eq!(
             all_green.text,
-            "Every unit is in Rust and checked — measure its speed: choose Speed, at the end \
-             of the tree"
+            "Every unit is in Rust and checked — measure its speed: choose Speed, under \
+             Features in the tree"
         );
         assert_eq!(all_green.action, None);
         let lib = app.config.target.join(LIB_C);

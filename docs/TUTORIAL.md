@@ -213,11 +213,11 @@ The **cockpit** (the program `harness-tui`) is a full-screen view of the project
 
 ```text
 ┌ Files ────────────────┐┌ View ───────────────────────────┐┌ Chat ─────────────────────────┐
-│ The project's C files ││ What you selected, in detail:   ││ Ask for model work in plain   │
-│ and its units, each   ││ a file's C beside its Rust,     ││ words; it asks the cockpit,   │
-│ with a state symbol   ││ a unit's checks, an attempt's   ││ never runs anything itself    │
-│                       ││ turns, the project's next step  ││                               │
-│ Enter: what you can   ││                                 ││ Asks: Migrate u001-…          │
+│ Units, Features and   ││ What you selected, in detail:   ││ Ask for model work in plain   │
+│ Speed, then the C     ││ a unit in words, its code       ││ words; it asks the cockpit,   │
+│ files' folder; each   ││ folded below; a file's code;    ││ never runs anything itself    │
+│ row has a state mark  ││ an attempt's turns; the         ││                               │
+│ Enter: what you can   ││ project's next step             ││ Asks: Migrate u001-…          │
 │ do with the selection ││                                 ││ [Review Enter] [Decline Esc]  │
 │                       ││                                 ││ › your message                │
 └───────────────────────┘└─────────────────────────────────┘└───────────────────────────────┘
@@ -225,7 +225,7 @@ The **cockpit** (the program `harness-tui`) is a full-screen view of the project
  Key bar: the keys that work right now — click one to press it
 ```
 
-You work left to right: pick something in **Files**, read about it in the **View**, and ask the **Chat** for model work. Each area is a **pane**; the one your keys go to has the **focus** and a highlighted border, and `Tab` moves it. A row with `▸` is folded and `▾` is open. The symbol beside each row is its state (section 16 lists them). On a window narrower than 156 **columns** (the window's width, counted in letters) the chat shares the right side, and a `View │ Chat` tab on its border switches.
+You work left to right: pick something in **Files**, read about it in the **View**, and ask the **Chat** for model work. Each area is a **pane**; the one your keys go to has the **focus** and a highlighted border, and `Tab` moves it. A row with `▸` is folded and `▾` is open. The symbol beside each row is its state (section 16 lists them). Files lists `Units`, `Features` and `Speed` first, so all three are on screen even on a small window; the project's C files come last, in their folder, folded once the project has units (the folder's row sums up their marks, such as `⚠1 ✓0/13`, and `→` opens it). A unit is listed once, under `Units`. Its View says first, in words, what it is: its state and next step, its functions and how long each is, its files, its Rust, which features run it, its attempts. Its code comes last, under `▸ C source (→ to open)`: `→`, or `Enter` with the View focused, opens it, the C beside its Rust once the unit has Rust, else the C alone. On a window narrower than 156 **columns** (the window's width, counted in letters) the chat shares the right side, and a `View │ Chat` tab on its border switches.
 
 **Every action waits in a dialog.** Every View starts with a **Next step** line: what to do now, in one sentence. Select a row and press `Enter`: a short menu lists what you can do with it now, the Next step's item first and highlighted, with a `↳ recommended: …` line saying why (an item that cannot run is greyed, and says why). Every item that changes something opens a dialog that says in words what it will write, then the exact command. It starts on the safe button, must be scrolled to its end, and only after a moment whole on screen says "ready: → then Enter". Keys typed or pasted before that, and a held-down `Enter`, never confirm anything. Only one command runs at a time.
 
@@ -433,8 +433,8 @@ Common options of `migrate`: `--model <name>` names who answers; `--provider <na
 | Key | What it does |
 |---|---|
 | `↑ ↓` | move in the focused pane (tree: a row; View and details: scroll) |
-| `← →` | tree: fold / open, or to the parent / into the View; View: scroll sideways, `←` at the edge back to Files |
-| `Enter` | tree: the action menu · menu: choose · dialog: the focused button |
+| `← →` | tree: fold / open, or to the parent / into the View (a unit's code opens on the way); View: open a unit's folded code, scroll sideways, `←` at the edge back to Files |
+| `Enter` | tree: the action menu · View: open a unit's folded code, else the menu · menu: choose · dialog: the focused button |
 | `Esc` | close a menu, dialog or overlay; View: back to Files; Files: back along your jumps |
 | `Backspace` | back along your jumps |
 | `Tab` | the other pane (below 80 columns: Files ⇄ View) |

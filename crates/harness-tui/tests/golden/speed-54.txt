@@ -1,39 +1,39 @@
 ┌ Files ───────────────┐┌ Speed (1 of 1) ──────────────────────────────────────┐
-│      ▸ ◇ lz77.c      ││Next step: u001-katajainen's Rust is slower than the C│
-│        · lz77.h      ││— open it under Units to see how to change it, if     │
-│      ▸ ◇ squeeze.c   ││speed matters there                                   │
-│        · squeeze.h   ││                                                      │
-│      ▸ · symbols.h   ││Speed — your workloads, the C against the Rust in use │
-│      ▸ ◇ tree.c      ││measured on Apple M3 with 2 compilers — see each row ·│
-│        · tree.h      ││as verify builds them · 15 runs each · compares what  │
-│      ▸ ◇ util.c      ││the program prints and how it ends                    │
-│        · util.h      ││                                                      │
-│      ▸ ◇ zlib_contai…││The original C                                        │
-│        · zlib_contai…││  big-text                  CPU 1.22 s · 12.4 MB      │
-│        · zopfli.h    ││  many-small                too short to time         │
-│      ▸ ◇ zopfli_bin.c││  compress-a-big-text-file  CPU 12.4 s · 124 MB       │
-│      ▸ ◇ zopfli_lib.c││    last try: the C ends or prints differently from   │
-│  ▾ Units (11)        ││    one run to the next                               │
-│    ▸ ✓? u001-katajai…││As it stands (1 of 2 units — 1 left out)              │
-│    ▸ ◇ u-cache       ││  big-text                  slower 6.2 % (5.6–6.8 %)  │
-│    ▸ ◇ u-hash        ││  many-small                too short to time         │
-│    ▸ ◇ u-lz77        ││u001-katajainen                                       │
-│    ▸ ◇ u-tree        ││  big-text                  slower 6.2 % (5.6–6.8 %)  │
-│    ▸ ◇ u-blocksplitt…││  compress-a-big-text-file  slower 6.2 % · parallel   │
-│    ▸ ◇ u-gzip_contai…││  many-small                too short to time         │
-│    ▸ ◇ u-util        ││                                                      │
-│    ▸ ◇ u-zlib_contai…││Move to a row (Tab, then ↓) to read its full words.   │
-│    ▸ ◇ u-zopfli_lib  ││                                                      │
-│    ▸ ◇ u-zopfli_bin  ││                                                      │
-│  ▾ Features (7)      ││                                                      │
-│      ◉ Compress to g…││                                                      │
-│      ◉ Compress to z…││                                                      │
-│      ◉ Compress to r…││                                                      │
-│      ◉ Say what it d…││                                                      │
-│      ◉ Compress quic…││                                                      │
-│      ◌ Show the help ││                                                      │
-│      ◌ Report a miss…││                                                      │
-│    Speed (1 of 1)    ││                                                      │
+│▾ harness-tui-speed-v…││Next step: u001-katajainen's Rust is slower than the C│
+│  ▾ Units (11)        ││— open it under Units to see how to change it, if     │
+│    ▸ ✓? u001-katajai…││speed matters there                                   │
+│    ▸ ◇ u-cache       ││                                                      │
+│    ▸ ◇ u-hash        ││Speed — your workloads, the C against the Rust in use │
+│    ▸ ◇ u-lz77        ││measured on Apple M3 with 2 compilers — see each row ·│
+│    ▸ ◇ u-tree        ││as verify builds them · 15 runs each · compares what  │
+│    ▸ ◇ u-blocksplitt…││the program prints and how it ends                    │
+│    ▸ ◇ u-gzip_contai…││                                                      │
+│    ▸ ◇ u-util        ││The original C                                        │
+│    ▸ ◇ u-zlib_contai…││  big-text                  CPU 1.22 s · 12.4 MB      │
+│    ▸ ◇ u-zopfli_lib  ││  many-small                too short to time         │
+│    ▸ ◇ u-zopfli_bin  ││  compress-a-big-text-file  CPU 12.4 s · 124 MB       │
+│  ▾ Features (7)      ││    last try: the C ends or prints differently from   │
+│      ◉ Compress to g…││    one run to the next                               │
+│      ◉ Compress to z…││As it stands (1 of 2 units — 1 left out)              │
+│      ◉ Compress to r…││  big-text                  slower 6.2 % (5.6–6.8 %)  │
+│      ◉ Say what it d…││  many-small                too short to time         │
+│      ◉ Compress quic…││u001-katajainen                                       │
+│      ◌ Show the help ││  big-text                  slower 6.2 % (5.6–6.8 %)  │
+│      ◌ Report a miss…││  compress-a-big-text-file  slower 6.2 % · parallel   │
+│    Speed (1 of 1)    ││  many-small                too short to time         │
+│  ▸ src/              ││                                                      │
+│                      ││Move to a row (Tab, then ↓) to read its full words.   │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
  Ready — ↑↓ to choose a row, Enter for what you can do
 

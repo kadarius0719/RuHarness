@@ -6,7 +6,7 @@ By the end of this page you will know what the cockpit's screen shows, how the E
 
 The **cockpit** (the program `harness-tui`) is a full-screen view of a project inside Terminal. It runs the same `harness` commands you could type, and reads and writes the same **ledger** (the project's record folder), so the cockpit and the command line can be mixed.
 
-You work left to right. **Files**, on the left, lists the project's C files, then the groups `Units`, `Features` and `Speed`; the symbol beside each row is its state (`✓` migrated, `◇` planned, `◐` tried, `✗` failing, `⚠` needs attention, `!` changed since the scan; `?` lists them all). The **View**, on the right, shows the selection in detail: a file's C beside its Rust, the checks of a **unit** (one program piece), the turns of an **attempt** (one translation try), the project's next step. The **Chat** sits beside them, or shares the right side on a window narrower than 156 **columns** (letters across the window). Each area is a **pane**; the one with the highlighted border has the **focus** (receives your keys), and `Tab` moves it. Under the panes, the activity line says what is running; the key bar below lists the keys that work right now.
+You work left to right. **Files**, on the left, lists the groups `Units`, `Features` and `Speed` first, then the project's source folder, folded once the project has units (its row sums up their marks; `→` opens it); the symbol beside each row is its state (`✓` migrated, `◇` planned, `◐` tried, `✗` failing, `⚠` needs attention, `!` changed since the scan; `?` lists them all). A unit is listed once, under `Units`; its C file in the source folder shows the same mark. The **View**, on the right, shows the selection in detail: a **unit** (one program piece) in words first — its functions and their sizes, its files, its Rust, which features run it, its attempts, its checks — and its code folded under `▸ C source (→ to open)` (C beside its Rust once it has Rust, else the C alone); a file's code; the turns of an **attempt** (one translation try); the project's next step. The **Chat** sits beside them, or shares the right side on a window narrower than 156 **columns** (letters across the window). Each area is a **pane**; the one with the highlighted border has the **focus** (receives your keys), and `Tab` moves it. Under the panes, the activity line says what is running; the key bar below lists the keys that work right now.
 
 A row with `▸` is folded and `▾` is open; `→` and `←` open and close. `Esc` steps back one level. `g` reads the project again, for example after a command you typed elsewhere. `c` shows the exact command of the last action and everything it reported.
 
@@ -39,7 +39,7 @@ These boxes assume the guided liblzg run, with `u-checksum` verified. Make the w
 harness-tui --target targets/lzg
 ```
 
-Look for: Files on the left with `lzg` as its first row and a summary such as `✓2/5` at its right edge (2 of its 5 C files are in Rust; the View's title says it in words), the View on the right starting with `Next step:`, and `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes.
+Look for: Files on the left with `lzg` as its first row and a summary such as `✓2/5` at its right edge (2 of its 5 C files are in Rust; the View's title says it in words), then `Units (5)`, `Features` and `Speed`, and the folded source folder last; the View on the right starting with `Next step:`; and `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes.
 
 ```text
 ?

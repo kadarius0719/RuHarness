@@ -1,14 +1,14 @@
 ┌ Files ───────────────────────┐┌ harness-tui-grun-0000000000 · 1 of 1 C file in Rust ─────────────────────────────────┐
-│▾ harness-tui-grun-00000… ✓1/1││Next step: Every unit is in Rust and checked — measure its speed: choose Speed, at the│
-│  ▾ test_case/            ✓1/1││end of the tree                                                                       │
-│    ▾ include/                ││                                                                                      │
-│        · lib.h         header││2 files scanned                                                                       │
-│    ▾ src/                ✓1/1││Units (1): 1 ✓ migrated                                                               │
-│      ▸ ✓ lib.c       migrated││                                                                                      │
-│  ▾ Units (1)                 ││                                                                                      │
+│▾ harness-tui-grun-00000… ✓1/1││Next step: Every unit is in Rust and checked — measure its speed: choose Speed, under │
+│  ▾ Units (1)                 ││Features in the tree                                                                  │
 │    ▸ ✓ u-lib         migrated││                                                                                      │
-│    Features (none yet)       ││                                                                                      │
-│    Speed — not set up        ││                                                                                      │
+│    Features (none yet)       ││2 files scanned                                                                       │
+│    Speed — not set up        ││Units (1): 1 ✓ migrated                                                               │
+│  ▸ test_case/            ✓1/1││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
 │                              ││                                                                                      │
 │                              ││                                                                                      │
 │                              ││                                                                                      │

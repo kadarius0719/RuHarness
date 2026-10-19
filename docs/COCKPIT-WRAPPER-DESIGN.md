@@ -78,13 +78,13 @@ The mock below is 120 columns wide:
 ```
 ┌ Files ───────────────────────┐┌ lib.c · migrated (u-lib, pipeline) ──────────────────────────────────────────────────┐
 │▾ read_scalefactors_lib  ✓1/1 ││ read_scalefactors   C  src/lib.c:17  ⇄  Rust  src/ffi.rs:11  → logic::read_scalefactor│
-│  ▾ test_case/                ││17 void read_scalefactors(bs_t *bs, uint› │ 11 pub unsafe extern "C" fn read_scalefa› │
-│    ▾ include/                ││18                        int bands, flo› │ 12     bs: *mut BsT,                      │
-│        · lib.h         header││…                                         │ …                                         │
-│    ▾ src/                    ││                                                                                      │
-│      ▸ ✓ lib.c       migrated││ Checks  ✓ same exports  ✓ allowed calls  ✓ driver shape  ✓ the Rust builds           │
-│  ▾ Units (1)                 ││         ✓ same outputs as C  ✓ whole program  ✓ sanitizers  ✓ boundary calls         │
-│    ▸ ✓ u-lib         migrated││ Crate from attempt a-13c9 (pipeline) · verdict green, fresh                          │
+│  ▾ Units (1)                 ││17 void read_scalefactors(bs_t *bs, uint› │ 11 pub unsafe extern "C" fn read_scalefa› │
+│    ▸ ✓ u-lib         migrated││18                        int bands, flo› │ 12     bs: *mut BsT,                      │
+│    Features (none yet)       ││…                                         │ …                                         │
+│    Speed — not set up        ││                                                                                      │
+│  ▾ test_case/            ✓1/1││ Checks  ✓ same exports  ✓ allowed calls  ✓ driver shape  ✓ the Rust builds           │
+│    ▾ src/                ✓1/1││         ✓ same outputs as C  ✓ whole program  ✓ sanitizers  ✓ boundary calls         │
+│      ▸ ✓ lib.c       migrated││ Crate from attempt a-13c9 (pipeline) · verdict green, fresh                          │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
  Ready. Last: Re-check u-lib — GREEN, all 8 checks passed (41 s).                                           [Details c]
  plan changed 1 unit — review `git diff migration/plan.toml` (c for the lines)
@@ -174,10 +174,24 @@ It is keyed by path and id, never by row index.
 
 The tree, from the top:
 - The project is the root. It starts expanded and selected.
-- Under it: directories, then files. Under a file: its functions, taken from the facts' symbol
-  records in span order.
-- After the source tree: a group **Units (n)**. Under each unit: its **crate** node, then its
-  attempts in the rail's defined order (TUI-DESIGN §2).
+- Under it, the sections first: a group **Units (n)**, under each unit its **crate** node, then
+  its attempts in the rail's defined order (TUI-DESIGN §2); the group **Features**; **Speed**.
+- Then the source tree: directories, then files. Under a file: its functions, taken from the
+  facts' symbol records in span order. Then the walk's notes (skipped, unreadable, cut short).
+
+The sections come first so that a 30-row terminal shows all three headings without scrolling
+(pass 2 of docs/reviews/2026-10-18-cockpit-usability-critique.md; before it, the tree listed every
+file first and Features and Speed fell below the fold). The default folds (`tree::defaults`):
+- the source tree's top-level folders start **folded once the project has units**: a unit's
+  place is the Units list, and the folder's row sums up the marks of the files under it
+  (`⚠1 ✓0/13`); `→` opens it. A `.c` row inside still shows its unit's mark and keeps its own
+  View (its code) and menu ("Open unit …"), but it is not a second unit row;
+- the units group starts folded only when its rows, with the other headings, do not fit the
+  tree's height; then the features group, likewise. Speed is one row.
+These defaults follow the snapshot and the tree's height (a resize, a first plan); a node the
+person opened or folded keeps how it is. A selection, a jump (`Backspace` back), a link of the
+summary or the chooser of an attempt opens whatever folds hide its row. The summary's Failing
+and Needs attention lists jump to the unit's row; its changed and new files to the file's.
 
 A reload keeps the selection. If the selected node vanished, the selection moves to its parent.
 
@@ -256,9 +270,20 @@ drag or multi-select.
 | file owned by no unit, or a header | its C source, display-filtered and highlighted; at most 1 MiB, the rest cut with a note |
 | public function in a unit | its C beside its Rust (today's pair view, one pair) and its unit's checks |
 | internal function | its C only, noting "compared through the unit's exported functions" when its file is in a unit |
-| unit | today's unit screen |
+| unit | a summary in words, then its code folded (below) |
 | crate | the unit crate's pairs (today's `Shown::Crate`) |
 | attempt | the attempt's crate as pairs (today's `Shown::Attempt`), its turns, checks, provider and model, and its note |
+
+**A unit's View** (pass 2 of the 2026-10-18 critique) leads with words, for a person who
+cannot read C: its state line and Next step; its exported functions by name, each with its size
+in lines of C; its files; its Rust and verdict (or "No Rust yet"); which features run it; its
+speed; its attempts in one line (how many, and how they came out: the ledger keeps no order of
+time between attempts, so the line tallies them); its checks once it has a verdict. The code
+comes last, under the heading `▸ C source (→ to open)`: `→` (from the tree, `→` into the View),
+`Enter` with the View focused, or a click on the heading opens it — C beside Rust once the unit
+has Rust, else the C alone, with no `~` column. Summary and code scroll as one list; `]f` `[f`
+jump between functions; the `c`, `v` and `d` overlays are unchanged. The code folds again when
+the selection changes. A file's View (a `.c` or `.h` row) keeps showing its code, as before.
 
 **The project summary** shows:
 - the facts: N files, and how many changed, are new or are missing;
@@ -282,7 +307,7 @@ drag or multi-select.
   9. units with no Rust that call no other unit → "N units have no Rust yet — migrate the
      first, u-…: press Enter and choose Migrate — ask in chat";
   10. every unit that can move in Rust and green → write your features, else measure speed
-      (Speed, at the end of the tree), else "nothing to do".
+      (Speed, under Features in the tree), else "nothing to do".
 
   Model work is only ever recommended as **Migrate — ask in chat**, which types a request
   into the chat for the person to send; nothing starts on its own (pass 1 of
@@ -596,8 +621,8 @@ and is best effort.
 | key | does |
 |---|---|
 | `↑` `↓` | move in the focused pane (tree: a row; View and details: scroll) |
-| `←` `→` | in the tree: `←` folds, or on a leaf goes to the parent; `→` unfolds, or on a leaf moves into the View. In the View: horizontal scroll, and `←` at column 0 returns to Files |
-| `Enter` | tree: the action menu · menu: choose · dialog: the focused button (§5.3) |
+| `←` `→` | in the tree: `←` folds, or on a leaf goes to the parent; `→` unfolds, or on a leaf moves into the View (a unit's folded code opens on the way). In the View: `→` opens a unit's folded code, else horizontal scroll, and `←` at column 0 returns to Files |
+| `Enter` | tree: the action menu · View: a unit's folded code opens, else the menu · menu: choose · dialog: the focused button (§5.3) |
 | `Esc` | close a menu, dialog, overlay or the details; View: back to Files; Files: back along the back stack |
 | `Backspace` | back along the back stack |
 | `Tab` `Shift-Tab` | next / previous pane (below 80 columns: Files ⇄ View) |

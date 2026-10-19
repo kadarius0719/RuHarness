@@ -1,0 +1,30 @@
+┌ Files ───────────────┐┌ harness-tui-heads00-0000000000 · 0 of 13 C files in R┐
+│▾ harness-t… ✓0/13 (+…││Next step: 3 units have no Rust yet — migrate the     │
+│  ▾ Units (11)        ││first, u-cache: press Enter and choose Migrate — ask  │
+│    ▸ ✓? u001-katajai…││in chat                                               │
+│    ▸ ◇ u-cache       ││                                                      │
+│    ▸ ◇ u-hash        ││26 files scanned                                      │
+│    ▸ ◇ u-lz77        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ ◇ u-tree        ││planned                                               │
+│    ▸ ◇ u-blocksplitt…││                                                      │
+│    ▸ ◇ u-gzip_contai…││Features: 7 — 5 hold so far, 2 still all C            │
+│    ▸ ◇ u-util        ││                                                      │
+│    ▸ ◇ u-zlib_contai…││                                                      │
+│    ▸ ◇ u-zopfli_lib  ││                                                      │
+│    ▸ ◇ u-zopfli_bin  ││                                                      │
+│  ▾ Features (7)      ││                                                      │
+│      ◉ Compress to g…││                                                      │
+│      ◉ Compress to z…││                                                      │
+│      ◉ Compress to r…││                                                      │
+│      ◉ Say what it d…││                                                      │
+│      ◉ Compress quic…││                                                      │
+│      ◌ Show the help ││                                                      │
+│      ◌ Report a miss…││                                                      │
+│    Speed — not set up││                                                      │
+│  ▸ src/              ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+└──────────────────────┘└──────────────────────────────────────────────────────┘
+ Ready — ↑↓ to choose a row, Enter for what you can do
+
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit

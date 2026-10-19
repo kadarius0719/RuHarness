@@ -369,13 +369,35 @@ fn gutter_of(lines: &[CodeLine]) -> usize {
         .map_or(0, |n| n.to_string().len() + 1)
 }
 
-/// Rows one pair takes: a heading, the body, a rule (wide); two headings,
-/// both sides, a rule (stacked).
-fn pair_height(p: &PairView, wide: bool) -> usize {
-    if wide {
-        2 + p.c.len().max(p.rust.len())
-    } else {
-        3 + p.c.len() + p.rust.len()
+/// How a pair is laid out: C beside Rust, C above Rust, or the C alone (a
+/// unit with no Rust yet: no `~` column beside it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sides {
+    /// Side by side.
+    Wide,
+    /// C first, then Rust.
+    Stacked,
+    /// The C alone.
+    COnly,
+}
+
+impl Sides {
+    fn of(wide: bool) -> Sides {
+        if wide {
+            Sides::Wide
+        } else {
+            Sides::Stacked
+        }
+    }
+}
+
+/// Rows one pair takes: a heading, the body, a rule (wide, or the C
+/// alone); two headings, both sides, a rule (stacked).
+fn pair_height(p: &PairView, sides: Sides) -> usize {
+    match sides {
+        Sides::Wide => 2 + p.c.len().max(p.rust.len()),
+        Sides::Stacked => 3 + p.c.len() + p.rust.len(),
+        Sides::COnly => 2 + p.c.len(),
     }
 }
 
@@ -385,14 +407,23 @@ fn pair_row(
     (gc, gr): (usize, usize),
     r: usize,
     width: usize,
-    wide: bool,
+    sides: Sides,
     skip: usize,
 ) -> Line<'static> {
-    let last = pair_height(p, wide) - 1;
+    let last = pair_height(p, sides) - 1;
     if r == last {
         return Line::from(Span::styled("─".repeat(width), dim()));
     }
-    if wide {
+    if sides == Sides::COnly {
+        if r == 0 {
+            return Line::from(Span::styled(
+                ellipsis(&format!("C  {}", p.c_title), width),
+                bold(),
+            ));
+        }
+        return Line::from(cell(p.c.get(r - 1), gc, width, skip));
+    }
+    if sides == Sides::Wide {
         let left = (width.saturating_sub(3)) / 2;
         let right = width.saturating_sub(3 + left);
         if r == 0 {
@@ -434,7 +465,7 @@ fn pair_row(
 pub fn pair_window(
     pairs: &[PairView],
     width: usize,
-    wide: bool,
+    sides: Sides,
     from: usize,
     height: usize,
     skip: usize,
@@ -451,7 +482,7 @@ pub fn pair_window(
     let mut total = 0;
     for p in pairs {
         starts.push(total);
-        total += pair_height(p, wide);
+        total += pair_height(p, sides);
     }
     let end = from.saturating_add(height).min(total);
     let mut rows = Vec::with_capacity(end.saturating_sub(from));
@@ -460,10 +491,10 @@ pub fn pair_window(
     let mut gutters = None;
     while row < end && i < pairs.len() {
         let local = row - starts[i];
-        if local < pair_height(&pairs[i], wide) {
+        if local < pair_height(&pairs[i], sides) {
             let g =
                 *gutters.get_or_insert_with(|| (gutter_of(&pairs[i].c), gutter_of(&pairs[i].rust)));
-            rows.push(pair_row(&pairs[i], g, local, width, wide, skip));
+            rows.push(pair_row(&pairs[i], g, local, width, sides, skip));
             row += 1;
         } else {
             i += 1;
@@ -708,7 +739,12 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
     app.hits.push((area, Hit::Pane(Focus::Files)));
     let height = inner.height as usize;
-    app.layout.tree_page = height;
+    // The tree's default folds follow its height (a group folded where its
+    // rows would push the other headings off).
+    if app.layout.tree_page != height {
+        app.layout.tree_page = height;
+        app.rebuild_rows();
+    }
     let cursor = app.cursor().unwrap_or(0);
     // The wheel lets the selected row scroll away until the next key in the
     // panes with the focus in the tree, or a click on a row (§R6); otherwise
@@ -797,6 +833,13 @@ fn unit_state<'a>(app: &'a App, unit: &UnitView) -> Option<&'a UnitState> {
 /// The lines above a unit's pairs: its state (and cause), its crate's
 /// origin, an attempt's record.
 fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
+    let mut lines = unit_lead(app, unit, width);
+    lines.extend(unit_record(app, unit, width));
+    lines
+}
+
+/// A unit's state line (and who is writing it) and its Next step.
+fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let state = unit_state(app, unit);
     if let Some(s) = state {
@@ -830,6 +873,13 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
         };
         lines.extend(wrapped(&next.line(), width, style));
     }
+    lines
+}
+
+/// An attempt's record, or the unit crate's origin and verdict; which
+/// features run it; its speed.
+fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     match app.shown_attempt() {
         Some(a) => {
             let r = &a.record;
@@ -910,6 +960,104 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
         lines.extend(wrapped(change, width, Style::default()));
     }
     lines
+}
+
+/// The heading a unit's code sits under in its View.
+pub const CODE_FOLDED: &str = "▸ C source (→ to open)";
+
+/// A unit's View, in words first (pass 2 of the 2026-10-18 critique): its
+/// state and Next step; what it is — its exported functions and their
+/// sizes, its files; its Rust and verdict, which features run it, its
+/// speed; its attempts in one line; its checks once it has a verdict. The
+/// code comes after, under [`CODE_FOLDED`].
+fn unit_summary(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
+    let mut lines = unit_lead(app, unit, width);
+    lines.push(Line::from(""));
+    // The exported functions, by name, each with its size in lines of C.
+    let functions: Vec<String> = if app.pairs.is_empty() {
+        unit.unit
+            .symbols
+            .iter()
+            .map(|s| short_symbol(s).to_string())
+            .collect()
+    } else {
+        app.pairs
+            .iter()
+            .map(|p| {
+                let name = short_symbol(&p.symbol).to_string();
+                let code =
+                    p.c.iter()
+                        .filter(|l| matches!(l, CodeLine::Code { .. }))
+                        .count();
+                match code {
+                    0 => name,
+                    1 => format!("{name} (1 line)"),
+                    n => format!("{name} ({n} lines)"),
+                }
+            })
+            .collect()
+    };
+    let n = functions.len();
+    lines.extend(wrapped(
+        &format!(
+            "{n} exported function{}: {}",
+            plural_s(n),
+            functions.join(", ")
+        ),
+        width,
+        Style::default(),
+    ));
+    let files = &unit.unit.files;
+    lines.extend(wrapped(
+        &format!(
+            "Its C: {} file{} — {}",
+            files.len(),
+            plural_s(files.len()),
+            files.join(", ")
+        ),
+        width,
+        Style::default(),
+    ));
+    lines.extend(unit_record(app, unit, width));
+    lines.extend(wrapped(&attempts_line(unit), width, Style::default()));
+    if app.shown_verdict().is_some() {
+        lines.extend(checks_lines(app, width, 2));
+    }
+    lines.push(Line::from(""));
+    lines
+}
+
+/// A unit's attempts in one line: how many, and how they came out. (The
+/// ledger keeps no order of time between attempts, so this tallies them;
+/// unit's row in the tree, opened, lists each.)
+fn attempts_line(unit: &UnitView) -> String {
+    let n = unit.attempts.len();
+    if n == 0 {
+        return "Attempts: none yet".into();
+    }
+    let count = |pick: &dyn Fn(&str) -> bool| {
+        unit.attempts
+            .iter()
+            .filter(|a| pick(a.record.outcome.as_str()))
+            .count()
+    };
+    let green = count(&|o| o == "green");
+    let running = count(&|o| o == "in-progress");
+    let red = n - green - running;
+    let mut parts = Vec::new();
+    if green > 0 {
+        parts.push(format!("{green} GREEN"));
+    }
+    if red > 0 {
+        parts.push(format!("{red} red"));
+    }
+    if running > 0 {
+        parts.push(format!("{running} unfinished"));
+    }
+    format!(
+        "Attempts: {n} — {} (listed under its row in the tree)",
+        parts.join(", ")
+    )
 }
 
 /// Which of the person's features ran a function (§8.4), from a current map.
@@ -1421,24 +1569,58 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
     if let Some(last) = &app.last {
         lines.extend(wrapped(&format!("Last: {last}"), width, dim()));
     }
-    type Pick = fn(&App, &files::FileInfo) -> bool;
-    let groups: [(&str, Pick); 4] = [
-        (
-            "Failing",
-            |app, f| matches!(f.state, FileState::Owned(u) if matches!(app.files.units[u].state, UnitState::Failing)),
-        ),
-        (
-            "Needs attention",
-            |app, f| matches!(f.state, FileState::Owned(u) if matches!(app.files.units[u].state, UnitState::Attention(_))),
-        ),
-        ("Changed since the scan", |_, f| {
+    // A failing unit, or one that needs attention: one item per unit, a
+    // jump to its row in the Units list (its one place in the tree).
+    type UnitPick = fn(&UnitState) -> bool;
+    let unit_groups: [(&str, UnitPick); 2] = [
+        ("Failing", |s| matches!(s, UnitState::Failing)),
+        ("Needs attention", |s| matches!(s, UnitState::Attention(_))),
+    ];
+    for (title, pick) in unit_groups {
+        let picked: Vec<(&UnitView, &UnitState)> = app
+            .snapshot
+            .units
+            .iter()
+            .zip(&app.files.units)
+            .filter(|(_, info)| pick(&info.state))
+            .map(|(u, info)| (u, &info.state))
+            .collect();
+        if picked.is_empty() {
+            continue;
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
+        for (unit, state) in picked {
+            // Each item says why and what to do, not its state again.
+            let word = match state {
+                UnitState::Attention(cause) => cause.short().to_string(),
+                _ => "its last check was red — open it, Show the checks".into(),
+            };
+            links.push((lines.len(), Selection::Unit(unit.unit.id.clone())));
+            lines.push(Line::from(clipped(
+                vec![
+                    Span::raw("  "),
+                    Span::styled(format!("{} ", state.glyph()), glyph_style(state.glyph())),
+                    Span::raw(unit.unit.id.clone()),
+                    Span::styled(format!(" · {}", unit.unit.files.join(", ")), dim()),
+                ],
+                width,
+            )));
+            // Under the name, indented (wrapping drops leading spaces).
+            for row in word_wrap(&word, width.saturating_sub(4).max(8)) {
+                lines.push(Line::from(format!("    {row}")));
+            }
+        }
+    }
+    type Pick = fn(&files::FileInfo) -> bool;
+    let groups: [(&str, Pick); 2] = [
+        ("Changed since the scan", |f| {
             matches!(f.state, FileState::Changed | FileState::Missing)
         }),
-        ("New (not scanned yet)", |_, f| f.state == FileState::New),
+        ("New (not scanned yet)", |f| f.state == FileState::New),
     ];
     for (title, pick) in groups {
-        let picked: Vec<&files::FileInfo> =
-            app.files.files.iter().filter(|f| pick(app, f)).collect();
+        let picked: Vec<&files::FileInfo> = app.files.files.iter().filter(|f| pick(f)).collect();
         if picked.is_empty() {
             continue;
         }
@@ -1446,15 +1628,10 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
         lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
         for f in picked {
             let (glyph, _) = files::file_label(&app.files, &f.state);
-            // Each item says why and what to do, not its state again.
             let word = match &f.state {
-                FileState::Owned(u) => match app.files.units.get(*u).map(|i| &i.state) {
-                    Some(UnitState::Attention(cause)) => cause.short().to_string(),
-                    _ => "its last check was red — open it, Show the checks".into(),
-                },
-                FileState::Missing => "missing — Scan the project again".into(),
-                FileState::Changed => "changed — Scan the project again".into(),
-                _ => "Scan the project".into(),
+                FileState::Missing => "missing — Scan the project again",
+                FileState::Changed => "changed — Scan the project again",
+                _ => "Scan the project",
             };
             links.push((lines.len(), Selection::File(f.path.clone())));
             lines.push(Line::from(clipped(
@@ -1465,8 +1642,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
                 ],
                 width,
             )));
-            // Under the path, indented (wrapping drops leading spaces).
-            for row in word_wrap(&word, width.saturating_sub(4).max(8)) {
+            for row in word_wrap(word, width.saturating_sub(4).max(8)) {
                 lines.push(Line::from(format!("    {row}")));
             }
         }
@@ -2579,6 +2755,10 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     };
+    if matches!(sel, Selection::Unit(_)) {
+        draw_unit(frame, app, inner, &unit);
+        return;
+    }
     let mut head = unit_header(app, &unit, width);
     if let Selection::Function(file, name) = &sel {
         if let Some(line) = function_features_line(app, file, name) {
@@ -2619,11 +2799,11 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
         ])
         .areas(inner);
     frame.render_widget(Paragraph::new(head), head_area);
-    let wide = is_wide(app, pairs_area.width);
+    let sides = Sides::of(is_wide(app, pairs_area.width));
     let (pw, ph) = (pairs_area.width as usize, pairs_area.height as usize);
-    let (_, _, total) = pair_window(&app.pairs, pw, wide, 0, 0, 0);
+    let (_, _, total) = pair_window(&app.pairs, pw, sides, 0, 0, 0);
     app.scroll = app.scroll.min(total.saturating_sub(1));
-    let (visible, starts, total) = pair_window(&app.pairs, pw, wide, app.scroll, ph, app.hscroll);
+    let (visible, starts, total) = pair_window(&app.pairs, pw, sides, app.scroll, ph, app.hscroll);
     app.layout.pair_rows = starts;
     app.layout.total_rows = total;
     app.layout.page = ph;
@@ -2636,6 +2816,55 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
         )),
         checks_area,
     );
+}
+
+/// A unit's View: its summary, then its code under a heading that folds it
+/// — C beside Rust once the unit has Rust, else the C alone — scrolled as
+/// one list; `]f` `[f` still jump between its functions.
+fn draw_unit(frame: &mut Frame, app: &mut App, area: Rect, unit: &UnitView) {
+    let (width, height) = (area.width as usize, area.height as usize);
+    let mut lines = unit_summary(app, unit, width);
+    let heading_row = lines.len();
+    let open = app.code_open;
+    let mut heading = Line::from(Span::styled(
+        clip(if open { "▾ C source" } else { CODE_FOLDED }, width),
+        bold(),
+    ));
+    // Folded, it is the View's one row to act on: Enter there opens it.
+    if !open && app.focus == Focus::View {
+        heading = heading.style(Style::default().add_modifier(Modifier::REVERSED));
+    }
+    lines.push(heading);
+    let lead = lines.len();
+    let sides = if unit.crate_dir.is_some() {
+        Sides::of(is_wide(app, area.width))
+    } else {
+        Sides::COnly
+    };
+    let code_rows = if open {
+        pair_window(&app.pairs, width, sides, 0, 0, 0).2
+    } else {
+        0
+    };
+    let total = lead + code_rows;
+    app.scroll = app.scroll.min(total.saturating_sub(1));
+    let mut shown: Vec<Line<'static>> = lines.into_iter().skip(app.scroll).take(height).collect();
+    app.layout.pair_rows = Vec::new();
+    if open {
+        let from = app.scroll.saturating_sub(lead);
+        let room = height.saturating_sub(shown.len());
+        let (visible, starts, _) = pair_window(&app.pairs, width, sides, from, room, app.hscroll);
+        shown.extend(visible);
+        app.layout.pair_rows = starts.into_iter().map(|r| r + lead).collect();
+    }
+    app.layout.total_rows = total;
+    app.layout.page = height;
+    if (app.scroll..app.scroll + height).contains(&heading_row) {
+        let y = area.y + (heading_row - app.scroll) as u16;
+        app.hits
+            .push((Rect::new(area.x, y, area.width, 1), Hit::Code));
+    }
+    frame.render_widget(Paragraph::new(shown), area);
 }
 
 // ----- the activity panel ----------------------------------------------------------
@@ -2848,7 +3077,10 @@ fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
         Focus::View => {
             // Enter goes to a link only once one is chosen (review NEW-6).
             let chosen = app.link.and_then(|l| app.links.get(l)).is_some();
-            if app.links.is_empty() {
+            if app.code_folded() {
+                h.push(("↑↓", "scroll"));
+                h.push(("Enter", "open the code"));
+            } else if app.links.is_empty() {
                 h.push(("↑↓", "scroll"));
                 h.push(("←→", "side/back"));
                 h.push(("Enter", "actions"));
@@ -2866,7 +3098,7 @@ fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     }
     h.push(("Tab", "pane"));
     h.push(("Esc", "back"));
-    if app.focus == Focus::View && !app.pairs.is_empty() {
+    if app.focus == Focus::View && !app.pairs.is_empty() && !app.code_folded() {
         h.push(("]f", "next pair"));
     }
     h.push(("c", "details"));
@@ -2996,8 +3228,8 @@ const HELP_MOUSE: &[&str] = &[
 
 const HELP_KEYS: &[(&str, &str)] = &[
     ("↑ ↓", "move in the focused pane (tree: a row; View and details: scroll)"),
-    ("← →", "tree: fold / open, or to the parent / into the View; View: scroll sideways, ← at the edge back to Files"),
-    ("Enter", "tree: the action menu · menu: choose · dialog: the focused button"),
+    ("← →", "tree: fold / open, or to the parent / into the View (a unit's code opens on the way); View: open a unit's folded code, scroll sideways, ← at the edge back to Files"),
+    ("Enter", "tree: the action menu · View: open a unit's folded code, else the menu · menu: choose · dialog: the focused button"),
     ("Esc", "close a menu, dialog or overlay; View: back to Files; Files: back along your jumps"),
     ("Backspace", "back along your jumps"),
     ("Tab", "the other pane (below 80 columns: Files ⇄ View)"),
@@ -4211,6 +4443,11 @@ mod tests {
     fn golden_80_columns_and_below() {
         let mut app = app("g80");
         app.select(Selection::Unit("u-lib".into()));
+        // Its code opened below its summary (→ in the View).
+        app.focus = Focus::View;
+        crate::app::tests::code(&mut app, KeyCode::Right);
+        assert!(app.code_open);
+        app.focus = Focus::Files;
         let buffer = render(&mut app, 80, 30);
         golden("narrow.txt", &app, &buffer);
         let screen = text(&buffer);
@@ -4773,6 +5010,7 @@ mod tests {
                 let text = under(buffer, *r);
                 let want: Option<String> = match h {
                     Hit::Row(sel) => Some(node_name(app, sel).chars().take(4).collect()),
+                    Hit::Code => Some("C source".into()),
                     Hit::Fold(_) => Some(
                         if text.starts_with('▾') {
                             "▾"
@@ -4817,8 +5055,11 @@ mod tests {
             }
             seen
         };
-        // A scrolled tree, and a scrolled list.
+        // A scrolled tree (the source folder open: taller than the pane),
+        // and a scrolled list.
         let mut app = app_of("targets/zopfli", "mwhere");
+        app.expansion.set(&Selection::Dir("src".into()), true);
+        app.rebuild_rows();
         let t = Instant::now();
         render(&mut app, 120, 16);
         let files = spot(&app, &Hit::Pane(Focus::Files));
@@ -4833,6 +5074,11 @@ mod tests {
         event(&mut app, MouseEventKind::ScrollDown, view, t);
         let buffer = render(&mut app, 120, 16);
         assert!(app.scroll > 0);
+        assert!(check(&app, &buffer) > 5);
+        // A unit's View: its code heading.
+        app.select(Selection::Unit("u-cache".into()));
+        let buffer = render(&mut app, 120, 40);
+        assert!(drawn(&app, &Hit::Code));
         assert!(check(&app, &buffer) > 5);
         // The activity row while running, Help, a menu, a dialog.
         let mut app = crate::app::tests::app("mwhere2");
@@ -5401,6 +5647,8 @@ mod tests {
     #[test]
     fn the_wheel_scrolls_menus_dialogs_and_the_pane_under_it() {
         let mut app = app_of("targets/zopfli", "mwheel");
+        app.expansion.set(&Selection::Dir("src".into()), true);
+        app.rebuild_rows();
         let t = Instant::now();
         render(&mut app, 120, 16);
         let files = spot(&app, &Hit::Pane(Focus::Files));
@@ -5609,6 +5857,8 @@ mod tests {
             .is_some_and(|n| n.text.contains("wheel")));
         app.select(Selection::Unit("u-lib".into()));
         app.focus = Focus::View;
+        // Its code open below its summary.
+        app.code_open = true;
         render(&mut app, 120, 12);
         let rows = app.layout.pair_rows.clone();
         click_on(&mut app, &Hit::Hint("]f"), when + ms(9000));
@@ -5810,6 +6060,132 @@ mod tests {
         assert!(!screen.contains("no command yet"), "{screen}");
     }
 
+    /// Pass 2 of the 2026-10-18 critique, the tree: Units, Features and
+    /// Speed come before the source folder, which starts folded once the
+    /// project has units — so a 30-row terminal shows all three headings,
+    /// at 80 columns and wider.
+    #[test]
+    fn thirty_rows_show_the_three_section_headings() {
+        for width in [80, 150] {
+            let mut app = app_of("targets/zopfli", &format!("heads{width}"));
+            let buffer = render(&mut app, width, 30);
+            let screen = text(&buffer);
+            let tree: Vec<&str> = screen
+                .lines()
+                .map(|l| l.split("││").next().unwrap_or(l))
+                .collect();
+            let row = |needle: &str| {
+                tree.iter()
+                    .position(|l| l.contains(needle))
+                    .unwrap_or_else(|| panic!("{needle} is not on screen at {width}×30:\n{screen}"))
+            };
+            let (units, features, speed, src) = (
+                row("▾ Units (11)"),
+                row("Features (7)"),
+                row("Speed"),
+                row("▸ src/"),
+            );
+            assert!(
+                units < features && features < speed && speed < src,
+                "{screen}"
+            );
+            // The units' rows, and the folder summing up their marks.
+            assert!(screen.contains("◇ u-cache"), "{screen}");
+            // (At 80 columns a long count gives way to the name, as on
+            // every row.)
+            if width == 150 {
+                assert!(tree[src].contains("✓0/13"), "{screen}");
+            }
+            assert!(
+                !screen.contains("cache.c"),
+                "the folder is folded: {screen}"
+            );
+            if width == 80 {
+                golden("first-80x30.txt", &app, &buffer);
+            }
+        }
+        // A short terminal folds the features group first, never a heading.
+        let mut app = app_of("targets/zopfli", "heads20");
+        let screen = text(&render(&mut app, 80, 24));
+        for needle in ["Units (11)", "▸ Features (7)", "Speed", "▸ src/"] {
+            assert!(screen.contains(needle), "{needle}:\n{screen}");
+        }
+        // A jump to a file opens its folder; the needs-attention list jumps
+        // to the unit's row (its one place).
+        let mut app = app_of("targets/zopfli", "headsjump");
+        app.select(Selection::File("src/zopfli/cache.c".into()));
+        render(&mut app, 80, 30);
+        assert!(app.cursor().is_some(), "the file's row is shown");
+        assert!(app.expansion.is_open(&Selection::Dir("src".into())));
+    }
+
+    /// Pass 2, a unit's View: its state and Next step, then what it is in
+    /// words — its functions and their sizes, its files, its Rust, which
+    /// features run it, its attempts — and only then its code, under a
+    /// folded heading that → or Enter opens.
+    #[test]
+    fn a_units_view_leads_with_its_summary_and_folds_its_code() {
+        let mut app = app_of("targets/zopfli", "unitsum");
+        app.select(Selection::Unit("u-cache".into()));
+        let buffer = render(&mut app, 80, 30);
+        golden("unit-80x30.txt", &app, &buffer);
+        let screen = text(&buffer);
+        let view: Vec<String> = screen
+            .lines()
+            .filter_map(|l| l.split("││").nth(1))
+            .map(|l| l.trim_end_matches('│').trim_end().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(
+            view.first().map(String::as_str),
+            Some("◇ u-cache planned"),
+            "{screen}"
+        );
+        assert!(view[1].starts_with("Next step: "), "{screen}");
+        assert_eq!(
+            view.last().map(String::as_str),
+            Some(CODE_FOLDED),
+            "{screen}"
+        );
+        for words in [
+            "5 exported functions: ZopfliCacheToSublen (22 lines),",
+            "Its C: 1 file — src/zopfli/cache.c",
+            "No Rust yet",
+            "5 of your features run it",
+            "Attempts: none yet",
+        ] {
+            assert!(screen.contains(words), "{words}:\n{screen}");
+        }
+        assert!(
+            !screen.contains("void ZopfliCacheToSublen"),
+            "folded: {screen}"
+        );
+        // Enter in the View opens it (the heading is its one row to act on);
+        // Files' → into the View does too.
+        app.focus = Focus::View;
+        assert!(hints(&app).contains(&("Enter", "open the code")));
+        crate::app::tests::code(&mut app, KeyCode::Enter);
+        assert!(app.code_open && matches!(app.mode, Mode::Normal));
+        let screen = text(&render(&mut app, 80, 30));
+        assert!(screen.contains("▾ C source"), "{screen}");
+        assert!(screen.contains("void ZopfliCacheToSublen"), "{screen}");
+        // Open, Enter is the menu again; another unit starts folded.
+        crate::app::tests::code(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Menu(_)));
+        app.mode = Mode::Normal;
+        app.focus = Focus::Files;
+        app.select(Selection::Unit("u-hash".into()));
+        assert!(!app.code_open);
+        crate::app::tests::code(&mut app, KeyCode::Right);
+        assert!(!app.code_open, "→ opens the unit's row first");
+        crate::app::tests::code(&mut app, KeyCode::Right);
+        assert!(app.code_open && app.focus == Focus::View);
+        // A file's View keeps its code: there is nothing else to say.
+        app.select(Selection::File("src/zopfli/cache.h".into()));
+        let screen = text(&render(&mut app, 80, 30));
+        assert!(!screen.contains(CODE_FOLDED), "{screen}");
+    }
+
     /// A planned unit's View says "No Rust yet" and its Next step; the
     /// project's says how many units have no Rust and which is first.
     #[test]
@@ -5824,11 +6200,17 @@ mod tests {
             "{screen}"
         );
         assert!(!screen.contains("No crate yet"), "{screen}");
-        assert!(
-            screen.contains("│ no Rust yet"),
-            "the Rust column: {screen}"
-        );
         assert!(!screen.contains("no crate"), "{screen}");
+        // Its code opens with no Rust column beside it: the C alone.
+        app.code_open = true;
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("C  ZopfliCacheToSublen (cache.c:87)"),
+            "{screen}"
+        );
+        assert!(!screen.contains("│ no Rust yet"), "{screen}");
+        assert!(!screen.contains("⇄"), "{screen}");
+        assert!(!screen.contains(" │ ~"), "{screen}");
         let next = app.next_step().expect("a Next step");
         assert!(
             next.text.ends_with(
@@ -6091,6 +6473,8 @@ mod tests {
     #[test]
     fn follow_comes_back_only_with_a_key_in_the_panes() {
         let mut app = app_of("targets/zopfli", "mfollow");
+        app.expansion.set(&Selection::Dir("src".into()), true);
+        app.rebuild_rows();
         let t = Instant::now();
         render(&mut app, 120, 16);
         let files = spot(&app, &Hit::Pane(Focus::Files));
@@ -6245,6 +6629,7 @@ mod tests {
         // the command again.
         app.running = false;
         app.focus = Focus::View;
+        app.code_open = true;
         render(&mut app, 120, 30);
         app.layout.pair_rows = vec![0, 7];
         click_on(&mut app, &Hit::Hint("]f"), t + ms(2000));
@@ -6267,6 +6652,8 @@ mod tests {
             .is_some_and(|n| n.text == "turn the wheel to scroll; ↑↓ are keys"));
         // The wheel over the panes above the details scrolls the pane.
         let mut app = app_of("targets/zopfli", "mrest2");
+        app.expansion.set(&Selection::Dir("src".into()), true);
+        app.rebuild_rows();
         key(&mut app, 'c');
         render(&mut app, 120, 30);
         let details = match app.mode {
@@ -6328,6 +6715,9 @@ mod tests {
     #[test]
     fn a_key_through_the_details_follows_the_tree() {
         let mut app = app_of("targets/zopfli", "mfollow2");
+        // The source folder open: a tree taller than the pane.
+        app.expansion.set(&Selection::Dir("src".into()), true);
+        app.rebuild_rows();
         let t = Instant::now();
         app.focus = Focus::View;
         key(&mut app, 'c');

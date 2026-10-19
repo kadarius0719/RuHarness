@@ -2638,7 +2638,7 @@ harness-tui --target targets/lzg
 
 **You should see** a full-screen view:
 
-- the **Files** pane on the left, with the project row `lzg`, the folders and files under `src/`, then `Units (5)`, then `Features (none yet)`;
+- the **Files** pane on the left, with the project row `lzg`, then `Units (5)` with its five units under it, then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
 - the **View** on the right, starting with a line `Next step: 5 units have no Rust yet — migrate the first, u-checksum: press Enter and choose Migrate — ask in chat`, then a summary such as `7 files scanned`, `Units (5): 5 ◇ planned` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
 - the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes;
 - a key bar at the bottom, like `↑↓ move   ←→ fold/open   Enter actions   Tab pane   …   q quit`.
@@ -2662,19 +2662,19 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 **Do** these, one press at a time, and check the screen after each:
 
-1. Press `↓` until the `Units (5)` row is highlighted. **You should see** the highlight on `Units (5)`, below the folders and files.
+1. Press `↓` once. **You should see** the highlight on `Units (5)`, the second row.
 2. If that row shows `▸`, press `→`. **You should see** `▾` in place of `▸`, and the five units listed under it, `u-checksum` first. (If it already showed `▾`, skip this press.)
 3. Press `↓` once. **You should see** the highlight on `u-checksum`, and the View change to the unit, as below.
 
-**You should see** in the View:
+**You should see** in the View, in words first:
 
 - `◇ u-checksum planned`;
 - `Next step: No Rust yet — ask the chat to migrate it (a model writes the Rust, the judge checks it, you accept it)`;
-- `No Rust yet`;
-- the C of `_LZG_CalcChecksum`, with `no Rust yet` on the Rust side;
-- `Checks  none yet for what is shown` at the bottom.
+- `1 exported function: _LZG_CalcChecksum (… lines)` and `Its C: 1 file — …checksum.c`;
+- `No Rust yet` and `Attempts: none yet`;
+- last, `▸ C source (→ to open)`: the code, folded.
 
-**What it means.** The unit is planned and has no Rust yet. You only moved the selection.
+**What it means.** The unit is planned and has no Rust yet. You only moved the selection. To read its C, press `→` twice (the first opens the unit's row in Files, the second goes into the View and opens the code); the C shows alone, since there is no Rust beside it yet.
 
 **If you do not see that.** No `Units (5)` row: press `g` to make the cockpit read the project again.
 
@@ -2862,7 +2862,7 @@ Accepting is your decision, so look first.
 Ready. Last: Accept a-<4hex> into u-checksum — GREEN — all 8 checks passed (<time>)
 ```
 
-In Files, `u-checksum` and `checksum.c` now show `✓`. The View's first line reads `✓ u-checksum migrated (asked in chat)`. The attempt row reads `✓ a-<4hex> green *c asked in chat` (`*c` marks the attempt the unit's crate came from).
+In Files, `u-checksum` now shows `✓` (so does `checksum.c`, inside the folded `src/` folder). The View's first line reads `✓ u-checksum migrated (asked in chat)`. The attempt row reads `✓ a-<4hex> green *c asked in chat` (`*c` marks the attempt the unit's crate came from).
 
 **What it means.** The cockpit ran `harness --json promote u-checksum a-<12hex> --target=…`. That created the crate `migration/units/u-checksum/u_checksum_rs/`, ran every check again in that final place, wrote the verdict files (`oracle-latest.json`, `oracle-latest.md`, `oracle-last-green.json`) and set `status = "verified"` in `plan.toml`. This answers the part's question: yes.
 
@@ -4607,7 +4607,7 @@ git status --short
 
 | Word | Plain meaning |
 |---|---|
-| **Files** | The list on the left of the cockpit: the project, its folders and files, then the groups `Units`, `Features` and `Speed`. The highlighted row is the one you have **selected**. |
+| **Files** | The list on the left of the cockpit: the project, the groups `Units`, `Features` and `Speed`, then the project's folders and files (the folder folded until you open it). The highlighted row is the one you have **selected**. |
 | **View** | The large area on the right. It shows details of the selected row. |
 | `✓` | Migrated: this piece is Rust now. On a folder, `✓2/5` means 2 of its 5 C files are Rust; the View's title says it in words. |
 | `◇` | Planned: the unit is still C. |
@@ -4657,8 +4657,8 @@ harness-tui --target targets/lzg
 
 **Do** these, one press at a time, and check the screen after each:
 
-1. Press `↓` until `src/` is highlighted, then press `→`. **You should see** `lzg/` appear, indented, under `src/`. (`→` opens a folder; `←` closes it again.)
-2. Press `↓` to highlight `lzg/`, then press `→`. **You should see** the five C files and the two headers. `checksum.c` and `version.c` are marked migrated; `internal.h` and `lzg.h` show `· header`. (A header is never migrated by itself, so the cockpit just marks it.)
+1. Press `↓` until `src/`, the last row, is highlighted. It shows `▸`: the folder is folded, and its right edge sums up the marks of its files. Press `→`. **You should see** `lzg/` appear, indented, under `src/`. (`→` opens a folder; `←` closes it again.)
+2. Press `↓` to highlight `lzg/`; if it shows `▸`, press `→`. **You should see** the five C files and the two headers under it. `checksum.c` and `version.c` are marked migrated; `internal.h` and `lzg.h` show `· header`. (A header is never migrated by itself, so the cockpit just marks it.)
 3. Press `↓` until `checksum.c` is highlighted. **You should see** `✓ migrated (asked in chat)` on its row. (If you used Plan B for it, the row says `✓ migrated`.)
 4. Press `→` to open `checksum.c`. **You should see** its function `_LZG_CalcChecksum()` appear under it.
 5. Press `↓` once to select `_LZG_CalcChecksum()`. **You should see** the View show the C next to the Rust, under a header like `C  _LZG_CalcChecksum (checksum.c:<line>)  ⇄ Rust  …`.
@@ -4678,21 +4678,24 @@ harness-tui --target targets/lzg
 **Do** these, one press at a time, and check the screen after each:
 
 1. Press `←` until `lzg` is highlighted again. **You should see** the highlight move up the list until it rests on `lzg`.
-2. Press `↓` until `Units (5)` is highlighted (it is below the folders). **You should see** the highlight on `Units (5)`.
-3. Press `→`. **You should see** the five units listed under it: `u-checksum`, `u-decode`, `u-encode`, `u-version`, `u-lzg`. These are the five pieces Part 2 planned.
+2. Press `↓` once. **You should see** the highlight on `Units (5)`, the second row.
+3. If that row shows `▸`, press `→` (if it shows `▾`, skip this press). **You should see** the five units listed under it: `u-checksum`, `u-decode`, `u-encode`, `u-version`, `u-lzg`. These are the five pieces Part 2 planned.
 4. Press `↓` to highlight `u-checksum`. **You should see** the View below.
 
-**You should see** in the View:
+**You should see** in the View, in words first:
 
 - `✓ u-checksum migrated (asked in chat)`;
 - a `Next step:` line, such as `Next step: In Rust and checked — nothing to do`;
+- `1 exported function: _LZG_CalcChecksum (… lines)` and `Its C: 1 file — …checksum.c`;
 - a line about the crate that ends `verdict green, fresh`;
 - a cyan line saying how many of your features run this unit (the colour depends on your Terminal's theme);
-- at the bottom, a row of checks similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3 (1 run this unit)`.
+- `Attempts: …`, how many and how they came out;
+- a row of checks similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3 (1 run this unit)`;
+- last, `▸ C source (→ to open)`: the code, folded. `→` twice would open it (the C beside its Rust, as in Step 9.3); you do not need it here.
 
 **What it means.** This is the same verdict `harness verify` printed in Part 5, in short form.
 
-**If you do not see that.** `verdict green, STALE` means something changed since the last verify: Step 9.6's re-check refreshes it. If you cannot find `Units (5)`, it is below the folders: keep pressing `↓`.
+**If you do not see that.** `verdict green, STALE` means something changed since the last verify: Step 9.6's re-check refreshes it. If you cannot find `Units (5)`, press `↑` until `lzg` is highlighted: `Units (5)` is the row under it.
 
 ### Step 9.5 — Show the checks, then close them
 
@@ -4762,7 +4765,7 @@ Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
 
 1. Press `←` until `Units (5)` is highlighted. **You should see** the highlight on `Units (5)`.
 2. Press `←` once more. **You should see** the units fold away under `Units (5)`.
-3. Press `↓` until `Features (3)` is highlighted, then press `→`. **You should see** the three features under it: `compress`, `version` and `no-file`.
+3. Press `↓` until `Features (3)` is highlighted; if it shows `▸`, press `→`. **You should see** the three features under it: `compress`, `version` and `no-file`.
 4. Press `↓` to select each feature in turn. **You should see** the View for each, as below.
 
 **You should see:**
@@ -6689,7 +6692,7 @@ Run it? Type y and Enter; anything else goes back:
 
 **Do.** Type `y`, Return.
 
-**You should see** (from the author's run) the full-screen cockpit open on the new tool, with `Next step: Nothing is scanned yet — press Enter and choose Scan the project`. The project's files that are not part of the tool are greyed out and marked `⊖`.
+**You should see** (from the author's run) the full-screen cockpit open on the new tool, with `Next step: Nothing is scanned yet — press Enter and choose Scan the project`. In Files, `Features` and `Speed` come first, then the project's folders and files, open (the tool has no units yet: once it has, the folders start folded and `Units` comes first). The project's files that are not part of the tool are greyed out and marked `⊖`.
 
 **Do.** Press `q`.
 

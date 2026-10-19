@@ -1,14 +1,14 @@
 ┌ Files ───────────────────────┐┌ Chat — continuing… · haiku-4-5 ───────────────────────────────[New]─[?]─ View ─ Chat ┐
 │▾ harness-tui-chat-lines… ✓1/1││  line 184                                                                            │
-│  ▾ test_case/            ✓1/1││  line 185                                                                            │
-│    ▾ include/                ││  line 186                                                                            │
-│        · lib.h         header││  line 187                                                                            │
-│    ▾ src/                ✓1/1││  line 188                                                                            │
-│      ▸ ✓ lib.c       migrated││  line 189                                                                            │
-│  ▾ Units (1)                 ││  line 190                                                                            │
-│    ▸ ✓ u-lib         migrated││  line 191                                                                            │
-│    Features (none yet)       ││  line 192                                                                            │
-│    Speed — not set up        ││  line 193                                                                            │
+│  ▾ Units (1)                 ││  line 185                                                                            │
+│    ▸ ✓ u-lib         migrated││  line 186                                                                            │
+│    Features (none yet)       ││  line 187                                                                            │
+│    Speed — not set up        ││  line 188                                                                            │
+│  ▸ test_case/            ✓1/1││  line 189                                                                            │
+│                              ││  line 190                                                                            │
+│                              ││  line 191                                                                            │
+│                              ││  line 192                                                                            │
+│                              ││  line 193                                                                            │
 │                              ││  line 194                                                                            │
 │                              ││  line 195                                                                            │
 │                              ││  line 196                                                                            │

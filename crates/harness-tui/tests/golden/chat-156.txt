@@ -1,14 +1,14 @@
 ┌ Files ───────────────────────┐┌ harness-tui-chat-goldens-0000000000 · 1 of 1 C file in Rus…──────────────────┐┌ Chat — waiting for you · …──[New]─[?]─[×]┐
 │▾ harness-tui-chat-golde… ✓1/1││Next step: Every unit is in Rust and checked — measure its speed: choose      ││› Please migrate u-lib.                   │
-│  ▾ test_case/            ✓1/1││Speed, at the end of the tree                                                 ││                                          │
-│    ▾ include/                ││                                                                              ││I will ask to migrate u-lib.              │
-│        · lib.h         header││2 files scanned                                                               ││                                          │
-│    ▾ src/                ✓1/1││Units (1): 1 ✓ migrated                                                       ││  · read the project's status — done      │
-│      ▸ ✓ lib.c       migrated││                                                                              ││                                          │
-│  ▾ Units (1)                 ││                                                                              ││                                          │
-│    ▸ ✓ u-lib         migrated││                                                                              ││                                          │
-│    Features (none yet)       ││                                                                              ││                                          │
-│    Speed — not set up        ││                                                                              ││                                          │
+│  ▾ Units (1)                 ││Speed, under Features in the tree                                             ││                                          │
+│    ▸ ✓ u-lib         migrated││                                                                              ││I will ask to migrate u-lib.              │
+│    Features (none yet)       ││2 files scanned                                                               ││                                          │
+│    Speed — not set up        ││Units (1): 1 ✓ migrated                                                       ││  · read the project's status — done      │
+│  ▸ test_case/            ✓1/1││                                                                              ││                                          │
+│                              ││                                                                              ││                                          │
+│                              ││                                                                              ││                                          │
+│                              ││                                                                              ││                                          │
+│                              ││                                                                              ││                                          │
 │                              ││                                                                              ││                                          │
 │                              ││                                                                              ││                                          │
 │                              ││                                                                              ││                                          │
