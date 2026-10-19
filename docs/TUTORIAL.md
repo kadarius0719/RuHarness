@@ -238,7 +238,7 @@ You work left to right: pick something in **Files**, read about it in the **View
 | Retry an attempt | Re-check with the judge |
 | Answer the model's questions during a migration (Continue) | Accept an attempt |
 
-For anything in the right column the chat tells you which menu item to use. A request appears on a yellow line above the input, "Asks: …", and ignores keys for its first second; `Enter` reviews it in the same dialog as your own actions, `Esc` declines it. Everything the chat asked for is recorded as "asked in chat".
+For anything in the right column the chat tells you which menu item to use. A request appears on a bold line above the input, "Asks: …", and ignores keys for its first second; `Enter` reviews it in the same dialog as your own actions, `Esc` declines it. Everything the chat asked for is recorded as "asked in chat".
 
 **Letting it continue on its own.** A migration is a conversation with the model, and each turn is a hand-off. When you confirm a migration the chat asked for, the dialog says the chat will answer these turns itself; each answer then continues the run after a quiet second ("waits for a quiet moment; Esc holds it"). That permission ends as soon as you hold one, decline or cancel one, stop the chat or start a new one; after that every answer asks you first. It is never given when the cockpit runs without its sandbox, and it never accepts anything.
 
@@ -448,6 +448,8 @@ Common options of `migrate`: `--model <name>` names who answers; `--provider <na
 | `j k  ]f [f  J K` | also: move, next/previous pair, next/previous unit |
 
 In the chat, letters are text. `Enter` sends (or, on an empty input, reviews a waiting request); `Ctrl-J`, `\` then `Enter`, or `Alt-Enter` is a new line; `Esc` declines a request, holds a waiting Continue, or stops the reply; `Ctrl-C` stops, clears the draft, or quits (asked); `Ctrl-X` cancels the running command; `Ctrl-N` starts a new chat (asked); `↑↓ PgUp PgDn` scroll; `F1` is the help. With the mouse, a click selects, a double click is `Enter`, the wheel scrolls, and a click on a key in the bottom bar presses it; if clicks print odd characters, start with `--no-mouse`.
+
+**The cockpit's colours.** Plain text, bold headings, one colour for the `Next step:` label and the recommended menu item, and three for states (good `✓`, failing `✗`, needs attention `⚠`), each beside its mark or word. By default it uses your terminal's own colours (`--theme terminal`). If text is faint or blends into the background, start the cockpit with `--theme dark` or `--theme light` (designed for a dark or a white background) or `--theme mono` (no colour; bold, underline and reverse carry everything). `RUHARNESS_THEME=light` does the same; `NO_COLOR` picks mono. A settings file, `cockpit.toml`, keeps a theme and can change any single colour: its place and an example are in docs/topics/cockpit.md.
 
 **The states**, as the help screen lists them:
 

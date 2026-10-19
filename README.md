@@ -116,7 +116,10 @@ can be done now. On a ledger not yet adopted it first asks `Adopt this folder? T
 adopt`. Keys, menus and symbols: [docs/TUTORIAL.md](docs/TUTORIAL.md); the walk: guide Parts 4 and 9.
 Flags (`harness-tui --help`): `--target DIR` (default `.`), `--tool ID`, `--harness PATH` (default
 on PATH, else next to the cockpit), `--provider NAME` (repeatable, default `external`; the target
-never chooses it), `--allow-unsandboxed`, `--layout split|stacked`, `--no-mouse`, `--no-chat`,
+never chooses it), `--allow-unsandboxed`, `--layout split|stacked`, `--no-mouse`, `--theme
+NAME` (`terminal`, the default, uses your terminal's own colours; `dark` or `light` are designed
+palettes, `mono` has none; also `RUHARNESS_THEME`; `NO_COLOR` picks `mono`; a settings file
+`cockpit.toml` can keep the theme and change any colour: [docs/topics/cockpit.md](docs/topics/cockpit.md)), `--no-chat`,
 `--chat-runtime PATH` (the `claude` to run), `--harness-mcp PATH` (default next to the cockpit,
 else on PATH), `--chat-model NAME`. `cargo build` at the root skips it (`cargo build -p
 harness-tui`). Install the three programs (`harness`, `harness-tui`, `harness-mcp`) with the three

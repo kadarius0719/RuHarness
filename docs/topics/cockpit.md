@@ -12,6 +12,29 @@ On a C project with no `harness.toml` (one you have not mapped yet, or one with 
 
 You work left to right. **Files**, on the left, lists the groups `Units`, `Features` and `Speed` first, then the project's source folder, folded once the project has units (its row sums up their marks; `→` opens it; a tool just accepted has no `Units` yet — scan and plan it first — and its folder starts open); the symbol beside each row is its state (`✓` migrated, `◇` planned, `◐` tried, `✗` failing, `⚠` needs attention, `!` changed since the scan, `+` new (not scanned yet), `·` a header or a file with no unit, `⊖` a file outside this tool; under Features, `◉` runs Rust now and `◌` still all C; `?` lists every mark). When a row is too narrow, its name is shortened, never its state word. A unit is listed once, under `Units`; its C file in the source folder shows the same mark. The **View**, on the right, shows the selection in detail: a **unit** (one program piece) in words first — its functions and their sizes, its files, its Rust, which features run it, its attempts, its checks — and its code folded under `▸ C source (Tab to the View, then Enter)` (in the View the heading reads `▸ C source (Enter to open)`; C beside its Rust once it has Rust, else the C alone); a file's code; the turns of an **attempt** (one translation try); the project's next step. A unit that needs attention leads with that one state and its cause, such as `needs attention: its verdict was made on another computer, not here yet`, and the judge's own words come under it, as `The judge's last verdict: …`. Selecting a unit's crate or one of its attempts in Files says what the row's words (`crate`, `green`, `red`, `truncated`, …) mean. The **Chat** sits beside them, or shares the right side on a window narrower than 156 **columns** (letters across the window). Each area is a **pane**; the one with the highlighted border has the **focus** (receives your keys), and `Tab` moves it. Under the panes, the activity line says what is running, or how the last command ended — `done`, `done, with a problem: …` or `failed (exit N): …` with its first error line, never `done` for a run that failed; the key bar below lists the keys that work right now.
 
+**Colours and themes.** The screen is plain text with bold headings, one colour for the `Next step:` label and the menu's recommended item, and three colours for states: good (`✓`), failing (`✗`) and needs attention (`⚠`). A state colour always sits beside its mark or word, so nothing is said by colour alone, and nothing is dim or blinks. By default the cockpit uses your terminal's own green, red, yellow and cyan (the theme `terminal`), so your terminal's colour scheme decides how it looks. If text still looks faint or blends into the background, start it with `--theme dark` or `--theme light` (colours designed and checked for a dark or a white background), or `--theme mono` (no colour at all: bold, underline and reverse carry everything). `RUHARNESS_THEME=light` does the same as the flag; `NO_COLOR` picks mono.
+
+To keep a choice, or to change one colour, write the settings file `cockpit.toml`: on a Mac `~/Library/Application Support/ruharness/cockpit.toml`, on Linux `~/.config/ruharness/cockpit.toml` (or the path in `RUHARNESS_COCKPIT_CONFIG`). The cockpit reads it at start; `--theme` beats it. A colour is a name (`red`, `bright-blue`, `default` for the terminal's own), a number from 0 to 255, or `#rrggbb`. Anything it cannot use is named in one sentence when the cockpit starts, and the default is used instead.
+
+```toml
+# ~/Library/Application Support/ruharness/cockpit.toml
+
+[theme]
+name = "terminal"        # terminal (the default), dark, light or mono
+
+[colors]                 # any of the ten roles; leave out what you like as it is
+# text      = "default"  # ordinary words
+# muted     = 250        # secondary words (the file's path, "Last: …")
+# heading   = "default"  # headings are bold
+# accent    = "bright-cyan"   # the Next step's label, the recommended item
+# good      = "green"    # beside ✓
+# bad       = "red"      # beside ✗
+attention   = "#ffaf00"  # beside ⚠ — an amber, for example
+# selected  = "default"  # the selected row is reversed
+# disabled  = 245        # a greyed menu item
+# border    = 244        # an unfocused pane's frame
+```
+
 A row with `▸` is folded and `▾` is open; `→` and `←` open and close. `Esc` steps back one level. `g` reads the project again, for example after a command you typed elsewhere. `c` shows the exact command of the last action and everything it reported.
 
 ## The Enter menu and the dialogs
@@ -31,7 +54,7 @@ The chat is your own Claude Code, signed in with your own account. The cockpit s
 | Retry an attempt | Re-check with the judge |
 | Answer the model's questions during a migration (Continue) | Accept an attempt |
 
-A request appears on a yellow line above the input, such as `Asks: Migrate u-checksum — a model call, answered here in chat`, and ignores keys for its first second. `Enter` reviews it in the same dialog as your own actions; `Esc` declines it. Everything the chat asked for is recorded as "asked in chat".
+A request appears on a bold line above the input, such as `Asks: Migrate u-checksum — a model call, answered here in chat`, and ignores keys for its first second. `Enter` reviews it in the same dialog as your own actions; `Esc` declines it. Everything the chat asked for is recorded as "asked in chat".
 
 When you confirm a migration the chat asked for, the dialog says the chat will answer its model turns itself. Each answer then continues the run after a quiet second ("waits for a quiet moment; Esc holds it"). That permission ends as soon as you hold, decline or cancel one, stop the chat or start a new one; it is never given when the cockpit runs without its **sandbox** (locked-down build space), and it never accepts anything. Quitting the cockpit stops the chat and any command it started.
 

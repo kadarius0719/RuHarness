@@ -1,0 +1,105 @@
+┌ Files ───────────────┐┌ harness-tui-theme-first-0000000000 · 0 of 13 C files ┐
+  @0-0 fg - BOLD "┌"
+  @1-7 fg - BOLD | REVERSED "Files"
+  @8-23 fg - BOLD "───────────────┐"
+│▾ harness… ✓0/13 (+1 …││Next step: 3 units have no Rust yet — migrate the     │
+  @0-0 fg - BOLD "│"
+  @1-2 fg - REVERSED "▾"
+  @3-10 fg - BOLD | REVERSED "harness…"
+  @11-22 fg - REVERSED "✓0/13 (+1 …"
+  @23-23 fg - BOLD "│"
+  @25-34 fg Cyan BOLD "Next step:"
+  @35-73 fg - BOLD "3 units have no Rust yet — migrate the"
+│  ▾ Units (11)        ││first, u-cache: press Enter and choose Migrate — ask  │
+  @0-0 fg - BOLD "│"
+  @5-14 fg - BOLD "Units (11)"
+  @23-23 fg - BOLD "│"
+  @25-76 fg - BOLD "first, u-cache: press Enter and choose Migrate — ask"
+│    ▸ ✓? u001-katajai…││in chat                                               │
+  @0-0 fg - BOLD "│"
+  @7-9 fg Green NONE "✓?"
+  @23-23 fg - BOLD "│"
+  @25-31 fg - BOLD "in chat"
+│    ▸ ◇ u-cache       ││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ ◇ u-hash planned││26 files scanned                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ ◇ u-lz77 planned││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ ◇ u-tree planned││planned                                               │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ ◇ u-blocksplitt…││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ ◇ u-gzip_contai…││Features: 7 — 5 hold so far, 2 still all C            │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ ◇ u-util planned││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ ◇ u-zlib_contai…││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ ◇ u-zopfli_lib  ││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ ◇ u-zopfli_bin  ││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│  ▾ Features (7)      ││                                                      │
+  @0-0 fg - BOLD "│"
+  @5-16 fg - BOLD "Features (7)"
+  @23-23 fg - BOLD "│"
+│      ◉ Compress to g…││                                                      │
+  @0-0 fg - BOLD "│"
+  @7-8 fg Green NONE "◉"
+  @23-23 fg - BOLD "│"
+│      ◉ Compress to z…││                                                      │
+  @0-0 fg - BOLD "│"
+  @7-8 fg Green NONE "◉"
+  @23-23 fg - BOLD "│"
+│      ◉ Compress to r…││                                                      │
+  @0-0 fg - BOLD "│"
+  @7-8 fg Green NONE "◉"
+  @23-23 fg - BOLD "│"
+│      ◉ Say what it d…││                                                      │
+  @0-0 fg - BOLD "│"
+  @7-8 fg Green NONE "◉"
+  @23-23 fg - BOLD "│"
+│      ◉ Compress quic…││                                                      │
+  @0-0 fg - BOLD "│"
+  @7-8 fg Green NONE "◉"
+  @23-23 fg - BOLD "│"
+│      ◌ Show the help ││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│      ◌ Report a miss…││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    Speed — not set up││                                                      │
+  @0-0 fg - BOLD "│"
+  @5-23 fg - BOLD "Speed — not set up│"
+│  ▸ src/ ✓0/13 (+1 ✓?)││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│                      ││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│                      ││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+└──────────────────────┘└──────────────────────────────────────────────────────┘
+  @0-23 fg - BOLD "└──────────────────────┘"
+ Ready — ↑↓ to choose a row, Enter for what you can do
+
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit
+  @0-2 fg - BOLD "↑↓"
+  @10-12 fg - BOLD "←→"
+  @25-30 fg - BOLD "Enter"
+  @41-44 fg - BOLD "Tab"
+  @52-53 fg - BOLD "?"
+  @61-62 fg - BOLD "q"

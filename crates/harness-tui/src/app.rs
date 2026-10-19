@@ -855,6 +855,8 @@ pub struct App {
     /// keeps the terminal's mouse modes in step with it. `--no-mouse` starts
     /// with it off; Help turns it on and off.
     pub mouse: bool,
+    /// The colours the screen is drawn in (`--theme`, cockpit.toml; docs/COCKPIT-WRAPPER-DESIGN.md §9.2).
+    pub palette: crate::theme::Palette,
     /// The `harness` every act runs is the cockpit's own build (the one
     /// next to its binary): only then does a Measure dialog say for certain
     /// whether perf's launcher cache is current (docs/PERF-DESIGN.md §3.11).
@@ -1089,6 +1091,7 @@ impl App {
             layout: Layout::default(),
             hits: Vec::new(),
             mouse: true,
+            palette: crate::theme::Palette::default(),
             harness_own_build,
             tree_follow: true,
             view_follow: true,

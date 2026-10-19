@@ -2710,7 +2710,7 @@ The cockpit acts on whatever is selected, so you select the unit first.
 1. `starting Claude Code (signed in with your Claude subscription)`;
 2. a line naming the Claude Code version and the model (a note in brackets about the version the cockpit was tested with is harmless; see [Known quirks](#known-quirks-in-this-version) at the end of the guide);
 3. the chat looking at the project, then saying it will ask to migrate;
-4. a **yellow line** above the input: `Asks: Migrate u-checksum — a model call, answered here in chat`, with `[Review Enter]` and `[Decline Esc]`.
+4. a **bold line** above the input: `Asks: Migrate u-checksum — a model call, answered here in chat`, with `[Review Enter]` and `[Decline Esc]`.
 
 **What it means.** The cockpit started Claude Code in the background. Claude read the ledger through `harness-mcp` (the small program that lets the chat read the project) and asked for a migration. The chat never runs anything itself: it asks the cockpit, and the cockpit asks you. Nothing has run yet.
 
@@ -2727,7 +2727,7 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 ### Step 4.6 — Open the review dialog
 
-**Do.** Wait one second after the yellow line appears (for a moment the cockpit ignores keys, so a key you happened to be pressing cannot approve anything). Then press `Enter`, leaving the chat's typing line empty.
+**Do.** Wait one second after the `Asks:` line appears (for a moment the cockpit ignores keys, so a key you happened to be pressing cannot approve anything). Then press `Enter`, leaving the chat's typing line empty.
 
 **You should see** a dialog titled `The chat asks: Migrate u-checksum?` that contains:
 
@@ -2790,7 +2790,7 @@ and the chat shows `✓ Continue a-<4hex> (asked in chat) — GREEN, 8 of 8 chec
 | You see | Do this |
 |---|---|
 | `RED` at the end | Nothing in the program changed. Type `Please retry u-checksum.` in the chat, press `Enter`, and confirm again as in Steps 4.6–4.7. The same request can come back GREEN one time and RED another, so a retry is normal. A retry of the same request keeps the attempt's name and adds `.r2` (then `.r3`, …), as in `a-<12hex>.r2`. |
-| you pressed `Esc` on a "Continues" line, and a new yellow line asks you | Press `Enter` to review it and confirm it as in Steps 4.6–4.7, each time it asks. |
+| you pressed `Esc` on a "Continues" line, and a new `Asks:` line asks you | Press `Enter` to review it and confirm it as in Steps 4.6–4.7, each time it asks. |
 | **nothing on screen has changed for 15 minutes** | The run is stuck. Press `Tab` until Files has the focus, press `Enter`, choose `Cancel the running command`, and in the `Stop the running command?` dialog choose `Stop it`. What it finished stays recorded, and nothing is accepted. Then try once more, or use Plan B. |
 
 ---
@@ -3886,7 +3886,7 @@ Press one key at a time, and check the screen after each:
 3. **Migrate — ask in chat** is first and highlighted, as in Step 4.4: press `Enter`. **You should see** the chat pane in focus, with `Migrate u-version` typed into its input line.
 4. Press `Enter` to send it. **You should see** the chat start, as in Step 4.5, and then the line below.
 
-**You should see** the yellow line `Asks: Migrate u-version — a model call, answered here in chat`, with `[Review Enter]` and `[Decline Esc]`.
+**You should see** the line `Asks: Migrate u-version — a model call, answered here in chat`, with `[Review Enter]` and `[Decline Esc]`.
 
 **What it means.** The chat asks to run the migration; nothing has run yet.
 

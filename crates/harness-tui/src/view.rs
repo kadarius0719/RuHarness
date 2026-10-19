@@ -19,10 +19,11 @@ use crate::menu::MODEL_SEPARATOR;
 use crate::model::UnitView;
 use crate::narrate::{check_words, elapsed_words, not_run_why};
 use crate::speed;
+use crate::theme::{self, Role};
 use crate::tree::{Row, RowKind, Selection};
 use ratatui::buffer::CellWidth;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
@@ -48,39 +49,77 @@ mod chat_pane;
 mod project_pane;
 pub use chat_pane::{state_word, CHAT_COLUMN_FROM, CHAT_COLUMN_MAX, VIEW_KEEPS};
 
-fn dim() -> Style {
-    Style::default().fg(Color::DarkGray)
+// The roles (crate::theme): every style the view draws is one of these.
+
+/// Secondary text, still readable (never dim).
+fn muted() -> Style {
+    theme::style(Role::Muted)
 }
 
+/// A heading: bold, no colour.
 fn bold() -> Style {
-    Style::default().add_modifier(Modifier::BOLD)
+    theme::style(Role::Heading)
+}
+
+/// The one accent: the Next step's label, the recommended menu item.
+fn accent() -> Style {
+    theme::style(Role::Accent)
+}
+
+/// A good state, beside its mark or word.
+fn good() -> Style {
+    theme::style(Role::Good)
+}
+
+/// A failed state, beside its mark or word.
+fn bad() -> Style {
+    theme::style(Role::Bad)
+}
+
+/// A state that wants a look, beside its mark or word.
+fn attention() -> Style {
+    theme::style(Role::Attention)
+}
+
+/// The selected row.
+fn selected_row() -> Style {
+    theme::style(Role::Selected)
+}
+
+/// A greyed menu item (its reason beside it, muted).
+fn disabled() -> Style {
+    theme::style(Role::Disabled)
+}
+
+/// An unfocused pane's frame.
+fn border() -> Style {
+    theme::style(Role::Border)
 }
 
 fn tone(t: Tone) -> Style {
     match t {
         Tone::Plain => Style::default(),
-        Tone::Good => Style::default().fg(Color::Green),
-        Tone::Bad => Style::default().fg(Color::Red),
-        Tone::Warn => Style::default().fg(Color::Yellow),
-        Tone::Dim => dim(),
+        Tone::Good => good(),
+        Tone::Bad => bad(),
+        Tone::Warn => attention(),
+        Tone::Dim => muted(),
     }
 }
 
+/// Code is plain text: keywords bold, comments muted. Colour is kept for
+/// states (theme rules: colour never decorates).
 fn class_style(class: Class) -> Style {
     match class {
-        Class::Plain | Class::Name => Style::default(),
-        Class::Attribute => Style::default().fg(Color::Magenta),
-        Class::Comment => Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::ITALIC),
-        Class::Constant => Style::default().fg(Color::Cyan),
-        Class::Function => Style::default().fg(Color::Blue),
-        Class::Keyword => Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD),
-        Class::Punctuation => Style::default(),
-        Class::String => Style::default().fg(Color::Green),
-        Class::Type => Style::default().fg(Color::Yellow),
+        Class::Keyword => bold(),
+        Class::Comment => muted().add_modifier(Modifier::ITALIC),
+        Class::Plain
+        | Class::Name
+        | Class::Attribute
+        | Class::Constant
+        | Class::Function
+        | Class::Punctuation
+        | Class::String
+        | Class::Type => Style::default(),
     }
 }
 
@@ -88,13 +127,30 @@ fn class_style(class: Class) -> Style {
 /// never the only signal).
 fn glyph_style(glyph: &str) -> Style {
     match glyph {
-        "✗" | "?" => Style::default().fg(Color::Red),
-        "⚠" | "!" | "◐" | "⚑" | "↻" => Style::default().fg(Color::Yellow),
-        "✓" | "◉" => Style::default().fg(Color::Green),
-        "✓?" => Style::default().fg(Color::Cyan),
-        "+" => Style::default().fg(Color::Cyan),
-        _ => dim(),
+        "✗" | "?" => bad(),
+        "⚠" | "!" | "◐" | "⚑" | "↻" => attention(),
+        "✓" | "◉" | "✓?" => good(),
+        _ => muted(),
     }
+}
+
+/// A "Next step: …" line wrapped to `width`: its label in the accent, the
+/// rest bold.
+fn next_step(line: &str, width: usize) -> Vec<Line<'static>> {
+    const LABEL: &str = "Next step:";
+    let mut lines = wrapped(line, width, bold());
+    if let Some(first) = lines.first_mut() {
+        if let [span] = first.spans.as_slice() {
+            if let Some(rest) = span.content.strip_prefix(LABEL) {
+                let rest = rest.to_string();
+                *first = Line::from(vec![
+                    Span::styled(LABEL, accent()),
+                    Span::styled(rest, bold()),
+                ]);
+            }
+        }
+    }
+    lines
 }
 
 /// Every grapheme of already-filtered `text` with the cells ratatui draws
@@ -308,7 +364,7 @@ fn fit(pieces: &Pieces, width: usize, skip: usize) -> (Vec<Span<'static>>, usize
                 spans.push(Span::styled(keep, last.style));
             }
         }
-        spans.push(Span::styled("›", dim()));
+        spans.push(Span::styled("›", muted()));
         used += 1;
     }
     (spans, used)
@@ -320,7 +376,7 @@ fn cell(line: Option<&CodeLine>, gutter: usize, width: usize, skip: usize) -> Ve
     let mut spans = Vec::new();
     let used = match line {
         None => {
-            spans.push(Span::styled(clip("~", width), dim()));
+            spans.push(Span::styled(clip("~", width), muted()));
             width.min(1)
         }
         Some(CodeLine::Code { number, pieces }) => {
@@ -329,7 +385,7 @@ fn cell(line: Option<&CodeLine>, gutter: usize, width: usize, skip: usize) -> Ve
                 width,
             );
             let gw = width_of(&g);
-            spans.push(Span::styled(g, dim()));
+            spans.push(Span::styled(g, muted()));
             let (code, cw) = fit(pieces, width.saturating_sub(gw), skip);
             spans.extend(code);
             gw + cw
@@ -339,21 +395,14 @@ fn cell(line: Option<&CodeLine>, gutter: usize, width: usize, skip: usize) -> Ve
             let w = width_of(&t);
             spans.push(Span::styled(
                 t,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().add_modifier(Modifier::UNDERLINED),
             ));
             w
         }
         Some(CodeLine::Note(text)) => {
             let t = safe(text, width);
             let w = width_of(&t);
-            spans.push(Span::styled(
-                t,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::ITALIC),
-            ));
+            spans.push(Span::styled(t, muted().add_modifier(Modifier::ITALIC)));
             w
         }
     };
@@ -417,7 +466,7 @@ fn pair_row(
 ) -> Line<'static> {
     let last = pair_height(p, sides) - 1;
     if r == last {
-        return Line::from(Span::styled("─".repeat(width), dim()));
+        return Line::from(Span::styled("─".repeat(width), muted()));
     }
     if sides == Sides::COnly {
         if r == 0 {
@@ -437,19 +486,19 @@ fn pair_row(
             return Line::from(vec![
                 Span::styled(lt, bold()),
                 Span::raw(" ".repeat(left.saturating_sub(lw))),
-                Span::styled(" ⇄ ", dim()),
+                Span::styled(" ⇄ ", muted()),
                 Span::styled(ellipsis(&format!("Rust  {}", p.rust_title), right), bold()),
             ]);
         }
         let i = r - 1;
         let mut spans = cell(p.c.get(i), gc, left, skip);
-        spans.push(Span::styled(" │ ", dim()));
+        spans.push(Span::styled(" │ ", muted()));
         spans.extend(cell(p.rust.get(i), gr, right, skip));
         return Line::from(spans);
     }
     let heading = |lead: &'static str, text: &str| {
         Line::from(vec![
-            Span::styled(lead, dim()),
+            Span::styled(lead, muted()),
             Span::styled(ellipsis(text, width.saturating_sub(5)), bold()),
         ])
     };
@@ -477,7 +526,7 @@ pub fn pair_window(
 ) -> (Vec<Line<'static>>, Vec<usize>, usize) {
     if pairs.is_empty() {
         let rows = if from == 0 && height > 0 {
-            vec![Line::from(Span::styled("no function pairs", dim()))]
+            vec![Line::from(Span::styled("no function pairs", muted()))]
         } else {
             Vec::new()
         };
@@ -628,7 +677,7 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         RowKind::Note(text) => {
             return Line::from(Span::styled(
                 ellipsis(&format!("{indent}  {text}"), width),
-                Style::default().fg(Color::Yellow),
+                muted(),
             ));
         }
         RowKind::Heading(text) => {
@@ -640,7 +689,7 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         RowKind::Detail(text) => {
             return Line::from(Span::styled(
                 ellipsis(&format!("{indent}{text}"), width),
-                dim(),
+                muted(),
             ));
         }
         RowKind::Node(sel) => sel,
@@ -735,7 +784,7 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         _ => false,
     };
     let mut name_style = if internal || greyed {
-        dim()
+        muted()
     } else {
         Style::default()
     };
@@ -751,13 +800,13 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         name_style = name_style.add_modifier(Modifier::BOLD);
     }
     let mut spans = vec![
-        Span::styled(lead, dim()),
+        Span::styled(lead, muted()),
         Span::styled(glyph_text, glyph_style(glyph)),
         Span::styled(name_text, name_style),
     ];
     if show_word {
         spans.push(Span::raw(" ".repeat(pad)));
-        spans.push(Span::styled(word_text, dim()));
+        spans.push(Span::styled(word_text, muted()));
     }
     Line::from(spans)
 }
@@ -767,9 +816,11 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
     if focused {
         block = block
             .border_style(bold())
-            .title(Span::styled(title, bold().add_modifier(Modifier::REVERSED)));
+            .title(Span::styled(title, bold().patch(selected_row())));
     } else {
-        block = block.border_style(dim()).title(Span::styled(title, dim()));
+        block = block
+            .border_style(border())
+            .title(Span::styled(title, muted()));
     }
     block
 }
@@ -817,7 +868,7 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut line = tree_row(app, row, width, selected);
         if selected {
             line = line.style(if focused {
-                Style::default().add_modifier(Modifier::REVERSED)
+                selected_row()
             } else {
                 Style::default().add_modifier(Modifier::UNDERLINED)
             });
@@ -917,7 +968,7 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
         if let Some(h) = &unit.report.write_in_flight {
             spans.push(Span::styled(
                 format!(" · being written by `{}`", h.command),
-                Style::default().fg(Color::Yellow),
+                attention(),
             ));
         }
         // Wrapped, not cut: the cause is the point of the line.
@@ -926,7 +977,7 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             lines.push(Line::from(spans));
         } else {
             let style = if matches!(s, UnitState::Attention(_)) {
-                Style::default().fg(Color::Yellow)
+                attention()
             } else {
                 Style::default()
             };
@@ -936,12 +987,7 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     // The Next step: the unit's (or the attempt's) one action, the cause
     // first when it needs attention.
     if let Some(next) = app.advice(&app.selection) {
-        let style = if matches!(state, Some(UnitState::Attention(_))) {
-            bold().fg(Color::Yellow)
-        } else {
-            bold()
-        };
-        lines.extend(wrapped(&next.line(), width, style));
+        lines.extend(next_step(&next.line(), width));
     }
     lines
 }
@@ -970,13 +1016,13 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                     outcome_gloss(&r.outcome)
                 ),
                 width,
-                dim(),
+                muted(),
             ));
             if let Some(note) = &r.steer_note {
-                lines.extend(wrapped(&format!("Steer note: {note}"), width, dim()));
+                lines.extend(wrapped(&format!("Steer note: {note}"), width, muted()));
             }
             if let Some(note) = &r.note {
-                lines.extend(wrapped(&format!("Hand-edit note: {note}"), width, dim()));
+                lines.extend(wrapped(&format!("Hand-edit note: {note}"), width, muted()));
             }
             if !r.turns.is_empty() {
                 let turns: Vec<String> = r
@@ -988,7 +1034,7 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 lines.extend(wrapped(
                     &format!("Turns: {}", turns.join(" · ")),
                     width,
-                    dim(),
+                    muted(),
                 ));
             }
         }
@@ -1027,30 +1073,30 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             if let Some(marker) = coverage_marker(app, unit) {
                 origin.push_str(&format!(" · {marker}"));
             }
-            lines.extend(wrapped(&origin, width, dim()));
+            lines.extend(wrapped(&origin, width, muted()));
             if matches!(app.selection, Selection::Crate(_)) {
                 lines.extend(wrapped(
                     "The crate is this unit's Rust in use now: what an Accept (or a hand edit) \
                      put there, built in place of its C.",
                     width,
-                    dim(),
+                    muted(),
                 ));
             }
         }
     }
     if let Some(line) = unit_features_line(app, &unit.unit.id) {
-        lines.extend(wrapped(&line, width, Style::default().fg(Color::Cyan)));
+        lines.extend(wrapped(&line, width, Style::default()));
     }
     if let Some((first, second)) = app.speed.unit_header(&unit.unit.id) {
         lines.push(Line::from(clipped(vec![Span::raw(first)], width)));
         lines.push(Line::from(clipped(
-            vec![Span::styled(second, dim())],
+            vec![Span::styled(second, muted())],
             width,
         )));
     }
     let advice = app.speed.advice(unit, !app.config.providers.is_empty());
     for d in &advice.differences {
-        lines.extend(wrapped(d, width, Style::default().fg(Color::Red)));
+        lines.extend(wrapped(d, width, bad()));
     }
     // Speed's own lead-in to how to change the Rust (the unit's Next step
     // above points here): no "Next:" of its own beside "Next step:".
@@ -1386,7 +1432,7 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
     let Some(v) = app.shown_verdict() else {
         return vec![Line::from(Span::styled(
             clip("Checks  none yet for what is shown", width),
-            dim(),
+            muted(),
         ))];
     };
     let rows = rows.max(1);
@@ -1397,9 +1443,9 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
             "Checks RED ".into()
         },
         if v.green {
-            dim()
+            muted()
         } else {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            bad().add_modifier(Modifier::BOLD)
         },
     )];
     // Failed first, then any check that did not run (never a pass: the
@@ -1456,18 +1502,9 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
             String::new()
         };
         let (text, style) = match ran {
-            Ran::Passed => (
-                format!(" ✓ {words}{count} "),
-                Style::default().fg(Color::Green),
-            ),
-            Ran::NotRun => (
-                format!(" – {words}{count} not run "),
-                Style::default().fg(Color::Yellow),
-            ),
-            Ran::Failed => (
-                format!(" ✗ {words}{count} "),
-                Style::default().fg(Color::Red),
-            ),
+            Ran::Passed => (format!(" ✓ {words}{count} "), good()),
+            Ran::NotRun => (format!(" – {words}{count} not run "), attention()),
+            Ran::Failed => (format!(" ✗ {words}{count} "), bad()),
         };
         chips.push((display::line(&text), style));
     }
@@ -1495,7 +1532,7 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
     }
     if placed < total {
         if let Some(line) = lines.last_mut() {
-            line.push(Span::styled(format!("+{}", total - placed), dim()));
+            line.push(Span::styled(format!("+{}", total - placed), muted()));
         }
     }
     lines.into_iter().map(Line::from).collect()
@@ -1583,7 +1620,7 @@ fn next_lines(app: &App, sel: &Selection, width: usize) -> Vec<Line<'static>> {
     let Some(next) = app.advice(sel) else {
         return Vec::new();
     };
-    let mut lines = wrapped(&next.line(), width, bold());
+    let mut lines = next_step(&next.line(), width);
     lines.push(Line::from(""));
     lines
 }
@@ -1618,21 +1655,17 @@ fn feature_mark_words(state: &featmap::FeatureState) -> String {
 fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     if let Some(next) = app.next_step() {
-        lines.extend(wrapped(&next.line(), width, bold()));
+        lines.extend(next_step(&next.line(), width));
         lines.push(Line::from(""));
     }
     // A mapped tool's "project changed" notice (docs/PROJECT-MAP-DESIGN.md
     // §3.7): a notice, never staleness.
     if let Some(n) = &app.snapshot.project_notice {
-        lines.extend(wrapped(
-            &format!("Project: {n}"),
-            width,
-            Style::default().fg(Color::Yellow),
-        ));
+        lines.extend(wrapped(&format!("Project: {n}"), width, bold()));
         lines.push(Line::from(""));
     }
     match &app.snapshot.facts_state {
-        None => lines.extend(wrapped("Nothing is scanned yet.", width, dim())),
+        None => lines.extend(wrapped("Nothing is scanned yet.", width, muted())),
         Some(s) => {
             let count = |st: FileState| app.files.files.iter().filter(|f| f.state == st).count();
             let mut text = format!(
@@ -1685,11 +1718,11 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
         lines.extend(wrapped(
             &format!("Busy: `{}` holds the writer lock", h.command),
             width,
-            Style::default().fg(Color::Yellow),
+            attention(),
         ));
     }
     if let Some(last) = &app.last {
-        lines.extend(wrapped(&format!("Last: {last}"), width, dim()));
+        lines.extend(wrapped(&format!("Last: {last}"), width, muted()));
     }
     // A failing unit, or one that needs attention: one item per unit, a
     // jump to its row in the Units list (its one place in the tree).
@@ -1724,7 +1757,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
                     Span::raw("  "),
                     Span::styled(format!("{} ", state.glyph()), glyph_style(state.glyph())),
                     Span::raw(unit.unit.id.clone()),
-                    Span::styled(format!(" · {}", unit.unit.files.join(", ")), dim()),
+                    Span::styled(format!(" · {}", unit.unit.files.join(", ")), muted()),
                 ],
                 width,
             )));
@@ -1764,7 +1797,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
                     Span::raw("  "),
                     Span::styled(format!("{glyph} "), glyph_style(glyph)),
                     Span::raw(f.path.clone()),
-                    Span::styled(word.to_string(), dim()),
+                    Span::styled(word.to_string(), muted()),
                 ],
                 width,
             )));
@@ -1847,11 +1880,7 @@ fn summary_speed(
     let mut lines = wrapped(&text, width, Style::default());
     for (fact, _) in app.speed.program_differences() {
         links.push((start + lines.len(), Selection::Speed));
-        lines.extend(wrapped(
-            &format!("Speed: {fact} — see Speed"),
-            width,
-            Style::default().fg(Color::Red),
-        ));
+        lines.extend(wrapped(&format!("Speed: {fact} — see Speed"), width, bad()));
     }
     lines
 }
@@ -1877,10 +1906,10 @@ fn speed_row_lines(row: &speed::SpeedRow, column: usize, width: usize) -> Vec<Li
     if row.out_of_date.is_empty() {
         spans.push(Span::raw(row.words.short.clone()));
     } else {
-        spans.push(Span::styled(row.words.short.clone(), dim()));
+        spans.push(Span::styled(row.words.short.clone(), muted()));
         spans.push(Span::styled(
             format!(" · out of date: {}", row.out_of_date.join(", ")),
-            dim(),
+            muted(),
         ));
     }
     let mut lines = vec![Line::from(clipped(spans, width))];
@@ -1889,7 +1918,7 @@ fn speed_row_lines(row: &speed::SpeedRow, column: usize, width: usize) -> Vec<Li
     for d in &row.words.details {
         if d.starts_with("last try:") || d.starts_with("a difference found before") {
             for part in word_wrap(d, width.saturating_sub(4)) {
-                lines.push(Line::from(Span::styled(format!("    {part}"), dim())));
+                lines.push(Line::from(Span::styled(format!("    {part}"), muted())));
             }
         }
     }
@@ -1962,12 +1991,12 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
                 // The error names the file, its line and column.
                 &display::line(why),
                 width,
-                Style::default().fg(Color::Yellow),
+                bold(),
             ));
             lines.extend(wrapped(
                 "Until it is fixed, the harness cannot measure speed — verify and migrations still work.",
                 width,
-                dim(),
+                muted(),
             ));
             return lines;
         }
@@ -1979,17 +2008,17 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         bold(),
     ));
     for h in &model.header {
-        lines.extend(wrapped(h, width, dim()));
+        lines.extend(wrapped(h, width, muted()));
     }
     if model.measuring {
         lines.extend(wrapped(
             "The harness is measuring speed now — rows appear as each finishes.",
             width,
-            Style::default().fg(Color::Yellow),
+            bold(),
         ));
     }
     for e in &model.errors {
-        lines.extend(wrapped(e, width, Style::default().fg(Color::Yellow)));
+        lines.extend(wrapped(e, width, bold()));
     }
     lines.push(Line::from(""));
     // The workload column: the longest workload id + 2.
@@ -2016,7 +2045,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     if model.group == speed::Group::NotYetRun {
         section
             .lines
-            .extend(wrapped("Nothing measured yet.", width, dim()));
+            .extend(wrapped("Nothing measured yet.", width, muted()));
     } else if model.c_rows.is_empty() {
         // Units measured alone (`--unit`): the C alone is not, yet.
         section
@@ -2026,7 +2055,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             "not measured yet — Measure speed on this row measures the C alone; measuring one \
              unit does not",
             width,
-            dim(),
+            muted(),
         ));
     } else {
         section.push(
@@ -2054,10 +2083,8 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             &model.program_rows,
         );
         for (fact, which) in model.program_differences() {
-            section
-                .lines
-                .extend(wrapped(&fact, width, Style::default().fg(Color::Red)));
-            section.lines.extend(wrapped(&which, width, dim()));
+            section.lines.extend(wrapped(&fact, width, bad()));
+            section.lines.extend(wrapped(&which, width, muted()));
         }
     }
     for u in &model.units {
@@ -2082,7 +2109,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
                 model.orphans.join(", ")
             ),
             width,
-            dim(),
+            muted(),
         ));
     }
     // The focused row's full sentence and details.
@@ -2104,14 +2131,14 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             Style::default(),
         ));
         for d in &row.words.details {
-            lines.extend(wrapped(d, width, dim()));
+            lines.extend(wrapped(d, width, muted()));
         }
-        lines.extend(wrapped(&row.measured_on, width, dim()));
+        lines.extend(wrapped(&row.measured_on, width, muted()));
         if !row.out_of_date.is_empty() {
             lines.extend(wrapped(
                 &format!("out of date: {}", row.out_of_date.join(", ")),
                 width,
-                Style::default().fg(Color::Yellow),
+                attention(),
             ));
         }
     } else if !sentences.is_empty() {
@@ -2119,7 +2146,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         lines.extend(wrapped(
             "Move to a row (Tab, then ↓) to read its full words.",
             width,
-            dim(),
+            muted(),
         ));
     }
     lines
@@ -2135,7 +2162,7 @@ fn dir_view(
     let mut lines = Vec::new();
     let rollup = app.files.rollup(dir).words();
     if !rollup.is_empty() {
-        lines.extend(wrapped(&rollup, width, dim()));
+        lines.extend(wrapped(&rollup, width, muted()));
     }
     let prefix = format!("{dir}/");
     for f in app
@@ -2150,7 +2177,7 @@ fn dir_view(
             vec![
                 Span::styled(format!("{glyph:<2} "), glyph_style(glyph)),
                 Span::raw(f.path[prefix.len()..].to_string()),
-                Span::styled(format!("  {word}"), dim()),
+                Span::styled(format!("  {word}"), muted()),
             ],
             width,
         )));
@@ -2166,12 +2193,12 @@ fn map_preface(app: &App, width: usize) -> Vec<Line<'static>> {
         featmap::MapStatus::OutOfDate(why) => wrapped(
             &format!("From the last map — out of date ({})", why.join(", ")),
             width,
-            Style::default().fg(Color::Yellow),
+            attention(),
         ),
         featmap::MapStatus::Unreadable(why) => wrapped(
             &format!("The map could not be read: {why}"),
             width,
-            Style::default().fg(Color::Yellow),
+            attention(),
         ),
         _ => Vec::new(),
     }
@@ -2200,7 +2227,7 @@ fn features_view(
                     "Features need a program with one main() — this target has none (a \
                      library?); not supported yet.",
                     width,
-                    dim(),
+                    muted(),
                 ));
             }
             return lines;
@@ -2209,7 +2236,7 @@ fn features_view(
             lines.extend(wrapped(
                 &format!("features.toml has an error: {why}"),
                 width,
-                Style::default().fg(Color::Yellow),
+                attention(),
             ));
             lines.push(Line::from(""));
             // The Next step above says Edit; two errors need another fix.
@@ -2226,7 +2253,7 @@ fn features_view(
                 "Until it is fixed, verdicts do not run your features — Re-checks and \
                  migrations still work, and say so.",
                 width,
-                dim(),
+                muted(),
             ));
             return lines;
         }
@@ -2240,7 +2267,7 @@ fn features_view(
             "Features need a program with one main() — this target's facts show none (a \
              library?); not supported yet.",
             width,
-            dim(),
+            muted(),
         ));
     }
     lines.extend(map_preface(app, width));
@@ -2255,7 +2282,7 @@ fn features_view(
             vec![
                 Span::styled(format!("{glyph} "), glyph_style(glyph)),
                 Span::raw(display::line(&f.name)),
-                Span::styled(format!("  {word}"), dim()),
+                Span::styled(format!("  {word}"), muted()),
             ],
             width,
         )));
@@ -2315,7 +2342,7 @@ fn features_view(
         }
         lines.push(Line::from(Span::styled(
             clip(&format!("    {}", parts.join(" · ")), width),
-            dim(),
+            muted(),
         )));
     }
     lines.push(Line::from(""));
@@ -2367,7 +2394,7 @@ fn features_view(
                 lines.push(Line::from(clipped(
                     vec![
                         Span::raw(format!("  {}()", short_symbol(name))),
-                        Span::styled(format!("  {file}"), dim()),
+                        Span::styled(format!("  {file}"), muted()),
                     ],
                     width,
                 )));
@@ -2375,7 +2402,7 @@ fn features_view(
             if never.len() > 20 {
                 lines.push(Line::from(Span::styled(
                     format!("  … {} more", never.len() - 20),
-                    dim(),
+                    muted(),
                 )));
             }
         }
@@ -2384,7 +2411,7 @@ fn features_view(
     lines.extend(wrapped(
         "Edited features.toml outside the cockpit? Press g to re-read.",
         width,
-        dim(),
+        muted(),
     ));
     lines
 }
@@ -2446,20 +2473,17 @@ fn result_words(row: &featmap::UnitRow) -> (String, Style) {
             featmap::UnitResult::NotChecked | featmap::UnitResult::Absent
         )
     {
-        return ("– still C".into(), dim());
+        return ("– still C".into(), muted());
     }
     match &row.result {
-        featmap::UnitResult::Passed => ("✓ passed".into(), Style::default().fg(Color::Green)),
-        featmap::UnitResult::Failed(ids) => (
-            format!("✗ failed: {}", ids.join(", ")),
-            Style::default().fg(Color::Red),
-        ),
+        featmap::UnitResult::Passed => ("✓ passed".into(), good()),
+        featmap::UnitResult::Failed(ids) => (format!("✗ failed: {}", ids.join(", ")), bad()),
         featmap::UnitResult::CouldNotRun(reason) => {
-            (format!("– could not run: {}", reason.words()), dim())
+            (format!("– could not run: {}", reason.words()), muted())
         }
-        featmap::UnitResult::Absent => ("– not re-checked".into(), dim()),
-        featmap::UnitResult::NotChecked => ("– not re-checked".into(), dim()),
-        featmap::UnitResult::Outside => ("– outside the program".into(), dim()),
+        featmap::UnitResult::Absent => ("– not re-checked".into(), muted()),
+        featmap::UnitResult::NotChecked => ("– not re-checked".into(), muted()),
+        featmap::UnitResult::Outside => ("– outside the program".into(), muted()),
     }
 }
 
@@ -2542,14 +2566,14 @@ fn feature_view(
         vec![
             Span::styled(format!("{glyph} "), glyph_style(glyph)),
             Span::styled(word, bold()),
-            Span::styled(format!("  · id {}", f.id), dim()),
+            Span::styled(format!("  · id {}", f.id), muted()),
         ],
         width,
     )));
     // The mark in words, then the one thing to do.
-    lines.extend(wrapped(&feature_mark_words(&f.state), width, dim()));
+    lines.extend(wrapped(&feature_mark_words(&f.state), width, muted()));
     if let Some(next) = app.advice(&Selection::Feature(f.id.clone())) {
-        lines.extend(wrapped(&next.line(), width, bold()));
+        lines.extend(next_step(&next.line(), width));
     }
     use featmap::FeatureState as S;
     if !matches!(
@@ -2567,7 +2591,7 @@ fn feature_view(
             lines.push(Line::from(clipped(
                 vec![
                     Span::raw(format!("  {u}")),
-                    Span::styled("  open it, then Re-check", dim()),
+                    Span::styled("  open it, then Re-check", muted()),
                 ],
                 width,
             )));
@@ -2578,7 +2602,7 @@ fn feature_view(
             "Features need a program with one main() — this target's facts show none (a \
              library?); not supported yet.",
             width,
-            dim(),
+            muted(),
         ));
     }
     lines.push(Line::from(""));
@@ -2604,7 +2628,7 @@ fn feature_view(
             lines.extend(wrapped(
                 &format!("    {} · stdout {} bytes · {stderr}", r.end, r.stdout_bytes),
                 width,
-                dim(),
+                muted(),
             ));
             let flag = if !r.stable {
                 Some("its output differs between runs — it cannot be a check".to_string())
@@ -2632,11 +2656,7 @@ fn feature_view(
                 None
             };
             if let Some(flag) = flag {
-                lines.extend(wrapped(
-                    &format!("    ⚑ {flag}"),
-                    width,
-                    Style::default().fg(Color::Yellow),
-                ));
+                lines.extend(wrapped(&format!("    ⚑ {flag}"), width, attention()));
             }
         }
         if let Some(reason) = s.skipped {
@@ -2647,20 +2667,20 @@ fn feature_view(
                     reason.what_to_do()
                 ),
                 width,
-                Style::default().fg(Color::Yellow),
+                attention(),
             ));
         }
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("Where its code lives", bold())));
     if f.scenarios.iter().all(|s| s.record.is_none()) {
-        lines.extend(wrapped("  (not known — map the features)", width, dim()));
+        lines.extend(wrapped("  (not known — map the features)", width, muted()));
     } else if f.units.is_empty() && f.outside_units == 0 && !app.features.complete {
         // Records without notes (fix check N5): not "nowhere".
         lines.extend(wrapped(
             "  (not known — the map has no usable notes for it)",
             width,
-            dim(),
+            muted(),
         ));
     }
     for row in &f.units {
@@ -2683,7 +2703,7 @@ fn feature_view(
                 Span::styled(format!("  {result}"), style),
                 Span::styled(
                     format!("  · runs {} of its {} · {uword}", row.ran, row.of),
-                    dim(),
+                    muted(),
                 ),
             ],
             width,
@@ -2697,7 +2717,7 @@ fn feature_view(
                 plural_s(f.outside_units)
             ),
             width,
-            dim(),
+            muted(),
         ));
     }
     if !f.also_fails.is_empty() {
@@ -2708,7 +2728,7 @@ fn feature_view(
             } else {
                 "Fails on"
             },
-            Style::default().fg(Color::Red),
+            bad(),
         )));
         for u in &f.also_fails {
             links.push((lines.len(), Selection::Unit(u.clone())));
@@ -2722,7 +2742,7 @@ fn feature_view(
             lines.extend(wrapped(
                 "  everything it runs is also run by another feature",
                 width,
-                dim(),
+                muted(),
             ));
         }
         for (file, name) in &f.specific {
@@ -2730,7 +2750,7 @@ fn feature_view(
             lines.push(Line::from(clipped(
                 vec![
                     Span::raw(format!("  {}()", short_symbol(name))),
-                    Span::styled(format!("  {file}"), dim()),
+                    Span::styled(format!("  {file}"), muted()),
                 ],
                 width,
             )));
@@ -2769,7 +2789,7 @@ fn draw_list(
         .take(height)
         .map(|(i, l)| {
             if Some(i) == link_row {
-                l.style(Style::default().add_modifier(Modifier::REVERSED))
+                l.style(selected_row())
             } else {
                 l
             }
@@ -2828,7 +2848,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
                             glyph_style(info.state.glyph()),
                         ),
                         Span::raw(u.unit.id.clone()),
-                        Span::styled(format!("  {}", info.state.word()), dim()),
+                        Span::styled(format!("  {}", info.state.word()), muted()),
                     ],
                     width,
                 )));
@@ -2856,17 +2876,17 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
                         short_symbol(name)
                     ),
                     width,
-                    dim(),
+                    muted(),
                 ));
             }
         }
         if let Selection::Function(file, name) = &sel {
             if let Some(line) = function_features_line(app, file, name) {
-                head.extend(wrapped(&line, width, Style::default().fg(Color::Cyan)));
+                head.extend(wrapped(&line, width, Style::default()));
             }
         }
         if let Some(note) = &source.note {
-            head.extend(wrapped(note, width, Style::default().fg(Color::Yellow)));
+            head.extend(wrapped(note, width, muted()));
         }
         let gutter = gutter_of(&source.lines);
         let body_h = (inner.height as usize).saturating_sub(head.len());
@@ -2884,7 +2904,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
     // A unit's screen: header, pairs, checks.
     let Some(unit) = app.unit_view().cloned() else {
         frame.render_widget(
-            Paragraph::new(wrapped("nothing to show", width, dim())),
+            Paragraph::new(wrapped("nothing to show", width, muted())),
             inner,
         );
         return;
@@ -2896,7 +2916,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut head = unit_header(app, &unit, width);
     if let Selection::Function(file, name) = &sel {
         if let Some(line) = function_features_line(app, file, name) {
-            head.extend(wrapped(&line, width, Style::default().fg(Color::Cyan)));
+            head.extend(wrapped(&line, width, Style::default()));
         }
     }
     if let Selection::File(p) = &sel {
@@ -2918,7 +2938,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
                     internal.join(", ")
                 ),
                 width,
-                dim(),
+                muted(),
             ));
         }
     }
@@ -2973,7 +2993,7 @@ fn draw_unit(frame: &mut Frame, app: &mut App, area: Rect, unit: &UnitView) {
     ));
     // Folded, it is the View's one row to act on: Enter there opens it.
     if !open && app.focus == Focus::View {
-        heading = heading.style(Style::default().add_modifier(Modifier::REVERSED));
+        heading = heading.style(selected_row());
     }
     lines.push(heading);
     let lead = lines.len();
@@ -3045,7 +3065,7 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
                     run.narrator.step(),
                     elapsed_words(elapsed)
                 ),
-                Style::default().fg(Color::Cyan),
+                bold(),
             )
         }
         _ => {
@@ -3106,7 +3126,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
     if let Some(n) = &app.notice {
         return Line::from(Span::styled(
             ellipsis(&format!(" {}", n.text), width),
-            Style::default().fg(Color::Yellow),
+            bold(),
         ));
     }
     // A request of the chat's stays announced outside the chat until it is
@@ -3123,7 +3143,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
                     &format!(" The chat asks: {} — {key} to the chat", r.words),
                     width,
                 ),
-                Style::default().fg(Color::Yellow),
+                bold(),
             ));
         }
     }
@@ -3140,7 +3160,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
                 &format!(" The answer for {who} is present — select it and choose Resume (R)"),
                 width,
             ),
-            Style::default().fg(Color::Yellow),
+            bold(),
         ));
     }
     if let Some(aw) = app.awaiting.last() {
@@ -3150,7 +3170,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
                 &format!(" {who} is waiting for your answer at {}", aw.path.display()),
                 width,
             ),
-            dim(),
+            muted(),
         ));
     }
     // Last: a mapped tool's "project changed" notice stays in sight.
@@ -3160,7 +3180,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
         .as_ref()
         .filter(|_| !app.in_project_view())
     {
-        return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), dim()));
+        return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), muted()));
     }
     Line::from("")
 }
@@ -3300,7 +3320,7 @@ fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         app.hits.push((Rect::new(x, area.y, w, 1), Hit::Hint(k)));
         spans.push(Span::styled(format!(" {k}"), bold()));
-        spans.push(Span::styled(format!(" {v} "), dim()));
+        spans.push(Span::styled(format!(" {v} "), muted()));
         spans.push(Span::raw(" "));
         x += w + 1;
     }
@@ -3697,7 +3717,7 @@ fn help_rows(
         rows.extend(wrapped(
             &format!("  {} — {}", reason.words(), reason.what_to_do()),
             width,
-            dim(),
+            muted(),
         ));
     }
     rows.push(Line::from(""));
@@ -3706,7 +3726,7 @@ fn help_rows(
         rows.extend(wrapped(l, width, Style::default()));
     }
     for (w, v) in HELP_SPEED_WORDS {
-        rows.extend(wrapped(&format!("  {w} — {v}"), width, dim()));
+        rows.extend(wrapped(&format!("  {w} — {v}"), width, muted()));
     }
     rows.push(Line::from(""));
     if let Some(why) = chat {
@@ -3716,7 +3736,7 @@ fn help_rows(
             rows.extend(wrapped(
                 &format!("The chat is unavailable here: {why}."),
                 width,
-                Style::default().fg(Color::Yellow),
+                attention(),
             ));
         }
         for l in HELP_CHAT {
@@ -3735,12 +3755,12 @@ fn help_rows(
 fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     match &app.run {
-        None => lines.extend(wrapped(NOTHING_RAN, width, dim())),
+        None => lines.extend(wrapped(NOTHING_RAN, width, muted())),
         Some(run) => {
             lines.extend(wrapped(
                 &format!("$ {}", shell_line(&run.argv)),
                 width,
-                dim(),
+                muted(),
             ));
             for l in &run.lines {
                 // A line's indent is kept (a command's own screen nests its
@@ -3772,7 +3792,7 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
         } else {
             format!("{who} awaits a response at {}", aw.path.display())
         };
-        lines.extend(wrapped(&text, width, Style::default().fg(Color::Yellow)));
+        lines.extend(wrapped(&text, width, bold()));
     }
     lines
 }
@@ -3808,33 +3828,41 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
             separated = true;
             rows.push(Line::from(Span::styled(
                 clip(&format!("── {MODEL_SEPARATOR} ──"), inner_w),
-                dim(),
+                muted(),
             )));
         }
         let accel = it.accel.map(|a| format!(" {a}")).unwrap_or_default();
         let aw = width_of(&accel);
-        let mut label = display::line(&it.label);
+        let name = display::line(&it.label);
+        let mut label = name.clone();
         if let Some(why) = &it.greyed {
             label = format!("{label} — {}", display::line(why));
         }
         let label = ellipsis(&label, inner_w.saturating_sub(aw + 2));
         let pad = inner_w.saturating_sub(2 + width_of(&label) + aw);
         let mut style = if it.greyed.is_some() {
-            dim()
+            disabled()
+        } else if recommended {
+            accent()
         } else {
             Style::default()
         };
-        if recommended {
-            style = style.add_modifier(Modifier::BOLD);
-        }
+        // A greyed item's reason, after its name, reads muted.
+        let mut why_style = muted();
         if i == m.focus {
-            style = style.add_modifier(Modifier::REVERSED);
+            style = style.patch(selected_row());
+            why_style = why_style.patch(selected_row());
         }
         item_rows.push((i, rows.len()));
-        rows.push(Line::from(vec![Span::styled(
-            format!("  {label}{}{accel}", " ".repeat(pad)),
-            style,
-        )]));
+        let (head, why) = match label.strip_prefix(name.as_str()) {
+            Some(rest) if it.greyed.is_some() => (name.clone(), rest.to_string()),
+            _ => (label.clone(), String::new()),
+        };
+        rows.push(Line::from(vec![
+            Span::styled(format!("  {head}"), style),
+            Span::styled(why, why_style),
+            Span::styled(format!("{}{accel}", " ".repeat(pad)), style),
+        ]));
         if let (true, Some(reason)) = (recommended, &m.reason) {
             let mut why = format!("recommended: {}", display::line(reason));
             if it.model {
@@ -3842,7 +3870,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
             }
             rows.push(Line::from(Span::styled(
                 ellipsis(&format!("    ↳ {why}"), inner_w),
-                Style::default().fg(Color::Green),
+                muted(),
             )));
         }
     }
@@ -3852,7 +3880,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         rows.extend(wrapped(
             &format!("Why not: {why}"),
             inner_w,
-            Style::default().fg(Color::Yellow),
+            Style::default(),
         ));
     }
     // The items stay where they were when a footer appears — it grows the
@@ -3957,7 +3985,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         wrapped(
             "The terminal is too small for this dialog; enlarge it, or press Esc.",
             inner_w.max(1),
-            Style::default().fg(Color::Yellow),
+            bold(),
         )
     };
     let (total, scroll) = if usable {
@@ -3980,10 +4008,10 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut style = if i == 0 || c.dialog.armed {
             bold()
         } else {
-            dim()
+            muted()
         };
         if i == c.dialog.focus {
-            style = style.add_modifier(Modifier::REVERSED);
+            style = style.patch(selected_row());
         }
         let w = width_of(&text) as u16;
         spots.push((i, x, w));
@@ -4004,11 +4032,11 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         c.dialog.state_text()
     };
     let state_style = if c.dialog.armed && !c.dialog.click_refused {
-        Style::default().fg(Color::Green)
+        good()
     } else if c.dialog.too_soon || c.dialog.click_refused {
-        Style::default().fg(Color::Yellow)
+        attention()
     } else {
-        dim()
+        muted()
     };
     let state_line = Line::from(Span::styled(
         clip(&format!(" {state}"), inner_w),
@@ -4030,7 +4058,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         if let Some(last) = visible.last_mut() {
             *last = Line::from(Span::styled(
                 clip("↓ more below — scroll to the end", inner_w),
-                Style::default().fg(Color::Yellow),
+                bold(),
             ));
         }
     }
@@ -4089,7 +4117,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                 "The file name features run the program as (empty: the program file's name \
                  without .c). The command is shown before it runs.",
                 inner,
-                dim(),
+                muted(),
             ));
             let at = follow_cursor(input_rows, rows.len(), rect);
             overlay(
@@ -4207,12 +4235,12 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                 // A check that did not run is not run here as in `verify`.
                 let why = not_run_why(&c.name, c.passed, &c.detail);
                 let (mut style, mark) = match (&why, c.passed) {
-                    (Some(_), _) => (Style::default().fg(Color::Yellow), "–"),
-                    (None, true) => (Style::default().fg(Color::Green), "✓"),
-                    (None, false) => (Style::default().fg(Color::Red), "✗"),
+                    (Some(_), _) => (attention(), "–"),
+                    (None, true) => (good(), "✓"),
+                    (None, false) => (bad(), "✗"),
                 };
                 if i == selected {
-                    style = style.add_modifier(Modifier::REVERSED);
+                    style = style.patch(selected_row());
                 }
                 rows.extend(wrapped(
                     &format!("{mark} {} ({})", check_words(&c.name), c.name),
@@ -4220,10 +4248,10 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                     style,
                 ));
                 if let Some(why) = why {
-                    rows.extend(wrapped(&format!("    not run: {why}"), inner, dim()));
+                    rows.extend(wrapped(&format!("    not run: {why}"), inner, muted()));
                 }
                 if let Some(note) = feature_check_note(app, &v.unit, &c.name, c.passed) {
-                    rows.extend(wrapped(&format!("    {note}"), inner, dim()));
+                    rows.extend(wrapped(&format!("    {note}"), inner, muted()));
                 }
             }
             if !v.inputs.features_skipped.is_empty() {
@@ -4234,7 +4262,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                         rows.extend(wrapped(
                             &format!("  {f}/{sc}: {} — {}", reason.words(), reason.what_to_do()),
                             inner,
-                            Style::default().fg(Color::Yellow),
+                            Style::default(),
                         ));
                     }
                 }
@@ -4277,11 +4305,11 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                         let style = if l.starts_with("+++") || l.starts_with("---") {
                             bold()
                         } else if l.starts_with('+') {
-                            Style::default().fg(Color::Green)
+                            good()
                         } else if l.starts_with('-') {
-                            Style::default().fg(Color::Red)
+                            bad()
                         } else if l.starts_with("@@") {
-                            Style::default().fg(Color::Cyan)
+                            muted()
                         } else {
                             Style::default()
                         };
@@ -4331,7 +4359,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                     crate::app::MAX_NOTE_BYTES
                 ),
                 inner,
-                dim(),
+                muted(),
             ));
             let at = follow_cursor(input_rows, rows.len(), rect);
             overlay(
@@ -4368,7 +4396,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                     stage.display()
                 ),
                 inner,
-                dim(),
+                muted(),
             ));
             let at = follow_cursor(input_rows, rows.len(), rect);
             overlay(
@@ -4387,6 +4415,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Draw the whole cockpit, recording the layout and the clickable regions.
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    theme::set(app.palette);
     app.hits.clear();
     let area = frame.area();
     app.layout.frame = area;
@@ -4479,9 +4508,11 @@ mod tests {
     use crate::app::{Act, Command, Purpose, RunLine, RunPanel};
     use crate::files::{Cause, FileInfo, FunctionInfo, Origin};
     use crate::narrate::Narrator;
+    use crate::theme::{Palette, Theme};
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
+    use ratatui::style::Color;
     use ratatui::Terminal;
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -4555,28 +4586,268 @@ mod tests {
         terminal.backend().buffer().clone()
     }
 
+    /// The marks a state colour may stand beside (docs/COCKPIT-WRAPPER-DESIGN.md
+    /// §2.3, §9.2): a token of its own.
+    const STATE_MARKS: [&str; 13] = [
+        "✓", "✗", "⚠", "!", "?", "◐", "⚑", "↻", "◉", "–", "●", "✓?", "◇",
+    ];
+    /// …or the words that say a state.
+    const STATE_WORDS: [&str; 22] = [
+        "passed",
+        "failed",
+        "failing",
+        "not run",
+        "needs attention",
+        "busy",
+        "being written",
+        "out of date",
+        "could not",
+        "cannot",
+        "error",
+        "ready",
+        "too soon",
+        "unavailable",
+        "red",
+        "green",
+        "migrated",
+        "ended",
+        "refused",
+        "rejected",
+        "limit",
+        "nothing from the model",
+    ];
+
+    /// One run of a row: cells side by side with the same colour.
+    struct Run {
+        x: u16,
+        fg: Color,
+        text: String,
+    }
+
+    fn runs(buffer: &Buffer, y: u16) -> Vec<Run> {
+        let mut out: Vec<Run> = Vec::new();
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            match out.last_mut() {
+                Some(r) if r.fg == cell.fg => r.text.push_str(cell.symbol()),
+                _ => out.push(Run {
+                    x,
+                    fg: cell.fg,
+                    text: cell.symbol().to_string(),
+                }),
+            }
+        }
+        out
+    }
+
+    /// The colour rules on one rendered screen, in `palette`: nothing dims or
+    /// blinks, no dark grey, no background; every colour on screen is one of
+    /// the palette's roles (in mono: none); every good, bad or attention run
+    /// stands beside a state mark or word (a wrapped paragraph counts as
+    /// one: its rows start at the same column); the accent marks at most the
+    /// Next step's label and one menu item.
+    fn assert_colour_rules(name: &str, palette: Palette, buffer: &Buffer) {
+        let theme = palette.theme;
+        let banned = Modifier::DIM | Modifier::SLOW_BLINK | Modifier::RAPID_BLINK;
+        let roles: Vec<Color> = Role::ALL.iter().filter_map(|r| palette.fg(*r)).collect();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                assert!(
+                    !cell.modifier.intersects(banned),
+                    "{name} ({}): dim or blinking at {x},{y}",
+                    theme.name()
+                );
+                assert!(
+                    (cell.fg == Color::Reset || roles.contains(&cell.fg))
+                        && cell.fg != Color::DarkGray
+                        && cell.bg == Color::Reset,
+                    "{name} ({}): a colour {:?}/{:?} that is no role's at {x},{y}",
+                    theme.name(),
+                    cell.fg,
+                    cell.bg
+                );
+            }
+        }
+        let colour = |role: Role| palette.fg(role);
+        let states = [Role::Good, Role::Bad, Role::Attention].map(colour);
+        let says_state = |text: &str| {
+            let lower = text.to_lowercase();
+            text.split_whitespace()
+                .any(|t| STATE_MARKS.contains(&t) || t.starts_with(['✓', '✗', '⚠', '–']))
+                || STATE_WORDS.iter().any(|w| lower.contains(w))
+        };
+        // Paragraphs: (x, fg) → (text so far, its first row).
+        let mut open: Vec<(u16, Color, String, u16)> = Vec::new();
+        let mut done: Vec<(String, u16)> = Vec::new();
+        let mut accents: Vec<(String, u16)> = Vec::new();
+        for y in 0..buffer.area.height {
+            let mut next: Vec<(u16, Color, String, u16)> = Vec::new();
+            for r in runs(buffer, y) {
+                if r.text.trim().is_empty() {
+                    continue;
+                }
+                if Some(r.fg) == colour(Role::Accent) {
+                    accents.push((r.text.trim().to_string(), y));
+                }
+                if !states.contains(&Some(r.fg)) {
+                    continue;
+                }
+                let (mut text, first) = match open.iter().position(|o| o.0 == r.x && o.1 == r.fg) {
+                    Some(i) => {
+                        let o = open.remove(i);
+                        (o.2, o.3)
+                    }
+                    None => (String::new(), y),
+                };
+                text.push(' ');
+                text.push_str(r.text.trim());
+                next.push((r.x, r.fg, text, first));
+            }
+            done.extend(open.drain(..).map(|o| (o.2, o.3)));
+            open = next;
+        }
+        done.extend(open.drain(..).map(|o| (o.2, o.3)));
+        for (text, y) in done {
+            assert!(
+                says_state(&text),
+                "{name} ({}): row {}: a state colour without a mark or word: {text:?}\n{}",
+                theme.name(),
+                y + 1,
+                text_of(buffer)
+            );
+        }
+        let (next, items): (Vec<_>, Vec<_>) = accents.iter().partition(|(t, _)| t == "Next step:");
+        assert!(
+            next.len() <= 1 && items.len() <= 1,
+            "{name} ({}): the accent is on more than the Next step and one menu item: {accents:?}",
+            theme.name()
+        );
+    }
+
+    fn text_of(buffer: &Buffer) -> String {
+        text(buffer)
+    }
+
+    /// A screen with its styles: each row's text, then under it every run
+    /// that is not plain text — its columns, its colour and its modifiers.
+    fn styled(buffer: &Buffer) -> String {
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            let mut row = String::new();
+            for x in 0..buffer.area.width {
+                row.push_str(buffer[(x, y)].symbol());
+            }
+            out.push_str(row.trim_end());
+            out.push('\n');
+            let mut x = 0;
+            while x < buffer.area.width {
+                let cell = &buffer[(x, y)];
+                let (fg, m) = (cell.fg, cell.modifier);
+                let start = x;
+                let mut text = String::new();
+                while x < buffer.area.width
+                    && buffer[(x, y)].fg == fg
+                    && buffer[(x, y)].modifier == m
+                {
+                    text.push_str(buffer[(x, y)].symbol());
+                    x += 1;
+                }
+                if (fg == Color::Reset && m.is_empty()) || text.trim().is_empty() {
+                    continue;
+                }
+                let colour = match fg {
+                    Color::Indexed(i) => format!("{i}"),
+                    Color::Reset => "-".into(),
+                    named => format!("{named:?}"),
+                };
+                out.push_str(&format!(
+                    "  @{start}-{} fg {colour} {m:?} {:?}\n",
+                    x - 1,
+                    text.trim()
+                ));
+            }
+        }
+        out
+    }
+
+    /// The rules' check catches a state colour with no mark or word, and a
+    /// second accent.
+    #[test]
+    fn the_colour_rules_catch_decoration() {
+        let paint = |text: &str, role: Role| {
+            let mut b = Buffer::empty(Rect::new(0, 0, 30, 2));
+            b.set_string(0, 0, text, Theme::Dark.style(role));
+            b
+        };
+        let fails = |b: Buffer| {
+            std::panic::catch_unwind(|| assert_colour_rules("t", Palette::of(Theme::Dark), &b))
+                .is_err()
+        };
+        assert!(!fails(paint("✓ passed", Role::Good)));
+        assert!(!fails(paint("⚠ u-lib", Role::Attention)));
+        assert!(fails(paint("Speed", Role::Good)));
+        assert!(fails(paint("Project: hello", Role::Attention)));
+        let mut b = paint("Next step:", Role::Accent);
+        assert!(!fails(b.clone()));
+        b.set_string(0, 1, "Open", Theme::Dark.style(Role::Accent));
+        assert!(!fails(b.clone()));
+        b.set_string(12, 0, "Scan", Theme::Dark.style(Role::Accent));
+        assert!(fails(b));
+    }
+
+    /// The first screen, a unit's View and the Project view, in each theme
+    /// (four, the terminal's own first),
+    /// with their styles (the text goldens hold the words; these hold the
+    /// colours): the rules hold in every theme, and a change of colour is a
+    /// reviewed diff.
+    #[test]
+    fn three_screens_in_four_themes() {
+        for theme in Theme::ALL {
+            let mut first = app_of("targets/zopfli", "theme-first");
+            let mut unit = app_of("targets/zopfli", "theme-unit");
+            unit.select(Selection::Unit("u-cache".into()));
+            let (_tmp, root) = project::project("theme-project");
+            let mut proj = project::cockpit(&root);
+            for (screen, app, w, h) in [
+                ("first", &mut first, 80, 30),
+                ("unit", &mut unit, 80, 30),
+                ("project", &mut proj, 120, 30),
+            ] {
+                app.palette = Palette::of(theme);
+                let buffer = render(app, w, h);
+                let name = format!("styles/{screen}-{}.txt", theme.name());
+                assert_colour_rules(&name, app.palette, &buffer);
+                let got =
+                    styled(&buffer).replace(&app.config.target.display().to_string(), "<target>");
+                let got = mask_scratch(&got);
+                let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/golden")
+                    .join(&name);
+                if std::env::var("RUHARNESS_UPDATE_TUI_GOLDENS").as_deref() == Ok("1") {
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(&path, &got).unwrap();
+                    continue;
+                }
+                let want = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+                    panic!("missing {name}: render it with RUHARNESS_UPDATE_TUI_GOLDENS=1")
+                });
+                assert!(
+                    want == got,
+                    "{name} differs (RUHARNESS_UPDATE_TUI_GOLDENS=1 to re-render and review):\n{got}"
+                );
+            }
+        }
+        theme::set(Palette::default());
+    }
+
     /// The scratch copy's path appears in some texts: replaced so goldens
     /// are machine-independent (the project row shows the copy's name).
     fn golden(name: &str, app: &App, buffer: &Buffer) {
-        // The scratch copy's name holds the pid: its digits are masked by
-        // position (a name cut with `…` keeps its length).
-        let mut got = String::new();
+        // Every golden screen keeps the colour rules (§9.2).
+        assert_colour_rules(name, app.palette, buffer);
         let text = text(buffer).replace(&app.config.target.display().to_string(), "<target>");
-        let mut rest = text.as_str();
-        while let Some(i) = rest.find("harness-tui-") {
-            got.push_str(&rest[..i + "harness-tui-".len()]);
-            rest = &rest[i + "harness-tui-".len()..];
-            let end = rest
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-                .unwrap_or(rest.len());
-            got.extend(
-                rest[..end]
-                    .chars()
-                    .map(|c| if c.is_ascii_digit() { '0' } else { c }),
-            );
-            rest = &rest[end..];
-        }
-        got.push_str(rest);
+        let got = mask_scratch(&text);
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/golden")
             .join(name);
@@ -4607,6 +4878,28 @@ mod tests {
                 i + 1
             );
         }
+    }
+
+    /// The scratch copy's name holds the pid: its digits are masked by
+    /// position (a name cut with `…` keeps its length).
+    fn mask_scratch(text: &str) -> String {
+        let mut got = String::new();
+        let mut rest = text;
+        while let Some(i) = rest.find("harness-tui-") {
+            got.push_str(&rest[..i + "harness-tui-".len()]);
+            rest = &rest[i + "harness-tui-".len()..];
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                .unwrap_or(rest.len());
+            got.extend(
+                rest[..end]
+                    .chars()
+                    .map(|c| if c.is_ascii_digit() { '0' } else { c }),
+            );
+            rest = &rest[end..];
+        }
+        got.push_str(rest);
+        got
     }
 
     fn row_with<'a>(screen: &'a str, needle: &str) -> &'a str {
@@ -7101,7 +7394,7 @@ mod tests {
             line.contains("ready") && !line.contains("or click"),
             "{line}"
         );
-        assert_eq!(fg, Color::Green);
+        assert_eq!(Some(fg), good().fg);
         if let Mode::Dialog(c) = &mut app.mode {
             c.dialog.opened = Instant::now().checked_sub(CLICK_SETTLE * 2).unwrap();
         }
@@ -7116,7 +7409,7 @@ mod tests {
         }
         let (line, fg) = state(&mut app);
         assert!(line.contains("Too soon — click again"), "{line}");
-        assert_eq!(fg, Color::Yellow);
+        assert_eq!(Some(fg), attention().fg);
         // Under the chat's dialog rules a click is invited too (review
         // USE-8).
         if let Mode::Dialog(c) = &mut app.mode {

@@ -25,6 +25,7 @@ tui = [
     "dep:tree-sitter-c",
     "dep:signal-hook",
     "dep:harness-oracle",
+    "dep:toml",
 ]
 
 [dependencies]
@@ -38,6 +39,9 @@ tree-sitter-highlight = { workspace = true, optional = true }
 tree-sitter-c = { workspace = true, optional = true }
 signal-hook = { workspace = true, optional = true }
 serde_json.workspace = true
+# Already in the tree (harness-core reads its TOML with it): the cockpit's own
+# settings file, cockpit.toml (its theme and colours).
+toml = { workspace = true, optional = true }
 # Workspace path dependency (no crates.io addition: it brings harness-scan,
 # another workspace crate new to the cockpit's tree, whose own tree-sitter
 # and tree-sitter-c are already here), for the front end only: the Measure

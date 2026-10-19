@@ -50,7 +50,7 @@ static GUARD: TermGuard = TermGuard::new();
 
 const USAGE: &str = "\
 usage: harness-tui [--target DIR] [--tool ID] [--harness PATH] [--provider NAME]... [--allow-unsandboxed]
-                   [--layout split|stacked] [--no-mouse]
+                   [--layout split|stacked] [--no-mouse] [--theme NAME]
                    [--no-chat] [--chat-runtime PATH] [--harness-mcp PATH] [--chat-model NAME]
 
 The review cockpit over a target's migration ledger. Every write is a spawned
@@ -73,6 +73,19 @@ The review cockpit over a target's migration ledger. Every write is a spawned
   --no-mouse            start with the mouse off (m in Help turns it on): for
                         a terminal whose clicks print odd characters, or to
                         select text with the mouse as usual
+  --theme NAME          the colours: terminal (the default: your terminal's own
+                        green, red, yellow and cyan, nothing dim); dark or light
+                        (designed for a dark or a white background: try one when
+                        text is faint or blends in); mono (no colour: bold,
+                        underline and reverse carry everything). Also
+                        RUHARNESS_THEME=NAME; NO_COLOR picks mono. It beats the
+                        settings file, ~/Library/Application Support/
+                        ruharness/cockpit.toml (~/.config/ruharness/ on Linux;
+                        $RUHARNESS_COCKPIT_CONFIG when set), whose [theme] name
+                        names a theme and whose [colors] sets a role's colour
+                        (a name such as bright-blue, 0-255, or #rrggbb); the
+                        roles: text muted heading accent good bad attention
+                        selected disabled border
   --no-chat             no chat pane
   --chat-runtime PATH   the Claude Code binary the chat runs (default: `claude`
                         on PATH)
@@ -89,6 +102,7 @@ struct Args {
     layout: LayoutMode,
     providers: Vec<String>,
     mouse: bool,
+    theme: Option<String>,
     chat: bool,
     chat_runtime: Option<PathBuf>,
     harness_mcp: Option<PathBuf>,
@@ -104,6 +118,7 @@ fn parse_args() -> Result<Args, String> {
         layout: LayoutMode::Auto,
         providers: Vec::new(),
         mouse: true,
+        theme: None,
         chat: true,
         chat_runtime: None,
         harness_mcp: None,
@@ -133,6 +148,12 @@ fn parse_args() -> Result<Args, String> {
             "--harness" => args.harness = Some(PathBuf::from(value("--harness")?)),
             "--allow-unsandboxed" => args.allow_unsandboxed = true,
             "--no-mouse" => args.mouse = false,
+            "--theme" => {
+                let name = value("--theme")?.to_string_lossy().into_owned();
+                // Checked here, so a bad name is refused before anything starts.
+                harness_tui::theme::Theme::choose(Some(&name), None, |_| None)?;
+                args.theme = Some(name);
+            }
             "--no-chat" => args.chat = false,
             "--chat-runtime" => args.chat_runtime = Some(PathBuf::from(value("--chat-runtime")?)),
             "--harness-mcp" => args.harness_mcp = Some(PathBuf::from(value("--harness-mcp")?)),
@@ -1021,6 +1042,25 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // The colours: --theme, else RUHARNESS_THEME, else cockpit.toml's
+    // theme, else mono under NO_COLOR, else the terminal's own; then the
+    // file's per-role colours. What the file gets wrong is said, by name,
+    // and the default used.
+    let env = |k: &str| std::env::var(k).ok();
+    let settings = harness_tui::theme::config_path(env)
+        .map(|p| harness_tui::theme::read_settings(&p))
+        .unwrap_or_default();
+    for why in &settings.refused {
+        eprintln!("harness-tui: {why}");
+    }
+    let palette =
+        match harness_tui::theme::Theme::choose(args.theme.as_deref(), settings.theme, env) {
+            Ok(theme) => settings.apply(theme),
+            Err(why) => {
+                eprintln!("harness-tui: {why}");
+                return ExitCode::from(2);
+            }
+        };
     // Every hint the cockpit shows carries `--target` when the person
     // started it on another folder.
     harness_core::runtime_view::set_hint_target(&args.target);
@@ -1118,6 +1158,10 @@ fn main() -> ExitCode {
         app.say("no `harness` binary found (PATH, or --harness <path>): read-only, acts disabled");
     }
     app.mouse = args.mouse;
+    app.palette = palette;
+    for why in &settings.refused {
+        app.say(why);
+    }
     app.set_chat(args.chat);
     if args.chat {
         let bins = chat::runtime::resolve(

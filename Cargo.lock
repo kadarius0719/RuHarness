@@ -483,6 +483,7 @@ dependencies = [
  "serde_json",
  "signal-hook 0.4.4",
  "similar",
+ "toml",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-highlight",
