@@ -2058,23 +2058,31 @@ after the picks' `message` lines.
 `--tool` — no mapped tool yet, a map to act on, or several tools — opens on its **Project
 view** (pass 3 of docs/reviews/2026-10-18-cockpit-usability-critique.md): the cockpit's own
 screen, panes, key bar and dialogs. Its left pane: before a map one row, "Map the project"; after
-a map "Programs (n)" with each program as a row ("t-lzg (tool)", its state in words — linked,
-held on a choice, did not compile, did not link, incomplete, fuzzer — and its file under it), a
+a map "Programs (n)" with each program as a row ("t-lzg", its state in words — linked,
+held on a choice, did not compile, did not link, incomplete, fuzzer — and under it its file and
+what the map knows it is, "src/tools/lzg.c (a tool, by its folder)", then a model's label from
+the reply's `p<n>` item, "“LZG compressor”, a tool (the model's label)", when one fits), a
 file holding a `main` that did not compile as a note, "Libraries (n)" likewise ("compiles" or
 "did not compile"), and "Accepted tools (n)" with a row "Open tool <id> — <program's path>"
 each. Its right pane: the folder's name (never the full path), the configuration's state in
 words (a guess / proposed / stated), the programs, libraries and tools again in full, what the
 selected program is (its held choices, the model's advice), and a Next step: no map → Map; a
-guess → state the build in migration/map/config.toml or Ask for a proposal; a held choice → pick
+guess → Write the build configuration (or Ask for a proposal); a configuration written since
+the map → Map the project again; right after an Accept → open the new tool; a held choice → pick
 it in Accept; a program ready → Accept it; a tool → open it. `Enter` on a row opens its menu, the
-recommended item first: "Accept this program" (or "this library") and "Accept it under a run
-name of your own…", "Open tool <id>" on an accepted one, "Map the project" (then "Map the
-project again"), and once a map exists "Ask for a proposal" (`--build`, while the configuration
-is a guess or nothing is held) or "Ask a model for advice". While the configuration is a guess
-(or came with the project) Accept is greyed with "Accept needs a stated configuration, and this
-map's is a guess (or came with the project): write it in migration/map/config.toml, or Ask for a
-proposal, then map again". Accept asks each held choice first, in a menu titled "Accept <id>":
-"<id> holds the choice d1: linking cannot tell its files apart, so keep which one?", the
+recommended item first (a menu that would hold only that item is skipped: its dialog opens):
+"Accept this program" (or "this library") and "Accept it under a run name of your own…", "Open
+tool <id>" on an accepted one, once a map exists "Write the build configuration (in <editor>)"
+("Edit …" once `migration/map/config.toml` exists: the person's editor on a private draft,
+starting from the map's own example — `[[configuration]]`, `name`, `from`, `flags = []` with its
+comment — checked on return by the map's own reader and written by the cockpit only while the
+file is still what the edit started from), "Map the project" (then "Map the project again"), and
+once a map exists "Ask for a proposal" (`--build`, while the configuration is a guess or nothing
+is held) or "Ask a model for advice". While the configuration is a guess (or came with the
+project) Accept is greyed with "Accept needs a stated configuration, and this map's is a guess
+(or came with the project): choose Write the build configuration (or Ask for a proposal), then
+Map the project again". Accept asks each held choice first, in a menu titled "Accept <id>":
+"<id> holds the choice d1: two files define the same function, so keep which one?", the
 definers as items, none suggested, skipping a set whose `under` names no choice made so far; a
 reply bound to the map's digests shows its advice above them — "The model's advice (<model>):
 keep d1.2, reason …  — advice only, the choice is yours." — each answer checked as `ask` checks

@@ -13,6 +13,7 @@
 //! The chat (docs/CHAT-PANE-DESIGN.md) is a third pane: its requests are
 //! the cockpit's own acts, confirmed in the same armed dialog ([`asks`]).
 
+mod adopt_offer;
 pub mod asks;
 pub mod features_edit;
 mod project_view;
@@ -431,6 +432,9 @@ pub enum Purpose {
     EditAgain,
     /// A save refused because the features file changed meanwhile.
     FeaturesChanged,
+    /// The adoption question, offered again after a command was refused
+    /// because the folder's results were made elsewhere.
+    Adopt,
 }
 
 /// An open dialog: its words and its latch.
@@ -868,6 +872,9 @@ pub struct App {
     pub features_draft: Option<features_edit::Draft>,
     /// The workloads draft, likewise (docs/PERF-DESIGN.md §3.11).
     pub workloads_draft: Option<features_edit::Draft>,
+    /// The build configuration draft, likewise (the Project view's Write
+    /// the build configuration).
+    pub config_draft: Option<features_edit::Draft>,
     /// Which draft the open editor dialog, the editor and its return are
     /// about.
     pub editing: features_edit::DraftKind,
@@ -875,6 +882,9 @@ pub struct App {
     /// chose to edit the file as it is now (§7.2 step 5): named on quit,
     /// never removed here.
     pub kept_drafts: Vec<PathBuf>,
+    /// A command failed and the folder is refused as made elsewhere: the
+    /// refusal's words; the menus offer Adopt this folder until it is.
+    pub not_adopted: Option<String>,
     /// Temp dirs kept only for what an editor left in them.
     pub leftovers: Vec<PathBuf>,
     /// Modify's last note per attempt (cancelled, declined or refused).
@@ -1085,8 +1095,10 @@ impl App {
             kept_edits: Vec::new(),
             features_draft: None,
             workloads_draft: None,
+            config_draft: None,
             editing: features_edit::DraftKind::Features,
             kept_drafts: Vec::new(),
+            not_adopted: None,
             leftovers: Vec::new(),
             notes: BTreeMap::new(),
             holder,
@@ -1893,6 +1905,7 @@ impl App {
             // file (nano's .save, vim's swap) lands beside the draft (N3).
             .chain(self.features_draft.iter().map(|d| d.tmp.clone()))
             .chain(self.workloads_draft.iter().map(|d| d.tmp.clone()))
+            .chain(self.config_draft.iter().map(|d| d.tmp.clone()))
             .chain(self.kept_drafts.iter().cloned())
             .collect()
     }
@@ -1930,15 +1943,27 @@ impl App {
             self.notice = notice("the command ended; nothing to stop");
         }
         let signal = status.signal().map(signal_name);
+        let mut failed = false;
         if let Some(run) = self.run.as_mut() {
+            // A run is never "done" when it failed (the newcomer's ten
+            // minutes, finding 2): its exit and its first error line, here
+            // and in the details.
+            let problem = first_error_line(&run.lines);
+            let with = |head: String| match &problem {
+                Some(line) => format!("{head}: {line}"),
+                None => head,
+            };
             let text = match (status.code(), &signal) {
                 (_, Some(sig)) => format!("interrupted ({sig})"),
                 (Some(code), _) if !run.saw_result && run.act.project().is_none() => {
                     format!("exited without result (exit {code})")
                 }
-                (Some(code), _) => format!("exit {code}"),
+                (Some(0), _) if problem.is_some() => with("done, with a problem".into()),
+                (Some(0), _) => "exit 0".into(),
+                (Some(code), _) => with(format!("failed (exit {code})")),
                 (None, None) => "ended".into(),
             };
+            failed = status.code() != Some(0) || problem.is_some();
             run.exit = Some(text);
             self.last = Some(run.narrator.last(
                 status.code(),
@@ -1948,16 +1973,19 @@ impl App {
             // A project act's outcome is its exit and its words.
             if run.act.project().is_some() {
                 let took = crate::narrate::elapsed_words(run.started.elapsed());
+                let label = &run.narrator.label;
                 self.last = Some(match (status.code(), &signal) {
-                    (_, Some(sig)) => format!("{} — stopped ({sig}) ({took})", run.narrator.label),
-                    (Some(0), _) => {
-                        format!("{} — done ({took}); c for its words", run.narrator.label)
-                    }
-                    (Some(code), _) => format!(
-                        "{} — ended with exit {code} ({took}); c for its words",
-                        run.narrator.label
+                    (_, Some(sig)) => format!("{label} — stopped ({sig}) ({took})"),
+                    (Some(0), _) if problem.is_some() => format!(
+                        "{label} — {} ({took}); c for its words",
+                        with("done, with a problem".into())
                     ),
-                    (None, None) => format!("{} — ended ({took})", run.narrator.label),
+                    (Some(0), _) => format!("{label} — done ({took}); c for its words"),
+                    (Some(code), _) => format!(
+                        "{label} — {} ({took}); c for its words",
+                        with(format!("failed (exit {code})"))
+                    ),
+                    (None, None) => format!("{label} — ended ({took})"),
                 });
             }
             let ending = run.narrator.ending(status.code(), signal.as_deref());
@@ -2015,7 +2043,26 @@ impl App {
                 }
             }
         }
+        // An Accept that succeeded: the new tool is the Next step and the
+        // row selected (the newcomer's ten minutes, finding 5).
+        let accepted = self
+            .run
+            .as_ref()
+            .filter(|r| r.act == Act::ProjectAccept && status.success() && !failed)
+            .and_then(|r| r.pending.unit.clone());
+        if let (Some(id), Some(p)) = (&accepted, self.project.as_mut()) {
+            p.just_accepted = Some(id.clone());
+        }
         self.request_load(LoadWhy::Reaped);
+        if let Some(id) = accepted {
+            let sel = Selection::Tool(id);
+            if crate::tree::row_of(&self.rows, &sel).is_some() {
+                self.selection = sel;
+            }
+        }
+        if failed {
+            self.offer_adoption_after_failure();
+        }
         remove
     }
 
@@ -2716,7 +2763,12 @@ impl App {
     }
 
     fn open_dialog(&mut self, purpose: Purpose) {
+        if purpose == Purpose::Adopt {
+            self.ask_adopt();
+            return;
+        }
         let (kind, title, body) = match &purpose {
+            Purpose::Adopt => return,
             Purpose::Act(p) => {
                 let (title, body) = self.dialog_words(p);
                 let kind = if p.act == Act::HandEdit {
@@ -2735,16 +2787,11 @@ impl App {
                 } else {
                     // Every kind of draft the way out names (main's
                     // `announce_kept_edits`).
-                    let kinds = [
-                        features_edit::DraftKind::Features,
-                        features_edit::DraftKind::Workloads,
+                    vec![
+                        "Nothing is running. Hand edits not recorded and drafts not saved \
+                          (features, workloads, build configuration) are named on the way out."
+                            .to_string(),
                     ]
-                    .map(features_edit::DraftKind::noun)
-                    .join(" and ");
-                    vec![format!(
-                        "Nothing is running. Hand edits not recorded and {kinds} drafts not saved \
-                         are named on the way out."
-                    )]
                 },
             ),
             Purpose::Quit => (Kind::Quit, "Quit while a command runs?".into(), {
@@ -3012,6 +3059,10 @@ impl App {
                 return self.close_chat_dialog(confirm, choice);
             }
         }
+        if confirm.purpose == Purpose::Adopt {
+            self.close_adopt_dialog(choice);
+            return Command::None;
+        }
         match (confirm.purpose, choice) {
             (Purpose::Act(p), Choice::Run | Choice::Record) => match self.confirm_gate(&p) {
                 Ok(()) => Command::Spawn(p),
@@ -3088,9 +3139,13 @@ impl App {
                 Command::None
             }
             (Purpose::Quit | Purpose::Cancel | Purpose::NewChat, _) => Command::None,
-            (Purpose::OpenEditor | Purpose::EditAgain | Purpose::FeaturesChanged, _) => {
-                Command::None
-            }
+            (
+                Purpose::OpenEditor
+                | Purpose::EditAgain
+                | Purpose::FeaturesChanged
+                | Purpose::Adopt,
+                _,
+            ) => Command::None,
         }
     }
 
@@ -3098,11 +3153,10 @@ impl App {
 
     /// `Enter`: the selection's menu, opened with a fresh check of the lock
     /// holder, its recommended item first and focused, with its reason.
-    pub fn open_menu(&mut self) {
+    pub fn open_menu(&mut self) -> Command {
         self.refresh_holder();
         if self.in_project_view() || self.selection == Selection::ProjectHome {
-            self.open_project_menu();
-            return;
+            return self.open_project_menu();
         }
         let mut items = self.menu_items();
         let advice = self.advice(&self.selection);
@@ -3115,6 +3169,7 @@ impl App {
             title: None,
             note: Vec::new(),
         });
+        Command::None
     }
 
     /// Act on a menu item (or an accelerator's item).
@@ -3300,6 +3355,14 @@ impl App {
             Action::EditWorkloads => self.start_edit(features_edit::DraftKind::Workloads),
             Action::DiscardWorkloadsDraft => {
                 self.ask_discard_draft(features_edit::DraftKind::Workloads)
+            }
+            Action::WriteBuildConfig => self.start_edit(features_edit::DraftKind::BuildConfig),
+            Action::DiscardBuildConfigDraft => {
+                self.ask_discard_draft(features_edit::DraftKind::BuildConfig)
+            }
+            Action::Adopt => {
+                self.ask_adopt();
+                Command::None
             }
         }
     }
@@ -4598,7 +4661,7 @@ impl App {
             KeyCode::Enter if self.focus == Focus::View && self.code_folded() => {
                 self.code_open = true;
             }
-            KeyCode::Enter => self.open_menu(),
+            KeyCode::Enter => return self.open_menu(),
             KeyCode::Char('x') => {
                 if self.running {
                     self.open_dialog(Purpose::Cancel);
@@ -5114,6 +5177,26 @@ fn rust_files(crate_dir: &Path) -> Vec<String> {
     walk(&crate_dir.join("src"), "src", &mut out);
     out.sort();
     out
+}
+
+/// The first error a command printed on its error stream (`Error: …`, or a
+/// `harness: …` warning), one line, without its prefix, at most 160
+/// characters — what the status line and the details name when the command
+/// failed or ended with a problem.
+pub fn first_error_line(lines: &[RunLine]) -> Option<String> {
+    lines.iter().filter(|l| l.tone == Tone::Dim).find_map(|l| {
+        let t = l.text.trim();
+        ["Error: ", "error: ", "harness: "]
+            .iter()
+            .find_map(|p| t.strip_prefix(p))
+            .map(|rest| {
+                let line = harness_core::text::safe_line(rest.trim());
+                match line.char_indices().nth(160) {
+                    Some((at, _)) => format!("{}…", &line[..at]),
+                    None => line,
+                }
+            })
+    })
 }
 
 fn signal_name(sig: i32) -> String {
@@ -5801,8 +5884,10 @@ pub(crate) mod tests {
         assert_eq!(c.dialog.kind, crate::dialog::Kind::QuitIdle);
         assert_eq!(
             c.body,
-            ["Nothing is running. Hand edits not recorded and features and workloads drafts not \
-              saved are named on the way out."]
+            [
+                "Nothing is running. Hand edits not recorded and drafts not saved (features, \
+              workloads, build configuration) are named on the way out."
+            ]
         );
     }
 

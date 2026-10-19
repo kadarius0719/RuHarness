@@ -171,6 +171,20 @@ pub enum Cause {
 }
 
 impl Cause {
+    /// The cause alone, plainly, for the unit's one state line ("needs
+    /// attention: its verdict was made on another computer, not here yet").
+    pub fn lead(&self) -> &'static str {
+        match self {
+            Cause::Contradiction => "its status and its verdict disagree",
+            Cause::PromotionInterrupted { .. } => "an Accept was interrupted",
+            Cause::SourceChanged => "its C changed since it was planned",
+            Cause::StaleVerdict => "its verdict is out of date",
+            Cause::ChangedOutside => "its Rust changed outside the harness",
+            Cause::NoEvidence => "its verdict is missing",
+            Cause::MadeElsewhere { .. } => "its verdict was made on another computer, not here yet",
+        }
+    }
+
     /// The cause and its action in a few words, for a list of units
     /// ("verdict made elsewhere — Re-check with the judge").
     pub fn short(&self) -> &'static str {

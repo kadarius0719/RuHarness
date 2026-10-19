@@ -1,7 +1,7 @@
 ┌ Files ───────────────────────┐┌ src/zopfli · 1 failing · 1 needs attention · 1 changed since the scan · 1 not scanned┐
 │▾ harness-tui-gglyph-00000000…││1 failing · 1 needs attention · 1 changed since the scan · 1 not scanned yet · 1      │
 │  ▾ Units (11)                ││missing · 5 of 14 C files in Rust · 1 more verified, origin not recorded              │
-│    ▸ ⊘ u001-katajainen       ││✓  blocksplitter.c  migrated (by hand)                                                │
+│    ▸ ⊘ u001-katajain… blocked││✓  blocksplitter.c  migrated (by hand)                                                │
 │    ▸ ⚠ u-cache               ││·  blocksplitter.h  header                                                            │
 │    ▸ ✗ u-hash         failing││⚠  cache.c  needs attention                                                           │
 │    ▸ ✓ u-lz77        migrated││·  cache.h  header                                                                    │
@@ -9,7 +9,7 @@
 │    ▸ ✓ u-blocksplitter-defla…││·  deflate.h  header                                                                  │
 │    ▸ ✓? u-gzip_container     ││!  edited.c  changed since scan                                                       │
 │    ▸ ◐ u-util           tried││+  fresh.c  not scanned yet                                                           │
-│    ▸ ◇ u-zlib_container      ││?  gone.c  missing                                                                    │
+│    ▸ ◇ u-zlib_contai… planned││?  gone.c  missing                                                                    │
 │    ▸ u-zopfli_lib in progress││✓? gzip_container.c  verified, origin not recorded                                    │
 │    ▸ ◇ u-zopfli_bin   planned││·  gzip_container.h  header                                                           │
 │  ▾ Features (7)              ││✗  hash.c  failing                                                                    │
@@ -24,7 +24,7 @@
 │  ▾ src/                      ││–  statics.c  no exported functions                                                   │
 │    ▾ zopfli/ ✗1 ⚠1 !1 +1 ?1 …││·  symbols.h  header                                                                  │
 │      ▸ ✓ blocksplitter.c     ││✓  tree.c  migrated (steered)                                                         │
-│        · blocksplitter.h     ││·  tree.h  header                                                                     │
+│        · blocksplitte… header││·  tree.h  header                                                                     │
 │      ▸ ⚠ cache.c             ││◐  util.c  tried                                                                      │
 │        · cache.h       header││·  util.h  header                                                                     │
 │      ▸ ✓ deflate.c           ││◇  zlib_container.c  planned                                                          │
@@ -33,7 +33,7 @@
 │      ▸ + fresh.c             ││◇  zopfli_bin.c  planned                                                              │
 │      ▸ ? gone.c       missing││   zopfli_lib.c  in progress                                                          │
 │      ▸ ✓? gzip_container.c   ││                                                                                      │
-│        · gzip_container.h    ││                                                                                      │
+│        · gzip_contain… header││                                                                                      │
 │      ▸ ✗ hash.c       failing││                                                                                      │
 │        · hash.h        header││                                                                                      │
 │      ▸ ○ katajainen.c        ││                                                                                      │

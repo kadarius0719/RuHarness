@@ -1,6 +1,10 @@
 //! Writing the person's own files from the cockpit — the features file
-//! (docs/FEATURES-DESIGN.md §7.2) and the workloads file
-//! (docs/PERF-DESIGN.md §3.11), one flow for both: the file (or its starter)
+//! (docs/FEATURES-DESIGN.md §7.2), the workloads file
+//! (docs/PERF-DESIGN.md §3.11) and, on the Project view, the build
+//! configuration (`migration/map/config.toml`, docs/PROJECT-MAP-DESIGN.md
+//! §3.2: no `harness` command writes it, so the cockpit writes the person's
+//! checked draft itself, then the map is read again — the person then
+//! chooses Map the project again). One flow for all: the file (or its starter)
 //! is copied into a private draft, a dialog says which editor opens and how
 //! to leave it, the draft is validated on return, and a confirmed
 //! `harness features save` or `harness perf save` — the text on its stdin,
@@ -25,6 +29,9 @@ pub enum DraftKind {
     Features,
     /// `migration/perf/workloads.toml`.
     Workloads,
+    /// The project's `migration/map/config.toml` (the Project view's
+    /// "Write the build configuration").
+    BuildConfig,
 }
 
 impl DraftKind {
@@ -33,8 +40,16 @@ impl DraftKind {
         match self {
             DraftKind::Features => "features",
             DraftKind::Workloads => "workloads",
+            DraftKind::BuildConfig => "build configuration",
         }
     }
+
+    /// Every kind, for naming kept drafts.
+    pub const ALL: [DraftKind; 3] = [
+        DraftKind::Features,
+        DraftKind::Workloads,
+        DraftKind::BuildConfig,
+    ];
 
     /// The file, target-relative, as the dialogs name it
     /// (`migration/features/features.toml`, or under a tool's ledger).
@@ -50,6 +65,10 @@ impl DraftKind {
         match self {
             DraftKind::Features => features::features_dir(&config.ledger()),
             DraftKind::Workloads => harness_core::perf::perf_dir(&config.ledger()),
+            DraftKind::BuildConfig => self
+                .path(config)
+                .parent()
+                .map_or_else(|| config.target.clone(), Path::to_path_buf),
         }
     }
 
@@ -57,6 +76,7 @@ impl DraftKind {
         match self {
             DraftKind::Features => features::features_path(&config.ledger()),
             DraftKind::Workloads => workloads::workloads_path(&config.ledger()),
+            DraftKind::BuildConfig => config.target.join(CONFIG_FILE),
         }
     }
 
@@ -64,6 +84,7 @@ impl DraftKind {
         match self {
             DraftKind::Features => features::MAX_FEATURES_BYTES,
             DraftKind::Workloads => workloads::MAX_WORKLOADS_BYTES,
+            DraftKind::BuildConfig => harness_oracle::projectmap::config::MAX_CONFIG_BYTES,
         }
     }
 
@@ -71,6 +92,7 @@ impl DraftKind {
         match self {
             DraftKind::Features => features::FEATURES_FILE,
             DraftKind::Workloads => workloads::WORKLOADS_FILE,
+            DraftKind::BuildConfig => "config.toml",
         }
     }
 
@@ -79,23 +101,42 @@ impl DraftKind {
         match self {
             DraftKind::Features => DRAFT_DIR_PREFIX,
             DraftKind::Workloads => WORKLOADS_DRAFT_DIR_PREFIX,
+            DraftKind::BuildConfig => CONFIG_DRAFT_DIR_PREFIX,
         }
     }
 
-    fn starter(self, config: &crate::app::Config) -> String {
+    /// The text a new file starts from: `example` is the map's suggested
+    /// configuration (the build configuration's).
+    fn starter(self, config: &crate::app::Config, example: &str) -> String {
         match self {
             DraftKind::Features => config
                 .target_config()
                 .map(|c| features::starter(&c))
                 .unwrap_or_default(),
             DraftKind::Workloads => workloads::STARTER.to_string(),
+            DraftKind::BuildConfig => example.to_string(),
         }
     }
 
     /// Whether `text` validates: else the reader's words and the line they
-    /// name.
-    fn check(self, text: &str, file: &Path, ledger_rel: &str) -> Result<(), (String, Option<u32>)> {
+    /// name. `root` is the project a build configuration's paths resolve in.
+    fn check(
+        self,
+        text: &str,
+        file: &Path,
+        ledger_rel: &str,
+        root: &Path,
+    ) -> Result<(), (String, Option<u32>)> {
         match self {
+            DraftKind::BuildConfig => harness_oracle::projectmap::config::check_text(root, text)
+                .map(|_| ())
+                .map_err(|message| {
+                    let line = message
+                        .strip_prefix("line ")
+                        .and_then(|r| r.split(':').next())
+                        .and_then(|n| n.parse().ok());
+                    (message, line)
+                }),
             DraftKind::Features => {
                 features::parse(text, file, ledger_rel)
                     .map(|_| ())
@@ -116,11 +157,13 @@ impl DraftKind {
         }
     }
 
-    /// The act that saves it.
-    pub fn save_act(self) -> Act {
+    /// The act that saves it (the build configuration has none: the
+    /// cockpit writes it).
+    pub fn save_act(self) -> Option<Act> {
         match self {
-            DraftKind::Features => Act::SaveFeatures,
-            DraftKind::Workloads => Act::SaveWorkloads,
+            DraftKind::Features => Some(Act::SaveFeatures),
+            DraftKind::Workloads => Some(Act::SaveWorkloads),
+            DraftKind::BuildConfig => None,
         }
     }
 
@@ -169,6 +212,12 @@ pub const DRAFT_DIR_PREFIX: &str = "harness-tui-features";
 
 /// The name every workloads draft's private dir starts with.
 pub const WORKLOADS_DRAFT_DIR_PREFIX: &str = "harness-tui-workloads";
+
+/// The name every build configuration draft's private dir starts with.
+pub const CONFIG_DRAFT_DIR_PREFIX: &str = "harness-tui-config";
+
+/// The build configuration, relative to the project's root.
+pub const CONFIG_FILE: &str = harness_oracle::projectmap::config::CONFIG_FILE;
 
 /// Editors that take `+N` to open at a line.
 const LINE_EDITORS: [&str; 7] = ["nano", "pico", "vi", "vim", "nvim", "emacs", "micro"];
@@ -236,6 +285,31 @@ pub fn editor_argv(editor: &str, file: &Path, line: Option<u32>) -> Vec<OsString
     argv
 }
 
+/// The build configuration's editor dialog: what opens (the map's example,
+/// or the file as it is), what goes in its flags, how to leave the editor,
+/// and what happens after — the file is checked and written, and the person
+/// then chooses Map the project again.
+pub fn build_config_words(editor: &str, new: bool) -> Vec<String> {
+    vec![
+        if new {
+            format!(
+                "{editor} opens {CONFIG_FILE}, filled in with the example the map suggests: one \
+                 [[configuration]] with its name, from and flags."
+            )
+        } else {
+            format!("{editor} opens {CONFIG_FILE} as it is now.")
+        },
+        "In flags, put the -I and -D flags your build passes, each in quotes, like \
+         [\"-Isrc/include\"]; flags = [] says it needs none."
+            .into(),
+        editor_instructions(editor),
+        format!(
+            "When you come back, the cockpit checks it and writes {CONFIG_FILE}; then choose Map \
+             the project again to map with it."
+        ),
+    ]
+}
+
 /// The line a loader message names (`… at line N, column M …`).
 fn error_line(message: &str) -> Option<u32> {
     let rest = message.split("at line ").nth(1)?;
@@ -256,6 +330,7 @@ impl App {
         match kind {
             DraftKind::Features => self.features_draft.as_ref(),
             DraftKind::Workloads => self.workloads_draft.as_ref(),
+            DraftKind::BuildConfig => self.config_draft.as_ref(),
         }
     }
 
@@ -263,6 +338,7 @@ impl App {
         match kind {
             DraftKind::Features => &mut self.features_draft,
             DraftKind::Workloads => &mut self.workloads_draft,
+            DraftKind::BuildConfig => &mut self.config_draft,
         }
     }
 
@@ -300,7 +376,13 @@ impl App {
                     String::from_utf8_lossy(&bytes).into_owned(),
                     harness_core::hash::bytes_hash(&bytes),
                 ),
-                Err(e) if e.is_not_found() => (kind.starter(&self.config), "none".to_string()),
+                Err(e) if e.is_not_found() => {
+                    let example = self
+                        .project_map()
+                        .map(|m| m.example.clone())
+                        .unwrap_or_default();
+                    (kind.starter(&self.config, &example), "none".to_string())
+                }
                 Err(e) => {
                     self.notice = notice(format!("the {noun} file cannot be read: {e}"));
                     return Command::None;
@@ -338,15 +420,25 @@ impl App {
         let kind = self.editing;
         let editor = self.features_editor();
         let name = editor_name(&editor);
-        let title = format!("Open the {} file in {name}?", kind.noun());
-        let body = vec![
-            format!(
-                "The cockpit steps aside and {name} opens a private copy of {}.",
-                kind.rel_path(&self.config)
-            ),
-            editor_instructions(&name),
-            "When you come back, the cockpit checks it and asks before saving it.".into(),
-        ];
+        let title = match kind {
+            DraftKind::BuildConfig if self.draft(kind).is_some_and(|d| d.expect == "none") => {
+                format!("Write the build configuration in {name}?")
+            }
+            DraftKind::BuildConfig => format!("Edit the build configuration in {name}?"),
+            _ => format!("Open the {} file in {name}?", kind.noun()),
+        };
+        let body = if kind == DraftKind::BuildConfig {
+            build_config_words(&name, self.draft(kind).is_some_and(|d| d.expect == "none"))
+        } else {
+            vec![
+                format!(
+                    "The cockpit steps aside and {name} opens a private copy of {}.",
+                    kind.rel_path(&self.config)
+                ),
+                editor_instructions(&name),
+                "When you come back, the cockpit checks it and asks before saving it.".into(),
+            ]
+        };
         let mut dialog = Dialog::new(Kind::OpenEditor, self.now);
         dialog.chat_rules = false;
         // The button says what opens (§7.2 step 3).
@@ -533,11 +625,16 @@ impl App {
         }
         // Only a draft with nothing of the person's in it goes: a kept draft
         // that came back unchanged is checked and offered again (review C1).
-        if untouched {
+        // The map's example, left as it is where there was no file, is a
+        // configuration all the same ("no flags"): the person saw it and
+        // left, so it is written.
+        let example_kept = kind == DraftKind::BuildConfig && draft.expect == "none";
+        if untouched && !example_kept {
             self.notice = notice("No change.");
             return self.discard_quietly(kind);
         }
-        match kind.check(&text, &draft.file, &self.snapshot.ledger_rel()) {
+        let root = self.config.target.clone();
+        match kind.check(&text, &draft.file, &self.snapshot.ledger_rel(), &root) {
             Err((message, line)) => {
                 if let Some(d) = self.draft_slot(kind).as_mut() {
                     d.error_line = line;
@@ -563,6 +660,9 @@ impl App {
                 if let Some(d) = self.draft_slot(kind).as_mut() {
                     d.error_line = None;
                 }
+                if kind == DraftKind::BuildConfig {
+                    return self.write_build_config(&draft, &text);
+                }
                 match self.save_draft_pending(&draft, &text) {
                     Ok(p) => {
                         self.ask(p);
@@ -584,14 +684,68 @@ impl App {
         }
     }
 
+    /// The checked build configuration written to the project's
+    /// `migration/map/config.toml` — only while the file is still what the
+    /// edit started from (else the draft is kept, said), never through a
+    /// link — and the map read again: its Next step then says to Map the
+    /// project again.
+    fn write_build_config(&mut self, draft: &Draft, text: &str) -> Command {
+        let kind = DraftKind::BuildConfig;
+        let root = self.config.target.clone();
+        let path = kind.path(&self.config);
+        let kept = format!(
+            "your draft is kept in {} — the menu offers {}",
+            draft.file.display(),
+            kind.continue_words()
+        );
+        if self.running {
+            self.notice = notice(format!("a command is running — not written; {kept}"));
+            return Command::None;
+        }
+        // No link on the way: migration/, migration/map/, the file.
+        let mut at = root.clone();
+        for part in Path::new(CONFIG_FILE).components() {
+            at.push(part);
+            if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
+                self.notice = notice(format!(
+                    "{} is a link — not written; {kept}",
+                    at.strip_prefix(&root).unwrap_or(&at).display()
+                ));
+                return Command::None;
+            }
+        }
+        if self.file_digest(kind).as_deref() != Some(draft.expect.as_str()) {
+            self.notice = notice(format!(
+                "{CONFIG_FILE} changed since you started editing — not written; {kept}"
+            ));
+            return Command::None;
+        }
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| {
+                harness_core::ledger::write_atomic(&path, text.as_bytes())
+                    .map_err(|e| std::io::Error::other(e.to_string()))
+            });
+        if let Err(e) = written {
+            self.notice = notice(format!("{CONFIG_FILE} could not be written ({e}); {kept}"));
+            return Command::None;
+        }
+        self.notice = notice(format!(
+            "{CONFIG_FILE} is written — choose Map the project again to map with it"
+        ));
+        self.reload_project();
+        self.discard_quietly(kind)
+    }
+
     /// The confirmed save: `harness features save` (or `harness perf
     /// save`) `--expect … --bytes N`, the text on its stdin.
     fn save_draft_pending(&self, draft: &Draft, text: &str) -> Result<Pending, String> {
-        let sub = match draft.kind {
-            DraftKind::Features => "features",
-            DraftKind::Workloads => "perf",
+        let (sub, act) = match (draft.kind, draft.kind.save_act()) {
+            (DraftKind::Features, Some(act)) => ("features", act),
+            (DraftKind::Workloads, Some(act)) => ("perf", act),
+            _ => return Err("no command saves this file".into()),
         };
-        let act = draft.kind.save_act();
         let argv = self.harness_argv(&[
             OsString::from(sub),
             OsString::from("save"),
@@ -662,7 +816,7 @@ impl App {
         };
         let n = new.workloads.len();
         let mut body = vec![if n == 0 {
-            "No workload yet: perf has nothing to measure until you add one.".to_string()
+            "No workload yet: Speed has nothing to measure until you add one.".to_string()
         } else {
             format!(
                 "{n} workload{}: {}.",

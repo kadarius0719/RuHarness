@@ -1,28 +1,28 @@
 ┌ Project ─────────────────────────────────────┐┌ liblzg · project, 4 programs found ──────────────────────────────────┐
 │Programs (4)                                  ││Next step: t-unlzg holds a choice — press Enter on it and choose      │
-│    ✓ t-lzg (tool)                    accepted││Accept this program to pick which file to keep                        │
-│      tools/lzg.c                             ││                                                                      │
-│    ⚠ t-unlzg (tool)          held on a choice││liblzg is a C project with no harness.toml; the cockpit shows its map.│
-│      tools/unlzg.c                           ││Configuration: stated (make)                                          │
-│    · t-fuzz (test)         fuzzer, not a tool││                                                                      │
-│      fuzz/f.c                                ││Programs (4): 1 accepted · 1 held on a choice · 1 fuzzer, not a tool ·│
+│    ✓ t-lzg                           accepted││Accept this program to pick which file to keep                        │
+│      tools/lzg.c (a tool, by its folder)     ││                                                                      │
+│    ⚠ t-unlzg                 held on a choice││liblzg is a C project with no harness.toml; the cockpit shows its map.│
+│      tools/unlzg.c (a tool, by its folder)   ││Configuration: stated (make)                                          │
+│    · t-fuzz                fuzzer, not a tool││                                                                      │
+│      fuzz/f.c (a fuzzer)                     ││Programs (4): 1 accepted · 1 held on a choice · 1 fuzzer, not a tool ·│
 │    tools/broken.c — did not compile          ││1 did not compile                                                     │
-│Libraries (2)                                 ││  ✓ t-lzg — tools/lzg.c (tool): accepted                              │
-│    ✓ l-checksum (library)            compiles││  ⚠ t-unlzg — tools/unlzg.c (tool): held on a choice (d1, d2)         │
-│      src/checksum.c                          ││  · t-fuzz — fuzz/f.c (test): fuzzer, not a tool                      │
-│    ✗ l-bad (library)          did not compile││  ✗ tools/broken.c: did not compile (it holds a main)                 │
-│      src/bad.c                               ││Libraries (2): 1 compiles · 1 did not compile                         │
-│Accepted tools (1)                            ││  ✓ l-checksum — src/checksum.c: compiles                             │
-│    Open tool t-lzg — tools/lzg.c             ││  ✗ l-bad — src/bad.c: did not compile                                │
+│Libraries (2)                                 ││  ✓ t-lzg — tools/lzg.c (a tool, by its folder): accepted             │
+│    ✓ l-checksum                      compiles││  ⚠ t-unlzg — tools/unlzg.c (a tool, by its folder): held on a choice │
+│      src/checksum.c (a library)              ││    (d1, d2)                                                          │
+│    ✗ l-bad                    did not compile││  · t-fuzz — fuzz/f.c (a fuzzer): fuzzer, not a tool                  │
+│      src/bad.c (a library)                   ││  ✗ tools/broken.c: did not compile (it holds a main)                 │
+│Accepted tools (1)                            ││held on a choice: two files define the same function; Accept asks     │
+│    Open tool t-lzg — tools/lzg.c             ││which to keep.                                                        │
+│                                              ││Libraries (2): 1 compiles · 1 did not compile                         │
+│                                              ││  ✓ l-checksum — src/checksum.c (a library): compiles                 │
+│                                              ││  ✗ l-bad — src/bad.c (a library): did not compile                    │
 │                                              ││Accepted tools (1)                                                    │
-│                                              ││  ▸ t-lzg — tools/lzg.c — Enter on its row opens it                   │
+│                                              ││  ▸ t-lzg — tools/lzg.c — press Enter on its row and choose Open tool │
 │                                              ││                                                                      │
 │                                              ││── t-lzg ──                                                           │
-│                                              ││tools/lzg.c: a program (the map guesses: tool) — accepted as a tool;  │
-│                                              ││its picks and its files are in migration/tools/t-lzg/harness.toml.    │
-│                                              ││                                                                      │
-│                                              ││                                                                      │
-│                                              ││                                                                      │
+│                                              ││tools/lzg.c: a tool, by its folder — accepted as a tool; its picks and│
+│                                              ││its files are in migration/tools/t-lzg/harness.toml.                  │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │

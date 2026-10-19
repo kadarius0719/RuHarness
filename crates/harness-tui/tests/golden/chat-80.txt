@@ -1,7 +1,7 @@
 ┌ Files ───────────────┐┌ Chat — waiting for you · h…───[New]─[?]─ View ─ Chat ┐
 │▾ harness-tui-ch… ✓1/1││› Please migrate u-lib.                               │
 │  ▾ Units (1)         ││                                                      │
-│    ▸ ✓ u-lib         ││I will ask to migrate u-lib.                          │
+│    ▸ ✓ u-lib migrated││I will ask to migrate u-lib.                          │
 │    Features (none ye…││                                                      │
 │    Speed — not set up││  · read the project's status — done                  │
 │  ▸ test_case/    ✓1/1││                                                      │
@@ -19,6 +19,6 @@
 │                      ││About: the project                                    │
 │                      ││› Enter reviews the request — or type                 │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
- Ready — ↑↓ to choose a row, Enter for what you can do
+ Ready.
 
  Enter review   Esc decline   Ctrl-J new line   F1 help   Ctrl-C quit

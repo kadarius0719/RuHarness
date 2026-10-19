@@ -7,6 +7,12 @@
 use std::io::{BufRead, Write};
 use std::path::Path;
 
+/// The question in one plain sentence, before any detail (the newcomer's
+/// ten minutes, finding 8: ledger, verdict, drivers and token come after).
+pub const LEAD: &str = "This folder holds migration results made on another computer, or in \
+     another copy of the project. The harness uses them here only once you trust them: adopt \
+     the folder?";
+
 /// What adopting does, in the dialog's words.
 pub fn explanation(adoption_file: &str) -> String {
     format!(
@@ -51,8 +57,8 @@ pub fn ask(
     say(
         output,
         &format!(
-            "harness-tui: {refusal}.\n\n{}\nAdopt this folder? Type y and Enter to adopt; \
-             anything else leaves it untouched: ",
+            "{LEAD}\n\nIn detail — harness-tui: {refusal}.\n\n{}\nAdopt this folder? Type y and \
+             Enter to adopt; anything else leaves it untouched: ",
             explanation(&file)
         ),
     )?;
@@ -104,6 +110,8 @@ mod tests {
             let adopted = ask(&dir, None, &refusal, &mut declined.as_bytes(), &mut out).unwrap();
             assert!(!adopted);
             let text = String::from_utf8(out).unwrap();
+            // One plain sentence first; the detail after it.
+            assert!(text.starts_with(&format!("{LEAD}\n\n")), "{text}");
             assert!(
                 text.contains(&format!(
                     "{}: this folder already holds migration results made elsewhere (0 units, \

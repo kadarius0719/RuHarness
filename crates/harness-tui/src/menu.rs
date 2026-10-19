@@ -73,6 +73,15 @@ pub enum Action {
     OpenTool(String),
     /// From a tool's screen, back to the Project view.
     BackToProject,
+    /// The Project view's Write (or Edit) the build configuration:
+    /// `migration/map/config.toml` in the person's editor, or the kept
+    /// draft continued.
+    WriteBuildConfig,
+    /// Discard the kept build configuration draft.
+    DiscardBuildConfigDraft,
+    /// A command was refused because the folder's results were made
+    /// elsewhere: the adoption question again, as at the start.
+    Adopt,
 }
 
 /// One menu item.
