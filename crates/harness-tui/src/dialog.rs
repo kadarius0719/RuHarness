@@ -108,6 +108,9 @@ pub enum Kind {
     /// The chat's connection walk-through (docs/CHAT-PANE-DESIGN.md §1.6):
     /// Cancel, Check again.
     Connection,
+    /// Open a tool or go back to the Project view while the chat holds a
+    /// conversation: Stay, Go on with a new chat (`y`).
+    Switch,
 }
 
 impl Kind {
@@ -139,6 +142,10 @@ impl Kind {
             Kind::NewChat => vec![
                 button("Stay", "Esc", &[], Choice::Safe),
                 button("Start a new chat", "Enter", &[], Choice::NewChat),
+            ],
+            Kind::Switch => vec![
+                button("Stay", "Esc", &[], Choice::Safe),
+                button("Go on, with a new chat", "y", &['y', 'Y'], Choice::NewChat),
             ],
             Kind::OpenEditor => vec![
                 button("Cancel", "Esc", &[], Choice::Safe),

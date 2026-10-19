@@ -791,7 +791,16 @@ fn the_chats_control_keys() {
     press(&mut a, KeyCode::Enter);
     assert!(!a.chat.alive(), "the old chat ends");
     assert_eq!(a.chat.gen, gen);
-    // `q` in the panes asks too, with a conversation.
+    // The new chat holds no conversation, whatever the screen still shows
+    // of the old one (2026-10-19).
+    assert!(!a.chat.has_conversation());
+    // `q` in the panes asks too, with a conversation: one message sent in
+    // the new chat.
+    for c in "hi".chars() {
+        press(&mut a, KeyCode::Char(c));
+    }
+    press(&mut a, KeyCode::Enter);
+    assert!(a.chat.has_conversation());
     a.focus = Focus::Files;
     a.asks.guard = false;
     assert_eq!(press(&mut a, KeyCode::Char('q')), Command::None);

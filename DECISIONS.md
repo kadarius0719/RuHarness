@@ -84,6 +84,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-19 — **Sections, status and notices get their own hues; a hand-off pause is "waiting"** — section, notice, status and label roles with their own hues; a hand-off pause says "waiting for your answer", never "failed".
 - 2026-10-19 — **Model work in the cockpit goes through the chat, with a sign-in walk-through** — the Project view's Ask items type their question into the chat; harness-mcp's two map tools; the connection check and its dialog.
 - 2026-10-19 — **An old harness-mcp beside a newer cockpit is said as a rebuild, not a sign-in** — its own dialog, with the rebuild line to paste as step 2; the init check returns the problem itself.
+- 2026-10-19 — **A conversation in the chat asks before a move, and a new chat ends it** — Open tool / Back ask and start a new chat; a conversation is this chat's own messages, not the screen's old lines.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3506,3 +3507,22 @@ together; the cockpit topic names the dialog.
 **Not done.** The cockpit does not compare build times to warn before the chat starts: a cockpit
 rebuilt with no change to harness-mcp would be a false alarm. The tool check at start is the honest
 detector, and it now says what to do.
+
+## 2026-10-19 — A conversation in the chat asks before a move, and a new chat ends it
+
+**Seen.** The person accepted three programs, then chose Open tool: greyed, "the chat holds a
+conversation about this tool — start a new chat first". New chat did not help: the cockpit took
+"holds a conversation" from the transcript's cells, and the transcript keeps every chat's lines on
+the screen by design, so once one message had ever been sent the refusal never lifted. A loop with
+no way out, found in the person's first real run.
+
+**Decided.** Two changes. A conversation is this chat's: the process is live, or a message was
+sent to it (`spoke`, cleared by New chat); what an earlier chat left on the screen is not one. And
+a conversation is not a refusal for the move between the Project view and a tool: Open tool and
+Back to the project view ask — "Open tool t-lzg?": a chat follows one screen, so this conversation
+ends and a new one starts for the tool; **[ Stay  Esc ] [ Go on, with a new chat  y ]** — and `y`
+moves with the chat new. A command running, a kept hand edit or draft, or a waiting hand-off still
+grey the move, as they lose work; a conversation loses only words the chat would not see anyway.
+
+**Why asked rather than silent.** The person may be mid-question; ending the chat under them
+without a word would be the quiet surprise the cockpit avoids everywhere else. One dialog, one key.

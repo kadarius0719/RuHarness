@@ -395,6 +395,11 @@ pub struct Chat {
     unechoed: BTreeSet<String>,
     /// The new chat's line was said (New chat, before its first message).
     announced: bool,
+    /// A message was sent in this chat (not an earlier one still on the
+    /// screen): what `has_conversation` means once the process is gone.
+    /// The transcript keeps every chat's cells, so it cannot say it (the
+    /// person's loop, 2026-10-19: "start a new chat first" never ended).
+    pub(crate) spoke: bool,
     /// Why the chat cannot be used now (the connection dialog's case).
     pub problem: Option<Problem>,
     /// `claude --version` answered since the last problem.
@@ -524,6 +529,7 @@ impl Chat {
             marked: false,
             unechoed: BTreeSet::new(),
             announced: false,
+            spoke: false,
             problem,
             installed: false,
             resolver: None,
@@ -605,14 +611,12 @@ impl Chat {
         }
     }
 
-    /// A conversation exists (Quit and New chat ask first).
+    /// A conversation exists in this chat (Quit and New chat ask first; a
+    /// move between the Project view and a tool asks too): the process is
+    /// live, or a message was sent to it. An earlier chat's cells on the
+    /// screen are not one.
     pub fn has_conversation(&self) -> bool {
-        self.live.is_some()
-            || self
-                .transcript
-                .cells
-                .iter()
-                .any(|c| matches!(c.kind, transcript::Kind::You { .. }))
+        self.live.is_some() || self.spoke
     }
 
     /// A Stop was sent and the turn has not ended yet.
@@ -725,6 +729,7 @@ impl Chat {
         self.sent.insert(uuid.clone());
         self.unechoed.insert(uuid.clone());
         self.last_sent = Some(text.to_string());
+        self.spoke = true;
         self.transcript.you(&uuid, text);
         self.transcript.follow();
         if !self.turn {
@@ -807,6 +812,7 @@ impl Chat {
         // line — said once (fix check N3).
         self.ended_by_itself = false;
         self.stopped_last = false;
+        self.spoke = false;
         if (ended.is_some() || self.gen > 0) && !self.announced {
             self.say(Tone::Cockpit, NEW_CHAT);
             self.announced = true;

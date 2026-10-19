@@ -697,7 +697,9 @@ impl App {
     }
 
     /// Why the cockpit cannot move between the Project view and a tool now,
-    /// if it cannot: what the screen holds would be lost.
+    /// if it cannot: what the screen holds would be lost. A conversation in
+    /// the chat is not a refusal: the move asks, and a new chat starts
+    /// there (`Purpose::Switch`).
     pub fn switch_refusal(&self) -> Option<String> {
         if self.running {
             return Some("a command is running (one at a time)".into());
@@ -713,11 +715,6 @@ impl App {
         }
         if !self.awaiting.is_empty() {
             return Some("a hand-off waits for its answer here — answer it first".into());
-        }
-        if self.chat.has_conversation() {
-            return Some(
-                "the chat holds a conversation about this tool — start a new chat first".into(),
-            );
         }
         None
     }

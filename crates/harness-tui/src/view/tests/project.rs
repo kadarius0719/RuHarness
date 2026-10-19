@@ -833,6 +833,82 @@ fn after_an_accept_the_next_step_is_the_new_tool() {
     }
 }
 
+/// A conversation in the chat never blocks the move between the Project
+/// view and a tool (the person's loop, 2026-10-19): Open tool asks — the
+/// conversation ends and a new chat starts for the tool — and `y` opens it;
+/// Esc stays with the chat as it was. Back to the project view asks the
+/// same way.
+#[test]
+fn opening_a_tool_with_a_conversation_asks_instead_of_refusing() {
+    let (_tmp, root) = project("switch-chat");
+    write_map(&root, &map_text("stated", false));
+    let dir = harness_core::config::tool_dir(&root, "t-lzg");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("harness.toml"), "schema_version = 2\n").unwrap();
+    let mut app = cockpit(&root);
+    with_chat(&mut app);
+    // A message sent in this chat (the process may be gone: a chat ends by
+    // itself after a reply too).
+    app.chat
+        .transcript
+        .you("u1", "Which file should t-benchmark keep?");
+    app.chat.spoke = true;
+    assert!(app.chat.has_conversation());
+    app.select(Selection::Tool("t-lzg".into()));
+    code(&mut app, KeyCode::Enter);
+    let open = menu(&app)
+        .items
+        .iter()
+        .find(|i| i.label == "Open tool t-lzg")
+        .cloned()
+        .unwrap();
+    assert_eq!(open.greyed, None, "a conversation is not a refusal");
+    assert_eq!(choose(&mut app, "Open tool t-lzg"), Command::None);
+    let Mode::Dialog(c) = &app.mode else {
+        panic!("no dialog: {:?}", app.mode)
+    };
+    assert_eq!(c.dialog.kind, Kind::Switch);
+    assert_eq!(c.title, "Open tool t-lzg?");
+    assert!(
+        c.body[0].contains("a new one starts for the tool"),
+        "{:?}",
+        c.body
+    );
+    let buttons: Vec<String> = c
+        .dialog
+        .buttons
+        .iter()
+        .map(|b| format!("{} {}", b.label, b.key))
+        .collect();
+    assert_eq!(buttons, ["Stay Esc", "Go on, with a new chat y"]);
+    // Esc: nothing moves, the conversation stays.
+    code(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::Normal));
+    assert!(app.chat.has_conversation());
+    // y: the tool opens and the chat is new.
+    code(&mut app, KeyCode::Enter);
+    choose(&mut app, "Open tool t-lzg");
+    arm(&mut app);
+    assert_eq!(key(&mut app, 'y'), Command::OpenTool("t-lzg".into()));
+    assert!(!app.chat.has_conversation(), "the old conversation ended");
+    assert!(matches!(app.mode, Mode::Normal));
+    // The earlier chat's lines stay on the screen; they are not a
+    // conversation (the loop: New chat never satisfied "start a new chat
+    // first" while they were counted).
+    assert!(app
+        .chat
+        .transcript
+        .cells
+        .iter()
+        .any(|c| matches!(c.kind, crate::chat::transcript::Kind::You { .. })));
+    // The same screen with no conversation opens at once, as before.
+    code(&mut app, KeyCode::Enter);
+    assert_eq!(
+        choose(&mut app, "Open tool t-lzg"),
+        Command::OpenTool("t-lzg".into())
+    );
+}
+
 /// After an accept: the tool keeps a row "Open tool <id> — <path>" whose
 /// Enter opens it; the Next step moves on.
 #[test]

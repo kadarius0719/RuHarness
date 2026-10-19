@@ -732,8 +732,11 @@ and no map opens that tool, as the command line does.
 - **Open tool** reads the tool as at the start (a refusal said in the notice) and shows its screen;
   the tool's tree then starts with a row **◂ Back to the project view**, whose Enter (menu: "Back
   to the project view") returns, the tool just left selected. Neither move is offered while a
-  command runs, a hand edit or a draft is kept, a hand-off waits, or the chat holds a
-  conversation (each greyed with why). The chat has its pane in the Project view too (2026-10-19):
+  command runs, a hand edit or a draft is kept, or a hand-off waits (each greyed with why). A
+  conversation in the chat is not a refusal (2026-10-19, the person's loop: "start a new chat
+  first" with no way offered): the move asks — "Open tool t-lzg?": a chat follows one screen, so
+  this conversation ends and a new chat starts for the tool; **[ Stay  Esc ] [ Go on, with a new
+  chat  y ]** — and `y` moves with the chat new. The chat has its pane in the Project view too (2026-10-19):
   started there, its harness-mcp serves the project with no tool open (the map's tools only).
 
 ### 9.2 Colours and themes (2026-10-19)

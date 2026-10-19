@@ -2098,7 +2098,8 @@ one model call for each 10 held choices) and what it writes, and runs it only on
 `y`; the command's own words land in the activity details (`c`), and its end reads the map
 again. "Open tool" reads that tool as at the start and opens its screen, whose first row, "◂
 Back to the project view", comes back (neither while a command runs, a hand edit or a draft is
-kept, a hand-off waits or the chat holds a conversation). A project with exactly one tool and no
+kept or a hand-off waits; a conversation in the chat asks first, and the move starts a new chat
+there). A project with exactly one tool and no
 map opens that tool, with the same first row. harness-mcp never runs these acts.
 
 ## `harness project ask` (docs/PROJECT-MAP-DESIGN.md §3.4, §3.8, §5 step d)

@@ -439,6 +439,10 @@ pub enum Purpose {
     /// The chat's connection walk-through (docs/CHAT-PANE-DESIGN.md §1.6):
     /// Claude Code not installed, not signed in, or stopped.
     Connection,
+    /// Open a tool or go back to the Project view while the chat holds a
+    /// conversation (§9.1): the conversation ends and a new chat starts
+    /// there — asked, never refused (the person's loop, 2026-10-19).
+    Switch(Action),
 }
 
 /// An open dialog: its words and its latch.
@@ -2855,6 +2859,23 @@ impl App {
                 "Start a new chat?".into(),
                 vec!["The chat forgets this conversation.".into()],
             ),
+            Purpose::Switch(action) => {
+                let (title, there) = match action {
+                    Action::OpenTool(id) => (format!("Open tool {id}?"), "the tool"),
+                    _ => ("Back to the project view?".into(), "the project view"),
+                };
+                (
+                    Kind::Switch,
+                    title,
+                    vec![
+                        format!(
+                            "The chat holds a conversation, and a chat follows one screen: it \
+                             ends here and a new one starts for {there}."
+                        ),
+                        "The conversation is not kept; nothing else is lost.".into(),
+                    ],
+                )
+            }
             Purpose::Connection => {
                 let Some(p) = self.chat.problem.clone() else {
                     return;
@@ -3193,6 +3214,18 @@ impl App {
                 self.chat_new_chat();
                 Command::None
             }
+            (Purpose::Switch(action), Choice::NewChat) => {
+                let action = action.clone();
+                self.chat_new_chat();
+                match action {
+                    Action::OpenTool(id) => Command::OpenTool(id),
+                    _ => {
+                        self.show_project();
+                        Command::None
+                    }
+                }
+            }
+            (Purpose::Switch(_), _) => Command::None,
             (Purpose::Connection, Choice::CheckAgain) => {
                 self.chat_check_again();
                 Command::None
@@ -3426,11 +3459,18 @@ impl App {
                     self.notice = notice(format!("Open tool {id}: {why}"));
                     Command::None
                 }
+                None if self.chat.has_conversation() => {
+                    self.open_dialog(Purpose::Switch(Action::OpenTool(id.clone())));
+                    Command::None
+                }
                 None => Command::OpenTool(id.clone()),
             },
             Action::BackToProject => {
                 match self.switch_refusal() {
                     Some(why) => self.notice = notice(format!("Back to the project view: {why}")),
+                    None if self.chat.has_conversation() => {
+                        self.open_dialog(Purpose::Switch(Action::BackToProject))
+                    }
                     None => self.show_project(),
                 }
                 Command::None
