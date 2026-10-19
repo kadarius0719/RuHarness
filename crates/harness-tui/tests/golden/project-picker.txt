@@ -1,32 +1,32 @@
-┌ Project ─────────────────────────┐┌ liblzg · project, 4 programs found ──────────────────────────────────────────────┐
-│Programs (4) · 1 needs a decision ││Next step: t-unlzg holds a choice — press Enter on it and choose Accept this      │
-│  1 links · 1 did not compile     ││program to pick which file to keep                                                │
-│    ✓ t-lzg                  links││                                                                                  │
-│    ⚠ t-unlzg     needs a decision││liblzg is a C project with no harness.toml; the cockpit shows its map.            │
-│    · t-fuzz    fuzzer, not a tool││Configuration: stated (make)                                                      │
-│    ✗ tools/broke… did not compile││                                                                                  │
-│Libraries (2)                     ││Programs (4): 1 links · 1 needs a decision · 1 fuzzer, not a tool · 1 did not     │
-│    ✓ l-checksum          compiles││compile                                                                           │
-│    ✗ l-bad        did not compile││  ✓ t-lzg — tools/lzg.c (a tool, by its folder): links                            │
-│                                  ││  ⚠ t-unlzg — tools/unlzg.c (a tool, by its folder): held on a choice (d1, d2)    │
-│                                  ││  · t-fuzz — fuzz/f.c (a fuzzer): fuzzer, not a tool                              │
-│                           ┌ Accept t-unlzg ──────────────────────────────────────────────┐                           │
+┌ Project ─────────────────────────┐┌ liblzg · 4 programs found ───────────────────────────────────────────────────────┐
+│Programs (4) · 1 needs a decision ││Next: Accept t-unlzg — Enter on its row, it asks for the file                     │
+│  1 links · 1 did not compile     ││                                                                                  │
+│    ✓ t-lzg                  links││t-unlzg                                                         ⚠ needs a decision│
+│    ⚠ t-unlzg     needs a decision││tools/unlzg.c · a tool, by its folder                                             │
+│    · t-fuzz    fuzzer, not a tool││                                                                                  │
+│    ✗ broken.c     did not compile││Decision: two files define the same functions. Keep which?                        │
+│Libraries (2)                     ││  1  src/decode.c                                                                 │
+│    ✓ l-checksum          compiles││  2  src/mini.c                                       ← the model advises this one│
+│    ✗ l-bad        did not compile││Why (claude-x): they are two implementations of the same thing.                   │
+│                                  ││This is advice; you pick the file when you accept.                                │
+│                                  ││                                                                                  │
+│                           ┌ Accept t-unlzg ──────────────────────────────────────────────┐ch?                        │
 │                           │t-unlzg holds the choice d1: two files define the same        │                           │
-│                           │function, so keep which one?                                  │ccept asks which to keep.  │
+│                           │function, so keep which one?                                  │                           │
 │                           │The model's advice (claude-x): keep d1.2, reason              │                           │
-│                           │alternative-implementation — advice only, the choice is yours.│                           │
+│                           │alternative-implementation — advice only, the choice is yours.│swers)                     │
 │                           │                                                              │                           │
 │                           │  d1.1 src/decode.c                                           │                           │
 │                           │  d1.2 src/mini.c                                             │                           │
 │                           └ Enter choose · Esc close ────────────────────────────────────┘                           │
-│                                  ││tools/unlzg.c: a tool, by its folder — needs a decision.                          │
-│                                  ││Choice d1: two files define the same function, so linking cannot tell them apart  │
-│                                  ││(d1.1 src/decode.c, d1.2 src/mini.c); Accept asks which to keep.                  │
-│                                  ││The model's advice (claude-x): keep d1.2, reason alternative-implementation —     │
-│                                  ││advice only, the choice is yours.                                                 │
-│                                  ││Choice d2 (asked only when you keep d1.1): two files define the same function, so │
-│                                  ││linking cannot tell them apart (d2.1 src/check_a.c, d2.2 src/check_b.c); Accept   │
-│                                  ││asks which to keep.                                                               │
+│                                  ││                                                                                  │
+│                                  ││                                                                                  │
+│                                  ││                                                                                  │
+│                                  ││                                                                                  │
+│                                  ││                                                                                  │
+│                                  ││                                                                                  │
+│                                  ││                                                                                  │
+│                                  ││                                                                                  │
 │                                  ││                                                                                  │
 └──────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────┘
  Ready.

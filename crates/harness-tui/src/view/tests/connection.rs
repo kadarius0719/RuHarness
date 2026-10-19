@@ -423,10 +423,13 @@ fn the_question_is_typed_and_the_recorded_advice_shows() {
     app.focus = Focus::Files;
     app.select(Selection::Program("t-unlzg".into()));
     let screen = text(&render(&mut app, 220, 44));
-    assert!(
-        screen.contains("The model's advice (claude-opus-5-5): keep d1.2"),
-        "{screen}"
-    );
+    for words in [
+        "│  2  src/mini.c ",
+        "← the model advises this one│",
+        "│Why (claude-opus-5-5): they are two implementations of the same thing. ",
+    ] {
+        assert!(screen.contains(words), "{words}\n{screen}");
+    }
     code(&mut app, KeyCode::Enter);
     choose(&mut app, "Accept this program");
     let Mode::Menu(m) = &app.mode else {

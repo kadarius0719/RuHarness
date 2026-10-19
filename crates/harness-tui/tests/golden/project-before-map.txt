@@ -1,12 +1,12 @@
-┌ Project ─────────────────────────┐┌ liblzg · project, not mapped yet ────────────────────────────────────────────────┐
-│  Map the project                 ││Next step: No map yet — press Enter to map the project                            │
+┌ Project ─────────────────────────┐┌ liblzg · not mapped yet ─────────────────────────────────────────────────────────┐
+│  Map the project                 ││Next: Map the project — Enter                                                     │
 │                                  ││                                                                                  │
-│                                  ││liblzg is a C project with no harness.toml: nothing is mapped yet.                │
-│                                  ││                                                                                  │
+│                                  ││Nothing is mapped yet.                                                            │
 │                                  ││Mapping finds its programs and libraries, the files each one needs, what they     │
 │                                  ││share, and whether each program links. It compiles in the sandbox, runs nothing,  │
 │                                  ││and writes only under migration/.                                                 │
 │                                  ││                                                                                  │
+│                                  ││Enter: Map the project                                                            │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │

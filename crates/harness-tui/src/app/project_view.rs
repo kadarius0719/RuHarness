@@ -321,7 +321,9 @@ impl App {
 
     /// The project's Next step, from its state: no map → Map; a guess →
     /// state the build or Ask for a proposal; a held choice → pick it in
-    /// Accept; a program ready → Accept it; a tool → open it.
+    /// Accept; a program ready → Accept it; a tool → open it. Its words
+    /// are one line (§9.3 of the cockpit design): "<verb phrase> — <key>";
+    /// the menu's reason is the verb phrase.
     pub fn project_next(&self) -> Option<Advice> {
         let p = self.project.as_ref()?;
         let say = |text: String, action: Option<Action>| Some(Advice { text, action });
@@ -329,9 +331,7 @@ impl App {
         // nothing else runs until the folder is adopted.
         if self.not_adopted.is_some() {
             return say(
-                "this folder's results were made elsewhere and are not trusted here yet — press \
-                 Enter and choose Adopt this folder"
-                    .into(),
+                "Adopt this folder — Enter; its results were made elsewhere".into(),
                 Some(Action::Adopt),
             );
         }
@@ -342,13 +342,13 @@ impl App {
         let m = match &p.map {
             Err(_) => {
                 return say(
-                    "the map could not be read — press Enter to map the project again".into(),
+                    "Map the project again — Enter; the map could not be read".into(),
                     Some(Action::Project(project::Act::Map)),
                 )
             }
             Ok(None) => {
                 return say(
-                    "No map yet — press Enter to map the project".into(),
+                    "Map the project — Enter".into(),
                     Some(Action::Project(project::Act::Map)),
                 )
             }
@@ -358,12 +358,7 @@ impl App {
         // program's held choice.
         if let Some(id) = &p.just_accepted {
             return say(
-                format!(
-                    "{} is accepted — open it and scan it: press Enter on its row and choose \
-                     Open tool {}",
-                    safe_line(id),
-                    safe_line(id)
-                ),
+                format!("Open tool {} — Enter on its row", safe_line(id)),
                 Some(Action::OpenTool(id.clone())),
             );
         }
@@ -371,35 +366,28 @@ impl App {
         // until it is made again.
         if p.config_newer {
             return say(
-                "migration/map/config.toml is written but this map was made before it — press \
-                 Enter and choose Map the project again to use it"
-                    .into(),
+                "Map the project again — Enter".into(),
                 Some(Action::Project(project::Act::Map)),
             );
         }
         let write = self.build_config_label();
         if m.proposed {
+            // The project's own configuration is only proposed: the person
+            // writes theirs (or adopts the project's on the command line).
             return say(
-                format!(
-                    "the configuration came with the project and is only proposed — state it \
-                     with `harness project map --adopt`, or press Enter and choose {write}, then \
-                     Map the project again"
-                ),
-                Some(Action::Project(project::Act::Map)),
+                format!("{write} — Enter (or harness project map --adopt)"),
+                Some(Action::WriteBuildConfig),
             );
         }
         if m.guessed {
             // The chat's item is named only while the chat can be used.
             let or_ask = if self.chat_unavailable().is_none() {
-                " (or Ask for a proposal — ask in chat)"
+                ", or Ask for a proposal in the chat"
             } else {
                 ""
             };
             return say(
-                format!(
-                    "the configuration is a guess — press Enter and choose {write}{or_ask}, \
-                     then Map the project again"
-                ),
+                format!("{write} — Enter, it is the first item{or_ask}"),
                 Some(Action::WriteBuildConfig),
             );
         }
@@ -412,8 +400,7 @@ impl App {
         {
             return say(
                 format!(
-                    "{} holds a choice — press Enter on it and choose Accept this program to \
-                     pick which file to keep",
+                    "Accept {} — Enter on its row, it asks for the file",
                     safe_line(&o.id)
                 ),
                 Some(Action::AcceptProgram {
@@ -429,16 +416,7 @@ impl App {
             .find(|o| matches!(o.state, State::Linked | State::Compiles))
         {
             return say(
-                format!(
-                    "{} {} and is ready — press Enter on it and choose Accept this {}",
-                    safe_line(&o.id),
-                    if o.state == State::Linked {
-                        "links"
-                    } else {
-                        "compiles"
-                    },
-                    o.noun()
-                ),
+                format!("Accept {} — Enter on its row", safe_line(&o.id)),
                 Some(Action::AcceptProgram {
                     id: o.id.clone(),
                     run_name: false,
@@ -446,21 +424,23 @@ impl App {
             );
         }
         if let Some(id) = p.tools.first() {
+            // Every program that can be a tool is one: nothing is left here.
+            let all = m
+                .offered
+                .iter()
+                .filter(|o| o.acceptable())
+                .all(|o| p.tools.contains(&o.id));
             return say(
-                format!(
-                    "{} is accepted — press Enter on its row and choose Open tool {} to scan, \
-                     plan and migrate it",
-                    safe_line(id),
-                    safe_line(id)
-                ),
+                if all {
+                    "nothing here — every program is a tool; open one".into()
+                } else {
+                    format!("Open tool {} — Enter on its row", safe_line(id))
+                },
                 Some(Action::OpenTool(id.clone())),
             );
         }
         say(
-            format!(
-                "no program links yet — press Enter and choose {write} to state the build's \
-                 flags, then Map the project again"
-            ),
+            format!("{write} — Enter, then Map the project again"),
             Some(Action::WriteBuildConfig),
         )
     }
@@ -484,9 +464,16 @@ impl App {
         }
     }
 
-    /// A Project view row's Next step (the menu's recommended item).
+    /// A Project view row's Next step (the menu's recommended item), in
+    /// the Next step's words.
     pub fn project_row_advice(&self, sel: &Selection) -> Option<Advice> {
         let say = |text: String, action: Option<Action>| Some(Advice { text, action });
+        let open = |id: &str| {
+            say(
+                format!("Open tool {} — Enter on its row", safe_line(id)),
+                Some(Action::OpenTool(id.to_string())),
+            )
+        };
         match sel {
             Selection::ProjectHome => say(
                 "the project's programs, Map, Ask and Accept are on the project view — press \
@@ -494,19 +481,7 @@ impl App {
                     .into(),
                 Some(Action::BackToProject),
             ),
-            // The tool just accepted: the project's own Next step names it.
-            Selection::Tool(id)
-                if self
-                    .project
-                    .as_ref()
-                    .is_some_and(|p| p.just_accepted.as_ref() == Some(id)) =>
-            {
-                self.project_next()
-            }
-            Selection::Tool(id) => say(
-                format!("open tool {} to scan, plan and migrate it", safe_line(id)),
-                Some(Action::OpenTool(id.clone())),
-            ),
+            Selection::Tool(id) => open(id),
             Selection::Program(id) => {
                 let m = self.project_map()?;
                 let o = m.get(id)?;
@@ -514,14 +489,7 @@ impl App {
                     return self.project_next();
                 }
                 if self.project_tools().contains(id) {
-                    return say(
-                        format!(
-                            "{} is accepted — choose Open tool {}",
-                            safe_line(id),
-                            safe_line(id)
-                        ),
-                        Some(Action::OpenTool(id.clone())),
-                    );
+                    return open(id);
                 }
                 let accept = Some(Action::AcceptProgram {
                     id: id.clone(),
@@ -530,40 +498,24 @@ impl App {
                 match o.state {
                     State::Held => say(
                         format!(
-                            "{} holds a choice — choose Accept this program to pick which file \
-                             to keep",
+                            "Accept {} — Enter on its row, it asks for the file",
                             safe_line(id)
                         ),
                         accept,
                     ),
-                    State::Linked => say(
-                        format!(
-                            "{} links and is ready — choose Accept this program",
-                            safe_line(id)
-                        ),
-                        accept,
-                    ),
-                    State::Compiles => say(
-                        format!(
-                            "{} compiles and is ready — choose Accept this library",
-                            safe_line(id)
-                        ),
+                    State::Linked | State::Compiles => say(
+                        format!("Accept {} — Enter on its row", safe_line(id)),
                         accept,
                     ),
                     State::DidNotCompile | State::DidNotLink | State::Incomplete => say(
                         format!(
-                            "{} {} — choose {} to state the build's flags, then Map the \
-                             project again",
-                            safe_line(id),
-                            o.state.words(),
+                            "{} — Enter, then Map the project again",
                             self.build_config_label()
                         ),
                         Some(Action::WriteBuildConfig),
                     ),
                     State::Fuzzer | State::Driver => say(
-                        "a fuzzer is not accepted as a tool: it is linked only with the \
-                         project's driver"
-                            .into(),
+                        "nothing here — a fuzzer is not accepted as a tool".into(),
                         None,
                     ),
                 }

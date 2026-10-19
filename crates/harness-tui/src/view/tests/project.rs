@@ -88,12 +88,9 @@ fn the_project_view_before_a_map() {
     golden("project-before-map.txt", &app, &buffer);
     let screen = text(&buffer);
     assert!(screen.contains("┌ Project "), "{screen}");
+    assert!(screen.contains(" liblzg · not mapped yet "), "{screen}");
     assert!(
-        screen.contains(" liblzg · project, not mapped yet "),
-        "{screen}"
-    );
-    assert!(
-        screen.contains("Next step: No map yet — press Enter to map the project"),
+        screen.contains("│Next: Map the project — Enter "),
         "{screen}"
     );
     assert!(
@@ -248,7 +245,7 @@ fn a_failed_run_says_so_and_offers_the_adoption_question() {
     let next = app.project_next().unwrap();
     assert!(
         next.text
-            .starts_with("this folder's results were made elsewhere and are not trusted here yet"),
+            .starts_with("Adopt this folder — Enter; its results were made elsewhere"),
         "{}",
         next.text
     );
@@ -337,25 +334,17 @@ fn a_guessed_configuration_asks_for_the_build() {
     let screen = text(&render(&mut app, 220, 40));
     // The chat is off here: its item is not named.
     assert!(
-        screen.contains(
-            "Next step: The configuration is a guess — press Enter and choose Write the build \
-             configuration, then Map the project again"
-        ),
+        screen.contains("│Next: Write the build configuration — Enter, it is the first item "),
         "{screen}"
     );
-    assert!(
-        screen.contains(
-            "Configuration: a guess — no migration/map/config.toml states the build yet (the \
-             map compiled with no flags of yours)"
-        ),
-        "{screen}"
-    );
+    // The guess is the Next step, not a line of its own (§9.3).
+    assert!(!screen.contains("Configuration:"), "{screen}");
     with_chat(&mut app);
     let screen = text(&render(&mut app, 220, 40));
     assert!(
         screen.contains(
-            "Next step: The configuration is a guess — press Enter and choose Write the build \
-             configuration (or Ask for a proposal — ask in chat), then Map the project again"
+            "│Next: Write the build configuration — Enter, it is the first item, or Ask for a \
+             proposal in the chat "
         ),
         "{screen}"
     );
@@ -375,7 +364,7 @@ fn a_guessed_configuration_asks_for_the_build() {
     assert!(write_item(&app).starts_with("Write the build configuration (in "));
     assert_eq!(
         menu(&app).reason.as_deref(),
-        Some("the configuration is a guess")
+        Some("Write the build configuration")
     );
     let accept = &menu(&app).items[1];
     assert_eq!(
@@ -392,8 +381,8 @@ fn a_guessed_configuration_asks_for_the_build() {
             .unwrap_or_else(|| panic!("{words}:\n{screen}"))
     };
     assert_eq!(
-        at("↳ recommended: the configuration is a guess"),
-        at("Write the build configuration") + 1
+        at("↳ recommended: Write the build configuration"),
+        at("Write the build configuration (in ") + 1
     );
     assert!(!row_with(&screen, "↳ recommended").contains("uses a model"));
     assert!(at("Map the project again") < at("── Uses a model — can take minutes ──"));
@@ -490,7 +479,7 @@ fn a_hand_off_pause_waits_for_the_answer_and_never_fails() {
             .unwrap()
     );
     assert!(
-        screen.contains("Next step: Waiting for your answer:"),
+        screen.contains("│Next: Waiting for your answer:"),
         "{screen}"
     );
     // A real failure still says so.
@@ -603,10 +592,8 @@ fn the_build_configuration_is_written_from_the_cockpit() {
     );
     let screen = text(&render(&mut app, 220, 40));
     for words in [
-        "Next step: migration/map/config.toml is written but this map was made before it — \
-         press Enter and choose Map the project again to use it",
-        "Configuration: migration/map/config.toml is written since this map — Map the project \
-         again to use it",
+        "│Next: Map the project again — Enter ",
+        "Enter: Map the project again",
     ] {
         assert!(screen.contains(words), "{words}\n{screen}");
     }
@@ -622,10 +609,9 @@ fn the_build_configuration_is_written_from_the_cockpit() {
     write_map(&root, &map_text("stated", false));
     app.reload_project();
     let next = app.project_next().unwrap();
-    assert!(
-        next.text.starts_with("t-unlzg holds a choice"),
-        "{}",
-        next.text
+    assert_eq!(
+        next.text,
+        "Accept t-unlzg — Enter on its row, it asks for the file"
     );
 }
 
@@ -684,24 +670,38 @@ fn the_project_view_after_a_map_with_a_held_choice() {
     golden("project-held.txt", &app, &buffer);
     let screen = text(&render(&mut app, 220, 44));
     for words in [
-        "Programs (4)",
+        "│Programs (4) · 1 needs a decision ",
         "✓ t-lzg",
         "⚠ t-unlzg",
-        "held on a choice",
-        "tools/unlzg.c (a tool, by its folder)",
-        "t-lzg — tools/lzg.c (a tool, by its folder): links",
-        "held on a choice: two files define the same function; Accept asks which to keep.",
-        "✗ tools/broken.c",
+        "needs a decision",
+        "✗ broken.c",
         "Libraries (2)",
-        "src/bad.c (a library)",
-        "Configuration: stated (make)",
-        "Next step: t-unlzg holds a choice — press Enter on it and choose Accept this program",
-        "Choice d1: two files define the same function, so linking cannot tell them apart (d1.1 \
-         src/decode.c, d1.2 src/mini.c)",
-        "The model's advice (claude-x): keep d1.2",
-        "Accepted tools: none yet",
+        "│Next: Accept t-unlzg — Enter on its row, it asks for the file ",
+        // The card: what it is, its decisions, the advice, what Enter does.
+        "│tools/unlzg.c · a tool, by its folder ",
+        "│Decision: two files define the same functions. Keep which? ",
+        "│  1  src/decode.c ",
+        "│  2  src/mini.c ",
+        "← the model advises this one│",
+        "│Why (claude-x): they are two implementations of the same thing. ",
+        "│This is advice; you pick the file when you accept. ",
+        "│Asked only if you keep src/decode.c. ",
+        "│No advice yet — Enter, then Ask for advice (the chat answers) ",
+        "│Enter: Accept t-unlzg — it asks for the file ",
     ] {
         assert!(screen.contains(words), "{words}\n{screen}");
+    }
+    // One list: the card never lists the programs again, nor says the
+    // configuration, the libraries or the glosses.
+    for gone in [
+        "Configuration:",
+        "Accepted tools",
+        "Libraries: none",
+        "t-lzg — tools/lzg.c",
+        "held on a choice",
+        "C project with no",
+    ] {
+        assert!(!screen.contains(gone), "{gone}\n{screen}");
     }
     code(&mut app, KeyCode::Enter);
     assert_eq!(
@@ -714,7 +714,7 @@ fn the_project_view_after_a_map_with_a_held_choice() {
             "Ask for advice — ask in chat".into(),
         ]
     );
-    assert_eq!(menu(&app).reason.as_deref(), Some("t-unlzg holds a choice"));
+    assert_eq!(menu(&app).reason.as_deref(), Some("Accept t-unlzg"));
     assert!(menu(&app).items[4].model);
     // The picker: d1, its definers none suggested, the advice beside them.
     choose(&mut app, "Accept this program");
@@ -770,10 +770,7 @@ fn accept_under_a_run_name() {
     app.select(Selection::Program("t-lzg".into()));
     code(&mut app, KeyCode::Enter);
     assert_eq!(menu_labels(&app)[0], "Accept this program");
-    assert_eq!(
-        menu(&app).reason.as_deref(),
-        Some("t-lzg links and is ready")
-    );
+    assert_eq!(menu(&app).reason.as_deref(), Some("Accept t-lzg"));
     choose(&mut app, "Accept it under a run name of your own…");
     assert!(matches!(app.mode, Mode::RunName { .. }), "{:?}", app.mode);
     let screen = text(&render(&mut app, 120, 30));
@@ -812,25 +809,20 @@ fn after_an_accept_the_next_step_is_the_new_tool() {
     // An accepted program's row is its tool's row.
     assert_eq!(app.selection, Selection::Program("t-lzg".into()));
     let next = app.project_next().unwrap();
-    assert_eq!(
-        next.text,
-        "t-lzg is accepted — open it and scan it: press Enter on its row and choose Open tool \
-         t-lzg"
-    );
+    assert_eq!(next.text, "Open tool t-lzg — Enter on its row");
     code(&mut app, KeyCode::Enter);
     assert_eq!(menu_labels(&app)[0], "Open tool t-lzg");
-    assert_eq!(menu(&app).reason.as_deref(), Some("t-lzg is accepted"));
+    assert_eq!(menu(&app).reason.as_deref(), Some("Open tool t-lzg"));
     // Opened: the held choice is the project's Next step again.
     app.mode = Mode::Normal;
     let read = crate::load::read_tool(&root, Some("t-lzg"));
     if let Ok(read) = read {
         app.open_tool("t-lzg".into(), read);
         app.show_project();
-        assert!(app
-            .project_next()
-            .unwrap()
-            .text
-            .starts_with("t-unlzg holds a choice"));
+        assert_eq!(
+            app.project_next().unwrap().text,
+            "Accept t-unlzg — Enter on its row, it asks for the file"
+        );
     }
 }
 
@@ -927,7 +919,9 @@ fn the_project_view_after_an_accept() {
         "│Programs (4) · 1 accepted ",
         "│  1 needs a decision ",
         "│  1 did not compile ",
-        "t-lzg — tools/lzg.c (a tool, by its folder): accepted",
+        "│tools/lzg.c · a tool, by its folder ",
+        "│Its build configuration: migration/tools/t-lzg/harness.toml ",
+        "│Enter: Open tool t-lzg ",
     ] {
         assert!(screen.contains(words), "{words}\n{screen}");
     }

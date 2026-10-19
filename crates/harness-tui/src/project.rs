@@ -212,11 +212,11 @@ pub struct Label {
 }
 
 impl Label {
-    /// The label in words, as the model's: "“LZG compressor”, a tool (the
-    /// model's label)".
+    /// The label in words, as the model's: "The model calls it “LZG
+    /// compressor” (a tool)".
     pub fn words(&self) -> String {
         format!(
-            "“{}”, {} {} (the model's label)",
+            "The model calls it “{}” ({} {})",
             safe_line(&self.name),
             article(&self.kind),
             self.kind
@@ -551,7 +551,29 @@ pub struct Advice {
     pub model: String,
 }
 
+/// A reason tag in words: shown only where the model gave no why (an
+/// older reply).
+pub fn reason_words(reason: &str) -> &'static str {
+    match reason {
+        "platform" => "they are the same code for different platforms",
+        "alternative-implementation" => "they are two implementations of the same thing",
+        _ => "the model could not tell them apart",
+    }
+}
+
 impl Advice {
+    /// Why, in the model's words, labelled as the model's: "Why
+    /// (claude-x): …"; the reason in words when the reply gave no why.
+    pub fn why_line(&self) -> String {
+        let why = reason_words(&self.reason);
+        let model = safe_line(&self.model);
+        if self.keep == "undecided" {
+            format!("The model ({model}) could not decide: {why}.")
+        } else {
+            format!("Why ({model}): {why}.")
+        }
+    }
+
     /// The advice in words, labelled as the model's.
     pub fn words(&self) -> String {
         if self.keep == "undecided" {
@@ -1109,7 +1131,7 @@ pub(crate) mod tests {
         let labels = read_labels(&p.0, &map);
         assert_eq!(
             labels["t-lzg"].words(),
-            "“LZG compressor”, a tool (the model's label)"
+            "The model calls it “LZG compressor” (a tool)"
         );
         assert_eq!(labels.len(), 1);
         // Bound to another map, or a name with a terminal code: not shown.

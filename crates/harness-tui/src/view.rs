@@ -164,19 +164,21 @@ fn glyph_style(glyph: &str) -> Style {
     }
 }
 
-/// A "Next step: …" line wrapped to `width`: its label in the accent, the
-/// rest bold.
+/// A "Next step: …" line (the Project view's "Next: …") wrapped to
+/// `width`: its label in the accent, the rest bold.
 fn next_step(line: &str, width: usize) -> Vec<Line<'static>> {
-    const LABEL: &str = "Next step:";
     let mut lines = wrapped(line, width, bold());
     if let Some(first) = lines.first_mut() {
         if let [span] = first.spans.as_slice() {
-            if let Some(rest) = span.content.strip_prefix(LABEL) {
-                let rest = rest.to_string();
-                *first = Line::from(vec![
-                    Span::styled(LABEL, accent()),
-                    Span::styled(rest, bold()),
-                ]);
+            for label in ["Next step:", "Next:"] {
+                if let Some(rest) = span.content.strip_prefix(label) {
+                    let rest = rest.to_string();
+                    *first = Line::from(vec![
+                        Span::styled(label, accent()),
+                        Span::styled(rest, bold()),
+                    ]);
+                    break;
+                }
             }
         }
     }
@@ -741,10 +743,17 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
             let word = "did not compile";
             let room = width.saturating_sub(width_of(&lead) + 2);
             let show_word = room > 8 + word.len();
-            let name = if show_word {
-                ellipsis(path, room - word.len() - 1)
-            } else {
+            // The path, else its file name when the path does not fit
+            // beside the word.
+            let name = if !show_word {
                 ellipsis(path, room)
+            } else if width_of(path) < room - word.len() {
+                display::line(path)
+            } else {
+                ellipsis(
+                    path.rsplit('/').next().unwrap_or(path),
+                    room - word.len() - 1,
+                )
             };
             let mut spans = vec![
                 Span::raw(lead),
@@ -4870,7 +4879,9 @@ mod tests {
                 text_of(buffer)
             );
         }
-        let (next, items): (Vec<_>, Vec<_>) = accents.iter().partition(|(t, _)| t == "Next step:");
+        let (next, items): (Vec<_>, Vec<_>) = accents
+            .iter()
+            .partition(|(t, _)| t == "Next step:" || t == "Next:");
         assert!(
             next.len() <= 1 && items.len() <= 1,
             "{name} ({}): the accent is on more than the Next step and one menu item: {accents:?}",
@@ -4910,6 +4921,9 @@ mod tests {
                 }
                 let lead = r.text.len() - r.text.trim_start().len();
                 let x = r.x + lead as u16;
+                // The Next step's line (a View's "Next step:", the Project
+                // view's "Next:").
+                let next_step = text.contains("Next step:") || text.contains("Next:");
                 let at = |what: &str| {
                     format!(
                         "{name} ({}): row {}: {what}: {text:?}\n{}",
@@ -4920,21 +4934,21 @@ mod tests {
                 };
                 if Some(r.fg) == own(Role::Section) {
                     assert!(
-                        starts_line(x) && !text.contains("Next step:"),
+                        starts_line(x) && !next_step,
                         "{}",
                         at("the section colour off a heading or a pane title")
                     );
                 }
                 if Some(r.fg) == own(Role::Notice) {
                     assert!(
-                        starts_line(x) && !text.contains("Next step:"),
+                        starts_line(x) && !next_step,
                         "{}",
                         at("the notice colour on part of a line")
                     );
                 }
                 if Some(r.fg) == own(Role::Label) {
                     assert!(
-                        !text.contains("Next step:")
+                        !next_step
                             && !text
                                 .split_whitespace()
                                 .any(|t| t.starts_with(['✓', '✗', '⚠'])),
