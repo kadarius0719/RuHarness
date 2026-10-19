@@ -163,7 +163,7 @@ pub fn project_view(
         return lines;
     };
     if let Some(next) = app.project_next() {
-        lines.extend(wrapped(&next.line(), width, bold()));
+        lines.extend(next_step(&next.line(), width));
         lines.push(Line::from(""));
     }
     let name = folder(app);
@@ -174,7 +174,7 @@ pub fn project_view(
                     "{name} is a C project with no harness.toml; its map cannot be read: {why}."
                 ),
                 width,
-                Style::default().fg(Color::Yellow),
+                attention(),
             ));
             last_line(app, width, &mut lines);
             return lines;
@@ -191,7 +191,7 @@ pub fn project_view(
                  share, and whether each program links. It compiles in the sandbox, runs \
                  nothing, and writes only under migration/.",
                 width,
-                dim(),
+                muted(),
             ));
             tools_lines(app, None, width, links, &mut lines);
             last_line(app, width, &mut lines);
@@ -221,7 +221,7 @@ pub fn project_view(
         &format!("Configuration: {configuration}"),
         width,
         if m.unstated() || p.config_newer {
-            Style::default().fg(Color::Yellow)
+            bold()
         } else {
             Style::default()
         },
@@ -258,10 +258,10 @@ pub fn project_view(
         ));
     }
     for gloss in state_glosses(&programs, &p.tools) {
-        lines.extend(wrapped(gloss, width, dim()));
+        lines.extend(wrapped(gloss, width, muted()));
     }
     if libraries.is_empty() {
-        lines.extend(wrapped("Libraries: none", width, dim()));
+        lines.extend(wrapped("Libraries: none", width, muted()));
     } else {
         lines.extend(wrapped(
             &format!(
@@ -294,7 +294,7 @@ fn tools_lines(
     let tools = app.project_tools();
     if tools.is_empty() {
         if map.is_some() {
-            lines.extend(wrapped("Accepted tools: none yet", width, dim()));
+            lines.extend(wrapped("Accepted tools: none yet", width, muted()));
         }
         return;
     }
@@ -354,7 +354,7 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
                 harness_core::text::safe_line(&l.purpose)
             ),
             width,
-            dim(),
+            muted(),
         ));
     }
     if accepted {
@@ -380,10 +380,10 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
                 h.set
             ),
             width,
-            Style::default().fg(Color::Yellow),
+            bold(),
         ));
         if let Some(a) = advice.and_then(|a| a.get(&h.set)) {
-            lines.extend(wrapped(&a.words(), width, dim()));
+            lines.extend(wrapped(&a.words(), width, muted()));
         }
     }
 }
@@ -392,7 +392,7 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
 fn last_line(app: &App, width: usize, lines: &mut Vec<Line<'static>>) {
     if let Some(last) = &app.last {
         lines.push(Line::from(""));
-        lines.extend(wrapped(&format!("Last: {last}"), width, dim()));
+        lines.extend(wrapped(&format!("Last: {last}"), width, muted()));
     }
 }
 
@@ -400,7 +400,7 @@ fn last_line(app: &App, width: usize, lines: &mut Vec<Line<'static>>) {
 pub fn home_view(app: &App, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(next) = app.project_row_advice(&Selection::ProjectHome) {
-        lines.extend(wrapped(&next.line(), width, bold()));
+        lines.extend(next_step(&next.line(), width));
         lines.push(Line::from(""));
     }
     let tool = app.config.tool.as_deref().unwrap_or("this tool");
@@ -416,11 +416,7 @@ pub fn home_view(app: &App, width: usize) -> Vec<Line<'static>> {
     ));
     if let Some(why) = app.switch_refusal() {
         lines.push(Line::from(""));
-        lines.extend(wrapped(
-            &format!("Not now: {why}."),
-            width,
-            Style::default().fg(Color::Yellow),
-        ));
+        lines.extend(wrapped(&format!("Not now: {why}."), width, bold()));
     }
     lines
 }

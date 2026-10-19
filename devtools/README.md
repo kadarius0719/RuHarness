@@ -9,8 +9,10 @@ real chat). `cockpit.py` runs `harness-tui` in a pseudo-terminal of a given size
 environment (HOME PATH USER LOGNAME SHELL LANG TMPDIR, TERM=xterm-256color — as from a plain
 Terminal window, so a Claude Code session's own variables never reach the chat), renders the screen
 with a small VT interpreter into `<dir>/screen.txt`, and takes commands from the FIFO `<dir>/cmd`.
-Each screen line is followed by `<<Y:…| G:…| I:…| D:…>>` marks: yellow, green, reverse video (the
-highlighted row) and grey (a disabled item).
+Each screen line is followed by `<<Y:…| G:…| R:…| A:…| I:…| D:…>>` marks: the attention (amber),
+good (green) and bad (red) state colours, the accent (the Next step's label, the recommended item),
+reverse video (the highlighted row) and a disabled item — in the `terminal`, `dark` or `light` theme
+(`mono` has no colour, so only `I:` shows).
 
 The example's `targets/lzg` exists only after Part 1 of docs/TESTING-GUIDE.md has made it; use
 any target folder you have.

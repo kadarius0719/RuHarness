@@ -3,7 +3,8 @@
 Usage: python3 -I cockpit.py <workdir> <rows> <cols> -- <argv...>
 
 - Renders the screen with a small VT interpreter (cursor moves, erases, text;
-  SGR colours kept only as a per-cell "colour tag" for yellow/green/red) into
+  SGR colours kept only as a per-cell "colour tag" for yellow/green/red and the
+  cockpit's accent and disabled colours) into
   <workdir>/screen.txt (atomically, whenever it changes).
 - Reads commands, one per line, from the FIFO <workdir>/cmd:
     key <Name> [n]     Up Down Left Right Enter Tab BackTab Esc Backspace, or one char
@@ -57,7 +58,14 @@ r = c = 0
 fg = ""
 pending = ""
 decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-COLOURS = {"31": "R", "32": "G", "33": "Y", "91": "R", "92": "G", "93": "Y"}
+COLOURS = {"31": "R", "32": "G", "33": "Y", "36": "A", "91": "R", "92": "G", "93": "Y"}
+# 256-colour indexes: the named ones, and the cockpit's palette roles
+# (crates/harness-tui/src/theme.rs): attention Y, good G, bad R, accent A,
+# disabled D, for the terminal theme (its named 1, 2, 3 and 6), the dark and the
+# light theme. Muted and border are untagged.
+PALETTE = {"1": "R", "2": "G", "3": "Y", "6": "A", "8": "D", "9": "R", "10": "G", "11": "Y",
+           "214": "Y", "130": "Y", "114": "G", "28": "G", "203": "R", "160": "R",
+           "81": "A", "25": "A", "245": "D", "243": "D"}
 
 
 def width(ch):
@@ -88,7 +96,7 @@ def sgr(params):
             fg = COLOURS[p]
         elif p == "38" and i + 2 < len(parts) and parts[i + 1] == "5":
             n = parts[i + 2]
-            fg = {"1": "R", "2": "G", "3": "Y", "8": "D", "9": "R", "10": "G", "11": "Y"}.get(n, "")
+            fg = PALETTE.get(n, "")
             i += 2
         elif p == "38" and i + 4 < len(parts) and parts[i + 1] == "2":
             i += 4

@@ -18,15 +18,13 @@ pub const VIEW_KEEPS: u16 = 80;
 
 fn row_style(t: T) -> Style {
     match t {
-        T::You => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
+        T::You => bold(),
         T::Claude => Style::default(),
-        T::Dim => dim(),
-        T::Warn => Style::default().fg(Color::Yellow),
-        T::Good => Style::default().fg(Color::Green),
-        T::Bad => Style::default().fg(Color::Red),
-        T::Cockpit => Style::default().fg(Color::Magenta),
+        T::Dim => muted(),
+        T::Warn => attention(),
+        T::Good => good(),
+        T::Bad => bad(),
+        T::Cockpit => muted(),
     }
 }
 
@@ -118,14 +116,14 @@ pub fn tab_strip(frame: &mut Frame, app: &mut App, area: Rect, on: Focus) -> u16
         return area.x + area.width;
     }
     let chat_label = chat_tab(app);
-    let active = Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
-    let view_style = if on == Focus::View { active } else { dim() };
+    let active = selected_row().add_modifier(Modifier::BOLD);
+    let view_style = if on == Focus::View { active } else { muted() };
     let chat_style = if on == Focus::Chat {
         active
     } else if chat_label.contains('●') {
-        Style::default().fg(Color::Yellow)
+        attention()
     } else {
-        dim()
+        muted()
     };
     let end = area.x + area.width - 1;
     let buttons = [
@@ -224,9 +222,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     let (input_rows, cursor, _) = app.chat.input.layout(width.saturating_sub(2));
     let shown_input = input_rows.len().clamp(1, crate::chat::input::MAX_ROWS);
     let now = Instant::now();
-    let yellow = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
+    let yellow = bold();
     let mut words: Vec<Line<'static>> = Vec::new();
     let mut must: Vec<(Line<'static>, Vec<KeyAt>)> = Vec::new();
     if let Some(r) = app.asks.shown().cloned() {
@@ -244,7 +240,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
             }
         }
         let review_ok = settled && !app.running;
-        let style = |ok: bool| if ok { bold() } else { dim() };
+        let style = |ok: bool| if ok { bold() } else { muted() };
         let mut labels: Vec<(String, &'static str, Style)> = vec![
             (
                 if app.running {
@@ -290,7 +286,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
         let x = width_of(&lead) as u16;
         must.push((
             Line::from(vec![
-                Span::styled(lead, Style::default().fg(Color::Yellow)),
+                Span::styled(lead, Style::default()),
                 Span::styled("[Hold Esc]", bold()),
             ]),
             vec![(x, 10, "hold")],
@@ -298,7 +294,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     }
     let about = Line::from(Span::styled(
         ellipsis(&format!("About: {}", app.about()), width),
-        dim(),
+        muted(),
     ));
     let avail = inner.height.saturating_sub(1) as usize;
     let mut left = avail;
@@ -339,7 +335,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
         if app.chat.input.is_empty() && focused {
             bottom.push(Line::from(vec![
                 Span::styled(lead, bold()),
-                Span::styled(placeholder, dim()),
+                Span::styled(placeholder, muted()),
             ]));
         } else {
             bottom.push(Line::from(vec![
@@ -367,7 +363,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
             ),
             Err(why) => format!("The chat is unavailable: {why}"),
         };
-        wrapped(&intro, width, dim())
+        wrapped(&intro, width, muted())
             .into_iter()
             .take(transcript_h as usize)
             .collect()

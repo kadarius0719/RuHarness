@@ -13,7 +13,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 
 /// An untouched C project named `liblzg` (one `.c`, no `harness.toml`).
-fn project(tag: &str) -> (TmpDir, PathBuf) {
+pub(super) fn project(tag: &str) -> (TmpDir, PathBuf) {
     let tmp = TmpDir::new(&format!("pv-{tag}"));
     let root = tmp.0.join("liblzg");
     std::fs::create_dir_all(&root).unwrap();
@@ -21,7 +21,7 @@ fn project(tag: &str) -> (TmpDir, PathBuf) {
     (tmp, root)
 }
 
-fn cockpit(root: &Path) -> App {
+pub(super) fn cockpit(root: &Path) -> App {
     App::new_project(Config {
         target: root.to_path_buf(),
         tool: None,

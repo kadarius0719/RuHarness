@@ -101,7 +101,7 @@ The mock below is 120 columns wide:
 **View** is the pane on the right.
 - The C and the Rust sit side by side when the View is at least 78 columns wide. Below that
   they stack, C first (today's narrow renderer).
-- A code line that is cut ends with a dim `›`.
+- A code line that is cut ends with a muted `›`.
 - `←` and `→` scroll it horizontally.
 
 **Activity** is two rows, visible at every width.
@@ -243,7 +243,7 @@ Where the other states show:
 - A unit row shows its own state.
 - `⊘ blocked` shows on unit rows only.
 - A function named in its unit's `symbols` takes the unit's state. Any other function is
-  **internal**: dim, with no glyph.
+  **internal**: muted, with no glyph.
 
 **Rollups.** A directory and the project show non-zero counts of the action states and the
 migrated share, for example `✗2 ⚠1 ✓3/11 (+1 ✓?)`.
@@ -509,7 +509,7 @@ flags are enabled. Before arming, the repeats are dropped and keep restarting th
 arming, `Enter` sits on the safe button, and reaching another one takes a separate move key.
 
 **The state is visible:**
-- Run (Record, Quit, Stop) is dim with "reading…" until armed.
+- Run (Record, Quit, Stop) is muted with "reading…" until armed.
 - "↓ more below — scroll to the end" shows while the argv is unseen.
 - A dropped key shows "Too soon — wait for ready" in the dialog.
 - Once armed, the dialog shows "ready: → then Enter, or y" (with the dialog's own key).
@@ -682,7 +682,7 @@ and no map opens that tool, as the command line does.
   words): before a map one row, **Map the project**. After a map, the heading "Programs (n)", each
   program a row — its id, "t-lzg", its mark and its state in words at the
   right (`✓ linked`, `⚠ held on a choice`, `✗ did not compile`, `✗ did not link`, `· incomplete`,
-  `· fuzzer, not a tool`; `✓ accepted` once it is a tool) — with its file, dim, on the line under
+  `· fuzzer, not a tool`; `✓ accepted` once it is a tool) — with its file, muted, on the line under
   it with what the map knows it is ("src/tools/lzg.c (a tool, by its folder)") and a model's
   label when one fits the map; a file holding a `main` that did not compile as a note; "Libraries (n)" likewise
   (`compiles`); "Accepted tools (n)" with one row per tool, **Open tool t-lzg — src/tools/lzg.c**.
@@ -733,6 +733,62 @@ and no map opens that tool, as the command line does.
   command runs, a hand edit or a draft is kept, a hand-off waits, or the chat holds a
   conversation (each greyed with why). The chat has no pane in the Project view: it works on a
   tool.
+
+### 9.2 Colours and themes (2026-10-19)
+
+The person found text hard to read: some of it blended into the terminal. The cockpit had drawn
+in the terminal's named colours (yellow in 41 places, decoratively as often as for a state), dark
+grey and dim text. It now draws through one palette of named roles
+(`crates/harness-tui/src/theme.rs`) and reads as **plain text, bold headings, one accent and
+three state colours**. The default respects the terminal's own configuration; designed palettes
+are the alternatives; every role can be changed.
+
+| Role | What it is for | terminal (default) | dark | light | mono |
+|---|---|---|---|---|---|
+| text | ordinary words: the terminal's foreground | — | — | — | — |
+| muted | secondary words that must still be read (never dim, never dark grey) | — | 250 | 240 | — |
+| heading | headings, notices, the focused pane's frame: bold, no colour | bold | bold | bold | bold |
+| accent | only the `Next step:` label and the menu's recommended item | cyan, bold | 81, bold | 25, bold | bold, underlined |
+| good | a state that is fine, beside `✓`, `◉` or a word | green | 114 | 28 | — |
+| bad | a failed state, beside `✗`, `?` or a word | red | 203 | 160 | bold |
+| attention | a state that wants a look, beside `⚠`, `!`, `◐`, `⚑`, `↻`, `–` or a word | yellow | 214 | 130 | bold |
+| selected | the selected row | reverse | reverse | reverse | reverse |
+| disabled | a greyed menu item; its reason after it is muted | — | 245 | 243 | — |
+| border | an unfocused pane's frame | — | 244 | 244 | — |
+
+(— is the terminal's own foreground. Numbers are 256-colour indexes.)
+
+- **terminal**, the default: the terminal's own green, red, yellow and cyan, so the person's
+  terminal theme decides the look; the cockpit only stops doing what made text unreadable (dim,
+  dark grey, colour as decoration).
+- **dark** and **light**: designed values, each with a WCAG contrast of at least 4.5:1 for words
+  and 3:1 for frames against the background they assume (dark: #1e1e1e and #000000; light:
+  #ffffff).
+- **mono**: no colour; bold, underline and reverse carry everything.
+
+The choice: `--theme NAME`, else `RUHARNESS_THEME`, else the settings file's `[theme] name`, else
+mono when `NO_COLOR` is set, else terminal. Nothing is guessed from the terminal's variables.
+**The settings file** `cockpit.toml` (`~/Library/Application Support/ruharness/` on macOS,
+`~/.config/ruharness/` elsewhere, `$RUHARNESS_COCKPIT_CONFIG` when set) holds `[theme] name` and a
+`[colors]` table, role → colour: a name (`red`, `bright-blue`, `default`), a 256-colour index, or
+`#rrggbb`. It is read at start; anything wrong in it is refused by name in one sentence (on the
+terminal before the screen opens, and in the notice row) and the default used for it. The
+person's colours are theirs: the tests do not judge them.
+
+The rules, each enforced by a test:
+- **Colour never decorates.** good, bad and attention appear only where a state is shown, and
+  always beside its mark or word, so the screen means the same in mono. Every golden screen is
+  walked: a run of a state colour (a wrapped paragraph counts as one) must hold a state mark or
+  word. Code is shown plain: keywords bold, comments muted, no syntax colours.
+- **One accent.** On any screen it marks at most the `Next step:` label and one menu item.
+- **Only the roles' colours.** Every cell's colour is one of the palette's roles; no background
+  is set; nothing dims, nothing blinks, no dark grey.
+- **Readable on its background**, for the designed themes (the terminal theme's values are the
+  terminal's and cannot be measured).
+
+Three screens (the first screen, a unit's View, the Project view) are kept per theme with their
+styles in `tests/golden/styles/`, so a change of colour is a reviewed diff; the text goldens hold
+the words, and are unchanged by the palette.
 
 ## 10. The chat pane
 

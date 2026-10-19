@@ -1,0 +1,95 @@
+┌ Project ─────────────────────────────────────┐┌ liblzg · project, not mapped yet ────────────────────────────────────┐
+  @0-0 fg - BOLD "┌"
+  @1-9 fg - BOLD | REVERSED "Project"
+  @10-47 fg - BOLD "─────────────────────────────────────┐"
+│  Map the project                             ││Next step: No map yet — press Enter to map the project                │
+  @0-0 fg - BOLD "│"
+  @3-17 fg - BOLD | REVERSED "Map the project"
+  @47-47 fg - BOLD "│"
+  @49-58 fg - BOLD | UNDERLINED "Next step:"
+  @59-102 fg - BOLD "No map yet — press Enter to map the project"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││liblzg is a C project with no harness.toml: nothing is mapped yet.    │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││Mapping finds its programs and libraries, the files each one needs,   │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││what they share, and whether each program links. It compiles in the   │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││sandbox, runs nothing, and writes only under migration/.              │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+│                                              ││                                                                      │
+  @0-0 fg - BOLD "│"
+  @47-47 fg - BOLD "│"
+└──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
+  @0-47 fg - BOLD "└──────────────────────────────────────────────┘"
+ Ready — ↑↓ to choose a row, Enter for what you can do
+
+ ↑↓ move   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+  @0-2 fg - BOLD "↑↓"
+  @10-15 fg - BOLD "Enter"
+  @26-29 fg - BOLD "Tab"
+  @37-40 fg - BOLD "Esc"
+  @48-49 fg - BOLD "c"
+  @60-61 fg - BOLD "g"
+  @72-73 fg - BOLD "?"
+  @81-82 fg - BOLD "q"

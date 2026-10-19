@@ -51,6 +51,8 @@ pub mod project;
 #[cfg(feature = "tui")]
 pub mod termguard;
 #[cfg(feature = "tui")]
+pub mod theme;
+#[cfg(feature = "tui")]
 pub mod tree;
 #[cfg(feature = "tui")]
 pub mod view;
