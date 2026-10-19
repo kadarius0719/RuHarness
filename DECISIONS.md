@@ -78,6 +78,10 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-09 — **The testing guide rewritten for a non-technical reader** — one shape for every part, every step says what you should see; `devtools/guide/gates.py`.
 - 2026-10-09 — **The README and the tutorial rewritten for a non-technical reader** — which document owns what (the README's Quick start, since moved); the same words everywhere.
 - 2026-10-15 — **The documentation reshaped for a person in a hurry** — FIRST-HOUR.md, seven topic pages and a four-door README; the `harness answer` idea.
+- 2026-10-18 — **The documentation cleaned up: three kinds of document, three files removed** — docs/README.md names every document's kind; NEXT-WEEK-PLAN, FEATURES-PROGRESS and the map roadmap removed after their content moved; the brief and the kickoff made true.
+- 2026-10-18 — **The cockpit made easy for a newcomer: four passes** — one vocabulary and a Next step on every screen; Units/Features/Speed first; the Project view replacing the text menu; the newcomer's seventeen snags.
+- 2026-10-19 — **The cockpit's colours: roles, four themes, a settings file** — named roles; terminal (default), dark, light, mono; `--theme`, `RUHARNESS_THEME`, `cockpit.toml` overrides; contrast and rule tests.
+- 2026-10-19 — **Sections, status and notices get their own hues; a hand-off pause is "waiting"** — section, notice, status and label roles with their own hues; a hand-off pause says "waiting for your answer", never "failed".
 - 2026-10-19 — **Model work in the cockpit goes through the chat, with a sign-in walk-through** — the Project view's Ask items type their question into the chat; harness-mcp's two map tools; the connection check and its dialog.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
