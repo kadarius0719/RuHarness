@@ -4,7 +4,7 @@ Usage: python3 -I cockpit.py <workdir> <rows> <cols> -- <argv...>
 
 - Renders the screen with a small VT interpreter (cursor moves, erases, text;
   SGR colours kept only as a per-cell "colour tag" for yellow/green/red and the
-  cockpit's accent and disabled colours) into
+  cockpit's accent, section, notice, label, status and disabled colours) into
   <workdir>/screen.txt (atomically, whenever it changes).
 - Reads commands, one per line, from the FIFO <workdir>/cmd:
     key <Name> [n]     Up Down Left Right Enter Tab BackTab Esc Backspace, or one char
@@ -58,14 +58,20 @@ r = c = 0
 fg = ""
 pending = ""
 decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-COLOURS = {"31": "R", "32": "G", "33": "Y", "36": "A", "91": "R", "92": "G", "93": "Y"}
+COLOURS = {"31": "R", "32": "G", "33": "Y", "34": "S", "35": "N", "36": "A",
+           "91": "R", "92": "G", "93": "Y", "94": "S", "95": "N"}
 # 256-colour indexes: the named ones, and the cockpit's palette roles
 # (crates/harness-tui/src/theme.rs): attention Y, good G, bad R, accent A,
-# disabled D, for the terminal theme (its named 1, 2, 3 and 6), the dark and the
-# light theme. Muted and border are untagged.
-PALETTE = {"1": "R", "2": "G", "3": "Y", "6": "A", "8": "D", "9": "R", "10": "G", "11": "Y",
+# section S, notice N, label L, status T, disabled D, for the terminal theme
+# (its named 1-6), the dark and the light theme. Muted shares status's value
+# in the dark and light themes (250, 240), so it is tagged T too; border is
+# untagged. The terminal theme leaves status and label the terminal's own
+# foreground: untagged there.
+PALETTE = {"1": "R", "2": "G", "3": "Y", "4": "S", "5": "N", "6": "A", "8": "D", "9": "R",
+           "10": "G", "11": "Y", "12": "S", "13": "N",
            "214": "Y", "130": "Y", "114": "G", "28": "G", "203": "R", "160": "R",
-           "81": "A", "25": "A", "245": "D", "243": "D"}
+           "81": "A", "23": "A", "75": "S", "25": "S", "176": "N", "127": "N",
+           "248": "L", "242": "L", "250": "T", "240": "T", "245": "D", "243": "D"}
 
 
 def width(ch):

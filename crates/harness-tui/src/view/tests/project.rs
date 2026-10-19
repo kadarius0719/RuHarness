@@ -385,6 +385,112 @@ fn a_guessed_configuration_asks_for_the_build() {
     assert_eq!(c.title, "Ask a model for a proposal?");
 }
 
+/// Ask a model with the hand-off provider stops for an answer: exit 1 and
+/// `awaiting response: <file>`. That is the harness pausing on purpose,
+/// never a failure: the status line (in the attention role, its long path
+/// shortened, its end in sight), the details and the Next step all say
+/// whose answer, where, and how to go on.
+#[test]
+fn a_hand_off_pause_waits_for_the_answer_and_never_fails() {
+    let (_tmp, root) = project("hand-off");
+    guessed_map(&root);
+    let mut app = cockpit(&root);
+    app.palette = crate::theme::Palette::of(crate::theme::Theme::Dark);
+    app.select(Selection::Program("t-lzg".into()));
+    code(&mut app, KeyCode::Enter);
+    choose(&mut app, "Ask for a proposal");
+    arm(&mut app);
+    let Command::Spawn(p) = key(&mut app, 'y') else {
+        panic!("y did not run it: {:?}", app.mode)
+    };
+    assert_eq!(p.act, crate::app::Act::ProjectAsk);
+    app.on_spawned(&p);
+    let file = "/Users/someone/code/liblzg/migration/map/handoffs/requests/434dba59.response.json";
+    app.on_child_msg(crate::spawn::ChildMsg::Stderr(format!(
+        "Error: awaiting response: {file}"
+    )));
+    app.on_child_exit(std::process::ExitStatus::from_raw(1 << 8));
+    let words = format!(
+        "waiting for your answer: {file} — write the reply there, then run Ask a model again \
+         (or answer it in the chat)"
+    );
+    assert_eq!(
+        app.last.as_deref(),
+        Some(&*format!("Ask a model — {words}"))
+    );
+    assert!(app.last_waiting);
+    assert_eq!(app.run.as_ref().unwrap().exit.as_deref(), Some(&*words));
+    let next = app.project_next().unwrap();
+    assert_eq!(next.text, words);
+    assert_eq!(
+        next.action,
+        Some(crate::menu::Action::Project(crate::project::Act::Ask))
+    );
+    app.select(Selection::MapProject);
+    let buffer = render(&mut app, 120, 34);
+    let screen = text(&buffer);
+    assert!(!screen.contains("failed"), "{screen}");
+    let status = row_with(&screen, "Ready. Last:");
+    assert!(
+        status.starts_with(
+            " Ready. Last: Ask a model — waiting for your answer: …/handoffs/requests/\
+             434dba59.response.json — write the"
+        ),
+        "{status}"
+    );
+    let y = screen.lines().position(|l| l == status).unwrap() as u16;
+    assert_eq!(
+        buffer[(2, y)].fg,
+        crate::theme::Palette::of(crate::theme::Theme::Dark)
+            .fg(crate::theme::Role::Attention)
+            .unwrap()
+    );
+    assert!(
+        screen.contains("Next step: Waiting for your answer:"),
+        "{screen}"
+    );
+    // A real failure still says so.
+    code(&mut app, KeyCode::Enter);
+    let _ = &app.mode;
+    app.mode = Mode::Normal;
+    app.on_spawned(&p);
+    app.on_child_msg(crate::spawn::ChildMsg::Stderr(
+        "Error: the model's answer is not a configuration".into(),
+    ));
+    app.on_child_exit(std::process::ExitStatus::from_raw(1 << 8));
+    assert!(
+        app.last
+            .as_deref()
+            .unwrap()
+            .starts_with("Ask a model — failed (exit 1)"),
+        "{:?}",
+        app.last
+    );
+    assert!(!app.last_waiting && app.project_waiting.is_none());
+}
+
+/// The status line's "Last:" shortens a long path to its last three parts
+/// and never cuts the sentence's end.
+#[test]
+fn the_status_line_shortens_paths_and_keeps_its_end() {
+    let long = " Ready. Last: Map the project — done, with a problem: could not read \
+                /Users/someone/code/projects/liblzg/migration/map/project-map.json (2s); c for \
+                its words";
+    let fitted = super::super::fit_status(long, 120);
+    assert!(fitted.ends_with("; c for its words"), "{fitted}");
+    assert!(
+        fitted.contains("…/migration/map/project-map.json"),
+        "{fitted}"
+    );
+    assert!(super::super::width_of(&fitted) <= 120);
+    let narrow = super::super::fit_status(long, 60);
+    assert!(narrow.ends_with("; c for its words"), "{narrow}");
+    assert!(super::super::width_of(&narrow) <= 60, "{narrow}");
+    assert_eq!(super::super::fit_status(" Ready.", 60), " Ready.");
+    assert_eq!(super::super::short_path("/a/b/c/d.json:"), "…/b/c/d.json:");
+    assert_eq!(super::super::short_path("a/b/c"), "a/b/c");
+}
+
 /// Write the build configuration: the dialog says what opens and what
 /// follows; the editor gets the map's example; on return the file is
 /// checked and written to migration/map/config.toml, the map read again,

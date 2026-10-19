@@ -74,7 +74,9 @@ The review cockpit over a target's migration ledger. Every write is a spawned
                         a terminal whose clicks print odd characters, or to
                         select text with the mouse as usual
   --theme NAME          the colours: terminal (the default: your terminal's own
-                        green, red, yellow and cyan, nothing dim); dark or light
+                        blue for sections, cyan for the next step, magenta for
+                        notices, green, red and yellow for states, nothing
+                        dim); dark or light
                         (designed for a dark or a white background: try one when
                         text is faint or blends in); mono (no colour: bold,
                         underline and reverse carry everything). Also
@@ -84,8 +86,9 @@ The review cockpit over a target's migration ledger. Every write is a spawned
                         $RUHARNESS_COCKPIT_CONFIG when set), whose [theme] name
                         names a theme and whose [colors] sets a role's colour
                         (a name such as bright-blue, 0-255, or #rrggbb); the
-                        roles: text muted heading accent good bad attention
-                        selected disabled border
+                        roles: text muted heading accent section status
+                        notice label good bad attention selected disabled
+                        border
   --no-chat             no chat pane
   --chat-runtime PATH   the Claude Code binary the chat runs (default: `claude`
                         on PATH)

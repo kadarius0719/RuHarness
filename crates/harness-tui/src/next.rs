@@ -228,13 +228,13 @@ impl App {
         let unit = self.snapshot.units.get(u)?;
         let a = unit.attempt(id)?;
         let r = &a.record;
-        if self
+        if let Some(aw) = self
             .awaiting
             .iter()
-            .any(|aw| aw.attempt.as_deref() == Some(id))
+            .find(|aw| aw.attempt.as_deref() == Some(id))
         {
             return Some(advice(
-                "it waits for your answer to its hand-off — answer it, then Resume",
+                crate::app::waiting_words(&aw.path.display().to_string(), "choose Resume"),
                 Some(Action::Act(Act::Resume)),
             ));
         }

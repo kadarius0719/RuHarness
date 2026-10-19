@@ -292,6 +292,10 @@ impl App {
                 Some(Action::Adopt),
             );
         }
+        // A hand-off's pause: the person's answer is what comes next.
+        if let Some((act, words)) = &self.project_waiting {
+            return say(words.clone(), Some(Action::Project(*act)));
+        }
         let m = match &p.map {
             Err(_) => {
                 return say(

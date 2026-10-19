@@ -118,6 +118,7 @@ pub struct Narrator {
     not_run: Vec<(String, String)>,
     verdict: Option<String>,
     awaited: bool,
+    awaited_path: Option<String>,
     error: Option<(String, String)>,
     last_message: Option<String>,
     locked_by: Option<String>,
@@ -163,6 +164,7 @@ impl Narrator {
             not_run: Vec::new(),
             verdict: None,
             awaited: false,
+            awaited_path: None,
             error: None,
             last_message: None,
             locked_by: None,
@@ -291,6 +293,7 @@ impl Narrator {
             }
             Event::Awaiting { path, .. } => {
                 self.awaited = true;
+                self.awaited_path = Some(path.clone());
                 self.step = if self.chat {
                     self.paused_words()
                 } else if self.steer {
@@ -338,6 +341,12 @@ impl Narrator {
             Some(n) => format!("Paused: the chat answers turn {n}"),
             None => "Paused: the chat answers its turn".into(),
         }
+    }
+
+    /// The file the run's `awaiting` event names, when it paused on a
+    /// hand-off.
+    pub fn awaited_path(&self) -> Option<&str> {
+        self.awaited_path.as_deref()
     }
 
     /// How a reaped run ended: `code` is its exit code, `signal` the
