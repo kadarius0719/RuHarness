@@ -26,17 +26,16 @@ hold the rest.
   judging what the person's run found or designing anything new, and for medium again after.
 - Plain words in every report; commit to `main` and push at each milestone.
 
-## In progress (2026-10-18): the cockpit made easy for a newcomer
+## Done (2026-10-18): the cockpit made easy for a newcomer
 
-The session's critique is docs/reviews/2026-10-18-cockpit-usability-critique.md (eight findings:
-no screen says what to do next; the program's words instead of a person's; Features and Speed
-below the fold; "Open" first in the menu; a unit's View leads with raw C; the help is a manual;
-the project mode is a different program; empty states say nothing). Three Opus passes, in
-sequence because they share view.rs/menu.rs/app.rs: 1 words and next steps (running); 2 layout
-(Units, Features and Speed above the file tree; the unit View led by a plain summary); 3 the
-project mode as a real cockpit screen. Then a reader who has never used it walks the first ten
-minutes, and docs/topics/cockpit.md, the tutorial's appendix and the guide's Parts 4 and 9 follow
-the new words.
+The session's critique and the newcomer's walk are in docs/reviews/2026-10-18-cockpit-usability-
+critique.md; DECISIONS' 2026-10-18 cockpit entry says what the four passes built (one vocabulary
+and a Next step on every screen; Units/Features/Speed first and a unit's View in words; the
+Project view replacing the text menu; the newcomer's seventeen snags, among them the cockpit
+writing the build configuration itself). A reader who had read only docs/topics/cockpit.md reached
+every goal in under eight minutes. Open from it: the headless driver (devtools/cockpit-drive) does
+not clear the screen when the cockpit goes full-screen and drops key bursts sent as one command
+(driver issues, not cockpit ones).
 
 ## The work, in order
 
