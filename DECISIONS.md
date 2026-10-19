@@ -3367,3 +3367,39 @@ tutorial, the tractor and devtools READMEs and every design got the corrections 
 flags' own sentence). Two code comments in projectmap/accept.rs still name SCHEMAS' old heading
 "The file-list form"; a note under the renamed heading keeps them findable (a one-line code change
 for the next wording pass).
+
+## 2026-10-18 — The cockpit made easy for a newcomer: four passes
+
+The person asked for a critical usability review of the cockpit so that anyone can use it. The
+session drove it headless and wrote eight findings (docs/reviews/2026-10-18-cockpit-usability-
+critique.md): no screen said what to do next; the program's words instead of a person's; Features
+and Speed below the fold; "Open" first in every menu; a unit's View led with raw C; the help was a
+manual; the project mode was a different program (a numbered text menu); empty states said
+nothing. Four Opus passes, in sequence because they share the view code:
+
+1. **Words and next steps.** One vocabulary matching the documents (the judge, "no Rust yet",
+   "find risky patterns in the C", one state word per row, "Speed — not set up", counts in words);
+   a Next step line on every View from one set of rules (`crates/harness-tui/src/next.rs`); the
+   recommended action first in every menu with its one-line reason; a two-page help whose first
+   page is six keys and three marks; honest empty states. Decided on the way: a unit that calls
+   other units is told it stays C in this version instead of being recommended for migration; the
+   Next step may name "Migrate — ask in chat", since that only types a request the person still
+   sends and confirms (COCKPIT-WRAPPER-DESIGN updated).
+2. **Layout.** Units, Features and Speed above the source folder, which starts folded; all three
+   headings on screen at 30 rows; a unit's View leads with its state, its Next step, its functions
+   and files in words, and folds its code under a heading.
+3. **The Project view.** An untouched project opens into the same cockpit as everything else: the
+   programs and libraries as rows with their state in words, the configuration's state, a Next
+   step, the acts (Map, Write the build configuration, Ask, Accept with its picker, Open tool) as
+   menus and dialogs; the numbered text menu and its "Type a number" prompt are gone.
+4. **The newcomer's snags.** A reader who had read only docs/topics/cockpit.md reached every goal
+   in under eight minutes; their seventeen findings were fixed: the cockpit writes the build
+   configuration itself (an editor act like the workloads file; the example text and its check are
+   one shared function with the command line), a run that failed never says "done" and the adoption
+   refusal opens the cockpit's own question, the code-fold hint tells the truth, the Next step
+   names a freshly accepted tool first, one state per unit header with the verdict's words under
+   it, program rows say what the map knows and the model's label when asked.
+
+Every screen string is pinned by a test and 22 goldens; docs/topics/cockpit.md, the tutorial, the
+guide's Parts 4, 9 and 12 and the designs follow the screens. fmt, clippy and the workspace green
+after each pass.
