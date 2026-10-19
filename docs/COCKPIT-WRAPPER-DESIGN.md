@@ -671,6 +671,8 @@ harness.toml) …", "<root> has no mapped tool <id> …"), never with a raw io e
 
 ### 9.1 The Project view (pass 3 of the 2026-10-18 critique)
 
+*Status (2026-10-19): the left-pane and right-pane bullets and the words are revised by §9.3; the menus, Write the build configuration, Accept's dialog, the acts' dialogs and Open tool stand.*
+
 A project with no root `harness.toml` and no `--tool` — not mapped yet, mapped, or with several
 tools — opens on the **Project view**, the same screen as a tool's: the two panes, the activity
 rows, the key bar, the help, the menus and the dialogs. Nothing is asked before the terminal is
@@ -738,6 +740,123 @@ and no map opens that tool, as the command line does.
   this conversation ends and a new chat starts for the tool; **[ Stay  Esc ] [ Go on, with a new
   chat  y ]** — and `y` moves with the chat new. The chat has its pane in the Project view too (2026-10-19):
   started there, its harness-mcp serves the project with no tool open (the map's tools only).
+
+### 9.3 The Project view, revision 2: one list, one card, one line (2026-10-19)
+
+The person's first real run (liblzg, three programs, the chat's first live advice) showed the
+Project view of §9.1 working and unreadable at once: a screen a stranger has to *read* to find
+out what to *do*. The faults, from the screenshot: the right pane is prose ("lzg-map is a C
+project with no harness.toml; the cockpit shows its map."), the same fact appears three times
+(the left list, the Programs list in the middle, the selected program's section), the advice's
+plain-words why from the chat is shown as a tag ("reason alternative-implementation"), the
+harness's internal names are on screen (`harness.toml`, `stated`, `d1`, `d1.2`, "held on a
+choice"), the Next step is a two-line sentence, bold marks four unrelated things, the left pane
+holds ten lines of a sixty-line window while the chat wraps at 55 columns, and the focused pane
+shows only by its title. §9.1 stays as the record of pass 3; what follows replaces its left-pane
+and right-pane bullets and its words. Three rules, then the screens.
+
+**One list.** The left pane is the only list. **One card.** The right pane shows the selection,
+as a card with its decision and its action inside, never the list again and never a paragraph
+about the harness. **One line.** The Next step is one short line: a verb phrase and the key.
+
+- **The left pane, "Project".** Width 36 at 120 columns or more, 30 under (§9.1's 48/36 held
+  paths; the rows no longer do). Before a map: one row, **Map the project**. After a map, the
+  heading `Programs (3) · 1 accepted · 2 need a decision` (the counts only for the states present;
+  "did not compile" and "did not link" counted too), then one row per program: its mark, its id,
+  its state word right-aligned — `✓ accepted`, `⚠ needs a decision`, `✓ links`, `✗ did not
+  compile`, `✗ did not link`, `· incomplete`, `· fuzzer, not a tool`. No path line under a row
+  (the card holds the path); no "(a tool, by its folder)"; no model label. An accepted program's
+  row *is* its tool's row: Enter on it leads with **Open tool t-lzg** (the "Accepted tools (n)"
+  group goes — a program was listed there a second time). `Libraries (n)` stays as a group only
+  when there are libraries. A file holding a `main` that did not compile is one row, `✗ <file>`,
+  state `did not compile`. The rows do not fold.
+- **The right pane.** Titled as before (`lzg-map · 3 programs found`). Line 1: the Next step
+  (below). A blank line. Then the card for the selection:
+  - *A program not yet accepted:*
+    ```
+    t-benchmark                                   ⚠ needs a decision
+    src/tools/benchmark.c · a tool, by its folder
+    The model calls it “the benchmark runner” (a tool)          ← only when labelled
+
+    Decision: two files define the same functions. Keep which?
+      1  src/extra/lzgmini.c
+      2  src/lib/decode.c                                   ← the model advises this one
+    Why (claude-fable-5-1): both files define the same two decoder functions;
+    decode.c is the library's own decoder, lzgmini.c a standalone one meant for
+    other projects. A benchmark of the library should link its own decoder.
+    This is advice; you pick the file when you accept.
+
+    Enter: Accept t-benchmark — it asks for the file
+    ```
+    A decision asked only under another ("asked only if you keep …") says so on its own line
+    under the question. "Why" is the model's own sentence (below); with no advice the two lines
+    after the files are `No advice yet — Enter, then Ask for advice (the chat answers)`. A
+    program with no decision and `✓ links` has a two-line card and `Enter: Accept t-lzg`. One
+    that did not link or compile shows the map's first error line under the path, in the bad
+    colour beside its mark, and `Enter: Map the project again` with the state's one-line
+    meaning (today's gloss) as the last line.
+  - *An accepted program (a tool):*
+    ```
+    t-lzg                                              ✓ accepted
+    src/tools/lzg.c · a tool, by its folder
+    Its build configuration: migration/tools/t-lzg/harness.toml
+
+    Enter: Open tool t-lzg
+    ```
+  - *A library:* its path, `a library (compiled, never linked)`, `Enter: Accept t-core`.
+  - *Nothing mapped yet* (the Map row selected): the two sentences of today ("nothing is mapped
+    yet"; what mapping does), which are the only prose left, and `Enter: Map the project`.
+  - *The configuration a guess* is not a line on the card: it is the Next step, and the menu's
+    first item, as §9.1 has it. `Configuration: stated (make)` goes; a build the person stated
+    needs no line. `Libraries: none` goes. The opening sentence goes. The state glosses move to
+    the help (`?`), under a heading "What the states mean".
+  - The last line of the pane stays the activity's `Last: …` line.
+- **The Next step, one line.** `Next: <verb phrase> — <key>`. The rules of `next.rs` are
+  unchanged; their words are: `Next: Map the project — Enter`; `Next: Write the build
+  configuration — Enter, it is the first item` (a guess; with the chat on, `… or Ask for a
+  proposal in the chat`); `Next: Map the project again — Enter` (a configuration newer than the
+  map; a program that did not link after an edit); `Next: Accept t-benchmark — Enter on its row,
+  it asks for the file` (a decision); `Next: Accept t-lzg — Enter on its row` (links, no
+  decision); `Next: Open tool t-lzg — Enter on its row` (just accepted, or a tool selected);
+  `Next: nothing here — every program is a tool; open one` when all are accepted. Under 80
+  characters each; the pane wraps the rest. The label `Next:` keeps the accent; the phrase is
+  bold; nothing else on the pane is bold but the card's first line.
+- **Words.** On screen, never: `harness.toml` (say "its build configuration", with the path only
+  on the tool's card), `stated`, `held`, `choice d1`, `d1.1`, `d1.2`, a reason tag. The decision's
+  files are numbered 1, 2, … on the card and in Accept's picker (`1  src/extra/lzgmini.c`); the
+  set and definer ids stay in the ledger, the reply file and `harness project accept`'s flags,
+  which the dialog's argv still shows. Accept's picker is titled `Accept t-benchmark` and asks
+  `Keep which file for the functions both define?`, the advised item marked `← the model advises
+  this one`, none recommended. The reason tag becomes words only where the why is missing (an
+  older reply): `platform` → "they are the same code for different platforms",
+  `alternative-implementation` → "they are two implementations of the same thing", `cannot-tell`
+  → "the model could not tell them apart".
+- **The why.** The chat's answer is the best text on the screen and the view hid it. The map's
+  reply format gains an optional `why`: one sentence or two, plain words, at most 300 characters,
+  one line (newlines folded); `project ask`'s validators accept it (missing is fine; longer is
+  refused with the limit named, as every check there), the reply file keeps it, `read_advice`
+  reads it, the card shows it after `Why (<model>):`. The chat's brief says to give it ("why, in
+  one or two sentences a person who has not read the files would understand"), and the prompt's
+  system part names it in the format. `harness project accept`'s advice line on the command
+  line shows it too. Nothing else about the ask changes; the request key does not include the
+  reply.
+- **Layout and focus.** The chat column, when the chat has the focus, takes half of what is left
+  after the left pane (today a fixed maximum, 55 columns on the person's 200); with the focus
+  elsewhere, today's width. The focused pane's border is drawn in the section colour, bold, in
+  every theme (today bold alone, invisible where the border is the terminal's default); unfocused
+  borders stay the border role. The reverse-video title stays. Bold is for the Next step's phrase,
+  the card's first line, headings in the left pane, and the chat's own rules; "Decision:" and
+  the question are plain.
+- **The help (`?`) on the Project view** gains "What the states mean" (the glosses that left the
+  pane) and the two sentences about mapping, so nothing explanatory is lost, only moved.
+- **Tests.** The goldens of the Project view are regenerated and read by eye once; a test asserts
+  the right pane holds no `harness.toml`, `stated`, `d1.` or reason tag on a mapped project with
+  a decision and advice; one asserts the card's lines for the three selections; one the one-line
+  Next step for each rule; one the why's round trip (reply → advice → card, and a why over the
+  limit refused by the validator); one the chat column's width with the focus on the chat and
+  off; one the focused border's style. The guide's quoted Project view screens (Part 12) and the
+  tutorial's, the map and cockpit topics, and §9.1's mirror in docs/SCHEMAS.md follow the new
+  words; the guide's gate stays green.
 
 ### 9.2 Colours and themes (2026-10-19)
 
