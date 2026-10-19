@@ -100,7 +100,7 @@ impl FeatureState {
             FeatureState::HoldsSoFar { rust, of } => {
                 format!("holds so far · {rust} of {of} unit{}", plural(*of))
             }
-            FeatureState::AllC => "all C".into(),
+            FeatureState::AllC => "still all C".into(),
             FeatureState::SeeUnits => "see its units".into(),
         }
     }

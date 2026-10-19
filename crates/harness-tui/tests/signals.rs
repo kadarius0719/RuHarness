@@ -1142,7 +1142,9 @@ fn the_mouse_scans_the_project_end_to_end() {
     send(b"\x1b[<0;0;0M\x1b[<0;0;0m");
     assert!(alive(tui_pid), "a zero coordinate ended the cockpit");
     // Help's line turns the mouse off (the terminal told), `m` on again.
+    // Its first page is the six keys and three marks; ↓ (j) opens the rest.
     send(b"?");
+    send(b"j");
     let (hr, hc) = wait_for("Help's mouse line", 10, || {
         locate(&grid(), "Mouse: on").into_iter().next()
     });

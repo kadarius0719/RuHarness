@@ -8,7 +8,7 @@
 │  ▾ Units (1)                 ││                                                                                      │
 │    ▸ ✓ u-lib         migrated││                                                                                      │
 │    Features (none yet)       ││                                                                                      │
-│    Speed (no file)           ││                                                                                      │
+│    Speed — not set up        ││                                                                                      │
 │                              ││                                                                                      │
 │                              ││                                                                                      │
 │                              ││                                                                                      │
@@ -19,6 +19,6 @@
 │                              ││About: the project                                                                    │
 │                              ││› Enter reviews the request — or type                                                 │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
- Ready.
+ Ready — ↑↓ to choose a row, Enter for what you can do
 
  Enter review   Esc decline   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit

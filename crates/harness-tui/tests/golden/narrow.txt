@@ -1,14 +1,15 @@
 ┌ Files ───────────────┐┌ u-lib · migrated ────────────────────────────────────┐
-│▾ harness-tui-g00-000…││✓ u-lib migrated · status verified                    │
-│  ▾ test_case/    ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, │
-│    ▾ include/        ││fresh                                                 │
-│        · lib.h       ││C    read_scalefactors (lib.c:17)                     │
-│    ▾ src/        ✓1/1││17 void read_scalefactors(bs_t *bs, uint8_t *pba, uin›│
-│      ▸ ✓ lib.c       ││18                                   int bands, float›│
-│  ▾ Units (1)         ││19     static const float g_deq_L12[18 * 3] = {       │
-│    ▸ ✓ u-lib migrated││20         9.53674316e-07f / 3,     7.56931807e-07f /›│
-│    Features (none ye…││21         6.00777173e-07f / 3,     9.53674316e-07f /›│
-│    Speed (no file)   ││22         7.56931807e-07f / 7,     6.00777173e-07f /›│
+│▾ harness-tui-g00-000…││✓ u-lib migrated                                      │
+│  ▾ test_case/    ✓1/1││Next step: In Rust and checked — nothing to do        │
+│    ▾ include/        ││Crate from attempt a-13c9 (pipeline) · verdict green, │
+│        · lib.h       ││fresh                                                 │
+│    ▾ src/        ✓1/1││C    read_scalefactors (lib.c:17)                     │
+│      ▸ ✓ lib.c       ││17 void read_scalefactors(bs_t *bs, uint8_t *pba, uin›│
+│  ▾ Units (1)         ││18                                   int bands, float›│
+│    ▸ ✓ u-lib migrated││19     static const float g_deq_L12[18 * 3] = {       │
+│    Features (none ye…││20         9.53674316e-07f / 3,     7.56931807e-07f /›│
+│    Speed — not set up││21         6.00777173e-07f / 3,     9.53674316e-07f /›│
+│                      ││22         7.56931807e-07f / 7,     6.00777173e-07f /›│
 │                      ││23         9.53674316e-07f / 15,    7.56931807e-07f /›│
 │                      ││24         6.00777173e-07f / 15,    9.53674316e-07f /›│
 │                      ││25         7.56931807e-07f / 31,    6.00777173e-07f /›│
@@ -21,10 +22,9 @@
 │                      ││32         9.53674316e-07f / 1023,  7.56931807e-07f /›│
 │                      ││33         6.00777173e-07f / 1023,  9.53674316e-07f /›│
 │                      ││34         7.56931807e-07f / 2047,  6.00777173e-07f /›│
-│                      ││35         9.53674316e-07f / 4095,  7.56931807e-07f /›│
 │                      ││Checks  – whole program not run  ✓ same exports       │
 │                      ││        ✓ allowed calls only  ✓ driver shape +3       │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
- Ready.
+ Ready — ↑↓ to choose a row, Enter for what you can do
 
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit

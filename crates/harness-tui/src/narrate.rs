@@ -145,7 +145,7 @@ impl Narrator {
             .unwrap_or_default();
         let step = match subcommand.as_str() {
             "verify" | "promote" => {
-                "Running the oracle… (the checks are reported when it finishes)".into()
+                "Running the judge… (the checks are reported when it finishes)".into()
             }
             _ => "Starting…".into(),
         };
@@ -517,7 +517,7 @@ mod tests {
             "Accept a-1",
             &argv(&["harness", "--json", "promote", "u", "a-1"]),
         );
-        assert!(n.step().starts_with("Running the oracle"));
+        assert!(n.step().starts_with("Running the judge"));
         let steps = run(&mut n, &fixture("promote-rolled-back.ndjson"));
         assert!(
             steps
@@ -593,13 +593,13 @@ mod tests {
             plan.last(Some(0), None, Duration::ZERO),
             "Refresh the plan — Done (0 s)"
         );
-        let mut detect = Narrator::new("Find hazards", &argv_of("detect"));
+        let mut detect = Narrator::new("Find risky patterns", &argv_of("detect"));
         let steps = run(&mut detect, &fixture("detect.ndjson"));
         assert!(
             steps.iter().any(|s| s.starts_with("detect: 0 finding(s)")),
             "{steps:#?}"
         );
-        let mut stale = Narrator::new("Find hazards", &argv_of("detect"));
+        let mut stale = Narrator::new("Find risky patterns", &argv_of("detect"));
         run(&mut stale, &fixture("detect-stale.ndjson"));
         assert!(
             stale
@@ -611,7 +611,7 @@ mod tests {
         assert_eq!(stale.ending(Some(1), None), Ending::Refused);
         assert!(stale
             .last(Some(1), None, Duration::ZERO)
-            .starts_with("Find hazards — Refused: facts.jsonl is stale"));
+            .starts_with("Find risky patterns — Refused: facts.jsonl is stale"));
     }
 
     /// An unconfigured whole-program check did not run: the narration says

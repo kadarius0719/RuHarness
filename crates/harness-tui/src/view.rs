@@ -766,7 +766,12 @@ fn view_title(app: &App) -> String {
         Selection::Attempt(u, a) => format!("attempt {} of {u}", short_id(a)),
         _ => node_name(app, sel),
     };
-    let (_, word) = row_label(app, sel);
+    // The tree's compact counts ("⚠1 ✓0/13"), said in words here.
+    let word = match sel {
+        Selection::Project => app.files.rollup("").words(),
+        Selection::Dir(d) => app.files.rollup(d).words(),
+        _ => row_label(app, sel).1,
+    };
     let mut title = if word.is_empty() {
         name
     } else {
@@ -806,7 +811,6 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             ),
             Span::styled(format!("{} ", unit.unit.id), bold()),
             Span::raw(s.word()),
-            Span::styled(format!(" · status {}", unit.report.status), dim()),
         ];
         if let Some(h) = &unit.report.write_in_flight {
             spans.push(Span::styled(
@@ -815,16 +819,16 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             ));
         }
         lines.push(Line::from(clipped(spans, width)));
-        if let UnitState::Attention(cause) = s {
-            lines.extend(wrapped(
-                &format!(
-                    "Needs attention: {}",
-                    cause.words(&app.snapshot.ledger_rel())
-                ),
-                width,
-                Style::default().fg(Color::Yellow),
-            ));
-        }
+    }
+    // The Next step: the unit's (or the attempt's) one action, the cause
+    // first when it needs attention.
+    if let Some(next) = app.advice(&app.selection) {
+        let style = if matches!(state, Some(UnitState::Attention(_))) {
+            bold().fg(Color::Yellow)
+        } else {
+            bold()
+        };
+        lines.extend(wrapped(&next.line(), width, style));
     }
     match app.shown_attempt() {
         Some(a) => {
@@ -857,17 +861,6 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                     dim(),
                 ));
             }
-            if app
-                .awaiting
-                .iter()
-                .any(|aw| aw.attempt.as_deref() == Some(r.id.as_str()))
-            {
-                lines.extend(wrapped(
-                    "Waiting for your answer to the hand-off; then choose Resume (R).",
-                    width,
-                    Style::default().fg(Color::Yellow),
-                ));
-            }
         }
         None => {
             let verdict = match (
@@ -886,7 +879,7 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             let mut origin = if unit.crate_dir.is_some() {
                 format!("Crate {} · {verdict}", provenance_words(unit))
             } else {
-                "No crate yet".to_string()
+                "No Rust yet".to_string()
             };
             if let Some(marker) = coverage_marker(app, unit) {
                 origin.push_str(&format!(" · {marker}"));
@@ -908,8 +901,10 @@ fn unit_header(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     for d in &advice.differences {
         lines.extend(wrapped(d, width, Style::default().fg(Color::Red)));
     }
+    // Speed's own lead-in to how to change the Rust (the unit's Next step
+    // above points here): no "Next:" of its own beside "Next step:".
     if let Some(next) = &advice.next {
-        lines.extend(wrapped(&format!("Next: {next}"), width, bold()));
+        lines.extend(wrapped(next, width, bold()));
     }
     if let Some(change) = &advice.change {
         lines.extend(wrapped(change, width, Style::default()));
@@ -1312,13 +1307,48 @@ fn features_reach_words(app: &App, v: &harness_core::Verdict) -> String {
     }
 }
 
+/// A View's "Next step: …" line and a blank line after it, when the node has
+/// one (pass 1 of the 2026-10-18 critique).
+fn next_lines(app: &App, sel: &Selection, width: usize) -> Vec<Line<'static>> {
+    let Some(next) = app.advice(sel) else {
+        return Vec::new();
+    };
+    let mut lines = wrapped(&next.line(), width, bold());
+    lines.push(Line::from(""));
+    lines
+}
+
+/// What a feature's mark means, in words, for its View (the tree shows the
+/// mark alone).
+fn feature_mark_words(state: &featmap::FeatureState) -> String {
+    use featmap::FeatureState as S;
+    match state {
+        S::Failing => "✗ failing: a unit's check of it failed".into(),
+        S::ScenarioCannotRun => "⚑ a scenario cannot run as written".into(),
+        S::NeedsRecheck => "↻ needs a re-check: a unit with Rust was not checked on it".into(),
+        S::NotMapped => "⋯ not mapped yet: which units it runs is not known".into(),
+        S::MapOutOfDate => "≃ the map is out of date".into(),
+        S::MapIncomplete => "◔ the map is incomplete for it".into(),
+        S::ReachesNoUnit => "∅ it reaches no unit".into(),
+        S::AllMigrated => "✓ all its units are in Rust, each checked alone".into(),
+        S::HoldsSoFar { rust, of } => format!(
+            "◉ runs Rust now: {rust} of its {of} unit{} {} in Rust, and each passed this \
+             feature's checks",
+            plural_s(*of),
+            if *rust == 1 { "is" } else { "are" }
+        ),
+        S::AllC => "◌ still all C: none of the units it runs is in Rust yet".into(),
+        S::SeeUnits => "· its units differ: see them below".into(),
+    }
+}
+
 /// The project summary (§3): the Next step first, as a fact; the facts; the
 /// units by state; the lock holder; the last command; the files that need
 /// action, each a link.
 fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    if let Some((step, _)) = app.next_step() {
-        lines.extend(wrapped(&format!("Next step: {step}"), width, bold()));
+    if let Some(next) = app.next_step() {
+        lines.extend(wrapped(&next.line(), width, bold()));
         lines.push(Line::from(""));
     }
     // A mapped tool's "project changed" notice (docs/PROJECT-MAP-DESIGN.md
@@ -1415,17 +1445,30 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
         for f in picked {
-            let (glyph, word) = files::file_label(&app.files, &f.state);
+            let (glyph, _) = files::file_label(&app.files, &f.state);
+            // Each item says why and what to do, not its state again.
+            let word = match &f.state {
+                FileState::Owned(u) => match app.files.units.get(*u).map(|i| &i.state) {
+                    Some(UnitState::Attention(cause)) => cause.short().to_string(),
+                    _ => "its last check was red — open it, Show the checks".into(),
+                },
+                FileState::Missing => "missing — Scan the project again".into(),
+                FileState::Changed => "changed — Scan the project again".into(),
+                _ => "Scan the project".into(),
+            };
             links.push((lines.len(), Selection::File(f.path.clone())));
             lines.push(Line::from(clipped(
                 vec![
                     Span::raw("  "),
                     Span::styled(format!("{glyph} "), glyph_style(glyph)),
                     Span::raw(f.path.clone()),
-                    Span::styled(format!("  {word}"), dim()),
                 ],
                 width,
             )));
+            // Under the path, indented (wrapping drops leading spaces).
+            for row in word_wrap(&word, width.saturating_sub(4).max(8)) {
+                lines.push(Line::from(format!("    {row}")));
+            }
         }
     }
     lines
@@ -1446,14 +1489,10 @@ fn summary_features(
         featmap::Group::Invalid(_) => "Features: features.toml has an error — see Features".into(),
         featmap::Group::Valid => {
             let mut counts: Vec<(&'static str, usize)> = Vec::new();
-            let mut caveat = false;
+            // The counts only: what was run and how each unit is checked
+            // are the Features View's to say (pass 1 of the 2026-10-18
+            // critique: no dense parenthetical here).
             for f in &model.features {
-                if matches!(
-                    f.state,
-                    featmap::FeatureState::HoldsSoFar { .. } | featmap::FeatureState::AllMigrated
-                ) {
-                    caveat = true;
-                }
                 let key = summary_key(&f.state);
                 match counts.iter_mut().find(|(k, _)| *k == key) {
                     Some((_, n)) => *n += 1,
@@ -1469,21 +1508,12 @@ fn summary_features(
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            if model.map.current() && model.watched > 0 {
-                text.push_str(&format!(
-                    " · they ran {} of {} watched functions",
-                    model.ran, model.watched
-                ));
-            }
             let behind = model.recheck.len();
             if behind > 0 {
                 text.push_str(&format!(
                     " · {behind} unit{} not re-checked",
                     plural_s(behind)
                 ));
-            }
-            if caveat {
-                text.push_str(" (each unit checked with only its own Rust swapped in)");
             }
             text
         }
@@ -1599,7 +1629,7 @@ impl<'r> SpeedSection<'_, 'r> {
 /// focused row's full sentence below.
 fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<Line<'static>> {
     let model = &app.speed;
-    let mut lines = Vec::new();
+    let mut lines = next_lines(app, &Selection::Speed, width);
     match &model.group {
         speed::Group::NoFile => {
             lines.extend(wrapped(
@@ -1609,12 +1639,6 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
                 width,
                 Style::default(),
             ));
-            lines.push(Line::from(""));
-            lines.extend(wrapped(
-                "On this row, press Enter and choose Write your workloads file.",
-                width,
-                bold(),
-            ));
             return lines;
         }
         speed::Group::NoWorkload => {
@@ -1622,12 +1646,6 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
                 "Your workloads file has no workload yet.",
                 width,
                 Style::default(),
-            ));
-            lines.push(Line::from(""));
-            lines.extend(wrapped(
-                "On this row, press Enter and choose Edit the workloads file.",
-                width,
-                bold(),
             ));
             return lines;
         }
@@ -1637,12 +1655,6 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
                 &display::line(why),
                 width,
                 Style::default().fg(Color::Yellow),
-            ));
-            lines.push(Line::from(""));
-            lines.extend(wrapped(
-                "On this row, press Enter and choose Edit the workloads file.",
-                width,
-                bold(),
             ));
             lines.extend(wrapped(
                 "Until it is fixed, perf cannot measure — verify and migrations still work.",
@@ -1694,11 +1706,9 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         width,
     };
     if model.group == speed::Group::NotYetRun {
-        section.lines.extend(wrapped(
-            "Nothing measured yet — on this row, press Enter and choose Measure speed.",
-            width,
-            bold(),
-        ));
+        section
+            .lines
+            .extend(wrapped("Nothing measured yet.", width, dim()));
     } else if model.c_rows.is_empty() {
         // Units measured alone (`--unit`): the C alone is not, yet.
         section
@@ -1815,9 +1825,9 @@ fn dir_view(
     links: &mut Vec<(usize, Selection)>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let rollup = app.files.rollup(dir).text();
+    let rollup = app.files.rollup(dir).words();
     if !rollup.is_empty() {
-        lines.push(Line::from(Span::styled(safe(&rollup, width), dim())));
+        lines.extend(wrapped(&rollup, width, dim()));
     }
     let prefix = format!("{dir}/");
     for f in app
@@ -1865,7 +1875,7 @@ fn features_view(
     width: usize,
     links: &mut Vec<(usize, Selection)>,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+    let mut lines = next_lines(app, &Selection::Features, width);
     let model = &app.features;
     match &model.group {
         featmap::Group::NoFile => {
@@ -1877,20 +1887,12 @@ fn features_view(
                 Style::default(),
             ));
             lines.push(Line::from(""));
-            if app.snapshot.facts.is_none() {
-                lines.extend(wrapped("Scan the project first.", width, bold()));
-            } else if model.no_single_main {
+            if model.no_single_main && app.snapshot.facts.is_some() {
                 lines.extend(wrapped(
                     "Features need a program with one main() — this target has none (a \
                      library?); not supported yet.",
                     width,
                     dim(),
-                ));
-            } else {
-                lines.extend(wrapped(
-                    "On this row, press Enter and choose Write your features file.",
-                    width,
-                    bold(),
                 ));
             }
             return lines;
@@ -1902,14 +1904,16 @@ fn features_view(
                 Style::default().fg(Color::Yellow),
             ));
             lines.push(Line::from(""));
-            let next = if why.contains("symlink") {
-                "Replace the symlink with a regular file outside the cockpit."
+            // The Next step above says Edit; two errors need another fix.
+            if why.contains("symlink") {
+                lines.extend(wrapped(
+                    "Replace the symlink with a regular file outside the cockpit.",
+                    width,
+                    bold(),
+                ));
             } else if why.contains("newer harness") {
-                "Update the harness."
-            } else {
-                "On this row, press Enter and choose Edit the features file."
-            };
-            lines.extend(wrapped(next, width, bold()));
+                lines.extend(wrapped("Update the harness.", width, bold()));
+            }
             lines.extend(wrapped(
                 "Until it is fixed, verdicts do not run your features — Re-checks and \
                  migrations still work, and say so.",
@@ -1921,11 +1925,6 @@ fn features_view(
         featmap::Group::Valid => {}
     }
     if model.features.is_empty() {
-        lines.extend(wrapped(
-            "No features yet — choose Edit the features file to add yours.",
-            width,
-            bold(),
-        ));
         return lines;
     }
     if model.no_single_main {
@@ -2117,7 +2116,7 @@ fn summary_count(key: &str, n: usize) -> String {
         "migrated" => "with all units migrated",
         "holds" if one => "holds so far",
         "holds" => "hold so far",
-        "all-c" => "all C",
+        "all-c" => "still all C",
         _ => "to see",
     };
     format!("{n} {words}")
@@ -2239,8 +2238,19 @@ fn feature_view(
         ],
         width,
     )));
-    if let Some(next) = feature_next(f) {
-        lines.extend(wrapped(&next, width, Style::default()));
+    // The mark in words, then the one thing to do.
+    lines.extend(wrapped(&feature_mark_words(&f.state), width, dim()));
+    if let Some(next) = app.advice(&Selection::Feature(f.id.clone())) {
+        lines.extend(wrapped(&next.line(), width, bold()));
+    }
+    use featmap::FeatureState as S;
+    if !matches!(
+        f.state,
+        S::NotMapped | S::MapOutOfDate | S::Failing | S::SeeUnits
+    ) {
+        if let Some(next) = feature_next(f) {
+            lines.extend(wrapped(&next, width, Style::default()));
+        }
     }
     // F3's next step names its units, each a link (§8.2; review C3).
     if matches!(f.state, featmap::FeatureState::NeedsRecheck) {
@@ -2498,7 +2508,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
         Selection::Project => Some(summary(app, width, &mut links)),
         Selection::Dir(d) => Some(dir_view(app, d, width, &mut links)),
         Selection::Units => {
-            let mut lines = Vec::new();
+            let mut lines = next_lines(app, &Selection::Units, width);
             for (u, info) in app.snapshot.units.iter().zip(&app.files.units) {
                 links.push((lines.len(), Selection::Unit(u.unit.id.clone())));
                 lines.push(Line::from(clipped(
@@ -2630,6 +2640,12 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
 
 // ----- the activity panel ----------------------------------------------------------
 
+/// The activity line before the first command: how to start.
+pub const READY_FIRST: &str = "Ready — ↑↓ to choose a row, Enter for what you can do";
+
+/// The activity details before any command ran.
+pub const NOTHING_RAN: &str = "Nothing has run yet. When a command runs, its output appears here.";
+
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Row 1: the running command in words, or "Ready. Last: …"; its buttons on
@@ -2679,6 +2695,7 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
             let text = match (app.chat_waits_why(app.now), &app.last) {
                 (Some(why), _) => why.to_string(),
                 (None, Some(last)) => format!("Ready. Last: {last}"),
+                (None, None) if app.run.is_none() => READY_FIRST.to_string(),
                 (None, None) => "Ready.".to_string(),
             };
             (text, Style::default())
@@ -3009,7 +3026,7 @@ const HELP_LEGEND: &[(&str, &str)] = &[
         "verified, origin not recorded: judged, but no attempt is known to have produced it",
     ),
     ("◐", "tried: attempts exist, none accepted"),
-    ("◇", "planned: no attempt yet"),
+    ("◇", "planned: no Rust yet, no attempt"),
     ("⊘", "blocked"),
     ("!", "changed since the scan"),
     ("+", "not scanned yet"),
@@ -3023,6 +3040,10 @@ const HELP_LEGEND: &[(&str, &str)] = &[
     (
         files::NOT_IN_TOOL,
         "not part of this tool: a project file the open tool does not list",
+    ),
+    (
+        "✓0/13",
+        "on a folder: 0 of its 13 C files are in Rust (⚠1: one needs attention); the View says it in words",
     ),
 ];
 
@@ -3070,8 +3091,11 @@ const HELP_FEATURE_LEGEND: &[(&str, &str)] = &[
     ("◔", "the map is incomplete for it"),
     ("∅", "reaches no unit"),
     ("✓", "all its units migrated, each checked alone"),
-    ("◉", "holds so far: its migrated units pass"),
-    ("◌", "all its code is still C"),
+    (
+        "◉",
+        "holds so far: it runs Rust now, and its migrated units pass",
+    ),
+    ("◌", "still all C: none of its units is in Rust yet"),
     ("·", "see its units: they differ"),
 ];
 
@@ -3180,6 +3204,49 @@ const HELP_ROUTES: &[&str] = &[
     "Every act shows its exact command and waits until it is ready: keys typed or pasted ahead never answer it, and a held Enter never runs anything.",
 ];
 
+/// Help's first page: the six keys and the three marks a newcomer meets,
+/// under twelve lines (pass 1 of the 2026-10-18 critique); `↓` opens the
+/// rest ([`help_rows`]).
+pub const HELP_FIRST_KEYS: &[(&str, &str)] = &[
+    ("↑ ↓", "choose a row"),
+    (
+        "Enter",
+        "what you can do with it — the first item is the next step",
+    ),
+    ("Tab", "the next pane: Files, View, Chat"),
+    ("Esc", "close, or step back"),
+    ("?", "this help"),
+    ("q", "quit"),
+];
+
+/// The three marks of the first page.
+pub const HELP_FIRST_MARKS: &[(&str, &str)] = &[
+    ("◇", "planned: no Rust yet"),
+    ("✓", "in Rust: migrated, and the judge's checks pass"),
+    ("⚠", "needs attention: the View says why and what to do"),
+];
+
+/// The first page's last line.
+pub const HELP_MORE: &str = "↓ more: every key, the mouse, every mark, features, speed, the chat";
+
+fn help_first_page(width: usize, chat: bool) -> Vec<Line<'static>> {
+    let mut rows = Vec::new();
+    for (k, v) in HELP_FIRST_KEYS {
+        let v = if *k == "Tab" && !chat {
+            "the other pane: Files, View"
+        } else {
+            v
+        };
+        rows.extend(wrapped(&format!("{k:<7} {v}"), width, Style::default()));
+    }
+    for (g, v) in HELP_FIRST_MARKS {
+        rows.extend(wrapped(&format!("{g:<7} {v}"), width, Style::default()));
+    }
+    rows.push(Line::from(""));
+    rows.extend(wrapped(HELP_MORE, width, bold()));
+    rows
+}
+
 /// Help's rows, and which of them are the mouse on/off line (a click there
 /// is `m`).
 /// `chat`: the chat pane exists — `Some(why)` when it cannot be used.
@@ -3277,7 +3344,7 @@ fn help_rows(
 fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     match &app.run {
-        None => lines.push(Line::from(Span::styled("no command yet", dim()))),
+        None => lines.extend(wrapped(NOTHING_RAN, width, dim())),
         Some(run) => {
             lines.extend(wrapped(
                 &format!("$ {}", shell_line(&run.argv)),
@@ -3310,13 +3377,25 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
 }
 
 fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
-    let width = 64u16.min(area.width.saturating_sub(2)).max(20);
+    // Wider (up to 96) when the recommended item's reason needs it, so it
+    // stays one whole line where the screen allows.
+    let reason_w = m
+        .reason
+        .as_ref()
+        .map_or(0, |r| width_of(&display::line(r)) as u16 + 36);
+    let width = 64u16
+        .max(reason_w.min(96))
+        .min(area.width.saturating_sub(2))
+        .max(20);
     let inner_w = width.saturating_sub(2) as usize;
     let mut rows: Vec<Line<'static>> = Vec::new();
     let mut item_rows = Vec::new();
     let mut separated = false;
     for (i, it) in m.items.iter().enumerate() {
-        if it.model && !separated {
+        // The recommended item stays first even when it uses a model: its
+        // reason says so.
+        let recommended = i == 0 && m.reason.is_some();
+        if it.model && !separated && !recommended {
             separated = true;
             rows.push(Line::from(Span::styled(
                 clip(&format!("── {MODEL_SEPARATOR} ──"), inner_w),
@@ -3336,6 +3415,9 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         } else {
             Style::default()
         };
+        if recommended {
+            style = style.add_modifier(Modifier::BOLD);
+        }
         if i == m.focus {
             style = style.add_modifier(Modifier::REVERSED);
         }
@@ -3344,6 +3426,16 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
             format!("  {label}{}{accel}", " ".repeat(pad)),
             style,
         )]));
+        if let (true, Some(reason)) = (recommended, &m.reason) {
+            let mut why = format!("recommended: {}", display::line(reason));
+            if it.model {
+                why.push_str(" · uses a model");
+            }
+            rows.push(Line::from(Span::styled(
+                ellipsis(&format!("    ↳ {why}"), inner_w),
+                Style::default().fg(Color::Green),
+            )));
+        }
     }
     let items_h = (rows.len() as u16 + 2).min(area.height);
     if let Some(why) = &m.footer {
@@ -3599,6 +3691,28 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
             app.mode = Mode::Details { scroll: shown };
             app.hits.push((rect, Hit::Overlay));
         }
+        // Scroll 0 is the first page alone; ↓ opens the rest, its scroll
+        // one less (↑ at its top goes back to the first page).
+        Mode::Help { scroll: 0 } => {
+            // A short page: no wider than its longest line needs.
+            let width = pct(area.width, 86).clamp(40, 78).min(area.width);
+            let rows = help_first_page(width.saturating_sub(2) as usize, app.chat_on);
+            let rect = centered(
+                area,
+                width,
+                (rows.len() as u16 + 2).min(pct(area.height, 86).max(10)),
+            );
+            overlay(
+                frame,
+                rect,
+                " Help ",
+                &rows,
+                0,
+                Some("↓ more · any other key closes"),
+                None,
+            );
+            app.hits.push((rect, Hit::Overlay));
+        }
         Mode::Help { scroll } => {
             let rect = centered(
                 area,
@@ -3614,13 +3728,13 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
             let shown = overlay(
                 frame,
                 rect,
-                " Help ",
+                " Help — more ",
                 &rows,
-                scroll,
-                Some("any other key closes"),
+                scroll - 1,
+                Some("↑ at the top: the first page · any other key closes"),
                 Some("↓"),
             );
-            app.mode = Mode::Help { scroll: shown };
+            app.mode = Mode::Help { scroll: shown + 1 };
             app.hits.push((rect, Hit::Overlay));
             // The mouse on/off line answers a click as `m` does.
             let page = rect.height.saturating_sub(2) as usize;
@@ -4086,7 +4200,8 @@ mod tests {
         assert!(screen.contains("⇄"));
         assert!(screen.contains("›"), "a cut code line ends with a dim ›");
         assert!(screen.contains("same outputs as C"));
-        assert!(row_with(&screen, "Ready.").starts_with(" Ready."));
+        // Before the first command: how to start (pass 1 of the 2026-10-18 critique).
+        assert!(row_with(&screen, "Ready —").starts_with(&format!(" {READY_FIRST}")));
         assert!(screen.lines().last().is_some_and(|l| l.ends_with("q quit")));
     }
 
@@ -4119,7 +4234,7 @@ mod tests {
             "{narrow}"
         );
         // Activity stays at every width.
-        assert!(narrow.contains("Ready."));
+        assert!(narrow.contains("Ready —"));
     }
 
     /// Golden 3: a tree showing every glyph, each with its word.
@@ -4339,7 +4454,7 @@ mod tests {
         let buffer = render(&mut app, 120, 30);
         golden("dialog-unarmed.txt", &app, &buffer);
         assert!(text(&buffer).contains("reading…"));
-        assert!(text(&buffer).contains("Re-check u-lib with the oracle?"));
+        assert!(text(&buffer).contains("Re-check u-lib with the judge?"));
         arm(&mut app);
         let buffer = render(&mut app, 120, 30);
         golden("dialog-armed.txt", &app, &buffer);
@@ -4726,6 +4841,7 @@ mod tests {
         assert!(drawn(&app, &Hit::Activity("x")) && drawn(&app, &Hit::Activity("c")));
         check(&app, &buffer);
         key(&mut app, '?');
+        key(&mut app, 'j'); // past the first page
         let buffer = render(&mut app, 120, 30);
         let (r, _) = app
             .hits
@@ -5019,10 +5135,10 @@ mod tests {
         let detect = m
             .items
             .iter()
-            .position(|i| i.label.starts_with("Find hazards"))
+            .position(|i| i.label.starts_with("Find risky patterns"))
             .unwrap();
         click_on(&mut app, &Hit::MenuItem(detect), t);
-        assert!(matches!(&app.mode, Mode::Dialog(c) if c.title.starts_with("Find hazards")));
+        assert!(matches!(&app.mode, Mode::Dialog(c) if c.title.starts_with("Find risky patterns")));
         render(&mut app, 120, 30);
         app.arm(t + ms(30), false);
         app.arm(t + ms(350), false);
@@ -5576,6 +5692,170 @@ mod tests {
         assert_ne!(said(&app).as_deref(), Some(DRAG_HINT));
     }
 
+    /// Pass 1 of the 2026-10-18 critique: Help opens on a first page of six
+    /// keys and three marks, under twelve lines; ↓ opens the rest, ↑ at its
+    /// top goes back.
+    #[test]
+    fn help_opens_on_a_short_first_page() {
+        let page = help_first_page(100, true);
+        assert!(page.len() < 12, "{} lines", page.len());
+        let words: Vec<String> = page
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(
+            words,
+            [
+                "↑ ↓     choose a row",
+                "Enter   what you can do with it — the first item is the next step",
+                "Tab     the next pane: Files, View, Chat",
+                "Esc     close, or step back",
+                "?       this help",
+                "q       quit",
+                "◇       planned: no Rust yet",
+                "✓       in Rust: migrated, and the judge's checks pass",
+                "⚠       needs attention: the View says why and what to do",
+                "",
+                "↓ more: every key, the mouse, every mark, features, speed, the chat",
+            ]
+        );
+        let mut app = app("helppage");
+        key(&mut app, '?');
+        let screen = text(&render(&mut app, 120, 40));
+        assert!(screen.contains("↑ ↓     choose a row"), "{screen}");
+        assert!(screen.contains(HELP_MORE), "{screen}");
+        assert!(!screen.contains("Mouse:"), "the manual waits: {screen}");
+        assert!(!screen.contains("a m e E r R x d v"), "{screen}");
+        key(&mut app, 'j');
+        let screen = text(&render(&mut app, 120, 40));
+        assert!(screen.contains("Mouse: on"), "{screen}");
+        assert!(screen.contains("a m e E r R x d v"), "{screen}");
+        key(&mut app, 'k');
+        let screen = text(&render(&mut app, 120, 40));
+        assert!(
+            screen.contains(HELP_MORE),
+            "back on the first page: {screen}"
+        );
+    }
+
+    /// Pass 1 of the 2026-10-18 critique: the project's View, a unit's View
+    /// and the needs-attention list each say what to do next; the menus
+    /// open on it; the root's counts are words; the details say what will
+    /// appear before anything ran.
+    #[test]
+    fn every_view_says_its_next_step() {
+        // u-lib's plan status says pending while its verdict is green: it
+        // needs attention (the words of each cause: files.rs's tests).
+        let mut app = app("nextviews");
+        let plan = app.config.target.join("migration/plan.toml");
+        let text_of = std::fs::read_to_string(&plan).unwrap();
+        std::fs::write(
+            &plan,
+            text_of.replace("status = \"verified\"", "status = \"pending\""),
+        )
+        .unwrap();
+        assert!(app.reload(true));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains(
+                "Next step: u-lib needs attention: status and verdict disagree — Re-check with \
+                 the judge — open it"
+            ),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("· 1 needs attention · 0 of 1 C file in Rust "),
+            "the title's counts in words: {screen}"
+        );
+        assert!(screen.contains("Needs attention:"), "{screen}");
+        assert!(
+            screen.contains("    status and verdict disagree — Re-check with the judge"),
+            "cause and action per item: {screen}"
+        );
+        // The project's menu: the jump to the unit first, with its reason.
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else {
+            panic!("a menu")
+        };
+        assert_eq!(m.items[0].label, "Open unit u-lib");
+        assert_eq!(
+            m.reason.as_deref(),
+            Some("u-lib needs attention: status and verdict disagree")
+        );
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("↳ recommended: u-lib needs attention: status and verdict disagree"),
+            "{screen}"
+        );
+        // The unit's View: one state word, its Next step; its menu opens on
+        // Re-check with the judge.
+        app.mode = Mode::Normal;
+        app.select(Selection::Unit("u-lib".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("Next step: Its status and its verdict disagree — Re-check it"),
+            "{screen}"
+        );
+        assert!(!screen.contains("· status"), "one state word: {screen}");
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else {
+            panic!("a menu")
+        };
+        assert_eq!(m.items[0].label, "Re-check with the judge");
+        assert_eq!(m.focus, 0);
+        // The details before any command.
+        app.mode = Mode::Details { scroll: 0 };
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains(NOTHING_RAN), "{screen}");
+        assert!(!screen.contains("no command yet"), "{screen}");
+    }
+
+    /// A planned unit's View says "No Rust yet" and its Next step; the
+    /// project's says how many units have no Rust and which is first.
+    #[test]
+    fn a_planned_unit_says_no_rust_yet() {
+        let mut app = app_of("targets/zopfli", "planned-next");
+        app.select(Selection::Unit("u-cache".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains("◇ u-cache planned "), "{screen}");
+        assert!(screen.contains("No Rust yet"), "{screen}");
+        assert!(
+            screen.contains("Next step: No Rust yet — ask the chat to migrate it"),
+            "{screen}"
+        );
+        assert!(!screen.contains("No crate yet"), "{screen}");
+        assert!(
+            screen.contains("│ no Rust yet"),
+            "the Rust column: {screen}"
+        );
+        assert!(!screen.contains("no crate"), "{screen}");
+        let next = app.next_step().expect("a Next step");
+        assert!(
+            next.text.ends_with(
+                "no Rust yet — migrate the first, u-cache: press Enter and choose Migrate — \
+                 ask in chat"
+            ),
+            "{}",
+            next.text
+        );
+        assert_eq!(next.action, Some(crate::menu::Action::Migrate));
+        // A unit that calls other units stays C in this version: said, and
+        // nothing recommended in its menu.
+        app.select(Selection::Unit("u-lz77".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains(
+                "Next step: It calls other units (u-cache, u-hash), so in this version it stays C"
+            ),
+            "{screen}"
+        );
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else {
+            panic!("a menu")
+        };
+        assert!(m.reason.is_none());
+    }
+
     /// §7: Help's "Mouse on/off" (a key, `m`, and a click on its line);
     /// with the mouse off every mouse event is ignored.
     #[test]
@@ -5583,6 +5863,7 @@ mod tests {
         let mut app = app("mtoggle");
         let t = Instant::now();
         key(&mut app, '?');
+        key(&mut app, 'j'); // past the first page
         let screen = text(&render(&mut app, 120, 30));
         assert!(
             screen.contains("Mouse: on — click here, or press m, to turn it off"),
@@ -5777,7 +6058,7 @@ mod tests {
         let detect = m
             .items
             .iter()
-            .position(|i| i.label.starts_with("Find hazards"))
+            .position(|i| i.label.starts_with("Find risky patterns"))
             .unwrap();
         click_on(&mut app, &Hit::MenuItem(detect), t);
         render(&mut app, 120, 30);
@@ -6690,8 +6971,12 @@ mod tests {
         // records no attempt: commit, edit, verify).
         app.select(Selection::Unit("u001-katajainen".into()));
         let screen = text(&render(&mut app, 200, 50));
+        assert!(screen.contains("perf times the Rust in use."), "{screen}");
         assert!(
-            screen.contains("Next: perf times the Rust in use."),
+            screen.contains(
+                "Next step: Its Rust is slower than the C — if speed matters here, change it as \
+                 said below"
+            ),
             "{screen}"
         );
         assert!(
@@ -6754,7 +7039,14 @@ mod tests {
             "{screen}"
         );
         assert!(
-            screen.contains("Next: Compare the outputs; then change the unit's Rust (below)"),
+            screen.contains("Compare the outputs; then change the unit's Rust (below)"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains(
+                "Next step: With its Rust the program behaves differently on big-text — Compare \
+                 the outputs"
+            ),
             "{screen}"
         );
         assert!(!screen.contains("perf times the Rust in use"), "{screen}");
@@ -7064,11 +7356,11 @@ mod tests {
     #[test]
     fn the_speed_group_says_its_state() {
         let mut app = app_of("targets/zopfli", "speed-states");
-        assert_eq!(app.speed.label(), "Speed (no file)");
+        assert_eq!(app.speed.label(), "Speed — not set up");
         app.select(Selection::Speed);
         let screen = text(&render(&mut app, 80, 40));
         assert!(
-            screen.contains("press Enter and choose Write your"),
+            screen.contains("Next step: No workloads file yet"),
             "{screen}"
         );
         app.select(Selection::Project);
@@ -7706,12 +7998,49 @@ mod tests {
         for line in [
             "◉ Compress to gzip  holds so far · 1 of 10 units",
             "◉ Compress to raw deflate  holds so far · 1 of 9 units",
-            "◌ Show the help  all C",
-            "◌ Report a missing file  all C",
+            "◌ Show the help  still all C",
+            "◌ Report a missing file  still all C",
             "Your features ran 108 of the 111 functions the map watches.",
         ] {
             assert!(screen.contains(line), "{line}\n{screen}");
         }
+        // The selected feature's mark, said in words (pass 1 of the
+        // 2026-10-18 critique).
+        let id_of = |app: &App, name: &str| {
+            app.features
+                .features
+                .iter()
+                .find(|f| f.name == name)
+                .map(|f| f.id.clone())
+                .unwrap()
+        };
+        let help = id_of(&app, "Show the help");
+        app.select(Selection::Feature(help));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("◌ still all C: none of the units it runs is in Rust yet"),
+            "{screen}"
+        );
+        let gzip = id_of(&app, "Compress to gzip");
+        app.select(Selection::Feature(gzip));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains(
+                "◉ runs Rust now: 1 of its 10 units is in Rust, and each passed this feature's \
+                 checks"
+            ),
+            "{screen}"
+        );
+        assert!(screen.contains("Next step: Nothing to do"), "{screen}");
+        // The summary: counts only, no dense parenthetical.
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("Features: 7 — 5 hold so far, 2 still all C\u{20}"),
+            "{screen}"
+        );
+        assert!(!screen.contains("watched functions"), "{screen}");
+        assert!(!screen.contains("swapped in)"), "{screen}");
         app.select(Selection::Unit("u001-katajainen".into()));
         let screen = text(&render(&mut app, 160, 40));
         assert!(
@@ -7863,10 +8192,13 @@ mod tests {
     #[test]
     fn features_start_with_a_map_then_a_re_check() {
         let mut app = zopfli_with_features("feat-next", FEATURES_TOML);
-        let (step, act) = app.next_step().expect("a next step");
-        assert!(step.starts_with("Map the features"), "{step}");
-        assert_eq!(act, Some(crate::app::Act::MapFeatures));
-        let items = app.menu_items();
+        let next = app.next_step().expect("a next step");
+        assert!(next.text.starts_with("Map the features"), "{}", next.text);
+        assert_eq!(
+            next.action,
+            Some(crate::menu::Action::Act(crate::app::Act::MapFeatures))
+        );
+        let mut items = app.menu_items();
         let map = items
             .iter()
             .find(|i| i.label == "Map the features")
@@ -7883,25 +8215,26 @@ mod tests {
                 &format!("--target={}", app.config.target.display())
             ]
         );
+        // The menu puts it first, with the Next step as its reason.
         assert_eq!(
-            crate::menu::recommended(
-                &items,
-                &Selection::Project,
-                Some(crate::app::Act::MapFeatures),
-                None
-            ),
-            items
-                .iter()
-                .position(|i| i.label == "Map the features")
-                .unwrap()
+            crate::menu::recommend(&mut items, Some(&next)).as_deref(),
+            Some("Map the features")
         );
+        assert_eq!(items[0].label, "Map the features");
         // Mapped: u001 has Rust, and its verdict predates the features.
         write_current_map(&app);
         app = crate::app::tests::app_of_path(&app.config.target);
         assert!(app.features.map.current());
-        let (step, act) = app.next_step().expect("a next step");
-        assert!(step.starts_with("Re-check u001-katajainen"), "{step}");
-        assert_eq!(act, None);
+        let next = app.next_step().expect("a next step");
+        assert!(
+            next.text.starts_with("Re-check u001-katajainen"),
+            "{}",
+            next.text
+        );
+        assert_eq!(
+            next.action,
+            Some(crate::menu::Action::OpenUnit("u001-katajainen".into()))
+        );
         // The unit's screen: the marker on its verdict line, the features line.
         app.select(Selection::Unit("u001-katajainen".into()));
         let screen = text(&render(&mut app, 160, 40));

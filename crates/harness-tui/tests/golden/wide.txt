@@ -1,14 +1,15 @@
 ┌ Files ───────────────────────┐┌ test_case/src/lib.c · migrated (u-lib) ──────────────────────────────────────────────┐
-│▾ harness-tui-g000-0000000000 ││✓ u-lib migrated · status verified                                                    │
-│  ▾ test_case/            ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
-│    ▾ include/                ││Internal: get_bits() (compared through the unit's exported functions)                 │
-│        · lib.h         header││C  read_scalefactors (lib.c:17)           ⇄ Rust  read_scalefactors (src/ffi.rs:11)   │
-│    ▾ src/                ✓1/1││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe extern "C" fn read_scalefa›│
-│      ▸ ✓ lib.c       migrated││18                                   int› │  12     bs: *mut BsT,                     │
-│  ▾ Units (1)                 ││19     static const float g_deq_L12[18 *› │  13     pba: *mut u8,                     │
-│    ▸ ✓ u-lib         migrated││20         9.53674316e-07f / 3,     7.56› │  14     scfcod: *mut u8,                  │
-│    Features (none yet)       ││21         6.00777173e-07f / 3,     9.53› │  15     bands: i32,                       │
-│    Speed (no file)           ││22         7.56931807e-07f / 7,     6.00› │  16     scf: *mut f32,                    │
+│▾ harness-tui-g000-0000000000 ││✓ u-lib migrated                                                                      │
+│  ▾ test_case/            ✓1/1││Next step: In Rust and checked — nothing to do                                        │
+│    ▾ include/                ││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
+│        · lib.h         header││Internal: get_bits() (compared through the unit's exported functions)                 │
+│    ▾ src/                ✓1/1││C  read_scalefactors (lib.c:17)           ⇄ Rust  read_scalefactors (src/ffi.rs:11)   │
+│      ▸ ✓ lib.c       migrated││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe extern "C" fn read_scalefa›│
+│  ▾ Units (1)                 ││18                                   int› │  12     bs: *mut BsT,                     │
+│    ▸ ✓ u-lib         migrated││19     static const float g_deq_L12[18 *› │  13     pba: *mut u8,                     │
+│    Features (none yet)       ││20         9.53674316e-07f / 3,     7.56› │  14     scfcod: *mut u8,                  │
+│    Speed — not set up        ││21         6.00777173e-07f / 3,     9.53› │  15     bands: i32,                       │
+│                              ││22         7.56931807e-07f / 7,     6.00› │  16     scf: *mut f32,                    │
 │                              ││23         9.53674316e-07f / 15,    7.56› │  17 ) {                                   │
 │                              ││24         6.00777173e-07f / 15,    9.53› │  18     let bands_n: usize = if bands > 0›│
 │                              ││25         7.56931807e-07f / 31,    6.00› │  19                                       │
@@ -31,10 +32,9 @@
 │                              ││42         6.00777173e-07f / 65535, 9.53› │  36         core::slice::from_raw_parts_m›│
 │                              ││43         7.56931807e-07f / 3,     6.00› │  37     };                                │
 │                              ││44         9.53674316e-07f / 5,     7.56› │  38                                       │
-│                              ││45         6.00777173e-07f / 5,     9.53› │  39     // `bs` (the bs_t struct) must be›│
 │                              ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only  ✓ driver shape │
 │                              ││        ✓ same outputs as C  ✓ sanitizers  ✓ boundary calls                           │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
- Ready.
+ Ready — ↑↓ to choose a row, Enter for what you can do
 
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

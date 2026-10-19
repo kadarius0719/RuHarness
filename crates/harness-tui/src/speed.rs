@@ -239,7 +239,7 @@ impl SpeedModel {
     /// The tree's label, at most 19 columns (§3.11, build note 28).
     pub fn label(&self) -> String {
         match &self.group {
-            Group::NoFile => "Speed (no file)".into(),
+            Group::NoFile => "Speed — not set up".into(),
             Group::NoWorkload => "Speed (no workload)".into(),
             Group::FileError(_) => "Speed (file error)".into(),
             Group::NotYetRun => "Speed (not yet run)".into(),

@@ -89,28 +89,29 @@ fn item(label: impl Into<String>, action: Action, accel: Option<&'static str>) -
 /// The menu's separator text for model-backed items.
 pub const MODEL_SEPARATOR: &str = "Uses a model — can take minutes";
 
-/// The index of the recommended item (focus starts there).
-/// `features_want`: on the Features row or a feature, the item its state
-/// asks for (§8.5) — Write on `Features (none yet)`, Edit on `Features
-/// (error)` and on a feature in F2, Map on a feature in F4/F5.
-pub fn recommended(
-    items: &[Item],
-    sel: &Selection,
-    next_step: Option<Act>,
-    features_want: Option<Action>,
-) -> usize {
-    let find = |f: &dyn Fn(&Item) -> bool| items.iter().position(f);
-    let open = find(&|i: &Item| matches!(i.action, Action::Open | Action::Fold));
-    let act = |act: Act| find(&|i: &Item| i.action == Action::Act(act) && i.greyed.is_none());
-    let wanted =
-        features_want.and_then(|want| find(&|i: &Item| i.action == want && i.greyed.is_none()));
-    match sel {
-        Selection::Project => next_step.and_then(act).or(open).unwrap_or(0),
-        Selection::Features | Selection::Feature(_) | Selection::Speed => {
-            wanted.or(open).unwrap_or(0)
-        }
-        _ => open.unwrap_or(0),
-    }
+/// Put the Next step's item first (docs/reviews/2026-10-18-cockpit-usability-
+/// critique.md, pass 1): the item that does what the View's "Next step" says,
+/// when the menu holds it and it can run now. Returns its one-line reason,
+/// the Next step up to its first " — ". A greyed item keeps its place and
+/// its reason; nothing moves when no item does it.
+pub fn recommend(items: &mut Vec<Item>, advice: Option<&crate::next::Advice>) -> Option<String> {
+    let advice = advice?;
+    let want = advice.action.as_ref()?;
+    let at = items
+        .iter()
+        .position(|i| &i.action == want && i.greyed.is_none())?;
+    let it = items.remove(at);
+    items.insert(0, it);
+    Some(reason_of(&advice.text))
+}
+
+/// A Next step's reason: its words up to the first " — ".
+pub fn reason_of(text: &str) -> String {
+    text.split(" — ")
+        .next()
+        .unwrap_or(text)
+        .trim_end_matches(':')
+        .to_string()
 }
 
 impl App {
@@ -308,7 +309,7 @@ impl App {
     fn recheck_gate(&self, u: usize) -> Option<String> {
         let unit = &self.snapshot.units[u];
         if unit.crate_dir.is_none() {
-            return Some("the unit has no crate yet".into());
+            return Some("the unit has no Rust yet".into());
         }
         if !unit.report.source_fresh {
             return Some(
@@ -320,8 +321,8 @@ impl App {
         if !self.files.units.get(u).is_some_and(|i| i.known_code) {
             return Some(match unit.report.verdict.state {
                 harness_core::status::VerdictState::Present => {
-                    "the crate differs from every recorded attempt and from what the oracle last \
-                     judged — restore it, or record it with `harness override` (see Help)"
+                    "its Rust differs from every recorded attempt and from what the judge last \
+                     checked — restore it, or record it with `harness override` (see Help)"
                         .into()
                 }
                 _ => "the crate matches no recorded attempt and there is no verdict to compare \
@@ -372,12 +373,8 @@ impl App {
         if unit.verdict.as_ref().is_some_and(|v| !v.checks.is_empty()) {
             items.push(item(of("Show the checks"), Action::ShowChecks, Some("v")));
         }
-        let mut recheck = self.act_item(
-            of("Re-check with the oracle"),
-            Act::Verify,
-            Some(unit),
-            None,
-        );
+        let mut recheck =
+            self.act_item(of("Re-check with the judge"), Act::Verify, Some(unit), None);
         if recheck.greyed.is_none() {
             recheck.greyed = self.recheck_gate(u);
         }
@@ -417,9 +414,18 @@ impl App {
     pub fn menu_items(&self) -> Vec<Item> {
         let sel = &self.selection;
         let mut items = Vec::new();
-        // Every node opens into the View (§4.2 "any | Open"); a directory
-        // and the units group also fold.
-        items.push(item("Open", Action::Open, None));
+        // The View already shows the selected row beside the tree: Open is
+        // offered only where it is hidden — one pane, Files showing (pass 1
+        // of the 2026-10-18 critique). A directory and the groups also fold.
+        if self.layout.single_pane && self.focus == crate::app::Focus::Files {
+            items.push(item("Open", Action::Open, None));
+        }
+        // The project's Next step names a unit: the jump to it.
+        if *sel == Selection::Project {
+            if let Some(Action::OpenUnit(id)) = self.next_step().and_then(|n| n.action) {
+                items.push(item(format!("Open unit {id}"), Action::OpenUnit(id), None));
+            }
+        }
         if matches!(
             sel,
             Selection::Dir(_) | Selection::Units | Selection::Features
@@ -434,7 +440,6 @@ impl App {
                 None,
             ));
         }
-        items.push(item("Re-read the project", Action::Reread, Some("g")));
         let file_state = match sel {
             Selection::File(p) | Selection::Function(p, _) => {
                 self.files.file(p).map(|f| f.state.clone())
@@ -465,7 +470,7 @@ impl App {
         }
         if project || is_file {
             let mut it = self.act_item(
-                "Find hazards (run the detectors)".into(),
+                "Find risky patterns in the C".into(),
                 Act::Detect,
                 None,
                 None,
@@ -627,6 +632,8 @@ impl App {
             it.greyed = chat_off;
             items.push(it);
         }
+        // Housekeeping last: after what the row is for.
+        items.push(item("Re-read the project", Action::Reread, Some("g")));
         if self.running {
             items.push(item(
                 "Cancel the running command",
@@ -754,7 +761,9 @@ mod tests {
             .collect()
     }
 
-    /// §4.2, the table: the items of each node of the tractor case.
+    /// §4.2, the table: the items of each node of the tractor case. The
+    /// View shows the selected row already, so no Open; Re-read the project
+    /// comes after what the row is for (pass 1 of the 2026-10-18 critique).
     #[test]
     fn the_items_fit_each_node() {
         let mut app = app("menutable");
@@ -765,90 +774,153 @@ mod tests {
         assert_eq!(
             at(Selection::Project),
             [
-                "Open",
-                "Re-read the project",
                 "Scan the project",
                 "Refresh the plan",
-                "Find hazards (run the detectors)"
+                "Find risky patterns in the C",
+                "Re-read the project"
             ]
         );
         assert_eq!(
             at(Selection::Dir("test_case".into())),
-            ["Open", "Fold", "Re-read the project"]
+            ["Fold", "Re-read the project"]
         );
         assert_eq!(
             at(Selection::File("test_case/src/lib.c".into())),
             [
-                "Open",
-                "Re-read the project",
-                "Find hazards (run the detectors)",
+                "Find risky patterns in the C",
                 "Open unit u-lib",
                 "Show the checks (u-lib)",
-                "Re-check with the oracle (u-lib)"
+                "Re-check with the judge (u-lib)",
+                "Re-read the project"
             ]
         );
         assert_eq!(
             at(Selection::File("test_case/include/lib.h".into())),
-            [
-                "Open",
-                "Re-read the project",
-                "Find hazards (run the detectors)"
-            ]
+            ["Find risky patterns in the C", "Re-read the project"]
         );
         assert_eq!(
             at(Selection::Unit("u-lib".into())),
             [
-                "Open",
-                "Re-read the project",
                 "Show the checks",
-                "Re-check with the oracle",
+                "Re-check with the judge",
                 // Greyed: no workloads file yet.
-                "(Measure this unit's speed)"
+                "(Measure this unit's speed)",
+                "Re-read the project"
             ]
         );
         assert_eq!(
             at(Selection::Crate("u-lib".into())),
             [
-                "Open",
-                "Re-read the project",
                 "Show the checks",
-                "Re-check with the oracle",
-                "Hand edit"
+                "Re-check with the judge",
+                "Hand edit",
+                "Re-read the project"
             ]
         );
         assert_eq!(
             at(Selection::Attempt("u-lib".into(), "a-13c941dfff95".into())),
             [
-                "Open",
-                "Re-read the project",
                 "Hand edit",
                 "Show the checks",
                 "Replace u-lib's verified crate with a-13c9",
+                "Re-read the project",
                 "Modify with a note"
             ]
         );
         assert_eq!(
             at(Selection::Attempt("u-lib".into(), "a-28d8ddc411f9".into())),
             [
-                "Open",
-                "Re-read the project",
                 "Hand edit",
                 "Show the checks",
                 "Replace u-lib's verified crate with a-28d8",
                 "Compare with the promoted attempt",
+                "Re-read the project",
                 "Modify with a note"
             ]
         );
         assert_eq!(
             at(Selection::Attempt("u-lib".into(), "a-d2e5513cdfa6".into())),
             [
-                "Open",
-                "Re-read the project",
                 "Hand edit",
                 "Show the checks",
                 "Compare with the promoted attempt",
+                "Re-read the project",
                 "Modify with a note"
             ]
+        );
+        // One pane, Files showing: the View is hidden, so Open comes back.
+        app.layout.single_pane = true;
+        app.select(Selection::Unit("u-lib".into()));
+        assert_eq!(labels(&app.menu_items())[0], "Open");
+        app.focus = crate::app::Focus::View;
+        assert!(!labels(&app.menu_items()).contains(&"Open".to_string()));
+    }
+
+    /// Pass 1 of the 2026-10-18 critique: the menu opens on the Next step's
+    /// item, first and focused, its reason beside it; a greyed item never
+    /// moves, and keeps its reason.
+    #[test]
+    fn the_menu_opens_on_the_next_step() {
+        let mut app = app("menunext");
+        // A planned unit: Migrate — ask in chat first, though it uses a
+        // model, with "no Rust yet" as its reason.
+        let plan = app.config.target.join("migration/plan.toml");
+        let text = std::fs::read_to_string(&plan).unwrap();
+        std::fs::write(
+            &plan,
+            text.replace("status = \"verified\"", "status = \"pending\""),
+        )
+        .unwrap();
+        // No attempt, no verdict, no Rust: planned.
+        let dir = app.config.target.join("migration/units/u-lib");
+        for d in ["attempts", "u_lib_rs"] {
+            std::fs::remove_dir_all(dir.join(d)).unwrap();
+        }
+        for f in [
+            "oracle-latest.json",
+            "oracle-last-green.json",
+            "oracle-latest.md",
+        ] {
+            std::fs::remove_file(dir.join(f)).unwrap();
+        }
+        assert!(app.reload(true));
+        // A chat that can start (its binaries found).
+        app.chat_on = true;
+        app.chat.bins = Ok(crate::chat::runtime::Binaries {
+            claude: "/bin/sh".into(),
+            mcp: "/bin/sh".into(),
+        });
+        app.select(Selection::Unit("u-lib".into()));
+        let next = app.advice(&app.selection).expect("a Next step");
+        assert_eq!(next.action, Some(Action::Migrate), "{}", next.text);
+        assert!(next.text.starts_with("no Rust yet — "), "{}", next.text);
+        app.open_menu();
+        let crate::app::Mode::Menu(m) = &app.mode else {
+            panic!("a menu")
+        };
+        assert_eq!(m.items[0].label, "Migrate — ask in chat");
+        assert_eq!(m.focus, 0);
+        assert_eq!(m.reason.as_deref(), Some("no Rust yet"));
+        // Its Re-check stays greyed with its reason, and is not moved up.
+        let recheck = m
+            .items
+            .iter()
+            .find(|i| i.label == "Re-check with the judge")
+            .expect("Re-check listed");
+        assert_eq!(recheck.greyed.as_deref(), Some("the unit has no Rust yet"));
+        // The chat off: Migrate is greyed, so nothing is recommended.
+        app.mode = crate::app::Mode::Normal;
+        app.chat.bins = Err("no `claude` on PATH".into());
+        app.open_menu();
+        let crate::app::Mode::Menu(m) = &app.mode else {
+            panic!("a menu")
+        };
+        assert!(m.reason.is_none());
+        assert_ne!(m.items[0].action, Action::Migrate);
+        assert_eq!(reason_of("no Rust yet — ask the chat"), "no Rust yet");
+        assert_eq!(
+            reason_of("write your features: press Enter"),
+            "write your features: press Enter"
         );
     }
 

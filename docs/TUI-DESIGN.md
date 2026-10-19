@@ -131,14 +131,15 @@ The screen is the friendly wrapper's (docs/COCKPIT-WRAPPER-DESIGN.md §1–§9, 
 
 ```
 ┌ Files ───────────────────────┐┌ test_case/src/lib.c · migrated (u-lib) ──────────────────────────┐
-│▾ read_scalefactors_lib   ✓1/1││✓ u-lib migrated · status verified                                │
-│  ▾ test_case/            ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, fresh       │
-│    ▾ include/                ││Internal: get_bits() (compared through the unit's exported fun…)  │
-│        · lib.h         header││C  read_scalefactors (lib.c:17)           ⇄ Rust  read_scalefact… │
-│    ▾ src/                ✓1/1││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe exter›│
-│      ▸ ✓ lib.c       migrated││…                                         │  …                   │
-│  ▾ Units (1)                 ││Checks  ✓ same exports  ✓ allowed calls only  ✓ driver shape  …   │
-│    ▸ ✓ u-lib         migrated││        ✓ whole program  ✓ sanitizers  ✓ boundary calls          │
+│▾ read_scalefactors_lib   ✓1/1││✓ u-lib migrated                                                  │
+│  ▾ test_case/            ✓1/1││Next step: In Rust and checked — nothing to do                    │
+│    ▾ include/                ││Crate from attempt a-13c9 (pipeline) · verdict green, fresh       │
+│        · lib.h         header││Internal: get_bits() (compared through the unit's exported fun…)  │
+│    ▾ src/                ✓1/1││C  read_scalefactors (lib.c:17)           ⇄ Rust  read_scalefact… │
+│      ▸ ✓ lib.c       migrated││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe exter›│
+│  ▾ Units (1)                 ││…                                         │  …                   │
+│    ▸ ✓ u-lib         migrated││Checks  ✓ same exports  ✓ allowed calls only  ✓ driver shape  …   │
+│                              ││        ✓ whole program  ✓ sanitizers  ✓ boundary calls          │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────┘
  Ready. Last: Re-check u-lib — GREEN — 6 checks passed, 1 not run (whole-program: …) (41 s) [Details c]
  plan: no changes
@@ -152,7 +153,8 @@ The screen is the friendly wrapper's (docs/COCKPIT-WRAPPER-DESIGN.md §1–§9, 
   design §2.3, pure over the snapshot and the walk); directories and the project show
   rollups (`✗2 ⚠1 ✓3/11 (+1 ✓?)`). The selection is keyed by path and id
   (`tree::Selection`), kept across reloads (a vanished node gives way to its parent).
-- **View**: the project summary with the Next step (a fact, never model work), a
+- **View**: every View leads with its Next step (`next.rs`; model work only ever
+  recommended, as Migrate — ask in chat), then: the project summary, a
   directory's files, the C source of a file no unit owns, the pairs of an owned file or a
   public function (the pair renderer below), a unit, its crate, an attempt with its turns,
   provider, model and note. A cut code line ends with a dim `›`; `←`/`→` scroll sideways.

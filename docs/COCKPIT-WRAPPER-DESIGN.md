@@ -267,15 +267,28 @@ drag or multi-select.
 - the last command's outcome;
 - lists of files that need action (failing, attention, changed, new), each a jump link;
 - a **Next step** line, stated as a fact. The first match wins:
-  1. nothing scanned → "Nothing is scanned yet — choose Scan the project";
+  1. nothing scanned → "Nothing is scanned yet — press Enter and choose Scan the project";
   2. changed, new or missing files → "N files changed since the scan — Scan the project
      again";
-  3. no plan → "No plan yet — Refresh the plan";
+  3. no plan → "No plan yet — press Enter and choose Refresh the plan";
   4. a unit whose C changed since planning → "u-…'s C changed since it was planned — scan,
      refresh the plan, then review its diff";
-  5. otherwise, no line.
+  5. a unit that needs attention → "u-… needs attention: <its cause and action, e.g. verdict
+     made elsewhere — Re-check with the judge> — open it";
+  6. a failing unit → "u-… is failing: its last check was red — open it";
+  7. features not mapped, or units not re-checked on them (docs/FEATURES-DESIGN.md §8.5);
+  8. a GREEN attempt waiting on a unit with no Rust → "u-… has a GREEN attempt waiting for
+     you — open it and Accept it";
+  9. units with no Rust that call no other unit → "N units have no Rust yet — migrate the
+     first, u-…: press Enter and choose Migrate — ask in chat";
+  10. every unit that can move in Rust and green → write your features, else measure speed
+      (Speed, at the end of the tree), else "nothing to do".
 
-  It never suggests model work.
+  Model work is only ever recommended as **Migrate — ask in chat**, which types a request
+  into the chat for the person to send; nothing starts on its own (pass 1 of
+  docs/reviews/2026-10-18-cockpit-usability-critique.md, which also gave every other View
+  its Next step line: a unit's, an attempt's, a feature's, Features', Speed's — `next.rs`).
+  The needs-attention list says, under each file, its cause and action in a few words.
 
 **Check names** are shown in words. The raw name stays in the details:
 
@@ -298,10 +311,13 @@ closes them.
 
 ### 4.1 How it behaves
 
-`Enter` on a tree row opens that row's menu. Focus starts on the recommended item:
-- **Open** (focus moves into the View) on a file, function, crate or attempt;
-- the Next step's action on the project, if there is one; otherwise Open;
-- **Open / Fold** on a directory.
+`Enter` on a tree row opens that row's menu. The item that does the View's Next step comes
+**first**, focused and bold, with one line under it, "↳ recommended: <the Next step up to its
+first ' — '>" (and "· uses a model" for Migrate — ask in chat, which then sits above the
+model separator). A greyed item is never moved up and keeps its reason; with no such item,
+the menu opens on its first item. **Open** is listed only when the View is hidden (one pane,
+Files showing): elsewhere the row is already shown. **Re-read the project** comes after the
+row's own items (pass 1 of docs/reviews/2026-10-18-cockpit-usability-critique.md).
 
 The menu opens with a fresh check of the lock holder: one file, plus `live_holder`'s pid check.
 
@@ -320,12 +336,13 @@ Each argv follows `harness --json`, and `--target=<root>` is always attached.
 
 | node · state | items |
 |---|---|
-| any | **Open** · **Re-read the project** (`g`) |
+| any | **Re-read the project** (`g`), after the row's own items · **Open** only when the View is hidden |
 | project; a file in states 1–3 | **Scan the project** — `scan` |
 | project; a file in state 6; a unit whose C changed | **Refresh the plan** — `plan` |
-| project, file | **Find hazards (run the detectors)** — `detect` |
+| project, file | **Find risky patterns in the C** — `detect` |
+| project, when its Next step names a unit | **Open unit u-…** (a jump) |
 | owned file or function | **Open unit u-…** (a jump) and the unit's items below, labelled "… u-…" |
-| unit, crate, owned file or function | **Show the checks** (`v`) · **Re-check with the oracle** — `verify <unit>` [`--allow-unsandboxed`] · **Accept a-… into u-…** when exactly one attempt is green, bound and not promoted; otherwise **Choose an attempt to accept…** (jumps to the unit's attempts) |
+| unit, crate, owned file or function | **Show the checks** (`v`) · **Re-check with the judge** — `verify <unit>` [`--allow-unsandboxed`] · **Accept a-… into u-…** when exactly one attempt is green, bound and not promoted; otherwise **Choose an attempt to accept…** (jumps to the unit's attempts) |
 | crate, attempt | **Hand edit** (`e`) — TUI-DESIGN §4 |
 | attempt | **Accept** (`a`), worded "Replace u-…'s verified crate with a-…" when `--replace` applies · **Compare with the promoted attempt** (`d`, when TUI-DESIGN §3 enables it). Then, under the model separator: **Modify with a note** (`m`), **Retry** (`r`), **Resume** (`R`) |
 | project; the kept edit's unit, crate and attempts | **Continue my kept hand edit (u-…)** (`E`) · **Discard my kept hand edit** (opens the override dialog focused on Keep) |
@@ -342,7 +359,7 @@ read**.
 - While this cockpit runs a command: "a command is running (one at a time)".
 - While another process holds the lock: "busy: `<holder command>` (checked just now)".
 
-**Refresh the plan, Find hazards.**
+**Refresh the plan, Find risky patterns in the C.**
 - No facts: "nothing is scanned yet — scan first".
 - Stale, new or missing files: "N files changed or new since the scan — scan first".
 
@@ -352,7 +369,7 @@ read**.
   already judged (this includes zopfli's u001).
 
 Otherwise it is greyed:
-- "the crate differs from every recorded attempt and from what the oracle last judged —
+- "its Rust differs from every recorded attempt and from what the judge last checked —
   restore it, or record it with `harness override` (see Help)";
 - when the unit's source is stale: "the C changed since the unit was planned — scan, refresh
   the plan and review its diff first".
@@ -392,7 +409,7 @@ write this?" is for later (§15).
 The Re-check dialog, 76 columns wide:
 
 ```
-┌ Re-check u-lib with the oracle? ─────────────────────────────────────────┐
+┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐
 │ Builds u-lib's Rust and runs it against the C in the sandbox.            │
 │ Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json│
 │ when green) and u-lib's status in plan.toml: green → verified; red → a   │
@@ -414,7 +431,7 @@ changes:
 |---|---|
 | Scan | rewrites facts.jsonl; a changed C file makes verdicts stale |
 | Refresh the plan | rewrites plan.toml: re-approves the changed sources of every unit whose C changed, verified units included; adds and removes units; blocks units whose files left. Review `git diff migration/plan.toml` afterwards |
-| Find hazards | rewrites the observer findings |
+| Find risky patterns in the C | rewrites the observer findings |
 | Re-check | as in the dialog above |
 | Accept | replaces the unit crate with the attempt's candidate and verifies it in place; writes the oracle files and the unit's status in plan.toml, and marks the attempt promoted; the replace wording when it applies |
 | Modify, Retry | a model call, naming the provider and model; records a new attempt; can take minutes |
@@ -606,10 +623,17 @@ Letters typed into a note input are text.
 The project is selected at start. Its View leads with the Next step: "Nothing is scanned yet —
 press Enter and choose Scan the project". The menu opens focused on that item.
 
-Help opens with three lines:
-- move with the arrows (in Build B, or the mouse);
-- `Enter` for what you can do;
-- `?` for this screen.
+Help opens on a first page under twelve lines: six keys (`↑ ↓` choose a row, `Enter` what
+you can do with it, `Tab` the next pane, `Esc` close or step back, `?` this help, `q` quit),
+the three marks a newcomer meets (`◇` planned, `✓` in Rust, `⚠` needs attention), and "↓ more:
+every key, the mouse, every mark, features, speed, the chat"; `↓` opens the full help, `↑` at
+its top goes back (pass 1 of the 2026-10-18 critique).
+
+Before the first command the activity line reads "Ready — ↑↓ to choose a row, Enter for what
+you can do", and the details box "Nothing has run yet. When a command runs, its output appears
+here." A selected feature's View says its mark in words ("◉ runs Rust now: …", "◌ still all
+C: …"). The View's title says the tree's compact counts in words ("1 needs attention · 0 of 13
+C files in Rust": files, not units).
 
 A target without `harness.toml` is refused at start, in words: "<dir> is not a harness target
 (no harness.toml); start with `--target <target dir>`". This replaces today's raw io error.
