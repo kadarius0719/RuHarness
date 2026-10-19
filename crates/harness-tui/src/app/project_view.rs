@@ -29,8 +29,8 @@ pub struct ProjectState {
     pub tools: Vec<String>,
     /// The model's advice on the held sets, by set.
     pub advice: BTreeMap<String, project::Advice>,
-    /// The chat pane is wanted on a tool's screen (the Project view has
-    /// none: the chat works on a tool).
+    /// The chat pane is wanted (on the Project view and the tools'
+    /// screens alike).
     pub chat_wanted: bool,
     /// Accept's picker, while it asks.
     pub pick: Option<Pick>,
@@ -164,16 +164,14 @@ impl App {
         self.project.as_ref().is_some_and(|p| p.shown)
     }
 
-    /// The chat pane on or off (`--chat`): the Project view keeps it for
-    /// the tools' screens.
+    /// The chat pane on or off (`--chat`): on the Project view too, where
+    /// the chat answers the map's open question (docs/CHAT-PANE-DESIGN.md
+    /// §3.6) with no tool open.
     pub fn set_chat(&mut self, on: bool) {
-        match self.project.as_mut().filter(|p| p.shown) {
-            Some(p) => {
-                p.chat_wanted = on;
-                self.chat_on = false;
-            }
-            None => self.chat_on = on,
+        if let Some(p) = self.project.as_mut() {
+            p.chat_wanted = on;
         }
+        self.chat_on = on;
     }
 
     /// The map's program or library `id`.
@@ -346,10 +344,16 @@ impl App {
             );
         }
         if m.guessed {
+            // The chat's item is named only while the chat can be used.
+            let or_ask = if self.chat_unavailable().is_none() {
+                " (or Ask for a proposal — ask in chat)"
+            } else {
+                ""
+            };
             return say(
                 format!(
-                    "the configuration is a guess — press Enter and choose {write} (or Ask for \
-                     a proposal), then Map the project again"
+                    "the configuration is a guess — press Enter and choose {write}{or_ask}, \
+                     then Map the project again"
                 ),
                 Some(Action::WriteBuildConfig),
             );
@@ -657,21 +661,38 @@ impl App {
         );
         it.greyed = busy.clone();
         items.push(it);
-        // Ask once a map exists: its open question is the map's.
+        // Model work goes through the chat (docs/CHAT-PANE-DESIGN.md §3.6):
+        // once a map exists, its open question is asked in chat — the
+        // question typed into the chat, the chat answering through the
+        // harness. (`harness project ask` stays the command line's.)
+        let chat_off = self.chat_unavailable();
+        self.check_chat_item(&mut items);
         if map.is_some() {
+            let build = project::asks_for_build(map);
             let mut it = item(
-                if project::asks_for_build(map) {
-                    "Ask for a proposal"
+                if build {
+                    "Ask for a proposal — ask in chat"
                 } else {
-                    "Ask a model for advice"
+                    "Ask for advice — ask in chat"
                 },
-                Action::Project(project::Act::Ask),
+                Action::AskInChat { build },
                 None,
             );
             it.model = true;
-            it.greyed = busy;
+            it.greyed = chat_off.clone().or_else(|| {
+                (!self.chat.input.is_empty())
+                    .then(|| "the chat has a draft — send or clear it first".to_string())
+            });
             items.push(it);
         }
+        if self.chat_on {
+            let mut it = item("Ask in chat…", Action::AskChat, None);
+            it.model = true;
+            it.greyed = chat_off;
+            items.push(it);
+        }
+        // Model-backed items last, under the separator.
+        items.sort_by_key(|i| i.model);
         items
     }
 
@@ -891,7 +912,9 @@ impl App {
         };
         p.shown = true;
         p.chat_wanted = chat_on;
-        self.chat_on = false;
+        // The next chat starts on the project, no tool open (the switch
+        // waits while the chat holds a conversation).
+        self.chat.tool = None;
         let tool = self.config.tool.take();
         self.focus = Focus::Files;
         self.mode = Mode::Normal;

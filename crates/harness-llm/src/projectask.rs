@@ -137,6 +137,20 @@ pub struct ConfigView {
     pub name: String,
     /// `compile_commands`, `stated` or `guessed`.
     pub source: String,
+    /// It came with the project and is only proposed (not the person's
+    /// yet).
+    #[serde(default)]
+    pub proposed: bool,
+}
+
+/// The map's open question is its build, not its held choices: while the
+/// configuration is a guess or only proposed, or when no closure holds a
+/// set — the rule the cockpit's Project view follows to offer "Ask for a
+/// proposal" rather than advice.
+pub fn asks_for_build(map: &MapView) -> bool {
+    map.configuration.source == "guessed"
+        || map.configuration.proposed
+        || map.closures.iter().all(|c| c.questions.is_empty())
 }
 
 /// One walked file's parser facts.
@@ -1577,6 +1591,34 @@ fn still_valid(index: &str, item: &ReplyItem, map: &MapView) -> bool {
     false
 }
 
+/// Merge validated `answers` into the reply file bound to `map` (the one
+/// there when it is this map's, else a fresh one), each recorded as given
+/// by `model` through `provider`, and write it; the caller holds the
+/// project lock. What became of the file that was there is returned.
+pub fn record_answers(
+    root: &Path,
+    map: &MapView,
+    answers: &[(String, Answer)],
+    model: &str,
+    provider: &str,
+) -> Result<Earlier, Error> {
+    let (mut reply, earlier) = load_reply(root, map);
+    for (index, answer) in answers {
+        reply
+            .items
+            .insert(index.clone(), ReplyItem::of(answer, model, provider));
+    }
+    write_reply(root, &reply)?;
+    Ok(earlier)
+}
+
+/// Write `config.proposed.toml` from a validated proposal (nothing else
+/// changes); the caller holds the project lock.
+pub fn write_proposal(root: &Path, p: &Proposal, model: &str, provider: &str) -> Result<(), Error> {
+    let text = proposed_toml(p, model, provider);
+    harness_core::ledger::write_atomic(&root.join(PROPOSED_FILE), text.as_bytes())
+}
+
 /// Write the reply file in full (pretty JSON, a final newline, atomically).
 pub fn write_reply(root: &Path, reply: &ReplyFile) -> Result<(), Error> {
     let mut text = serde_json::to_string_pretty(reply)
@@ -2139,8 +2181,7 @@ pub fn run_build(
     let validate = |text: &str| validate_proposal(text, files, check_path);
     match call(provider, &request, traces, "project ask --build", &validate) {
         Ok(p) => {
-            let text = proposed_toml(&p, model, &provider.profile);
-            harness_core::ledger::write_atomic(&root.join(PROPOSED_FILE), text.as_bytes())?;
+            write_proposal(root, &p, model, &provider.profile)?;
             Ok(BuildOutcome {
                 proposal: Some(p),
                 awaiting: None,

@@ -59,7 +59,11 @@ every theme — section (pane titles, headings), status (the Ready/Last line), n
 fixes a bug the screenshot showed: a hand-off pause (`project ask` exit 1 with "awaiting
 response") was labelled "failed"; it must read "waiting for your answer: <file> — …".
 
-## Queued (2026-10-19): model work in the cockpit goes through the chat, with a sign-in walk-through
+## Done (2026-10-19): model work in the cockpit goes through the chat, with a sign-in walk-through
+
+Built as queued below (DECISIONS 2026-10-19, CHAT-PANE-DESIGN §1.6 and §3.6, MCP-DESIGN §R7). Open from it: run the live chat tests once (the real Claude Code must list the two new map tools), and the person's own try of "Ask for advice — ask in chat" signed in.
+
+What was queued:
 
 The person's "Ask a model" from the Project view ran the command-line hand-off and stopped on a
 file nobody writes. Next pass, after the colour pass merges: "Ask a model" becomes "Ask in chat"

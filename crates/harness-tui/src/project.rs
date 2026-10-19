@@ -746,7 +746,7 @@ pub fn dialog(act: Act, map: Option<&MapView>, argv: &[String]) -> Vec<String> {
 /// stated.
 pub const ACCEPT_NEEDS_STATED: &str = "Accept needs a stated configuration, and this map's is a \
      guess (or came with the project): choose Write the build configuration (or Ask for a \
-     proposal), then Map the project again";
+     proposal — ask in chat), then Map the project again";
 
 /// The picker's question for one held set.
 pub fn keep_question(id: &str, set: &str) -> String {

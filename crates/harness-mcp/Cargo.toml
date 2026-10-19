@@ -16,3 +16,12 @@ harness-core.workspace = true
 harness-tui = { path = "../harness-tui", default-features = false }
 serde_json.workspace = true
 signal-hook.workspace = true
+# Workspace path dependencies (no crates.io addition; DECISIONS 2026-10-19):
+# the cockpit's chat answers the project map's open question through
+# `harness_map_questions` and `harness_map_answer`, which must send exactly
+# what `harness project ask` sends and record through exactly its
+# validators — harness-llm's `projectask` holds both (its live adapters are
+# never called here), and harness-oracle the path check a proposed flag
+# passes (`projectmap::config::check_flags`) and the build-file rule.
+harness-llm.workspace = true
+harness-oracle.workspace = true

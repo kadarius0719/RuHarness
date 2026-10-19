@@ -30,3 +30,7 @@ runtime echoes each `control_response` it received; the interrupt's response car
 
 Re-record: `python3 record.py <scenario>` (a live model call through your own `claude`
 login; `RECORD_DIR` keeps the logs), then trim as above.
+
+Edited by hand once (2026-10-19): each recording's `init` tool list gained
+`mcp__harness__harness_map_answer` and `mcp__harness__harness_map_questions` (harness-mcp's
+map tools); the cockpit requires the exact set once harness-mcp is connected.

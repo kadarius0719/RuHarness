@@ -631,6 +631,7 @@ mod tests {
             allow_unsandboxed: false,
             home: None,
             cockpit: false,
+            project_form: false,
         }
     }
 

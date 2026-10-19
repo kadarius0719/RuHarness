@@ -149,6 +149,8 @@ fn idle_recording(path: &Path) {
         "mcp__harness__harness_steer",
         "mcp__harness__harness_retry",
         "mcp__harness__harness_answer",
+        "mcp__harness__harness_map_questions",
+        "mcp__harness__harness_map_answer",
     ]
     .map(|t| format!("\"{t}\""))
     .join(", ");
@@ -301,7 +303,7 @@ impl Run {
         executable(
             &claude,
             &format!(
-                "#!/bin/sh\necho $$ >> '{log}/pids'\npwd > '{log}/cwd'\n{extra}\nexec /bin/sh '{replay}' '{rec}' '{log}' \"$@\"\n",
+                "#!/bin/sh\n[ \"$1\" = --version ] && {{ echo '2.1.274 (Claude Code)'; exit 0; }}\necho $$ >> '{log}/pids'\npwd > '{log}/cwd'\n{extra}\nexec /bin/sh '{replay}' '{rec}' '{log}' \"$@\"\n",
                 log = log.display(),
                 replay = fixtures().join("replay.sh").display(),
                 rec = rec.display(),

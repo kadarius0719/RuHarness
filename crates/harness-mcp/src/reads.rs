@@ -739,6 +739,16 @@ fn escaped_len(c: char) -> usize {
 /// deterministic, so page `n` is the same slices on every call; never zero
 /// pages, and every page advances (at least one char).
 fn request_pages(parts: [&str; 2], budget: usize) -> Vec<[Option<(usize, usize)>; 2]> {
+    pages_of(parts, REQUEST_PARTS, budget)
+}
+
+/// [`request_pages`] for two texts fenced under `origins` (the project
+/// map's question uses it too).
+pub(crate) fn pages_of(
+    parts: [&str; 2],
+    origins: [&str; 2],
+    budget: usize,
+) -> Vec<[Option<(usize, usize)>; 2]> {
     let mut pages = Vec::new();
     let (mut part, mut at) = (0usize, 0usize);
     while part < parts.len() {
@@ -750,7 +760,7 @@ fn request_pages(parts: [&str; 2], budget: usize) -> Vec<[Option<(usize, usize)>
                 (part, at) = (part + 1, 0);
                 continue;
             }
-            let mut cost = fence::size(&untrusted(REQUEST_PARTS[part], "", usize::MAX));
+            let mut cost = fence::size(&untrusted(origins[part], "", usize::MAX));
             let mut end = at;
             for c in text[at..].chars() {
                 let k = escaped_len(c);

@@ -79,6 +79,70 @@ fn given(flag: &str, path: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("{flag} {}: not an executable file", path.display()))
 }
 
+/// How long `claude --version` may take before it counts as failed.
+pub const VERSION_WAIT: Duration = Duration::from_secs(5);
+
+/// `claude --version` under the chat's environment (docs/CHAT-PANE-DESIGN.md
+/// §1.6): its first line when it exits 0 within `wait`, else what was seen,
+/// in words. No terminal, no stdin; a slow one is killed.
+pub fn version(
+    claude: &Path,
+    env: &[(OsString, OsString)],
+    wait: Duration,
+) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(claude)
+        .arg("--version")
+        .env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("`claude --version` could not start: {e}"))?;
+    let deadline = std::time::Instant::now() + wait;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "`claude --version` did not answer within {} s",
+                    wait.as_secs()
+                ));
+            }
+            Err(e) => return Err(format!("`claude --version`: {e}")),
+        }
+    };
+    let first = |pipe: Option<&mut dyn Read>| {
+        let mut text = String::new();
+        if let Some(p) = pipe {
+            let _ = p.take(4096).read_to_string(&mut text);
+        }
+        text.lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let out = first(child.stdout.as_mut().map(|p| p as &mut dyn Read));
+    let err = first(child.stderr.as_mut().map(|p| p as &mut dyn Read));
+    if status.success() {
+        Ok(out)
+    } else {
+        Err(match (err.is_empty(), out.is_empty()) {
+            (false, _) => format!("`claude --version` failed: {err}"),
+            (true, false) => format!("`claude --version` failed: {out}"),
+            (true, true) => format!("`claude --version` failed ({status})"),
+        })
+    }
+}
+
 /// Resolve both binaries, like `harness` (docs/CHAT-PANE-DESIGN.md §1.1):
 /// `claude` from `runtime`, else PATH; harness-mcp from `mcp`, else next
 /// to `exe`, else PATH. `Err` says in words what is missing.

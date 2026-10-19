@@ -32,6 +32,9 @@ pub struct Config {
     /// tool; docs/PROJECT-MAP-DESIGN.md §3.7); `None` for a folder-form
     /// target. A call's other target (under a `--target-root`) has none.
     pub tool: Option<String>,
+    /// `--cockpit` on a project with no tool open (the cockpit's Project
+    /// view): the project map's tools serve it; the ledger reads refuse.
+    pub project_form: bool,
 }
 
 const USAGE: &str = "usage: harness-mcp --target DIR [--tool ID] [--target-root DIR]... \
@@ -140,15 +143,29 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, ArgError> {
         code: 1,
         message: e.to_string(),
     };
-    let tool = match harness_core::config::find_target(&target, tool.as_deref())
-        .map_err(|e| refused(e.opening(&target, tool.as_deref())))?
-    {
-        harness_core::config::Found::Tool(id) => Some(id),
-        harness_core::config::Found::Root => {
-            if !target.join("harness.toml").is_file() {
-                return Err(refused(harness_core::Error::no_target_here(&target)));
+    // The cockpit's Project view (no `--tool`, no root harness.toml): the
+    // project itself, with no tool open — its chat answers the project
+    // map's open question; the ledger reads refuse.
+    let project_form = cockpit
+        && tool.is_none()
+        && !target.join("harness.toml").exists()
+        && !matches!(
+            harness_core::config::find_target(&target, None),
+            Ok(harness_core::config::Found::Tool(_))
+        );
+    let tool = if project_form {
+        None
+    } else {
+        match harness_core::config::find_target(&target, tool.as_deref())
+            .map_err(|e| refused(e.opening(&target, tool.as_deref())))?
+        {
+            harness_core::config::Found::Tool(id) => Some(id),
+            harness_core::config::Found::Root => {
+                if !target.join("harness.toml").is_file() {
+                    return Err(refused(harness_core::Error::no_target_here(&target)));
+                }
+                None
             }
-            None
         }
     };
     let target_roots = roots
@@ -189,6 +206,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Config>, ArgError> {
         home,
         cockpit,
         tool,
+        project_form,
     }))
 }
 
@@ -314,6 +332,7 @@ pub(crate) mod tests {
             allow_unsandboxed: false,
             home,
             cockpit: false,
+            project_form: false,
         }
     }
 

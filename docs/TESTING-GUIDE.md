@@ -6564,7 +6564,7 @@ Programs (3)
 Under each program, its file and what the map guesses it is (a tool, from the folder it sits in); the right pane says it whole. The right pane begins:
 
 ```text
-Next step: The configuration is a guess — press Enter and choose Write the build configuration (or Ask for a proposal), then Map the project again
+Next step: The configuration is a guess — press Enter and choose Write the build configuration (or Ask for a proposal — ask in chat), then Map the project again
 
 lzg-cockpit is a C project with no harness.toml; the cockpit shows its map.
 Configuration: a guess — no migration/map/config.toml states the build yet (the map compiled with no flags of yours)
@@ -6582,16 +6582,16 @@ and, under the list of programs, what its words mean: `held on a choice: two fil
 
 **Do.** One key at a time:
 
-1. Press `Enter` (the first program, `t-benchmark`, is selected). **You should see** a menu whose first item is `Write the build configuration (in nano)` with `↳ recommended: the configuration is a guess`, then `Accept this program — Accept needs a stated configuration, …` in grey, `Accept it under a run name of your own…` in grey, `Map the project again`, the line `── Uses a model — can take minutes ──`, and under it `Ask for a proposal`. (The editor's name is your own: `nano` unless you set another.)
+1. Press `Enter` (the first program, `t-benchmark`, is selected). **You should see** a menu whose first item is `Write the build configuration (in nano)` with `↳ recommended: the configuration is a guess`, then `Accept this program — Accept needs a stated configuration, …` in grey, `Accept it under a run name of your own…` in grey, `Map the project again`, the line `── Uses a model — can take minutes ──`, and under it `Ask for a proposal — ask in chat` and `Ask in chat…`. (The editor's name is your own: `nano` unless you set another. Without Claude Code on this computer, the two chat items are grey with `Claude Code is not installed — choose Check the chat's connection to see how to fix it`, a `Check the chat's connection…` item sits above the line, and the Next step leaves out its "(or Ask for a proposal — ask in chat)".)
 2. Press `↓` once (to `Accept this program`), then `Enter`. **You should see**, at the bottom of the menu:
 
    ```text
-   Why not: Accept needs a stated configuration, and this map's is a guess (or came with the project): choose Write the build configuration (or Ask for a proposal), then Map the project again
+   Why not: Accept needs a stated configuration, and this map's is a guess (or came with the project): choose Write the build configuration (or Ask for a proposal — ask in chat), then Map the project again
    ```
 
 3. Press `Esc` to close the menu.
 
-**What it means.** The cockpit keeps the same rule as Step 12.3: no accept under a guess. A greyed item always says why when you choose it. Items that ask a model sit under the `Uses a model` line; when the recommended item itself uses one, its `↳ recommended` line ends `· uses a model` instead.
+**What it means.** The cockpit keeps the same rule as Step 12.3: no accept under a guess. A greyed item always says why when you choose it. Items that ask a model sit under the `Uses a model` line; when the recommended item itself uses one, its `↳ recommended` line ends `· uses a model` instead. In the cockpit every model item goes through the chat: `Ask for a proposal — ask in chat` types `Propose the build configuration for this project from its Makefiles` into the chat for you to send (the command line's `harness project ask` of Steps 12.4 and 12.9 is the same question, answered by hand). If Claude Code is not installed or not signed in, a dialog says so and walks you through signing in (docs/topics/cockpit.md, "Signing in").
 
 **If you do not see that.** If `Accept this program` is not grey and opens a list of files or a dialog, a `config.toml` is already there from an earlier try: press `Esc` until the menu closes, and continue at Step 12.27.
 

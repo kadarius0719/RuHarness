@@ -408,3 +408,28 @@ call that reaches this server anyway is refused `cockpit`, nothing spawned. `har
 omits `act_in_flight` and `routing.steer_providers` (this server has no acts to describe).
 The fence and the model-name rule (`valid_model`) moved into harness-tui's library, one
 implementation for both.
+
+## R7. The project map's question, for the cockpit's chat (2026-10-19)
+
+The cockpit's model work goes through its chat (docs/CHAT-PANE-DESIGN.md §3.6), so the chat must
+be able to read a map's open question and record its answer — no tool did. `--cockpit` gains two
+tools, answered in this process (they spawn nothing), on the server's project root:
+
+| tool | args | does |
+|---|---|---|
+| `harness_map_questions` | `batch?`, `page?` (from 1) | the map's open question as `harness project ask` would send it: `kind: "questions"` — the held sets (in `ask`'s batches of at most 10, `batches` says how many), `items` their indexes — or, while the configuration is a guess or only proposed, or nothing is held, `kind: "build"` — the build files `ask --build` sends (`files`, `left_out` a count); the request's system prompt then user message, fenced (`map-question-system`, `map-question-user`) and paged like `harness_request` (≤ 40 KiB after fencing); `omitted: {next_page}` until the last page; `answer_with: {tool: harness_map_answer, arguments: {batch}}`. Refused: no map ("no map written yet: the person maps the project first …"), a map `ask` refuses (its own sentence), no build file to send, no such batch or page. Read-only. |
+| `harness_map_answer` | `model`, `text`, `batch?` | under the project lock (`WriterLock::acquire_project`, as `ask`), on the map as it is now: the reply validated in full by `ask`'s own contract — `projectask::validate_answers` for the questions, `validate_proposal` with the map's path check for the build — and refused whole, nothing written, with "the answer does not follow the contract: <the validator's sentence>; nothing was recorded — read the request's system part again and answer it whole"; else recorded through `ask`'s writers (`record_answers`: merged into `migration/map/project-map.reply.json` bound to the map's digests, each answer labelled `model` with provider `chat`; `write_proposal`: `migration/map/config.proposed.toml`). `model` passes `valid_model`; `text` non-empty, ≤ 512 KiB. Result: `kind`, `recorded` (the indexes, or the configuration's name, fenced), `file`, `replaced` (an earlier reply for another map, or unreadable, was replaced), `next` (in words: advice only). |
+
+Both refuse a ledger made elsewhere (`not-adopted`), as `project ask` does. **The project form**:
+`--cockpit` on a folder with no `harness.toml` and no `--tool`, where the command line's lookup
+finds no single tool (the cockpit's Project view), starts with no tool open instead of refusing;
+the ledger reads then refuse `no-tool` ("no tool is open in the cockpit: on the Project view the
+chat reads the project map only …"). The shared code lives in harness-llm's `projectask`
+(`asks_for_build`, `record_answers`, `write_proposal` added; `run_questions` and `run_build`
+unchanged in behaviour), so harness-mcp now depends on harness-llm and harness-oracle (workspace
+crates, no crates.io addition; DECISIONS 2026-10-19). Tests: `map::tests` (the request equal to
+`ask`'s, a good answer recorded as the model's with provider `chat`, forged ones — an index not
+asked, a keep no definer, not an array, a flag leaving the project — refused whole and nothing
+written, a guess asking for the build) and `server::tests::the_project_views_chat_reads_the_map_
+and_records_its_answer` (the project form end to end through the protocol, each result conforming
+to its outputSchema).

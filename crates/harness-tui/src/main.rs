@@ -1167,12 +1167,15 @@ fn main() -> ExitCode {
     }
     app.set_chat(args.chat);
     if args.chat {
-        let bins = chat::runtime::resolve(
-            args.chat_runtime.as_deref(),
-            args.harness_mcp.as_deref(),
-            std::env::current_exe().ok().as_deref(),
-            std::env::var_os("PATH").as_deref(),
-        );
+        // Kept: Check again looks for the binaries again (a `claude`
+        // installed while the cockpit runs).
+        let resolver = chat::Resolver {
+            runtime: args.chat_runtime.clone(),
+            mcp: args.harness_mcp.clone(),
+            exe: std::env::current_exe().ok(),
+            path: std::env::var_os("PATH"),
+        };
+        let bins = resolver.resolve();
         let vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
         app.chat = chat::Chat::new(
             bins,
@@ -1182,6 +1185,7 @@ fn main() -> ExitCode {
             chats(),
         );
         app.chat.tool = app.config.tool.clone();
+        app.chat.resolver = Some(resolver);
     }
     // Under the guard: a signal during the setup restores after it.
     let Some(terminal) = GUARD.enable(|| {

@@ -44,6 +44,16 @@ pub enum Action {
     Migrate,
     /// Ask in chat…: the chat focused.
     AskChat,
+    /// The Project view's model work, asked in chat: the question typed
+    /// into the chat's input — for a proposal of the build configuration
+    /// (`build`), else for advice on the held choices.
+    AskInChat {
+        /// A proposal of the build configuration.
+        build: bool,
+    },
+    /// The chat's connection walk-through, again (docs/CHAT-PANE-DESIGN.md
+    /// §1.6).
+    CheckChat,
     /// Write or edit the person's features file (docs/FEATURES-DESIGN.md
     /// §7.2), or continue the kept draft.
     EditFeatures,
@@ -638,11 +648,8 @@ impl App {
             Selection::Unit(_) => owner.is_some_and(|u| migratable(&self.snapshot.units[u])),
             _ => false,
         };
-        let chat_off = if !self.chat_on {
-            Some("the chat is off (--no-chat)".to_string())
-        } else {
-            self.chat.bins.as_ref().err().cloned()
-        };
+        let chat_off = self.chat_unavailable();
+        self.check_chat_item(&mut items);
         if offer_migrate {
             let mut it = item("Migrate — ask in chat", Action::Migrate, None);
             it.model = true;
@@ -670,6 +677,19 @@ impl App {
         // Model-backed items last, under the separator.
         items.sort_by_key(|i| i.model);
         items
+    }
+
+    /// "Check the chat's connection…" while Claude Code is not installed,
+    /// not signed in or stopped: the walk-through again
+    /// (docs/CHAT-PANE-DESIGN.md §1.6).
+    pub(crate) fn check_chat_item(&self, items: &mut Vec<Item>) {
+        if self.chat_on && self.chat.problem.is_some() {
+            items.push(item(
+                "Check the chat's connection…",
+                Action::CheckChat,
+                None,
+            ));
+        }
     }
 
     fn attempt_items(&self, u: usize, id: &str, items: &mut Vec<Item>) {

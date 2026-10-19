@@ -288,9 +288,12 @@ impl<W: Write> Server<W> {
                          chat inside the cockpit. harness_status, harness_unit and \
                          harness_request read; harness_migrate, harness_steer, harness_retry \
                          and harness_answer ASK the person, and the cockpit runs what they \
-                         confirm. {} {} {UNTRUSTED_RULE}",
+                         confirm; harness_map_questions reads the project map's open question \
+                         and harness_map_answer records your answer to it as advice. {} {} {} \
+                         {UNTRUSTED_RULE}",
                         tools::COCKPIT_RULE,
-                        tools::COCKPIT_ANSWERING_RULE
+                        tools::COCKPIT_ANSWERING_RULE,
+                        tools::MAP_RULE
                     )
                 } else {
                     format!(
@@ -353,6 +356,15 @@ impl<W: Write> Server<W> {
                 };
                 self.send(&rpc::result(&id, tool_result(structured, is_error)))
             }
+            // The project map's open question (cockpit mode): answered in
+            // this process, through `project ask`'s own checks (§R7).
+            "harness_map_questions" | "harness_map_answer" => {
+                let (structured, is_error) = match self.map_tool(tool_name, &args) {
+                    Ok(v) => (v, false),
+                    Err(refusal) => (refusal.to_value(), true),
+                };
+                self.send(&rpc::result(&id, tool_result(structured, is_error)))
+            }
             // The cockpit's server never runs an act: the cockpit holds the
             // call as a permission request and runs it itself (§4.4) — one
             // that reaches here was let through by mistake.
@@ -395,6 +407,15 @@ impl<W: Write> Server<W> {
     /// is not the person; docs/PROJECT-MAP-DESIGN.md §3.7) — then the size
     /// preflight.
     fn preflight(&self, target: &Path) -> Result<(), Refusal> {
+        self.adopted(target)?;
+        policy::preflight_tool(target, self.cfg.tool_for(target)).map_err(|message| Refusal {
+            kind: "unreadable",
+            message,
+        })
+    }
+
+    /// A ledger made elsewhere, refused in an agent's words.
+    fn adopted(&self, target: &Path) -> Result<(), Refusal> {
         harness_core::adopt::check(target).map_err(|e| match &e {
             harness_core::Error::NotAdopted {
                 root,
@@ -415,14 +436,40 @@ impl<W: Write> Server<W> {
                 kind: "unreadable",
                 message: e.words_for(harness_core::adopt::Way::Agent),
             },
-        })?;
-        policy::preflight_tool(target, self.cfg.tool_for(target)).map_err(|message| Refusal {
-            kind: "unreadable",
-            message,
         })
     }
 
+    /// `harness_map_questions` and `harness_map_answer` on the server's
+    /// project (its `--target`): a ledger made elsewhere refused first, as
+    /// `project ask` refuses it.
+    fn map_tool(&self, tool: &str, args: &Map<String, Value>) -> Result<Value, Refusal> {
+        let root = self.cfg.target.clone();
+        self.adopted(&root)?;
+        let int = |key: &str| args.get(key).and_then(Value::as_u64).unwrap_or(1);
+        if tool == "harness_map_questions" {
+            crate::map::questions(&root, int("batch"), int("page")).map_err(Refusal::refused)
+        } else {
+            crate::map::answer(
+                &root,
+                arg(args, "model").unwrap_or_default(),
+                int("batch"),
+                arg(args, "text").unwrap_or_default(),
+            )
+            .map_err(Refusal::refused)
+        }
+    }
+
     fn read(&self, tool: &str, args: &Map<String, Value>) -> Result<Value, Refusal> {
+        // The cockpit's Project view: no tool is open, so no ledger.
+        if self.cfg.project_form {
+            return Err(Refusal {
+                kind: "no-tool",
+                message: "no tool is open in the cockpit: on the Project view the chat reads the \
+                          project map only (harness_map_questions); the person opens a tool \
+                          (Open tool …) for its ledger"
+                    .into(),
+            });
+        }
         let target = self.target(args)?;
         self.preflight(&target)?;
         let snapshot =
@@ -883,6 +930,7 @@ mod tests {
             allow_unsandboxed: false,
             home: None,
             cockpit: false,
+            project_form: false,
         }
     }
 
@@ -1019,9 +1067,12 @@ mod tests {
                 "harness_migrate",
                 "harness_steer",
                 "harness_retry",
-                "harness_answer"
+                "harness_answer",
+                "harness_map_questions",
+                "harness_map_answer"
             ]
         );
+        assert!(instructions.contains(tools::MAP_RULE));
         let params = |name: &str| -> Vec<String> {
             let t = listed.iter().find(|t| t["name"] == name).unwrap();
             let mut v: Vec<String> = t["inputSchema"]["properties"]
@@ -1040,7 +1091,18 @@ mod tests {
             params("harness_answer"),
             ["attempt", "request_key", "text", "unit"]
         );
+        assert_eq!(params("harness_map_questions"), ["batch", "page"]);
+        assert_eq!(params("harness_map_answer"), ["batch", "model", "text"]);
         for t in listed {
+            // The map answer names the model that answers: the advice is
+            // recorded as its (the cockpit checks it is the chat's).
+            if t["name"]
+                .as_str()
+                .is_some_and(|n| n.starts_with("harness_map_"))
+            {
+                assert!(t["description"].as_str().unwrap().contains(tools::MAP_RULE));
+                continue;
+            }
             let props = t["inputSchema"]["properties"].as_object().unwrap();
             for gone in ["target", "provider", "model", "replace"] {
                 assert!(!props.contains_key(gone), "{}: {gone}", t["name"]);
@@ -1099,6 +1161,48 @@ mod tests {
         // A `target` argument is no argument of the cockpit's reads.
         let r = call(&mut s, 22, "harness_status", json!({"target": "/"}));
         assert_eq!(code(&r), -32602);
+    }
+
+    /// The cockpit's Project view (docs/MCP-DESIGN.md §R7): `--cockpit` on a
+    /// project with no tool open starts; the ledger reads refuse in words;
+    /// the map's question is read and a forged answer refused whole, then a
+    /// good one recorded — each result conforming to its outputSchema.
+    #[test]
+    fn the_project_views_chat_reads_the_map_and_records_its_answer() {
+        let root = crate::map::tests::project("server", false);
+        let args: Vec<String> = ["--cockpit", "--target", root.to_str().unwrap()]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let cfg = policy::parse_args(&args).unwrap().unwrap();
+        assert!(cfg.project_form && cfg.tool.is_none());
+        let mut s = Server::new(cfg, Vec::new(), ChildSlot::default(), Gate::default());
+        let all = s.tools.clone();
+        let schema = |name: &str| all.iter().find(|t| t.name == name).unwrap().output_schema();
+        let r = call(&mut s, 1, "harness_status", json!({}));
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert_eq!(structured(&r)["error"]["kind"], "no-tool");
+        let r = call(&mut s, 2, "harness_map_questions", json!({}));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        tools::conforms(&schema("harness_map_questions"), structured(&r)).unwrap();
+        assert_eq!(structured(&r)["kind"], "questions");
+        let forged = json!({"model": "claude-opus-5-5",
+            "text": r#"[{"item": "d1", "keep": "d1.9", "reason": "platform"}]"#});
+        let r = call(&mut s, 3, "harness_map_answer", forged);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        let why = structured(&r)["error"]["message"]["text"].as_str().unwrap();
+        assert!(
+            why.contains("keep `d1.9` is not one of its definers (d1.1, d1.2)"),
+            "{why}"
+        );
+        assert!(!root.join(harness_llm::projectask::REPLY_FILE).exists());
+        let good = json!({"model": "claude-opus-5-5", "batch": 1,
+            "text": r#"[{"item": "d1", "keep": "d1.1", "reason": "platform"}]"#});
+        let r = call(&mut s, 4, "harness_map_answer", good);
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        tools::conforms(&schema("harness_map_answer"), structured(&r)).unwrap();
+        assert!(root.join(harness_llm::projectask::REPLY_FILE).is_file());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
