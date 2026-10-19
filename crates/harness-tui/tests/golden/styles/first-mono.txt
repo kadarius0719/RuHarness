@@ -2,6 +2,7 @@
   @0-0 fg - BOLD "┌"
   @1-7 fg - BOLD | REVERSED "Files"
   @8-23 fg - BOLD "───────────────┐"
+  @25-78 fg - BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
 │▾ harness… ✓0/13 (+1 …││Next step: 3 units have no Rust yet — migrate the     │
   @0-0 fg - BOLD "│"
   @1-2 fg - REVERSED "▾"
@@ -28,6 +29,7 @@
 │    ▸ ◇ u-lz77 planned││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
+  @25-35 fg - BOLD "Units (11):"
 │    ▸ ◇ u-tree planned││planned                                               │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
@@ -37,6 +39,7 @@
 │    ▸ ◇ u-gzip_contai…││Features: 7 — 5 hold so far, 2 still all C            │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
+  @25-33 fg - BOLD "Features:"
 │    ▸ ◇ u-util planned││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"

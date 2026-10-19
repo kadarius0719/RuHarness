@@ -2,6 +2,7 @@
   @0-0 fg - BOLD "┌"
   @1-7 fg - BOLD | REVERSED "Files"
   @8-23 fg - BOLD "───────────────┐"
+  @25-43 fg - BOLD "u-cache · planned"
 │▾ harness-tui-theme-u…││◇ u-cache planned                                     │
   @0-0 fg - BOLD "│"
   @3-23 fg - BOLD "harness-tui-theme-u…│"
@@ -48,6 +49,7 @@
 │    ▸ ◇ u-zopfli_bin  ││Attempts: none yet                                    │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
+  @25-33 fg - BOLD "Attempts:"
 │  ▾ Features (7)      ││                                                      │
   @0-0 fg - BOLD "│"
   @5-16 fg - BOLD "Features (7)"

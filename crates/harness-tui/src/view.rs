@@ -66,6 +66,36 @@ fn accent() -> Style {
     theme::style(Role::Accent)
 }
 
+/// A pane title or an in-pane section heading.
+fn section_role() -> Style {
+    theme::style(Role::Section)
+}
+
+/// The bottom status line, and a running command's progress.
+fn status() -> Style {
+    theme::style(Role::Status)
+}
+
+/// The "Last: …" words: the status line's, or a state that wants the person
+/// when the last command paused on a hand-off.
+fn last_style(app: &App) -> Style {
+    if app.last_waiting {
+        attention()
+    } else {
+        status()
+    }
+}
+
+/// An informational line: neither a state nor the next step.
+fn notice() -> Style {
+    theme::style(Role::Notice)
+}
+
+/// A secondary label beside or under what it describes.
+fn label_role() -> Style {
+    theme::style(Role::Label)
+}
+
 /// A good state, beside its mark or word.
 fn good() -> Style {
     theme::style(Role::Good)
@@ -146,6 +176,24 @@ fn next_step(line: &str, width: usize) -> Vec<Line<'static>> {
                 *first = Line::from(vec![
                     Span::styled(LABEL, accent()),
                     Span::styled(rest, bold()),
+                ]);
+            }
+        }
+    }
+    lines
+}
+
+/// A "Heading: …" line wrapped to `width`: its words up to the first `:` in
+/// the section role, the rest plain.
+fn headed(line: &str, width: usize) -> Vec<Line<'static>> {
+    let mut lines = wrapped(line, width, Style::default());
+    if let Some(first) = lines.first_mut() {
+        if let [span] = first.spans.as_slice() {
+            if let Some(at) = span.content.find(':') {
+                let (head, rest) = span.content.split_at(at + 1);
+                *first = Line::from(vec![
+                    Span::styled(head.to_string(), section_role()),
+                    Span::raw(rest.to_string()),
                 ]);
             }
         }
@@ -677,19 +725,19 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         RowKind::Note(text) => {
             return Line::from(Span::styled(
                 ellipsis(&format!("{indent}  {text}"), width),
-                muted(),
+                notice(),
             ));
         }
         RowKind::Heading(text) => {
             return Line::from(Span::styled(
                 ellipsis(&format!("{indent}{text}"), width),
-                bold(),
+                section_role(),
             ));
         }
         RowKind::Detail(text) => {
             return Line::from(Span::styled(
                 ellipsis(&format!("{indent}{text}"), width),
-                muted(),
+                label_role(),
             ));
         }
         RowKind::Node(sel) => sel,
@@ -797,10 +845,16 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
             | Selection::MapProject
             | Selection::ProjectHome
     ) {
-        name_style = name_style.add_modifier(Modifier::BOLD);
+        // The tree's groups head their sections; one with a state mark
+        // before it stays bold, its mark carrying the colour.
+        name_style = if glyph.is_empty() {
+            section_role()
+        } else {
+            name_style.add_modifier(Modifier::BOLD)
+        };
     }
     let mut spans = vec![
-        Span::styled(lead, muted()),
+        Span::styled(lead, label_role()),
         Span::styled(glyph_text, glyph_style(glyph)),
         Span::styled(name_text, name_style),
     ];
@@ -816,11 +870,11 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
     if focused {
         block = block
             .border_style(bold())
-            .title(Span::styled(title, bold().patch(selected_row())));
+            .title(Span::styled(title, section_role().patch(selected_row())));
     } else {
         block = block
             .border_style(border())
-            .title(Span::styled(title, muted()));
+            .title(Span::styled(title, section_role()));
     }
     block
 }
@@ -1016,13 +1070,17 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                     outcome_gloss(&r.outcome)
                 ),
                 width,
-                muted(),
+                notice(),
             ));
             if let Some(note) = &r.steer_note {
-                lines.extend(wrapped(&format!("Steer note: {note}"), width, muted()));
+                lines.extend(wrapped(&format!("Steer note: {note}"), width, label_role()));
             }
             if let Some(note) = &r.note {
-                lines.extend(wrapped(&format!("Hand-edit note: {note}"), width, muted()));
+                lines.extend(wrapped(
+                    &format!("Hand-edit note: {note}"),
+                    width,
+                    label_role(),
+                ));
             }
             if !r.turns.is_empty() {
                 let turns: Vec<String> = r
@@ -1034,7 +1092,7 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 lines.extend(wrapped(
                     &format!("Turns: {}", turns.join(" · ")),
                     width,
-                    muted(),
+                    label_role(),
                 ));
             }
         }
@@ -1073,13 +1131,13 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             if let Some(marker) = coverage_marker(app, unit) {
                 origin.push_str(&format!(" · {marker}"));
             }
-            lines.extend(wrapped(&origin, width, muted()));
+            lines.extend(wrapped(&origin, width, label_role()));
             if matches!(app.selection, Selection::Crate(_)) {
                 lines.extend(wrapped(
                     "The crate is this unit's Rust in use now: what an Accept (or a hand edit) \
                      put there, built in place of its C.",
                     width,
-                    muted(),
+                    notice(),
                 ));
             }
         }
@@ -1090,7 +1148,7 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     if let Some((first, second)) = app.speed.unit_header(&unit.unit.id) {
         lines.push(Line::from(clipped(vec![Span::raw(first)], width)));
         lines.push(Line::from(clipped(
-            vec![Span::styled(second, muted())],
+            vec![Span::styled(second, label_role())],
             width,
         )));
     }
@@ -1187,7 +1245,7 @@ fn unit_summary(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> 
         Style::default(),
     ));
     lines.extend(unit_record(app, unit, width));
-    lines.extend(wrapped(&attempts_line(unit), width, Style::default()));
+    lines.extend(headed(&attempts_line(unit), width));
     if app.shown_verdict().is_some() {
         lines.extend(checks_lines(app, width, 2));
     }
@@ -1430,9 +1488,12 @@ enum Ran {
 /// strip never hides a failure, and `+N` for whatever did not fit.
 fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
     let Some(v) = app.shown_verdict() else {
-        return vec![Line::from(Span::styled(
-            clip("Checks  none yet for what is shown", width),
-            muted(),
+        return vec![Line::from(clipped(
+            vec![
+                Span::styled("Checks", section_role()),
+                Span::styled("  none yet for what is shown", label_role()),
+            ],
+            width,
         ))];
     };
     let rows = rows.max(1);
@@ -1443,7 +1504,7 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
             "Checks RED ".into()
         },
         if v.green {
-            muted()
+            section_role()
         } else {
             bad().add_modifier(Modifier::BOLD)
         },
@@ -1532,7 +1593,7 @@ fn checks_lines(app: &App, width: usize, rows: usize) -> Vec<Line<'static>> {
     }
     if placed < total {
         if let Some(line) = lines.last_mut() {
-            line.push(Span::styled(format!("+{}", total - placed), muted()));
+            line.push(Span::styled(format!("+{}", total - placed), label_role()));
         }
     }
     lines.into_iter().map(Line::from).collect()
@@ -1661,11 +1722,11 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
     // A mapped tool's "project changed" notice (docs/PROJECT-MAP-DESIGN.md
     // §3.7): a notice, never staleness.
     if let Some(n) = &app.snapshot.project_notice {
-        lines.extend(wrapped(&format!("Project: {n}"), width, bold()));
+        lines.extend(wrapped(&format!("Project: {n}"), width, notice()));
         lines.push(Line::from(""));
     }
     match &app.snapshot.facts_state {
-        None => lines.extend(wrapped("Nothing is scanned yet.", width, muted())),
+        None => lines.extend(wrapped("Nothing is scanned yet.", width, notice())),
         Some(s) => {
             let count = |st: FileState| app.files.files.iter().filter(|f| f.state == st).count();
             let mut text = format!(
@@ -1702,10 +1763,9 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             .map(|(k, n)| format!("{n} {k}"))
             .collect::<Vec<_>>()
             .join(" · ");
-        lines.extend(wrapped(
+        lines.extend(headed(
             &format!("Units ({}): {text}", app.snapshot.units.len()),
             width,
-            Style::default(),
         ));
     }
     let start = lines.len();
@@ -1722,7 +1782,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
         ));
     }
     if let Some(last) = &app.last {
-        lines.extend(wrapped(&format!("Last: {last}"), width, muted()));
+        lines.extend(wrapped(&format!("Last: {last}"), width, last_style(app)));
     }
     // A failing unit, or one that needs attention: one item per unit, a
     // jump to its row in the Units list (its one place in the tree).
@@ -1744,7 +1804,10 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             continue;
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
+        lines.push(Line::from(Span::styled(
+            format!("{title}:"),
+            section_role(),
+        )));
         for (unit, state) in picked {
             // Each item says why and what to do, not its state again.
             let word = match state {
@@ -1757,7 +1820,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
                     Span::raw("  "),
                     Span::styled(format!("{} ", state.glyph()), glyph_style(state.glyph())),
                     Span::raw(unit.unit.id.clone()),
-                    Span::styled(format!(" · {}", unit.unit.files.join(", ")), muted()),
+                    Span::styled(format!(" · {}", unit.unit.files.join(", ")), label_role()),
                 ],
                 width,
             )));
@@ -1780,7 +1843,10 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             continue;
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
+        lines.push(Line::from(Span::styled(
+            format!("{title}:"),
+            section_role(),
+        )));
         let changed = picked.iter().any(|f| f.state != FileState::New);
         for f in picked {
             let (glyph, _) = files::file_label(&app.files, &f.state);
@@ -1797,7 +1863,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
                     Span::raw("  "),
                     Span::styled(format!("{glyph} "), glyph_style(glyph)),
                     Span::raw(f.path.clone()),
-                    Span::styled(word.to_string(), muted()),
+                    Span::styled(word.to_string(), label_role()),
                 ],
                 width,
             )));
@@ -1861,7 +1927,7 @@ fn summary_features(
     };
     let mut lines = vec![Line::from("")];
     links.push((start + lines.len(), Selection::Features));
-    lines.extend(wrapped(&text, width, Style::default()));
+    lines.extend(headed(&text, width));
     lines
 }
 
@@ -1909,7 +1975,7 @@ fn speed_row_lines(row: &speed::SpeedRow, column: usize, width: usize) -> Vec<Li
         spans.push(Span::styled(row.words.short.clone(), muted()));
         spans.push(Span::styled(
             format!(" · out of date: {}", row.out_of_date.join(", ")),
-            muted(),
+            label_role(),
         ));
     }
     let mut lines = vec![Line::from(clipped(spans, width))];
@@ -1918,7 +1984,10 @@ fn speed_row_lines(row: &speed::SpeedRow, column: usize, width: usize) -> Vec<Li
     for d in &row.words.details {
         if d.starts_with("last try:") || d.starts_with("a difference found before") {
             for part in word_wrap(d, width.saturating_sub(4)) {
-                lines.push(Line::from(Span::styled(format!("    {part}"), muted())));
+                lines.push(Line::from(Span::styled(
+                    format!("    {part}"),
+                    label_role(),
+                )));
             }
         }
     }
@@ -1996,7 +2065,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             lines.extend(wrapped(
                 "Until it is fixed, the harness cannot measure speed — verify and migrations still work.",
                 width,
-                muted(),
+                notice(),
             ));
             return lines;
         }
@@ -2005,16 +2074,16 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     lines.extend(wrapped(
         "Speed — your workloads, the C against the Rust in use",
         width,
-        bold(),
+        section_role(),
     ));
     for h in &model.header {
-        lines.extend(wrapped(h, width, muted()));
+        lines.extend(wrapped(h, width, label_role()));
     }
     if model.measuring {
         lines.extend(wrapped(
             "The harness is measuring speed now — rows appear as each finishes.",
             width,
-            bold(),
+            notice(),
         ));
     }
     for e in &model.errors {
@@ -2045,21 +2114,21 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     if model.group == speed::Group::NotYetRun {
         section
             .lines
-            .extend(wrapped("Nothing measured yet.", width, muted()));
+            .extend(wrapped("Nothing measured yet.", width, notice()));
     } else if model.c_rows.is_empty() {
         // Units measured alone (`--unit`): the C alone is not, yet.
         section
             .lines
-            .push(Line::from(Span::styled("The original C", bold())));
+            .push(Line::from(Span::styled("The original C", section_role())));
         section.lines.extend(wrapped(
             "not measured yet — Measure speed on this row measures the C alone; measuring one \
              unit does not",
             width,
-            muted(),
+            notice(),
         ));
     } else {
         section.push(
-            Line::from(Span::styled("The original C", bold())),
+            Line::from(Span::styled("The original C", section_role())),
             None,
             speed::SideKey::C,
             &model.c_rows,
@@ -2077,19 +2146,22 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             )
         };
         section.push(
-            Line::from(clipped(vec![Span::styled(heading, bold())], width)),
+            Line::from(clipped(vec![Span::styled(heading, section_role())], width)),
             None,
             speed::SideKey::AsItStands,
             &model.program_rows,
         );
         for (fact, which) in model.program_differences() {
             section.lines.extend(wrapped(&fact, width, bad()));
-            section.lines.extend(wrapped(&which, width, muted()));
+            section.lines.extend(wrapped(&which, width, label_role()));
         }
     }
     for u in &model.units {
         section.push(
-            Line::from(clipped(vec![Span::styled(u.id.clone(), bold())], width)),
+            Line::from(clipped(
+                vec![Span::styled(u.id.clone(), section_role())],
+                width,
+            )),
             Some(Selection::Unit(u.id.clone())),
             speed::SideKey::Unit(u.id.clone()),
             &u.rows,
@@ -2109,7 +2181,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
                 model.orphans.join(", ")
             ),
             width,
-            muted(),
+            notice(),
         ));
     }
     // The focused row's full sentence and details.
@@ -2131,9 +2203,9 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             Style::default(),
         ));
         for d in &row.words.details {
-            lines.extend(wrapped(d, width, muted()));
+            lines.extend(wrapped(d, width, label_role()));
         }
-        lines.extend(wrapped(&row.measured_on, width, muted()));
+        lines.extend(wrapped(&row.measured_on, width, label_role()));
         if !row.out_of_date.is_empty() {
             lines.extend(wrapped(
                 &format!("out of date: {}", row.out_of_date.join(", ")),
@@ -2146,7 +2218,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         lines.extend(wrapped(
             "Move to a row (Tab, then ↓) to read its full words.",
             width,
-            muted(),
+            label_role(),
         ));
     }
     lines
@@ -2162,7 +2234,7 @@ fn dir_view(
     let mut lines = Vec::new();
     let rollup = app.files.rollup(dir).words();
     if !rollup.is_empty() {
-        lines.extend(wrapped(&rollup, width, muted()));
+        lines.extend(wrapped(&rollup, width, label_role()));
     }
     let prefix = format!("{dir}/");
     for f in app
@@ -2177,7 +2249,7 @@ fn dir_view(
             vec![
                 Span::styled(format!("{glyph:<2} "), glyph_style(glyph)),
                 Span::raw(f.path[prefix.len()..].to_string()),
-                Span::styled(format!("  {word}"), muted()),
+                Span::styled(format!("  {word}"), label_role()),
             ],
             width,
         )));
@@ -2227,7 +2299,7 @@ fn features_view(
                     "Features need a program with one main() — this target has none (a \
                      library?); not supported yet.",
                     width,
-                    muted(),
+                    notice(),
                 ));
             }
             return lines;
@@ -2253,7 +2325,7 @@ fn features_view(
                 "Until it is fixed, verdicts do not run your features — Re-checks and \
                  migrations still work, and say so.",
                 width,
-                muted(),
+                notice(),
             ));
             return lines;
         }
@@ -2267,7 +2339,7 @@ fn features_view(
             "Features need a program with one main() — this target's facts show none (a \
              library?); not supported yet.",
             width,
-            muted(),
+            notice(),
         ));
     }
     lines.extend(map_preface(app, width));
@@ -2282,7 +2354,7 @@ fn features_view(
             vec![
                 Span::styled(format!("{glyph} "), glyph_style(glyph)),
                 Span::raw(display::line(&f.name)),
-                Span::styled(format!("  {word}"), muted()),
+                Span::styled(format!("  {word}"), label_role()),
             ],
             width,
         )));
@@ -2342,7 +2414,7 @@ fn features_view(
         }
         lines.push(Line::from(Span::styled(
             clip(&format!("    {}", parts.join(" · ")), width),
-            muted(),
+            label_role(),
         )));
     }
     lines.push(Line::from(""));
@@ -2387,14 +2459,14 @@ fn features_view(
                     plural_s(never.len())
                 ),
                 width,
-                bold(),
+                section_role(),
             ));
             for (file, name) in never.iter().take(20) {
                 links.push((lines.len(), Selection::Function(file.clone(), name.clone())));
                 lines.push(Line::from(clipped(
                     vec![
                         Span::raw(format!("  {}()", short_symbol(name))),
-                        Span::styled(format!("  {file}"), muted()),
+                        Span::styled(format!("  {file}"), label_role()),
                     ],
                     width,
                 )));
@@ -2402,7 +2474,7 @@ fn features_view(
             if never.len() > 20 {
                 lines.push(Line::from(Span::styled(
                     format!("  … {} more", never.len() - 20),
-                    muted(),
+                    label_role(),
                 )));
             }
         }
@@ -2411,7 +2483,7 @@ fn features_view(
     lines.extend(wrapped(
         "Edited features.toml outside the cockpit? Press g to re-read.",
         width,
-        muted(),
+        label_role(),
     ));
     lines
 }
@@ -2566,12 +2638,12 @@ fn feature_view(
         vec![
             Span::styled(format!("{glyph} "), glyph_style(glyph)),
             Span::styled(word, bold()),
-            Span::styled(format!("  · id {}", f.id), muted()),
+            Span::styled(format!("  · id {}", f.id), label_role()),
         ],
         width,
     )));
     // The mark in words, then the one thing to do.
-    lines.extend(wrapped(&feature_mark_words(&f.state), width, muted()));
+    lines.extend(wrapped(&feature_mark_words(&f.state), width, label_role()));
     if let Some(next) = app.advice(&Selection::Feature(f.id.clone())) {
         lines.extend(next_step(&next.line(), width));
     }
@@ -2591,7 +2663,7 @@ fn feature_view(
             lines.push(Line::from(clipped(
                 vec![
                     Span::raw(format!("  {u}")),
-                    Span::styled("  open it, then Re-check", muted()),
+                    Span::styled("  open it, then Re-check", label_role()),
                 ],
                 width,
             )));
@@ -2602,12 +2674,12 @@ fn feature_view(
             "Features need a program with one main() — this target's facts show none (a \
              library?); not supported yet.",
             width,
-            muted(),
+            notice(),
         ));
     }
     lines.push(Line::from(""));
     lines.extend(map_preface(app, width));
-    lines.push(Line::from(Span::styled("Scenarios", bold())));
+    lines.push(Line::from(Span::styled("Scenarios", section_role())));
     let program = app.snapshot.program_name.clone();
     for s in &f.scenarios {
         let mut argv = vec![program.clone()];
@@ -2628,7 +2700,7 @@ fn feature_view(
             lines.extend(wrapped(
                 &format!("    {} · stdout {} bytes · {stderr}", r.end, r.stdout_bytes),
                 width,
-                muted(),
+                label_role(),
             ));
             let flag = if !r.stable {
                 Some("its output differs between runs — it cannot be a check".to_string())
@@ -2672,15 +2744,22 @@ fn feature_view(
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Where its code lives", bold())));
+    lines.push(Line::from(Span::styled(
+        "Where its code lives",
+        section_role(),
+    )));
     if f.scenarios.iter().all(|s| s.record.is_none()) {
-        lines.extend(wrapped("  (not known — map the features)", width, muted()));
+        lines.extend(wrapped(
+            "  (not known — map the features)",
+            width,
+            label_role(),
+        ));
     } else if f.units.is_empty() && f.outside_units == 0 && !app.features.complete {
         // Records without notes (fix check N5): not "nowhere".
         lines.extend(wrapped(
             "  (not known — the map has no usable notes for it)",
             width,
-            muted(),
+            label_role(),
         ));
     }
     for row in &f.units {
@@ -2703,7 +2782,7 @@ fn feature_view(
                 Span::styled(format!("  {result}"), style),
                 Span::styled(
                     format!("  · runs {} of its {} · {uword}", row.ran, row.of),
-                    muted(),
+                    label_role(),
                 ),
             ],
             width,
@@ -2717,7 +2796,7 @@ fn feature_view(
                 plural_s(f.outside_units)
             ),
             width,
-            muted(),
+            label_role(),
         ));
     }
     if !f.also_fails.is_empty() {
@@ -2737,12 +2816,15 @@ fn feature_view(
     }
     if app.features.features.len() >= 2 && app.features.complete {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("Only this feature runs", bold())));
+        lines.push(Line::from(Span::styled(
+            "Only this feature runs",
+            section_role(),
+        )));
         if f.specific.is_empty() {
             lines.extend(wrapped(
                 "  everything it runs is also run by another feature",
                 width,
-                muted(),
+                label_role(),
             ));
         }
         for (file, name) in &f.specific {
@@ -2750,7 +2832,7 @@ fn feature_view(
             lines.push(Line::from(clipped(
                 vec![
                     Span::raw(format!("  {}()", short_symbol(name))),
-                    Span::styled(format!("  {file}"), muted()),
+                    Span::styled(format!("  {file}"), label_role()),
                 ],
                 width,
             )));
@@ -2848,7 +2930,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
                             glyph_style(info.state.glyph()),
                         ),
                         Span::raw(u.unit.id.clone()),
-                        Span::styled(format!("  {}", info.state.word()), muted()),
+                        Span::styled(format!("  {}", info.state.word()), label_role()),
                     ],
                     width,
                 )));
@@ -2876,7 +2958,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
                         short_symbol(name)
                     ),
                     width,
-                    muted(),
+                    notice(),
                 ));
             }
         }
@@ -2886,7 +2968,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
         if let Some(note) = &source.note {
-            head.extend(wrapped(note, width, muted()));
+            head.extend(wrapped(note, width, notice()));
         }
         let gutter = gutter_of(&source.lines);
         let body_h = (inner.height as usize).saturating_sub(head.len());
@@ -2904,7 +2986,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
     // A unit's screen: header, pairs, checks.
     let Some(unit) = app.unit_view().cloned() else {
         frame.render_widget(
-            Paragraph::new(wrapped("nothing to show", width, muted())),
+            Paragraph::new(wrapped("nothing to show", width, notice())),
             inner,
         );
         return;
@@ -2938,7 +3020,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
                     internal.join(", ")
                 ),
                 width,
-                muted(),
+                notice(),
             ));
         }
     }
@@ -2989,7 +3071,7 @@ fn draw_unit(frame: &mut Frame, app: &mut App, area: Rect, unit: &UnitView) {
             },
             width,
         ),
-        bold(),
+        section_role(),
     ));
     // Folded, it is the View's one row to act on: Enter there opens it.
     if !open && app.focus == Focus::View {
@@ -3065,7 +3147,7 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
                     run.narrator.step(),
                     elapsed_words(elapsed)
                 ),
-                bold(),
+                status(),
             )
         }
         _ => {
@@ -3082,9 +3164,17 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
             if app.run.is_some() {
                 buttons.push((if in_chat { "[Details]" } else { "[Details c]" }, "c"));
             }
+            let mut style = status();
             let text = match (app.chat_waits_why(app.now), &app.last) {
-                (Some(why), _) => why.to_string(),
-                (None, Some(last)) => format!("Ready. Last: {last}"),
+                (Some(why), _) => {
+                    style = notice();
+                    why.to_string()
+                }
+                // A hand-off's pause is a state that wants the person.
+                (None, Some(last)) => {
+                    style = last_style(app);
+                    format!("Ready. Last: {last}")
+                }
                 // The how-to only where it is true: the tree has the keys
                 // (not a dialog, a menu or the chat).
                 (None, None)
@@ -3096,12 +3186,12 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
                 }
                 (None, None) => "Ready.".to_string(),
             };
-            (text, Style::default())
+            (text, style)
         }
     };
     let right: String = buttons.iter().map(|(b, _)| format!(" {b}")).collect();
     let right_w = width_of(&right);
-    let lead = ellipsis(&format!(" {lead}"), width.saturating_sub(right_w));
+    let lead = fit_status(&format!(" {lead}"), width.saturating_sub(right_w));
     let pad = width.saturating_sub(width_of(&lead) + right_w);
     let mut x = area.x + (width_of(&lead) + pad) as u16;
     for (b, key) in &buttons {
@@ -3121,12 +3211,50 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
     ])
 }
 
+/// A path shortened to its last three parts: `…/a/b/c`; anything shorter
+/// as it is. Punctuation after it (`:`, `;`, `,`, `.`, `)`) stays.
+fn short_path(word: &str) -> String {
+    let body = word.trim_end_matches([':', ';', ',', '.', ')']);
+    let tail = &word[body.len()..];
+    let parts: Vec<&str> = body.split('/').filter(|p| !p.is_empty()).collect();
+    if !body.contains('/') || parts.len() <= 3 {
+        return word.to_string();
+    }
+    format!("…/{}{tail}", parts[parts.len() - 3..].join("/"))
+}
+
+/// The status line's text in `width` columns: whole when it fits; else its
+/// long paths shortened to their last three parts; else its head cut with
+/// `…` — never the sentence's end after its last `; ` ("c for its words"
+/// stays in sight).
+fn fit_status(text: &str, width: usize) -> String {
+    let text = display::line(text);
+    if width_of(&text) <= width {
+        return text;
+    }
+    let shorter = text
+        .split(' ')
+        .map(short_path)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if width_of(&shorter) <= width {
+        return shorter;
+    }
+    match shorter.rsplit_once("; ") {
+        Some((head, end)) if width_of(end) + 3 < width => {
+            let room = width - width_of(end) - 2;
+            format!("{}; {end}", ellipsis(head, room))
+        }
+        _ => ellipsis(&shorter, width),
+    }
+}
+
 /// Row 2: the notice, else the plan summary, else the hand-offs' state.
 fn notice_row(app: &App, width: usize) -> Line<'static> {
     if let Some(n) = &app.notice {
         return Line::from(Span::styled(
             ellipsis(&format!(" {}", n.text), width),
-            bold(),
+            notice(),
         ));
     }
     // A request of the chat's stays announced outside the chat until it is
@@ -3148,10 +3276,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
         }
     }
     if let Some(p) = &app.plan_notice {
-        return Line::from(Span::styled(
-            ellipsis(&format!(" {p}"), width),
-            Style::default(),
-        ));
+        return Line::from(Span::styled(ellipsis(&format!(" {p}"), width), notice()));
     }
     if let Some(aw) = app.awaiting.iter().find(|aw| aw.response_present) {
         let who = aw.attempt.as_deref().map(short_id).unwrap_or_default();
@@ -3170,7 +3295,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
                 &format!(" {who} is waiting for your answer at {}", aw.path.display()),
                 width,
             ),
-            muted(),
+            notice(),
         ));
     }
     // Last: a mapped tool's "project changed" notice stays in sight.
@@ -3180,7 +3305,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
         .as_ref()
         .filter(|_| !app.in_project_view())
     {
-        return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), muted()));
+        return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), notice()));
     }
     Line::from("")
 }
@@ -3320,7 +3445,7 @@ fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         app.hits.push((Rect::new(x, area.y, w, 1), Hit::Hint(k)));
         spans.push(Span::styled(format!(" {k}"), bold()));
-        spans.push(Span::styled(format!(" {v} "), muted()));
+        spans.push(Span::styled(format!(" {v} "), label_role()));
         spans.push(Span::raw(" "));
         x += w + 1;
     }
@@ -3361,7 +3486,7 @@ fn overlay(
     let more = rows.len() > scroll + page;
     let mut block = Block::default().borders(Borders::ALL).title(Span::styled(
         safe(title, area.width.saturating_sub(4) as usize),
-        bold(),
+        section_role(),
     ));
     let hint = more_key.map(|k| format!(" — {k}")).unwrap_or_default();
     let bottom = match (prompt, more) {
@@ -3690,17 +3815,17 @@ fn help_rows(
         rows.extend(wrapped(l, width, Style::default()));
     }
     rows.push(Line::from(""));
-    rows.push(Line::from(Span::styled("Keys", bold())));
+    rows.push(Line::from(Span::styled("Keys", section_role())));
     for (k, v) in HELP_KEYS {
         rows.extend(wrapped(&format!("{k:<18} {v}"), width, Style::default()));
     }
     rows.push(Line::from(""));
-    rows.push(Line::from(Span::styled("States", bold())));
+    rows.push(Line::from(Span::styled("States", section_role())));
     for (g, v) in HELP_LEGEND {
         rows.extend(wrapped(&format!("{g:<3} {v}"), width, Style::default()));
     }
     rows.push(Line::from(""));
-    rows.push(Line::from(Span::styled("Features", bold())));
+    rows.push(Line::from(Span::styled("Features", section_role())));
     for l in HELP_FEATURES {
         rows.extend(wrapped(l, width, Style::default()));
     }
@@ -3717,20 +3842,20 @@ fn help_rows(
         rows.extend(wrapped(
             &format!("  {} — {}", reason.words(), reason.what_to_do()),
             width,
-            muted(),
+            label_role(),
         ));
     }
     rows.push(Line::from(""));
-    rows.push(Line::from(Span::styled("Speed", bold())));
+    rows.push(Line::from(Span::styled("Speed", section_role())));
     for l in HELP_SPEED {
         rows.extend(wrapped(l, width, Style::default()));
     }
     for (w, v) in HELP_SPEED_WORDS {
-        rows.extend(wrapped(&format!("  {w} — {v}"), width, muted()));
+        rows.extend(wrapped(&format!("  {w} — {v}"), width, label_role()));
     }
     rows.push(Line::from(""));
     if let Some(why) = chat {
-        rows.push(Line::from(Span::styled("Chat", bold())));
+        rows.push(Line::from(Span::styled("Chat", section_role())));
         // Unavailable: why, in words (§1.1).
         if let Some(why) = why {
             rows.extend(wrapped(
@@ -3755,12 +3880,12 @@ fn help_rows(
 fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     match &app.run {
-        None => lines.extend(wrapped(NOTHING_RAN, width, muted())),
+        None => lines.extend(wrapped(NOTHING_RAN, width, notice())),
         Some(run) => {
             lines.extend(wrapped(
                 &format!("$ {}", shell_line(&run.argv)),
                 width,
-                muted(),
+                label_role(),
             ));
             for l in &run.lines {
                 // A line's indent is kept (a command's own screen nests its
@@ -3781,7 +3906,7 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                 } else {
                     Tone::Warn
                 };
-                lines.push(Line::from(Span::styled(safe(exit, width), tone(t))));
+                lines.extend(wrapped(exit, width, tone(t)));
             }
         }
     }
@@ -3828,7 +3953,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
             separated = true;
             rows.push(Line::from(Span::styled(
                 clip(&format!("── {MODEL_SEPARATOR} ──"), inner_w),
-                muted(),
+                section_role(),
             )));
         }
         let accel = it.accel.map(|a| format!(" {a}")).unwrap_or_default();
@@ -3870,7 +3995,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
             }
             rows.push(Line::from(Span::styled(
                 ellipsis(&format!("    ↳ {why}"), inner_w),
-                muted(),
+                label_role(),
             )));
         }
     }
@@ -4049,7 +4174,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         .border_style(bold())
         .title(Span::styled(
             ellipsis(&format!(" {} ", c.title), inner_w),
-            bold(),
+            section_role(),
         ));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
@@ -4117,7 +4242,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                 "The file name features run the program as (empty: the program file's name \
                  without .c). The command is shown before it runs.",
                 inner,
-                muted(),
+                notice(),
             ));
             let at = follow_cursor(input_rows, rows.len(), rect);
             overlay(
@@ -4248,15 +4373,19 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                     style,
                 ));
                 if let Some(why) = why {
-                    rows.extend(wrapped(&format!("    not run: {why}"), inner, muted()));
+                    rows.extend(wrapped(&format!("    not run: {why}"), inner, label_role()));
                 }
                 if let Some(note) = feature_check_note(app, &v.unit, &c.name, c.passed) {
-                    rows.extend(wrapped(&format!("    {note}"), inner, muted()));
+                    rows.extend(wrapped(&format!("    {note}"), inner, label_role()));
                 }
             }
             if !v.inputs.features_skipped.is_empty() {
                 rows.push(Line::from(""));
-                rows.extend(wrapped("Your scenarios that could not run:", inner, bold()));
+                rows.extend(wrapped(
+                    "Your scenarios that could not run:",
+                    inner,
+                    section_role(),
+                ));
                 for entry in &v.inputs.features_skipped {
                     if let Some((f, sc, reason)) = harness_core::features::parse_skip(entry) {
                         rows.extend(wrapped(
@@ -4359,7 +4488,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                     crate::app::MAX_NOTE_BYTES
                 ),
                 inner,
-                muted(),
+                label_role(),
             ));
             let at = follow_cursor(input_rows, rows.len(), rect);
             overlay(
@@ -4396,7 +4525,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                     stage.display()
                 ),
                 inner,
-                muted(),
+                label_role(),
             ));
             let at = follow_cursor(input_rows, rows.len(), rect);
             overlay(
@@ -4592,7 +4721,8 @@ mod tests {
         "✓", "✗", "⚠", "!", "?", "◐", "⚑", "↻", "◉", "–", "●", "✓?", "◇",
     ];
     /// …or the words that say a state.
-    const STATE_WORDS: [&str; 22] = [
+    const STATE_WORDS: [&str; 23] = [
+        "waiting",
         "passed",
         "failed",
         "failing",
@@ -4723,6 +4853,74 @@ mod tests {
             "{name} ({}): the accent is on more than the Next step and one menu item: {accents:?}",
             theme.name()
         );
+        // The roles that delineate: checked where their colour is theirs
+        // alone in this palette (the terminal theme leaves status and label
+        // the terminal's foreground).
+        let own = |role: Role| {
+            colour(role).filter(|c| {
+                Role::ALL
+                    .iter()
+                    .filter(|r| **r != role)
+                    .all(|r| palette.fg(*r) != Some(*c))
+            })
+        };
+        let row = |y: u16| -> Vec<String> {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        };
+        for y in 0..buffer.area.height {
+            let cells = row(y);
+            // A run starts its line: only frame, blank or a frame's rule
+            // before it, back to the pane's edge.
+            let starts_line = |x: u16| {
+                cells[..usize::from(x)]
+                    .iter()
+                    .rev()
+                    .take_while(|c| !matches!(c.as_str(), "│" | "┌" | "└" | "┐" | "┘"))
+                    .all(|c| matches!(c.as_str(), " " | "─" | "▾" | "▸"))
+            };
+            for r in runs(buffer, y) {
+                let text = r.text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                let lead = r.text.len() - r.text.trim_start().len();
+                let x = r.x + lead as u16;
+                let at = |what: &str| {
+                    format!(
+                        "{name} ({}): row {}: {what}: {text:?}\n{}",
+                        theme.name(),
+                        y + 1,
+                        text_of(buffer)
+                    )
+                };
+                if Some(r.fg) == own(Role::Section) {
+                    assert!(
+                        starts_line(x) && !text.contains("Next step:"),
+                        "{}",
+                        at("the section colour off a heading or a pane title")
+                    );
+                }
+                if Some(r.fg) == own(Role::Notice) {
+                    assert!(
+                        starts_line(x) && !text.contains("Next step:"),
+                        "{}",
+                        at("the notice colour on part of a line")
+                    );
+                }
+                if Some(r.fg) == own(Role::Label) {
+                    assert!(
+                        !text.contains("Next step:")
+                            && !text
+                                .split_whitespace()
+                                .any(|t| t.starts_with(['✓', '✗', '⚠'])),
+                        "{}",
+                        at("the label colour on more than secondary words")
+                    );
+                }
+            }
+        }
     }
 
     fn text_of(buffer: &Buffer) -> String {

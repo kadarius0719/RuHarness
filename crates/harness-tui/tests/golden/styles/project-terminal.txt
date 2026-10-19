@@ -1,10 +1,11 @@
 ┌ Project ─────────────────────────────────────┐┌ liblzg · project, not mapped yet ────────────────────────────────────┐
   @0-0 fg - BOLD "┌"
-  @1-9 fg - BOLD | REVERSED "Project"
+  @1-9 fg Blue BOLD | REVERSED "Project"
   @10-47 fg - BOLD "─────────────────────────────────────┐"
+  @49-82 fg Blue BOLD "liblzg · project, not mapped yet"
 │  Map the project                             ││Next step: No map yet — press Enter to map the project                │
   @0-0 fg - BOLD "│"
-  @3-17 fg - BOLD | REVERSED "Map the project"
+  @3-17 fg Blue BOLD | REVERSED "Map the project"
   @47-47 fg - BOLD "│"
   @49-58 fg Cyan BOLD "Next step:"
   @59-102 fg - BOLD "No map yet — press Enter to map the project"
@@ -20,12 +21,15 @@
 │                                              ││Mapping finds its programs and libraries, the files each one needs,   │
   @0-0 fg - BOLD "│"
   @47-47 fg - BOLD "│"
+  @49-115 fg Magenta NONE "Mapping finds its programs and libraries, the files each one needs,"
 │                                              ││what they share, and whether each program links. It compiles in the   │
   @0-0 fg - BOLD "│"
   @47-47 fg - BOLD "│"
+  @49-115 fg Magenta NONE "what they share, and whether each program links. It compiles in the"
 │                                              ││sandbox, runs nothing, and writes only under migration/.              │
   @0-0 fg - BOLD "│"
   @47-47 fg - BOLD "│"
+  @49-104 fg Magenta NONE "sandbox, runs nothing, and writes only under migration/."
 │                                              ││                                                                      │
   @0-0 fg - BOLD "│"
   @47-47 fg - BOLD "│"

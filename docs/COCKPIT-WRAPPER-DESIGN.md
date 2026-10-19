@@ -739,28 +739,50 @@ and no map opens that tool, as the command line does.
 The person found text hard to read: some of it blended into the terminal. The cockpit had drawn
 in the terminal's named colours (yellow in 41 places, decoratively as often as for a state), dark
 grey and dim text. It now draws through one palette of named roles
-(`crates/harness-tui/src/theme.rs`) and reads as **plain text, bold headings, one accent and
-three state colours**. The default respects the terminal's own configuration; designed palettes
-are the alternatives; every role can be changed.
+(`crates/harness-tui/src/theme.rs`). The default respects the terminal's own configuration;
+designed palettes are the alternatives; every role can be changed.
+
+**Delineation (2026-10-19, second pass).** On a green-on-black terminal the first pass read as
+almost all green: the terminal theme left plain text, headings, notices and labels the terminal's
+foreground. Colour now also tells the parts of the screen apart: pane titles and section
+headings, the status line, notices and secondary labels each have a role, and each delineating
+role (section, notice, accent and the three states) has a hue of its own in every coloured theme.
+The light accent is 23, not the 31 first proposed: 31 is 4.1:1 on white, under the 4.5:1 floor.
 
 | Role | What it is for | terminal (default) | dark | light | mono |
 |---|---|---|---|---|---|
 | text | ordinary words: the terminal's foreground | — | — | — | — |
-| muted | secondary words that must still be read (never dim, never dark grey) | — | 250 | 240 | — |
-| heading | headings, notices, the focused pane's frame: bold, no colour | bold | bold | bold | bold |
-| accent | only the `Next step:` label and the menu's recommended item | cyan, bold | 81, bold | 25, bold | bold, underlined |
+| muted | secondary words that must still be read: code comments, a greyed item's reason, a tree row's state word (never dim, never dark grey) | — | 250 | 240 | — |
+| heading | bold words that are not a section (the Next step's sentence, a dialog's command), the focused pane's frame | bold | bold | bold | bold |
+| section | pane titles ("Project", "Files", the View's, a dialog's, an overlay's) and in-pane section headings ("Programs (3)", "Libraries:", "Accepted tools", "── t-benchmark ──", "Checks", the tree's groups) | blue, bold | 75, bold | 25, bold | bold |
+| status | the bottom status line ("Ready…", "Last: …") and a running command's progress | — | 250 | 240 | — |
+| notice | informational lines that are neither a state nor the next step: the notice row, a project-changed notice, an explanation ("Mapping finds its programs…"), the chat's own lines | magenta | 176 | 127 | — |
+| label | secondary labels beside or under what they describe: a program's file, "c for its words", the key bar's words, a check's note | — | 248 | 242 | — |
+| accent | only the `Next step:` label and the menu's recommended item | cyan, bold | 81, bold | 23, bold | bold, underlined |
 | good | a state that is fine, beside `✓`, `◉` or a word | green | 114 | 28 | — |
 | bad | a failed state, beside `✗`, `?` or a word | red | 203 | 160 | bold |
-| attention | a state that wants a look, beside `⚠`, `!`, `◐`, `⚑`, `↻`, `–` or a word | yellow | 214 | 130 | bold |
+| attention | a state that wants a look, beside `⚠`, `!`, `◐`, `⚑`, `↻`, `–` or a word; a hand-off's pause ("waiting for your answer: …") | yellow | 214 | 130 | bold |
 | selected | the selected row | reverse | reverse | reverse | reverse |
 | disabled | a greyed menu item; its reason after it is muted | — | 245 | 243 | — |
 | border | an unfocused pane's frame | — | 244 | 244 | — |
 
+Contrast of the new values (WCAG, against #1e1e1e / #000000 for dark, #ffffff for light):
+section 7.2 / 9.1 and 6.5; status 8.8 / 11.1 and 7.1; notice 6.6 / 8.3 and 6.1; label 7.0 /
+8.8 and 5.3; accent 10.0 / 12.7 and 7.5.
+
+**A hand-off's pause is not a failure.** A command that stops for an answer given by hand exits
+1 with `awaiting response: <file>` (or, under `--json`, an `awaiting` event). The status line,
+the details and the Next step say `waiting for your answer: <file> — write the reply there, then
+run Ask a model again (or answer it in the chat)` — `then choose Resume` for a unit's attempt —
+in the attention role; `failed (exit N)` is kept for real failures. The status line shortens a
+long path to its last three parts (`…/a/b/c`) and never cuts the sentence's end after its last
+`; ` (`c for its words`).
+
 (— is the terminal's own foreground. Numbers are 256-colour indexes.)
 
-- **terminal**, the default: the terminal's own green, red, yellow and cyan, so the person's
-  terminal theme decides the look; the cockpit only stops doing what made text unreadable (dim,
-  dark grey, colour as decoration).
+- **terminal**, the default: the terminal's own blue, cyan, magenta, green, red and yellow, so
+  the person's terminal theme decides the look; status and label stay the terminal's foreground
+  there (its grey is what sank before).
 - **dark** and **light**: designed values, each with a WCAG contrast of at least 4.5:1 for words
   and 3:1 for frames against the background they assume (dark: #1e1e1e and #000000; light:
   #ffffff).
@@ -781,6 +803,11 @@ The rules, each enforced by a test:
   walked: a run of a state colour (a wrapped paragraph counts as one) must hold a state mark or
   word. Code is shown plain: keywords bold, comments muted, no syntax colours.
 - **One accent.** On any screen it marks at most the `Next step:` label and one menu item.
+- **Each delineating role in its place** (checked where the role's colour is its own in the
+  palette): the section colour only on a run that starts its line (a heading or a pane title);
+  the notice colour only on whole lines; the label colour never on the Next step or a state mark.
+- **Distinct hues.** section, notice, accent, good, bad and attention differ in every coloured
+  theme.
 - **Only the roles' colours.** Every cell's colour is one of the palette's roles; no background
   is set; nothing dims, nothing blinks, no dark grey.
 - **Readable on its background**, for the designed themes (the terminal theme's values are the

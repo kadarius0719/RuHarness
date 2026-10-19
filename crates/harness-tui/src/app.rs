@@ -824,6 +824,12 @@ pub struct App {
     pub running: bool,
     /// The idle line: "Last: …".
     pub last: Option<String>,
+    /// The last command paused on a hand-off: the idle line is a state that
+    /// wants the person (the attention role), never a failure.
+    pub last_waiting: bool,
+    /// A Project view act that paused on a hand-off: the act to run again
+    /// and the words the Next step says.
+    pub project_waiting: Option<(crate::project::Act, String)>,
     /// `t`: the command to offer again after a `locked` refusal or a failed
     /// start.
     pub try_again: Option<Pending>,
@@ -1092,6 +1098,8 @@ impl App {
             hits: Vec::new(),
             mouse: true,
             palette: crate::theme::Palette::default(),
+            last_waiting: false,
+            project_waiting: None,
             harness_own_build,
             tree_follow: true,
             view_follow: true,
@@ -1956,8 +1964,32 @@ impl App {
                 Some(line) => format!("{head}: {line}"),
                 None => head,
             };
+            // A hand-off's pause (exit 1 with `awaiting response: <file>`,
+            // or the `awaiting` event under --json) is the harness waiting
+            // on purpose, never a failure.
+            // A chat's run is the chat's to answer: its own words.
+            let waiting = match (status.code(), &signal) {
+                (Some(1), None) if run.pending.chat.is_none() => run
+                    .narrator
+                    .awaited_path()
+                    .map(str::to_string)
+                    .or_else(|| awaiting_file(&run.lines))
+                    .map(|file| {
+                        let again = match run.act.project() {
+                            Some(_) => format!("run {} again", run.act.label()),
+                            None => "choose Resume".to_string(),
+                        };
+                        waiting_words(&file, &again)
+                    }),
+                _ => None,
+            };
+            self.last_waiting = waiting.is_some();
+            if run.act.project().is_some() {
+                self.project_waiting = run.act.project().zip(waiting.clone());
+            }
             let text = match (status.code(), &signal) {
                 (_, Some(sig)) => format!("interrupted ({sig})"),
+                _ if waiting.is_some() => waiting.clone().unwrap_or_default(),
                 (Some(code), _) if !run.saw_result && run.act.project().is_none() => {
                     format!("exited without result (exit {code})")
                 }
@@ -1966,18 +1998,24 @@ impl App {
                 (Some(code), _) => with(format!("failed (exit {code})")),
                 (None, None) => "ended".into(),
             };
-            failed = status.code() != Some(0) || problem.is_some();
+            failed = waiting.is_none() && (status.code() != Some(0) || problem.is_some());
             run.exit = Some(text);
             self.last = Some(run.narrator.last(
                 status.code(),
                 signal.as_deref(),
                 run.started.elapsed(),
             ));
+            if let Some(w) = &waiting {
+                self.last = Some(format!("{} — {w}", run.narrator.label));
+            }
             // A project act's outcome is its exit and its words.
             if run.act.project().is_some() {
                 let took = crate::narrate::elapsed_words(run.started.elapsed());
                 let label = &run.narrator.label;
                 self.last = Some(match (status.code(), &signal) {
+                    _ if waiting.is_some() => {
+                        format!("{label} — {}", waiting.clone().unwrap_or_default())
+                    }
                     (_, Some(sig)) => format!("{label} — stopped ({sig}) ({took})"),
                     (Some(0), _) if problem.is_some() => format!(
                         "{label} — {} ({took}); c for its words",
@@ -5182,6 +5220,29 @@ fn rust_files(crate_dir: &Path) -> Vec<String> {
     out
 }
 
+/// The file a hand-off waits on, from the command's own words: its
+/// `Error: awaiting response: <file>` line, whole.
+pub fn awaiting_file(lines: &[RunLine]) -> Option<String> {
+    lines.iter().filter(|l| l.tone == Tone::Dim).find_map(|l| {
+        let t = l.text.trim();
+        let rest = ["Error: ", "error: "]
+            .iter()
+            .find_map(|p| t.strip_prefix(p))?;
+        let file = rest.strip_prefix("awaiting response: ")?.trim();
+        (!file.is_empty()).then(|| harness_core::text::safe_line(file))
+    })
+}
+
+/// What a hand-off's pause says, on the status line, in the details and as
+/// the Next step: the harness waits for the person's answer in `file`;
+/// `again` is how to go on once it is written.
+pub fn waiting_words(file: &str, again: &str) -> String {
+    format!(
+        "waiting for your answer: {file} — write the reply there, then {again} (or answer it \
+         in the chat)"
+    )
+}
+
 /// The first error a command printed on its error stream (`Error: …`, or a
 /// `harness: …` warning), one line, without its prefix, at most 160
 /// characters — what the status line and the details name when the command
@@ -6007,12 +6068,23 @@ pub(crate) mod tests {
         app.on_child_exit(ExitStatus::from_raw(1 << 8));
         app.load_now();
         assert_eq!(app.awaiting.len(), 1);
-        assert_eq!(
-            app.last.as_deref().map(|l| l.contains("Paused")),
-            Some(true),
-            "{:?}",
-            app.last
+        // A pause, never a failure: the status line and the details say
+        // whose answer and where.
+        let waits = format!("waiting for your answer: {}", response.display());
+        let last = app.last.clone().unwrap_or_default();
+        assert!(
+            last.contains(&waits)
+                && last.contains("then choose Resume")
+                && !last.contains("failed"),
+            "{last}"
         );
+        assert!(app.last_waiting);
+        let exit = app
+            .run
+            .as_ref()
+            .and_then(|r| r.exit.clone())
+            .unwrap_or_default();
+        assert!(exit.starts_with(&waits), "{exit}");
         attempt(&mut app, awaited);
         assert_eq!(
             app.node_label(&app.selection.clone()).1,

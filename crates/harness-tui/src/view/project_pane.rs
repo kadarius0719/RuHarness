@@ -191,7 +191,7 @@ pub fn project_view(
                  share, and whether each program links. It compiles in the sandbox, runs \
                  nothing, and writes only under migration/.",
                 width,
-                muted(),
+                notice(),
             ));
             tools_lines(app, None, width, links, &mut lines);
             last_line(app, width, &mut lines);
@@ -240,7 +240,7 @@ pub fn project_view(
     if !said.is_empty() {
         head.push_str(&format!(": {said}"));
     }
-    lines.extend(wrapped(&head, width, bold()));
+    lines.extend(wrapped(&head, width, section_role()));
     for o in &programs {
         links.push((lines.len(), Selection::Program(o.id.clone())));
         lines.extend(offered_lines(
@@ -258,10 +258,10 @@ pub fn project_view(
         ));
     }
     for gloss in state_glosses(&programs, &p.tools) {
-        lines.extend(wrapped(gloss, width, muted()));
+        lines.extend(wrapped(gloss, width, notice()));
     }
     if libraries.is_empty() {
-        lines.extend(wrapped("Libraries: none", width, muted()));
+        lines.extend(wrapped("Libraries: none", width, section_role()));
     } else {
         lines.extend(wrapped(
             &format!(
@@ -270,7 +270,7 @@ pub fn project_view(
                 counts(&libraries, &p.tools)
             ),
             width,
-            bold(),
+            section_role(),
         ));
         for o in &libraries {
             links.push((lines.len(), Selection::Program(o.id.clone())));
@@ -294,14 +294,14 @@ fn tools_lines(
     let tools = app.project_tools();
     if tools.is_empty() {
         if map.is_some() {
-            lines.extend(wrapped("Accepted tools: none yet", width, muted()));
+            lines.extend(wrapped("Accepted tools: none yet", width, section_role()));
         }
         return;
     }
     lines.extend(wrapped(
         &format!("Accepted tools ({})", tools.len()),
         width,
-        bold(),
+        section_role(),
     ));
     for id in tools {
         links.push((lines.len(), Selection::Tool(id.clone())));
@@ -326,7 +326,7 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
         return;
     };
     lines.push(Line::from(""));
-    lines.extend(wrapped(&format!("── {id} ──"), width, bold()));
+    lines.extend(wrapped(&format!("── {id} ──"), width, section_role()));
     let kind = match o.kind.as_str() {
         "library" => "a library (compiled, never linked)".to_string(),
         _ => o.what(),
@@ -354,7 +354,7 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
                 harness_core::text::safe_line(&l.purpose)
             ),
             width,
-            muted(),
+            label_role(),
         ));
     }
     if accepted {
@@ -383,7 +383,7 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
             bold(),
         ));
         if let Some(a) = advice.and_then(|a| a.get(&h.set)) {
-            lines.extend(wrapped(&a.words(), width, muted()));
+            lines.extend(wrapped(&a.words(), width, label_role()));
         }
     }
 }
@@ -392,7 +392,7 @@ fn selected_lines(app: &App, m: &MapView, width: usize, lines: &mut Vec<Line<'st
 fn last_line(app: &App, width: usize, lines: &mut Vec<Line<'static>>) {
     if let Some(last) = &app.last {
         lines.push(Line::from(""));
-        lines.extend(wrapped(&format!("Last: {last}"), width, muted()));
+        lines.extend(wrapped(&format!("Last: {last}"), width, last_style(app)));
     }
 }
 

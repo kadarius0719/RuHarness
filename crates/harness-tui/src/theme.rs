@@ -1,12 +1,20 @@
 //! The cockpit's colours (docs/COCKPIT-WRAPPER-DESIGN.md §9.2): one palette
-//! of named roles, four themes and the person's own overrides. The screen
-//! reads as plain text, bold headings, one accent and three state colours;
-//! colour never decorates.
+//! of named roles, four themes and the person's own overrides. Colour
+//! delineates the parts of the screen (sections, the status line, notices,
+//! secondary labels) and says states; it never decorates.
 //!
 //! - `text`: the terminal's own foreground.
-//! - `muted`: secondary text that must still be read: never dim, never
-//!   dark grey.
+//! - `muted`: secondary text that must still be read (code comments, a
+//!   greyed item's reason): never dim, never dark grey.
 //! - `heading`: bold, no colour.
+//! - `section`: pane titles and in-pane section headings, in a hue of their
+//!   own, bold.
+//! - `status`: the bottom status line ("Ready…", "Last: …", a running
+//!   command's progress).
+//! - `notice`: informational lines that are neither a state nor the next
+//!   step (a file written, the project changed, the chat waiting).
+//! - `label`: secondary labels ("(a tool, by its folder)", a program's path,
+//!   "c for its words").
 //! - `accent`: one colour, only for the Next step's label and the menu's
 //!   recommended item.
 //! - `good`, `bad`, `attention`: the three state colours, only where a state
@@ -14,8 +22,9 @@
 //! - `selected`: reverse video. `disabled`: a greyed menu item, still
 //!   readable. `border`: an unfocused pane's frame.
 //!
-//! The themes: **terminal** (the default: the terminal's own green, red,
-//! yellow and cyan, so the person's terminal theme decides the look),
+//! The themes: **terminal** (the default: the terminal's own blue, cyan,
+//! magenta, green, red and yellow, so the person's terminal theme decides
+//! the look),
 //! **dark** and **light** (designed 256-colour values, tested for contrast)
 //! and **mono** (no colour: bold, underline and reverse carry everything;
 //! the default when `NO_COLOR` is set). The file `cockpit.toml`
@@ -53,6 +62,14 @@ pub enum Role {
     Heading,
     /// The one accent: the Next step's label, the recommended menu item.
     Accent,
+    /// A pane title or an in-pane section heading.
+    Section,
+    /// The bottom status line, and a running command's progress.
+    Status,
+    /// An informational line: neither a state nor the next step.
+    Notice,
+    /// A secondary label beside or under what it describes.
+    Label,
     /// A state that is fine (beside `✓`, "passed", …).
     Good,
     /// A state that failed (beside `✗`, "failed", …).
@@ -69,11 +86,15 @@ pub enum Role {
 
 impl Role {
     /// Every role, for the tests, the file and the docs.
-    pub const ALL: [Role; 10] = [
+    pub const ALL: [Role; 14] = [
         Role::Text,
         Role::Muted,
         Role::Heading,
         Role::Accent,
+        Role::Section,
+        Role::Status,
+        Role::Notice,
+        Role::Label,
         Role::Good,
         Role::Bad,
         Role::Attention,
@@ -89,6 +110,10 @@ impl Role {
             Role::Muted => "muted",
             Role::Heading => "heading",
             Role::Accent => "accent",
+            Role::Section => "section",
+            Role::Status => "status",
+            Role::Notice => "notice",
+            Role::Label => "label",
             Role::Good => "good",
             Role::Bad => "bad",
             Role::Attention => "attention",
@@ -183,13 +208,22 @@ impl Theme {
             (Theme::Terminal | Theme::Mono, _) | (_, R::Text | R::Heading | R::Selected) => None,
             (Theme::Dark, R::Muted) => Some(250),
             (Theme::Dark, R::Accent) => Some(81),
+            (Theme::Dark, R::Section) => Some(75),
+            (Theme::Dark, R::Status) => Some(250),
+            (Theme::Dark, R::Notice) => Some(176),
+            (Theme::Dark, R::Label) => Some(248),
             (Theme::Dark, R::Good) => Some(114),
             (Theme::Dark, R::Bad) => Some(203),
             (Theme::Dark, R::Attention) => Some(214),
             (Theme::Dark, R::Disabled) => Some(245),
             (Theme::Dark, R::Border) => Some(244),
             (Theme::Light, R::Muted) => Some(240),
-            (Theme::Light, R::Accent) => Some(25),
+            // 31, the first choice, is 4.1:1 on white: too faint.
+            (Theme::Light, R::Accent) => Some(23),
+            (Theme::Light, R::Section) => Some(25),
+            (Theme::Light, R::Status) => Some(240),
+            (Theme::Light, R::Notice) => Some(127),
+            (Theme::Light, R::Label) => Some(242),
             (Theme::Light, R::Good) => Some(28),
             (Theme::Light, R::Bad) => Some(160),
             (Theme::Light, R::Attention) => Some(130),
@@ -199,8 +233,9 @@ impl Theme {
     }
 
     /// A role's foreground in this theme: the terminal theme's are the
-    /// terminal's own named colours; muted, disabled and border stay the
-    /// terminal's foreground there (its grey can be unreadable).
+    /// terminal's own named colours; muted, status, label, disabled and
+    /// border stay the terminal's foreground there (its grey can be
+    /// unreadable).
     pub fn fg(self, role: Role) -> Option<Color> {
         match self {
             Theme::Terminal => match role {
@@ -208,6 +243,8 @@ impl Theme {
                 Role::Bad => Some(Color::Red),
                 Role::Attention => Some(Color::Yellow),
                 Role::Accent => Some(Color::Cyan),
+                Role::Section => Some(Color::Blue),
+                Role::Notice => Some(Color::Magenta),
                 _ => None,
             },
             _ => self.colour(role).map(Color::Indexed),
@@ -217,7 +254,7 @@ impl Theme {
     /// A role's modifiers in this theme.
     pub fn modifiers(self, role: Role) -> Modifier {
         match (self, role) {
-            (_, Role::Heading) => Modifier::BOLD,
+            (_, Role::Heading | Role::Section) => Modifier::BOLD,
             (_, Role::Selected) => Modifier::REVERSED,
             (Theme::Mono, Role::Accent) => Modifier::BOLD | Modifier::UNDERLINED,
             (_, Role::Accent) => Modifier::BOLD,
@@ -239,7 +276,7 @@ impl Theme {
 pub struct Palette {
     /// The theme under the overrides.
     pub theme: Theme,
-    overrides: [Option<Color>; 10],
+    overrides: [Option<Color>; Role::ALL.len()],
 }
 
 impl Palette {
@@ -247,7 +284,7 @@ impl Palette {
     pub fn of(theme: Theme) -> Palette {
         Palette {
             theme,
-            overrides: [None; 10],
+            overrides: [None; Role::ALL.len()],
         }
     }
 
@@ -621,6 +658,17 @@ mod tests {
         assert!(s.refused.is_empty(), "{:?}", s.refused);
         assert_eq!(s.theme, Some(Theme::Terminal));
         assert_eq!(s.colours, [(Role::Attention, Color::Rgb(0xff, 0xaf, 0))]);
+        // Every role is in it, by name.
+        for role in Role::ALL {
+            assert!(
+                example.lines().any(|l| {
+                    let mut words = l.trim_start_matches("# ").split_whitespace();
+                    words.next() == Some(role.name()) && words.next() == Some("=")
+                }),
+                "{} is not in the example",
+                role.name()
+            );
+        }
         // Every commented line names a role and a colour the file takes.
         for line in example
             .lines()
@@ -655,6 +703,9 @@ mod tests {
         assert_eq!(rgb(114), Some([135, 215, 135]));
         assert_eq!(rgb(203), Some([255, 95, 95]));
         assert_eq!(rgb(81), Some([95, 215, 255]));
+        assert_eq!(rgb(75), Some([95, 175, 255]));
+        assert_eq!(rgb(176), Some([215, 135, 215]));
+        assert_eq!(rgb(23), Some([0, 95, 95]));
         assert_eq!(rgb(250), Some([188, 188, 188]));
         assert_eq!(rgb(232), Some([8, 8, 8]));
         assert_eq!(rgb(255), Some([238, 238, 238]));
@@ -690,7 +741,7 @@ mod tests {
 
     /// Every theme: nothing dims, blinks or sets a background; text is never
     /// recoloured; no dark grey; the terminal theme colours only the three
-    /// states and the accent; mono has no colour.
+    /// states, the accent, sections and notices; mono has no colour.
     #[test]
     fn every_theme_keeps_the_rules() {
         for theme in Theme::ALL {
@@ -706,7 +757,12 @@ mod tests {
                 assert_ne!(style.fg, Some(Color::DarkGray), "{what}");
                 let coloured = matches!(
                     role,
-                    Role::Good | Role::Bad | Role::Attention | Role::Accent
+                    Role::Good
+                        | Role::Bad
+                        | Role::Attention
+                        | Role::Accent
+                        | Role::Section
+                        | Role::Notice
                 );
                 match theme {
                     Theme::Mono => assert_eq!(style.fg, None, "{what}"),
@@ -719,6 +775,41 @@ mod tests {
                 theme.style(Role::Heading),
                 Style::default().add_modifier(Modifier::BOLD)
             );
+            assert!(theme
+                .style(Role::Section)
+                .add_modifier
+                .contains(Modifier::BOLD));
         }
+    }
+
+    /// The roles that delineate the screen each have a hue of their own in
+    /// every coloured theme, so a section, a notice, the accent and the
+    /// three states never look alike.
+    #[test]
+    fn the_delineating_roles_differ_in_every_coloured_theme() {
+        let roles = [
+            Role::Section,
+            Role::Notice,
+            Role::Accent,
+            Role::Good,
+            Role::Bad,
+            Role::Attention,
+        ];
+        for theme in [Theme::Terminal, Theme::Dark, Theme::Light] {
+            let colours: Vec<_> = roles.iter().map(|r| theme.fg(*r)).collect();
+            for (i, c) in colours.iter().enumerate() {
+                assert!(c.is_some(), "{} {}", theme.name(), roles[i].name());
+                assert!(
+                    !colours[..i].contains(c),
+                    "{} {}: shares its colour",
+                    theme.name(),
+                    roles[i].name()
+                );
+            }
+        }
+        assert_eq!(Theme::Dark.colour(Role::Status), Some(250));
+        assert_eq!(Theme::Dark.colour(Role::Label), Some(248));
+        assert_eq!(Theme::Light.colour(Role::Status), Some(240));
+        assert_eq!(Theme::Light.colour(Role::Label), Some(242));
     }
 }

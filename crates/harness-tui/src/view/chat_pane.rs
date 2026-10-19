@@ -20,11 +20,11 @@ fn row_style(t: T) -> Style {
     match t {
         T::You => bold(),
         T::Claude => Style::default(),
-        T::Dim => muted(),
+        T::Dim => notice(),
         T::Warn => attention(),
         T::Good => good(),
         T::Bad => bad(),
-        T::Cockpit => muted(),
+        T::Cockpit => notice(),
     }
 }
 
@@ -117,13 +117,17 @@ pub fn tab_strip(frame: &mut Frame, app: &mut App, area: Rect, on: Focus) -> u16
     }
     let chat_label = chat_tab(app);
     let active = selected_row().add_modifier(Modifier::BOLD);
-    let view_style = if on == Focus::View { active } else { muted() };
+    let view_style = if on == Focus::View {
+        active
+    } else {
+        label_role()
+    };
     let chat_style = if on == Focus::Chat {
         active
     } else if chat_label.contains('●') {
         attention()
     } else {
-        muted()
+        label_role()
     };
     let end = area.x + area.width - 1;
     let buttons = [
@@ -294,7 +298,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     }
     let about = Line::from(Span::styled(
         ellipsis(&format!("About: {}", app.about()), width),
-        muted(),
+        label_role(),
     ));
     let avail = inner.height.saturating_sub(1) as usize;
     let mut left = avail;
@@ -335,7 +339,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
         if app.chat.input.is_empty() && focused {
             bottom.push(Line::from(vec![
                 Span::styled(lead, bold()),
-                Span::styled(placeholder, muted()),
+                Span::styled(placeholder, label_role()),
             ]));
         } else {
             bottom.push(Line::from(vec![
@@ -363,7 +367,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
             ),
             Err(why) => format!("The chat is unavailable: {why}"),
         };
-        wrapped(&intro, width, muted())
+        wrapped(&intro, width, notice())
             .into_iter()
             .take(transcript_h as usize)
             .collect()
